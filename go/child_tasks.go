@@ -99,6 +99,7 @@ type childEnqueueInput struct {
 	RunAt                *string  `json:"runAt,omitempty"`
 	Deadline             *string  `json:"deadline"`
 	ConcurrencyKey       any      `json:"concurrencyKey"`
+	Budget               any      `json:"budget"`
 	ExecutionTimeoutMS   any      `json:"executionTimeoutMs"`
 	MaxAttempts          int      `json:"maxAttempts"`
 	RetryPolicy          any      `json:"retryPolicy"`
@@ -379,6 +380,7 @@ func serializeChildRequest(
 		PayloadMaxBytes: defaultTaskValueMaxBytes, ResultMaxBytes: defaultTaskValueMaxBytes,
 		SensitivePayloadKeys: []string{}, SensitiveResultKeys: []string{},
 		TraceContext: parent.TraceContext, ConcurrencyKey: nilIfEmpty(options.ConcurrencyKey),
+		Budget:             nilIfEmpty(options.Budget),
 		ExecutionTimeoutMS: nilIfZero(options.ExecutionTimeoutMS), MaxAttempts: maxAttempts,
 		RetryPolicy: options.RetryPolicy, Tags: append([]string{}, options.Tags...),
 	}

@@ -41,6 +41,7 @@ Two boundaries keep this matrix small:
 | Concurrency keys                           | Supported  | Supported | Supported |
 | Concurrency policy management              | Supported  | Supported | Supported |
 | Rate-limit policy management               | Supported  | Supported | Supported |
+| Named budget management                    | Supported  | Supported | Supported |
 | Recurring schedule definition sync         | Supported  | Supported | Supported |
 | Payload and result contracts               | Supported  | Supported | Supported |
 | Compatibility refusal before mutation      | Supported  | Supported | Supported |

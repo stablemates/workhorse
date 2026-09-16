@@ -69,6 +69,7 @@ export {
 export type {
   QueueMetricSnapshot,
   QueueMetricSource,
+  BudgetMetricSnapshot,
   TelemetryAttributes,
   TelemetryAttributeValue,
   TelemetryContext,
@@ -195,6 +196,9 @@ export type {
   CancellationRequest,
   CancelResult,
   CancelStatus,
+  Budget,
+  BudgetDefinition,
+  BudgetStatus,
   ConcurrencyPolicy,
   ConcurrencyPolicyDefinition,
   RateLimit,

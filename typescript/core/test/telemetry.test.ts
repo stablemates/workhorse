@@ -499,6 +499,74 @@ describe("OpenTelemetry", () => {
     );
   });
 
+  it("exports named-budget gauges with the budget name as the only dimension", async () => {
+    metricExporter.reset();
+    const unregister = registerQueueMetrics({
+      queueMetricSnapshot: vi.fn<QueueMetricSource["queueMetricSnapshot"]>(async () => []),
+      budgetMetricSnapshot: vi.fn<NonNullable<QueueMetricSource["budgetMetricSnapshot"]>>(
+        async () => [
+          {
+            budget: "vendor-api",
+            concurrencyLimit: 3,
+            concurrencyActive: 3,
+            rateLimitPerSecond: 5,
+            rateLimitAvailableTokens: 0.25,
+            blockedReadyDepth: 4,
+            nextEligibleDelayMs: 150,
+          },
+          {
+            budget: "capacity-only",
+            concurrencyLimit: 2,
+            concurrencyActive: 0,
+            rateLimitPerSecond: null,
+            rateLimitAvailableTokens: 0,
+            blockedReadyDepth: 0,
+            nextEligibleDelayMs: null,
+          },
+        ],
+      ),
+    });
+    await meterProvider.forceFlush();
+    unregister();
+
+    const metricsData = metricExporter
+      .getMetrics()
+      .flatMap((resource) => resource.scopeMetrics)
+      .flatMap((scope) => scope.metrics);
+    const byName = (name: string) =>
+      metricsData.find((metric) => metric.descriptor.name === name)?.dataPoints ?? [];
+    const vendor = { "workhorse.budget.name": "vendor-api" };
+    expect(byName("workhorse.budget.concurrency.limit")).toContainEqual(
+      expect.objectContaining({ value: 3, attributes: vendor }),
+    );
+    expect(byName("workhorse.budget.concurrency.active")).toContainEqual(
+      expect.objectContaining({ value: 3, attributes: vendor }),
+    );
+    expect(byName("workhorse.budget.rate_limit.configured")).toContainEqual(
+      expect.objectContaining({ value: 5, attributes: vendor }),
+    );
+    expect(byName("workhorse.budget.rate_limit.available_tokens")).toContainEqual(
+      expect.objectContaining({ value: 0.25, attributes: vendor }),
+    );
+    expect(byName("workhorse.budget.blocked_ready")).toContainEqual(
+      expect.objectContaining({ value: 4, attributes: vendor }),
+    );
+    expect(byName("workhorse.budget.next_eligible_delay")).toContainEqual(
+      expect.objectContaining({ value: 150, attributes: vendor }),
+    );
+    // A budget without a rate limit exports no rate instruments and no eligibility delay.
+    const capacityOnly = { "workhorse.budget.name": "capacity-only" };
+    expect(byName("workhorse.budget.concurrency.limit")).toContainEqual(
+      expect.objectContaining({ value: 2, attributes: capacityOnly }),
+    );
+    expect(byName("workhorse.budget.rate_limit.configured")).not.toContainEqual(
+      expect.objectContaining({ attributes: capacityOnly }),
+    );
+    expect(byName("workhorse.budget.next_eligible_delay")).not.toContainEqual(
+      expect.objectContaining({ attributes: capacityOnly }),
+    );
+  });
+
   it("exports queue depth and age without per-task metric attributes", async () => {
     metricExporter.reset();
     const unregister = registerQueueMetrics({

@@ -138,6 +138,7 @@ export class ChildTasksModule extends QueueModule {
       ...(options.runAt === undefined ? {} : { runAt: options.runAt.toISOString() }),
       deadline: options.deadline?.toISOString() ?? null,
       concurrencyKey: options.concurrencyKey ?? null,
+      budget: options.budget ?? null,
       executionTimeoutMs: options.executionTimeoutMs ?? null,
       maxAttempts: options.maxAttempts ?? 25,
       retryPolicy: options.retryPolicy ?? null,

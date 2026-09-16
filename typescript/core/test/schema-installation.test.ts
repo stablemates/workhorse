@@ -455,12 +455,13 @@ describe("schema installation", () => {
     expect(migrations.rows).toEqual([
       { version: 1, description: "baseline" },
       { version: 2, description: "schedule catch-up policies" },
+      { version: 3, description: "named budgets" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
       "SELECT version FROM workhorse.protocol_version ORDER BY version",
     );
-    expect(protocols.rows).toEqual([{ version: 1 }, { version: 2 }]);
+    expect(protocols.rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;

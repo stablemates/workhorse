@@ -41,6 +41,7 @@ import {
   formatSpan,
 } from "../preferences.js";
 import { SystemOutcomeChart, systemWindows } from "../core.js";
+import { BudgetsTable, budgetCappedFootnote } from "../budgets-table.js";
 import { taskDisplayName } from "../components/task-list.js";
 import {
   healthCheckMessages,
@@ -214,6 +215,12 @@ export function SystemPage({
 
       {/* Current queue pressure gets the full width its numeric columns need. */}
       <QueuePressure data={data} navigate={navigate} />
+      {data.budgets.length === 0 ? null : <BudgetsTable budgets={data.budgets} />}
+      {data.budgetsCapped ? (
+        <Text c="dimmed" size="xs">
+          {budgetCappedFootnote}
+        </Text>
+      ) : null}
 
       <Paper withBorder>
         <Box p="md">

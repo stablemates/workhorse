@@ -1169,6 +1169,51 @@
       "mutation": false,
       "request": {},
       "response": {
+        "budgets": {
+          "type": "array"
+        },
+        "budgetsCapped": {
+          "type": "boolean"
+        },
+        "budgets[]": {
+          "type": "object"
+        },
+        "budgets[].active": {
+          "type": "number"
+        },
+        "budgets[].availableTokens": {
+          "type": "null|number"
+        },
+        "budgets[].blockedReady": {
+          "type": "number"
+        },
+        "budgets[].maxActive": {
+          "type": "null|number"
+        },
+        "budgets[].name": {
+          "type": "string"
+        },
+        "budgets[].namespace": {
+          "type": "string"
+        },
+        "budgets[].nextEligibleAt": {
+          "type": "null|string"
+        },
+        "budgets[].rate": {
+          "type": "null|object"
+        },
+        "budgets[].rate.burst": {
+          "type": "number"
+        },
+        "budgets[].rate.intervalMs": {
+          "type": "number"
+        },
+        "budgets[].rate.limit": {
+          "type": "number"
+        },
+        "budgets[].saturated": {
+          "type": "boolean"
+        },
         "capturedAt": {
           "type": "string"
         },
@@ -1843,6 +1888,9 @@
         "recommendationInputs.reasons[].budget": {
           "type": "number"
         },
+        "recommendationInputs.reasons[].budgetName": {
+          "type": "string"
+        },
         "recommendationInputs.reasons[].category": {
           "type": "enum",
           "enum": [
@@ -1857,6 +1905,7 @@
         "recommendationInputs.reasons[].code": {
           "type": "enum",
           "enum": [
+            "budget-blocked",
             "concurrency-blocked",
             "default-history-rows",
             "eligible-history-partitions",
@@ -2207,6 +2256,51 @@
         }
       },
       "response": {
+        "budgets": {
+          "type": "array"
+        },
+        "budgetsCapped": {
+          "type": "boolean"
+        },
+        "budgets[]": {
+          "type": "object"
+        },
+        "budgets[].active": {
+          "type": "number"
+        },
+        "budgets[].availableTokens": {
+          "type": "null|number"
+        },
+        "budgets[].blockedReady": {
+          "type": "number"
+        },
+        "budgets[].maxActive": {
+          "type": "null|number"
+        },
+        "budgets[].name": {
+          "type": "string"
+        },
+        "budgets[].namespace": {
+          "type": "string"
+        },
+        "budgets[].nextEligibleAt": {
+          "type": "null|string"
+        },
+        "budgets[].rate": {
+          "type": "null|object"
+        },
+        "budgets[].rate.burst": {
+          "type": "number"
+        },
+        "budgets[].rate.intervalMs": {
+          "type": "number"
+        },
+        "budgets[].rate.limit": {
+          "type": "number"
+        },
+        "budgets[].saturated": {
+          "type": "boolean"
+        },
         "capturedAt": {
           "type": "string"
         },
@@ -2775,6 +2869,9 @@
         "status.reasons[].budget": {
           "type": "number"
         },
+        "status.reasons[].budgetName": {
+          "type": "string"
+        },
         "status.reasons[].category": {
           "type": "enum",
           "enum": [
@@ -2789,6 +2886,7 @@
         "status.reasons[].code": {
           "type": "enum",
           "enum": [
+            "budget-blocked",
             "concurrency-blocked",
             "default-history-rows",
             "eligible-history-partitions",

@@ -3,6 +3,7 @@ import type {
   BulkRedriveOptions,
   BulkRedrivePage,
   ChildLineage,
+  Budget,
   ConcurrencyPolicy,
   DeadLetterFilter,
   DeadLetterPage,
@@ -31,7 +32,7 @@ import type {
 } from "./types.js";
 import { databaseErrorCode, databaseErrorDetails, expectOneRow, WorkhorseError } from "./errors.js";
 import { MAX_TASK_QUERY_PAGE_SIZE, MAX_REDRIVE_BATCH_SIZE } from "./types.js";
-import type { QueueMetricSnapshot } from "./telemetry.js";
+import type { BudgetMetricSnapshot, QueueMetricSnapshot } from "./telemetry.js";
 import { logInfo } from "./telemetry.js";
 import { createQueueModuleContext } from "./queue/module-context.js";
 import { createQueueModules, type QueueModules } from "./queue/modules.js";
@@ -41,7 +42,12 @@ import type { HumanWaitPage } from "./queue/human-waits.js";
 import type { SignalWaitPage } from "./queue/signals.js";
 import type { StoredSchedule } from "./queue/cron-schedules.js";
 import { nullableRowTimestamp } from "./queue/row-mapping.js";
-import { concurrencyPolicy, type ConcurrencyPolicyRow } from "./queue/operator-reads.js";
+import {
+  budget,
+  concurrencyPolicy,
+  type BudgetRow,
+  type ConcurrencyPolicyRow,
+} from "./queue/operator-reads.js";
 
 export type RunTaskNowStatus =
   | "released"
@@ -301,6 +307,10 @@ export class Admin {
     return this.modules.operatorReads.queueMetricSnapshot();
   }
 
+  budgetMetricSnapshot(): Promise<BudgetMetricSnapshot[]> {
+    return this.modules.operatorReads.budgetMetricSnapshot();
+  }
+
   health(): Promise<QueueHealth> {
     return this.modules.operatorReads.health();
   }
@@ -316,6 +326,13 @@ export class Admin {
   /** @deprecated Use `listConcurrencyPolicies`. Removed in 1.0.0. */
   concurrencyPolicies(queueNames: readonly string[] = []): Promise<ConcurrencyPolicy[]> {
     return this.listConcurrencyPolicies(queueNames);
+  }
+
+  async listBudgets(budgetNames: readonly string[] = []): Promise<Budget[]> {
+    const result = await this.database.query<BudgetRow>(SQL_STATEMENTS["list_budgets"], [
+      budgetNames,
+    ]);
+    return result.rows.map(budget);
   }
 
   getRetentionPolicy(): Promise<RetentionPolicy> {

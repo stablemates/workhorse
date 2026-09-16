@@ -103,9 +103,11 @@ type Dependencies struct {
 // EnqueueOptions controls a task's initial dispatch and durable acceptance behavior.
 // Zero values select PostgreSQL-compatible client defaults or omit optional values.
 type EnqueueOptions struct {
-	Queue              string
-	Priority           int
-	ConcurrencyKey     string
+	Queue          string
+	Priority       int
+	ConcurrencyKey string
+	// Budget names a deployment-synchronized budget shared across queues. Empty means none.
+	Budget             string
 	RunAt              *time.Time
 	Deadline           *time.Time
 	ExecutionTimeoutMS int
@@ -687,6 +689,7 @@ type enqueueInput struct {
 	RunAt                *string           `json:"runAt,omitempty"`
 	Deadline             *string           `json:"deadline"`
 	ConcurrencyKey       any               `json:"concurrencyKey"`
+	Budget               any               `json:"budget"`
 	ExecutionTimeoutMS   any               `json:"executionTimeoutMs"`
 	MaxAttempts          int               `json:"maxAttempts"`
 	RetryPolicy          any               `json:"retryPolicy"`
@@ -741,6 +744,7 @@ func serializeEnqueueRequest(request EnqueueRequest, defaultQueue string, now ti
 		SensitivePayloadKeys: []string{},
 		SensitiveResultKeys:  []string{},
 		ConcurrencyKey:       nilIfEmpty(options.ConcurrencyKey),
+		Budget:               nilIfEmpty(options.Budget),
 		ExecutionTimeoutMS:   nilIfZero(options.ExecutionTimeoutMS),
 		MaxAttempts:          maxAttempts,
 		RetryPolicy:          options.RetryPolicy,

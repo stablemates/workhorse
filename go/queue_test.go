@@ -321,6 +321,8 @@ func goOptions(t *testing.T, input map[string]any) workhorse.EnqueueOptions {
 			options.Priority = fixtureInteger(t, value)
 		case "concurrencyKey":
 			options.ConcurrencyKey = value.(string)
+		case "budget":
+			options.Budget = value.(string)
 		case "runAt":
 			parsed, err := time.Parse(time.RFC3339Nano, value.(string))
 			if err != nil {

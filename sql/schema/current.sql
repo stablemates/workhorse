@@ -343,6 +343,31 @@ CREATE TABLE IF NOT EXISTS workhorse.rate_limit_bucket (
 CREATE INDEX IF NOT EXISTS rate_limit_bucket_queue_refill_idx
   ON workhorse.rate_limit_bucket(queue_name, bucket_scope, refilled_at);
 
+-- Deployment-synchronized budgets that span queues (ADR 0067). A task names at most one budget.
+-- A missing row means the named budget imposes no limit.
+CREATE TABLE IF NOT EXISTS workhorse.budget (
+  budget_name text PRIMARY KEY CHECK (budget_name <> '' AND octet_length(budget_name) <= 256),
+  namespace text NOT NULL CHECK (namespace <> '' AND octet_length(namespace) <= 256),
+  max_active integer CHECK (max_active IS NULL OR max_active BETWEEN 1 AND 1000000),
+  rate_limit integer,
+  rate_interval_ms integer,
+  rate_burst integer,
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  CONSTRAINT budget_rate_check CHECK (
+    (rate_limit IS NULL AND rate_interval_ms IS NULL AND rate_burst IS NULL)
+    OR (rate_limit BETWEEN 1 AND 1000000
+      AND rate_interval_ms BETWEEN 1 AND 86400000
+      AND rate_burst BETWEEN 1 AND 1000000)
+  ),
+  CONSTRAINT budget_limit_check CHECK (max_active IS NOT NULL OR rate_limit IS NOT NULL)
+);
+-- One durable token bucket per budget. Deleting the budget removes its balance.
+CREATE TABLE IF NOT EXISTS workhorse.budget_bucket (
+  budget_name text PRIMARY KEY REFERENCES workhorse.budget(budget_name) ON DELETE CASCADE,
+  tokens numeric NOT NULL CHECK (tokens >= 0),
+  refilled_at timestamptz NOT NULL
+);
+
 -- Durable worker fleet registration.
 --
 -- Every worker process announces itself here and refreshes `last_heartbeat_at` on its maintenance
@@ -470,7 +495,10 @@ CREATE TABLE IF NOT EXISTS workhorse.task (
   execution_timeout_ms bigint CHECK (execution_timeout_ms BETWEEN 1 AND 31536000000),
   CHECK (octet_length(payload::text) <= payload_max_bytes),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-  priority integer NOT NULL DEFAULT 0 CHECK (priority BETWEEN 0 AND 100)
+  priority integer NOT NULL DEFAULT 0 CHECK (priority BETWEEN 0 AND 100),
+  budget_name text CONSTRAINT task_budget_name_check CHECK (
+    budget_name IS NULL OR (budget_name <> '' AND octet_length(budget_name) <= 256)
+  )
 );
 -- GIN indexes array elements so overlap and containment tag filters avoid scanning every task row.
 CREATE INDEX IF NOT EXISTS task_tags_gin_idx ON workhorse.task USING gin (tags);
@@ -940,6 +968,9 @@ CREATE TABLE IF NOT EXISTS workhorse.task_runtime (
   ),
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   priority integer NOT NULL DEFAULT 0 CHECK (priority BETWEEN 0 AND 100),
+  budget_name text CONSTRAINT task_runtime_budget_name_check CHECK (
+    budget_name IS NULL OR (budget_name <> '' AND octet_length(budget_name) <= 256)
+  ),
   CHECK (wait_name IS NULL OR (wait_name <> '' AND char_length(wait_name) <= 200)),
   CHECK (
     (cancel_requested_at IS NULL AND cancel_requested_by IS NULL AND cancel_reason IS NULL)
@@ -984,6 +1015,15 @@ CREATE INDEX IF NOT EXISTS task_runtime_expired_active_idx
 CREATE INDEX IF NOT EXISTS task_runtime_active_queue_key_expiry_idx
   ON workhorse.task_runtime (queue_name, concurrency_key, task_id)
   WHERE state = 'active';
+CREATE INDEX IF NOT EXISTS task_runtime_active_budget_expiry_idx
+  ON workhorse.task_runtime (budget_name, task_id)
+  WHERE state = 'active' AND budget_name IS NOT NULL;
+CREATE INDEX IF NOT EXISTS task_runtime_ready_budget_queue_idx
+  ON workhorse.task_runtime (queue_name, budget_name)
+  WHERE state = 'ready' AND budget_name IS NOT NULL;
+CREATE INDEX IF NOT EXISTS task_runtime_ready_budget_idx
+  ON workhorse.task_runtime (budget_name, queue_name)
+  WHERE state = 'ready' AND budget_name IS NOT NULL;
 CREATE INDEX IF NOT EXISTS task_runtime_deadline_idx
   ON workhorse.task_runtime (deadline_at, task_id) WHERE deadline_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS task_runtime_timeout_idx
@@ -1014,6 +1054,59 @@ FOR EACH ROW EXECUTE FUNCTION workhorse.notify_concurrency_capacity_v1();
 CREATE OR REPLACE TRIGGER task_runtime_concurrency_capacity_delete
 AFTER DELETE ON workhorse.task_runtime
 FOR EACH ROW EXECUTE FUNCTION workhorse.notify_concurrency_capacity_v1();
+
+-- A budget release can unblock ready work in any queue. Walk the distinct waiting queues through
+-- the budget-ready index one step at a time, so the wake-up costs one probe per queue rather than
+-- one scan per waiting row.
+CREATE OR REPLACE FUNCTION workhorse.notify_budget_capacity_v1()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_queue_name text;
+BEGIN
+  IF OLD.state = 'active'
+     AND OLD.budget_name IS NOT NULL
+     AND (TG_OP = 'DELETE' OR NEW.state <> 'active')
+     AND EXISTS (
+       SELECT 1 FROM workhorse.budget budget
+        WHERE budget.budget_name = OLD.budget_name
+     ) THEN
+    FOR v_queue_name IN
+      WITH RECURSIVE waiting AS (
+        (SELECT runtime.queue_name
+           FROM workhorse.task_runtime runtime
+          WHERE runtime.state = 'ready' AND runtime.budget_name = OLD.budget_name
+          ORDER BY runtime.queue_name
+          LIMIT 1)
+        UNION ALL
+        SELECT (
+          SELECT runtime.queue_name
+            FROM workhorse.task_runtime runtime
+           WHERE runtime.state = 'ready' AND runtime.budget_name = OLD.budget_name
+             AND runtime.queue_name > waiting.queue_name
+           ORDER BY runtime.queue_name
+           LIMIT 1
+        )
+          FROM waiting
+         WHERE waiting.queue_name IS NOT NULL
+      )
+      SELECT waiting.queue_name FROM waiting WHERE waiting.queue_name IS NOT NULL LIMIT 100
+    LOOP
+      PERFORM pg_notify('workhorse_tasks', v_queue_name);
+    END LOOP;
+  END IF;
+  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END;
+$$;
+
+CREATE OR REPLACE TRIGGER task_runtime_budget_capacity_update
+AFTER UPDATE OF state ON workhorse.task_runtime
+FOR EACH ROW EXECUTE FUNCTION workhorse.notify_budget_capacity_v1();
+
+CREATE OR REPLACE TRIGGER task_runtime_budget_capacity_delete
+AFTER DELETE ON workhorse.task_runtime
+FOR EACH ROW EXECUTE FUNCTION workhorse.notify_budget_capacity_v1();
 
 -- Immutable terminal materialization. Moving here removes completed work from every dispatch index.
 CREATE TABLE IF NOT EXISTS workhorse.task_outcome (
@@ -2008,6 +2101,14 @@ AS $$
     ) FROM jsonb_array_elements(p_snapshot->'rate_limit_policies')
       WITH ORDINALITY admission(value, ordinality)
     WHERE (admission.value->>'throttled_ready')::numeric > 0
+    UNION ALL
+    SELECT 600 + admission.ordinality::integer, jsonb_build_object(
+      'code', 'budget-blocked', 'severity', 'degraded',
+      'observed', (admission.value->>'blocked_ready')::numeric,
+      'budget', 0, 'budgetName', admission.value->>'budget_name'
+    ) FROM jsonb_array_elements(COALESCE(p_snapshot->'budget_policies', '[]'::jsonb))
+      WITH ORDINALITY admission(value, ordinality)
+    WHERE (admission.value->>'blocked_ready')::numeric > 0
   ), aggregate AS (
     SELECT COALESCE(jsonb_agg(reason ORDER BY position), '[]'::jsonb) AS reasons,
            bool_or(reason->>'severity' = 'critical') AS critical,
@@ -2630,6 +2731,8 @@ BEGIN
               ) sample
           ) pressure
          ORDER BY policy.queue_name LIMIT 100
+        ), budget_policies AS (
+          SELECT * FROM workhorse.budget_status_v1(ARRAY[]::text[])
         ), partition_days AS (
           SELECT to_char(day_start, 'YYYYMMDD') AS day, day_start AS starts_at,
                  to_regclass(format('workhorse.%I', 'task_event_' || to_char(day_start, 'YYYYMMDD')))
@@ -2649,6 +2752,8 @@ BEGIN
                   FROM concurrency c) AS concurrency_policies,
                (SELECT COALESCE(jsonb_agg(to_jsonb(r.*) ORDER BY r.queue_name), '[]'::jsonb)
                   FROM rate_limits r) AS rate_limit_policies,
+               (SELECT COALESCE(jsonb_agg(to_jsonb(b.*) ORDER BY b.budget_name), '[]'::jsonb)
+                  FROM budget_policies b) AS budget_policies,
                (SELECT jsonb_agg(to_jsonb(p.*) ORDER BY p.starts_at)
                   FROM partition_days p) AS history_partition_days
           FROM installed
@@ -4683,6 +4788,340 @@ BEGIN
 END;
 $$;
 
+
+-- Reconcile one namespace's budgets. Mirrors sync_rate_limit_policies_v1: strict definition
+-- shapes, cross-namespace ownership refusal, pruning by default, and a wake hint for queues that
+-- hold ready work naming an affected budget.
+CREATE OR REPLACE FUNCTION workhorse.sync_budgets_v1(
+  p_namespace text,
+  p_definitions jsonb,
+  p_prune boolean DEFAULT true
+) RETURNS TABLE (
+  namespace text,
+  budget_name text,
+  max_active integer,
+  rate_limit integer,
+  rate_interval_ms integer,
+  rate_burst integer,
+  updated_at timestamptz
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_definition jsonb;
+  v_rate jsonb;
+  v_budget_name text;
+  v_max_active numeric;
+  v_rate_limit numeric;
+  v_rate_interval_ms numeric;
+  v_rate_burst numeric;
+  v_seen text[] := '{}';
+  v_affected text[] := '{}';
+  v_queue_name text;
+BEGIN
+  IF p_namespace IS NULL OR p_namespace = '' OR octet_length(p_namespace) > 256 THEN
+    RAISE EXCEPTION 'budget namespace must contain between 1 and 256 UTF-8 bytes';
+  END IF;
+  IF p_definitions IS NULL OR jsonb_typeof(p_definitions) <> 'array' THEN
+    RAISE EXCEPTION 'budget definitions must be a JSON array';
+  END IF;
+  IF jsonb_array_length(p_definitions) > 10000 THEN
+    RAISE EXCEPTION 'budget definitions exceed maximum size of 10000';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:budgets', 0));
+
+  FOR v_definition IN SELECT value FROM jsonb_array_elements(p_definitions)
+  LOOP
+    IF jsonb_typeof(v_definition) <> 'object'
+       OR v_definition - ARRAY['name', 'maxActive', 'rate'] <> '{}'::jsonb
+       OR NOT (v_definition ? 'name')
+       OR jsonb_typeof(v_definition->'name') <> 'string'
+       OR (v_definition ? 'maxActive'
+         AND v_definition->'maxActive' <> 'null'::jsonb
+         AND jsonb_typeof(v_definition->'maxActive') <> 'number')
+       OR (v_definition ? 'rate'
+         AND v_definition->'rate' <> 'null'::jsonb
+         AND jsonb_typeof(v_definition->'rate') <> 'object') THEN
+      RAISE EXCEPTION 'each budget requires name, with optional maxActive and rate';
+    END IF;
+    v_budget_name := v_definition->>'name';
+    v_max_active := (v_definition->>'maxActive')::numeric;
+    v_rate := CASE WHEN v_definition->'rate' = 'null'::jsonb THEN NULL
+      ELSE v_definition->'rate' END;
+    IF v_budget_name = '' OR octet_length(v_budget_name) > 256 THEN
+      RAISE EXCEPTION 'budget name must contain between 1 and 256 UTF-8 bytes';
+    END IF;
+    IF v_budget_name = ANY(v_seen) THEN
+      RAISE EXCEPTION 'budget names must be unique';
+    END IF;
+    IF v_max_active IS NULL AND v_rate IS NULL THEN
+      RAISE EXCEPTION 'each budget requires maxActive, rate, or both';
+    END IF;
+    IF v_max_active IS NOT NULL AND (
+      v_max_active <> trunc(v_max_active) OR v_max_active NOT BETWEEN 1 AND 1000000
+    ) THEN
+      RAISE EXCEPTION 'budget maxActive must be an integer between 1 and 1000000';
+    END IF;
+    IF v_rate IS NOT NULL THEN
+      IF v_rate - ARRAY['limit', 'intervalMs', 'burst'] <> '{}'::jsonb
+         OR NOT (v_rate ?& ARRAY['limit', 'intervalMs', 'burst'])
+         OR jsonb_typeof(v_rate->'limit') <> 'number'
+         OR jsonb_typeof(v_rate->'intervalMs') <> 'number'
+         OR jsonb_typeof(v_rate->'burst') <> 'number' THEN
+        RAISE EXCEPTION 'budget rate requires limit, intervalMs, and burst';
+      END IF;
+      v_rate_limit := (v_rate->>'limit')::numeric;
+      v_rate_interval_ms := (v_rate->>'intervalMs')::numeric;
+      v_rate_burst := (v_rate->>'burst')::numeric;
+      IF v_rate_limit <> trunc(v_rate_limit) OR v_rate_limit NOT BETWEEN 1 AND 1000000
+         OR v_rate_interval_ms <> trunc(v_rate_interval_ms)
+         OR v_rate_interval_ms NOT BETWEEN 1 AND 86400000
+         OR v_rate_burst <> trunc(v_rate_burst) OR v_rate_burst NOT BETWEEN 1 AND 1000000 THEN
+        RAISE EXCEPTION 'budget rate values must be bounded positive integers';
+      END IF;
+    ELSE
+      v_rate_limit := NULL;
+      v_rate_interval_ms := NULL;
+      v_rate_burst := NULL;
+    END IF;
+    v_seen := array_append(v_seen, v_budget_name);
+    v_affected := array_append(v_affected, v_budget_name);
+    IF EXISTS (
+      SELECT 1 FROM workhorse.budget budget
+       WHERE budget.budget_name = v_budget_name AND budget.namespace <> p_namespace
+    ) THEN
+      RAISE EXCEPTION 'budget is owned by another namespace';
+    END IF;
+    INSERT INTO workhorse.budget AS budget(
+      budget_name, namespace, max_active, rate_limit, rate_interval_ms, rate_burst, updated_at
+    ) VALUES (
+      v_budget_name, p_namespace, v_max_active::integer, v_rate_limit::integer,
+      v_rate_interval_ms::integer, v_rate_burst::integer, clock_timestamp()
+    )
+    ON CONFLICT ON CONSTRAINT budget_pkey DO UPDATE SET
+      max_active = EXCLUDED.max_active,
+      rate_limit = EXCLUDED.rate_limit,
+      rate_interval_ms = EXCLUDED.rate_interval_ms,
+      rate_burst = EXCLUDED.rate_burst,
+      updated_at = CASE
+        WHEN budget.max_active IS DISTINCT FROM EXCLUDED.max_active
+          OR budget.rate_limit IS DISTINCT FROM EXCLUDED.rate_limit
+          OR budget.rate_interval_ms IS DISTINCT FROM EXCLUDED.rate_interval_ms
+          OR budget.rate_burst IS DISTINCT FROM EXCLUDED.rate_burst
+        THEN EXCLUDED.updated_at ELSE budget.updated_at
+      END;
+  END LOOP;
+
+  IF p_prune THEN
+    v_affected := v_affected || ARRAY(
+      SELECT budget.budget_name
+        FROM workhorse.budget budget
+       WHERE budget.namespace = p_namespace AND NOT (budget.budget_name = ANY(v_seen))
+       ORDER BY budget.budget_name
+    );
+    DELETE FROM workhorse.budget budget
+     WHERE budget.namespace = p_namespace AND NOT (budget.budget_name = ANY(v_seen));
+  END IF;
+
+  FOR v_queue_name IN
+    SELECT DISTINCT runtime.queue_name
+      FROM workhorse.task_runtime runtime
+     WHERE runtime.state = 'ready' AND runtime.budget_name = ANY(v_affected)
+     ORDER BY runtime.queue_name
+     LIMIT 100
+  LOOP
+    PERFORM pg_notify('workhorse_tasks', v_queue_name);
+  END LOOP;
+
+  RETURN QUERY
+    SELECT budget.namespace, budget.budget_name, budget.max_active, budget.rate_limit,
+           budget.rate_interval_ms, budget.rate_burst, budget.updated_at
+      FROM workhorse.budget budget
+     WHERE budget.namespace = p_namespace
+     ORDER BY budget.budget_name;
+END;
+$$;
+
+-- The budget token bucket. Same arithmetic as rate_limit_bucket_v1: refill from PostgreSQL time,
+-- clamp negative elapsed time, cap at burst, and insert bucket state only when a start consumes a
+-- token. A budget without a rate limit, or no budget row at all, always allows.
+CREATE OR REPLACE FUNCTION workhorse.budget_bucket_v1(
+  p_budget_name text,
+  p_now timestamptz,
+  p_consume boolean DEFAULT false
+) RETURNS TABLE (allowed boolean, tokens numeric, next_eligible_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_budget workhorse.budget%ROWTYPE;
+  v_bucket workhorse.budget_bucket%ROWTYPE;
+  v_tokens numeric;
+  v_refill_baseline timestamptz;
+BEGIN
+  IF p_budget_name IS NOT NULL THEN
+    SELECT * INTO v_budget FROM workhorse.budget budget WHERE budget.budget_name = p_budget_name;
+  END IF;
+  IF v_budget.rate_limit IS NULL THEN
+    allowed := true; tokens := NULL; next_eligible_at := NULL; RETURN NEXT; RETURN;
+  END IF;
+  SELECT * INTO v_bucket FROM workhorse.budget_bucket bucket
+   WHERE bucket.budget_name = p_budget_name
+   FOR UPDATE;
+  IF NOT FOUND THEN
+    IF NOT p_consume THEN
+      allowed := true; tokens := v_budget.rate_burst; next_eligible_at := NULL;
+      RETURN NEXT; RETURN;
+    END IF;
+    INSERT INTO workhorse.budget_bucket(budget_name, tokens, refilled_at)
+      VALUES (p_budget_name, v_budget.rate_burst, p_now)
+    ON CONFLICT DO NOTHING;
+    SELECT * INTO STRICT v_bucket FROM workhorse.budget_bucket bucket
+     WHERE bucket.budget_name = p_budget_name
+     FOR UPDATE;
+  END IF;
+  v_tokens := LEAST(
+    v_budget.rate_burst::numeric,
+    v_bucket.tokens + GREATEST(
+      0::numeric,
+      extract(epoch FROM p_now - v_bucket.refilled_at) * 1000
+    ) * v_budget.rate_limit::numeric / v_budget.rate_interval_ms::numeric
+  );
+  v_refill_baseline := GREATEST(p_now, v_bucket.refilled_at);
+  allowed := v_tokens >= 1;
+  IF allowed AND p_consume THEN v_tokens := v_tokens - 1; END IF;
+  tokens := v_tokens;
+  next_eligible_at := CASE WHEN allowed THEN p_now ELSE v_refill_baseline + make_interval(
+    secs => CEIL(
+      (1 - v_tokens) * v_budget.rate_interval_ms::numeric / v_budget.rate_limit::numeric
+    )::double precision / 1000
+  ) END;
+  IF p_consume THEN
+    UPDATE workhorse.budget_bucket bucket
+       SET tokens = v_tokens, refilled_at = v_refill_baseline
+     WHERE bucket.budget_name = p_budget_name;
+  END IF;
+  RETURN NEXT;
+END;
+$$;
+
+-- Whether one budget admits one more start now. Counts only unexpired active leases naming the
+-- budget and probes the bucket without consuming. claim_v1 holds the workhorse:budgets advisory
+-- lock while calling this, so two claims cannot both admit the last slot.
+CREATE OR REPLACE FUNCTION workhorse.budget_admission_v1(
+  p_budget_name text,
+  p_now timestamptz
+) RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_budget workhorse.budget%ROWTYPE;
+  v_active integer;
+  v_status record;
+BEGIN
+  IF p_budget_name IS NULL THEN RETURN true; END IF;
+  SELECT * INTO v_budget FROM workhorse.budget budget WHERE budget.budget_name = p_budget_name;
+  IF NOT FOUND THEN RETURN true; END IF;
+  IF v_budget.max_active IS NOT NULL THEN
+    SELECT count(*)::integer INTO v_active
+      FROM workhorse.task_runtime active
+     WHERE active.state = 'active'
+       AND active.budget_name = p_budget_name
+       AND active.expires_at > p_now;
+    IF v_active >= v_budget.max_active THEN RETURN false; END IF;
+  END IF;
+  IF v_budget.rate_limit IS NOT NULL THEN
+    SELECT * INTO STRICT v_status FROM workhorse.budget_bucket_v1(p_budget_name, p_now, false);
+    IF NOT v_status.allowed THEN RETURN false; END IF;
+  END IF;
+  RETURN true;
+END;
+$$;
+
+-- Bounded budget observation shared by queue_health_v1 and the operator read. At most 100 budgets
+-- are reported, and at most 101 ready rows per budget are sampled for blocked depth. Raw
+-- concurrency keys never appear.
+CREATE OR REPLACE FUNCTION workhorse.budget_status_v1(p_budget_names text[])
+RETURNS TABLE (
+  namespace text,
+  budget_name text,
+  max_active integer,
+  rate_limit integer,
+  rate_interval_ms integer,
+  rate_burst integer,
+  updated_at timestamptz,
+  active text,
+  available_tokens text,
+  saturated boolean,
+  blocked_ready text,
+  next_eligible_at timestamptz,
+  sample_capped boolean,
+  budget_set_capped boolean
+)
+LANGUAGE sql
+STABLE
+AS $$
+  WITH observed AS (
+    SELECT clock_timestamp() AS now
+  ), budgets AS MATERIALIZED (
+    SELECT budget.* FROM workhorse.budget budget
+     WHERE cardinality(COALESCE(p_budget_names, '{}')) = 0
+        OR budget.budget_name = ANY(p_budget_names)
+     ORDER BY budget.budget_name LIMIT 101
+  ), status AS (
+    SELECT budget.*, observed.now,
+           GREATEST(observed.now, COALESCE(bucket.refilled_at, observed.now)) AS refill_baseline,
+           CASE WHEN budget.rate_limit IS NULL THEN NULL ELSE LEAST(
+             budget.rate_burst::numeric,
+             COALESCE(
+               bucket.tokens + GREATEST(
+                 0::numeric,
+                 extract(epoch FROM observed.now - bucket.refilled_at) * 1000
+               ) * budget.rate_limit::numeric / budget.rate_interval_ms::numeric,
+               budget.rate_burst::numeric
+             )
+           ) END AS available_tokens,
+           (SELECT count(*)::integer
+              FROM workhorse.task_runtime active
+             WHERE active.state = 'active'
+               AND active.budget_name = budget.budget_name
+               AND active.expires_at > observed.now) AS active
+      FROM budgets budget CROSS JOIN observed
+      LEFT JOIN workhorse.budget_bucket bucket ON bucket.budget_name = budget.budget_name
+  ), evaluated AS (
+    SELECT status.*,
+           (status.max_active IS NOT NULL AND status.active >= status.max_active)
+             OR (status.available_tokens IS NOT NULL AND status.available_tokens < 1)
+             AS saturated
+      FROM status
+  )
+  SELECT budget.namespace, budget.budget_name, budget.max_active, budget.rate_limit,
+         budget.rate_interval_ms, budget.rate_burst, budget.updated_at,
+         budget.active::text,
+         budget.available_tokens::text,
+         budget.saturated,
+         CASE WHEN budget.saturated THEN waiting.sampled ELSE 0 END::text AS blocked_ready,
+         CASE WHEN budget.available_tokens < 1 THEN budget.refill_baseline + make_interval(
+           secs => CEIL(
+             (1 - budget.available_tokens) * budget.rate_interval_ms::numeric
+             / budget.rate_limit::numeric
+           )::double precision / 1000
+         ) END AS next_eligible_at,
+         waiting.sampled > 100 AS sample_capped,
+         (SELECT count(*) FROM budgets) > 100 AS budget_set_capped
+    FROM evaluated budget
+    CROSS JOIN LATERAL (
+      SELECT count(*)::integer AS sampled
+        FROM (
+          SELECT runtime.task_id
+            FROM workhorse.task_runtime runtime
+           WHERE runtime.state = 'ready' AND runtime.budget_name = budget.budget_name
+           LIMIT 101
+        ) sample
+    ) waiting
+   ORDER BY budget.budget_name
+   LIMIT 100;
+$$;
+
 -- The core batch insert path. Accept up to 1,000 tasks atomically. Scoped idempotency keys are
 -- resolved in ordinal order through their unique index before any durable task side effects. Exact
 -- replays return the original identity; material mismatches abort the whole statement with SQLSTATE
@@ -4704,6 +5143,7 @@ DECLARE
   v_queue_name text;
   v_task_type text;
   v_concurrency_key text;
+  v_budget_name text;
   v_priority numeric;
   v_payload jsonb;
   v_contract_version text;
@@ -4808,6 +5248,7 @@ BEGIN
     v_queue_name := v_request->>'queue';
     v_task_type := v_request->>'type';
     v_concurrency_key := v_request->>'concurrencyKey';
+    v_budget_name := v_request->>'budget';
     v_priority := COALESCE((v_request->>'priority')::numeric, 0);
     v_payload := COALESCE(v_request->'payload', 'null'::jsonb);
     v_contract_version := v_request->>'contractVersion';
@@ -4867,6 +5308,11 @@ BEGIN
       v_concurrency_key = '' OR octet_length(v_concurrency_key) > 256
     ) THEN
       RAISE EXCEPTION 'concurrencyKey must contain between 1 and 256 UTF-8 bytes';
+    END IF;
+    IF v_budget_name IS NOT NULL AND (
+      v_budget_name = '' OR octet_length(v_budget_name) > 256
+    ) THEN
+      RAISE EXCEPTION 'budget must contain between 1 and 256 UTF-8 bytes';
     END IF;
     IF v_priority <> trunc(v_priority) OR v_priority NOT BETWEEN 0 AND 100 THEN
       RAISE EXCEPTION 'priority must be an integer between 0 and 100';
@@ -5065,7 +5511,8 @@ BEGIN
             'onCancellation', v_on_cancellation
           ) END,
         'ttlMs', v_ttl_ms
-      );
+      ) || CASE WHEN v_budget_name IS NULL THEN '{}'::jsonb
+           ELSE jsonb_build_object('budget', v_budget_name) END;
       v_request_digest := workhorse.sha256_hex_v1(v_fingerprint::text);
 
       LOOP
@@ -5123,22 +5570,22 @@ BEGIN
         id, queue_name, task_type, concurrency_key, priority, payload, contract_version,
         payload_max_bytes, result_max_bytes,
         payload_redact_keys, result_redact_keys, trace_context, tags, max_attempts, retry_policy,
-        deadline_at, execution_timeout_ms
+        deadline_at, execution_timeout_ms, budget_name
       ) VALUES (
         task_id, v_queue_name, v_task_type, v_concurrency_key, v_priority::integer, v_payload, v_contract_version,
         v_payload_max_bytes::integer, v_result_max_bytes::integer,
         v_payload_redact_keys, v_result_redact_keys, v_trace_context, v_tags,
         v_max_attempts, v_retry_policy,
-        v_deadline_at, v_execution_timeout_ms::bigint
+        v_deadline_at, v_execution_timeout_ms::bigint, v_budget_name
       );
       INSERT INTO workhorse.task_runtime(
         task_id, queue_name, concurrency_key, priority, state, current_attempt, run_at, ready_at, sequence,
-        deadline_at
+        deadline_at, budget_name
       ) VALUES (
         task_id, v_queue_name, v_concurrency_key, v_priority::integer, v_state, 1, v_run_at,
         CASE WHEN v_state = 'ready' THEN v_now END,
         CASE WHEN v_state = 'ready' THEN nextval('workhorse.ready_sequence_seq') END,
-        v_deadline_at
+        v_deadline_at, v_budget_name
       );
       WITH prerequisites AS MATERIALIZED (
         SELECT input.prerequisite_task_id, outcome.state,
@@ -5425,7 +5872,8 @@ BEGIN
       'retryPolicy', v_retry_policy,
       'priority', COALESCE((v_normalized->>'priority')::integer, 0),
       'ttlMs', v_window_ms
-    );
+    ) || CASE WHEN v_normalized->>'budget' IS NULL THEN '{}'::jsonb
+         ELSE jsonb_build_object('budget', v_normalized->>'budget') END;
     v_stored_digest := workhorse.sha256_hex_v1(v_existing.request_fingerprint::text);
     v_request_digest := workhorse.sha256_hex_v1(v_fingerprint::text);
 
@@ -5445,7 +5893,8 @@ BEGIN
       max_attempts = COALESCE((v_normalized->>'maxAttempts')::integer, 25),
       retry_policy = v_retry_policy,
       deadline_at = (v_normalized->>'deadline')::timestamptz,
-      execution_timeout_ms = (v_normalized->>'executionTimeoutMs')::bigint
+      execution_timeout_ms = (v_normalized->>'executionTimeoutMs')::bigint,
+      budget_name = v_normalized->>'budget'
     WHERE id = v_existing.task_id;
 
     v_state := CASE WHEN v_run_at <= v_now THEN 'ready' ELSE 'scheduled' END;
@@ -5457,6 +5906,7 @@ BEGIN
     UPDATE workhorse.task_runtime runtime SET
       queue_name = v_normalized->>'queue',
       concurrency_key = v_normalized->>'concurrencyKey',
+      budget_name = v_normalized->>'budget',
       priority = COALESCE((v_normalized->>'priority')::integer, 0),
       state = v_state,
       run_at = v_run_at,
@@ -6028,20 +6478,20 @@ BEGIN
     id, queue_name, task_type, concurrency_key, priority, payload, contract_version,
     payload_max_bytes, result_max_bytes,
     payload_redact_keys, result_redact_keys, tags, max_attempts, retry_policy,
-    deadline_at, execution_timeout_ms
+    deadline_at, execution_timeout_ms, budget_name
   ) VALUES (
     target_task_id, v_task.queue_name, v_task.task_type, v_task.concurrency_key, v_task.priority,
     v_task.payload, v_task.contract_version,
     v_task.payload_max_bytes, v_task.result_max_bytes,
     v_task.payload_redact_keys, v_task.result_redact_keys, v_task.tags,
-    v_task.max_attempts, v_task.retry_policy, NULL, v_task.execution_timeout_ms
+    v_task.max_attempts, v_task.retry_policy, NULL, v_task.execution_timeout_ms, v_task.budget_name
   );
   INSERT INTO workhorse.task_runtime(
     task_id, queue_name, concurrency_key, priority, state, current_attempt, run_at, ready_at, sequence,
-    deadline_at
+    deadline_at, budget_name
   ) VALUES (
     target_task_id, v_task.queue_name, v_task.concurrency_key, v_task.priority, 'ready', 1, v_now, v_now,
-    nextval('workhorse.ready_sequence_seq'), NULL
+    nextval('workhorse.ready_sequence_seq'), NULL, v_task.budget_name
   );
   INSERT INTO workhorse.task_redrive(
     source_task_id, target_task_id, request_id_hash, request_id_preview,
@@ -6851,7 +7301,9 @@ $$;
 -- Policy-aware claim. Governed queues serialize the short admission transaction through policy
 -- rows, count only unexpired active leases, refill durable rate tokens from PostgreSQL time, and
 -- inspect at most the highest-priority 100 ready rows. Concurrency remains a dispatch budget rather than a
--- guarantee that expired handler code has stopped executing.
+-- guarantee that expired handler code has stopped executing. A queue holding ready work that names
+-- a budget also serializes on the workhorse:budgets advisory lock, because budget capacity is
+-- counted across queues (ADR 0067).
 CREATE OR REPLACE FUNCTION workhorse.claim_v1(
   p_queue_name text,
   p_worker_id text,
@@ -6872,6 +7324,7 @@ DECLARE
   v_rate_policy workhorse.rate_limit_policy%ROWTYPE;
   v_rate_status record;
   v_active integer;
+  v_budgeted boolean;
   v_fence bigint;
   v_now timestamptz;
   v_expires timestamptz;
@@ -6896,6 +7349,16 @@ BEGIN
     FROM workhorse.rate_limit_policy policy
    WHERE policy.queue_name = p_queue_name
    FOR UPDATE;
+  -- Budget admission counts across queues, so claims that can admit budget-named work serialize
+  -- on one lock. A queue without budget-named ready work never takes it.
+  SELECT EXISTS (
+    SELECT 1 FROM workhorse.task_runtime waiting
+     WHERE waiting.state = 'ready' AND waiting.queue_name = p_queue_name
+       AND waiting.budget_name IS NOT NULL
+  ) INTO v_budgeted;
+  IF v_budgeted THEN
+    PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:budgets', 0));
+  END IF;
   v_now := clock_timestamp();
   v_expires := v_now + make_interval(secs => p_lease_ms::double precision / 1000.0);
   WITH oldest_key_buckets AS MATERIALIZED (
@@ -6937,7 +7400,8 @@ BEGIN
 
   v_fence := nextval('workhorse.fence_token_seq');
   WITH ready_window AS MATERIALIZED (
-    SELECT runtime.task_id, runtime.concurrency_key, runtime.priority, runtime.sequence
+    SELECT runtime.task_id, runtime.concurrency_key, runtime.budget_name, runtime.priority,
+           runtime.sequence
       FROM workhorse.task_runtime runtime
       JOIN workhorse.task task ON task.id = runtime.task_id
      WHERE runtime.state = 'ready' AND runtime.queue_name = p_queue_name
@@ -6951,7 +7415,8 @@ BEGIN
      ORDER BY runtime.priority DESC, runtime.sequence, runtime.task_id
      FOR UPDATE OF runtime SKIP LOCKED
      LIMIT CASE
-       WHEN v_policy.queue_name IS NULL AND v_rate_policy.per_key_limit IS NULL THEN 1
+       WHEN v_policy.queue_name IS NULL AND v_rate_policy.per_key_limit IS NULL
+         AND NOT v_budgeted THEN 1
        ELSE 100
      END
   ), candidate AS (
@@ -6974,6 +7439,7 @@ BEGIN
              AND active.expires_at > v_now
         ) < v_policy.max_active_per_key
      ) AND keyed_rate.allowed
+       AND workhorse.budget_admission_v1(ready.budget_name, v_now)
      ORDER BY ready.priority DESC, ready.sequence, ready.task_id
      LIMIT 1
   )
@@ -7002,6 +7468,9 @@ BEGIN
     p_queue_name, 'key', v_runtime.concurrency_key, v_rate_policy.per_key_limit,
     v_rate_policy.per_key_interval_ms, v_rate_policy.per_key_burst, v_now, true
   );
+  IF v_runtime.budget_name IS NOT NULL THEN
+    PERFORM * FROM workhorse.budget_bucket_v1(v_runtime.budget_name, v_now, true);
+  END IF;
 
   INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
     VALUES (v_runtime.task_id, v_runtime.current_attempt, 'claimed',
@@ -12739,6 +13208,39 @@ AS $$
     FROM policy CROSS JOIN schedules CROSS JOIN routines;
 $$;
 
+
+-- Project the health document's budget rows into the dashboard/v1 wire shape.
+CREATE OR REPLACE FUNCTION workhorse.dashboard_budgets_v1(p_health jsonb)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT jsonb_build_object(
+    'budgets', COALESCE((
+      SELECT jsonb_agg(jsonb_build_object(
+               'name', budget->>'budget_name',
+               'namespace', budget->>'namespace',
+               'maxActive', (budget->>'max_active')::integer,
+               'rate', CASE WHEN COALESCE(budget->'rate_limit', 'null'::jsonb) = 'null'::jsonb
+                 THEN NULL
+                 ELSE jsonb_build_object('limit', (budget->>'rate_limit')::integer,
+                   'intervalMs', (budget->>'rate_interval_ms')::integer,
+                   'burst', (budget->>'rate_burst')::integer) END,
+               'active', (budget->>'active')::integer,
+               'availableTokens', (budget->>'available_tokens')::numeric,
+               'blockedReady', (budget->>'blocked_ready')::integer,
+               'saturated', (budget->>'saturated')::boolean,
+               'nextEligibleAt',
+               workhorse.dashboard_iso_v1((budget->>'next_eligible_at')::timestamptz)
+             ) ORDER BY budget->>'budget_name')
+        FROM jsonb_array_elements(COALESCE(p_health->'budget_policies', '[]'::jsonb)) budget
+    ), '[]'::jsonb),
+    'budgetsCapped', EXISTS (
+      SELECT 1 FROM jsonb_array_elements(COALESCE(p_health->'budget_policies', '[]'::jsonb)) budget
+       WHERE (budget->>'budget_set_capped')::boolean OR (budget->>'sample_capped')::boolean)
+  );
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.dashboard_queues_v1(p_input jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -12861,7 +13363,8 @@ BEGIN
        WHERE (policy->>'capped')::boolean),
     'rateLimitPoliciesCapped', EXISTS (
       SELECT 1 FROM jsonb_array_elements(v_health->'rate_limit_policies') policy
-       WHERE (policy->>'policy_set_capped')::boolean OR (policy->>'sample_capped')::boolean));
+       WHERE (policy->>'policy_set_capped')::boolean OR (policy->>'sample_capped')::boolean))
+    || workhorse.dashboard_budgets_v1(v_health);
 END;
 $$;
 
@@ -13849,6 +14352,8 @@ WITH rows AS (
     'rateLimitPoliciesCapped', EXISTS (
       SELECT 1 FROM jsonb_array_elements(v_health->'rate_limit_policies') policy
        WHERE (policy->>'policy_set_capped')::boolean OR (policy->>'sample_capped')::boolean),
+    'budgets', workhorse.dashboard_budgets_v1(v_health)->'budgets',
+    'budgetsCapped', workhorse.dashboard_budgets_v1(v_health)->'budgetsCapped',
     'retryStorm', jsonb_build_object('buckets', v_retry_buckets, 'topTypes', v_retry_types),
     'failingTypes', v_failing_types,
     'integrity', jsonb_build_object(
@@ -14089,11 +14594,12 @@ $$;
 
 INSERT INTO workhorse.schema_migration(version, description) VALUES
   (1, 'baseline'),
-  (2, 'schedule catch-up policies')
+  (2, 'schedule catch-up policies'),
+  (3, 'named budgets')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (2) ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.protocol_version(version) VALUES (1), (2) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (3) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.protocol_version(version) VALUES (1), (2), (3) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )

@@ -141,6 +141,7 @@ export type EnqueueIdempotencyConflictField =
   | "payload"
   | "priority"
   | "concurrencyKey"
+  | "budget"
   | "contractVersion"
   | "payloadMaxBytes"
   | "resultMaxBytes"
@@ -176,6 +177,8 @@ interface EnqueueBaseOptions {
   priority?: number;
   /** Queue-scoped application group used by durable concurrency admission. */
   concurrencyKey?: string;
+  /** Named budget shared across queues. A name with no synchronized budget imposes no limit. */
+  budget?: string;
   runAt?: Date;
   /** Absolute wall-clock deadline. Reaching it is terminal even when retry budget remains. */
   deadline?: Date;
@@ -289,6 +292,43 @@ export interface RateLimitStatus extends RateLimitPolicy {
   nextEligibleAt: Date | null;
   sampleCapped: boolean;
   policySetCapped: boolean;
+}
+
+/**
+ * One deployment-synchronized budget that tasks in any queue can name.
+ *
+ * At least one of `maxActive` and `rate` must be set. A budget adds to, and never replaces, the
+ * per-queue policies of the queues whose tasks name it.
+ */
+export interface BudgetDefinition {
+  name: string;
+  /** Unexpired active tasks naming this budget across every queue. */
+  maxActive?: number | null;
+  /** One token bucket shared by every start that names this budget. */
+  rate?: RateLimit | null;
+}
+
+/** Persisted named budget. */
+export interface Budget {
+  namespace: string;
+  name: string;
+  maxActive: number | null;
+  rate: RateLimit | null;
+  updatedAt: Date;
+}
+
+/** A bounded operational observation of one named budget. */
+export interface BudgetStatus extends Budget {
+  active: number;
+  /** Refilled tokens, or null when the budget has no rate limit. */
+  availableTokens: number | null;
+  /** True when the next start naming this budget would be refused right now. */
+  saturated: boolean;
+  /** Sampled ready rows naming a saturated budget. Zero when the budget has capacity. */
+  blockedReady: number;
+  nextEligibleAt: Date | null;
+  sampleCapped: boolean;
+  budgetSetCapped: boolean;
 }
 
 /** One task accepted by {@link Queue.enqueueMany}, with the same semantics as `Queue.enqueue`. */
@@ -980,7 +1020,8 @@ export type QueueHealthReasonCode =
   | "eligible-history-partitions"
   | "default-history-rows"
   | "concurrency-blocked"
-  | "rate-limit-throttled";
+  | "rate-limit-throttled"
+  | "budget-blocked";
 
 /**
  * One exceeded health budget.
@@ -996,6 +1037,8 @@ export interface QueueHealthReason {
   budget: number;
   /** Present on per-queue codes: `concurrency-blocked` and `rate-limit-throttled`. */
   queue?: string;
+  /** Present on `budget-blocked`, naming the saturated budget. */
+  budgetName?: string;
   /** Present on `retention-lag`, naming the late retention category. */
   category?: keyof RetentionCategoryValues<unknown>;
 }
@@ -1154,6 +1197,11 @@ export interface QueueHealth {
   /** Bounded token-bucket pressure. Ready counts are lower bounds when `capped` is true. */
   rateLimitPolicies: {
     policies: RateLimitStatus[];
+    capped: boolean;
+  };
+  /** Bounded named-budget pressure across queues. Ready counts are lower bounds when `capped`. */
+  budgetPolicies: {
+    budgets: BudgetStatus[];
     capped: boolean;
   };
   /**

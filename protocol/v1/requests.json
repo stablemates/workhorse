@@ -3,21 +3,35 @@
     "id": "keyed-enqueue-request",
     "application": {
       "type": "protocol.serialization",
-      "payload": { "account": "acct-1", "active": true },
+      "payload": {
+        "account": "acct-1",
+        "active": true
+      },
       "options": {
         "queue": "protocol-contract",
         "priority": 70,
         "concurrencyKey": "acct-1",
+        "budget": "vendor-api",
         "maxAttempts": 3,
-        "retryPolicy": { "type": "fixed", "delayMs": 25 },
+        "retryPolicy": {
+          "type": "fixed",
+          "delayMs": 25
+        },
         "tags": ["conformance"],
-        "idempotency": { "scope": "protocol", "key": "serialize", "ttlMs": 60000 }
+        "idempotency": {
+          "scope": "protocol",
+          "key": "serialize",
+          "ttlMs": 60000
+        }
       }
     },
     "postgres": {
       "queue": "protocol-contract",
       "type": "protocol.serialization",
-      "payload": { "account": "acct-1", "active": true },
+      "payload": {
+        "account": "acct-1",
+        "active": true
+      },
       "priority": 70,
       "contractVersion": null,
       "payloadMaxBytes": 1048576,
@@ -26,35 +40,50 @@
       "sensitiveResultKeys": [],
       "deadline": null,
       "concurrencyKey": "acct-1",
+      "budget": "vendor-api",
       "executionTimeoutMs": null,
       "maxAttempts": 3,
-      "retryPolicy": { "type": "fixed", "delayMs": 25 },
+      "retryPolicy": {
+        "type": "fixed",
+        "delayMs": 25
+      },
       "prerequisiteTaskId": null,
       "dependencies": null,
       "tags": ["conformance"],
-      "idempotency": { "scope": "protocol", "key": "serialize", "ttlMs": 60000 }
+      "idempotency": {
+        "scope": "protocol",
+        "key": "serialize",
+        "ttlMs": 60000
+      }
     }
   },
   {
     "id": "minimal-enqueue-request",
     "application": {
       "type": "protocol.minimal",
-      "payload": { "message": "hello" },
+      "payload": {
+        "message": "hello"
+      },
       "options": {}
     },
     "postgres": {
       "queue": "default",
       "type": "protocol.minimal",
-      "payload": { "message": "hello" },
+      "payload": {
+        "message": "hello"
+      },
       "priority": 0,
       "contractVersion": null,
       "payloadMaxBytes": 1048576,
       "resultMaxBytes": 1048576,
       "sensitivePayloadKeys": [],
       "sensitiveResultKeys": [],
-      "runAt": { "$type": "timestamp" },
+      "runAt": {
+        "$type": "timestamp"
+      },
       "deadline": null,
       "concurrencyKey": null,
+      "budget": null,
       "executionTimeoutMs": null,
       "maxAttempts": 25,
       "retryPolicy": null,

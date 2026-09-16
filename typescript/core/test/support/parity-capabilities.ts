@@ -175,6 +175,21 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
     },
   },
   {
+    capability: "Named budget management",
+    typescript: {
+      file: "integration-budgets.test.ts",
+      patterns: ["syncBudgets", "listBudgets"],
+    },
+    python: {
+      file: "test_policies.py",
+      patterns: ["sync_budgets", "list_budgets"],
+    },
+    go: {
+      file: "policies_test.go",
+      patterns: ["SyncBudgets", "ListBudgets"],
+    },
+  },
+  {
     capability: "Recurring schedule definition sync",
     typescript: { file: "integration-cron-schedules.test.ts", pattern: "syncSchedules" },
     python: { file: "test_schedules.py", pattern: "sync_schedules" },

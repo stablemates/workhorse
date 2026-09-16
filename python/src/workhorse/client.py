@@ -42,6 +42,8 @@ from .errors import (
     _translate_database_error,
 )
 from .types import (
+    Budget,
+    BudgetDefinition,
     CancelResult,
     ConcurrencyPolicy,
     ConcurrencyPolicyDefinition,
@@ -185,6 +187,24 @@ class Queue:
         names = list(queue_names)
         rows = self._executor.rows(_STATEMENTS.list_rate_limit_policies, (names,))
         return [_rate_limit_policy(row) for row in rows]
+
+    def sync_budgets(
+        self,
+        namespace: str,
+        definitions: Sequence[BudgetDefinition],
+        *,
+        prune: bool = True,
+    ) -> list[Budget]:
+        _assert_sync_compatible(self._executor)
+        rows = self._executor.rows(
+            _STATEMENTS.sync_budgets,
+            (namespace, _budget_payload(definitions), prune),
+        )
+        return [_budget(row) for row in rows]
+
+    def list_budgets(self, budget_names: Sequence[str] = ()) -> list[Budget]:
+        rows = self._executor.rows(_STATEMENTS.list_budgets, (list(budget_names),))
+        return [_budget(row) for row in rows]
 
     def sync_contracts(self, contracts: Mapping[str, TaskTypeContracts]) -> None:
         _assert_sync_compatible(self._executor)
@@ -371,6 +391,25 @@ class AsyncQueue:
         names = list(queue_names)
         rows = await self._executor.rows(_STATEMENTS.list_rate_limit_policies, (names,))
         return [_rate_limit_policy(row) for row in rows]
+
+    async def sync_budgets(
+        self,
+        namespace: str,
+        definitions: Sequence[BudgetDefinition],
+        *,
+        prune: bool = True,
+    ) -> list[Budget]:
+        await _assert_async_compatible(self._executor)
+        rows = await self._executor.rows(
+            _STATEMENTS.sync_budgets,
+            (namespace, _budget_payload(definitions), prune),
+        )
+        return [_budget(row) for row in rows]
+
+    async def list_budgets(self, budget_names: Sequence[str] = ()) -> list[Budget]:
+        names = list(budget_names)
+        rows = await self._executor.rows(_STATEMENTS.list_budgets, (names,))
+        return [_budget(row) for row in rows]
 
     async def sync_contracts(self, contracts: Mapping[str, TaskTypeContracts]) -> None:
         await _assert_async_compatible(self._executor)
@@ -582,6 +621,39 @@ def _rate_limit_policy(row: _Row) -> RateLimitPolicy:
             burst=int(cast(Any, row["rate_burst"])),
         ),
         per_key=per_key,
+        updated_at=cast(datetime, row["updated_at"]),
+    )
+
+
+def _budget_payload(definitions: Sequence[BudgetDefinition]) -> str:
+    return json.dumps(
+        [
+            {
+                "name": definition.name,
+                "maxActive": definition.max_active,
+                "rate": None if definition.rate is None else _rate_limit_document(definition.rate),
+            }
+            for definition in definitions
+        ],
+        separators=(",", ":"),
+    )
+
+
+def _budget(row: _Row) -> Budget:
+    rate = (
+        None
+        if row["rate_limit"] is None
+        else RateLimit(
+            limit=int(cast(Any, row["rate_limit"])),
+            interval_ms=int(cast(Any, row["rate_interval_ms"])),
+            burst=int(cast(Any, row["rate_burst"])),
+        )
+    )
+    return Budget(
+        namespace=str(row["namespace"]),
+        name=str(row["budget_name"]),
+        max_active=None if row["max_active"] is None else int(cast(Any, row["max_active"])),
+        rate=rate,
         updated_at=cast(datetime, row["updated_at"]),
     )
 

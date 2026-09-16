@@ -7,6 +7,7 @@ import {
   describeConcurrencyLimit,
 } from "../concurrency-policy.js";
 import { describeRateLimit, describeRateThrottle, rateLimitCappedFootnote } from "../rate-limit.js";
+import { BudgetsTable, budgetCappedFootnote } from "../budgets-table.js";
 import { EmptyState, PageHeader } from "../components/task-list.js";
 import { HelpButton } from "../charts/system.js";
 
@@ -251,6 +252,12 @@ export function QueuesPage({
       {data.rateLimitPoliciesCapped ? (
         <Text c="dimmed" size="xs">
           {rateLimitCappedFootnote}
+        </Text>
+      ) : null}
+      {data.budgets.length === 0 ? null : <BudgetsTable budgets={data.budgets} />}
+      {data.budgetsCapped ? (
+        <Text c="dimmed" size="xs">
+          {budgetCappedFootnote}
         </Text>
       ) : null}
     </Stack>

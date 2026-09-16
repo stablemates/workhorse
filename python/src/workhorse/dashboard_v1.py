@@ -30,6 +30,24 @@ class DashboardActivityPage(TypedDict, total=False):
 type DashboardActivityPeriod = Literal["15m", "1h", "24h", "6h", "7d"]
 
 
+class DashboardBudgetSummaryRate(TypedDict, total=False):
+    limit: Required[float]
+    intervalMs: Required[float]
+    burst: Required[float]
+
+
+class DashboardBudgetSummary(TypedDict, total=False):
+    name: Required[str]
+    namespace: Required[str]
+    maxActive: Required[float | None]
+    rate: Required[DashboardBudgetSummaryRate | None]
+    active: Required[float]
+    availableTokens: Required[float | None]
+    blockedReady: Required[float]
+    saturated: Required[bool]
+    nextEligibleAt: Required[str | None]
+
+
 type DashboardCancelStatus = Literal["already_terminal", "cancel_requested", "canceled", "not_found"]
 
 
@@ -336,10 +354,11 @@ class DashboardQueueHealthReason(TypedDict, total=False):
     observed: Required[float]
     budget: Required[float]
     queue: NotRequired[str]
+    budgetName: NotRequired[str]
     category: NotRequired[Literal["attemptHistory", "scheduleOccurrences", "statistics", "taskEvents", "taskIdentity", "terminalOutcome"]]
 
 
-type DashboardQueueHealthReasonCode = Literal["concurrency-blocked", "default-history-rows", "eligible-history-partitions", "expired-leases", "missing-history-partitions", "overdue-deadlines", "overdue-execution-timeouts", "overdue-external-waits", "rate-limit-throttled", "retention-lag", "rollup-stalled", "stalled-promotion"]
+type DashboardQueueHealthReasonCode = Literal["budget-blocked", "concurrency-blocked", "default-history-rows", "eligible-history-partitions", "expired-leases", "missing-history-partitions", "overdue-deadlines", "overdue-execution-timeouts", "overdue-external-waits", "rate-limit-throttled", "retention-lag", "rollup-stalled", "stalled-promotion"]
 
 
 class DashboardQueuesPage(TypedDict, total=False):
@@ -347,6 +366,8 @@ class DashboardQueuesPage(TypedDict, total=False):
     queues: Required[list[DashboardManagedQueueRow]]
     concurrencyPoliciesCapped: Required[bool]
     rateLimitPoliciesCapped: Required[bool]
+    budgets: Required[list[DashboardBudgetSummary]]
+    budgetsCapped: Required[bool]
 
 
 class DashboardRateLimitPolicySummaryRate(TypedDict, total=False):
@@ -786,6 +807,8 @@ class DashboardSystemPage(TypedDict, total=False):
     queues: Required[list[DashboardSystemQueueRow]]
     concurrencyPoliciesCapped: Required[bool]
     rateLimitPoliciesCapped: Required[bool]
+    budgets: Required[list[DashboardBudgetSummary]]
+    budgetsCapped: Required[bool]
     retryStorm: Required[DashboardSystemPageRetryStorm]
     failingTypes: Required[list[DashboardSystemFailingType]]
     integrity: Required[DashboardSystemPageIntegrity]
@@ -1878,6 +1901,8 @@ __all__ = [
     "DashboardActivityGroupBy",
     "DashboardActivityPage",
     "DashboardActivityPeriod",
+    "DashboardBudgetSummary",
+    "DashboardBudgetSummaryRate",
     "DashboardCancelStatus",
     "DashboardCancelTaskResult",
     "DashboardCancellationRequest",

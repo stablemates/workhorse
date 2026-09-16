@@ -58,6 +58,23 @@ type RateLimitPolicy struct {
 	UpdatedAt time.Time
 }
 
+// BudgetDefinition is one deployment-synchronized budget that tasks in any queue can name.
+// At least one of MaxActive and Rate must be set.
+type BudgetDefinition struct {
+	Name      string     `json:"name"`
+	MaxActive *int       `json:"maxActive"`
+	Rate      *RateLimit `json:"rate"`
+}
+
+// Budget is one persisted named budget.
+type Budget struct {
+	Namespace string
+	Name      string
+	MaxActive *int
+	Rate      *RateLimit
+	UpdatedAt time.Time
+}
+
 // SyncConcurrencyPolicies atomically reconciles one namespace of concurrency policies.
 // Omitted definitions are removed unless options explicitly set Prune to false.
 func (queue *Queue) SyncConcurrencyPolicies(
@@ -168,6 +185,54 @@ func (queue *Queue) ListRateLimitPolicies(
 	return rateLimitPolicyRows(rows)
 }
 
+// SyncBudgets atomically reconciles one namespace of named budgets.
+// Omitted budgets are removed unless options explicitly set Prune to false.
+func (queue *Queue) SyncBudgets(
+	ctx context.Context,
+	namespace string,
+	definitions []BudgetDefinition,
+	options ...SyncPolicyOptions,
+) ([]Budget, error) {
+	prune, err := policyPruneOption(options)
+	if err != nil {
+		return nil, err
+	}
+	if definitions == nil {
+		definitions = []BudgetDefinition{}
+	}
+	payload, err := json.Marshal(definitions)
+	if err != nil {
+		return nil, err
+	}
+	if err := AssertSchemaCompatible(ctx, queue.executor); err != nil {
+		return nil, err
+	}
+	rows, err := queue.executor.Query(
+		ctx,
+		internalStatementRegistry[syncBudgetsStatementName],
+		namespace,
+		payload,
+		prune,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return budgetRows(rows)
+}
+
+// ListBudgets returns persisted budgets ordered by name.
+// A nil or empty name slice returns every budget.
+func (queue *Queue) ListBudgets(ctx context.Context, budgetNames []string) ([]Budget, error) {
+	if budgetNames == nil {
+		budgetNames = []string{}
+	}
+	rows, err := queue.executor.Query(ctx, internalStatementRegistry[listBudgetsStatementName], budgetNames)
+	if err != nil {
+		return nil, err
+	}
+	return budgetRows(rows)
+}
+
 func policyPruneOption(options []SyncPolicyOptions) (bool, error) {
 	if len(options) > 1 {
 		return false, fmt.Errorf(tooManySyncPolicyOptionsMessage, ErrInvalidPolicyOptions)
@@ -242,6 +307,41 @@ func rateLimitPolicyRows(rows []Row) ([]RateLimitPolicy, error) {
 		}
 	}
 	return policies, nil
+}
+
+func budgetRows(rows []Row) ([]Budget, error) {
+	budgets := make([]Budget, len(rows))
+	for index, row := range rows {
+		namespace, namespaceOK := row[rowNamespaceField].(string)
+		name, nameOK := row[rowBudgetNameField].(string)
+		maxActive, maxActiveOK := optionalInteger(row[rowMaxActiveField])
+		rate, rateOK := optionalRateLimitFromRow(
+			row,
+			rowRateLimitField,
+			rowRateIntervalMSField,
+			rowRateBurstField,
+		)
+		updatedAt, updatedAtOK := row[rowUpdatedAtField].(time.Time)
+		if !namespaceOK {
+			return nil, invalidPolicyField(rowNamespaceField)
+		}
+		if !nameOK {
+			return nil, invalidPolicyField(rowBudgetNameField)
+		}
+		if !maxActiveOK {
+			return nil, invalidPolicyField(rowMaxActiveField)
+		}
+		if !rateOK {
+			return nil, invalidPolicyField(rowRateLimitField)
+		}
+		if !updatedAtOK {
+			return nil, invalidPolicyField(rowUpdatedAtField)
+		}
+		budgets[index] = Budget{
+			Namespace: namespace, Name: name, MaxActive: maxActive, Rate: rate, UpdatedAt: updatedAt,
+		}
+	}
+	return budgets, nil
 }
 
 func rateLimitFromRow(row Row, limitField, intervalField, burstField string) (RateLimit, bool) {

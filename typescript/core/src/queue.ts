@@ -9,6 +9,9 @@ import type {
   ClaimedTask,
   CreateChildResult,
   CreateChildrenResult,
+  Budget,
+  BudgetDefinition,
+  BudgetStatus,
   ConcurrencyPolicy,
   ConcurrencyPolicyDefinition,
   RateLimitPolicy,
@@ -35,7 +38,7 @@ import type {
   RetentionPolicySetting,
   WorkerRegistration,
 } from "./types.js";
-import type { QueueMetricSnapshot } from "./telemetry.js";
+import type { BudgetMetricSnapshot, QueueMetricSnapshot } from "./telemetry.js";
 import {
   subscribeToTaskNotifications,
   supportsTaskNotifications,
@@ -50,8 +53,10 @@ import {
 } from "./queue/modules.js";
 import {
   RedriveIdempotencyConflictError,
+  budget,
   concurrencyPolicy,
   rateLimitPolicy,
+  type BudgetRow,
   type ConcurrencyPolicyRow,
   type RateLimitPolicyRow,
 } from "./queue/operator-reads.js";
@@ -416,6 +421,35 @@ export class Queue {
     return this.modules.operatorReads.rateLimitStatuses(queueNames);
   }
 
+  async syncBudgets(
+    namespace: string,
+    definitions: readonly BudgetDefinition[],
+    options: { prune?: boolean } = {},
+  ): Promise<Budget[]> {
+    const input = definitions.map((definition) => ({
+      name: definition.name,
+      maxActive: definition.maxActive ?? null,
+      rate: definition.rate ?? null,
+    }));
+    const result = await this.database.query<BudgetRow>(SQL_STATEMENTS["sync_budgets_v1"], [
+      namespace,
+      JSON.stringify(input),
+      options.prune ?? true,
+    ]);
+    return result.rows.map(budget);
+  }
+
+  async listBudgets(budgetNames: readonly string[] = []): Promise<Budget[]> {
+    const result = await this.database.query<BudgetRow>(SQL_STATEMENTS["list_budgets"], [
+      budgetNames,
+    ]);
+    return result.rows.map(budget);
+  }
+
+  async budgetStatuses(budgetNames: readonly string[] = []): Promise<BudgetStatus[]> {
+    return this.modules.operatorReads.budgetStatuses(budgetNames);
+  }
+
   async overrideRetentionPolicy(
     definition: Partial<RetentionPolicyDefinition>,
   ): Promise<RetentionPolicy> {
@@ -709,5 +743,9 @@ export class Queue {
   /** Read the per-queue live pressure used by OpenTelemetry observable instruments. */
   async queueMetricSnapshot(): Promise<QueueMetricSnapshot[]> {
     return this.modules.operatorReads.queueMetricSnapshot();
+  }
+
+  async budgetMetricSnapshot(): Promise<BudgetMetricSnapshot[]> {
+    return this.modules.operatorReads.budgetMetricSnapshot();
   }
 }

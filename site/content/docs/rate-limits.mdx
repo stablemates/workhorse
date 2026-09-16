@@ -93,6 +93,17 @@ Python synchronizes policies through `Queue.sync_rate_limit_policies` or
 `AsyncQueue.list_rate_limit_policies`. TypeScript exposes current pressure through
 `Queue.rateLimitStatuses`.
 
+## One bucket across queues
+
+A rate policy governs one queue. When several queues call the same external service, give them a
+named budget with a `rate` through `Queue.syncBudgets`. Every start that names the budget, from any
+queue, draws one token from the same bucket, and PostgreSQL refills it from its own clock. A task
+names its budget with the `budget` enqueue option. The budget is an extra check beside the queue's
+own rate policy and has no per-key bucket. `Queue.budgetStatuses` shows the budget's refilled tokens
+and how much sampled ready work waits on it, and the same facts appear in `Queue.health()`. The
+[concurrency policies](/docs/concurrency-policies) page shows how a budget is defined in each
+language.
+
 ## Next
 
 - [Concurrency policies](/docs/concurrency-policies) — limit simultaneous active work

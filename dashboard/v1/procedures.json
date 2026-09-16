@@ -2089,6 +2089,93 @@
         "7d"
       ]
     },
+    "DashboardBudgetSummary": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "maxActive": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "rate": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "limit": {
+                  "type": "number"
+                },
+                "intervalMs": {
+                  "type": "number"
+                },
+                "burst": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "limit",
+                "intervalMs",
+                "burst"
+              ]
+            }
+          ]
+        },
+        "active": {
+          "type": "number"
+        },
+        "availableTokens": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "blockedReady": {
+          "type": "number"
+        },
+        "saturated": {
+          "type": "boolean"
+        },
+        "nextEligibleAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "namespace",
+        "maxActive",
+        "rate",
+        "active",
+        "availableTokens",
+        "blockedReady",
+        "saturated",
+        "nextEligibleAt"
+      ]
+    },
     "DashboardCancelStatus": {
       "enum": [
         "already_terminal",
@@ -3410,6 +3497,9 @@
         "queue": {
           "type": "string"
         },
+        "budgetName": {
+          "type": "string"
+        },
         "category": {
           "enum": [
             "attemptHistory",
@@ -3430,6 +3520,7 @@
     },
     "DashboardQueueHealthReasonCode": {
       "enum": [
+        "budget-blocked",
         "concurrency-blocked",
         "default-history-rows",
         "eligible-history-partitions",
@@ -3461,13 +3552,24 @@
         },
         "rateLimitPoliciesCapped": {
           "type": "boolean"
+        },
+        "budgets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardBudgetSummary"
+          }
+        },
+        "budgetsCapped": {
+          "type": "boolean"
         }
       },
       "required": [
         "capturedAt",
         "queues",
         "concurrencyPoliciesCapped",
-        "rateLimitPoliciesCapped"
+        "rateLimitPoliciesCapped",
+        "budgets",
+        "budgetsCapped"
       ]
     },
     "DashboardRateLimitPolicySummary": {
@@ -5147,6 +5249,15 @@
         "rateLimitPoliciesCapped": {
           "type": "boolean"
         },
+        "budgets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardBudgetSummary"
+          }
+        },
+        "budgetsCapped": {
+          "type": "boolean"
+        },
         "retryStorm": {
           "type": "object",
           "properties": {
@@ -5256,6 +5367,8 @@
         "queues",
         "concurrencyPoliciesCapped",
         "rateLimitPoliciesCapped",
+        "budgets",
+        "budgetsCapped",
         "retryStorm",
         "failingTypes",
         "integrity"

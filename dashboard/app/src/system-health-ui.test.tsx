@@ -32,6 +32,8 @@ const systemPage = {
   ],
   concurrencyPoliciesCapped: false,
   rateLimitPoliciesCapped: false,
+  budgets: [],
+  budgetsCapped: false,
   kpis: {
     drain: { enqueuedPerMinute: 1, completedPerMinute: 2, netPerMinute: 1 },
     backlog: { ready: 3, oldestReadyMs: 4_000 },

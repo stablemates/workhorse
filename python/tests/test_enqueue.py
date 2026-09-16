@@ -82,6 +82,7 @@ def test_serializes_every_shared_request_fixture_and_returns_the_canonical_resul
                 queue=options.get("queue"),
                 priority=options.get("priority", 0),
                 concurrency_key=options.get("concurrencyKey"),
+                budget=options.get("budget"),
                 max_attempts=options.get("maxAttempts", 25),
                 retry_policy=options.get("retryPolicy"),
                 tags=tuple(options.get("tags", [])),

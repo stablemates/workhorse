@@ -215,6 +215,27 @@ interface AdminQueueStatus {
   rateLimitThrottledReadyDepth: number;
 }
 
+interface Budget {
+  namespace: string;
+  name: string;
+  maxActive: number | null;
+  rate: RateLimit | null;
+  updatedAt: Date;
+}
+
+interface BudgetStatus extends Budget {
+  active: number;
+  /** Refilled tokens, or null when the budget has no rate limit. */
+  availableTokens: number | null;
+  /** True when the next start naming this budget would be refused right now. */
+  saturated: boolean;
+  /** Sampled ready rows naming a saturated budget. Zero when the budget has capacity. */
+  blockedReady: number;
+  nextEligibleAt: Date | null;
+  sampleCapped: boolean;
+  budgetSetCapped: boolean;
+}
+
 interface BulkRedrivePage {
   results: RedriveResult[];
   nextCursor: DeadLetterCursor | null;
@@ -455,6 +476,11 @@ interface QueueHealth {
     policies: RateLimitStatus[];
     capped: boolean;
   };
+  /** Bounded named-budget pressure across queues. Ready counts are lower bounds when `capped`. */
+  budgetPolicies: {
+    budgets: BudgetStatus[];
+    capped: boolean;
+  };
   /**
   * Rolling-statistics rollup progress.
   *
@@ -558,11 +584,13 @@ interface QueueHealthReason {
   budget: number;
   /** Present on per-queue codes: `concurrency-blocked` and `rate-limit-throttled`. */
   queue?: string;
+  /** Present on `budget-blocked`, naming the saturated budget. */
+  budgetName?: string;
   /** Present on `retention-lag`, naming the late retention category. */
   category?: keyof RetentionCategoryValues<unknown>;
 }
 
-type QueueHealthReasonCode = "expired-leases" | "overdue-deadlines" | "overdue-execution-timeouts" | "overdue-external-waits" | "stalled-promotion" | "missing-history-partitions" | "rollup-stalled" | "retention-lag" | "eligible-history-partitions" | "default-history-rows" | "concurrency-blocked" | "rate-limit-throttled";
+type QueueHealthReasonCode = "expired-leases" | "overdue-deadlines" | "overdue-execution-timeouts" | "overdue-external-waits" | "stalled-promotion" | "missing-history-partitions" | "rollup-stalled" | "retention-lag" | "eligible-history-partitions" | "default-history-rows" | "concurrency-blocked" | "rate-limit-throttled" | "budget-blocked";
 
 interface QueueHealthStatus {
   level: "healthy" | "degraded" | "critical";

@@ -1407,6 +1407,8 @@ The table uses fillfactor 70 because heartbeat and lifecycle updates are intenti
 
 `task_runtime_active_queue_key_expiry_idx` contains only active rows and orders them by queue, concurrency key, and task identity. `claim_v1` reads heap-only `expires_at` while counting admission pressure. The concurrency policy bounds those candidates. Neither active partial index stores `expires_at`, so an accepted heartbeat can use a HOT update.
 
+`budget_name` is null or a non-empty UTF-8 string through 256 bytes, mirrored from `task` the same way. Three partial indexes cover only rows that name a budget: `task_runtime_active_budget_expiry_idx` on `(budget_name, task_id)` for active rows, `task_runtime_ready_budget_queue_idx` on `(queue_name, budget_name)` for ready rows, and `task_runtime_ready_budget_idx` on `(budget_name, queue_name)` for ready rows. Rows without a budget never enter them.
+
 ### `task_outcome`
 
 Semantically immutable terminal state. Completion, terminal failure, or cancellation deletes runtime and inserts the outcome in one transaction. Succeeded rows contain `result`; failed rows contain `error`; canceled rows contain the bounded cancellation envelope. Those semantic columns never change. Each terminal function sets the retention-only `history_through_at` watermark when it inserts the outcome. Never-started cancellation uses fence zero and has no attempt row, while started cancellation retains ownership provenance. Terminal tasks no longer occupy dispatch indexes. Automated retention never deletes an outcome alone. It removes the stable terminal task only after every retention boundary has elapsed and no history rows remain.
@@ -1654,6 +1656,62 @@ array observes every policy subject to the cap; a non-empty array filters exact 
 the cap. `QueueHealth.rateLimitPolicies` includes the same observations and sets `capped` when either
 limit applies. OpenTelemetry exports configured starts per second, available queue tokens, throttled
 ready depth, and next-eligibility delay using queue name as the only policy dimension.
+
+### `budget` and `budget_bucket`
+
+One `budget` row per name defines a deployment-owned limit that tasks in any queue can name
+([ADR 0067](decisions/0067-add-named-budgets-that-span-queues.md)). `budget_name` is the primary
+key and accepts 1 through 256 UTF-8 bytes. `namespace` accepts the same bounds and owns the row.
+Nullable `max_active` accepts integers from 1 through 1,000,000 and caps unexpired active tasks
+naming the budget across every queue. Nullable `rate_limit`, `rate_interval_ms`, and `rate_burst`
+either appear together or remain null, with the same bounds as `rate_limit_policy`.
+`budget_limit_check` requires at least one limit. `updated_at` changes only when a limit changes. A
+budget has no per-key sub-limit; keys stay queue-scoped.
+
+`sync_budgets_v1(namespace, definitions, prune)` and TypeScript
+`Queue.syncBudgets(namespace, definitions, { prune })`, Python
+`Queue.sync_budgets(namespace, definitions, prune=True)` and
+`AsyncQueue.sync_budgets(namespace, definitions, prune=True)`, plus Go
+`Queue.SyncBudgets(ctx, namespace, definitions, options...)` reconcile deployment-owned desired
+state. Each definition contains only `name`, optional `maxActive`, and optional `rate`, and at least
+one limit. Synchronization accepts at most 10,000 unique names, takes the exclusive
+`workhorse:budgets` transaction advisory lock, rejects cross-namespace ownership, prunes omitted
+rows by default, and sends a `workhorse_tasks` wake hint to at most 100 queues holding ready work
+that names an affected budget. TypeScript `Queue.listBudgets(budgetNames)` and
+`Admin.listBudgets(budgetNames)`, Python `Queue.list_budgets(budget_names)` and
+`AsyncQueue.list_budgets(budget_names)`, and Go `Queue.ListBudgets(ctx, budgetNames)` return
+persisted rows ordered by `budget_name` without an implicit result cap.
+
+`task.budget_name` and `task_runtime.budget_name` are null or 1 through 256 UTF-8 bytes.
+`enqueue_batch_v1` reads the `budget` request key, validates it, and adds it to the idempotency
+fingerprint only when present, so a request accepted before schema version 3 keeps its digest.
+`enqueue_debounce_v1` updates it on replacement and `redrive_v1` copies it. A task whose budget has
+no row admits freely, the way a queue with no policy row has no limit.
+
+`claim_v1` probes `task_runtime_ready_budget_queue_idx` for ready rows in its queue that name a
+budget. When one exists it takes the exclusive `workhorse:budgets` advisory lock before it reads
+the clock, inspects the 100-row priority window, and calls `budget_admission_v1(budget_name, now)`
+for each candidate. Admission counts active rows through `task_runtime_active_budget_expiry_idx`
+whose `expires_at` is later than now, and probes `budget_bucket_v1(budget_name, now, false)`
+without consuming. After the runtime update selects a candidate,
+`budget_bucket_v1(budget_name, now, true)` consumes one token. `budget_bucket` holds one row per
+budget with the refill arithmetic of `rate_limit_bucket_v1`, and deleting a budget cascades its
+bucket. `notify_budget_capacity_v1` fires when an active row naming a budget leaves the active
+state and notifies `workhorse_tasks` for each distinct waiting queue found through
+`task_runtime_ready_budget_idx`, at most 100 per release.
+
+`budget_status_v1(budget_names)` reports at most 100 budgets and samples at most 101 ready rows
+per budget: `active`, `available_tokens` (null without a rate), `saturated`, `blocked_ready` (zero
+unless saturated), `next_eligible_at`, `sample_capped`, and `budget_set_capped`.
+`Queue.budgetStatuses(budgetNames)` returns those rows. `queue_health_v1` carries them as
+`budget_policies`, and `QueueHealth.budgetPolicies` sets `capped` when either limit applies.
+`evaluate_queue_health_v1` emits `budget-blocked` with `budgetName` when `blocked_ready` is
+positive. OpenTelemetry exports `workhorse.budget.concurrency.limit`,
+`workhorse.budget.concurrency.active`, `workhorse.budget.rate_limit.configured`,
+`workhorse.budget.rate_limit.available_tokens`, `workhorse.budget.blocked_ready`, and
+`workhorse.budget.next_eligible_delay` with `workhorse.budget.name` as the only dimension. The
+dashboard `queues` and `system` procedures carry `budgets` and `budgetsCapped` through
+`dashboard_budgets_v1(health)`.
 
 ### History
 
@@ -2056,6 +2114,8 @@ it refills the queue bucket from PostgreSQL time and returns null when no queue 
 
 Priority dispatch has no aging or fair-share control. A sustained stream of higher-priority ready work can starve lower-priority rows in the same queue.
 
+When the queue holds ready rows that name a budget, `claim_v1` also takes the exclusive `workhorse:budgets` advisory lock before reading the clock and checks each candidate with `budget_admission_v1`, so a saturated budget is passed over inside the same 100-row window. A queue with no budget-named ready work never takes that lock and keeps the one-row fast path. See [`budget`](#budget-and-budget_bucket).
+
 If concurrency-key or rate-key limits apply, `claim_v1` inspects at most the first 100 ready rows by
 priority descending, FIFO sequence, and task identity. It selects the earliest candidate whose queue-scoped key has concurrency capacity and
 a rate token. Saturated or throttled candidates remain ready, so later admissible work can proceed
@@ -2243,7 +2303,7 @@ Snapshot cost tracks live work, not lifetime history. Live-state counts and dept
 
 PostgreSQL planner and collector readings are observations rather than transactional facts and are returned under `QueueHealth.observations`: per-relation size and tuple statistics from `pg_stat_user_tables` summed across `pg_partition_tree`, `oldestTransactionAgeMs` and `lockWaitCount` from `pg_stat_activity`, and `pg_notification_queue_usage()`. `queue_health_v1` reads them after the correctness snapshot in the same function call. They may lag until the statistics collector flushes.
 
-`evaluate_queue_health_v1(snapshot, policy)` produces `status.level` (`healthy`, `degraded`, `critical`) and `status.reasons`, each `{ code, severity, observed, budget }` plus `queue` on admission codes and `category` on retention lag. Critical codes mean work is stopping or being lost: `expired-leases`, `overdue-deadlines`, `overdue-execution-timeouts`, `overdue-external-waits`, `stalled-promotion` when the oldest due scheduled runtime exceeds `promotionLagMs`, and `missing-history-partitions` counting each absent partition side. Degraded codes cost storage or throughput: `rollup-stalled`, `retention-lag`, `eligible-history-partitions`, `default-history-rows`, `concurrency-blocked`, and `rate-limit-throttled`.
+`evaluate_queue_health_v1(snapshot, policy)` produces `status.level` (`healthy`, `degraded`, `critical`) and `status.reasons`, each `{ code, severity, observed, budget }` plus `queue` on queue admission codes, `budgetName` on `budget-blocked`, and `category` on retention lag. Critical codes mean work is stopping or being lost: `expired-leases`, `overdue-deadlines`, `overdue-execution-timeouts`, `overdue-external-waits`, `stalled-promotion` when the oldest due scheduled runtime exceeds `promotionLagMs`, and `missing-history-partitions` counting each absent partition side. Degraded codes cost storage or throughput: `rollup-stalled`, `retention-lag`, `eligible-history-partitions`, `default-history-rows`, `concurrency-blocked`, `rate-limit-throttled`, and `budget-blocked`.
 
 `queue_health_policy` uses `singleton` as its primary key. It owns `promotion_lag_ms`,
 `rollup_stalled_lag_ms`, `row_retention_lag_ms`, `partition_retention_lag_ms`, and

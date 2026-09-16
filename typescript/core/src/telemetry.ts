@@ -474,8 +474,21 @@ export interface QueueMetricSnapshot {
   rateLimitNextEligibleDelayMs: number | null;
 }
 
+/** Per-budget pressure for OpenTelemetry. The budget name is the only dimension. */
+export interface BudgetMetricSnapshot {
+  budget: string;
+  concurrencyLimit: number | null;
+  concurrencyActive: number;
+  rateLimitPerSecond: number | null;
+  rateLimitAvailableTokens: number;
+  blockedReadyDepth: number;
+  nextEligibleDelayMs: number | null;
+}
+
 export interface QueueMetricSource {
   queueMetricSnapshot(): Promise<QueueMetricSnapshot[]>;
+  /** Optional so a source that predates named budgets keeps working unchanged. */
+  budgetMetricSnapshot?(): Promise<BudgetMetricSnapshot[]>;
 }
 
 const queueMetricDefinitions: readonly TelemetryObservationDefinition[] = [
@@ -574,6 +587,36 @@ const queueMetricDefinitions: readonly TelemetryObservationDefinition[] = [
     description: "Delay until the earliest sampled throttled task can start",
     unit: "ms",
   },
+  {
+    name: "workhorse.budget.concurrency.limit",
+    description: "Configured named-budget concurrency limit across queues",
+    unit: "{task}",
+  },
+  {
+    name: "workhorse.budget.concurrency.active",
+    description: "Unexpired active tasks counted by named-budget admission",
+    unit: "{task}",
+  },
+  {
+    name: "workhorse.budget.rate_limit.configured",
+    description: "Configured sustained named-budget start rate",
+    unit: "{task}/s",
+  },
+  {
+    name: "workhorse.budget.rate_limit.available_tokens",
+    description: "Refilled named-budget start tokens available now",
+    unit: "{token}",
+  },
+  {
+    name: "workhorse.budget.blocked_ready",
+    description: "Bounded ready depth waiting on a saturated named budget",
+    unit: "{task}",
+  },
+  {
+    name: "workhorse.budget.next_eligible_delay",
+    description: "Delay until a saturated named budget refills one start token",
+    unit: "ms",
+  },
 ];
 
 async function collectQueueMetrics(source: QueueMetricSource): Promise<TelemetryObservation[]> {
@@ -658,6 +701,32 @@ async function collectQueueMetrics(source: QueueMetricSource): Promise<Telemetry
           queueAttribute,
         );
     }
+  }
+  for (const snapshot of (await source.budgetMetricSnapshot?.()) ?? []) {
+    const budgetAttribute = { "workhorse.budget.name": snapshot.budget };
+    if (snapshot.concurrencyLimit !== null) {
+      observe("workhorse.budget.concurrency.limit", snapshot.concurrencyLimit, budgetAttribute);
+      observe("workhorse.budget.concurrency.active", snapshot.concurrencyActive, budgetAttribute);
+    }
+    if (snapshot.rateLimitPerSecond !== null) {
+      observe(
+        "workhorse.budget.rate_limit.configured",
+        snapshot.rateLimitPerSecond,
+        budgetAttribute,
+      );
+      observe(
+        "workhorse.budget.rate_limit.available_tokens",
+        snapshot.rateLimitAvailableTokens,
+        budgetAttribute,
+      );
+    }
+    observe("workhorse.budget.blocked_ready", snapshot.blockedReadyDepth, budgetAttribute);
+    if (snapshot.nextEligibleDelayMs !== null)
+      observe(
+        "workhorse.budget.next_eligible_delay",
+        snapshot.nextEligibleDelayMs,
+        budgetAttribute,
+      );
   }
   return observations;
 }

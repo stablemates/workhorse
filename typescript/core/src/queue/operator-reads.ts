@@ -1,6 +1,11 @@
 import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { databaseErrorCode, databaseErrorDetails, WorkhorseError } from "../errors.js";
-import { logInfo, recordRedrive, type QueueMetricSnapshot } from "../telemetry.js";
+import {
+  logInfo,
+  recordRedrive,
+  type BudgetMetricSnapshot,
+  type QueueMetricSnapshot,
+} from "../telemetry.js";
 import type {
   BulkRedriveOptions,
   BulkRedrivePage,
@@ -28,6 +33,8 @@ import type {
   QueueHealthStatus,
   RateLimitPolicy,
   RateLimitStatus,
+  Budget,
+  BudgetStatus,
   RedriveIdempotencyConflictDetails,
   RedriveIdempotencyConflictField,
   RedriveLineage,
@@ -183,6 +190,26 @@ type RateLimitStatusRow = RateLimitPolicyRow & {
   policy_set_capped: boolean;
 };
 
+export type BudgetRow = {
+  namespace: string;
+  budget_name: string;
+  max_active: number | null;
+  rate_limit: number | null;
+  rate_interval_ms: number | null;
+  rate_burst: number | null;
+  updated_at: Date | string;
+};
+
+type BudgetStatusRow = BudgetRow & {
+  active: string;
+  available_tokens: string | null;
+  saturated: boolean;
+  blocked_ready: string;
+  next_eligible_at: Date | string | null;
+  sample_capped: boolean;
+  budget_set_capped: boolean;
+};
+
 const RATE_LIMIT_STATUS_SQL = SQL_STATEMENTS["rate_limit_policy__operator_read_sql"];
 
 // Adapters such as Drizzle can hand back timestamptz columns as raw strings rather than pg's
@@ -273,6 +300,7 @@ type QueueHealthDocument = RetentionPolicyRow & {
     capped: boolean;
   }>;
   rate_limit_policies: RateLimitStatusRow[];
+  budget_policies: BudgetStatusRow[];
   history_partition_days: Array<{
     day: string;
     starts_at: string;
@@ -504,6 +532,36 @@ function rateLimitStatus(row: RateLimitStatusRow): RateLimitStatus {
   };
 }
 
+export function budget(row: BudgetRow): Budget {
+  return {
+    namespace: row.namespace,
+    name: row.budget_name,
+    maxActive: row.max_active,
+    rate:
+      row.rate_limit === null
+        ? null
+        : {
+            limit: row.rate_limit,
+            intervalMs: row.rate_interval_ms!,
+            burst: row.rate_burst!,
+          },
+    updatedAt: rowTimestamp(row.updated_at, "updated_at"),
+  };
+}
+
+function budgetStatus(row: BudgetStatusRow): BudgetStatus {
+  return {
+    ...budget(row),
+    active: Number(row.active),
+    availableTokens: row.available_tokens === null ? null : Number(row.available_tokens),
+    saturated: row.saturated,
+    blockedReady: Number(row.blocked_ready),
+    nextEligibleAt: nullableRowTimestamp(row.next_eligible_at, "next_eligible_at"),
+    sampleCapped: row.sample_capped,
+    budgetSetCapped: row.budget_set_capped,
+  };
+}
+
 function conflictDetails<TDetails>(
   error: unknown,
   valid: (value: unknown) => value is TDetails,
@@ -600,6 +658,7 @@ export class RedriveIdempotencyConflictError extends WorkhorseError {
 /** Convert the versioned PostgreSQL health document into the public TypeScript shape. */
 function queueHealthFromDocument(row: QueueHealthDocument): QueueHealth {
   const rateLimits = row.rate_limit_policies.map(rateLimitStatus);
+  const budgets = (row.budget_policies ?? []).map(budgetStatus);
   const base: Omit<QueueHealth, "status" | "budgets"> = {
     capturedAt: healthTimestamp(row.captured_at),
     schemaVersion: row.schema_version,
@@ -675,6 +734,10 @@ function queueHealthFromDocument(row: QueueHealthDocument): QueueHealth {
     rateLimitPolicies: {
       policies: rateLimits,
       capped: rateLimits.some((policy) => policy.policySetCapped || policy.sampleCapped),
+    },
+    budgetPolicies: {
+      budgets,
+      capped: budgets.some((status) => status.budgetSetCapped || status.sampleCapped),
     },
     statistics: {
       rolledUpThrough: healthTimestamp(row.rolled_up_through),
@@ -775,6 +838,30 @@ export class OperatorReadsModule extends QueueModule {
       queueNames,
     ]);
     return result.rows.map(rateLimitStatus);
+  }
+
+  async budgetStatuses(budgetNames: readonly string[] = []): Promise<BudgetStatus[]> {
+    const result = await this.context.database.query<BudgetStatusRow>(
+      SQL_STATEMENTS["budget_status_v1"],
+      [budgetNames],
+    );
+    return result.rows.map(budgetStatus);
+  }
+
+  /** Read the per-budget pressure used by OpenTelemetry observable instruments. */
+  async budgetMetricSnapshot(): Promise<BudgetMetricSnapshot[]> {
+    const now = Date.now();
+    return (await this.budgetStatuses()).map((status) => ({
+      budget: status.name,
+      concurrencyLimit: status.maxActive,
+      concurrencyActive: status.active,
+      rateLimitPerSecond:
+        status.rate === null ? null : (status.rate.limit * 1_000) / status.rate.intervalMs,
+      rateLimitAvailableTokens: status.availableTokens ?? 0,
+      blockedReadyDepth: status.blockedReady,
+      nextEligibleDelayMs:
+        status.nextEligibleAt === null ? null : Math.max(0, status.nextEligibleAt.getTime() - now),
+    }));
   }
 
   async listTasks(query: TaskListQuery = {}): Promise<TaskListPage> {

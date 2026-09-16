@@ -170,6 +170,68 @@ func TestQueueSynchronizesAndListsRateLimitPoliciesThroughDatabaseSQL(t *testing
 	}
 }
 
+func TestQueueSynchronizesAndListsBudgetsThroughPGX(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "go-budgets")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	transaction, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = transaction.Rollback(ctx) })
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(transaction), "default")
+	maxActive := 3
+
+	budgets, err := queue.SyncBudgets(ctx, "go-deployment", []workhorse.BudgetDefinition{
+		{Name: "vendor-api", MaxActive: &maxActive, Rate: &workhorse.RateLimit{Limit: 5, IntervalMS: 1_000, Burst: 10}},
+		{Name: "slow-partner", Rate: &workhorse.RateLimit{Limit: 1, IntervalMS: 60_000, Burst: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(budgets) != 2 || budgets[0].Name != "slow-partner" || budgets[0].MaxActive != nil ||
+		budgets[0].Rate == nil || budgets[0].Rate.IntervalMS != 60_000 ||
+		budgets[1].Name != "vendor-api" || budgets[1].MaxActive == nil || *budgets[1].MaxActive != 3 ||
+		budgets[1].Rate == nil || budgets[1].Rate.Limit != 5 || budgets[1].UpdatedAt.IsZero() {
+		t.Fatalf("unexpected synchronized budgets: %#v", budgets)
+	}
+	if _, err := queue.SyncBudgets(
+		ctx,
+		"go-deployment",
+		[]workhorse.BudgetDefinition{{Name: "vendor-api", MaxActive: &maxActive}},
+		workhorse.SyncPolicyOptions{Prune: false},
+	); err != nil {
+		t.Fatal(err)
+	}
+	budgets, err = queue.ListBudgets(ctx, []string{"vendor-api", "slow-partner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(budgets) != 2 || budgets[1].Name != "vendor-api" || budgets[1].Rate != nil {
+		t.Fatalf("optional pruning did not preserve omitted budget: %#v", budgets)
+	}
+	if _, err := queue.SyncBudgets(ctx, "go-deployment", nil); err != nil {
+		t.Fatal(err)
+	}
+	budgets, err = queue.ListBudgets(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(budgets) != 0 {
+		t.Fatalf("empty authoritative synchronization did not prune budgets: %#v", budgets)
+	}
+	_, err = queue.SyncBudgets(ctx, "go-deployment", []workhorse.BudgetDefinition{{Name: "vendor-api"}})
+	var databaseError *pgconn.PgError
+	if !errors.As(err, &databaseError) || databaseError.Code != "P0001" {
+		t.Fatalf("budget validation did not return a structured PostgreSQL error: %v", err)
+	}
+}
+
 func TestPolicySynchronizationRefusesIncompatibleSchemaBeforeMutation(t *testing.T) {
 	// The installed schema declares that it serves a later protocol only, so it has crossed a major
 	// boundary and no longer answers this client. A newer schema version alone is not a refusal.

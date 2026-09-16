@@ -10,6 +10,12 @@
 
 # name  kind  unit  description
 
+workhorse.budget.blocked_ready                   observable_gauge  {task}        Bounded ready depth waiting on a saturated named budget
+workhorse.budget.concurrency.active              observable_gauge  {task}        Unexpired active tasks counted by named-budget admission
+workhorse.budget.concurrency.limit               observable_gauge  {task}        Configured named-budget concurrency limit across queues
+workhorse.budget.next_eligible_delay             observable_gauge  ms            Delay until a saturated named budget refills one start token
+workhorse.budget.rate_limit.available_tokens     observable_gauge  {token}       Refilled named-budget start tokens available now
+workhorse.budget.rate_limit.configured           observable_gauge  {task}/s      Configured sustained named-budget start rate
 workhorse.claim.duration                         histogram         ms            PostgreSQL claim operation latency
 workhorse.deadline.overdue                       gauge             {task}        Current live tasks past their absolute deadline
 workhorse.execution_timeout.overdue              gauge             {attempt}     Current active attempts past their execution timeout
@@ -80,6 +86,7 @@ workhorse.schedule.synchronize
 ## Attributes
 
 workhorse.attempt.outcome
+workhorse.budget.name
 workhorse.cancel.accepted
 workhorse.cancellation.status
 workhorse.checkpoint.name

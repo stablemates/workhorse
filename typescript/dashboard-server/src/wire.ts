@@ -324,6 +324,38 @@ export function dashboardRateLimitPolicySummary(
   };
 }
 
+/** Bounded named-budget facts from `Queue.health()`. Raw concurrency keys are never included. */
+export interface DashboardBudgetSummary {
+  name: string;
+  namespace: string;
+  maxActive: number | null;
+  rate: { limit: number; intervalMs: number; burst: number } | null;
+  active: number;
+  /** Refilled tokens, or null when the budget has no rate limit. */
+  availableTokens: number | null;
+  /** Sampled ready tasks across queues waiting on a saturated budget. Zero when it has room. */
+  blockedReady: number;
+  saturated: boolean;
+  nextEligibleAt: string | null;
+}
+
+type QueueBudgetStatus = Awaited<ReturnType<Queue["health"]>>["budgetPolicies"]["budgets"][number];
+
+/** Project one budget observation onto the wire, keeping only bounded aggregate facts. */
+export function dashboardBudgetSummary(status: QueueBudgetStatus): DashboardBudgetSummary {
+  return {
+    name: status.name,
+    namespace: status.namespace,
+    maxActive: status.maxActive === null ? null : Number(status.maxActive),
+    rate: status.rate === null ? null : { ...status.rate },
+    active: Number(status.active),
+    availableTokens: status.availableTokens === null ? null : Number(status.availableTokens),
+    blockedReady: Number(status.blockedReady),
+    saturated: status.saturated,
+    nextEligibleAt: status.nextEligibleAt?.toISOString() ?? null,
+  };
+}
+
 export interface DashboardManagedQueueRow {
   queue: string;
   paused: boolean;
@@ -619,6 +651,10 @@ export interface DashboardQueuesPage {
   concurrencyPoliciesCapped: boolean;
   /** True when `Queue.health()` capped its rate policy or throttled-ready scan. */
   rateLimitPoliciesCapped: boolean;
+  /** Named budgets that span queues, ordered by name. */
+  budgets: DashboardBudgetSummary[];
+  /** True when `Queue.health()` capped its budget set or a budget's blocked-ready sample. */
+  budgetsCapped: boolean;
 }
 
 export type DashboardSystemWindow = "15m" | "1h" | "24h";
@@ -773,6 +809,9 @@ export interface DashboardSystemPage {
   /** True when `Queue.health()` capped its policy or blocked-ready scan. */
   concurrencyPoliciesCapped: boolean;
   rateLimitPoliciesCapped: boolean;
+  /** Named budgets that span queues, ordered by name. */
+  budgets: DashboardBudgetSummary[];
+  budgetsCapped: boolean;
   retryStorm: {
     buckets: DashboardSystemRetryBucket[];
     topTypes: Array<{ queue: string; type: string; count: number }>;

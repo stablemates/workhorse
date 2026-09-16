@@ -109,9 +109,11 @@ class AsyncQueue
   @classmethod def from_asyncpg(cls, connection: _AsyncpgConnection, default_queue: str = 'default') -> AsyncQueue
   @classmethod def from_psycopg(cls, connection: _AsyncPsycopgConnectionInput, default_queue: str = 'default') -> AsyncQueue
   async def health(self) -> QueueHealth
+  async def list_budgets(self, budget_names: Sequence[str] = ()) -> list[Budget]
   async def list_concurrency_policies(self, queue_names: Sequence[str] = ()) -> list[ConcurrencyPolicy]
   async def list_rate_limit_policies(self, queue_names: Sequence[str] = ()) -> list[RateLimitPolicy]
   async def send_signal(self, task_id: str, name: str, payload: Json, *, idempotency_key: str, requested_by: str) -> SignalDeliveryResult
+  async def sync_budgets(self, namespace: str, definitions: Sequence[BudgetDefinition], *, prune: bool = True) -> list[Budget]
   async def sync_concurrency_policies(self, namespace: str, definitions: Sequence[ConcurrencyPolicyDefinition], *, prune: bool = True) -> list[ConcurrencyPolicy]
   async def sync_contracts(self, contracts: Mapping[str, TaskTypeContracts]) -> None
   async def sync_rate_limit_policies(self, namespace: str, definitions: Sequence[RateLimitPolicyDefinition], *, prune: bool = True) -> list[RateLimitPolicy]
@@ -185,6 +187,20 @@ class BatchSucceeded(dict)
   status: ForwardRef("Literal['succeeded']", module='types')
   def update(...)
   def values(...)
+
+class Budget
+  def __init__(self, namespace: str, name: str, max_active: int | None, rate: RateLimit | None, updated_at: datetime) -> None
+  max_active: int | None
+  name: str
+  namespace: str
+  rate: RateLimit | None
+  updated_at: datetime
+
+class BudgetDefinition
+  def __init__(self, name: str, max_active: int | None = None, rate: RateLimit | None = None) -> None
+  max_active: int | None = None
+  name: str
+  rate: RateLimit | None = None
 
 class BulkRedriveOptions
   def __init__(self, limit: int = 100, dry_run: bool = False, cursor: DeadLetterCursor | None = None) -> None
@@ -421,7 +437,8 @@ type EnqueueNonReplaceableReason = Literal[
 ]
 
 class EnqueueOptions
-  def __init__(self, queue: str | None = None, priority: int = 0, concurrency_key: str | None = None, run_at: datetime | None = None, deadline: datetime | None = None, execution_timeout_ms: int | None = None, max_attempts: int = 25, retry_policy: RetryPolicy | None = None, tags: Sequence[str] = <_HAS_DEFAULT_FACTORY_CLASS>, idempotency: Idempotency | None = None, debounce: Debounce | None = None, throttle: Throttle | None = None, dependencies: Dependencies | None = None) -> None
+  def __init__(self, queue: str | None = None, priority: int = 0, concurrency_key: str | None = None, budget: str | None = None, run_at: datetime | None = None, deadline: datetime | None = None, execution_timeout_ms: int | None = None, max_attempts: int = 25, retry_policy: RetryPolicy | None = None, tags: Sequence[str] = <_HAS_DEFAULT_FACTORY_CLASS>, idempotency: Idempotency | None = None, debounce: Debounce | None = None, throttle: Throttle | None = None, dependencies: Dependencies | None = None) -> None
+  budget: str | None = None
   concurrency_key: str | None = None
   deadline: datetime | None = None
   debounce: Debounce | None = None
@@ -571,9 +588,11 @@ class Queue
   def enqueue_many_with_results(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
   def enqueue_with_result(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> EnqueueResult
   def health(self) -> QueueHealth
+  def list_budgets(self, budget_names: Sequence[str] = ()) -> list[Budget]
   def list_concurrency_policies(self, queue_names: Sequence[str] = ()) -> list[ConcurrencyPolicy]
   def list_rate_limit_policies(self, queue_names: Sequence[str] = ()) -> list[RateLimitPolicy]
   def send_signal(self, task_id: str, name: str, payload: Json, *, idempotency_key: str, requested_by: str) -> SignalDeliveryResult
+  def sync_budgets(self, namespace: str, definitions: Sequence[BudgetDefinition], *, prune: bool = True) -> list[Budget]
   def sync_concurrency_policies(self, namespace: str, definitions: Sequence[ConcurrencyPolicyDefinition], *, prune: bool = True) -> list[ConcurrencyPolicy]
   def sync_contracts(self, contracts: Mapping[str, TaskTypeContracts]) -> None
   def sync_rate_limit_policies(self, namespace: str, definitions: Sequence[RateLimitPolicyDefinition], *, prune: bool = True) -> list[RateLimitPolicy]
@@ -1274,9 +1293,11 @@ class AsyncQueue
   @classmethod def from_asyncpg(cls, connection: _AsyncpgConnection, default_queue: str = 'default') -> AsyncQueue
   @classmethod def from_psycopg(cls, connection: _AsyncPsycopgConnectionInput, default_queue: str = 'default') -> AsyncQueue
   async def health(self) -> QueueHealth
+  async def list_budgets(self, budget_names: Sequence[str] = ()) -> list[Budget]
   async def list_concurrency_policies(self, queue_names: Sequence[str] = ()) -> list[ConcurrencyPolicy]
   async def list_rate_limit_policies(self, queue_names: Sequence[str] = ()) -> list[RateLimitPolicy]
   async def send_signal(self, task_id: str, name: str, payload: Json, *, idempotency_key: str, requested_by: str) -> SignalDeliveryResult
+  async def sync_budgets(self, namespace: str, definitions: Sequence[BudgetDefinition], *, prune: bool = True) -> list[Budget]
   async def sync_concurrency_policies(self, namespace: str, definitions: Sequence[ConcurrencyPolicyDefinition], *, prune: bool = True) -> list[ConcurrencyPolicy]
   async def sync_contracts(self, contracts: Mapping[str, TaskTypeContracts]) -> None
   async def sync_rate_limit_policies(self, namespace: str, definitions: Sequence[RateLimitPolicyDefinition], *, prune: bool = True) -> list[RateLimitPolicy]
@@ -1291,9 +1312,11 @@ class Queue
   def enqueue_many_with_results(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
   def enqueue_with_result(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> EnqueueResult
   def health(self) -> QueueHealth
+  def list_budgets(self, budget_names: Sequence[str] = ()) -> list[Budget]
   def list_concurrency_policies(self, queue_names: Sequence[str] = ()) -> list[ConcurrencyPolicy]
   def list_rate_limit_policies(self, queue_names: Sequence[str] = ()) -> list[RateLimitPolicy]
   def send_signal(self, task_id: str, name: str, payload: Json, *, idempotency_key: str, requested_by: str) -> SignalDeliveryResult
+  def sync_budgets(self, namespace: str, definitions: Sequence[BudgetDefinition], *, prune: bool = True) -> list[Budget]
   def sync_concurrency_policies(self, namespace: str, definitions: Sequence[ConcurrencyPolicyDefinition], *, prune: bool = True) -> list[ConcurrencyPolicy]
   def sync_contracts(self, contracts: Mapping[str, TaskTypeContracts]) -> None
   def sync_rate_limit_policies(self, namespace: str, definitions: Sequence[RateLimitPolicyDefinition], *, prune: bool = True) -> list[RateLimitPolicy]
@@ -1479,6 +1502,48 @@ class DashboardActivityPage(dict)
   def values(...)
 
 type DashboardActivityPeriod = Literal["15m", "1h", "24h", "6h", "7d"]
+
+class DashboardBudgetSummary(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  active: ForwardRef('Required[float]', module='dashboard_v1')
+  availableTokens: ForwardRef('Required[float | None]', module='dashboard_v1')
+  blockedReady: ForwardRef('Required[float]', module='dashboard_v1')
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  maxActive: ForwardRef('Required[float | None]', module='dashboard_v1')
+  name: ForwardRef('Required[str]', module='dashboard_v1')
+  namespace: ForwardRef('Required[str]', module='dashboard_v1')
+  nextEligibleAt: ForwardRef('Required[str | None]', module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  rate: ForwardRef('Required[DashboardBudgetSummaryRate | None]', module='dashboard_v1')
+  saturated: ForwardRef('Required[bool]', module='dashboard_v1')
+  def setdefault(self, key, default=None)
+  def update(...)
+  def values(...)
+
+class DashboardBudgetSummaryRate(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  burst: ForwardRef('Required[float]', module='dashboard_v1')
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  intervalMs: ForwardRef('Required[float]', module='dashboard_v1')
+  def items(...)
+  def keys(...)
+  limit: ForwardRef('Required[float]', module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  def update(...)
+  def values(...)
 
 type DashboardCancelStatus = Literal["already_terminal", "cancel_requested", "canceled", "not_found"]
 
@@ -2190,6 +2255,7 @@ class DashboardQueueHealthReason(dict)
   def __init__(self, *args, **kwargs)
   def __iter__(self)
   budget: ForwardRef('Required[float]', module='dashboard_v1')
+  budgetName: ForwardRef('NotRequired[str]', module='dashboard_v1')
   category: ForwardRef("NotRequired[Literal['attemptHistory', 'scheduleOccurrences', 'statistics', 'taskEvents', 'taskIdentity', 'terminalOutcome']]", module='dashboard_v1')
   def clear(...)
   code: ForwardRef('Required[DashboardQueueHealthReasonCode]', module='dashboard_v1')
@@ -2207,11 +2273,13 @@ class DashboardQueueHealthReason(dict)
   def update(...)
   def values(...)
 
-type DashboardQueueHealthReasonCode = Literal["concurrency-blocked", "default-history-rows", "eligible-history-partitions", "expired-leases", "missing-history-partitions", "overdue-deadlines", "overdue-execution-timeouts", "overdue-external-waits", "rate-limit-throttled", "retention-lag", "rollup-stalled", "stalled-promotion"]
+type DashboardQueueHealthReasonCode = Literal["budget-blocked", "concurrency-blocked", "default-history-rows", "eligible-history-partitions", "expired-leases", "missing-history-partitions", "overdue-deadlines", "overdue-execution-timeouts", "overdue-external-waits", "rate-limit-throttled", "retention-lag", "rollup-stalled", "stalled-promotion"]
 
 class DashboardQueuesPage(dict)
   def __init__(self, *args, **kwargs)
   def __iter__(self)
+  budgets: ForwardRef('Required[list[DashboardBudgetSummary]]', module='dashboard_v1')
+  budgetsCapped: ForwardRef('Required[bool]', module='dashboard_v1')
   capturedAt: ForwardRef('Required[str]', module='dashboard_v1')
   def clear(...)
   concurrencyPoliciesCapped: ForwardRef('Required[bool]', module='dashboard_v1')
@@ -3064,6 +3132,8 @@ class DashboardSystemOutcomeBucket(dict)
 class DashboardSystemPage(dict)
   def __init__(self, *args, **kwargs)
   def __iter__(self)
+  budgets: ForwardRef('Required[list[DashboardBudgetSummary]]', module='dashboard_v1')
+  budgetsCapped: ForwardRef('Required[bool]', module='dashboard_v1')
   capturedAt: ForwardRef('Required[str]', module='dashboard_v1')
   def clear(...)
   concurrencyPoliciesCapped: ForwardRef('Required[bool]', module='dashboard_v1')
@@ -5479,6 +5549,20 @@ class BatchSucceeded(dict)
   def update(...)
   def values(...)
 
+class Budget
+  def __init__(self, namespace: str, name: str, max_active: int | None, rate: RateLimit | None, updated_at: datetime) -> None
+  max_active: int | None
+  name: str
+  namespace: str
+  rate: RateLimit | None
+  updated_at: datetime
+
+class BudgetDefinition
+  def __init__(self, name: str, max_active: int | None = None, rate: RateLimit | None = None) -> None
+  max_active: int | None = None
+  name: str
+  rate: RateLimit | None = None
+
 class CancelResult
   def __init__(self, status: CancelStatus, task_id: str, state: TaskState | None, current_attempt: int | None, requested_at: datetime | None, requested_by: str | None, reason: str | None, finished_at: datetime | None) -> None
   current_attempt: int | None
@@ -5614,7 +5698,8 @@ type EnqueueNonReplaceableReason = Literal[
 ]
 
 class EnqueueOptions
-  def __init__(self, queue: str | None = None, priority: int = 0, concurrency_key: str | None = None, run_at: datetime | None = None, deadline: datetime | None = None, execution_timeout_ms: int | None = None, max_attempts: int = 25, retry_policy: RetryPolicy | None = None, tags: Sequence[str] = <_HAS_DEFAULT_FACTORY_CLASS>, idempotency: Idempotency | None = None, debounce: Debounce | None = None, throttle: Throttle | None = None, dependencies: Dependencies | None = None) -> None
+  def __init__(self, queue: str | None = None, priority: int = 0, concurrency_key: str | None = None, budget: str | None = None, run_at: datetime | None = None, deadline: datetime | None = None, execution_timeout_ms: int | None = None, max_attempts: int = 25, retry_policy: RetryPolicy | None = None, tags: Sequence[str] = <_HAS_DEFAULT_FACTORY_CLASS>, idempotency: Idempotency | None = None, debounce: Debounce | None = None, throttle: Throttle | None = None, dependencies: Dependencies | None = None) -> None
+  budget: str | None = None
   concurrency_key: str | None = None
   deadline: datetime | None = None
   debounce: Debounce | None = None

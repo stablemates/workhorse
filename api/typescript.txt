@@ -19,6 +19,10 @@ type BatchHandlerContext
 interface BatchHandlerItem
 interface BatchHandlerOptions
 type BatchHandlerOutcome
+interface Budget
+interface BudgetDefinition
+interface BudgetMetricSnapshot
+interface BudgetStatus
 interface BulkRedriveOptions
 interface BulkRedrivePage
 interface CancelResult
@@ -346,6 +350,7 @@ type DashboardActivityGroupBy
 interface DashboardActivityPage
 type DashboardActivityPeriod
 type DashboardAttemptOutcome
+interface DashboardBudgetSummary
 type DashboardCancelStatus
 interface DashboardCancellationRequest
 type DashboardChildHealth
@@ -412,6 +417,7 @@ interface DashboardWorkersPage
 type IdempotencyEvidence
 type MaintenanceLoopCadences
 const dashboardAttemptOutcomes
+function dashboardBudgetSummary
 function dashboardConcurrencyPolicySummary
 const dashboardIdempotencyEventDetailKeys
 function dashboardRateLimitPolicySummary
@@ -569,6 +575,7 @@ type DashboardActivityGroupBy
 interface DashboardActivityPage
 type DashboardActivityPeriod
 type DashboardAttemptOutcome
+interface DashboardBudgetSummary
 type DashboardCancelStatus
 interface DashboardCancellationRequest
 type DashboardChildHealth
@@ -635,6 +642,7 @@ interface DashboardWorkersPage
 type IdempotencyEvidence
 type MaintenanceLoopCadences
 const dashboardAttemptOutcomes
+function dashboardBudgetSummary
 function dashboardConcurrencyPolicySummary
 const dashboardIdempotencyEventDetailKeys
 function dashboardRateLimitPolicySummary
@@ -780,10 +788,12 @@ class Admin {
   resumeQueue(queueName: string, audit: AdminAudit): Promise<void>;
   purgeQueue(queueName: string, audit: AdminAudit): Promise<number>;
   queueMetricSnapshot(): Promise<QueueMetricSnapshot[]>;
+  budgetMetricSnapshot(): Promise<BudgetMetricSnapshot[]>;
   health(): Promise<QueueHealth>;
   listConcurrencyPolicies(queueNames?: readonly string[]): Promise<ConcurrencyPolicy[]>;
   /** @deprecated Use `listConcurrencyPolicies`. Removed in 1.0.0. */
   concurrencyPolicies(queueNames?: readonly string[]): Promise<ConcurrencyPolicy[]>;
+  listBudgets(budgetNames?: readonly string[]): Promise<Budget[]>;
   getRetentionPolicy(): Promise<RetentionPolicy>;
   previewRetentionPolicy(definition: Partial<RetentionPolicyDefinition>): Promise<RetentionPolicyImpact>;
   getMaintenancePolicy(): Promise<MaintenancePolicy>;
@@ -825,6 +835,45 @@ type BatchHandlerOutcome<TResult extends Json = Json> = {
   status: "failed";
   error: unknown;
 };
+
+interface Budget {
+  namespace: string;
+  name: string;
+  maxActive: number | null;
+  rate: RateLimit | null;
+  updatedAt: Date;
+}
+
+interface BudgetDefinition {
+  name: string;
+  /** Unexpired active tasks naming this budget across every queue. */
+  maxActive?: number | null;
+  /** One token bucket shared by every start that names this budget. */
+  rate?: RateLimit | null;
+}
+
+interface BudgetMetricSnapshot {
+  budget: string;
+  concurrencyLimit: number | null;
+  concurrencyActive: number;
+  rateLimitPerSecond: number | null;
+  rateLimitAvailableTokens: number;
+  blockedReadyDepth: number;
+  nextEligibleDelayMs: number | null;
+}
+
+interface BudgetStatus extends Budget {
+  active: number;
+  /** Refilled tokens, or null when the budget has no rate limit. */
+  availableTokens: number | null;
+  /** True when the next start naming this budget would be refused right now. */
+  saturated: boolean;
+  /** Sampled ready rows naming a saturated budget. Zero when the budget has capacity. */
+  blockedReady: number;
+  nextEligibleAt: Date | null;
+  sampleCapped: boolean;
+  budgetSetCapped: boolean;
+}
 
 interface BulkRedriveOptions {
   limit?: number;
@@ -1077,6 +1126,24 @@ type DashboardAuditInput = DashboardProcedureInputs["setQueuePaused"]["audit"];
 interface DashboardAuthenticationRoutes {
   loginUrl: string;
   logoutUrl: string;
+}
+
+interface DashboardBudgetSummary {
+  name: string;
+  namespace: string;
+  maxActive: number | null;
+  rate: {
+    limit: number;
+    intervalMs: number;
+    burst: number;
+  } | null;
+  active: number;
+  /** Refilled tokens, or null when the budget has no rate limit. */
+  availableTokens: number | null;
+  /** Sampled ready tasks across queues waiting on a saturated budget. Zero when it has room. */
+  blockedReady: number;
+  saturated: boolean;
+  nextEligibleAt: string | null;
 }
 
 type DashboardCancelStatus = CancelStatus;
@@ -1655,6 +1722,10 @@ interface DashboardQueuesPage {
   concurrencyPoliciesCapped: boolean;
   /** True when `Queue.health()` capped its rate policy or throttled-ready scan. */
   rateLimitPoliciesCapped: boolean;
+  /** Named budgets that span queues, ordered by name. */
+  budgets: DashboardBudgetSummary[];
+  /** True when `Queue.health()` capped its budget set or a budget's blocked-ready sample. */
+  budgetsCapped: boolean;
 }
 
 interface DashboardRateLimitPolicySummary {
@@ -1993,6 +2064,9 @@ interface DashboardSystemPage {
   /** True when `Queue.health()` capped its policy or blocked-ready scan. */
   concurrencyPoliciesCapped: boolean;
   rateLimitPoliciesCapped: boolean;
+  /** Named budgets that span queues, ordered by name. */
+  budgets: DashboardBudgetSummary[];
+  budgetsCapped: boolean;
   retryStorm: {
     buckets: DashboardSystemRetryBucket[];
     topTypes: Array<{
@@ -2614,6 +2688,8 @@ interface EnqueueBaseOptions {
   priority?: number;
   /** Queue-scoped application group used by durable concurrency admission. */
   concurrencyKey?: string;
+  /** Named budget shared across queues. A name with no synchronized budget imposes no limit. */
+  budget?: string;
   runAt?: Date;
   /** Absolute wall-clock deadline. Reaching it is terminal even when retry budget remains. */
   deadline?: Date;
@@ -2664,7 +2740,7 @@ class EnqueueIdempotencyConflictError extends WorkhorseError {
   get rejectedRequestDigest(): string;
 }
 
-type EnqueueIdempotencyConflictField = "queue" | "type" | "payload" | "priority" | "concurrencyKey" | "contractVersion" | "payloadMaxBytes" | "resultMaxBytes" | "sensitivePayloadKeys" | "sensitiveResultKeys" | "tags" | "runAt" | "deadline" | "executionTimeoutMs" | "maxAttempts" | "retryPolicy" | "prerequisiteTaskId" | "dependencies" | "ttlMs";
+type EnqueueIdempotencyConflictField = "queue" | "type" | "payload" | "priority" | "concurrencyKey" | "budget" | "contractVersion" | "payloadMaxBytes" | "resultMaxBytes" | "sensitivePayloadKeys" | "sensitiveResultKeys" | "tags" | "runAt" | "deadline" | "executionTimeoutMs" | "maxAttempts" | "retryPolicy" | "prerequisiteTaskId" | "dependencies" | "ttlMs";
 
 type EnqueueNonReplaceableReason = "incompatible_key_mode" | "not_pending" | "window_elapsed_pending";
 
@@ -2897,9 +2973,9 @@ interface LiveProtocolWorker {
   readonly lastHeartbeatAt: Date;
 }
 
-const MAXIMUM_PROTOCOL_VERSION = 2;
+const MAXIMUM_PROTOCOL_VERSION = 3;
 
-const MAXIMUM_SCHEMA_VERSION = 2;
+const MAXIMUM_SCHEMA_VERSION = 3;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -3047,7 +3123,7 @@ class MissingRowError extends WorkhorseError {
 
 type OptionalDashboardProcedure = "runTaskNow" | "enqueueTest" | "redriveTask" | "redriveDeadLetters";
 
-const PROTOCOL_VERSION = 2;
+const PROTOCOL_VERSION = 3;
 
 interface ParsedHumanWaitResult {
   value: Json;
@@ -3225,6 +3301,11 @@ class Queue {
   /** @deprecated Use `listRateLimitPolicies`. Removed in 1.0.0. */
   rateLimitPolicies(queueNames?: readonly string[]): Promise<RateLimitPolicy[]>;
   rateLimitStatuses(queueNames?: readonly string[]): Promise<RateLimitStatus[]>;
+  syncBudgets(namespace: string, definitions: readonly BudgetDefinition[], options?: {
+    prune?: boolean;
+  }): Promise<Budget[]>;
+  listBudgets(budgetNames?: readonly string[]): Promise<Budget[]>;
+  budgetStatuses(budgetNames?: readonly string[]): Promise<BudgetStatus[]>;
   overrideRetentionPolicy(definition: Partial<RetentionPolicyDefinition>): Promise<RetentionPolicy>;
   revertRetentionPolicy(settings: readonly RetentionPolicySetting[]): Promise<RetentionPolicy>;
   previewRetentionPolicy(definition: Partial<RetentionPolicyDefinition>): Promise<RetentionPolicyImpact>;
@@ -3275,7 +3356,10 @@ class Queue {
   health(): Promise<QueueHealth>;
   /** Read the per-queue live pressure used by OpenTelemetry observable instruments. */
   queueMetricSnapshot(): Promise<QueueMetricSnapshot[]>;
+  budgetMetricSnapshot(): Promise<BudgetMetricSnapshot[]>;
 }
+
+type QueueBudgetStatus = Awaited<ReturnType<Queue["health"]>>["budgetPolicies"]["budgets"][number];
 
 type QueueConcurrencyPolicy = Awaited<ReturnType<Queue["health"]>>["concurrencyPolicies"]["policies"][number];
 
@@ -3372,6 +3456,11 @@ interface QueueHealth {
   /** Bounded token-bucket pressure. Ready counts are lower bounds when `capped` is true. */
   rateLimitPolicies: {
     policies: RateLimitStatus[];
+    capped: boolean;
+  };
+  /** Bounded named-budget pressure across queues. Ready counts are lower bounds when `capped`. */
+  budgetPolicies: {
+    budgets: BudgetStatus[];
     capped: boolean;
   };
   /**
@@ -3477,11 +3566,13 @@ interface QueueHealthReason {
   budget: number;
   /** Present on per-queue codes: `concurrency-blocked` and `rate-limit-throttled`. */
   queue?: string;
+  /** Present on `budget-blocked`, naming the saturated budget. */
+  budgetName?: string;
   /** Present on `retention-lag`, naming the late retention category. */
   category?: keyof RetentionCategoryValues<unknown>;
 }
 
-type QueueHealthReasonCode = "expired-leases" | "overdue-deadlines" | "overdue-execution-timeouts" | "overdue-external-waits" | "stalled-promotion" | "missing-history-partitions" | "rollup-stalled" | "retention-lag" | "eligible-history-partitions" | "default-history-rows" | "concurrency-blocked" | "rate-limit-throttled";
+type QueueHealthReasonCode = "expired-leases" | "overdue-deadlines" | "overdue-execution-timeouts" | "overdue-external-waits" | "stalled-promotion" | "missing-history-partitions" | "rollup-stalled" | "retention-lag" | "eligible-history-partitions" | "default-history-rows" | "concurrency-blocked" | "rate-limit-throttled" | "budget-blocked";
 
 interface QueueHealthStatus {
   level: "healthy" | "degraded" | "critical";
@@ -3515,6 +3606,8 @@ interface QueueMetricSnapshot {
 
 interface QueueMetricSource {
   queueMetricSnapshot(): Promise<QueueMetricSnapshot[]>;
+  /** Optional so a source that predates named budgets keeps working unchanged. */
+  budgetMetricSnapshot?(): Promise<BudgetMetricSnapshot[]>;
 }
 
 interface QueueOptions {
@@ -4306,7 +4399,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 1;
 
-const WORKHORSE_SCHEMA_VERSION = 2;
+const WORKHORSE_SCHEMA_VERSION = 3;
 
 const WORKHORSE_VERSION = "0.1.5";
 
@@ -4721,6 +4814,8 @@ function createWorkhorseAdapter<TTransaction = Queryable>(options: WorkhorseAdap
 function dashboardAssetsDirectory(): string;
 
 const dashboardAttemptOutcomes: readonly ["succeeded", "failed", "retry", "lease_expired", "canceled", "deadline_exceeded", "timeout"];
+
+function dashboardBudgetSummary(status: QueueBudgetStatus): DashboardBudgetSummary;
 
 function dashboardConcurrencyPolicySummary(policy: QueueConcurrencyPolicy): DashboardConcurrencyPolicySummary;
 

@@ -10,6 +10,7 @@ from test_enqueue import Connection
 
 from workhorse import (
     AsyncQueue,
+    BudgetDefinition,
     ConcurrencyPolicyDefinition,
     ProtocolCompatibilityError,
     Queue,
@@ -132,10 +133,34 @@ def test_psycopg_synchronizes_lists_prunes_and_preserves_the_transaction(
             assert [policy.queue for policy in authoritative_rate_limits] == ["mail"]
             assert _policy_count(database_url, "concurrency_policy") == 0
             assert _policy_count(database_url, "rate_limit_policy") == 0
+
+            budgets = queue.sync_budgets(
+                "python-deployment",
+                [
+                    BudgetDefinition("vendor-api", max_active=3),
+                    BudgetDefinition("slow-partner", rate=RateLimit(1, 60_000, 1)),
+                ],
+            )
+            assert [(budget.name, budget.max_active) for budget in budgets] == [
+                ("slow-partner", None),
+                ("vendor-api", 3),
+            ]
+            assert budgets[0].rate == RateLimit(1, 60_000, 1)
+            assert budgets[1].rate is None
+            assert [budget.name for budget in queue.list_budgets(["vendor-api"])] == ["vendor-api"]
+            preserved = queue.sync_budgets(
+                "python-deployment", [BudgetDefinition("vendor-api", max_active=4)], prune=False
+            )
+            assert [budget.name for budget in preserved] == ["slow-partner", "vendor-api"]
+            authoritative_budgets = queue.sync_budgets(
+                "python-deployment", [BudgetDefinition("vendor-api", max_active=4)]
+            )
+            assert [budget.name for budget in authoritative_budgets] == ["vendor-api"]
             raise RuntimeError("application rollback")
 
         assert _policy_count(database_url, "concurrency_policy") == 0
         assert _policy_count(database_url, "rate_limit_policy") == 0
+        assert _policy_count(database_url, "budget") == 0
 
         with (
             pytest.raises(psycopg.errors.RaiseException) as raised,
@@ -197,5 +222,13 @@ async def test_async_psycopg_synchronizes_and_lists_both_policy_types(
             )
             assert len(await queue.list_concurrency_policies(["mail"])) == 1
             assert len(await queue.list_rate_limit_policies(["mail"])) == 1
+            budgets = await queue.sync_budgets(
+                "python-async-psycopg",
+                [BudgetDefinition("vendor-api", max_active=3, rate=RateLimit(5, 1_000, 10))],
+            )
+            assert budgets[0].name == "vendor-api"
+            assert budgets[0].max_active == 3
+            assert budgets[0].rate == RateLimit(5, 1_000, 10)
+            assert len(await queue.list_budgets(["vendor-api"])) == 1
     finally:
         await connection.close()

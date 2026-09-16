@@ -66,6 +66,8 @@ function queuesPage(overrides: Partial<DashboardQueuesPage> = {}): DashboardQueu
     queues: [queueRow()],
     concurrencyPoliciesCapped: false,
     rateLimitPoliciesCapped: false,
+    budgets: [],
+    budgetsCapped: false,
     ...overrides,
   };
 }

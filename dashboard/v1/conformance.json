@@ -2428,7 +2428,6 @@
                     "pausedAt": null,
                     "pausedBy": null,
                     "priority": 0,
-                    "catchupPolicy": "skip",
                     "revision": "1",
                     "namespace": "conformance",
                     "updatedAt": {
@@ -2436,6 +2435,7 @@
                     },
                     "lastFiredAt": null,
                     "pausedReason": null,
+                    "catchupPolicy": "skip",
                     "evaluatorCount": 1,
                     "occurrenceCount": 0,
                     "configuredEnabled": true
@@ -2552,9 +2552,11 @@
                     "terminalCountsApproximate": false
                   }
                 ],
+                "budgets": [],
                 "capturedAt": {
                   "$type": "timestamp"
                 },
+                "budgetsCapped": false,
                 "rateLimitPoliciesCapped": false,
                 "concurrencyPoliciesCapped": false
               }
@@ -2754,6 +2756,7 @@
                   ]
                 },
                 "window": "1h",
+                "budgets": [],
                 "outcomes": [
                   {
                     "retry": {
@@ -4542,6 +4545,7 @@
                   }
                 ],
                 "pausedQueues": [],
+                "budgetsCapped": false,
                 "windowSeconds": 3600,
                 "rateLimitPoliciesCapped": false,
                 "concurrencyPoliciesCapped": false

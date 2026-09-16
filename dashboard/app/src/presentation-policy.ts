@@ -295,6 +295,15 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
           helpHref: docs("rate-limits"),
         });
         break;
+      case "budget-blocked":
+        degradedChecks.push({
+          message: `Budget ${reason.budgetName} holds ${reason.observed}+ ready tasks across queues`,
+          advice:
+            "The named budget is at its concurrency cap or out of start tokens, so ready tasks " +
+            "in every queue naming it wait. Raise the budget if the shared resource can absorb more.",
+          helpHref: docs("concurrency-policies"),
+        });
+        break;
     }
   }
   if (lateRetentionLabels.length > 0) {

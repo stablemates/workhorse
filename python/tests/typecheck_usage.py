@@ -16,6 +16,7 @@ from workhorse import (
     AsyncWorker,
     BatchHandlerItem,
     BatchHandlerOutcome,
+    BudgetDefinition,
     ChildTaskRequest,
     ConcurrencyPolicyDefinition,
     DeadLetterQuery,
@@ -64,6 +65,11 @@ def sync_policies(connection: psycopg.Connection[Any]) -> None:
         prune=False,
     )
     queue.list_rate_limit_policies()
+    queue.sync_budgets(
+        "application",
+        [BudgetDefinition("vendor-api", max_active=3, rate=RateLimit(10, 1_000, 20))],
+    )
+    queue.list_budgets(["vendor-api"])
 
 
 def sync_admin(connection: psycopg.Connection[Any]) -> str | None:
@@ -180,6 +186,8 @@ async def asyncpg_policies(connection: asyncpg.Connection) -> None:
         [RateLimitPolicyDefinition("mail", RateLimit(limit=10, interval_ms=1_000, burst=20))],
     )
     await queue.list_rate_limit_policies(["mail"])
+    await queue.sync_budgets("application", [BudgetDefinition("vendor-api", max_active=3)])
+    await queue.list_budgets()
 
 
 async def async_psycopg_worker(connection: psycopg.AsyncConnection[Any]) -> bool:

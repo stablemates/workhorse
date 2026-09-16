@@ -5,6 +5,26 @@
       "arguments": ["uuid", "text", "bigint"],
       "returns": "boolean"
     },
+    "budget_status_v1": {
+      "arguments": ["text[]"],
+      "returns": "table",
+      "returnsColumns": {
+        "active": "text",
+        "available_tokens": "text",
+        "blocked_ready": "text",
+        "budget_name": "text",
+        "budget_set_capped": "boolean",
+        "max_active": "integer",
+        "namespace": "text",
+        "next_eligible_at": "timestamptz",
+        "rate_burst": "integer",
+        "rate_interval_ms": "integer",
+        "rate_limit": "integer",
+        "sample_capped": "boolean",
+        "saturated": "boolean",
+        "updated_at": "timestamptz"
+      }
+    },
     "cancel_v1": {
       "arguments": ["uuid", "text?", "text?"],
       "returns": "table",
@@ -581,6 +601,19 @@
         "wait_sketch": "jsonb"
       }
     },
+    "sync_budgets_v1": {
+      "arguments": ["text", "jsonb", "boolean?"],
+      "returns": "table",
+      "returnsColumns": {
+        "budget_name": "text",
+        "max_active": "integer",
+        "namespace": "text",
+        "rate_burst": "integer",
+        "rate_interval_ms": "integer",
+        "rate_limit": "integer",
+        "updated_at": "timestamptz"
+      }
+    },
     "sync_concurrency_policies_v1": {
       "arguments": ["text", "jsonb", "boolean?"],
       "returns": "table",
@@ -717,6 +750,18 @@
         "started_at": "timestamptz",
         "task_id": "uuid",
         "worker_id": "text"
+      }
+    },
+    "budget": {
+      "kind": "table",
+      "columns": {
+        "budget_name": "text",
+        "max_active": "integer",
+        "namespace": "text",
+        "rate_burst": "integer",
+        "rate_interval_ms": "integer",
+        "rate_limit": "integer",
+        "updated_at": "timestamptz"
       }
     },
     "concurrency_policy": {
@@ -1121,6 +1166,7 @@
     "task": {
       "kind": "table",
       "columns": {
+        "budget_name": "text",
         "concurrency_key": "text",
         "contract_version": "text",
         "created_at": "timestamptz",
@@ -1239,6 +1285,7 @@
       "kind": "table",
       "columns": {
         "attempt_timeout_at": "timestamptz",
+        "budget_name": "text",
         "cancel_reason": "text",
         "cancel_requested_at": "timestamptz",
         "cancel_requested_by": "text",
@@ -1344,11 +1391,14 @@
   "internalHelpers": {
     "functions": [
       "aggregate_stats_v1",
+      "budget_admission_v1",
+      "budget_bucket_v1",
       "cancellation_envelope_v1",
       "create_history_day_v1",
       "create_single_child_v1",
       "cron_field_values_v1",
       "cron_occurrences_v1",
+      "dashboard_budgets_v1",
       "dashboard_iso_v1",
       "dashboard_task_estimate_v1",
       "deadline_envelope_v1",
@@ -1364,6 +1414,7 @@
       "history_retention_complete_v1",
       "idempotency_key_hash_v1",
       "normalize_retry_policy_v1",
+      "notify_budget_capacity_v1",
       "notify_concurrency_capacity_v1",
       "override_contract_version_v1",
       "override_queue_health_policy_v1",
@@ -1407,6 +1458,7 @@
       "validate_task_dependencies_v1"
     ],
     "relations": [
+      "budget_bucket",
       "contract_definition",
       "contract_policy",
       "enqueue_idempotency",

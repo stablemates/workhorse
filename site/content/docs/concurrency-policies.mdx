@@ -94,10 +94,61 @@ handler can briefly overlap its replacement after expiry, and fence tokens — n
 prevent that stale generation from recording a result. Handlers keep the ordinary at-least-once
 assumptions.
 
+## Share one budget across queues
+
+A policy limits one queue. When several queues call the same downstream resource, a named budget
+caps them together without merging them, so each queue keeps its own priority order, pause control,
+and health row. `Queue.syncBudgets` stores budgets in PostgreSQL the way policies are stored, and
+`Queue.listBudgets` reads them back. Go applications use `Queue.SyncBudgets` and
+`Queue.ListBudgets`. Python applications use `Queue.sync_budgets` or `AsyncQueue.sync_budgets`,
+and `Queue.list_budgets` or `AsyncQueue.list_budgets`.
+
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    await queue.syncBudgets("workers", [{ name: "vendor-api", maxActive: 4 }]);
+
+    await queue.enqueue("invoice.sync", { id: 1 }, { queue: "billing", budget: "vendor-api" });
+    await queue.enqueue("contact.sync", { id: 2 }, { queue: "crm", budget: "vendor-api" });
+    ```
+
+  </Tab>
+  <Tab value="Python">
+    ```python
+    queue.sync_budgets("workers", [BudgetDefinition(name="vendor-api", max_active=4)])
+
+    queue.enqueue("invoice.sync", {"id": 1}, EnqueueOptions(queue="billing", budget="vendor-api"))
+    queue.enqueue("contact.sync", {"id": 2}, EnqueueOptions(queue="crm", budget="vendor-api"))
+    ```
+
+  </Tab>
+  <Tab value="Go">
+    ```go
+    maxActive := 4
+    budgets, err := queue.SyncBudgets(ctx, "workers", []workhorse.BudgetDefinition{{
+    	Name: "vendor-api", MaxActive: &maxActive,
+    }})
+
+    _, err = queue.Enqueue(ctx, "invoice.sync", map[string]any{"id": 1}, workhorse.EnqueueOptions{
+    	Queue: "billing", Budget: "vendor-api",
+    })
+    ```
+
+  </Tab>
+</Tabs>
+
+A task names its budget at enqueue time with the `budget` option beside `concurrencyKey`. The
+budget is an extra check: the task must still pass its queue's own policy. A budget can cap active
+tasks, cap the start rate, or both. It has no per-key limit, because keys stay queue-scoped, and a
+task that names a budget nobody synchronized is not limited by it. An expired lease returns budget
+capacity, a release wakes every queue holding ready work that names the budget, and `claim_v1`
+passes over a saturated budget inside the same bounded window it uses for keys.
+
 ## Observe pressure
 
 `queue.health()` reports each policy's limit, active count, blocked ready work, and saturated-key
-counts, all bounded. OpenTelemetry publishes the same queue-level gauges without raw key values.
+counts, all bounded. Named budgets appear under `budgetPolicies`, and `Queue.budgetStatuses` returns
+the same observation on its own, with the budget name as the only telemetry label. OpenTelemetry publishes the same queue-level gauges without raw key values.
 If ready work sits behind a full policy, it shows up as `blockedReady` rather than as a mystery
 latency.
 

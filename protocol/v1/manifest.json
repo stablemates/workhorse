@@ -1,15 +1,15 @@
 {
   "formatVersion": 1,
-  "protocolVersion": 2,
+  "protocolVersion": 3,
   "schema": {
-    "installedVersion": 2,
+    "installedVersion": 3,
     "minimumVersion": 1,
-    "maximumVersion": 2,
+    "maximumVersion": 3,
     "baselineVersion": 1
   },
   "supportedClientProtocol": {
     "minimumVersion": 1,
-    "maximumVersion": 2
+    "maximumVersion": 3
   },
   "limits": {
     "defaultTaskValueMaxBytes": 1048576,
@@ -564,6 +564,26 @@
       "pythonBinding": "sync_rate_limit_policies",
       "arity": 3,
       "contract": "SELECT * FROM workhorse.sync_rate_limit_policies_v1($1::text, $2::jsonb, $3::boolean)",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "sync_budgets_v1",
+      "pythonBinding": "sync_budgets",
+      "arity": 3,
+      "contract": "SELECT * FROM workhorse.sync_budgets_v1($1::text, $2::jsonb, $3::boolean)",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "list_budgets",
+      "pythonBinding": "list_budgets",
+      "arity": 1,
+      "contract": "SELECT namespace, budget_name, max_active, rate_limit, rate_interval_ms, rate_burst, updated_at FROM workhorse.budget, (SELECT $1::text[] AS names) AS filter WHERE cardinality(filter.names) = 0 OR budget_name = ANY(filter.names) ORDER BY budget_name",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "budget_status_v1",
+      "arity": 1,
+      "contract": "SELECT * FROM workhorse.budget_status_v1($1::text[])",
       "catalogues": ["internal"]
     },
     {

@@ -50,6 +50,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "schedule catch-up policies",
     kind: "additive",
   },
+  {
+    fromVersion: 2,
+    toVersion: 3,
+    file: "0003-named-budgets.sql",
+    description: "named budgets",
+    kind: "additive",
+  },
 ];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {

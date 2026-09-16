@@ -6,11 +6,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 MINIMUM_PROTOCOL_VERSION = 1
-MAXIMUM_PROTOCOL_VERSION = 2
+MAXIMUM_PROTOCOL_VERSION = 3
 MINIMUM_SCHEMA_VERSION = 1
-MAXIMUM_SCHEMA_VERSION = 2
+MAXIMUM_SCHEMA_VERSION = 3
 DEFAULT_VALUE_MAX_BYTES = 1048576
 MAX_BATCH_SIZE = 1000
 
@@ -238,6 +238,18 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
     "sync_rate_limit_policies_v1": (
         "SELECT * FROM workhorse.sync_rate_limit_policies_v1(%s::text, %s::jsonb, %s::boolean)",
         "SELECT * FROM workhorse.sync_rate_limit_policies_v1($1::text, $2::jsonb, $3::boolean)",
+    ),
+    "sync_budgets_v1": (
+        "SELECT * FROM workhorse.sync_budgets_v1(%s::text, %s::jsonb, %s::boolean)",
+        "SELECT * FROM workhorse.sync_budgets_v1($1::text, $2::jsonb, $3::boolean)",
+    ),
+    "list_budgets": (
+        "SELECT namespace, budget_name, max_active, rate_limit, rate_interval_ms, rate_burst, updated_at FROM workhorse.budget, (SELECT %s::text[] AS names) AS filter WHERE cardinality(filter.names) = 0 OR budget_name = ANY(filter.names) ORDER BY budget_name",
+        "SELECT namespace, budget_name, max_active, rate_limit, rate_interval_ms, rate_burst, updated_at FROM workhorse.budget, (SELECT $1::text[] AS names) AS filter WHERE cardinality(filter.names) = 0 OR budget_name = ANY(filter.names) ORDER BY budget_name",
+    ),
+    "budget_status_v1": (
+        "SELECT * FROM workhorse.budget_status_v1(%s::text[])",
+        "SELECT * FROM workhorse.budget_status_v1($1::text[])",
     ),
     "sync_schedule_definitions_v2": (
         "SELECT workhorse.sync_schedule_definitions_v2(%s::text, %s::jsonb, %s::boolean)",
@@ -513,6 +525,8 @@ class StatementRegistry:
     sync_concurrency_policies: DriverStatement
     sync_contracts: DriverStatement
     sync_rate_limit_policies: DriverStatement
+    sync_budgets: DriverStatement
+    list_budgets: DriverStatement
     sync_schedules: DriverStatement
     tick: DriverStatement
     update_progress: DriverStatement
@@ -554,6 +568,8 @@ STATEMENTS = StatementRegistry(
     sync_concurrency_policies=_statement("sync_concurrency_policies_v1"),
     sync_contracts=_statement("sync_contract_definitions_v1"),
     sync_rate_limit_policies=_statement("sync_rate_limit_policies_v1"),
+    sync_budgets=_statement("sync_budgets_v1"),
+    list_budgets=_statement("list_budgets"),
     sync_schedules=_statement("sync_schedule_definitions_v2"),
     tick=_statement("tick_v1"),
     update_progress=_statement("update_progress_v1"),

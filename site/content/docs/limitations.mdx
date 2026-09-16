@@ -21,14 +21,6 @@ decisions. It does not provide a separate workflow definition language or graph 
 Workaround: compose those durable boundaries in ordinary handler code. If a workflow must be
 defined and deployed independently of application code, use a workflow system on top or instead.
 
-## No cross-queue concurrency policies
-
-Concurrency and rate-limit policies are scoped to one queue. You cannot express "at most 10 active
-tasks across these three queues".
-
-Workaround: route work that shares a budget onto one queue, and use `concurrencyKey` for per-tenant
-budgets within it.
-
 ## Cancellation is cooperative, never forced
 
 JavaScript cannot be preempted safely, so Workhorse never kills a running handler. Cancellation,

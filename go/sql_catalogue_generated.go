@@ -4,11 +4,11 @@ package workhorse
 
 const (
 	// ProtocolVersion is the SQL protocol version implemented by this module.
-	ProtocolVersion        = 2
+	ProtocolVersion        = 3
 	minimumProtocolVersion = 1
-	maximumProtocolVersion = 2
+	maximumProtocolVersion = 3
 	minimumSchemaVersion   = 1
-	maximumSchemaVersion   = 2
+	maximumSchemaVersion   = 3
 	// MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
 	MaxEnqueueBatchSize      = 1000
 	defaultTaskValueMaxBytes = 1048576
@@ -36,6 +36,9 @@ var internalStatementRegistry = map[string]string{
 	"schema_version":               `SELECT version FROM workhorse.schema_version ORDER BY version`,
 	"sync_concurrency_policies_v1": `SELECT * FROM workhorse.sync_concurrency_policies_v1($1::text, $2::jsonb, $3::boolean)`,
 	"sync_rate_limit_policies_v1":  `SELECT * FROM workhorse.sync_rate_limit_policies_v1($1::text, $2::jsonb, $3::boolean)`,
+	"sync_budgets_v1":              `SELECT * FROM workhorse.sync_budgets_v1($1::text, $2::jsonb, $3::boolean)`,
+	"list_budgets":                 `SELECT namespace, budget_name, max_active, rate_limit, rate_interval_ms, rate_burst, updated_at FROM workhorse.budget, (SELECT $1::text[] AS names) AS filter WHERE cardinality(filter.names) = 0 OR budget_name = ANY(filter.names) ORDER BY budget_name`,
+	"budget_status_v1":             `SELECT * FROM workhorse.budget_status_v1($1::text[])`,
 	"sync_schedule_definitions_v2": `SELECT workhorse.sync_schedule_definitions_v2($1::text, $2::jsonb, $3::boolean)`,
 	"tick_v1":                      `SELECT * FROM workhorse.tick_v1($1::integer, $2::integer)`,
 	"run_task_now_v1":              `SELECT status, state, run_at FROM workhorse.run_task_now_v1($1::uuid, $2::text, $3::text, $4::text)`,

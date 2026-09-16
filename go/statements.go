@@ -64,6 +64,8 @@ const (
 	listConcurrencyPoliciesStatementName = "list_concurrency_policies"
 	syncRateLimitPoliciesStatementName   = "sync_rate_limit_policies_v1"
 	listRateLimitPoliciesStatementName   = "list_rate_limit_policies"
+	syncBudgetsStatementName             = "sync_budgets_v1"
+	listBudgetsStatementName             = "list_budgets"
 	syncContractDefinitionsStatementName = "sync_contract_definitions_v1"
 	getContractDefinitionStatementName   = "get_contract_definition_v1"
 	tickStatementName                    = "tick_v1"
@@ -462,6 +464,7 @@ const (
 	rowPerKeyLimitField      = "per_key_limit"
 	rowPerKeyIntervalMSField = "per_key_interval_ms"
 	rowPerKeyBurstField      = "per_key_burst"
+	rowBudgetNameField       = "budget_name"
 	rowScheduleNameField     = "schedule_name"
 	rowRevisionField         = "revision"
 )

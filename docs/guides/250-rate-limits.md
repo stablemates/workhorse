@@ -50,6 +50,18 @@ measures starts, so a retry consumes a token just like its first attempt.
 `Queue.rateLimitStatuses` shows available queue tokens, throttled ready work, and the next time a
 sampled task can start. The dashboard presents those facts separately from active concurrency.
 
+## One bucket across queues
+
+A rate policy governs one queue. When several queues call the same external service, give them a
+named budget with a `rate` instead, through `Queue.syncBudgets`. Every start that names the budget,
+from any queue, draws one token from the same bucket. PostgreSQL refills it from its own clock, the
+way it refills a queue bucket.
+
+A task names its budget with the `budget` enqueue option. The budget is an extra check beside the
+queue's own rate policy, and it has no per-key bucket. `Queue.budgetStatuses` shows the budget's
+refilled tokens and how much sampled ready work waits on it, and the same facts appear in
+`Queue.health()`.
+
 ## Next
 
 - [How do I stop one customer from consuming every worker?](240-concurrency-policies.md)

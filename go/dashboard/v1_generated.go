@@ -26,6 +26,22 @@ type DashboardActivityPage struct {
 
 type DashboardActivityPeriod string
 
+type DashboardBudgetSummary struct {
+	Name      string   `json:"name"`
+	Namespace string   `json:"namespace"`
+	MaxActive *float64 `json:"maxActive"`
+	Rate      *struct {
+		Limit      float64 `json:"limit"`
+		IntervalMs float64 `json:"intervalMs"`
+		Burst      float64 `json:"burst"`
+	} `json:"rate"`
+	Active          float64  `json:"active"`
+	AvailableTokens *float64 `json:"availableTokens"`
+	BlockedReady    float64  `json:"blockedReady"`
+	Saturated       bool     `json:"saturated"`
+	NextEligibleAt  *string  `json:"nextEligibleAt"`
+}
+
 type DashboardCancelStatus string
 
 type DashboardCancelTaskResult struct {
@@ -286,12 +302,13 @@ type DashboardManagedQueueRow struct {
 }
 
 type DashboardQueueHealthReason struct {
-	Code     DashboardQueueHealthReasonCode `json:"code"`
-	Severity string                         `json:"severity"`
-	Observed float64                        `json:"observed"`
-	Budget   float64                        `json:"budget"`
-	Queue    *string                        `json:"queue,omitempty"`
-	Category *string                        `json:"category,omitempty"`
+	Code       DashboardQueueHealthReasonCode `json:"code"`
+	Severity   string                         `json:"severity"`
+	Observed   float64                        `json:"observed"`
+	Budget     float64                        `json:"budget"`
+	Queue      *string                        `json:"queue,omitempty"`
+	BudgetName *string                        `json:"budgetName,omitempty"`
+	Category   *string                        `json:"category,omitempty"`
 }
 
 type DashboardQueueHealthReasonCode string
@@ -301,6 +318,8 @@ type DashboardQueuesPage struct {
 	Queues                    []DashboardManagedQueueRow `json:"queues"`
 	ConcurrencyPoliciesCapped bool                       `json:"concurrencyPoliciesCapped"`
 	RateLimitPoliciesCapped   bool                       `json:"rateLimitPoliciesCapped"`
+	Budgets                   []DashboardBudgetSummary   `json:"budgets"`
+	BudgetsCapped             bool                       `json:"budgetsCapped"`
 }
 
 type DashboardRateLimitPolicySummary struct {
@@ -639,6 +658,8 @@ type DashboardSystemPage struct {
 	Queues                    []DashboardSystemQueueRow      `json:"queues"`
 	ConcurrencyPoliciesCapped bool                           `json:"concurrencyPoliciesCapped"`
 	RateLimitPoliciesCapped   bool                           `json:"rateLimitPoliciesCapped"`
+	Budgets                   []DashboardBudgetSummary       `json:"budgets"`
+	BudgetsCapped             bool                           `json:"budgetsCapped"`
 	RetryStorm                struct {
 		Buckets  []DashboardSystemRetryBucket `json:"buckets"`
 		TopTypes []struct {

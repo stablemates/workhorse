@@ -84,6 +84,7 @@ class EnqueueOptions:
     queue: str | None = None
     priority: int = 0
     concurrency_key: str | None = None
+    budget: str | None = None
     run_at: datetime | None = None
     deadline: datetime | None = None
     execution_timeout_ms: int | None = None
@@ -139,6 +140,24 @@ class RateLimitPolicy:
     queue: str
     rate: RateLimit
     per_key: RateLimit | None
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class BudgetDefinition:
+    """One named budget that tasks in any queue can name. Set max_active, rate, or both."""
+
+    name: str
+    max_active: int | None = None
+    rate: RateLimit | None = None
+
+
+@dataclass(frozen=True)
+class Budget:
+    namespace: str
+    name: str
+    max_active: int | None
+    rate: RateLimit | None
     updated_at: datetime
 
 
@@ -575,6 +594,8 @@ __all__ = [
     "BatchHandlerItem",
     "BatchHandlerOutcome",
     "BatchSucceeded",
+    "Budget",
+    "BudgetDefinition",
     "CancelResult",
     "CancelStatus",
     "CancellationToken",

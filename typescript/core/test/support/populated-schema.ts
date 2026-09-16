@@ -31,6 +31,15 @@ export async function createHistoryFixtureDay(pool: Pool): Promise<void> {
   await pool.query("SELECT workhorse.create_history_day_v1($1::date)", [historyFixtureDay]);
 }
 
+/** Whether the installed schema, which may be an older released artifact, has one function. */
+async function schemaHasFunction(pool: Pool, name: string): Promise<boolean> {
+  const result = await pool.query<{ present: boolean }>(
+    `SELECT to_regprocedure($1) IS NOT NULL AS present`,
+    [`workhorse.${name}(text, jsonb, boolean)`],
+  );
+  return result.rows[0]?.present === true;
+}
+
 /** One table's rows, projected to the columns it had when the snapshot's shape was recorded. */
 export interface SeededTableRows {
   readonly table: string;
@@ -62,6 +71,15 @@ export async function seedReleasedSchema(pool: Pool): Promise<void> {
       },
     ]),
   ]);
+  // Named budgets arrived in schema version 3; older artifacts have nothing to seed.
+  if (await schemaHasFunction(pool, "sync_budgets_v1")) {
+    await pool.query(`SELECT workhorse.sync_budgets_v1($1, $2::jsonb, false)`, [
+      "fixture",
+      JSON.stringify([
+        { name: "fixture-budget", maxActive: 10, rate: { limit: 60, intervalMs: 60000, burst: 5 } },
+      ]),
+    ]);
+  }
 
   await pool.query(
     `SELECT workhorse.register_worker_v1(

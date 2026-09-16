@@ -8,12 +8,12 @@ This is the authoritative implementation snapshot for schema version 1. “Suppo
 | ---------------------------------------------------------- | ---------------------------------------- | -------------------------------------- |
 | Transactional idempotent immediate/delayed batch enqueue   |                                          |                                        |
 | FIFO `SKIP LOCKED` claims                                  |                                          |                                        |
-| Leases, heartbeats, fencing, recovery                      |                                          | Cross-queue concurrency policies       |
-| Deploy-synchronized worker-owned schedules                 |                                          | Arbitrary scheduled SQL                |
-| Persisted retry policies and terminal failure              | Success-path comparative baseline        | Workflow runtime                       |
-| Queue pause/resume/purge controls and OpenTelemetry        | Operations dashboard without SSO or RBAC | Rust SDK                               |
-| Four ORM providers and framework-neutral dashboard host    |                                          | Online production migration guarantees |
-| Python and Go SDKs at full parity with TypeScript          |                                          | Public HTTP ingress API                |
+| Leases, heartbeats, fencing, recovery                      |                                          | Arbitrary scheduled SQL                |
+| Deploy-synchronized worker-owned schedules                 |                                          | Workflow runtime                       |
+| Persisted retry policies and terminal failure              | Success-path comparative baseline        | Rust SDK                               |
+| Queue pause/resume/purge controls and OpenTelemetry        | Operations dashboard without SSO or RBAC | Online production migration guarantees |
+| Four ORM providers and framework-neutral dashboard host    |                                          | Public HTTP ingress API                |
+| Python and Go SDKs at full parity with TypeScript          |                                          |                                        |
 | Live runtime plus immutable outcomes                       |                                          |                                        |
 | Append-only events and attempt history                     |                                          |                                        |
 | Immutable named checkpoint replay                          |                                          |                                        |
@@ -23,6 +23,7 @@ This is the authoritative implementation snapshot for schema version 1. “Suppo
 | Configurable bounded worker concurrency                    |                                          |                                        |
 | Durable queue and keyed concurrency policies               |                                          |                                        |
 | Durable queue and keyed token-bucket rate limits           |                                          |                                        |
+| Named budgets that cap work across queues                  |                                          |                                        |
 | Immediate and cooperative fenced cancellation              |                                          |                                        |
 | Dedicated worker process CLI and graceful signal drain     |                                          |                                        |
 | Absolute deadlines and per-attempt execution timeouts      |                                          |                                        |
@@ -60,6 +61,7 @@ and human-decision delivery. PostgreSQL owns each transition, matching the SDK s
 | Multi-worker claim                | Supported | `claim_v1` atomically enforces durable queue and optional queue-scoped key budgets, then changes one bounded priority-ordered candidate to active.                                                                                                                          |
 | Fleet-wide concurrency policies   | Supported | Namespaced desired-state policies limit unexpired active work across workers. Keyed admission uses bounded lookahead, and capacity release sends a queue wake hint.                                                                                                         |
 | Fleet-wide rate-limit policies    | Supported | Namespaced queue and optional per-key token buckets consume one durable token per start. PostgreSQL owns refill time, competing claims serialize consumption, and bounded status reports tokens, throttled work, and next eligibility.                                      |
+| Cross-queue named budgets         | Supported | A task names one budget at enqueue time. The budget caps unexpired active work, start rate, or both across every queue naming it, adds to the queue's own policies, and reports bounded pressure through health, telemetry, and the dashboard.                              |
 | Single mutable live row           | Supported | Scheduled, ready, and active state are mutually exclusive shapes in `task_runtime`.                                                                                                                                                                                         |
 | Selective dispatch indexes        | Supported | Separate partial indexes cover ready, scheduled, and active-expiry access paths.                                                                                                                                                                                            |
 | Declarative recurring tasks       | Supported | Namespaced definitions synchronize into the target database. Worker-owned cadence calls PostgreSQL's shared evaluator and fires tasks through the normal Workhorse protocol.                                                                                                |

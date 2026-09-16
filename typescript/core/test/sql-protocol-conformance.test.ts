@@ -806,7 +806,11 @@ describe("SQL protocol conformance fixtures", () => {
     const fixtures = await loadSqlProtocolFixtures(repository);
     try {
       await expect(
-        assertSqlProtocolCompatible(compatibilityDatabase.pool, fixtures.manifest, 3),
+        assertSqlProtocolCompatible(
+          compatibilityDatabase.pool,
+          fixtures.manifest,
+          PROTOCOL_VERSION + 1,
+        ),
       ).rejects.toMatchObject({
         name: "SqlProtocolCompatibilityError",
         code: "client-protocol-too-new",
