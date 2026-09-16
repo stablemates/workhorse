@@ -26,6 +26,7 @@
     "315-batch-handlers": "batch-handlers",
     "320-statistics": "operations",
     "330-retention": "maintenance",
+    "335-cold-export": "maintenance",
     "340-redrive": "dead-letters",
     "350-production-telemetry": "operations",
     "355-observability": "operations",

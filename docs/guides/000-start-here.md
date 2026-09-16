@@ -61,6 +61,7 @@ How a task behaves once it's executing.
 | [315 Batch handlers](315-batch-handlers.md)             | Processing compatible tasks in one application call          |
 | [320 Statistics](320-statistics.md)                     | Counting things without melting the database                 |
 | [330 Retention](330-retention.md)                       | Deleting old data without losing the audit trail             |
+| [335 Cold export](335-cold-export.md)                   | Keeping history longer than PostgreSQL should hold it        |
 | [340 Redrive](340-redrive.md)                           | Running a task again after it has given up                   |
 | [350 Production telemetry](350-production-telemetry.md) | Connecting traces, logs, and metrics to your backend         |
 | [355 Observability](355-observability.md)               | Reading bounded runtime metrics and database-wide gauges     |

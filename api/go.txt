@@ -9,4 +9,4 @@
 
 baseline github.com/stablemates/workhorse/go@v0.1.5 (tag go/v0.1.5)
 
-- ProtocolVersion: value changed from 1 to 3
+- ProtocolVersion: value changed from 1 to 4

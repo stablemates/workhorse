@@ -57,6 +57,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "named budgets",
     kind: "additive",
   },
+  {
+    fromVersion: 3,
+    toVersion: 4,
+    file: "0004-cold-history-export.sql",
+    description: "cold history export",
+    kind: "additive",
+  },
 ];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {

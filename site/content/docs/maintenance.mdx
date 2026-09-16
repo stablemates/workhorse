@@ -131,6 +131,30 @@ Run exactly one observer per database, beside a long-lived service — every rep
 queues, so multiple observers export duplicate gauges. `registerQueueMetrics` and
 `queue.queueMetricSnapshot` are the lower-level pieces if you integrate by hand.
 
+## Export history before retention deletes it
+
+Retention is the right window for a database whose job is dispatch, and the wrong window for an
+auditor. Cold export copies each finished UTC day of events and attempts to a store you own, and
+history retention then waits for that copy: while export is enabled, a day above the export
+watermark is never deleted, so an exporter that falls behind holds history instead of leaving a
+hole in the archive. Export is off by default.
+
+Workhorse ships the ledger and the four SQL functions an exporter drives: claim a day, read it in
+identity-ordered pages, complete it with a SHA-256 checksum and counts, or report a failure so the
+day is handed out again. The exporter itself is a small program you run on your own schedule, and
+no exporter ships in this release. Enable export only once one is ready, because enabling it with
+nothing to drain it holds history indefinitely:
+
+```ts
+await queue.setColdExportPolicy({ enabled: true });
+console.log(await queue.getColdExportStatus());
+```
+
+Object names derive from the day, so a crashed export resumes by rewriting the same object.
+`queue.getColdExportStatus()` reports the watermark, the segment being exported, and the last
+error. Read exports back with a JSON-lines tool such as DuckDB, or `COPY` a day into a scratch
+schema as `jsonb` lines; never load it into the live `workhorse` schema.
+
 ## Next
 
 - [Worker processes](/docs/worker-processes) — the runtime that drives maintenance

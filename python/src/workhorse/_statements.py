@@ -6,11 +6,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 MINIMUM_PROTOCOL_VERSION = 1
-MAXIMUM_PROTOCOL_VERSION = 3
+MAXIMUM_PROTOCOL_VERSION = 4
 MINIMUM_SCHEMA_VERSION = 1
-MAXIMUM_SCHEMA_VERSION = 3
+MAXIMUM_SCHEMA_VERSION = 4
 DEFAULT_VALUE_MAX_BYTES = 1048576
 MAX_BATCH_SIZE = 1000
 
@@ -398,6 +398,30 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
     "prune_terminal_storage_v1": (
         "SELECT * FROM workhorse.prune_terminal_storage_v1(%s::boolean, %s::timestamptz)",
         "SELECT * FROM workhorse.prune_terminal_storage_v1($1::boolean, $2::timestamptz)",
+    ),
+    "set_cold_export_policy_v1": (
+        "SELECT * FROM workhorse.set_cold_export_policy_v1(%s::boolean, %s::timestamptz)",
+        "SELECT * FROM workhorse.set_cold_export_policy_v1($1::boolean, $2::timestamptz)",
+    ),
+    "get_cold_export_status_v1": (
+        "SELECT * FROM workhorse.get_cold_export_status_v1()",
+        "SELECT * FROM workhorse.get_cold_export_status_v1()",
+    ),
+    "claim_cold_export_segment_v1": (
+        "SELECT * FROM workhorse.claim_cold_export_segment_v1(%s::text, %s::text, %s::integer, %s::timestamptz)",
+        "SELECT * FROM workhorse.claim_cold_export_segment_v1($1::text, $2::text, $3::integer, $4::timestamptz)",
+    ),
+    "read_cold_export_rows_v1": (
+        "SELECT * FROM workhorse.read_cold_export_rows_v1(%s::text, %s::timestamptz, %s::timestamptz, %s::timestamptz, %s::uuid, %s::integer)",
+        "SELECT * FROM workhorse.read_cold_export_rows_v1($1::text, $2::timestamptz, $3::timestamptz, $4::timestamptz, $5::uuid, $6::integer)",
+    ),
+    "complete_cold_export_segment_v1": (
+        "SELECT workhorse.complete_cold_export_segment_v1(%s::text, %s::timestamptz, %s::integer, %s::text, %s::text, %s::text, %s::bigint, %s::bigint) AS exported_through",
+        "SELECT workhorse.complete_cold_export_segment_v1($1::text, $2::timestamptz, $3::integer, $4::text, $5::text, $6::text, $7::bigint, $8::bigint) AS exported_through",
+    ),
+    "fail_cold_export_segment_v1": (
+        "SELECT workhorse.fail_cold_export_segment_v1(%s::text, %s::timestamptz, %s::integer, %s::jsonb)",
+        "SELECT workhorse.fail_cold_export_segment_v1($1::text, $2::timestamptz, $3::integer, $4::jsonb)",
     ),
     "sync_retention_policy_v1": (
         "SELECT (policy).* FROM workhorse.sync_retention_policy_v1(\n         %s::integer, %s::integer, %s::integer, %s::integer, %s::integer,\n         %s::integer, %s::integer, %s::integer, %s::integer, %s::integer,\n         %s::integer, %s::boolean\n       ) policy",

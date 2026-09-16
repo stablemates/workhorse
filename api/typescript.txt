@@ -41,6 +41,10 @@ class ChildResultLimitExceededError
 interface ChildTask
 interface ChildTaskRequest
 interface ClaimedTask
+type ColdExportDataset
+interface ColdExportDatasetStatus
+interface ColdExportPolicyDefinition
+interface ColdExportStatus
 type CompleteHumanWaitRequest
 type CompleteHumanWaitResult
 type CompleteHumanWaitStatus
@@ -1024,6 +1028,33 @@ interface ClaimedTask<TPayload extends Json = Json> {
   fenceToken: bigint;
   /** Client-visible expiry snapshot. PostgreSQL remains authoritative. */
   leaseExpiresAt: Date;
+}
+
+type ColdExportDataset = "task_event" | "attempt_history";
+
+interface ColdExportDatasetStatus {
+  /** Exclusive, UTC-day-aligned. Every history day below it has a complete segment. */
+  exportedThrough: Date | null;
+  /** The newest day boundary a segment may end at: the day is closed and the rollup has passed it. */
+  exportableThrough: Date;
+  completeSegments: number;
+  /** The segment an exporter currently holds, or was abandoned mid-export, if any. */
+  exporting: {
+    segmentStart: Date;
+    attempts: number;
+  } | null;
+  lastError: Json | null;
+}
+
+interface ColdExportPolicyDefinition {
+  enabled: boolean;
+  from?: Date;
+}
+
+interface ColdExportStatus {
+  enabled: boolean;
+  datasets: Record<ColdExportDataset, ColdExportDatasetStatus>;
+  updatedAt: Date | null;
 }
 
 type CompleteDashboardOptions<Union, Options extends readonly Union[]> = Exclude<Union, Options[number]> extends never ? Options : never;
@@ -2973,9 +3004,9 @@ interface LiveProtocolWorker {
   readonly lastHeartbeatAt: Date;
 }
 
-const MAXIMUM_PROTOCOL_VERSION = 3;
+const MAXIMUM_PROTOCOL_VERSION = 4;
 
-const MAXIMUM_SCHEMA_VERSION = 3;
+const MAXIMUM_SCHEMA_VERSION = 4;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -3123,7 +3154,7 @@ class MissingRowError extends WorkhorseError {
 
 type OptionalDashboardProcedure = "runTaskNow" | "enqueueTest" | "redriveTask" | "redriveDeadLetters";
 
-const PROTOCOL_VERSION = 3;
+const PROTOCOL_VERSION = 4;
 
 interface ParsedHumanWaitResult {
   value: Json;
@@ -3288,6 +3319,13 @@ class Queue {
   syncRetentionPolicy(definition: RetentionPolicyDefinition, options?: {
     force?: boolean;
   }): Promise<RetentionPolicy>;
+  /**
+  * Turn cold history export on or off. While it is on, history retention waits for every day no
+  * completed export segment covers, so an exporter that falls behind, or one that was never run,
+  * holds history rather than leaving the archive incomplete.
+  */
+  setColdExportPolicy(definition: ColdExportPolicyDefinition): Promise<ColdExportStatus>;
+  getColdExportStatus(): Promise<ColdExportStatus>;
   syncConcurrencyPolicies(namespace: string, definitions: readonly ConcurrencyPolicyDefinition[], options?: {
     prune?: boolean;
   }): Promise<ConcurrencyPolicy[]>;
@@ -4399,7 +4437,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 1;
 
-const WORKHORSE_SCHEMA_VERSION = 3;
+const WORKHORSE_SCHEMA_VERSION = 4;
 
 const WORKHORSE_VERSION = "0.1.5";
 
@@ -4737,7 +4775,7 @@ class WorkhorseError extends Error {
   constructor(message: string, options?: ErrorOptions);
 }
 
-type WorkhorseLogEvent = "workhorse.handler.batch_dispatched" | "workhorse.handler.batch_evidence_failed" | "workhorse.handler.finished" | "workhorse.handler.registered" | "workhorse.handler.signal_swallowed" | "workhorse.handler.started" | "workhorse.task.cancellation_acknowledged" | "workhorse.task.cancellation_processed" | "workhorse.task.checkpoint_saved" | "workhorse.task.child_processed" | "workhorse.task.debounce_rejected" | "workhorse.task.debounced" | "workhorse.task.claimed" | "workhorse.task.completed" | "workhorse.task.completion_rejected" | "workhorse.task.enqueue_replayed" | "workhorse.task.enqueued" | "workhorse.task.throttled" | "workhorse.task.execution_finished" | "workhorse.task.failure_processed" | "workhorse.task.heartbeat_accepted" | "workhorse.task.heartbeat_rejected" | "workhorse.task.ownership_expired" | "workhorse.task.progress_updated" | "workhorse.task.redrive_processed" | "workhorse.task.run_now_requested" | "workhorse.task.signal_processed" | "workhorse.task.human_wait_processed" | "workhorse.task.wait_processed" | "workhorse.tasks.promoted" | "workhorse.tasks.redrive_processed" | "workhorse.leases.recovered" | "workhorse.maintenance.completed" | "workhorse.maintenance_policy.synchronized" | "workhorse.queue.paused" | "workhorse.queue.purged" | "workhorse.queue.resumed" | "workhorse.retention_policy.synchronized" | "workhorse.schedule.fire_replayed" | "workhorse.schedule.fired" | "workhorse.schedules.synchronized" | "workhorse.worker.deregistered" | "workhorse.worker.paused" | "workhorse.worker.registered" | "workhorse.worker.registration_failed" | "workhorse.worker.resumed" | "workhorse.worker.started" | "workhorse.worker.stop_requested" | "workhorse.worker.stopped" | "workhorse.worker_registry.pruned";
+type WorkhorseLogEvent = "workhorse.handler.batch_dispatched" | "workhorse.handler.batch_evidence_failed" | "workhorse.handler.finished" | "workhorse.handler.registered" | "workhorse.handler.signal_swallowed" | "workhorse.handler.started" | "workhorse.task.cancellation_acknowledged" | "workhorse.task.cancellation_processed" | "workhorse.task.checkpoint_saved" | "workhorse.task.child_processed" | "workhorse.task.debounce_rejected" | "workhorse.task.debounced" | "workhorse.task.claimed" | "workhorse.task.completed" | "workhorse.task.completion_rejected" | "workhorse.task.enqueue_replayed" | "workhorse.task.enqueued" | "workhorse.task.throttled" | "workhorse.task.execution_finished" | "workhorse.task.failure_processed" | "workhorse.task.heartbeat_accepted" | "workhorse.task.heartbeat_rejected" | "workhorse.task.ownership_expired" | "workhorse.task.progress_updated" | "workhorse.task.redrive_processed" | "workhorse.task.run_now_requested" | "workhorse.task.signal_processed" | "workhorse.task.human_wait_processed" | "workhorse.task.wait_processed" | "workhorse.tasks.promoted" | "workhorse.tasks.redrive_processed" | "workhorse.leases.recovered" | "workhorse.cold_export_policy.synchronized" | "workhorse.maintenance.completed" | "workhorse.maintenance_policy.synchronized" | "workhorse.queue.paused" | "workhorse.queue.purged" | "workhorse.queue.resumed" | "workhorse.retention_policy.synchronized" | "workhorse.schedule.fire_replayed" | "workhorse.schedule.fired" | "workhorse.schedules.synchronized" | "workhorse.worker.deregistered" | "workhorse.worker.paused" | "workhorse.worker.registered" | "workhorse.worker.registration_failed" | "workhorse.worker.resumed" | "workhorse.worker.started" | "workhorse.worker.stop_requested" | "workhorse.worker.stopped" | "workhorse.worker_registry.pruned";
 
 class WorkhorseMetricsObserver {
   constructor(database: Queryable, options?: {

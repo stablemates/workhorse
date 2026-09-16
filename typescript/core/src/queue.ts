@@ -1,6 +1,8 @@
 import { SQL_STATEMENTS } from "./queue/sql-catalogue.generated.js";
 import type {
   ChildTaskOptions,
+  ColdExportPolicyDefinition,
+  ColdExportStatus,
   ChildOutcomes,
   ChildTaskRequest,
   CancellationRequest,
@@ -355,6 +357,19 @@ export class Queue {
     options: { force?: boolean } = {},
   ): Promise<RetentionPolicy> {
     return this.modules.retentionMaintenance.syncRetentionPolicy(definition, options);
+  }
+
+  /**
+   * Turn cold history export on or off. While it is on, history retention waits for every day no
+   * completed export segment covers, so an exporter that falls behind, or one that was never run,
+   * holds history rather than leaving the archive incomplete.
+   */
+  async setColdExportPolicy(definition: ColdExportPolicyDefinition): Promise<ColdExportStatus> {
+    return this.modules.retentionMaintenance.setColdExportPolicy(definition);
+  }
+
+  async getColdExportStatus(): Promise<ColdExportStatus> {
+    return this.modules.retentionMaintenance.getColdExportStatus();
   }
 
   async syncConcurrencyPolicies(

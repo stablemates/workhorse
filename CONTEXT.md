@@ -33,6 +33,12 @@ partitions, history retention, and terminal storage. A routine is not a task and
 handler.
 _Avoid_: Maintenance task, background task, cron job
 
+**Cold export**:
+The optional copy of each finished UTC day of history to a store the operator owns, recorded in
+PostgreSQL so retention waits for it. It is off by default and is not a routine: an operator runs
+the exporter.
+_Avoid_: Archive, backup, offload, tiering
+
 **Schedule pause**:
 A durable operator override that prevents a configured recurring schedule from firing until an
 operator resumes it. Deployment synchronization does not clear it.

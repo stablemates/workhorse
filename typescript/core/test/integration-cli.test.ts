@@ -37,7 +37,7 @@ describe("database CLI output", () => {
         installedVersion: WORKHORSE_SCHEMA_VERSION,
         expectedVersion: WORKHORSE_SCHEMA_VERSION,
         state: "current",
-        installedProtocolVersions: [1, 2, 3],
+        installedProtocolVersions: [1, 2, 3, 4],
         pendingContractSteps: [],
       },
       postgres: {

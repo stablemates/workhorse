@@ -469,7 +469,12 @@ describe("schema migrations", () => {
       const protocols = await releaseDatabase.pool.query<{ version: number }>(
         "SELECT version FROM workhorse.protocol_version ORDER BY version",
       );
-      expect(protocols.rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
+      expect(protocols.rows).toEqual([
+        { version: 1 },
+        { version: 2 },
+        { version: 3 },
+        { version: 4 },
+      ]);
       const migrations = await releaseDatabase.pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_migration ORDER BY version",
       );

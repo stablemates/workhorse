@@ -38,6 +38,17 @@
         "status": "text"
       }
     },
+    "claim_cold_export_segment_v1": {
+      "arguments": ["text", "text", "integer", "timestamptz?"],
+      "returns": "table",
+      "returnsColumns": {
+        "attempts": "integer",
+        "dataset": "text",
+        "exportable_through": "timestamptz",
+        "segment_end": "timestamptz",
+        "segment_start": "timestamptz"
+      }
+    },
     "claim_many_v1": {
       "arguments": ["text", "text", "integer", "integer?"],
       "returns": "table",
@@ -81,6 +92,10 @@
         "task_type": "text",
         "trace_context": "jsonb"
       }
+    },
+    "complete_cold_export_segment_v1": {
+      "arguments": ["text", "timestamptz", "integer", "text", "text", "text", "bigint", "bigint"],
+      "returns": "timestamptz"
     },
     "complete_human_wait_v1": {
       "arguments": ["uuid", "text", "jsonb", "text", "text"],
@@ -201,6 +216,10 @@
         "status": "text"
       }
     },
+    "fail_cold_export_segment_v1": {
+      "arguments": ["text", "timestamptz", "integer", "jsonb"],
+      "returns": "void"
+    },
     "fail_v1": {
       "arguments": ["uuid", "text", "bigint", "jsonb", "integer?"],
       "returns": "text"
@@ -228,6 +247,21 @@
     "fire_schedule_v1": {
       "arguments": ["text", "text", "bigint", "timestamptz?"],
       "returns": "uuid"
+    },
+    "get_cold_export_status_v1": {
+      "arguments": [],
+      "returns": "table",
+      "returnsColumns": {
+        "complete_segments": "bigint",
+        "dataset": "text",
+        "enabled": "boolean",
+        "exportable_through": "timestamptz",
+        "exported_through": "timestamptz",
+        "exporting_attempts": "integer",
+        "exporting_segment_start": "timestamptz",
+        "last_error": "jsonb",
+        "updated_at": "timestamptz"
+      }
     },
     "get_contract_definition_v1": {
       "arguments": ["text", "text?"],
@@ -380,6 +414,15 @@
     "queue_health_v1": {
       "arguments": ["timestamptz?"],
       "returns": "jsonb"
+    },
+    "read_cold_export_rows_v1": {
+      "arguments": ["text", "timestamptz", "timestamptz", "timestamptz", "uuid", "integer"],
+      "returns": "table",
+      "returnsColumns": {
+        "occurred_at": "timestamptz",
+        "record": "jsonb",
+        "row_id": "uuid"
+      }
     },
     "record_batch_dispatch_v1": {
       "arguments": ["uuid", "uuid[]", "integer[]", "bigint[]", "text"],
@@ -555,6 +598,21 @@
         "delivered_by": "text",
         "payload": "jsonb",
         "status": "text"
+      }
+    },
+    "set_cold_export_policy_v1": {
+      "arguments": ["boolean", "timestamptz?"],
+      "returns": "table",
+      "returnsColumns": {
+        "complete_segments": "bigint",
+        "dataset": "text",
+        "enabled": "boolean",
+        "exportable_through": "timestamptz",
+        "exported_through": "timestamptz",
+        "exporting_attempts": "integer",
+        "exporting_segment_start": "timestamptz",
+        "last_error": "jsonb",
+        "updated_at": "timestamptz"
       }
     },
     "set_queue_paused_v1": {
@@ -1394,6 +1452,8 @@
       "budget_admission_v1",
       "budget_bucket_v1",
       "cancellation_envelope_v1",
+      "cold_export_exportable_through_internal_v1",
+      "cold_export_oldest_history_day_internal_v1",
       "create_history_day_v1",
       "create_single_child_v1",
       "cron_field_values_v1",
@@ -1459,6 +1519,9 @@
     ],
     "relations": [
       "budget_bucket",
+      "cold_export_dataset",
+      "cold_export_policy",
+      "cold_export_segment",
       "contract_definition",
       "contract_policy",
       "enqueue_idempotency",

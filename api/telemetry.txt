@@ -95,6 +95,7 @@ workhorse.child.count
 workhorse.child.name
 workhorse.child.status
 workhorse.claim.result
+workhorse.cold_export.enabled
 workhorse.complete.accepted
 workhorse.enqueue.count
 workhorse.enqueue.outcome
