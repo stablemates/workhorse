@@ -16,22 +16,30 @@
  * `--env-file` precedence, so a deliberate one-off override such as `PORT=4000 pnpm demo` still
  * works.
  *
+ * A linked worktree whose `.env` still names the primary checkout's databases — the shape a
+ * worktree has when a tool copied `.env` in without running `pnpm worktree:setup` — is refused
+ * outright. Two such worktrees running database-scope tests at once reset each other mid-suite.
+ *
  * Usage: tsx scripts/with-env.ts <command> [...arguments]
  */
 import { spawn } from "node:child_process";
-import { join } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   localDatabaseEnvironmentVariable,
   localDatabasePurposes,
 } from "../typescript/core/src/local-database.js";
 import { readEnvironment } from "./environment-file.js";
+import {
+  describeUnscopedDatabases,
+  linkedWorktreeId,
+  unscopedDatabases,
+} from "./worktree-identity.js";
 
 /** Variables this repository provisions per worktree, and so is entitled to overwrite. */
-const ownedVariables = new Set([
-  ...localDatabasePurposes.map((purpose) => localDatabaseEnvironmentVariable(purpose)),
-  "ONTRACK_AGENT_DSN",
-]);
+const ownedVariables = new Set(
+  localDatabasePurposes.map((purpose) => localDatabaseEnvironmentVariable(purpose)),
+);
 
 const [command, ...commandArguments] = process.argv.slice(2);
 if (!command) {
@@ -41,11 +49,19 @@ if (!command) {
 
 // Resolved against this file rather than the working directory: the point is to find the `.env`
 // of the checkout the command belongs to, whatever directory it was invoked from.
-const checkoutRoot = fileURLToPath(new URL("..", import.meta.url));
+const checkoutRoot = resolvePath(fileURLToPath(new URL("..", import.meta.url)));
 const fileEnvironment = await readEnvironment(join(checkoutRoot, ".env"));
 
+const worktreeId = await linkedWorktreeId(checkoutRoot);
+if (worktreeId !== undefined) {
+  const unscoped = unscopedDatabases(fileEnvironment, worktreeId);
+  if (unscoped.length > 0) {
+    console.error(describeUnscopedDatabases(worktreeId, checkoutRoot, unscoped));
+    process.exit(2);
+  }
+}
+
 const environment: NodeJS.ProcessEnv = { ...process.env };
-if (fileEnvironment.ONTRACK_AGENT_DSN === undefined) delete environment.ONTRACK_AGENT_DSN;
 for (const [key, value] of Object.entries(fileEnvironment)) {
   if (ownedVariables.has(key) || environment[key] === undefined) environment[key] = value;
 }

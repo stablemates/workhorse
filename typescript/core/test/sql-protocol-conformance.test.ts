@@ -801,43 +801,49 @@ describe("SQL protocol conformance fixtures", () => {
     expect(fixtures.compatibility.filter((fixture) => !fixture.compatible)).toHaveLength(5);
   });
 
-  it("refuses incompatible schemas and client protocols before mutation", async () => {
-    await compatibilityDatabase.setup();
-    const fixtures = await loadSqlProtocolFixtures(repository);
-    try {
-      await expect(
-        assertSqlProtocolCompatible(
-          compatibilityDatabase.pool,
-          fixtures.manifest,
-          PROTOCOL_VERSION + 1,
-        ),
-      ).rejects.toMatchObject({
-        name: "SqlProtocolCompatibilityError",
-        code: "client-protocol-too-new",
-      });
-      const client = await compatibilityDatabase.pool.connect();
+  // Recreating the compatibility database mid-test waits on the same cluster-wide checkpoint
+  // queue as the suite's teardown hooks; see vitest.database.config.ts.
+  it(
+    "refuses incompatible schemas and client protocols before mutation",
+    { timeout: 120_000 },
+    async () => {
+      await compatibilityDatabase.setup();
+      const fixtures = await loadSqlProtocolFixtures(repository);
       try {
-        await client.query("BEGIN");
-        // Below the supported minimum, which is 1 now that the baseline was reset.
-        await client.query("UPDATE workhorse.schema_version SET version = 0");
         await expect(
-          assertSqlProtocolCompatible(client, fixtures.manifest, PROTOCOL_VERSION),
+          assertSqlProtocolCompatible(
+            compatibilityDatabase.pool,
+            fixtures.manifest,
+            PROTOCOL_VERSION + 1,
+          ),
         ).rejects.toMatchObject({
           name: "SqlProtocolCompatibilityError",
-          code: "schema-too-old",
+          code: "client-protocol-too-new",
         });
-        const tasks = await client.query<{ count: number }>(
-          "SELECT count(*)::integer AS count FROM workhorse.task",
-        );
-        expect(tasks.rows).toEqual([{ count: 0 }]);
+        const client = await compatibilityDatabase.pool.connect();
+        try {
+          await client.query("BEGIN");
+          // Below the supported minimum, which is 1 now that the baseline was reset.
+          await client.query("UPDATE workhorse.schema_version SET version = 0");
+          await expect(
+            assertSqlProtocolCompatible(client, fixtures.manifest, PROTOCOL_VERSION),
+          ).rejects.toMatchObject({
+            name: "SqlProtocolCompatibilityError",
+            code: "schema-too-old",
+          });
+          const tasks = await client.query<{ count: number }>(
+            "SELECT count(*)::integer AS count FROM workhorse.task",
+          );
+          expect(tasks.rows).toEqual([{ count: 0 }]);
+        } finally {
+          await client.query("ROLLBACK");
+          client.release();
+        }
       } finally {
-        await client.query("ROLLBACK");
-        client.release();
+        await compatibilityDatabase.teardown();
       }
-    } finally {
-      await compatibilityDatabase.teardown();
-    }
-  });
+    },
+  );
 
   it("verifies canonical requests, results, transitions, and structured errors through PostgreSQL", async () => {
     await sqlDatabase.setup();

@@ -11,6 +11,7 @@ import {
   localDatabasePurposes,
   localDatabaseUrl,
   type LocalDatabasePurpose,
+  worktreeDatabaseHash,
   worktreeDatabaseUrl,
 } from "../typescript/core/src/local-database.js";
 
@@ -123,7 +124,10 @@ export async function dropWorktreeDatabases(resources: WorktreeResources): Promi
 
     const name = databaseName(databaseUrl);
     const purposeMarker = currentPurpose ? `_${purpose}_` : `${legacySuffix}_`;
-    if (!name.includes(purposeMarker) || !name.endsWith(`_${worktreeHash(resources.worktreeId)}`)) {
+    if (
+      !name.includes(purposeMarker) ||
+      !name.endsWith(`_${worktreeDatabaseHash(resources.worktreeId)}`)
+    ) {
       throw new Error(`Refusing to drop database without the expected worktree marker: ${name}`);
     }
 
@@ -208,15 +212,6 @@ async function findEnvironmentFiles(root: string): Promise<string[]> {
 function isLocalEnvironmentFile(name: string): boolean {
   if (name.endsWith(".example")) return false;
   return name === ".env" || name.startsWith(".env.");
-}
-
-function worktreeHash(value: string): string {
-  let hash = 0x811c9dc5;
-  for (const character of value) {
-    hash ^= character.codePointAt(0) ?? 0;
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 function identifier(value: string): string {

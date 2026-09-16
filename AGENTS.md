@@ -84,14 +84,19 @@ prerequisites, or deployment procedure, update `typescript/demo/DEPLOYMENT.md` i
 
 ## Run commands from the checkout they belong to
 
-`scripts/setup-worktree.ts` provisions a dedicated set of five databases for each linked worktree:
+`pnpm worktree:setup` provisions a dedicated set of five databases for each linked worktree:
 two development roles plus `test`, `bench`, and `test_packed`. It writes their URLs into that
-worktree's `.env`.
+worktree's `.env`, and it refuses to finish if that file still names another checkout's
+databases. Run it once in every new linked worktree. Creating a worktree with `git worktree add`
+or with a workspace tool that copies `.env` from the primary checkout does not run it.
 
 Repository commands run through `scripts/with-env.ts`. The script resolves `.env` relative to its
 own checkout and lets the five repository-owned `DATABASE_URL_*` values from that file win over the
-ambient environment. Keep repository scripts behind that wrapper, and do not reintroduce
-`--env-file-if-exists=.env` in `package.json`.
+ambient environment. In a linked worktree it refuses to run any command until those five values
+name databases generated for that worktree, so an unconfigured worktree cannot reset another
+checkout's test database. Keep repository scripts behind that wrapper, and do not reintroduce
+`--env-file-if-exists=.env` in `package.json`. The `worktree:*` commands are the one exception:
+they run bare because they have to work before a worktree is configured.
 
 Anything spawned outside those scripts still inherits the ambient environment. If an integration
 test fails on an unexpected row count, confirm which database the process resolved before treating
