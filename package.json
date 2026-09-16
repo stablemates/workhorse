@@ -120,6 +120,7 @@
     "worktree:prune": "tsx scripts/prune-worktrees.ts",
     "check": "pnpm sql-catalogues:check && pnpm dashboard-spec:check && pnpm build:verified && pnpm parity:check && pnpm readme-alignment:check && pnpm format:check && pnpm lint && pnpm npm:vuln && pnpm python:vuln && pnpm go:vuln && pnpm typecheck && pnpm typescript-api:check && pnpm python-api:check && pnpm go-api:check && pnpm cli-surface:check && pnpm telemetry-surface:check && pnpm test && pnpm go:test:race && pnpm test:packed:built && pnpm test:site-smoke:built && pnpm test:demo-smoke:built",
     "db:provision": "tsx scripts/with-env.ts tsx scripts/setup-checkout.ts",
+    "db:sweep": "tsx scripts/with-env.ts tsx scripts/sweep-test-databases.ts",
     "db:reset": "pnpm db:reset:dev-primary",
     "db:reset:dev-primary": "tsx scripts/with-env.ts tsx typescript/core/src/cli/reset-db.ts --database dev_primary --yes",
     "db:reset:dev-secondary": "tsx scripts/with-env.ts tsx typescript/core/src/cli/reset-db.ts --database dev_secondary --yes",
