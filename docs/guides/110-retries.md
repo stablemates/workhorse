@@ -5,13 +5,13 @@ This guide covers how the next attempt gets scheduled, and how long it waits.
 
 ## The attempt budget
 
-Every task carries a maximum number of attempts, set when you enqueue it. Each failure uses
-one up. When the budget runs out, the task stops retrying: its runtime row is deleted and a
-failed outcome is written instead.
+Every task carries a maximum number of attempts, set when you enqueue it. Each failure uses one up.
+When the budget runs out, the task stops retrying: Workhorse deletes its runtime row and writes a
+failed outcome instead.
 
-That budget check happens in SQL, always. It doesn't matter where the retry delay came from,
-or what your worker configuration says — the database is the thing that decides whether a
-task is allowed another attempt. You can't accidentally configure infinite retries.
+Workhorse makes that budget check in SQL, always. It doesn't matter where the retry delay came from,
+or what your worker configuration says — the database is the thing that decides whether a task is
+allowed another attempt. You can't accidentally configure infinite retries.
 
 ## Choosing the delay
 

@@ -46,7 +46,7 @@ handler restarts.
   </Tab>
 </Tabs>
 
-Code before the wait runs again, so checkpoint earlier effects or make them idempotent.
+Code before the wait runs again, so wrap earlier effects in a checkpoint or make them idempotent.
 
 Go handlers can pass `ExternalWaitOptions` when the decision needs a shorter lifetime. Python
 handlers pass `timeout_ms` for the same boundary.

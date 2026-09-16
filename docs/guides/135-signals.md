@@ -9,8 +9,8 @@ worker slot until an application or authenticated operator supplies a named JSON
 shorten how long PostgreSQL keeps the boundary open. When a caller delivers that signal, Workhorse
 makes the same logical attempt ready and a worker starts the handler again.
 
-The handler restarts from its entry point, so checkpoint earlier effects or make them idempotent.
-When replay reaches the same name, `waitForSignal` returns the retained payload.
+The handler restarts from its entry point, so wrap earlier effects in a checkpoint or make them
+idempotent. When replay reaches the same name, `waitForSignal` returns the retained payload.
 
 Go handlers call `HandlerContext.WaitForSignal` with the same stable name. They can pass
 `ExternalWaitOptions` when the boundary needs a shorter lifetime.

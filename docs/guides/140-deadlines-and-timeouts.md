@@ -8,9 +8,9 @@ Mixing them up is the usual source of confusion.
 `deadline` is a wall-clock moment after which the task is pointless. It is an actual instant,
 such as the cutoff for a delivery run, rather than an execution budget.
 
-The clock never stops. It keeps running while the task is queued, while it's retrying, while
-it's asleep on a timer, and while it's executing. When that moment passes, the task is
-finished as failed, even if it had attempts left. No new attempt is started.
+The clock never stops. It keeps running while the task is queued, while it's retrying, while it's
+asleep on a timer, and while it's executing. When that moment passes, Workhorse finishes the task
+as failed, even if it had attempts left. It starts no new attempt.
 
 Use it for work that expires: a reminder that's useless after the event, a price quote that
 goes stale, a batch that must land before a cutoff.

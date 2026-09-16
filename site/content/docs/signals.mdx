@@ -35,8 +35,8 @@ handler from its entry point.
   </Tab>
 </Tabs>
 
-Checkpoint earlier effects because replay starts from the top. When replay reaches the same name,
-`waitForSignal` returns the retained payload.
+Wrap earlier effects in a checkpoint because replay starts from the top. When replay reaches the
+same name, `waitForSignal` returns the retained payload.
 
 Go handlers can pass `ExternalWaitOptions` when the boundary needs a shorter lifetime. Python
 handlers pass `timeout_ms` for the same boundary.

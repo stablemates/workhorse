@@ -244,9 +244,9 @@ its last remote-pause decision until a later refresh succeeds.
 Each refresh also records which client library the worker runs, at which version, speaking which
 protocol. A rolling deploy runs more than one build at once by design, so the dashboard shows this
 per worker and `workhorse schema status --json` counts the live workers by the protocol each one
-reported. A worker running an SDK older than those fields reports none of them, and that is
-recorded as reporting nothing. Producers never register, so the counts are evidence about workers
-and not an inventory of everything using the database.
+reported. A worker running an SDK older than those fields reports none of them, and the registry
+records that as reporting nothing. Producers never register, so the counts are evidence about
+workers and not an inventory of everything using the database.
 
 A worker that dies stops refreshing and goes stale in the registry. Automatic maintenance later
 removes that row. Its tasks are not lost: their leases expire and

@@ -7,12 +7,12 @@ works in Workhorse follows from that one fact.
 ## If the task hasn't started
 
 This is the easy case. A task sitting in `ready` or `scheduled` isn't running anywhere, so
-`cancel_v1` just finishes it on the spot: the runtime row is deleted and a `canceled`
-outcome is written. Nothing ever executed, so there's no attempt history to record.
+`cancel_v1` just finishes it on the spot: it deletes the runtime row and writes a `canceled`
+outcome. Nothing ever executed, so there's no attempt history to record.
 
-A task that's [waiting on a timer](130-durable-waits.md) also settles on the spot — no worker
-holds it. One difference: if the wait began partway through an attempt, that attempt is closed
-as canceled, so the record keeps the work that had already started.
+A task that's [waiting on a timer](130-durable-waits.md) also settles on the spot — no worker holds
+it. One difference: if the wait began partway through an attempt, Workhorse closes that attempt as
+canceled, so the record keeps the work that had already started.
 
 ## If a handler is running right now
 

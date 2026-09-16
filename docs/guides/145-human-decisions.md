@@ -27,8 +27,8 @@ const review = await ctx.waitForHuman<{ accountId: string; prompt: string }, { a
 if (review.approved) await activateAccount(accountId);
 ```
 
-Checkpoint earlier effects or make them idempotent, because replay starts the handler again rather
-than restoring a JavaScript stack.
+Wrap earlier effects in a checkpoint or make them idempotent, because replay starts the handler
+again rather than restoring a JavaScript stack.
 
 ## An authenticated operator supplies the result
 

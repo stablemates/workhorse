@@ -107,17 +107,17 @@ memory can't answer "which workers are alive" once workers are deployed separate
 The row also says what the worker is: which client library it runs, at which version, speaking which
 protocol. A deploy that replaces workers one at a time runs two builds at once on purpose, so "why
 is that one worker behaving differently" is a normal question, and this is where you answer it. An
-older worker may report none of the three, and that is recorded as reporting nothing rather than
-guessed at.
+older worker may report none of the three, and the registry records that as reporting nothing rather
+than guessing.
 
 The namespace list answers a different question from the queue list. Queues control which tasks a
 worker can claim. Schedule namespaces control which recurring definitions it can evaluate.
 
-This registry is never read when claiming tasks, so it can't slow dispatch down.
+`claim_v1` never reads this registry, so it can't slow dispatch down.
 
-A worker that's killed stops refreshing and is reported offline once its row goes stale. Automatic
-maintenance eventually cleans up that row. Slot counts are therefore a moment-ago snapshot, not a
-live read.
+A worker that dies stops refreshing, and the dashboard reports it offline once its row goes stale.
+Automatic maintenance eventually cleans up that row. Slot counts are therefore a moment-ago
+snapshot, not a live read.
 
 Registration failures do not stop dispatch. A worker keeps the last remote pause it received, so a
 temporary database error cannot silently resume claims that an operator stopped.
