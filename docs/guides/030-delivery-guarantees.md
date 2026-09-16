@@ -5,8 +5,8 @@ exactly once. This guide explains why, and what to do about it.
 
 ## Why it happens
 
-Your handler sends an email. The email goes out. Then, before the worker can record that the
-task succeeded, the process is killed.
+Your handler sends an email. The email goes out. Then, before the worker can record that the task
+succeeded, the process dies.
 
 Nothing in the database knows the email was sent. The lease expires, recovery puts the task
 back, another worker picks it up, and the email goes out a second time.

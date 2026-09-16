@@ -51,14 +51,12 @@ matching bins, so long windows avoid both the raw-event join and a list of every
 
 ## Why the watermark protects history
 
-Here's the part that connects to cleanup. A summary row can only ever be rebuilt by
-re-reading the raw history it came from. Delete the history first and those numbers are gone
-permanently.
+Here's the part that connects to cleanup. The rollup can rebuild a summary row only by re-reading
+the raw history it came from. Delete the history first and those numbers are gone permanently.
 
-So retention is not allowed to delete anything the rollup hasn't summarised yet. A stuck
-rollup makes history pile up rather than making data disappear — visible as growing lag on
-the health page, annoying but fixable. The alternative would be a silent hole in your
-numbers, which isn't.
+So the retention routine never deletes anything the rollup hasn't summarised yet. A stuck rollup
+makes history pile up rather than making data disappear — visible as growing lag on the health page,
+annoying but fixable. The alternative would be a silent hole in your numbers, which isn't.
 
 ## Cardinality
 

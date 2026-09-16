@@ -56,10 +56,9 @@ outcome. Use `Queue.enqueueWithResult` when logs, metrics, or application behavi
 
 ## Keys expire
 
-Each key is retained for a configurable period and then released. That's deliberate: keys are for
-catching accidental duplicates within a short
-window, not for permanently reserving a name. Once a key expires, the same key can create a
-new task.
+Workhorse retains each key for a configurable period and then releases it. That's deliberate: keys
+are for catching accidental duplicates within a short window, not for permanently reserving a name.
+Once a key expires, the same key can create a new task.
 
 ## Sending different data under the same key
 
@@ -73,9 +72,9 @@ id.
 
 ## Your raw key is never stored
 
-Only a hash of it goes into the database. Errors and the dashboard show a short preview and
-a digest, not the key itself. So it's safe to build keys out of internal identifiers without
-worrying about them showing up on an operator's screen.
+Workhorse stores only a hash of it. Errors and the dashboard show a short preview and a digest, not
+the key itself. So it's safe to build keys out of internal identifiers without worrying about them
+showing up on an operator's screen.
 
 ## What this does not do
 

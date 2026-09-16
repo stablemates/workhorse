@@ -126,8 +126,8 @@ went out to one box first. `admin pause-worker` stops that worker claiming, and
 `admin resume-worker` lets it claim again. Both need a reason, and both name a worker id you can
 read out of `admin workers`, which also shows who paused each one.
 
-The pause lives in the fleet registry, so it is not a message shouted at a process that happens to
-be listening. A worker finds out on its next registration, and until then anyone reading
+The pause lives in the fleet registry, so the command does not shout a message at a process that
+happens to be listening. A worker finds out on its next registration, and until then anyone reading
 `admin workers` can already see the decision. That also sets the limit of what the command can do:
 [workers](310-workers.md) explains what an operator pause survives and what it does not.
 
@@ -146,7 +146,7 @@ that difference.
 ## What this is not
 
 The terminal surface deliberately stays inside the operator APIs. It adds no authorization —
-attribution is recorded, never checked, exactly as everywhere else in Workhorse — so access to a
+Workhorse records attribution and never checks it, exactly as everywhere else — so access to a
 guarded command is access to the database URL. If you need logins, roles, and an audit trail with
 teeth, that is the [dashboard](370-dashboard-authentication.md)'s territory.
 
