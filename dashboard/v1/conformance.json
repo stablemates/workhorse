@@ -2468,7 +2468,9 @@
                       "recordedRunCount": 0
                     },
                     {
-                      "due": true,
+                      "due": {
+                        "$type": "boolean"
+                      },
                       "runs": [],
                       "routine": "history_retention",
                       "incomplete": false,
@@ -2500,7 +2502,8 @@
             }
           },
           "coerce": {
-            "body.json.maintenance.tasks.*.due": "boolean"
+            "body.json.maintenance.tasks.*.due": "boolean",
+            "body.json.maintenance.routines.1.due": "boolean"
           }
         },
         {
