@@ -6,6 +6,7 @@ import { defineConfig } from "vitest/config";
 const require = createRequire(import.meta.url);
 
 export const databaseTestFiles = [
+  "scripts/*-integration.test.ts",
   "typescript/demo/test/app.integration.test.ts",
   "typescript/*/test/*-integration.test.ts",
   "typescript/*/test/*conformance.test.ts",

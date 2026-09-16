@@ -10,6 +10,7 @@
   "include": [
     "scripts/**/*.ts",
     "typescript/core/test/support/parity-capabilities.ts",
+    "typescript/core/test/support/schema-template.ts",
     "vitest*.config.ts"
   ],
   "references": [{ "path": "typescript/core/tsconfig.source.json" }]

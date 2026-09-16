@@ -102,6 +102,12 @@ Anything spawned outside those scripts still inherits the ambient environment. I
 test fails on an unexpected row count, confirm which database the process resolved before treating
 the result as a product failure.
 
+A database-scope test file never uses the checkout's `test` database directly. It creates a scratch
+database named after that database plus a per-process digest, and drops it in teardown. A teardown
+that times out leaves the scratch database behind, and each schema change retires a schema template.
+`pnpm db:sweep` lists those leftovers and `pnpm db:sweep --yes` drops them. The sweep skips every
+database a checkout owns and every database a session still holds open.
+
 ## Building before testing
 
 `pnpm test` does not build the dashboard browser bundle. Anything that serves
