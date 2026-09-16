@@ -3,6 +3,7 @@ import {
   provisionCheckoutDatabases,
   writeCheckoutDatabaseEnvironment,
 } from "./checkout-databases.js";
+import { describeUnscopedDatabases, unscopedDatabases } from "./worktree-identity.js";
 import {
   copyIgnoredEnvironmentFiles,
   createWorktreeResources,
@@ -16,7 +17,6 @@ import {
   worktreeContext,
   writeResourceRegistry,
 } from "./worktree-resources.js";
-import { configureOntrackSession, preflightOntrackSession } from "./ontrack-session.js";
 
 const context = worktreeContext();
 if (!context.linked) {
@@ -25,12 +25,6 @@ if (!context.linked) {
 }
 
 const copied = await copyIgnoredEnvironmentFiles(context.primaryWorktreeRoot, context.worktreeRoot);
-const ontrack = await configureOntrackSession({
-  checkoutRoot: context.worktreeRoot,
-  sourceRoot: context.primaryWorktreeRoot,
-  sessionName: context.worktreeId,
-});
-const preflight = await preflightOntrackSession(ontrack);
 const primaryEnvironment = {
   ...process.env,
   ...(await readEnvironment(join(context.worktreeRoot, ".env"))),
@@ -52,11 +46,19 @@ await writeCheckoutDatabaseEnvironment(context.worktreeRoot, {
   overwriteExisting: true,
 });
 
+// Re-read what landed on disk rather than trusting the values handed to the writer: the whole
+// point is that this worktree must never be left pointing at another checkout's databases.
+const written = await readEnvironment(join(context.worktreeRoot, ".env"));
+const unscoped = unscopedDatabases(written, context.worktreeId);
+if (unscoped.length > 0) {
+  throw new Error(describeUnscopedDatabases(context.worktreeId, context.worktreeRoot, unscoped));
+}
+
 await writeResourceRegistry(context.commonGitDirectory, resources);
 await run("uv", ["sync", "--project", "python", "--frozen"], { cwd: context.worktreeRoot });
 await run("go", ["-C", "go", "mod", "download"], { cwd: context.worktreeRoot });
 await provisionCheckoutDatabases(generatedEnvironment, { resetExisting: true });
 
 console.log(
-  `Configured linked worktree ${context.worktreeId} and Ontrack Project ${preflight.projectKey} (${preflight.projectId}): copied ${copied.length} env file(s), synchronized language dependencies, and provisioned five databases`,
+  `Configured linked worktree ${context.worktreeId}: copied ${copied.length} env file(s), synchronized language dependencies, and provisioned five databases`,
 );

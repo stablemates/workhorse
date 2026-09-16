@@ -2,10 +2,16 @@ import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { worktreeDatabaseUrl } from "../typescript/core/src/local-database.js";
 import {
   checkoutDatabaseEnvironment,
   writeCheckoutDatabaseEnvironment,
 } from "./checkout-databases.js";
+import {
+  describeUnscopedDatabases,
+  linkedWorktreeId,
+  unscopedDatabases,
+} from "./worktree-identity.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -92,5 +98,93 @@ describe("checkout database environment", () => {
 
     expect(result.environment.DATABASE_URL_PRIMARY).toBe(generated.DATABASE_URL_PRIMARY);
     expect(result.addedVariables).toEqual([]);
+  });
+});
+
+describe("linked worktree database isolation", () => {
+  const primaryEnvironment = checkoutDatabaseEnvironment({});
+
+  function worktreeEnvironment(worktreeId: string): Record<string, string> {
+    return {
+      DATABASE_URL_PRIMARY: worktreeDatabaseUrl(
+        primaryEnvironment.DATABASE_URL_PRIMARY!,
+        "dev_primary",
+        worktreeId,
+      ),
+      DATABASE_URL_SECONDARY: worktreeDatabaseUrl(
+        primaryEnvironment.DATABASE_URL_SECONDARY!,
+        "dev_secondary",
+        worktreeId,
+      ),
+      DATABASE_URL_TEST: worktreeDatabaseUrl(
+        primaryEnvironment.DATABASE_URL_TEST!,
+        "test",
+        worktreeId,
+      ),
+      DATABASE_URL_BENCH: worktreeDatabaseUrl(
+        primaryEnvironment.DATABASE_URL_BENCH!,
+        "bench",
+        worktreeId,
+      ),
+      DATABASE_URL_TEST_PACKED: worktreeDatabaseUrl(
+        primaryEnvironment.DATABASE_URL_TEST_PACKED!,
+        "test_packed",
+        worktreeId,
+      ),
+    };
+  }
+
+  it("accepts the databases setup generates for the same worktree", () => {
+    expect(unscopedDatabases(worktreeEnvironment("prowfish"), "prowfish")).toEqual([]);
+  });
+
+  it("rejects the primary checkout's database names", () => {
+    expect(
+      unscopedDatabases(primaryEnvironment, "prowfish").map((entry) => entry.variable),
+    ).toEqual([
+      "DATABASE_URL_PRIMARY",
+      "DATABASE_URL_SECONDARY",
+      "DATABASE_URL_TEST",
+      "DATABASE_URL_BENCH",
+      "DATABASE_URL_TEST_PACKED",
+    ]);
+  });
+
+  it("rejects another worktree's database names", () => {
+    const unscoped = unscopedDatabases(worktreeEnvironment("mudskipper"), "prowfish");
+    expect(unscoped).toHaveLength(5);
+    expect(unscoped[2]).toEqual({
+      variable: "DATABASE_URL_TEST",
+      database: expect.stringMatching(/^workhorse_test_mudskipper_[0-9a-f]{8}$/),
+    });
+  });
+
+  it("rejects a missing variable, which would fall back to the primary default", () => {
+    const { DATABASE_URL_TEST: _test, ...partial } = worktreeEnvironment("prowfish");
+    expect(unscopedDatabases(partial, "prowfish")).toEqual([
+      { variable: "DATABASE_URL_TEST", database: undefined },
+    ]);
+  });
+
+  it("names the offending databases and the command to run", () => {
+    const message = describeUnscopedDatabases("prowfish", "/checkouts/prowfish", [
+      { variable: "DATABASE_URL_TEST", database: "workhorse_test" },
+    ]);
+    expect(message).toContain("DATABASE_URL_TEST → workhorse_test");
+    expect(message).toContain("pnpm worktree:setup");
+    expect(message).toContain("/checkouts/prowfish");
+  });
+
+  it("tells a linked worktree apart from the primary checkout by its .git pointer", async () => {
+    const linked = await temporaryCheckout();
+    await writeFile(join(linked, ".git"), "gitdir: /repo/.git/worktrees/prowfish\n");
+    expect(await linkedWorktreeId(linked)).toBe("prowfish");
+
+    const primary = await temporaryCheckout();
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(join(primary, ".git"));
+    expect(await linkedWorktreeId(primary)).toBeUndefined();
+
+    expect(await linkedWorktreeId(await temporaryCheckout())).toBeUndefined();
   });
 });

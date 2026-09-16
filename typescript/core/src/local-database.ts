@@ -103,14 +103,37 @@ export function worktreeDatabaseUrl(
   const baseName = databaseName(databaseUrl);
   const purposeSuffix = localDatabaseDefinitions[purpose].suffix;
   const basePrefix = baseName.slice(0, -purposeSuffix.length);
-  const worktreeSlug = normalizeIdentifier(worktreeId) || "worktree";
-  const worktreeHash = hashWorktreeId(worktreeId);
-  const suffix = `${purposeSuffix}_${worktreeSlug.slice(0, 24)}_${worktreeHash}`;
+  const suffix = worktreeDatabaseSuffix(purpose, worktreeId);
   const availablePrefixLength = POSTGRES_IDENTIFIER_LIMIT - suffix.length;
   const prefix = basePrefix.slice(0, availablePrefixLength).replace(/_+$/, "") || "workhorse";
 
   url.pathname = `/${prefix}${suffix}`;
   return url.toString();
+}
+
+/**
+ * The name ending every database owned by one linked worktree carries: the purpose marker, then
+ * the worktree slug and a hash of its id. Two worktrees can never produce the same suffix.
+ */
+function worktreeDatabaseSuffix(purpose: LocalDatabasePurpose, worktreeId: string): string {
+  const purposeSuffix = localDatabaseDefinitions[purpose].suffix;
+  const worktreeSlug = normalizeIdentifier(worktreeId) || "worktree";
+  return `${purposeSuffix}_${worktreeSlug.slice(0, 24)}_${worktreeDatabaseHash(worktreeId)}`;
+}
+
+/** Whether a URL names a database that belongs to this worktree rather than to another checkout. */
+export function isWorktreeDatabaseUrl(
+  databaseUrl: string,
+  purpose: LocalDatabasePurpose,
+  worktreeId: string,
+): boolean {
+  let name: string;
+  try {
+    name = databaseName(databaseUrl);
+  } catch {
+    return false;
+  }
+  return name.endsWith(worktreeDatabaseSuffix(purpose, worktreeId));
 }
 
 /**
@@ -144,7 +167,8 @@ function normalizeIdentifier(value: string): string {
     .replace(/^_+|_+$/g, "");
 }
 
-function hashWorktreeId(value: string): string {
+/** FNV-1a over the worktree id; the registry's drop guard checks for the same digest. */
+export function worktreeDatabaseHash(value: string): string {
   // FNV-1a is deterministic, dependency-free, and sufficient to avoid collisions between slugs.
   let hash = 0x811c9dc5;
   for (const character of value) {
