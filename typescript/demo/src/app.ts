@@ -64,6 +64,10 @@ import {
   DEMO_RATE_LIMIT,
   DEMO_RATE_LIMIT_PER_KEY,
   DEMO_RATE_LIMIT_POLICY_NAMESPACE,
+  DEMO_BUDGET_MAX_ACTIVE,
+  DEMO_BUDGET_NAME,
+  DEMO_BUDGET_NAMESPACE,
+  DEMO_BUDGET_RATE,
   DEMO_RATE_LIMIT_QUEUE,
   DEMO_RATE_LIMIT_SEED_TASKS,
   DEMO_RATE_LIMIT_SEED_NAME,
@@ -856,6 +860,14 @@ export async function syncDemoRateLimitPolicies(database: Pool): Promise<void> {
   ]);
 }
 
+/** Synchronize the named budget that the main queue and the partner API queue share. */
+export async function syncDemoBudgets(database: Pool): Promise<void> {
+  const queue = new Queue(database, DEMO_QUEUE);
+  await queue.syncBudgets(DEMO_BUDGET_NAMESPACE, [
+    { name: DEMO_BUDGET_NAME, maxActive: DEMO_BUDGET_MAX_ACTIVE, rate: DEMO_BUDGET_RATE },
+  ]);
+}
+
 function createReadOnlyOperator(): DashboardOperator {
   return { mode: "read-only" };
 }
@@ -1553,6 +1565,7 @@ async function seedLongRunningDemoData(database: DemoDatabase): Promise<string[]
           { source: "long-running-seed", label: task.label },
           {
             concurrencyKey: task.concurrencyKey,
+            budget: DEMO_BUDGET_NAME,
             maxAttempts: 1,
             runAt,
             tags: ["demo-test", "long-running", "low-resource", "concurrency-policy"],
@@ -1593,6 +1606,7 @@ async function seedRateLimitDemoData(database: DemoDatabase): Promise<string[]> 
           { source: "rate-limit-seed", label: task.label },
           {
             concurrencyKey: task.concurrencyKey,
+            budget: DEMO_BUDGET_NAME,
             maxAttempts: 1,
             tags: ["demo-test", "rate-limit", "partner-api"],
           },

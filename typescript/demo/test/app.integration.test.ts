@@ -36,6 +36,10 @@ import {
   DEMO_GO_QUEUE,
   DEMO_PYTHON_QUEUE,
   DEMO_QUEUE,
+  DEMO_BUDGET_MAX_ACTIVE,
+  DEMO_BUDGET_NAME,
+  DEMO_BUDGET_NAMESPACE,
+  DEMO_BUDGET_RATE,
   DEMO_RATE_LIMIT,
   DEMO_RATE_LIMIT_PER_KEY,
   DEMO_RATE_LIMIT_POLICY_NAMESPACE,
@@ -65,6 +69,7 @@ import {
   SHARED_WORKER_TASK_TYPE,
   SHARED_WORKER_SCHEDULE_NAME,
   seedDemoData,
+  syncDemoBudgets,
   syncDemoConcurrencyPolicies,
   syncDemoRateLimitPolicies,
   syncDemoSchedules,
@@ -275,6 +280,7 @@ beforeEach(async () => {
   await pool.query(`TRUNCATE public.workhorse_demo_audit, public.workhorse_demo_seed, public.workhorse_demo_order, workhorse.task_event,
     workhorse.task_wait, workhorse.task_checkpoint, workhorse.attempt_history, workhorse.schedule_occurrence, workhorse.schedule_definition,
     workhorse.queue_control, workhorse.rate_limit_bucket, workhorse.rate_limit_policy,
+    workhorse.budget_bucket, workhorse.budget,
     workhorse.concurrency_policy, workhorse.worker_registry,
     workhorse.enqueue_idempotency, workhorse.task_outcome, workhorse.task_runtime,
     workhorse.task_stat_bucket, workhorse.task RESTART IDENTITY CASCADE`);
@@ -1375,6 +1381,37 @@ describe("Workhorse demo", () => {
     expect(released?.id).toBe(remainingAcmeId);
     await queue.complete(globexClaim, globexWorker, { seededConcurrencyExample: true });
     await queue.complete(released!, "demo-concurrency-c", { seededConcurrencyExample: true });
+  });
+
+  it("synchronizes one named budget that the seeded queues share", async () => {
+    await syncDemoConcurrencyPolicies(pool);
+    await syncDemoRateLimitPolicies(pool);
+    await syncDemoBudgets(pool);
+    await seedDemoData(database);
+
+    await expect(new Queue(pool).listBudgets([DEMO_BUDGET_NAME])).resolves.toEqual([
+      expect.objectContaining({
+        namespace: DEMO_BUDGET_NAMESPACE,
+        name: DEMO_BUDGET_NAME,
+        maxActive: DEMO_BUDGET_MAX_ACTIVE,
+        rate: DEMO_BUDGET_RATE,
+      }),
+    ]);
+    await expect(
+      pool.query(
+        `SELECT DISTINCT task.queue_name
+           FROM workhorse.task task
+          WHERE task.budget_name = $1
+          ORDER BY task.queue_name`,
+        [DEMO_BUDGET_NAME],
+      ),
+    ).resolves.toMatchObject({
+      rows: [{ queue_name: DEMO_QUEUE }, { queue_name: DEMO_RATE_LIMIT_QUEUE }],
+    });
+    const health = await new Queue(pool).health();
+    expect(health.budgetPolicies.budgets).toEqual([
+      expect.objectContaining({ name: DEMO_BUDGET_NAME, maxActive: DEMO_BUDGET_MAX_ACTIVE }),
+    ]);
   });
 
   it("seeds a visibly throttled partner API queue", async () => {

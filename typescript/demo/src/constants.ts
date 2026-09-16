@@ -95,6 +95,16 @@ export const DEMO_RATE_LIMIT_POLICY_NAMESPACE = "workhorse-demo-rate-limits";
 export const DEMO_RATE_LIMIT_SEED_NAME = "rate-limit-dashboard-v1";
 export const DEMO_RATE_LIMIT = { limit: 2, intervalMs: 60 * 60_000, burst: 2 } as const;
 export const DEMO_RATE_LIMIT_PER_KEY = { limit: 1, intervalMs: 60 * 60_000, burst: 1 } as const;
+/**
+ * One named budget spans the main demo queue and the partner API queue.
+ *
+ * The seeded long-running tasks and the partner catalog pages all name it, so the dashboard shows
+ * a cap that neither queue's own policy could express and a health reason when it saturates.
+ */
+export const DEMO_BUDGET_NAMESPACE = "workhorse-demo-budgets";
+export const DEMO_BUDGET_NAME = "vendor-api";
+export const DEMO_BUDGET_MAX_ACTIVE = 2;
+export const DEMO_BUDGET_RATE = { limit: 4, intervalMs: 60 * 60_000, burst: 4 } as const;
 export const DEMO_RATE_LIMIT_SEED_TASKS = [
   { label: "acme-catalog-page-1", concurrencyKey: "customer-acme" },
   { label: "acme-catalog-page-2", concurrencyKey: "customer-acme" },

@@ -11,6 +11,7 @@ import {
   createLocalScheduleController,
   installDemoSchema,
   seedDemoData,
+  syncDemoBudgets,
   syncDemoConcurrencyPolicies,
   syncDemoRateLimitPolicies,
   syncDemoSchedules,
@@ -118,10 +119,12 @@ if (stagingPool) {
   // Apply admission policies to tasks retained from the older shared seed, too.
   await syncDemoConcurrencyPolicies(stagingPool);
   await syncDemoRateLimitPolicies(stagingPool);
+  await syncDemoBudgets(stagingPool);
 }
 await syncDemoSchedules(pool);
 await syncDemoConcurrencyPolicies(pool);
 await syncDemoRateLimitPolicies(pool);
+await syncDemoBudgets(pool);
 demoLogger.info(
   "workhorse.demo.schedules_synchronized",
   "Synchronized recurring demo schedules for worker-owned execution",

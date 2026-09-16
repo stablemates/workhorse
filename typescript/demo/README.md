@@ -31,7 +31,8 @@ The implementation findings and remaining product gaps are recorded in
 The demo installs the current schema, including daily retained history, split scheduled maintenance,
 a dedicated operator query projection with bounded payload controls and merged timelines,
 scoped enqueue idempotency, cooperative cancellation, absolute deadlines, and per-attempt execution
-timeouts. PostgreSQL also owns a fleet-wide demo dispatch budget with a queue cap and a per-key cap.
+timeouts. PostgreSQL also owns a fleet-wide demo dispatch budget with a queue cap and a per-key cap,
+plus one named budget that the main queue and the partner API queue share.
 One deterministic keyed seed exposes deduplication evidence without persisting or displaying the raw
 key. The operator menu also retains an explicit idempotent enqueue path.
 
