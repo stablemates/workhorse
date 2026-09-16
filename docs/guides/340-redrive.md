@@ -11,8 +11,8 @@ shows the failed tasks, one task or one filtered batch at a time.
 
 ## Dead letters
 
-When a task exhausts its retries it isn't deleted — it becomes a failed outcome
-with its error attached. Most queues call this the dead letter queue. In Workhorse it's just
+When a task exhausts its retries, Workhorse doesn't delete it — the task becomes a failed
+outcome with its error attached. Most queues call this the dead letter queue. In Workhorse it's just
 the set of failed tasks, and you can page through it oldest-first to see what's accumulated.
 
 That listing uses a cold failure index outside the ready scan. Dead-letter growth therefore does
@@ -48,9 +48,9 @@ Every redrive request carries an id. Repeat the same request and you get back th
 already exists, rather than a second copy. An impatient operator clicking twice doesn't run
 the work twice.
 
-Sending the _same_ request id with a different reason or a different person attached is
-treated as a conflict, not a duplicate — those are two different claims about what happened,
-and silently keeping one would lose an audit record.
+Workhorse treats the _same_ request id with a different reason or a different person attached
+as a conflict, not a duplicate — those are two different claims about what happened, and
+silently keeping one would lose an audit record.
 
 ## Bulk redrive
 

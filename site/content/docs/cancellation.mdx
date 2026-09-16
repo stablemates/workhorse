@@ -107,7 +107,7 @@ Two honest limits:
 Suppose a cancellation and a completion commit at almost the same moment. Both need the same
 runtime row lock, so exactly one arrives first, and that one wins:
 
-- Cancel first — the later completion is refused; it cannot resurrect the task.
+- Cancel first — Workhorse refuses the later completion; it cannot resurrect the task.
 - Complete first — the cancel call reports `already_terminal`.
 
 Either way the answer is consistent. Repeating a cancellation returns the existing request or

@@ -52,7 +52,7 @@ generation". That phrase means: this write only lands if you are still genuinely
 You mostly don't think about it. But it explains two things you will run into:
 
 - A handler that hangs for a long time without finishing may find its task has already been
-  retried elsewhere. Its final write will be rejected, silently and correctly.
+  retried elsewhere. Workhorse rejects its final write, silently and correctly.
 - "Still running" and "still owns the task" are different questions. Heartbeats answer the
   second one.
 

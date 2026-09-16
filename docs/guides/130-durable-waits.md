@@ -21,8 +21,8 @@ wake time. Both release the slot and replay the handler without consuming the at
 
 This is the part that surprises people, so get it clear.
 
-When the task resumes, your handler function is called **again, from the beginning**. It is
-not resumed mid-function — there is no saved call stack, because the process that was
+When the task resumes, your handler function is called **again, from the beginning**. Workhorse
+does not resume it mid-function — there is no saved call stack, because the process that was
 running it is long gone and may have been replaced by a newer deployment.
 
 So a handler with a wait in the middle runs its opening section again after the wait. Which
@@ -47,12 +47,12 @@ const handler = async (payload, ctx) => {
 Waits are named. The name is how Workhorse knows, on the second pass, that `settle` has
 already elapsed and execution should continue past it.
 
-When execution reaches a wait that has already elapsed, it's recorded as already done and
-the handler continues straight past it. That's how the code after the wait finally runs.
+When execution reaches a wait that has already elapsed, Workhorse records it as already done
+and the handler continues straight past it. That's how the code after the wait finally runs.
 
 Don't catch the control signal thrown by `ctx.sleep` or `ctx.sleepUntil`. If a handler catches
 it and returns, the worker still honors the recorded wait. It also warns that the signal was
-swallowed. Any side effects after the catch have already happened and can't be undone.
+swallowed. Any side effects after the catch have already happened, and nothing can undo them.
 
 ## Waiting is not failing
 

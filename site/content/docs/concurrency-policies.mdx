@@ -48,7 +48,7 @@ caller-owned connection. `list_concurrency_policies` returns the persisted typed
 </Tabs>
 
 Workers need no matching in-memory configuration — admission reads the stored policy, so a policy
-change takes effect without redeploying the fleet. Omitted policies are pruned by default, and
+change takes effect without redeploying the fleet. Workhorse prunes omitted policies by default, and
 PostgreSQL rejects another namespace that tries to replace a queue this namespace owns.
 
 `maxActivePerKey` is optional; omit it (or pass `null`) to keep only the queue-wide limit.

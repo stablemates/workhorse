@@ -28,8 +28,8 @@ key, and trusted actor. The first accepted delivery resumes the task. An equal r
 retained delivery, so a network retry cannot resume the handler twice.
 
 A reused key conflicts if its payload or actor changes. Another key arriving after acceptance is
-late and returns the retained winner. A delivery before the wait exists is rejected without being
-buffered, so the caller may retry after the handler declares the boundary.
+late and returns the retained winner. Workhorse rejects a delivery before the wait exists and does
+not buffer it, so the caller may retry after the handler declares the boundary.
 
 Go applications call `Queue.SendSignal` with `ExternalWaitDelivery`. The result reports the
 database status and retained payload, while a changed retained key returns a typed conflict error.

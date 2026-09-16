@@ -17,7 +17,7 @@ So Workhorse keeps running summaries per queue and task type. Recent rows cover 
 older rows cover hours, and the oldest rows cover days. Each row holds counts for its period
 plus the last error seen, so a dashboard can name a likely cause without touching history.
 
-Two different things get counted, and they're kept separate on purpose:
+The rollup counts two different things and keeps them separate on purpose:
 
 - **Tasks** — a task that retried several times and then succeeded counts as one success.
 - **Attempts** — the same task contributes every attempt it made.
