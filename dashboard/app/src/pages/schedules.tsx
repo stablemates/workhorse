@@ -17,7 +17,7 @@ import {
 import { Fragment, useState } from "react";
 import { useConfirmationActivity } from "../dropdown-activity.js";
 import { statusColor } from "../status-colors.js";
-import { HelpButton } from "../charts/system.js";
+import { HelpButton } from "../components/help-button.js";
 import { EmptyState, PageHeader } from "../components/task-list.js";
 import { formatDuration, formatExact, formatRelative } from "../preferences.js";
 import { presentSchedules } from "../presentation-policy.js";

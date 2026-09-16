@@ -1,5 +1,4 @@
 import type {
-  DashboardEventsWindow,
   DashboardSystemPage,
   DashboardSystemRetention,
   DashboardSystemStorage,
@@ -25,7 +24,6 @@ import {
 import { Suspense } from "react";
 import {
   ExternalWaitAlert,
-  HelpButton,
   QueuePressure,
   RetryStorm,
   SystemKpiList,
@@ -42,6 +40,7 @@ import {
 } from "../preferences.js";
 import { SystemOutcomeChart, systemWindows } from "../core.js";
 import { BudgetsTable, budgetCappedFootnote } from "../budgets-table.js";
+import { HelpButton } from "../components/help-button.js";
 import { taskDisplayName } from "../components/task-list.js";
 import {
   healthCheckMessages,
@@ -648,12 +647,3 @@ export function StoragePanel({
     </Paper>
   );
 }
-export const eventsWindowOptions: ReadonlyArray<{
-  value: DashboardEventsWindow;
-  label: string;
-}> = [
-  { value: "15m", label: "15m" },
-  { value: "1h", label: "1h" },
-  { value: "6h", label: "6h" },
-  { value: "24h", label: "24h" },
-];

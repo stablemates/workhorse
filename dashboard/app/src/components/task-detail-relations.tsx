@@ -32,7 +32,7 @@ import {
   eventDetail,
 } from "./task-detail-overview.js";
 import { formatDuration, formatExact, formatRelative } from "../preferences.js";
-import { HelpButton } from "../charts/system.js";
+import { HelpButton } from "./help-button.js";
 
 function KeyEvidenceRows({
   scope,

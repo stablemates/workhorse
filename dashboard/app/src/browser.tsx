@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { Dashboard } from "./dashboard.js";
+import { Dashboard } from "./dashboard-root.js";
 import {
   createDashboardClient,
   type DashboardAuthenticationRoutes,

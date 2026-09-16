@@ -1,5 +1,4 @@
 import {
-  ActionIcon,
   Alert,
   Badge,
   Box,
@@ -25,7 +24,6 @@ import {
   ArrowClockwise,
   Clock,
   FunnelSimple,
-  Info,
   Lightning,
   ListChecks,
   Pulse,
@@ -45,10 +43,11 @@ import {
   systemErrorRateWarning,
   systemOldestReadyWarningMs,
 } from "../core.js";
+import { HelpButton } from "../components/help-button.js";
 import { taskDisplayName } from "../components/task-list.js";
 import { retryBucketLabel, sortQueuesByRisk } from "../presentation-policy.js";
 
-export function formatRate(value: number): string {
+function formatRate(value: number): string {
   if (value === 0) return "0";
   if (Math.abs(value) < 0.1) return "<0.1";
   return value.toFixed(1);
@@ -56,7 +55,7 @@ export function formatRate(value: number): string {
 export function formatPercent(value: number): string {
   return `${(value * 100).toFixed(value < 0.01 ? 1 : 0)}%`;
 }
-export function MiniTrend({ series }: { series: Array<{ values: number[]; color: string }> }) {
+function MiniTrend({ series }: { series: Array<{ values: number[]; color: string }> }) {
   const values = series.flatMap((item) => item.values);
   const maximum = Math.max(1, ...values);
   const width = 132;
@@ -86,7 +85,7 @@ export function MiniTrend({ series }: { series: Array<{ values: number[]; color:
     </Box>
   );
 }
-export function RetryBars({ buckets }: { buckets: DashboardSystemRetryBucket[] }) {
+function RetryBars({ buckets }: { buckets: DashboardSystemRetryBucket[] }) {
   const maximum = Math.max(1, ...buckets.map((bucket) => bucket.count));
   return (
     <Stack gap={6}>
@@ -111,22 +110,7 @@ export function RetryBars({ buckets }: { buckets: DashboardSystemRetryBucket[] }
     </Stack>
   );
 }
-export function HelpButton({ label, help }: { label: string; help: string }) {
-  return (
-    <Tooltip label={help} multiline w={280} withArrow>
-      <ActionIcon
-        className="task-drawer__help"
-        aria-label={`${label}: ${help}`}
-        color="gray"
-        size="sm"
-        variant="subtle"
-      >
-        <Info size={14} />
-      </ActionIcon>
-    </Tooltip>
-  );
-}
-export function HealthKpi({
+function HealthKpi({
   title,
   value,
   detail,

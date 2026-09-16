@@ -9,7 +9,7 @@ import {
 import { describeRateLimit, describeRateThrottle, rateLimitCappedFootnote } from "../rate-limit.js";
 import { BudgetsTable, budgetCappedFootnote } from "../budgets-table.js";
 import { EmptyState, PageHeader } from "../components/task-list.js";
-import { HelpButton } from "../charts/system.js";
+import { HelpButton } from "../components/help-button.js";
 
 export function QueuesPage({
   data,

@@ -17,7 +17,7 @@ import { StatusBadge } from "../status-badge.js";
 import { EmptyState, PageHeader } from "../components/task-list.js";
 import { formatDuration, formatExact, formatRelative } from "../preferences.js";
 import { workerStatus } from "../presentation-policy.js";
-import { HelpButton } from "../charts/system.js";
+import { HelpButton } from "../components/help-button.js";
 
 export function WorkersPage({
   data,

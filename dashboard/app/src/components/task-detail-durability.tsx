@@ -30,8 +30,8 @@ import {
   waitPhaseLabel,
   waitReplayWording,
 } from "./task-detail-overview.js";
-import { HelpButton } from "../charts/system.js";
-import { eventDetailSummary } from "../pages/events.js";
+import { HelpButton } from "./help-button.js";
+import { eventDetailSummary } from "../event-presentation.js";
 
 /** Plain-English consequence of one dependency policy action, said of the dependent task. */
 function dependencyActionPhrase(action: "release" | "cancel" | "fail"): string {

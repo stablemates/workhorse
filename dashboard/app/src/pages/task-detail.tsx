@@ -21,7 +21,7 @@ import {
   RetryPolicyLine,
   TaskIdChip,
 } from "../components/task-detail-relations.js";
-import { HelpButton } from "../charts/system.js";
+import { HelpButton } from "../components/help-button.js";
 import {
   ChildLine,
   ConcurrencyPolicyLine,

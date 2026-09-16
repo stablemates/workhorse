@@ -6,7 +6,7 @@ import {
   describeBudgetLimit,
   describeBudgetRate,
 } from "./budget.js";
-import { HelpButton } from "./charts/system.js";
+import { HelpButton } from "./components/help-button.js";
 
 export { budgetCappedFootnote };
 

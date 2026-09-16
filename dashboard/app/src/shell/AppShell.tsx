@@ -50,7 +50,7 @@ import {
 import { taskOpenButtonId } from "../task-table-ui.js";
 import { WorkhorseBrand, WorkhorseVersion } from "../brand.js";
 import { ThemeSchemeSwitch } from "../theme.js";
-import { DashboardProps } from "../dashboard.js";
+import type { DashboardProps } from "../dashboard-root.js";
 import { useDashboardController } from "./controller.js";
 import {
   blockedTaskDescription,
@@ -59,7 +59,7 @@ import {
   taskFilters,
   taskHref,
 } from "../core.js";
-import { EventDetails } from "../pages/events.js";
+import { EventDetails } from "../components/event-details.js";
 import { TaskDetailDrawer } from "../pages/task-detail.js";
 
 /**

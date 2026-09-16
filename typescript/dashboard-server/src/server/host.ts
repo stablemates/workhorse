@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { readFile as readFileAsync } from "node:fs/promises";
-import { extname, join, normalize } from "node:path";
+import { join } from "node:path";
 import { SeverityNumber, logs } from "@opentelemetry/api-logs";
 import { RPCHandler } from "@orpc/server/fetch";
 import type { DashboardSingleAdminOptions } from "@stablemates/workhorse-dashboard-contract";
@@ -13,6 +13,7 @@ import { renderDashboardHtml } from "./html.js";
 import { dashboardRouter, isDashboardMutation } from "./router.js";
 import { createDashboardQueueHealthReader, type DashboardQueueHealthReader } from "./read-model.js";
 import { dashboardDatabase } from "./sql.js";
+import { createStaticAssetCache } from "./static-assets.js";
 import type {
   DashboardDurabilityProjector,
   DashboardOperator,
@@ -171,15 +172,6 @@ interface HostWorkspace {
   compatibility?: Promise<void>;
 }
 
-const contentTypes: Readonly<Record<string, string>> = {
-  ".css": "text/css; charset=utf-8",
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".png": "image/png",
-  ".svg": "image/svg+xml",
-  ".woff2": "font/woff2",
-};
-
 const SLOW_RPC_REQUEST_MS = 1_000;
 const rpcLogRecords = {
   completed: {
@@ -269,6 +261,17 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
       )
     : undefined;
   const rpc = new RPCHandler(dashboardRouter);
+  const staticAssets = createStaticAssetCache(assets);
+  // The packaged template never changes for the life of the process; the dev hook stays
+  // per-request because its whole point is to follow source edits.
+  let packagedTemplate: Promise<string> | null = null;
+  const readPackagedTemplate = (): Promise<string> => {
+    packagedTemplate ??= readFileAsync(join(assets, "index.html"), "utf8");
+    packagedTemplate.catch(() => {
+      packagedTemplate = null;
+    });
+    return packagedTemplate;
+  };
 
   const resolveWorkspace = (
     name: string | null,
@@ -350,9 +353,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
     authenticatedActor: string,
     workspace: HostWorkspace,
   ): Promise<Response> {
-    const template = options.dev
-      ? await options.dev.readTemplate()
-      : await readFileAsync(join(assets, "index.html"), "utf8");
+    const template = options.dev ? await options.dev.readTemplate() : await readPackagedTemplate();
     const rendered = renderDashboardHtml(template, {
       runtime: {
         basePath: workspace.basePath,
@@ -372,23 +373,6 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
     return new Response(html, {
       headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
     });
-  }
-
-  async function serveAsset(pathname: string, basePath: string): Promise<Response | null> {
-    const relative = pathname.slice(`${basePath}/`.length);
-    const safe = normalize(relative).replaceAll("\\", "/");
-    if (!safe.startsWith("assets/") || safe.includes("../")) return null;
-    try {
-      const body = await readFileAsync(join(assets, safe));
-      return new Response(body, {
-        headers: {
-          "content-type": contentTypes[extname(safe)] ?? "application/octet-stream",
-          "cache-control": "public, max-age=31536000, immutable",
-        },
-      });
-    } catch {
-      return null;
-    }
   }
 
   return {
@@ -487,7 +471,9 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
         return response ?? null;
       }
 
-      if (pathname.startsWith(`${basePath}/assets/`)) return serveAsset(pathname, basePath);
+      if (pathname.startsWith(`${basePath}/assets/`)) {
+        return staticAssets.serve(pathname.slice(`${basePath}/`.length), request);
+      }
 
       if (pathname === (basePath || "/")) {
         // See the redirect note above; the same proxy constraint applies here.

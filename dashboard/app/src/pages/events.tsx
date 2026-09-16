@@ -1,9 +1,7 @@
 import { taskStatusColors } from "../status-colors.js";
 import { StatusLabel } from "../status-badge.js";
 import { TaskTableId } from "../components/task-table-id.js";
-import { TaskIdChip } from "../components/task-detail-relations.js";
 import type {
-  DashboardEventDetail,
   DashboardEventRow,
   DashboardEventsPage,
   DashboardEventsWindow,
@@ -13,10 +11,10 @@ import {
   dashboardTaskEventTypes,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import { isEventTypeFilter, type EventsLocationState } from "../events-location.js";
+import { eventDetailSummary, eventsWindowOptions } from "../event-presentation.js";
 import {
   Box,
   Button,
-  Code,
   Group,
   Loader,
   Pagination,
@@ -30,16 +28,14 @@ import {
   Tooltip,
 } from "@mantine/core";
 import { MultiSelect, Select } from "../dropdown-activity.js";
-import { ArrowSquareOut } from "@phosphor-icons/react";
-import { type ReactNode, useEffect, useState } from "react";
-import { JsonValue, boundaryEventPresentation } from "../components/task-detail-overview.js";
+import { useEffect, useState } from "react";
+import { boundaryEventPresentation } from "../components/task-detail-overview.js";
 import {
   EmptyState,
   includeSelectedOption,
   includeSelectedOptions,
   useTaskFacets,
 } from "../components/task-list.js";
-import { eventsWindowOptions } from "./overview.js";
 import { formatDuration, formatExact, formatRelative } from "../preferences.js";
 
 export const eventsKindOptions = [
@@ -59,16 +55,6 @@ export function eventTypeColor(type: string): string {
   if (type === "timeout") return taskStatusColors.failed;
   if (type === "retry") return taskStatusColors.scheduled;
   return "gray";
-}
-/** One-line rendering of an event payload, for a table cell that cannot hold formatted JSON. */
-export function eventDetailSummary(details: unknown): string | null {
-  if (details === null || details === undefined) return null;
-  if (typeof details !== "object") return String(details);
-  const entries = Object.entries(details as Record<string, unknown>);
-  if (entries.length === 0) return null;
-  return entries
-    .map(([key, value]) => `${key}=${typeof value === "object" ? JSON.stringify(value) : value}`)
-    .join(" · ");
 }
 export function uniqueSorted(values: Array<string | null>): string[] {
   // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
@@ -525,79 +511,5 @@ export function EventRow({
         )}
       </Table.Td>
     </Table.Tr>
-  );
-}
-export function EventDetails({
-  event,
-  taskLinkHref,
-}: {
-  event: DashboardEventDetail;
-  taskLinkHref: (id: string) => string;
-}) {
-  const taskId = (
-    <Group gap="xs" wrap="nowrap">
-      <TaskIdChip id={event.taskId} />
-      {event.taskType !== null ? (
-        <Text
-          component="a"
-          href={taskLinkHref(event.taskId)}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={`Open task ${event.taskId}`}
-          aria-label={`Open task ${event.taskId} in a new window`}
-        >
-          <ArrowSquareOut size={14} aria-hidden />
-        </Text>
-      ) : null}
-    </Group>
-  );
-  const fields: Array<[string, ReactNode]> = [
-    [
-      "Event",
-      `${event.kind === "attempt" ? "Attempt" : "Task"} ${event.type.replaceAll("_", " ")}`,
-    ],
-    ["Source", event.kind === "event" ? "Lifecycle" : "Attempt history"],
-    ["Occurred", formatExact(event.occurredAt)],
-    ["Task", event.taskType ?? "Retained away"],
-    ["Task ID", taskId],
-    ["Queue", event.queue ?? "Retained away"],
-    ["Attempt", event.attempt ?? "—"],
-    ["Worker", event.workerId ?? "—"],
-    ["Fence token", event.fenceToken ?? "—"],
-    ["Started", event.startedAt ? formatExact(event.startedAt) : "—"],
-    ["Claimed", event.claimedAt ? formatExact(event.claimedAt) : "—"],
-    ["Finished", event.finishedAt ? formatExact(event.finishedAt) : "—"],
-    ["Duration", formatDuration(event.durationMs)],
-    ["Record ID", <Code key="record-id">{event.recordId}</Code>],
-  ];
-  return (
-    <Stack gap="lg">
-      <Stack gap={8}>
-        {fields.map(([label, value]) => (
-          <Group key={label} justify="space-between" align="flex-start" wrap="nowrap">
-            <Text c="dimmed" size="sm">
-              {label}
-            </Text>
-            <Text component="div" size="sm" ta="right" style={{ overflowWrap: "anywhere" }}>
-              {value}
-            </Text>
-          </Group>
-        ))}
-      </Stack>
-      {event.error !== null ? (
-        <JsonValue
-          label="Error"
-          value={event.error}
-          emptyLabel="This attempt finished without an error."
-          copyLabel="the attempt error"
-        />
-      ) : null}
-      <JsonValue
-        label="Details"
-        value={event.details}
-        emptyLabel="This event was recorded without details."
-        copyLabel="the event details"
-      />
-    </Stack>
   );
 }
