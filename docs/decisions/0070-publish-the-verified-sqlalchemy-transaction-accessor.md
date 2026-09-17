@@ -1,4 +1,4 @@
-# ADR 0065: Publish the verified SQLAlchemy transaction accessor
+# ADR 0070: Publish the verified SQLAlchemy transaction accessor
 
 - **Status:** Accepted
 - **Date:** 2026-09-12
