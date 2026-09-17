@@ -42,7 +42,7 @@ import {
   eventsLocationHref,
   type EventsLocationState,
 } from "../events-location.js";
-import { taskDetailNavigation, taskListingKey } from "../task-location.js";
+import { taskDetailNavigation, taskListingKey, taskListingPinned } from "../task-location.js";
 import { notifyDashboard, notifyEnqueueTest, notifyFailure } from "../notifications.js";
 import type { MaintenancePolicyDefinition, MaintenancePolicySetting } from "@stablemates/workhorse";
 import { requestRunNow, type RunNowFeedback } from "../run-now.js";
@@ -148,6 +148,18 @@ export function useDashboardController(
    */
   const selectedTaskId = location.route === "/tasks" ? location.taskId : null;
   useRefreshBlocker(taskDrawerOpened(selectedTaskId), dashboardRefreshBlockers.taskDrawer);
+  /**
+   * A page the operator pinned stops following the list, so auto refresh stops with it.
+   *
+   * Tasks are ordered by update time, so every row a poll would bring news about leaves the pinned
+   * window at the same moment: refreshing an anchored page drains it toward empty without ever
+   * showing the new work, and an offset page shuffles rows across its boundaries between polls.
+   * Manual refresh is unaffected, and returning to the newest page resumes the configured cadence.
+   */
+  useRefreshBlocker(
+    location.route === "/tasks" && taskListingPinned(location),
+    dashboardRefreshBlockers.pinnedTaskPage,
+  );
   const selectedEventId = location.route === "/events" ? location.events.eventId : null;
   const [inspectedEvent, setInspectedEvent] = useState<DashboardEventDetail | null>(null);
   const [eventDetailError, setEventDetailError] = useState<string | null>(null);

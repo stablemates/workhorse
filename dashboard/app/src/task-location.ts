@@ -221,3 +221,24 @@ export function taskFilterHref(state: TaskLocationState, filter: DashboardTaskFi
     taskId: null,
   });
 }
+
+/**
+ * Whether the listing is held at a page other than the newest one.
+ *
+ * A cursor anchors the list to one row and a page number anchors it to an offset. Either way the
+ * operator asked for a page that stops following new work, which is what enables the control that
+ * returns to the newest page and what tells auto refresh to stand still.
+ */
+export function taskListingPinned(state: TaskLocationState): boolean {
+  return Boolean(state.cursor) || state.page > 1;
+}
+
+/**
+ * The same listing, released from whatever page it was pinned to.
+ *
+ * Every filter, the sort, the page size, the chart settings, and the open drawer survive, because
+ * returning to the newest tasks is a move within the list the operator is already reading.
+ */
+export function taskListingHeadHref(state: TaskLocationState): string {
+  return taskLocationHref({ ...state, page: 1, cursor: null, direction: "next" });
+}

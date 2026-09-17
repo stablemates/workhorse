@@ -1,4 +1,4 @@
-import { taskFilterHref } from "./task-location.js";
+import { taskFilterHref, taskListingHeadHref, taskListingPinned } from "./task-location.js";
 import { describe, expect, it } from "vitest";
 import {
   parseTaskLocation,
@@ -198,4 +198,27 @@ it("clears sidebar pagination and drawer selection while preserving useful filte
   expect(selected.direction).toBeUndefined();
   expect(state.page).toBe(3);
   expect(state.direction).toBe("previous");
+});
+
+it("releases a pinned page without disturbing the list the operator is reading", () => {
+  // A cursor and a page number are the two ways the list stops following new work, and returning
+  // to the first page is a move inside the same list: filters, size, chart, and drawer all survive.
+  const first = parseTaskLocation("?filter=running&queue=orders&per=100&group=queue&task=task-1");
+  expect(taskListingPinned(first)).toBe(false);
+  expect(taskListingPinned({ ...first, page: 2 })).toBe(true);
+
+  const anchored = {
+    ...first,
+    cursor: {
+      id: "01890abc-0000-7000-8000-000000000001",
+      updatedAt: "2026-09-08T01:02:03.123456Z",
+      priority: 50,
+    },
+    direction: "previous" as const,
+  };
+  expect(taskListingPinned(anchored)).toBe(true);
+  expect(parseTaskLocation(taskListingHeadHref(anchored).split("?")[1] ?? "")).toEqual(first);
+  expect(taskListingHeadHref({ ...first, page: 4 })).toBe(taskListingHeadHref(first));
+  expect(taskListingHeadHref(anchored)).not.toContain("cursor");
+  expect(taskListingHeadHref(anchored)).not.toContain("direction");
 });

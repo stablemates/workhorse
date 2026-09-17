@@ -7,7 +7,13 @@ import {
   type DashboardTasksPage,
   type DashboardTasksCursorPage,
 } from "@stablemates/workhorse-dashboard-server/wire";
-import { taskPageSizes, type TaskLocationState, type TaskPageSize } from "../task-location.js";
+import {
+  taskListingHeadHref,
+  taskListingPinned,
+  taskPageSizes,
+  type TaskLocationState,
+  type TaskPageSize,
+} from "../task-location.js";
 import { type RunNowFeedback } from "../run-now.js";
 import {
   lazy,
@@ -147,6 +153,20 @@ export const TasksPage = memo(function TasksPage({
     }, 300);
     return () => clearTimeout(timer);
   }, [searchDraft, taskLocation.search, updateLocation]);
+  /**
+   * Drop a cursor the listing has outgrown.
+   *
+   * A page that reports no previous cursor is the first page, so the anchor in the URL selects
+   * nothing this list is not already showing. Left in place it hands out a link that reloads into a
+   * window mid-list as soon as the rows above the anchor change, and it holds auto refresh paused
+   * on a page that is following the list again. Replacing rather than pushing keeps Back pointing
+   * at wherever the operator came from.
+   */
+  const atFirstPage = "nextCursor" in data && data.previousCursor === null;
+  useEffect(() => {
+    if (!atFirstPage || !taskLocation.cursor) return;
+    replace(taskListingHeadHref(taskLocation));
+  }, [atFirstPage, replace, taskLocation]);
   const taskActions = useTaskActions({
     canCompleteHumanWait: data.canCompleteHumanWait,
     inspectTask,
@@ -204,9 +224,20 @@ export const TasksPage = memo(function TasksPage({
   // Offset pages report the total they proved rather than a count over every matching task, so the
   // pager gains one page while more remain and settles on the real last page once it is reached.
   const totalPages = Math.max(1, Math.ceil((data.total ?? 0) / data.pageSize));
+  const pinned = taskListingPinned(locationState);
   const pagination =
     "nextCursor" in data ? (
       <Group gap="xs" aria-label="Tasks pagination">
+        {/* The anchor a pinned page holds is not otherwise visible, so the way back is stated. */}
+        <Button
+          size="xs"
+          variant="subtle"
+          disabled={!pinned}
+          title="Return to the first page, so the list follows new work again"
+          onClick={() => navigate(taskListingHeadHref(locationState))}
+        >
+          First
+        </Button>
         <Button
           size="xs"
           variant="subtle"
