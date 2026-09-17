@@ -1773,7 +1773,11 @@ interface DashboardQueueController {
   }>;
 }
 
-type DashboardQueueHealthReader = () => Promise<unknown>;
+type DashboardQueueHealthDocument = {
+  readonly [key: string]: unknown;
+};
+
+type DashboardQueueHealthReader = () => Promise<DashboardQueueHealthDocument>;
 
 interface DashboardQueueRow {
   queue: string;
