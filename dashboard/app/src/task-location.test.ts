@@ -1,4 +1,9 @@
-import { taskFilterHref, taskListingHeadHref, taskListingPinned } from "./task-location.js";
+import {
+  taskCursorSpent,
+  taskFilterHref,
+  taskListingHeadHref,
+  taskListingPinned,
+} from "./task-location.js";
 import { describe, expect, it } from "vitest";
 import {
   parseTaskLocation,
@@ -221,4 +226,27 @@ it("releases a pinned page without disturbing the list the operator is reading",
   expect(taskListingHeadHref({ ...first, page: 4 })).toBe(taskListingHeadHref(first));
   expect(taskListingHeadHref(anchored)).not.toContain("cursor");
   expect(taskListingHeadHref(anchored)).not.toContain("direction");
+});
+
+it("releases a spent cursor only against the listing that asked for the page", () => {
+  const cursor = {
+    id: "01890abc-0000-7000-8000-000000000001",
+    updatedAt: "2026-09-08T01:02:03.123456Z",
+    priority: 50,
+  };
+  const first = parseTaskLocation("");
+  const anchored = { ...first, cursor, direction: "next" as const };
+  const firstPage = { previousCursor: null, nextCursor: cursor };
+  const laterPage = { previousCursor: cursor, nextCursor: cursor };
+
+  // Reaching the first page backwards leaves an anchor that selects nothing new.
+  expect(taskCursorSpent(anchored, firstPage)).toBe(true);
+  expect(taskCursorSpent(anchored, laterPage)).toBe(false);
+
+  // The first page is what is still on screen while a Next click is in flight. Judged against the
+  // location rather than against the request it answered, it would undo the click.
+  expect(taskCursorSpent(first, firstPage)).toBe(false);
+
+  // An offset page carries no cursor fields at all and never releases anything.
+  expect(taskCursorSpent(anchored, {})).toBe(false);
 });

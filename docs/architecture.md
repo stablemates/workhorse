@@ -2426,8 +2426,10 @@ Concurrent state changes can move tasks between pages; browsing does not hold a 
 The SPA uses cursor navigation and preserves legacy page-number links through `tasks`.
 It carries the cursor in the URL, and its pager offers a first-page control that drops the
 cursor while keeping every filter, the sort, the page size, the chart settings, and the open
-drawer. A page that returns `previousCursor: null` is the first page, so the SPA replaces the
-URL to drop the anchor it no longer needs.
+drawer. A cursor request answered with `previousCursor: null` was answered from the first page,
+so the SPA replaces the URL to drop the anchor it no longer needs. That judgement pairs each
+answer with the request that asked for it, because the page still on screen during a pager
+click reports the same thing about the page the operator left.
 
 `dashboard_task_counts_v1(p_input jsonb)` returns the complete version 1 sidebar-count JSON
 document and ignores its input. If the task estimate is below 50,000, it counts every filter

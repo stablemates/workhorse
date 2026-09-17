@@ -42,7 +42,13 @@ import {
   eventsLocationHref,
   type EventsLocationState,
 } from "../events-location.js";
-import { taskDetailNavigation, taskListingKey, taskListingPinned } from "../task-location.js";
+import {
+  taskCursorSpent,
+  taskDetailNavigation,
+  taskListingHeadHref,
+  taskListingKey,
+  taskListingPinned,
+} from "../task-location.js";
 import { notifyDashboard, notifyEnqueueTest, notifyFailure } from "../notifications.js";
 import type { MaintenancePolicyDefinition, MaintenancePolicySetting } from "@stablemates/workhorse";
 import { requestRunNow, type RunNowFeedback } from "../run-now.js";
@@ -283,6 +289,10 @@ export function useDashboardController(
       const key = JSON.stringify([route, listingKey, systemWindow, eventsKey]);
       if (background && refreshRequests.has(key)) return;
       const activeRequest = ++requestId.current;
+      // The answer is judged against the listing that asked for it. While a pager click is in
+      // flight the page on screen is still the one the operator left, and its own first-page
+      // report must not be read as an answer about the cursor now in the URL.
+      const requestedListing = listingRef.current;
       if (!background) {
         setLoadState((current) => ({
           status: "loading",
@@ -362,6 +372,21 @@ export function useDashboardController(
         if (activeRequest === requestId.current) {
           if (!shouldDiscardBackgroundRefresh(background)) {
             setLoadState({ status: "ready", data, error: null });
+            /**
+             * Release a cursor this answer proved spent.
+             *
+             * Left in the URL, an anchor the first page no longer needs hands out a link that
+             * reloads into a window mid-list as soon as the rows above it change, and it holds
+             * auto refresh paused on a list that is following new work again. Replacing rather
+             * than pushing keeps Back pointing at wherever the operator came from.
+             */
+            if (
+              data.route === "/tasks" &&
+              "previousCursor" in data.value &&
+              taskCursorSpent(requestedListing, data.value)
+            ) {
+              replace(taskListingHeadHref(requestedListing));
+            }
           }
         }
       } catch (cause) {
@@ -384,6 +409,7 @@ export function useDashboardController(
       listingKey,
       systemWindow,
       eventsKey,
+      replace,
       shouldDiscardBackgroundRefresh,
       refreshRequests,
     ],

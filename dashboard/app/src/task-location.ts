@@ -242,3 +242,18 @@ export function taskListingPinned(state: TaskLocationState): boolean {
 export function taskListingHeadHref(state: TaskLocationState): string {
   return taskLocationHref({ ...state, page: 1, cursor: null, direction: "next" });
 }
+
+/**
+ * Whether the answer to a listing request proves the cursor it was sent with is spent.
+ *
+ * A cursor page that reports no previous cursor is the first page, so its anchor selects nothing
+ * the list is not already showing. The judgement pairs one request with its own answer: the page
+ * on screen while a pager click is in flight is the page the operator just left, and it would
+ * report exactly this while the new cursor sits in the URL, undoing the click.
+ */
+export function taskCursorSpent(
+  requested: TaskLocationState,
+  page: { previousCursor?: DashboardTaskCursor | null },
+): boolean {
+  return Boolean(requested.cursor) && page.previousCursor === null;
+}

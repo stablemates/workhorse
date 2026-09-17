@@ -153,20 +153,6 @@ export const TasksPage = memo(function TasksPage({
     }, 300);
     return () => clearTimeout(timer);
   }, [searchDraft, taskLocation.search, updateLocation]);
-  /**
-   * Drop a cursor the listing has outgrown.
-   *
-   * A page that reports no previous cursor is the first page, so the anchor in the URL selects
-   * nothing this list is not already showing. Left in place it hands out a link that reloads into a
-   * window mid-list as soon as the rows above the anchor change, and it holds auto refresh paused
-   * on a page that is following the list again. Replacing rather than pushing keeps Back pointing
-   * at wherever the operator came from.
-   */
-  const atFirstPage = "nextCursor" in data && data.previousCursor === null;
-  useEffect(() => {
-    if (!atFirstPage || !taskLocation.cursor) return;
-    replace(taskListingHeadHref(taskLocation));
-  }, [atFirstPage, replace, taskLocation]);
   const taskActions = useTaskActions({
     canCompleteHumanWait: data.canCompleteHumanWait,
     inspectTask,
