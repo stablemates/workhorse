@@ -2358,7 +2358,7 @@ Core owns the dashboard's relational read contract. The version 1 views expose t
 - `dashboard_task_event_v1`: `event_id`, `task_id`, `attempt`, `event_type`, `details`, `occurred_at`.
 - `dashboard_task_outcome_v1`: `task_id`, `state`, `current_attempt`, `run_at`, `error`, `finished_at`, `updated_at`. `result` is absent; read it through `dashboard_task_result_v1`.
 - `dashboard_task_progress_v1`: `task_id`, `progress_value`, `revision`, `attempt`, `fence_token`, `worker_id`, `created_at`, `updated_at`.
-- `dashboard_task_query_v1`: `task_id`, `queue_name`, `task_type`, `created_at`. The routing projection is indexed on `queue_name` and on `task_type`. A facet list therefore seeks one row per distinct value.
+- `dashboard_task_query_v1`: `task_id`, `queue_name`, `task_type`, `created_at`. The routing projection is indexed on `queue_name` and on `task_type`. A facet list therefore seeks one row per distinct value, and a task list filtered by queue or task type prunes on the same indexes.
 - `dashboard_task_runtime_v1`: `task_id`, `queue_name`, `state`, `current_attempt`, `fence_token`, `run_at`, `ready_at`, `worker_id`, `acquired_at`, `heartbeat_at`, `expires_at`, `attempt_timeout_at`, `wait_name`, `attempt_started_at`, `cancel_requested_at`, `cancel_requested_by`, `cancel_reason`, `error`, `updated_at`.
 - `dashboard_task_v1`: `id`, `queue_name`, `task_type`, `concurrency_key`, `payload`, `payload_redact_keys`, `result_redact_keys`, `tags`, `max_attempts`, `retry_policy`, `deadline_at`, `execution_timeout_ms`, `created_at`, `priority`. `payload` is `redact_top_level_keys_v1(payload, payload_redact_keys)`; the key arrays are projected so a reader can report how many keys were withheld.
 - `dashboard_task_wait_v1`: `task_id`, `wait_name`, `mode`, `duration_ms`, `requested_wake_at`, `wake_at`, `attempt`, `fence_token`, `worker_id`, `created_at`.
@@ -2394,6 +2394,17 @@ whenever it is at most `page * pageSize`. Otherwise it is one more than the page
 caller knows only that more exist. With `count: exact`, `total` counts every matching task. That
 count reads the whole selection rather than one page of it.
 
+A `task_scope` branch names which tasks the request can reach before the runtime and outcome joins
+read a row. A `tags` request seeks `task_tags_gin_idx`; otherwise a `queue` or `taskType` request
+seeks `task_query_queue_created_idx` or `task_query_type_created_idx`; otherwise every task is in
+scope. Exactly one branch survives planning, because each branch tests only `p_input`, so the
+planner folds the other two away. The filter list below the scope still applies every predicate, so
+a request that names both a tag and a queue seeks the tag index and filters on the queue. The tag
+array reaches the scan through `dashboard_tag_filter_v1(p_tags jsonb)`, an immutable function that
+returns the request's `tags` as `text[]`; an inline `ARRAY(SELECT jsonb_array_elements_text(...))`
+is a subquery, which the planner evaluates once per execution and never folds into the scan, so
+`task_tags_gin_idx` stays unreachable behind it.
+
 `dashboard_tasks_cursor_v1(p_input jsonb)` backs the additive `tasksCursor` procedure.
 It accepts the same filters and page sizes as `tasks`, without a page number.
 `cursor` contains `id`, `priority`, and `updatedAt` with six fractional timestamp digits.
@@ -2405,6 +2416,10 @@ The query reads one extra candidate before enriching the requested page.
 Updated ordering uses `(updated_at, task_id)`; priority ordering prefixes that tuple with `priority`.
 Live and terminal rows use separate query branches, preserving the terminal update-time index.
 No update-time index is added to live rows because heartbeats must retain HOT eligibility.
+It reads the tag filter through `dashboard_tag_filter_v1` for the same reason `tasks` does. A
+`queue` or `taskType` request adds a join to `dashboard_task_query_v1` so that projection's index
+prunes before the ordering walk reads a task; absent both, no join enters the query and the walk
+stays on the update-time indexes, which already return the page in order.
 Concurrent state changes can move tasks between pages; browsing does not hold a snapshot across requests.
 The SPA uses cursor navigation and preserves legacy page-number links through `tasks`.
 

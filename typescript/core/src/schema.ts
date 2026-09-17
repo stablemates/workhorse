@@ -85,6 +85,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "health snapshot without JIT",
     kind: "additive",
   },
+  {
+    fromVersion: 7,
+    toVersion: 8,
+    file: "0008-index-pruned-task-lists.sql",
+    description: "index-pruned task lists",
+    kind: "additive",
+  },
 ];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {

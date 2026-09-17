@@ -1474,6 +1474,7 @@
       "dashboard_budgets_v1",
       "dashboard_inline_value_bytes_v1",
       "dashboard_iso_v1",
+      "dashboard_tag_filter_v1",
       "dashboard_task_detail_limit_v1",
       "dashboard_task_estimate_v1",
       "dashboard_task_event_limit_v1",

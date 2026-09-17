@@ -12454,6 +12454,25 @@ AS $$
   SELECT to_char(p_value AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
 $$;
 
+-- The tag filter a request asked for, as an array. A read applies the tag filter as a predicate on
+-- workhorse.task, which `task_tags_gin_idx` can answer, but only when the planner sees the array as
+-- a value it already holds. An inline `ARRAY(SELECT jsonb_array_elements_text(...))` is a subquery,
+-- which the planner evaluates once per execution and never folds into the scan, so the scan reads
+-- every task row. Reading the same array through an immutable function lets the planner evaluate it
+-- while it plans and seek the index instead (SM-757).
+CREATE OR REPLACE FUNCTION workhorse.dashboard_tag_filter_v1(p_tags jsonb)
+RETURNS text[]
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+  SELECT COALESCE(ARRAY(
+    SELECT jsonb_array_elements_text(
+      CASE WHEN jsonb_typeof(p_tags) = 'array' THEN p_tags ELSE '[]'::jsonb END
+    )
+  ), ARRAY[]::text[]);
+$$;
+
 -- How many attempts, checkpoints, and waits one task detail carries. A handler declares its
 -- checkpoints and waits by name and Workhorse stops retrying at the task's attempt budget, so this
 -- bound is far above what a task produces and exists to cap the pathological one.
@@ -12500,8 +12519,7 @@ AS $$
            NULLIF(p_input->>'worker', '') AS worker_filter,
            NULLIF(p_input->>'taskType', '') AS type_filter,
            NULLIF(p_input->>'priority', '')::integer AS priority_filter,
-           COALESCE(ARRAY(SELECT jsonb_array_elements_text(p_input->'tags')), ARRAY[]::text[])
-             AS tag_filter,
+           workhorse.dashboard_tag_filter_v1(p_input->'tags') AS tag_filter,
            NULLIF(p_input->>'search', '') AS search,
            CASE WHEN NULLIF(p_input->>'search', '') IS NULL THEN NULL ELSE
              '%' || replace(replace(replace(replace(
@@ -12513,13 +12531,38 @@ AS $$
            COALESCE(NULLIF(p_input->>'count', ''), 'none') AS count_mode,
            COALESCE((p_input->>'canCompleteHumanWait')::boolean, false)
              AS can_complete_human_wait
+  -- Which tasks the request can reach, named by the task table's own indexes before the runtime
+  -- and outcome joins read a row. Exactly one branch survives planning, because each branch tests
+  -- only the request: the planner folds the other two away and plans the survivor against the
+  -- value it will seek. The branches choose which index drives, and `filtered` below still applies
+  -- every predicate, so a request that names both a tag and a queue seeks the tag index and
+  -- filters on the queue rather than losing either one.
+  ), task_scope AS (
+    SELECT j.id FROM workhorse.dashboard_task_v1 j
+     WHERE cardinality(workhorse.dashboard_tag_filter_v1(p_input->'tags')) > 0
+       AND j.tags && workhorse.dashboard_tag_filter_v1(p_input->'tags')
+    UNION ALL
+    SELECT query_row.task_id AS id FROM workhorse.dashboard_task_query_v1 query_row
+     WHERE cardinality(workhorse.dashboard_tag_filter_v1(p_input->'tags')) = 0
+       AND (NULLIF(p_input->>'queue', '') IS NOT NULL
+            OR NULLIF(p_input->>'taskType', '') IS NOT NULL)
+       AND (NULLIF(p_input->>'queue', '') IS NULL
+            OR query_row.queue_name = NULLIF(p_input->>'queue', ''))
+       AND (NULLIF(p_input->>'taskType', '') IS NULL
+            OR query_row.task_type = NULLIF(p_input->>'taskType', ''))
+    UNION ALL
+    SELECT j.id FROM workhorse.dashboard_task_v1 j
+     WHERE cardinality(workhorse.dashboard_tag_filter_v1(p_input->'tags')) = 0
+       AND NULLIF(p_input->>'queue', '') IS NULL
+       AND NULLIF(p_input->>'taskType', '') IS NULL
   ), task_rows AS (
     SELECT j.id, j.queue_name AS queue, j.task_type AS type, j.priority,
            COALESCE(r.state, o.state) AS state,
            COALESCE(r.current_attempt, o.current_attempt) AS attempt,
            j.tags, r.worker_id AS current_worker_id, r.wait_name,
            COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at
-      FROM workhorse.dashboard_task_v1 j
+      FROM task_scope
+      JOIN workhorse.dashboard_task_v1 j ON j.id = task_scope.id
       LEFT JOIN workhorse.dashboard_task_runtime_v1 r ON r.task_id = j.id
       LEFT JOIN workhorse.dashboard_task_outcome_v1 o ON o.task_id = j.id
   -- No materialization hint: one reference lets the limit reach the filter, and a request that
@@ -14656,11 +14699,24 @@ DECLARE
   v_order text;
   v_cursor text := 'true';
   v_comparison text;
+  v_scope text := '';
   v_query text;
   v_result jsonb;
 BEGIN
   -- Only fixed SQL fragments enter the query. Values stay in the bound JSON parameter.
   -- A custom plan can simplify absent filters and seek the terminal update-time index.
+  -- A queue or task-type filter joins the routing projection so its index prunes before the
+  -- ordering walk reads a task. Absent both, no join enters the query and the walk stays on the
+  -- update-time indexes, which already return the page in order.
+  IF NULLIF(p_input->>'queue', '') IS NOT NULL OR NULLIF(p_input->>'taskType', '') IS NOT NULL THEN
+    v_scope := $scope$      JOIN (
+        SELECT query_row.task_id FROM workhorse.dashboard_task_query_v1 query_row
+         WHERE (NULLIF($1->>'queue', '') IS NULL
+                OR query_row.queue_name = NULLIF($1->>'queue', ''))
+           AND (NULLIF($1->>'taskType', '') IS NULL
+                OR query_row.task_type = NULLIF($1->>'taskType', ''))
+      ) task_scope ON task_scope.task_id = __scope_task__$scope$;
+  END IF;
   v_order := CASE WHEN v_priority THEN 'priority ' || CASE WHEN v_backwards THEN 'ASC, ' ELSE 'DESC, ' END ELSE '' END
     || CASE WHEN v_backwards THEN 'updated_at ASC, id ASC' ELSE 'updated_at DESC, id DESC' END;
   v_comparison := CASE WHEN v_backwards THEN ' > ' ELSE ' < ' END;
@@ -14681,8 +14737,7 @@ WITH parameters AS NOT MATERIALIZED (
            NULLIF($1->>'worker', '') AS worker_filter,
            NULLIF($1->>'taskType', '') AS type_filter,
            NULLIF($1->>'priority', '')::integer AS priority_filter,
-           COALESCE(ARRAY(SELECT jsonb_array_elements_text($1->'tags')), ARRAY[]::text[])
-             AS tag_filter,
+           workhorse.dashboard_tag_filter_v1($1->'tags') AS tag_filter,
            NULLIF($1->>'search', '') AS search,
            CASE WHEN NULLIF($1->>'search', '') IS NULL THEN NULL ELSE
              '%' || replace(replace(replace(replace(
@@ -14699,12 +14754,14 @@ WITH parameters AS NOT MATERIALIZED (
            r.worker_id AS current_worker_id, r.wait_name, r.updated_at
       FROM workhorse.dashboard_task_runtime_v1 r
       JOIN workhorse.dashboard_task_v1 j ON j.id = r.task_id
+__runtime_scope__
     UNION ALL
     SELECT o.task_id AS id, j.queue_name AS queue, j.task_type AS type, j.priority,
            o.state, o.current_attempt AS attempt, j.tags,
            NULL::text AS current_worker_id, NULL::text AS wait_name, o.updated_at
       FROM workhorse.dashboard_task_outcome_v1 o
       JOIN workhorse.dashboard_task_v1 j ON j.id = o.task_id
+__outcome_scope__
   ), filtered AS NOT MATERIALIZED (
     SELECT task_rows.* FROM task_rows CROSS JOIN parameters
      WHERE CASE parameters.filter
@@ -14862,6 +14919,8 @@ WITH parameters AS NOT MATERIALIZED (
     ), '[]'::jsonb)
   ) FROM parameters;
 $query$, '__cursor__', v_cursor), '__order__', v_order);
+  v_query := replace(v_query, '__runtime_scope__', replace(v_scope, '__scope_task__', 'r.task_id'));
+  v_query := replace(v_query, '__outcome_scope__', replace(v_scope, '__scope_task__', 'o.task_id'));
   EXECUTE v_query INTO v_result USING p_input;
   RETURN v_result;
 END;
@@ -15264,10 +15323,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (4, 'cold history export'),
   (5, 'history partition horizon'),
   (6, 'bounded dashboard reads'),
-  (7, 'health snapshot without JIT')
+  (7, 'health snapshot without JIT'),
+  (8, 'index-pruned task lists')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (7) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (8) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
