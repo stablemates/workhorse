@@ -8,6 +8,35 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## 0.2.0 — 2026-09-17
+
+The npm packages, Python distribution, and Go module release from one source commit.
+
+Requires **schema v1** and Go **1.25** or newer.
+
+**A 0.1.5 database upgrades in place.** This is the first release that ships migrations. Run
+`workhorse schema migrate` from a deployment step before any process from this release starts. It
+applies migrations 0002 through 0006 and leaves the installation at schema version 6. No database is
+dropped and no data is lost.
+
+- Add named budgets that span queues. `Queue.SyncBudgets` declares a namespace of budgets,
+  `Queue.ListBudgets` reads them, and an enqueue names one through `Budget`. A budget caps the
+  unexpired active tasks that name it, refills one shared token bucket, or does both.
+- Skip missed schedule occurrences by default. A schedule definition carries a `CatchupPolicy` of
+  `ScheduleCatchupSkip`, `ScheduleCatchupLatest`, or `ScheduleCatchupAll`. A schedule that a paused
+  deployment left behind no longer enqueues every occurrence it missed. Existing schedules take
+  `ScheduleCatchupSkip`.
+- Look each contracted task type up once per enqueue batch instead of once per row, trim the
+  heartbeat fan-out, the child-set decode, and the hostname lookup, and build worker log attributes
+  only when a logger is enabled.
+- Leave promotion to the maintenance tick on the claim path, so a claim no longer pays for promotion
+  work on every call.
+- Bound every dashboard read procedure to the page it returns. `DashboardTaskRow` drops `DeadlineAt`
+  and `ExecutionTimeoutMs`, a task detail's `Current` drops its duplicate `Result`, and each
+  checkpoint carries `ValueBytes` and `ValueOmitted`.
+- Document two tenancy tiers. One database per tenant is the boundary Workhorse enforces; a shared
+  database carries the tenant on the concurrency key, a budget, and a tag.
+
 ## 0.1.5 — 2026-09-14
 
 The npm packages, Python distribution, and Go module release from one source commit.
