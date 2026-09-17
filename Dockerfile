@@ -56,6 +56,14 @@ FROM node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a
 
 ENV NODE_ENV=production
 ENV PORT=3000
+# This ceiling and the deployment's 1 GiB container memory limit are one pair; see the resource
+# section of typescript/demo/DEPLOYMENT.md before changing either. V8 sizes a heap from a fixed
+# default rather than from the container, so without this every Node process here believes it may
+# grow to 4288 MB. It then defers collection until the container limit is reached first and the
+# kernel kills the process with no message and no stack. The container runs four Node processes —
+# the supervisor, the server, the TypeScript worker, and the staging worker — and each also holds
+# about 80 MiB outside the heap, so four ceilings plus the Python and Go workers must fit 1 GiB.
+ENV NODE_OPTIONS=--max-old-space-size=128
 ENV WORKHORSE_DEMO_MODE=production
 ENV WORKHORSE_DEMO_LOG_DIRECTORY=/opt/workhorse-demo/logs
 ENV PYTHONPATH=/opt/workhorse-python
