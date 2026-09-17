@@ -4169,7 +4169,7 @@
                         "indexBytes": {
                           "$type": "integer"
                         },
-                        "partitions": 5,
+                        "partitions": 7,
                         "tableBytes": {
                           "$type": "integer"
                         },
@@ -4189,7 +4189,7 @@
                         "indexBytes": {
                           "$type": "integer"
                         },
-                        "partitions": 5,
+                        "partitions": 7,
                         "tableBytes": {
                           "$type": "integer"
                         },

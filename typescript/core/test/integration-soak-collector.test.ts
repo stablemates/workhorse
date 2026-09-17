@@ -31,9 +31,18 @@ describe("soak observation collector", () => {
   it("sees the daily partitions the installation prepared ahead", async () => {
     const observation = await collectSoakObservation(pool);
 
+    // Installation prepares today plus the horizon derived from the preparation cadence, which
+    // stays wider than the four days the health snapshot demands.
+    const horizon = await pool.query<{ days: number }>(`
+        SELECT workhorse.history_partition_horizon_days_v1(
+                 policy.partition_preparation_interval_ms
+               ) AS days
+          FROM workhorse.maintenance_policy policy
+         WHERE policy.singleton`);
+    const expectedDays = (horizon.rows[0]?.days ?? 0) + 1;
+    expect(expectedDays).toBeGreaterThan(4);
     for (const parent of observation.partitions.parents) {
-      // Installation prepares today and the three days after it.
-      expect(parent.days).toHaveLength(4);
+      expect(parent.days).toHaveLength(expectedDays);
       expect(parent.days).toContain(today());
       expect(parent.defaultRows).toBe(0);
     }

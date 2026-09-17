@@ -457,6 +457,7 @@ describe("schema installation", () => {
       { version: 2, description: "schedule catch-up policies" },
       { version: 3, description: "named budgets" },
       { version: 4, description: "cold history export" },
+      { version: 5, description: "history partition horizon" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
@@ -544,9 +545,20 @@ describe("schema installation", () => {
            AND parent.relname IN ('task_event', 'attempt_history')
          GROUP BY parent.relname
          ORDER BY parent.relname`);
+    // Installation prepares today plus the derived horizon, and each parent also keeps its default
+    // partition. The horizon exceeds the four days the health snapshot demands so the verdict
+    // survives a UTC midnight between preparation passes.
+    const horizon = await pool.query<{ days: number }>(`
+        SELECT workhorse.history_partition_horizon_days_v1(
+                 policy.partition_preparation_interval_ms
+               ) AS days
+          FROM workhorse.maintenance_policy policy
+         WHERE policy.singleton`);
+    const expectedPartitions = (horizon.rows[0]?.days ?? 0) + 2;
+    expect(expectedPartitions).toBeGreaterThan(5);
     expect(historyPartitions.rows).toEqual([
-      { parent: "attempt_history", partitions: 5 },
-      { parent: "task_event", partitions: 5 },
+      { parent: "attempt_history", partitions: expectedPartitions },
+      { parent: "task_event", partitions: expectedPartitions },
     ]);
 
     const historyIntegrity = await pool.query<{ foreign_keys: number; triggers: string[] }>(`

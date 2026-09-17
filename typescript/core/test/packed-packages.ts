@@ -7,7 +7,11 @@ import { promisify } from "node:util";
 import { auditPackedTree } from "../../../scripts/audit-npm-dependencies.js";
 import { publishedPackages, workspacePackages } from "../../../scripts/packages.js";
 import { hasPublicBetaNotice } from "../../../scripts/public-beta-notice.js";
-import { WORKHORSE_SCHEMA_VERSION } from "../src/schema.js";
+import {
+  MINIMUM_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+  WORKHORSE_SCHEMA_VERSION,
+} from "../src/queue/sql-catalogue.generated.js";
 
 const exec = promisify(execFile);
 const repository = path.resolve(import.meta.dirname, "../../..");
@@ -568,6 +572,12 @@ await provider.shutdown();
 metrics.disable();
 `,
   );
+  // The host refuses a database that does not serve the protocol this build speaks, so the stand-in
+  // database reports every served version rather than a literal that a protocol bump would strand.
+  const servedProtocolRows = Array.from(
+    { length: PROTOCOL_VERSION - MINIMUM_PROTOCOL_VERSION + 1 },
+    (_unused, offset) => `  { kind: "protocol", version: ${MINIMUM_PROTOCOL_VERSION + offset} },`,
+  ).join("\n");
   await writeFile(
     path.join(consumer, "dashboard-auth.mjs"),
     `import assert from "node:assert/strict";
@@ -580,7 +590,7 @@ const { Dashboard } = await import("@stablemates/workhorse-dashboard");
 assert.equal(typeof Dashboard, "function");
 const salt = Buffer.from("packed-dashboard-auth-salt");
 const passwordHash = \`scrypt-v1$\${salt.toString("base64url")}$\${scryptSync("correct horse", salt, 32).toString("base64url")}\`;
-const database = { query: async () => ({ rows: [\n  { kind: "protocol", version: 1 },\n  { kind: "schema", version: ${WORKHORSE_SCHEMA_VERSION} },\n] }) };
+const database = { query: async () => ({ rows: [\n${servedProtocolRows}\n  { kind: "schema", version: ${WORKHORSE_SCHEMA_VERSION} },\n] }) };
 const audits = [];
 const host = createDashboardHost({
   database,

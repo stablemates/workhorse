@@ -2982,7 +2982,7 @@
                                 "deadRows": 0,
                                 "relation": "task_event",
                                 "indexBytes": 0,
-                                "partitions": 5,
+                                "partitions": 7,
                                 "tableBytes": 0,
                                 "totalBytes": 0,
                                 "lastVacuumAt": null
@@ -2992,7 +2992,7 @@
                                 "deadRows": 0,
                                 "relation": "attempt_history",
                                 "indexBytes": 0,
-                                "partitions": 5,
+                                "partitions": 7,
                                 "tableBytes": 0,
                                 "totalBytes": 0,
                                 "lastVacuumAt": null

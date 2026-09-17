@@ -64,6 +64,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "cold history export",
     kind: "additive",
   },
+  {
+    fromVersion: 4,
+    toVersion: 5,
+    file: "0005-history-partition-horizon.sql",
+    description: "history partition horizon",
+    kind: "additive",
+  },
 ];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {

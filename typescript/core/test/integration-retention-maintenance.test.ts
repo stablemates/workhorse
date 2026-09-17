@@ -1476,6 +1476,130 @@ describe("retention maintenance", () => {
     expect(eligible.retentionLagMs.terminalOutcome).toBeGreaterThan(0);
   });
 
+  it("prepares more history days than the snapshot demands over a full preparation interval", async () => {
+    // Workhorse demands prepared storage for today and the three days after it, while preparation
+    // runs on an elapsed-time cadence that notices nothing at the UTC midnight boundary. When both
+    // windows were four days wide, every rollover left the furthest demanded day uncreated until
+    // the next pass, so the queue read critical with missing-history-partitions once a day.
+    const snapshotHorizonDays = 3;
+    const intervalsMs = [60_000, 21_600_000, 86_400_000, 604_800_000];
+
+    // At every cadence the policy accepts, the horizon covers the days the UTC date can advance
+    // before the next pass and still leaves slack for a pass that starts late.
+    const slack = await pool.query<{ interval_ms: number; least_slack: number }>(
+      `SELECT intervals.interval_ms,
+              min(horizon.days - (advanced.days + $1))::integer AS least_slack
+         FROM unnest($2::integer[]) AS intervals(interval_ms)
+         CROSS JOIN LATERAL (
+           SELECT workhorse.history_partition_horizon_days_v1(intervals.interval_ms) AS days
+         ) horizon
+         CROSS JOIN generate_series(0, 23) AS offsets(hour)
+         CROSS JOIN LATERAL (
+           SELECT ((started.at + make_interval(secs => intervals.interval_ms / 1000.0))
+                     AT TIME ZONE 'UTC')::date
+                - (started.at AT TIME ZONE 'UTC')::date AS days
+             FROM (
+               SELECT timestamptz '2026-03-01 00:00:00+00'
+                    + make_interval(hours => offsets.hour) AS at
+             ) started
+         ) advanced
+        GROUP BY intervals.interval_ms
+        ORDER BY intervals.interval_ms`,
+      [snapshotHorizonDays, intervalsMs],
+    );
+    expect(slack.rows).toEqual(
+      intervalsMs.map((intervalMs) => ({
+        interval_ms: intervalMs,
+        least_slack: expect.any(Number) as number,
+      })),
+    );
+    for (const row of slack.rows) {
+      expect({ intervalMs: row.interval_ms, atLeastOneDay: row.least_slack >= 1 }).toEqual({
+        intervalMs: row.interval_ms,
+        atLeastOneDay: true,
+      });
+    }
+
+    // A pass that lands a second before a UTC midnight is the worst case: the date advances at
+    // once, and nothing prepares storage again until the whole interval has elapsed.
+    const preparedAt = Date.parse("2087-04-10T23:59:59.000Z");
+    const configured = await pool.query<{ interval_ms: number }>(
+      `SELECT partition_preparation_interval_ms AS interval_ms
+         FROM workhorse.maintenance_policy WHERE singleton`,
+    );
+    const state = await pool.query<{ started_at: Date | null; completed_at: Date | null }>(
+      `SELECT last_started_at AS started_at, last_completed_at AS completed_at
+         FROM workhorse.maintenance_state WHERE routine_name = 'history_partitions'`,
+    );
+    const marker = (await pool.query<{ at: Date }>("SELECT clock_timestamp() AS at")).rows[0]!.at;
+    try {
+      for (const intervalMs of intervalsMs) {
+        await pool.query(
+          `UPDATE workhorse.maintenance_policy SET partition_preparation_interval_ms = $1
+            WHERE singleton`,
+          [intervalMs],
+        );
+        await pool.query("SELECT workhorse.prepare_history_partitions_v1(true, $1::timestamptz)", [
+          new Date(preparedAt).toISOString(),
+        ]);
+        const missing = await pool.query<{ missing: number }>(
+          `SELECT count(*)::integer AS missing
+             FROM generate_series(
+               date_trunc('day', $1::timestamptz AT TIME ZONE 'UTC'),
+               date_trunc('day', $1::timestamptz AT TIME ZONE 'UTC') + interval '3 days',
+               interval '1 day'
+             ) AS demanded(day_start)
+            WHERE to_regclass(
+                    format('workhorse.%I', 'task_event_' || to_char(demanded.day_start, 'YYYYMMDD'))
+                  ) IS NULL
+               OR to_regclass(
+                    format(
+                      'workhorse.%I',
+                      'attempt_history_' || to_char(demanded.day_start, 'YYYYMMDD')
+                    )
+                  ) IS NULL`,
+          [new Date(preparedAt + intervalMs).toISOString()],
+        );
+        expect({ intervalMs, missing: missing.rows[0]?.missing }).toEqual({
+          intervalMs,
+          missing: 0,
+        });
+      }
+    } finally {
+      await pool.query(
+        `UPDATE workhorse.maintenance_policy SET partition_preparation_interval_ms = $1
+          WHERE singleton`,
+        [configured.rows[0]!.interval_ms],
+      );
+      await pool.query(
+        `UPDATE workhorse.maintenance_state
+            SET last_started_at = $1, last_completed_at = $2
+          WHERE routine_name = 'history_partitions'`,
+        [state.rows[0]?.started_at ?? null, state.rows[0]?.completed_at ?? null],
+      );
+      await pool.query(
+        `DELETE FROM workhorse.maintenance_run
+          WHERE routine_name = 'history_partitions' AND started_at >= $1`,
+        [marker],
+      );
+      await pool.query(`DO $$
+        DECLARE leftover record;
+        BEGIN
+          FOR leftover IN
+            SELECT relation.relname AS name
+              FROM pg_class relation
+              JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+             WHERE namespace.nspname = 'workhorse'
+               AND relation.relkind = 'r'
+               AND (relation.relname LIKE 'task_event_2087%'
+                 OR relation.relname LIKE 'attempt_history_2087%')
+          LOOP
+            EXECUTE format('DROP TABLE IF EXISTS workhorse.%I', leftover.name);
+          END LOOP;
+        END $$`);
+    }
+  });
+
   it("creates and retires completed daily history partitions", async () => {
     const oldDay = "2020-01-08";
     const historicalTimestamp = "2020-01-08T12:00:00.000Z";

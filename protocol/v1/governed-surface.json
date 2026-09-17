@@ -1471,6 +1471,7 @@
       "expand_hashed_cron_field_v1",
       "expire_owned_v1",
       "get_queue_health_policy_v1",
+      "history_partition_horizon_days_v1",
       "history_retention_complete_v1",
       "idempotency_key_hash_v1",
       "normalize_retry_policy_v1",

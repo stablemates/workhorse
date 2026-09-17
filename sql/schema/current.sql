@@ -2789,6 +2789,9 @@ BEGIN
         ), budget_policies AS (
           SELECT * FROM workhorse.budget_status_v1(ARRAY[]::text[])
         ), partition_days AS (
+          -- Workhorse demands prepared storage for today and the three days after it. Preparation
+          -- covers a longer horizon so this window can never outrun it; see
+          -- history_partition_horizon_days_v1 before changing the three days here.
           SELECT to_char(day_start, 'YYYYMMDD') AS day, day_start AS starts_at,
                  to_regclass(format('workhorse.%I', 'task_event_' || to_char(day_start, 'YYYYMMDD')))
                    IS NOT NULL AS has_task_events,
@@ -10198,6 +10201,20 @@ BEGIN
 END;
 $$;
 
+-- How many days beyond today preparation must cover. The health snapshot demands prepared storage
+-- for today and the three days after it, while preparation runs on an elapsed-time cadence and
+-- notices nothing at the UTC midnight boundary. A horizon that only matched the snapshot left the
+-- furthest demanded day uncreated from every rollover until the next pass, so Workhorse reported
+-- missing history partitions once a day. Preparation therefore also covers the days the UTC date
+-- can advance before the next pass, plus one day for a pass that starts later than its interval.
+CREATE OR REPLACE FUNCTION workhorse.history_partition_horizon_days_v1(
+  p_preparation_interval_ms integer
+) RETURNS integer
+LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT
+AS $$
+  SELECT 3 + ceil(p_preparation_interval_ms / 86400000.0)::integer + 1
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.prepare_history_partitions_v1(
   p_force boolean DEFAULT false,
   p_now timestamptz DEFAULT clock_timestamp()
@@ -10208,6 +10225,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE v_started_at timestamptz;
 DECLARE v_day_offset integer;
+DECLARE v_horizon_days integer;
 DECLARE v_suffix text;
 DECLARE v_today date := (p_now AT TIME ZONE 'UTC')::date;
 DECLARE v_policy workhorse.maintenance_policy%ROWTYPE;
@@ -10242,7 +10260,10 @@ BEGIN
   error := NULL;
   v_started_at := clock_timestamp();
   BEGIN
-    FOR v_day_offset IN 0..3 LOOP
+    v_horizon_days := workhorse.history_partition_horizon_days_v1(
+      v_policy.partition_preparation_interval_ms
+    );
+    FOR v_day_offset IN 0..v_horizon_days LOOP
       v_suffix := to_char(v_today + v_day_offset, 'YYYYMMDD');
       IF to_regclass(format('workhorse.%I', 'task_event_' || v_suffix)) IS NULL
          OR to_regclass(format('workhorse.%I', 'attempt_history_' || v_suffix)) IS NULL THEN
@@ -15063,15 +15084,20 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (1, 'baseline'),
   (2, 'schedule catch-up policies'),
   (3, 'named budgets'),
-  (4, 'cold history export')
+  (4, 'cold history export'),
+  (5, 'history partition horizon')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (4) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )
-  FROM generate_series(0, 3) AS days(day_offset);
+  FROM workhorse.maintenance_policy policy
+  CROSS JOIN generate_series(
+    0, workhorse.history_partition_horizon_days_v1(policy.partition_preparation_interval_ms)
+  ) AS days(day_offset)
+ WHERE policy.singleton;
 
 COMMIT;
