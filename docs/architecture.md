@@ -3127,6 +3127,40 @@ the same target database. A queue has one namespace owner. Concurrent synchroniz
 ownership checks, and a second namespace cannot replace the owner silently. Scheduled definitions retain
 their `concurrencyKey`, while `fire_schedule_v1` sends it through ordinary enqueue admission metadata.
 
+## Tenancy
+
+Workhorse has no tenant object ([ADR 0069](decisions/0069-isolate-tenants-by-database-and-carry-tenant-identity-as-task-metadata.md)). It documents two tiers.
+
+_Isolated tenancy_ installs the schema into one database per tenant. PostgreSQL enforces the
+boundary; every table, policy, budget, schedule, retention window, and dashboard session is
+separate because the databases are. Each database runs `workhorse schema migrate` independently,
+and each `Worker` binds to one database.
+
+_Shared tenancy_ carries the tenant on three task fields that already exist:
+
+- `task.concurrency_key`, 1 through 256 UTF-8 bytes, queue-scoped. `concurrency_policy.max_active_per_key` and the `rate_limit_policy` per-key bucket give the tenant fair share inside one queue.
+- `task.budget_name`, 1 through 256 UTF-8 bytes. One `budget` row per tenant caps that tenant's active tasks or start rate across every queue. `sync_budgets_v1` accepts at most 10,000 definitions per call, so one budget per tenant is a deployment cost of about 130 microseconds per tenant on the benchmark host.
+- One `tenant:<id>` element of `task.tags`, which holds at most 20 tags of at most 100 characters each. `task_tags_gin_idx` serves the `&&` and `@>` filters in `list_dead_letters_v1`, `redrive_many_v1`, `dashboard_tasks_v1`, `dashboard_tasks_cursor_v1`, and `dashboard_activity_v1`; the dashboard wire validator accepts at most 20 selected tags.
+
+`schedule_definition` retains `concurrency_key` and carries neither tags nor a budget. `namespace`
+on schedules, policies, and budgets identifies the owning deployment, not a tenant.
+`retention_policy` is a singleton, so retention windows are per installation. Metric attributes
+never include a key or tag, and spans carry `workhorse.task.id` and `workhorse.task.type` rather
+than the key or tags. No function scopes a read or an operator action to a tenant; tag filters
+narrow a result without enforcing a boundary.
+
+Admission cost is independent of tenant count. `claim_v1` counts one key through
+`task_runtime_active_queue_key_expiry_idx` and one budget through
+`task_runtime_active_budget_expiry_idx`, and inspects at most 100 ready rows when a per-key limit
+or budget can pass over saturated work. `pnpm benchmark:tenant-cardinality` loads one queue with
+100 through 100,000 tenants, each with a key, a tag, and optionally its own budget, and 80
+saturated rows at the head of the window. Median claim latency measured 2.2 through 3.5 ms without
+budgets and 3.7 through 4.4 ms with them across the whole ladder, with each admission count at
+three buffer hits. The dashboard task list filtered by tag grew from 1 ms to 94 ms because it
+materializes the whole task projection before filtering, and `queue_health_v1` reached 2.7 s at
+200,000 ready rows; both track total rows, not tenants
+([analysis](benchmarks/2026-09-16-tenant-cardinality-analysis.md)).
+
 ## Worker process lifecycle
 
 `defineWorkerProcess()` declares a process-owned adapter and one or more worker configurations.

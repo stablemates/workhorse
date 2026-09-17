@@ -36,6 +36,7 @@
     "worker-processes",
     "maintenance",
     "queue-health",
+    "multi-tenancy",
     "---Integrations---",
     "---Reference---",
     "examples",

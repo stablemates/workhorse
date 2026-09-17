@@ -1,0 +1,1816 @@
+{
+  "generatedAt": "2026-09-16T04:00:13.868Z",
+  "postgres": {
+    "version": "PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+    "sharedBuffers": "128MB",
+    "workMem": "4MB"
+  },
+  "options": {
+    "tenants": [
+      100,
+      1000,
+      10000,
+      100000
+    ],
+    "tasksPerTenant": 2,
+    "saturatedTenants": 40,
+    "maxActivePerKey": 2,
+    "claimSamples": 25,
+    "readSamples": 10,
+    "warmupSamples": 2,
+    "profiles": [
+      "keyed",
+      "budgeted"
+    ]
+  },
+  "rungs": [
+    {
+      "tenants": 100,
+      "profile": "keyed",
+      "load": {
+        "readyRows": 200,
+        "activeRows": 80,
+        "budgetRows": 0,
+        "keyBucketRows": 100,
+        "loadMs": 33.19470899999999,
+        "policySyncMs": 8.874457000000007,
+        "budgetSyncMs": 0
+      },
+      "claim": {
+        "summary": {
+          "count": 25,
+          "min": 1.8271139999999946,
+          "max": 3.514961000000028,
+          "mean": 2.3370965599999978,
+          "sampleStandardDeviation": 0.468363180427329,
+          "confidenceInterval95": {
+            "confidenceLevel": 0.95,
+            "lower": 2.1437562391195963,
+            "upper": 2.530436880880399,
+            "marginOfError": 0.19334032088040143
+          }
+        },
+        "p50Ms": 2.147515999999996,
+        "p95Ms": 3.188908999999967,
+        "p99Ms": 3.514961000000028,
+        "admittedClaims": 27,
+        "firstAdmittedTenant": 40,
+        "skippedRowsPerClaim": 80,
+        "keyBucketRowsAfter": 1
+      },
+      "reads": {
+        "dashboardTasksByTag": {
+          "summary": {
+            "count": 10,
+            "min": 0.9735979999999813,
+            "max": 5.229647999999997,
+            "mean": 2.5222398999999998,
+            "sampleStandardDeviation": 1.8189244719523068,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 1.221150116714796,
+              "upper": 3.8233296832852037,
+              "marginOfError": 1.3010897832852037
+            }
+          },
+          "p50Ms": 1.2071599999999876,
+          "p95Ms": 5.229647999999997,
+          "p99Ms": 5.229647999999997
+        },
+        "tagOverlapCount": {
+          "summary": {
+            "count": 10,
+            "min": 0.17267900000001646,
+            "max": 0.23762900000002674,
+            "mean": 0.18623410000001286,
+            "sampleStandardDeviation": 0.01915591469118148,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 0.172531736169904,
+              "upper": 0.19993646383012173,
+              "marginOfError": 0.013702363830108867
+            }
+          },
+          "p50Ms": 0.17734699999999748,
+          "p95Ms": 0.23762900000002674,
+          "p99Ms": 0.23762900000002674
+        },
+        "activePerKeyCount": {
+          "summary": {
+            "count": 10,
+            "min": 0.17049499999995987,
+            "max": 0.2024539999999888,
+            "mean": 0.1831662000000051,
+            "sampleStandardDeviation": 0.011647586166722054,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 0.17483459767393916,
+              "upper": 0.19149780232607105,
+              "marginOfError": 0.008331602326065958
+            }
+          },
+          "p50Ms": 0.17875000000003638,
+          "p95Ms": 0.2024539999999888,
+          "p99Ms": 0.2024539999999888
+        },
+        "queueHealth": {
+          "summary": {
+            "count": 10,
+            "min": 170.69813,
+            "max": 196.06929200000013,
+            "mean": 183.695612,
+            "sampleStandardDeviation": 9.2947697096011,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 177.0469962418258,
+              "upper": 190.3442277581742,
+              "marginOfError": 6.648615758174188
+            }
+          },
+          "p50Ms": 182.31076400000006,
+          "p95Ms": 196.06929200000013,
+          "p99Ms": 196.06929200000013
+        }
+      },
+      "plans": {
+        "tagOverlapCount": {
+          "nodeTypes": [
+            "Aggregate",
+            "Seq Scan"
+          ],
+          "indexes": [],
+          "planningTimeMs": 0.064,
+          "executionTimeMs": 0.074,
+          "sharedHitBlocks": 9,
+          "sharedReadBlocks": 0
+        },
+        "activePerKeyCount": {
+          "nodeTypes": [
+            "Aggregate",
+            "Index Scan"
+          ],
+          "indexes": [
+            "task_runtime_active_queue_key_expiry_idx"
+          ],
+          "planningTimeMs": 0.154,
+          "executionTimeMs": 0.034,
+          "sharedHitBlocks": 3,
+          "sharedReadBlocks": 0
+        },
+        "readyWindow": {
+          "nodeTypes": [
+            "Limit",
+            "Sort",
+            "Hash Join",
+            "Seq Scan",
+            "Hash",
+            "Seq Scan"
+          ],
+          "indexes": [],
+          "planningTimeMs": 0.169,
+          "executionTimeMs": 0.167,
+          "sharedHitBlocks": 17,
+          "sharedReadBlocks": 0
+        }
+      },
+      "relations": {
+        "budget": {
+          "rows": 0,
+          "bytes": 0
+        },
+        "budget_pkey": {
+          "rows": null,
+          "bytes": 8192
+        },
+        "rate_limit_bucket": {
+          "rows": 100,
+          "bytes": 8192
+        },
+        "rate_limit_bucket_pkey": {
+          "rows": null,
+          "bytes": 16384
+        },
+        "task": {
+          "rows": 280,
+          "bytes": 73728
+        },
+        "task_runtime": {
+          "rows": 280,
+          "bytes": 65536
+        },
+        "task_runtime_active_budget_expiry_idx": {
+          "rows": null,
+          "bytes": 8192
+        },
+        "task_runtime_active_queue_key_expiry_idx": {
+          "rows": null,
+          "bytes": 16384
+        },
+        "task_runtime_ready_budget_idx": {
+          "rows": null,
+          "bytes": 8192
+        },
+        "task_runtime_ready_idx": {
+          "rows": null,
+          "bytes": 40960
+        },
+        "task_tags_gin_idx": {
+          "rows": null,
+          "bytes": 32768
+        }
+      }
+    },
+    {
+      "tenants": 100,
+      "profile": "budgeted",
+      "load": {
+        "readyRows": 200,
+        "activeRows": 80,
+        "budgetRows": 100,
+        "keyBucketRows": 100,
+        "loadMs": 31.87254800000028,
+        "policySyncMs": 7.803520999999819,
+        "budgetSyncMs": 7.593511999999919
+      },
+      "claim": {
+        "summary": {
+          "count": 25,
+          "min": 2.8969489999999496,
+          "max": 5.402686999999787,
+          "mean": 3.8171109199999775,
+          "sampleStandardDeviation": 0.5591033539568377,
+          "confidenceInterval95": {
+            "confidenceLevel": 0.95,
+            "lower": 3.586313055486595,
+            "upper": 4.047908784513361,
+            "marginOfError": 0.23079786451338263
+          }
+        },
+        "p50Ms": 3.707155999999941,
+        "p95Ms": 4.667128999999932,
+        "p99Ms": 5.402686999999787,
+        "admittedClaims": 27,
+        "firstAdmittedTenant": 40,
+        "skippedRowsPerClaim": 80,
+        "keyBucketRowsAfter": 1
+      },
+      "reads": {
+        "dashboardTasksByTag": {
+          "summary": {
+            "count": 10,
+            "min": 0.8608800000001793,
+            "max": 4.664883999999802,
+            "mean": 2.249264499999981,
+            "sampleStandardDeviation": 1.6519868042221764,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 1.0675864335168526,
+              "upper": 3.4309425664831097,
+              "marginOfError": 1.1816780664831286
+            }
+          },
+          "p50Ms": 1.08772799999997,
+          "p95Ms": 4.664883999999802,
+          "p99Ms": 4.664883999999802
+        },
+        "tagOverlapCount": {
+          "summary": {
+            "count": 10,
+            "min": 0.1695239999999103,
+            "max": 0.24541299999964394,
+            "mean": 0.20855509999992136,
+            "sampleStandardDeviation": 0.027610461867571292,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 0.18880513764490134,
+              "upper": 0.22830506235494138,
+              "marginOfError": 0.019749962355020013
+            }
+          },
+          "p50Ms": 0.2060700000001816,
+          "p95Ms": 0.24541299999964394,
+          "p99Ms": 0.24541299999964394
+        },
+        "activePerKeyCount": {
+          "summary": {
+            "count": 10,
+            "min": 0.17834999999968204,
+            "max": 0.2341919999998936,
+            "mean": 0.2022226000000046,
+            "sampleStandardDeviation": 0.01672932367766573,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 0.19025599420965003,
+              "upper": 0.2141892057903592,
+              "marginOfError": 0.011966605790354586
+            }
+          },
+          "p50Ms": 0.19926799999984723,
+          "p95Ms": 0.2341919999998936,
+          "p99Ms": 0.2341919999998936
+        },
+        "queueHealth": {
+          "summary": {
+            "count": 10,
+            "min": 179.38180599999987,
+            "max": 209.87982600000032,
+            "mean": 188.2696590999999,
+            "sampleStandardDeviation": 8.493709898621011,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 182.19404719764162,
+              "upper": 194.34527100235817,
+              "marginOfError": 6.075611902358289
+            }
+          },
+          "p50Ms": 186.1778159999999,
+          "p95Ms": 209.87982600000032,
+          "p99Ms": 209.87982600000032
+        },
+        "budgetStatusPage": {
+          "summary": {
+            "count": 10,
+            "min": 2.3721099999993385,
+            "max": 3.191913999999997,
+            "mean": 2.646389999999883,
+            "sampleStandardDeviation": 0.24585983347477888,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 2.4705246892699146,
+              "upper": 2.8222553107298514,
+              "marginOfError": 0.1758653107299685
+            }
+          },
+          "p50Ms": 2.578602000000501,
+          "p95Ms": 3.191913999999997,
+          "p99Ms": 3.191913999999997
+        },
+        "budgetAdmission": {
+          "summary": {
+            "count": 10,
+            "min": 0.12960900000052789,
+            "max": 0.28440499999942404,
+            "mean": 0.17349629999998797,
+            "sampleStandardDeviation": 0.04819131781636305,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 0.13902470306412343,
+              "upper": 0.20796789693585252,
+              "marginOfError": 0.034471596935864546
+            }
+          },
+          "p50Ms": 0.14580899999964458,
+          "p95Ms": 0.28440499999942404,
+          "p99Ms": 0.28440499999942404
+        }
+      },
+      "plans": {
+        "tagOverlapCount": {
+          "nodeTypes": [
+            "Aggregate",
+            "Seq Scan"
+          ],
+          "indexes": [],
+          "planningTimeMs": 0.067,
+          "executionTimeMs": 0.071,
+          "sharedHitBlocks": 9,
+          "sharedReadBlocks": 0
+        },
+        "activePerKeyCount": {
+          "nodeTypes": [
+            "Aggregate",
+            "Index Scan"
+          ],
+          "indexes": [
+            "task_runtime_active_queue_key_expiry_idx"
+          ],
+          "planningTimeMs": 0.087,
+          "executionTimeMs": 0.022,
+          "sharedHitBlocks": 3,
+          "sharedReadBlocks": 0
+        },
+        "readyWindow": {
+          "nodeTypes": [
+            "Limit",
+            "Sort",
+            "Hash Join",
+            "Seq Scan",
+            "Hash",
+            "Seq Scan"
+          ],
+          "indexes": [],
+          "planningTimeMs": 0.161,
+          "executionTimeMs": 0.152,
+          "sharedHitBlocks": 17,
+          "sharedReadBlocks": 0
+        },
+        "activePerBudgetCount": {
+          "nodeTypes": [
+            "Aggregate",
+            "Index Scan"
+          ],
+          "indexes": [
+            "task_runtime_active_budget_expiry_idx"
+          ],
+          "planningTimeMs": 0.132,
+          "executionTimeMs": 0.022,
+          "sharedHitBlocks": 3,
+          "sharedReadBlocks": 0
+        }
+      },
+      "relations": {
+        "budget": {
+          "rows": 100,
+          "bytes": 8192
+        },
+        "budget_pkey": {
+          "rows": null,
+          "bytes": 16384
+        },
+        "rate_limit_bucket": {
+          "rows": 100,
+          "bytes": 8192
+        },
+        "rate_limit_bucket_pkey": {
+          "rows": null,
+          "bytes": 16384
+        },
+        "task": {
+          "rows": 280,
+          "bytes": 73728
+        },
+        "task_runtime": {
+          "rows": 280,
+          "bytes": 65536
+        },
+        "task_runtime_active_budget_expiry_idx": {
+          "rows": null,
+          "bytes": 16384
+        },
+        "task_runtime_active_queue_key_expiry_idx": {
+          "rows": null,
+          "bytes": 16384
+        },
+        "task_runtime_ready_budget_idx": {
+          "rows": null,
+          "bytes": 16384
+        },
+        "task_runtime_ready_idx": {
+          "rows": null,
+          "bytes": 40960
+        },
+        "task_tags_gin_idx": {
+          "rows": null,
+          "bytes": 32768
+        }
+      }
+    },
+    {
+      "tenants": 1000,
+      "profile": "keyed",
+      "load": {
+        "readyRows": 2000,
+        "activeRows": 80,
+        "budgetRows": 0,
+        "keyBucketRows": 1000,
+        "loadMs": 133.12670900000012,
+        "policySyncMs": 6.348584000000301,
+        "budgetSyncMs": 0
+      },
+      "claim": {
+        "summary": {
+          "count": 25,
+          "min": 2.8365780000003724,
+          "max": 4.365972000000511,
+          "mean": 3.5609117600001263,
+          "sampleStandardDeviation": 0.36552504513601697,
+          "confidenceInterval95": {
+            "confidenceLevel": 0.95,
+            "lower": 3.4100230213679783,
+            "upper": 3.7118004986322743,
+            "marginOfError": 0.1508887386321478
+          }
+        },
+        "p50Ms": 3.50225699999919,
+        "p95Ms": 4.142950999999812,
+        "p99Ms": 4.365972000000511,
+        "admittedClaims": 27,
+        "firstAdmittedTenant": 40,
+        "skippedRowsPerClaim": 80,
+        "keyBucketRowsAfter": 1
+      },
+      "reads": {
+        "dashboardTasksByTag": {
+          "summary": {
+            "count": 10,
+            "min": 1.3599709999998595,
+            "max": 5.0895080000000235,
+            "mean": 2.879680699999972,
+            "sampleStandardDeviation": 1.6407997364427962,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 1.7060048237216117,
+              "upper": 4.053356576278332,
+              "marginOfError": 1.1736758762783601
+            }
+          },
+          "p50Ms": 1.6635409999998956,
+          "p95Ms": 5.0895080000000235,
+          "p99Ms": 5.0895080000000235
+        },
+        "tagOverlapCount": {
+          "summary": {
+            "count": 10,
+            "min": 0.43829900000037014,
+            "max": 0.4914280000002691,
+            "mean": 0.46325630000010276,
+            "sampleStandardDeviation": 0.019760291338611825,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 0.4491216211985076,
+              "upper": 0.4773909788016979,
+              "marginOfError": 0.014134678801595163
+            }
+          },
+          "p50Ms": 0.4542989999999918,
+          "p95Ms": 0.4914280000002691,
+          "p99Ms": 0.4914280000002691
+        },
+        "activePerKeyCount": {
+          "summary": {
+            "count": 10,
+            "min": 0.15570699999989301,
+            "max": 0.20134199999938573,
+            "mean": 0.1706731000000218,
+            "sampleStandardDeviation": 0.01536332148289559,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 0.15968360542399543,
+              "upper": 0.1816625945760482,
+              "marginOfError": 0.010989494576026389
+            }
+          },
+          "p50Ms": 0.16307099999994534,
+          "p95Ms": 0.20134199999938573,
+          "p99Ms": 0.20134199999938573
+        },
+        "queueHealth": {
+          "summary": {
+            "count": 10,
+            "min": 183.43272799999977,
+            "max": 207.2561509999996,
+            "mean": 193.09547750000002,
+            "sampleStandardDeviation": 9.33041390830077,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 186.42136518961783,
+              "upper": 199.7695898103822,
+              "marginOfError": 6.6741123103821804
+            }
+          },
+          "p50Ms": 188.8415160000004,
+          "p95Ms": 207.2561509999996,
+          "p99Ms": 207.2561509999996
+        }
+      },
+      "plans": {
+        "tagOverlapCount": {
+          "nodeTypes": [
+            "Aggregate",
+            "Bitmap Heap Scan",
+            "Bitmap Index Scan"
+          ],
+          "indexes": [
+            "task_tags_gin_idx"
+          ],
+          "planningTimeMs": 0.074,
+          "executionTimeMs": 0.267,
+          "sharedHitBlocks": 17,
+          "sharedReadBlocks": 0
+        },
+        "activePerKeyCount": {
+          "nodeTypes": [
+            "Aggregate",
+            "Index Scan"
+          ],
+          "indexes": [
+            "task_runtime_active_queue_key_expiry_idx"
+          ],
+          "planningTimeMs": 0.101,
+          "executionTimeMs": 0.026,
+          "sharedHitBlocks": 3,
+          "sharedReadBlocks": 0
+        },
+        "readyWindow": {
+          "nodeTypes": [
+            "Limit",
+            "Nested Loop",
+            "Index Scan",
+            "Index Scan"
+          ],
+          "indexes": [
+            "task_runtime_ready_idx",
+            "task_pkey"
+          ],
+          "planningTimeMs": 0.191,
+          "executionTimeMs": 0.191,
+          "sharedHitBlocks": 404,
+          "sharedReadBlocks": 0
+        }
+      },
+      "relations": {
+        "budget": {
+          "rows": 0,
+          "bytes": 0
+        },
+        "budget_pkey": {
+          "rows": null,
+          "bytes": 8192
+        },
+        "rate_limit_bucket": {
+          "rows": 1000,
+          "bytes": 73728
+        },
+        "rate_limit_bucket_pkey": {
+          "rows": null,
+          "bytes": 98304
+        },
+        "task": {
+          "rows": 2080,
+          "bytes": 524288
+        },
+        "task_runtime": {
+          "rows": 2080,
+          "bytes": 458752
+        },
+        "task_runtime_active_budget_expiry_idx": {
+          "rows": null,
+          "bytes": 8192
+        },
+        "task_runtime_active_queue_key_expiry_idx": {
+          "rows": null,
+          "bytes": 16384
+        },
+        "task_runtime_ready_budget_idx": {
+          "rows": null,
+          "bytes": 8192
+        },
+        "task_runtime_ready_idx": {
+          "rows": null,
+          "bytes": 172032
+        },
+        "task_tags_gin_idx": {
+          "rows": null,
+          "bytes": 122880
+        }
+      }
+    },
+    {
+      "tenants": 1000,
+      "profile": "budgeted",
+      "load": {
+        "readyRows": 2000,
+        "activeRows": 80,
+        "budgetRows": 1000,
+        "keyBucketRows": 1000,
+        "loadMs": 130.5219190000007,
+        "policySyncMs": 5.543197000000873,
+        "budgetSyncMs": 42.21140999999989
+      },
+      "claim": {
+        "summary": {
+          "count": 25,
+          "min": 3.396122000000105,
+          "max": 6.299712999998519,
+          "mean": 4.033178640000115,
+          "sampleStandardDeviation": 0.667046746001484,
+          "confidenceInterval95": {
+            "confidenceLevel": 0.95,
+            "lower": 3.757821743250702,
+            "upper": 4.3085355367495275,
+            "marginOfError": 0.2753568967494126
+          }
+        },
+        "p50Ms": 3.905070999999225,
+        "p95Ms": 5.034367000000202,
+        "p99Ms": 6.299712999998519,
+        "admittedClaims": 27,
+        "firstAdmittedTenant": 40,
+        "skippedRowsPerClaim": 80,
+        "keyBucketRowsAfter": 1
+      },
+      "reads": {
+        "dashboardTasksByTag": {
+          "summary": {
+            "count": 10,
+            "min": 1.8158330000005662,
+            "max": 5.934690000000046,
+            "mean": 3.457186400000137,
+            "sampleStandardDeviation": 1.7340688745529387,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 2.2167944370660884,
+              "upper": 4.697578362934186,
+              "marginOfError": 1.240391962934049
+            }
+          },
+          "p50Ms": 2.0922039999986737,
+          "p95Ms": 5.934690000000046,
+          "p99Ms": 5.934690000000046
+        },
+        "tagOverlapCount": {
+          "summary": {
+            "count": 10,
+            "min": 0.44154600000001665,
+            "max": 0.5641519999990123,
+            "mean": 0.47170220000007246,
+            "sampleStandardDeviation": 0.03784428893263809,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 0.44463190739298075,
+              "upper": 0.49877249260716416,
+              "marginOfError": 0.027070292607091713
+            }
+          },
+          "p50Ms": 0.45899700000154553,
+          "p95Ms": 0.5641519999990123,
+          "p99Ms": 0.5641519999990123
+        },
+        "activePerKeyCount": {
+          "summary": {
+            "count": 10,
+            "min": 0.18103399999927205,
+            "max": 0.3180469999988418,
+            "mean": 0.2551982000000862,
+            "sampleStandardDeviation": 0.05495443298213487,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 0.2158888980461995,
+              "upper": 0.29450750195397285,
+              "marginOfError": 0.039309301953886676
+            }
+          },
+          "p50Ms": 0.23598600000150327,
+          "p95Ms": 0.3180469999988418,
+          "p99Ms": 0.3180469999988418
+        },
+        "queueHealth": {
+          "summary": {
+            "count": 10,
+            "min": 192.1916430000001,
+            "max": 230.47263500000008,
+            "mean": 205.33709710000022,
+            "sampleStandardDeviation": 12.459801881533357,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 196.4245110197103,
+              "upper": 214.24968318029013,
+              "marginOfError": 8.912586080289913
+            }
+          },
+          "p50Ms": 197.72797700000046,
+          "p95Ms": 230.47263500000008,
+          "p99Ms": 230.47263500000008
+        },
+        "budgetStatusPage": {
+          "summary": {
+            "count": 10,
+            "min": 1.9058489999988524,
+            "max": 2.4077570000008564,
+            "mean": 2.231619099999989,
+            "sampleStandardDeviation": 0.1757577597381682,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 2.105898307820542,
+              "upper": 2.3573398921794357,
+              "marginOfError": 0.12572079217944693
+            }
+          },
+          "p50Ms": 2.266234999999142,
+          "p95Ms": 2.4077570000008564,
+          "p99Ms": 2.4077570000008564
+        },
+        "budgetAdmission": {
+          "summary": {
+            "count": 10,
+            "min": 0.12863800000013725,
+            "max": 0.21603899999900023,
+            "mean": 0.1804943999999523,
+            "sampleStandardDeviation": 0.025107167401472782,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 0.1625350622171001,
+              "upper": 0.19845373778280448,
+              "marginOfError": 0.017959337782852202
+            }
+          },
+          "p50Ms": 0.17977199999950244,
+          "p95Ms": 0.21603899999900023,
+          "p99Ms": 0.21603899999900023
+        }
+      },
+      "plans": {
+        "tagOverlapCount": {
+          "nodeTypes": [
+            "Aggregate",
+            "Bitmap Heap Scan",
+            "Bitmap Index Scan"
+          ],
+          "indexes": [
+            "task_tags_gin_idx"
+          ],
+          "planningTimeMs": 0.074,
+          "executionTimeMs": 0.267,
+          "sharedHitBlocks": 17,
+          "sharedReadBlocks": 0
+        },
+        "activePerKeyCount": {
+          "nodeTypes": [
+            "Aggregate",
+            "Index Scan"
+          ],
+          "indexes": [
+            "task_runtime_active_queue_key_expiry_idx"
+          ],
+          "planningTimeMs": 0.091,
+          "executionTimeMs": 0.022,
+          "sharedHitBlocks": 3,
+          "sharedReadBlocks": 0
+        },
+        "readyWindow": {
+          "nodeTypes": [
+            "Limit",
+            "Nested Loop",
+            "Index Scan",
+            "Index Scan"
+          ],
+          "indexes": [
+            "task_runtime_ready_idx",
+            "task_pkey"
+          ],
+          "planningTimeMs": 0.173,
+          "executionTimeMs": 0.189,
+          "sharedHitBlocks": 402,
+          "sharedReadBlocks": 0
+        },
+        "activePerBudgetCount": {
+          "nodeTypes": [
+            "Aggregate",
+            "Index Scan"
+          ],
+          "indexes": [
+            "task_runtime_active_budget_expiry_idx"
+          ],
+          "planningTimeMs": 0.099,
+          "executionTimeMs": 0.018,
+          "sharedHitBlocks": 3,
+          "sharedReadBlocks": 0
+        }
+      },
+      "relations": {
+        "budget": {
+          "rows": 1000,
+          "bytes": 73728
+        },
+        "budget_pkey": {
+          "rows": null,
+          "bytes": 65536
+        },
+        "rate_limit_bucket": {
+          "rows": 1000,
+          "bytes": 73728
+        },
+        "rate_limit_bucket_pkey": {
+          "rows": null,
+          "bytes": 98304
+        },
+        "task": {
+          "rows": 2080,
+          "bytes": 532480
+        },
+        "task_runtime": {
+          "rows": 2080,
+          "bytes": 483328
+        },
+        "task_runtime_active_budget_expiry_idx": {
+          "rows": null,
+          "bytes": 16384
+        },
+        "task_runtime_active_queue_key_expiry_idx": {
+          "rows": null,
+          "bytes": 16384
+        },
+        "task_runtime_ready_budget_idx": {
+          "rows": null,
+          "bytes": 90112
+        },
+        "task_runtime_ready_idx": {
+          "rows": null,
+          "bytes": 172032
+        },
+        "task_tags_gin_idx": {
+          "rows": null,
+          "bytes": 122880
+        }
+      }
+    },
+    {
+      "tenants": 10000,
+      "profile": "keyed",
+      "load": {
+        "readyRows": 20000,
+        "activeRows": 80,
+        "budgetRows": 0,
+        "keyBucketRows": 10000,
+        "loadMs": 1151.2043759999997,
+        "policySyncMs": 4.959869999998773,
+        "budgetSyncMs": 0
+      },
+      "claim": {
+        "summary": {
+          "count": 25,
+          "min": 2.5852340000001277,
+          "max": 5.341784000000189,
+          "mean": 3.4244525600000633,
+          "sampleStandardDeviation": 0.6064806948139035,
+          "confidenceInterval95": {
+            "confidenceLevel": 0.95,
+            "lower": 3.174097329180884,
+            "upper": 3.6748077908192425,
+            "marginOfError": 0.2503552308191794
+          }
+        },
+        "p50Ms": 3.2294440000005125,
+        "p95Ms": 4.70488800000021,
+        "p99Ms": 5.341784000000189,
+        "admittedClaims": 27,
+        "firstAdmittedTenant": 40,
+        "skippedRowsPerClaim": 80,
+        "keyBucketRowsAfter": 7300
+      },
+      "reads": {
+        "dashboardTasksByTag": {
+          "summary": {
+            "count": 10,
+            "min": 8.582518999999593,
+            "max": 13.60204800000065,
+            "mean": 10.595661599999948,
+            "sampleStandardDeviation": 1.9435664087921378,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 9.205414541032416,
+              "upper": 11.98590865896748,
+              "marginOfError": 1.390247058967531
+            }
+          },
+          "p50Ms": 9.120332000000417,
+          "p95Ms": 13.60204800000065,
+          "p99Ms": 13.60204800000065
+        },
+        "tagOverlapCount": {
+          "summary": {
+            "count": 10,
+            "min": 2.525504000001092,
+            "max": 3.336642000000211,
+            "mean": 2.882817700000669,
+            "sampleStandardDeviation": 0.21693558738875762,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 2.727642110945266,
+              "upper": 3.037993289056072,
+              "marginOfError": 0.155175589055403
+            }
+          },
+          "p50Ms": 2.826550000001589,
+          "p95Ms": 3.336642000000211,
+          "p99Ms": 3.336642000000211
+        },
+        "activePerKeyCount": {
+          "summary": {
+            "count": 10,
+            "min": 0.19536100000004808,
+            "max": 0.6106280000003608,
+            "mean": 0.30552429999952435,
+            "sampleStandardDeviation": 0.14861367077765492,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 0.1992198702736552,
+              "upper": 0.4118287297253935,
+              "marginOfError": 0.10630442972586915
+            }
+          },
+          "p50Ms": 0.23040500000024622,
+          "p95Ms": 0.6106280000003608,
+          "p99Ms": 0.6106280000003608
+        },
+        "queueHealth": {
+          "summary": {
+            "count": 10,
+            "min": 2452.3609039999974,
+            "max": 2617.3114050000004,
+            "mean": 2528.7781846999987,
+            "sampleStandardDeviation": 58.9718574023577,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 2486.5951901058334,
+              "upper": 2570.961179294164,
+              "marginOfError": 42.18299459416551
+            }
+          },
+          "p50Ms": 2510.672430999999,
+          "p95Ms": 2617.3114050000004,
+          "p99Ms": 2617.3114050000004
+        }
+      },
+      "plans": {
+        "tagOverlapCount": {
+          "nodeTypes": [
+            "Aggregate",
+            "Bitmap Heap Scan",
+            "Bitmap Index Scan"
+          ],
+          "indexes": [
+            "task_tags_gin_idx"
+          ],
+          "planningTimeMs": 0.073,
+          "executionTimeMs": 0.043,
+          "sharedHitBlocks": 5,
+          "sharedReadBlocks": 0
+        },
+        "activePerKeyCount": {
+          "nodeTypes": [
+            "Aggregate",
+            "Index Scan"
+          ],
+          "indexes": [
+            "task_runtime_active_queue_key_expiry_idx"
+          ],
+          "planningTimeMs": 0.117,
+          "executionTimeMs": 0.028,
+          "sharedHitBlocks": 3,
+          "sharedReadBlocks": 0
+        },
+        "readyWindow": {
+          "nodeTypes": [
+            "Limit",
+            "Nested Loop",
+            "Index Scan",
+            "Index Scan"
+          ],
+          "indexes": [
+            "task_runtime_ready_idx",
+            "task_pkey"
+          ],
+          "planningTimeMs": 0.235,
+          "executionTimeMs": 0.312,
+          "sharedHitBlocks": 403,
+          "sharedReadBlocks": 0
+        }
+      },
+      "relations": {
+        "budget": {
+          "rows": 0,
+          "bytes": 0
+        },
+        "budget_pkey": {
+          "rows": null,
+          "bytes": 8192
+        },
+        "rate_limit_bucket": {
+          "rows": 7301,
+          "bytes": 761856
+        },
+        "rate_limit_bucket_pkey": {
+          "rows": null,
+          "bytes": 868352
+        },
+        "task": {
+          "rows": 20080,
+          "bytes": 4988928
+        },
+        "task_runtime": {
+          "rows": 20080,
+          "bytes": 4333568
+        },
+        "task_runtime_active_budget_expiry_idx": {
+          "rows": null,
+          "bytes": 8192
+        },
+        "task_runtime_active_queue_key_expiry_idx": {
+          "rows": null,
+          "bytes": 16384
+        },
+        "task_runtime_ready_budget_idx": {
+          "rows": null,
+          "bytes": 8192
+        },
+        "task_runtime_ready_idx": {
+          "rows": null,
+          "bytes": 1523712
+        },
+        "task_tags_gin_idx": {
+          "rows": null,
+          "bytes": 1892352
+        }
+      }
+    },
+    {
+      "tenants": 10000,
+      "profile": "budgeted",
+      "load": {
+        "readyRows": 20000,
+        "activeRows": 80,
+        "budgetRows": 10000,
+        "keyBucketRows": 10000,
+        "loadMs": 1376.480313999993,
+        "policySyncMs": 7.08644600000116,
+        "budgetSyncMs": 1118.7085579999984
+      },
+      "claim": {
+        "summary": {
+          "count": 25,
+          "min": 3.737271999998484,
+          "max": 6.172067999999854,
+          "mean": 4.2938004800005,
+          "sampleStandardDeviation": 0.5350469637571047,
+          "confidenceInterval95": {
+            "confidenceLevel": 0.95,
+            "lower": 4.072933093361567,
+            "upper": 4.514667866639432,
+            "marginOfError": 0.22086738663893282
+          }
+        },
+        "p50Ms": 4.153360000003886,
+        "p95Ms": 5.2997770000001765,
+        "p99Ms": 6.172067999999854,
+        "admittedClaims": 27,
+        "firstAdmittedTenant": 40,
+        "skippedRowsPerClaim": 80,
+        "keyBucketRowsAfter": 7300
+      },
+      "reads": {
+        "dashboardTasksByTag": {
+          "summary": {
+            "count": 10,
+            "min": 8.492823000000499,
+            "max": 13.939040999997815,
+            "mean": 10.144947599998705,
+            "sampleStandardDeviation": 1.863991216203204,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 8.811621249766972,
+              "upper": 11.478273950230438,
+              "marginOfError": 1.3333263502317323
+            }
+          },
+          "p50Ms": 9.02809200000047,
+          "p95Ms": 13.939040999997815,
+          "p99Ms": 13.939040999997815
+        },
+        "tagOverlapCount": {
+          "summary": {
+            "count": 10,
+            "min": 2.587748999998439,
+            "max": 4.589274999998452,
+            "mean": 2.9731755999993768,
+            "sampleStandardDeviation": 0.6022419840941988,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 2.5423875685813697,
+              "upper": 3.403963631417384,
+              "marginOfError": 0.4307880314180071
+            }
+          },
+          "p50Ms": 2.720234000000346,
+          "p95Ms": 4.589274999998452,
+          "p99Ms": 4.589274999998452
+        },
+        "activePerKeyCount": {
+          "summary": {
+            "count": 10,
+            "min": 0.16643800000019837,
+            "max": 0.21291300000302726,
+            "mean": 0.18551340000267375,
+            "sampleStandardDeviation": 0.01645311919314033,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 0.17374436527063136,
+              "upper": 0.19728243473471613,
+              "marginOfError": 0.011769034732042397
+            }
+          },
+          "p50Ms": 0.18005200000334298,
+          "p95Ms": 0.21291300000302726,
+          "p99Ms": 0.21291300000302726
+        },
+        "queueHealth": {
+          "summary": {
+            "count": 10,
+            "min": 2523.0515599999926,
+            "max": 2712.1660919999995,
+            "mean": 2614.637299599999,
+            "sampleStandardDeviation": 71.52214792234284,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 2563.4769917503318,
+              "upper": 2665.7976074496664,
+              "marginOfError": 51.16030784966718
+            }
+          },
+          "p50Ms": 2599.541728999997,
+          "p95Ms": 2712.1660919999995,
+          "p99Ms": 2712.1660919999995
+        },
+        "budgetStatusPage": {
+          "summary": {
+            "count": 10,
+            "min": 2.0641820000018924,
+            "max": 3.632828999994672,
+            "mean": 2.7616840999995476,
+            "sampleStandardDeviation": 0.5711581465148684,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 2.3531305616148632,
+              "upper": 3.170237638384232,
+              "marginOfError": 0.4085535383846845
+            }
+          },
+          "p50Ms": 2.4136880000005476,
+          "p95Ms": 3.632828999994672,
+          "p99Ms": 3.632828999994672
+        },
+        "budgetAdmission": {
+          "summary": {
+            "count": 10,
+            "min": 0.0991830000129994,
+            "max": 0.14491800000541843,
+            "mean": 0.11742190000368283,
+            "sampleStandardDeviation": 0.017284183365916743,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 0.10505839907959828,
+              "upper": 0.12978540092776736,
+              "marginOfError": 0.012363500924084544
+            }
+          },
+          "p50Ms": 0.10780900000827387,
+          "p95Ms": 0.14491800000541843,
+          "p99Ms": 0.14491800000541843
+        }
+      },
+      "plans": {
+        "tagOverlapCount": {
+          "nodeTypes": [
+            "Aggregate",
+            "Bitmap Heap Scan",
+            "Bitmap Index Scan"
+          ],
+          "indexes": [
+            "task_tags_gin_idx"
+          ],
+          "planningTimeMs": 0.07,
+          "executionTimeMs": 2.332,
+          "sharedHitBlocks": 123,
+          "sharedReadBlocks": 0
+        },
+        "activePerKeyCount": {
+          "nodeTypes": [
+            "Aggregate",
+            "Index Scan"
+          ],
+          "indexes": [
+            "task_runtime_active_queue_key_expiry_idx"
+          ],
+          "planningTimeMs": 0.143,
+          "executionTimeMs": 0.042,
+          "sharedHitBlocks": 3,
+          "sharedReadBlocks": 0
+        },
+        "readyWindow": {
+          "nodeTypes": [
+            "Limit",
+            "Nested Loop",
+            "Index Scan",
+            "Index Scan"
+          ],
+          "indexes": [
+            "task_runtime_ready_idx",
+            "task_pkey"
+          ],
+          "planningTimeMs": 0.209,
+          "executionTimeMs": 0.297,
+          "sharedHitBlocks": 404,
+          "sharedReadBlocks": 0
+        },
+        "activePerBudgetCount": {
+          "nodeTypes": [
+            "Aggregate",
+            "Index Scan"
+          ],
+          "indexes": [
+            "task_runtime_active_budget_expiry_idx"
+          ],
+          "planningTimeMs": 0.112,
+          "executionTimeMs": 0.017,
+          "sharedHitBlocks": 3,
+          "sharedReadBlocks": 0
+        }
+      },
+      "relations": {
+        "budget": {
+          "rows": 10000,
+          "bytes": 761856
+        },
+        "budget_pkey": {
+          "rows": null,
+          "bytes": 540672
+        },
+        "rate_limit_bucket": {
+          "rows": 10000,
+          "bytes": 761856
+        },
+        "rate_limit_bucket_pkey": {
+          "rows": null,
+          "bytes": 868352
+        },
+        "task": {
+          "rows": 20080,
+          "bytes": 5144576
+        },
+        "task_runtime": {
+          "rows": 20080,
+          "bytes": 4579328
+        },
+        "task_runtime_active_budget_expiry_idx": {
+          "rows": null,
+          "bytes": 16384
+        },
+        "task_runtime_active_queue_key_expiry_idx": {
+          "rows": null,
+          "bytes": 16384
+        },
+        "task_runtime_ready_budget_idx": {
+          "rows": null,
+          "bytes": 729088
+        },
+        "task_runtime_ready_idx": {
+          "rows": null,
+          "bytes": 1523712
+        },
+        "task_tags_gin_idx": {
+          "rows": null,
+          "bytes": 991232
+        }
+      }
+    },
+    {
+      "tenants": 100000,
+      "profile": "keyed",
+      "load": {
+        "readyRows": 200000,
+        "activeRows": 80,
+        "budgetRows": 0,
+        "keyBucketRows": 100000,
+        "loadMs": 12529.961802000005,
+        "policySyncMs": 5.9579520000115735,
+        "budgetSyncMs": 0
+      },
+      "claim": {
+        "summary": {
+          "count": 25,
+          "min": 2.802033999993,
+          "max": 5.166912000000593,
+          "mean": 3.535974719999358,
+          "sampleStandardDeviation": 0.5136519180797927,
+          "confidenceInterval95": {
+            "confidenceLevel": 0.95,
+            "lower": 3.3239392082160193,
+            "upper": 3.7480102317826964,
+            "marginOfError": 0.21203551178333843
+          }
+        },
+        "p50Ms": 3.485677000004216,
+        "p95Ms": 4.622145000001183,
+        "p99Ms": 5.166912000000593,
+        "admittedClaims": 27,
+        "firstAdmittedTenant": 40,
+        "skippedRowsPerClaim": 80,
+        "keyBucketRowsAfter": 97300
+      },
+      "reads": {
+        "dashboardTasksByTag": {
+          "summary": {
+            "count": 10,
+            "min": 86.89661499999056,
+            "max": 97.5289189999894,
+            "mean": 93.74075149999699,
+            "sampleStandardDeviation": 3.190031580557506,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 91.45889892072763,
+              "upper": 96.02260407926634,
+              "marginOfError": 2.2818525792693554
+            }
+          },
+          "p50Ms": 93.85497400000168,
+          "p95Ms": 97.5289189999894,
+          "p99Ms": 97.5289189999894
+        },
+        "tagOverlapCount": {
+          "summary": {
+            "count": 10,
+            "min": 3.561868000004324,
+            "max": 4.414613000000827,
+            "mean": 3.8072070000009264,
+            "sampleStandardDeviation": 0.2511471722292482,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 3.6275596177554625,
+              "upper": 3.98685438224639,
+              "marginOfError": 0.1796473822454637
+            }
+          },
+          "p50Ms": 3.7129769999883138,
+          "p95Ms": 4.414613000000827,
+          "p99Ms": 4.414613000000827
+        },
+        "activePerKeyCount": {
+          "summary": {
+            "count": 10,
+            "min": 0.14757299999473616,
+            "max": 0.41494600000442006,
+            "mean": 0.21483449999795995,
+            "sampleStandardDeviation": 0.0943955002085565,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 0.147312718415888,
+              "upper": 0.2823562815800319,
+              "marginOfError": 0.06752178158207194
+            }
+          },
+          "p50Ms": 0.17095600000175182,
+          "p95Ms": 0.41494600000442006,
+          "p99Ms": 0.41494600000442006
+        },
+        "queueHealth": {
+          "summary": {
+            "count": 10,
+            "min": 2237.7009270000126,
+            "max": 2868.826184999998,
+            "mean": 2691.6742636000026,
+            "sampleStandardDeviation": 172.03777473926417,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 2568.6144034991994,
+              "upper": 2814.734123700806,
+              "marginOfError": 123.05986010080304
+            }
+          },
+          "p50Ms": 2697.931224999993,
+          "p95Ms": 2868.826184999998,
+          "p99Ms": 2868.826184999998
+        }
+      },
+      "plans": {
+        "tagOverlapCount": {
+          "nodeTypes": [
+            "Aggregate",
+            "Bitmap Heap Scan",
+            "Bitmap Index Scan"
+          ],
+          "indexes": [
+            "task_tags_gin_idx"
+          ],
+          "planningTimeMs": 0.057,
+          "executionTimeMs": 0.03,
+          "sharedHitBlocks": 6,
+          "sharedReadBlocks": 0
+        },
+        "activePerKeyCount": {
+          "nodeTypes": [
+            "Aggregate",
+            "Index Scan"
+          ],
+          "indexes": [
+            "task_runtime_active_queue_key_expiry_idx"
+          ],
+          "planningTimeMs": 0.089,
+          "executionTimeMs": 0.018,
+          "sharedHitBlocks": 3,
+          "sharedReadBlocks": 0
+        },
+        "readyWindow": {
+          "nodeTypes": [
+            "Limit",
+            "Nested Loop",
+            "Index Scan",
+            "Index Scan"
+          ],
+          "indexes": [
+            "task_runtime_ready_idx",
+            "task_pkey"
+          ],
+          "planningTimeMs": 0.192,
+          "executionTimeMs": 0.342,
+          "sharedHitBlocks": 500,
+          "sharedReadBlocks": 4
+        }
+      },
+      "relations": {
+        "budget": {
+          "rows": 0,
+          "bytes": 0
+        },
+        "budget_pkey": {
+          "rows": null,
+          "bytes": 8192
+        },
+        "rate_limit_bucket": {
+          "rows": 97301,
+          "bytes": 7651328
+        },
+        "rate_limit_bucket_pkey": {
+          "rows": null,
+          "bytes": 8667136
+        },
+        "task": {
+          "rows": 200080,
+          "bytes": 49676288
+        },
+        "task_runtime": {
+          "rows": 200080,
+          "bytes": 43139072
+        },
+        "task_runtime_active_budget_expiry_idx": {
+          "rows": null,
+          "bytes": 8192
+        },
+        "task_runtime_active_queue_key_expiry_idx": {
+          "rows": null,
+          "bytes": 16384
+        },
+        "task_runtime_ready_budget_idx": {
+          "rows": null,
+          "bytes": 8192
+        },
+        "task_runtime_ready_idx": {
+          "rows": null,
+          "bytes": 15261696
+        },
+        "task_tags_gin_idx": {
+          "rows": null,
+          "bytes": 11747328
+        }
+      }
+    },
+    {
+      "tenants": 100000,
+      "profile": "budgeted",
+      "load": {
+        "readyRows": 200000,
+        "activeRows": 80,
+        "budgetRows": 100000,
+        "keyBucketRows": 100000,
+        "loadMs": 14352.275813999993,
+        "policySyncMs": 5.460514000005787,
+        "budgetSyncMs": 13111.673916
+      },
+      "claim": {
+        "summary": {
+          "count": 25,
+          "min": 3.5909220000030473,
+          "max": 6.6966580000007525,
+          "mean": 4.5019898399990055,
+          "sampleStandardDeviation": 0.736022848463649,
+          "confidenceInterval95": {
+            "confidenceLevel": 0.95,
+            "lower": 4.198159608153211,
+            "upper": 4.8058200718448,
+            "marginOfError": 0.30383023184579433
+          }
+        },
+        "p50Ms": 4.367706999997608,
+        "p95Ms": 5.757582999998704,
+        "p99Ms": 6.6966580000007525,
+        "admittedClaims": 27,
+        "firstAdmittedTenant": 40,
+        "skippedRowsPerClaim": 80,
+        "keyBucketRowsAfter": 97300
+      },
+      "reads": {
+        "dashboardTasksByTag": {
+          "summary": {
+            "count": 10,
+            "min": 89.22123100000317,
+            "max": 105.55093899997883,
+            "mean": 93.29405580000021,
+            "sampleStandardDeviation": 4.749132560619648,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 89.89696705367245,
+              "upper": 96.69114454632796,
+              "marginOfError": 3.3970887463277477
+            }
+          },
+          "p50Ms": 91.91982499998994,
+          "p95Ms": 105.55093899997883,
+          "p99Ms": 105.55093899997883
+        },
+        "tagOverlapCount": {
+          "summary": {
+            "count": 10,
+            "min": 3.33814499998698,
+            "max": 3.5847000000067055,
+            "mean": 3.507855200002086,
+            "sampleStandardDeviation": 0.07606973332225968,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 3.453441971542638,
+              "upper": 3.5622684284615342,
+              "marginOfError": 0.054413228459448224
+            }
+          },
+          "p50Ms": 3.526802999986103,
+          "p95Ms": 3.5847000000067055,
+          "p99Ms": 3.5847000000067055
+        },
+        "activePerKeyCount": {
+          "summary": {
+            "count": 10,
+            "min": 0.12579200000618584,
+            "max": 0.17205799999646842,
+            "mean": 0.1487416999967536,
+            "sampleStandardDeviation": 0.016970464491979684,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 0.13660260444408348,
+              "upper": 0.16088079554942372,
+              "marginOfError": 0.012139095552670119
+            }
+          },
+          "p50Ms": 0.1463600000133738,
+          "p95Ms": 0.17205799999646842,
+          "p99Ms": 0.17205799999646842
+        },
+        "queueHealth": {
+          "summary": {
+            "count": 10,
+            "min": 2628.8935530000017,
+            "max": 3067.9062829999893,
+            "mean": 2749.0570123999905,
+            "sampleStandardDeviation": 137.3320177837992,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 2650.8224303644542,
+              "upper": 2847.291594435527,
+              "marginOfError": 98.23458203553609
+            }
+          },
+          "p50Ms": 2700.2409119999793,
+          "p95Ms": 3067.9062829999893,
+          "p99Ms": 3067.9062829999893
+        },
+        "budgetStatusPage": {
+          "summary": {
+            "count": 10,
+            "min": 2.048332999984268,
+            "max": 4.159811999998055,
+            "mean": 2.7791454000020166,
+            "sampleStandardDeviation": 0.7683728522157648,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 2.2295227613563275,
+              "upper": 3.3287680386477057,
+              "marginOfError": 0.5496226386456889
+            }
+          },
+          "p50Ms": 2.383222000004025,
+          "p95Ms": 4.159811999998055,
+          "p99Ms": 4.159811999998055
+        },
+        "budgetAdmission": {
+          "summary": {
+            "count": 10,
+            "min": 0.09351299999980256,
+            "max": 0.1927060000016354,
+            "mean": 0.13465560000622645,
+            "sampleStandardDeviation": 0.025789197259395307,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 0.11620840135079717,
+              "upper": 0.15310279866165574,
+              "marginOfError": 0.018447198655429282
+            }
+          },
+          "p50Ms": 0.12858700001379475,
+          "p95Ms": 0.1927060000016354,
+          "p99Ms": 0.1927060000016354
+        }
+      },
+      "plans": {
+        "tagOverlapCount": {
+          "nodeTypes": [
+            "Aggregate",
+            "Bitmap Heap Scan",
+            "Bitmap Index Scan"
+          ],
+          "indexes": [
+            "task_tags_gin_idx"
+          ],
+          "planningTimeMs": 0.133,
+          "executionTimeMs": 0.095,
+          "sharedHitBlocks": 3,
+          "sharedReadBlocks": 3
+        },
+        "activePerKeyCount": {
+          "nodeTypes": [
+            "Aggregate",
+            "Index Scan"
+          ],
+          "indexes": [
+            "task_runtime_active_queue_key_expiry_idx"
+          ],
+          "planningTimeMs": 0.165,
+          "executionTimeMs": 0.015,
+          "sharedHitBlocks": 3,
+          "sharedReadBlocks": 0
+        },
+        "readyWindow": {
+          "nodeTypes": [
+            "Limit",
+            "Nested Loop",
+            "Index Scan",
+            "Index Scan"
+          ],
+          "indexes": [
+            "task_runtime_ready_idx",
+            "task_pkey"
+          ],
+          "planningTimeMs": 0.259,
+          "executionTimeMs": 0.73,
+          "sharedHitBlocks": 321,
+          "sharedReadBlocks": 183
+        },
+        "activePerBudgetCount": {
+          "nodeTypes": [
+            "Aggregate",
+            "Index Scan"
+          ],
+          "indexes": [
+            "task_runtime_active_budget_expiry_idx"
+          ],
+          "planningTimeMs": 0.083,
+          "executionTimeMs": 0.017,
+          "sharedHitBlocks": 3,
+          "sharedReadBlocks": 0
+        }
+      },
+      "relations": {
+        "budget": {
+          "rows": 100000,
+          "bytes": 7651328
+        },
+        "budget_pkey": {
+          "rows": null,
+          "bytes": 5382144
+        },
+        "rate_limit_bucket": {
+          "rows": 97301,
+          "bytes": 7651328
+        },
+        "rate_limit_bucket_pkey": {
+          "rows": null,
+          "bytes": 8667136
+        },
+        "task": {
+          "rows": 200080,
+          "bytes": 52707328
+        },
+        "task_runtime": {
+          "rows": 200080,
+          "bytes": 47554560
+        },
+        "task_runtime_active_budget_expiry_idx": {
+          "rows": null,
+          "bytes": 16384
+        },
+        "task_runtime_active_queue_key_expiry_idx": {
+          "rows": null,
+          "bytes": 16384
+        },
+        "task_runtime_ready_budget_idx": {
+          "rows": null,
+          "bytes": 8888320
+        },
+        "task_runtime_ready_idx": {
+          "rows": null,
+          "bytes": 15261696
+        },
+        "task_tags_gin_idx": {
+          "rows": null,
+          "bytes": 11747328
+        }
+      }
+    }
+  ]
+}

@@ -42,16 +42,17 @@ How a task behaves once it's executing.
 
 ## Getting work in
 
-|                                                           |                                                      |
-| --------------------------------------------------------- | ---------------------------------------------------- |
-| [200 Transactional enqueue](200-transactional-enqueue.md) | Committing a task and your data together, ORM or not |
-| [210 Enqueue idempotency](210-enqueue-idempotency.md)     | Stopping the double-click from creating two tasks    |
-| [215 Keyed debounce](215-debounce.md)                     | Replacing pending work while updates keep arriving   |
-| [217 Keyed throttle](217-throttle.md)                     | Reusing one accepted task during a busy window       |
-| [220 Schedules](220-schedules.md)                         | Recurring tasks on cron, without a scheduler process |
-| [230 Payload contracts](230-payload-contracts.md)         | Rejecting malformed data and hiding sensitive fields |
-| [240 Concurrency policies](240-concurrency-policies.md)   | Limiting active work across the whole worker fleet   |
-| [250 Rate limits](250-rate-limits.md)                     | Controlling starts, bursts, and per-key traffic      |
+|                                                           |                                                       |
+| --------------------------------------------------------- | ----------------------------------------------------- |
+| [200 Transactional enqueue](200-transactional-enqueue.md) | Committing a task and your data together, ORM or not  |
+| [210 Enqueue idempotency](210-enqueue-idempotency.md)     | Stopping the double-click from creating two tasks     |
+| [215 Keyed debounce](215-debounce.md)                     | Replacing pending work while updates keep arriving    |
+| [217 Keyed throttle](217-throttle.md)                     | Reusing one accepted task during a busy window        |
+| [220 Schedules](220-schedules.md)                         | Recurring tasks on cron, without a scheduler process  |
+| [230 Payload contracts](230-payload-contracts.md)         | Rejecting malformed data and hiding sensitive fields  |
+| [240 Concurrency policies](240-concurrency-policies.md)   | Limiting active work across the whole worker fleet    |
+| [250 Rate limits](250-rate-limits.md)                     | Controlling starts, bursts, and per-key traffic       |
+| [260 Multi-tenancy](260-multi-tenancy.md)                 | Keeping tenants fair, bounded, and where needed apart |
 
 ## Operating the system
 
