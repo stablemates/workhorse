@@ -212,16 +212,16 @@ export const TasksPage = memo(function TasksPage({
   const totalPages = Math.max(1, Math.ceil((data.total ?? 0) / data.pageSize));
   const pinned = taskListingPinned(locationState);
   /**
-   * What a page other than the first costs the operator, said beside the pager that caused it.
+   * What a page other than the first costs the operator, for the screens the header cannot say it on.
    *
-   * The header states that auto refresh is paused, but not why, and it is nowhere near the control
-   * that pinned the list. This page holds still while tasks keep changing, which is the fact the
-   * operator is owed, and the control that undoes it sits immediately after this note.
+   * The header carries this notice beside the refresh control it explains. That row has no room on
+   * a narrow screen, so the same fact appears at the pager instead, and never in both places.
    */
   const pinnedNotice = pinned ? (
     <Text
       size="xs"
       c="dimmed"
+      hiddenFrom="sm"
       title="This page is anchored, so it neither follows new tasks nor auto refreshes. Return to the first page to follow the list again."
     >
       Not following new tasks
@@ -233,7 +233,7 @@ export const TasksPage = memo(function TasksPage({
         {pinnedNotice}
         <Button
           size="xs"
-          variant={pinned ? "light" : "subtle"}
+          variant={pinned ? "default" : "subtle"}
           disabled={!pinned}
           title="Return to the first page, so the list follows new work again"
           onClick={() => navigate(taskListingHeadHref(locationState))}

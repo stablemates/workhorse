@@ -463,6 +463,16 @@ html[data-mantine-color-scheme="dark"] .workhorse-brand__wordmark {
     order: 3;
     margin-left: auto;
   }
+
+  /* The pinned-listing notice rides the same row as the control it explains, next to it. */
+  .dashboard-header__pinned {
+    order: 3;
+    margin-left: auto;
+  }
+
+  .dashboard-header__pinned + .dashboard-refresh-control {
+    margin-left: 0;
+  }
 }
 
 .task-table-viewport {
