@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { MantineProvider } from "@mantine/core";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -74,8 +76,8 @@ describe("task listing identity", () => {
     expect(html).toContain('aria-label="View task billing.invoice, task-123"');
   });
 
-  it("places ordering after task type and omits the priority filter", async () => {
-    const { TaskListingFilters } = await import("./dashboard.js");
+  it("keeps ordering out of the filters and beside the page size", async () => {
+    const { TaskListingFilters, TaskSortSelect } = await import("./dashboard.js");
     const html = render(TaskListingFilters, {
       data: {
         tags: [],
@@ -96,8 +98,16 @@ describe("task listing identity", () => {
     });
 
     expect(html).not.toContain('aria-label="Filter tasks by exact priority"');
-    expect(html.indexOf('aria-label="Filter tasks by task type"')).toBeLessThan(
-      html.indexOf('aria-label="Sort tasks"'),
+    // Ordering selects nothing out of the list, so it left the filter row for the toolbar, where
+    // it stands next to the page size: both describe how one selection is presented.
+    expect(html).not.toContain('aria-label="Sort tasks"');
+    expect(render(TaskSortSelect, { sort: "updated", updateLocation: () => undefined })).toContain(
+      'aria-label="Sort tasks"',
+    );
+
+    const page = readFileSync(new URL("./pages/tasks.tsx", import.meta.url), "utf8");
+    expect(page.indexOf("<TaskSortSelect")).toBeLessThan(
+      page.indexOf('aria-label="Tasks per page"'),
     );
   });
 

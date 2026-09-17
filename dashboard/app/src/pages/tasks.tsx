@@ -68,6 +68,7 @@ import {
   TaskName,
   TaskEnqueueBadge,
   TaskRowActions,
+  TaskSortSelect,
   TaskTags,
   TaskStatusIndicators,
   taskDuration,
@@ -497,6 +498,7 @@ export const TasksPage = memo(function TasksPage({
                   </Menu.Dropdown>
                 </Menu>
               ) : null}
+              <TaskSortSelect sort={data.sort} updateLocation={updateLocation} />
               <Select
                 size="xs"
                 w={76}

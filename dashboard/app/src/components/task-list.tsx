@@ -4,6 +4,7 @@ import type {
   DashboardCancellationRequest,
   DashboardTaskRow,
   DashboardTaskFacets,
+  DashboardTaskSort,
   DashboardTasksPage,
   DashboardTasksCursorPage,
 } from "@stablemates/workhorse-dashboard-server/wire";
@@ -460,19 +461,36 @@ export function TaskListingFilters({
           style={{ flex: "1 1 150px" }}
         />
       ))}
-      <Select
-        size="xs"
-        value={data.sort}
-        onChange={(sort) => updateLocation({ sort: sort === "priority" ? "priority" : "updated" })}
-        data={[
-          { value: "updated", label: "Recently updated" },
-          { value: "priority", label: "Highest priority" },
-        ]}
-        allowDeselect={false}
-        aria-label="Sort tasks"
-        style={{ flex: "1 1 150px" }}
-      />
     </Group>
+  );
+}
+
+/**
+ * Ordering, which selects nothing out of the list and so does not belong with the filters.
+ *
+ * It sits with the page size instead, because both describe how the same selection is presented,
+ * and because a filter row that wraps must not push the control an operator reaches for next.
+ */
+export function TaskSortSelect({
+  sort,
+  updateLocation,
+}: {
+  sort: DashboardTaskSort;
+  updateLocation: (updates: Partial<TaskLocationState>) => void;
+}) {
+  return (
+    <Select
+      size="xs"
+      w={160}
+      value={sort}
+      onChange={(next) => updateLocation({ sort: next === "priority" ? "priority" : "updated" })}
+      data={[
+        { value: "updated", label: "Recently updated" },
+        { value: "priority", label: "Highest priority" },
+      ]}
+      allowDeselect={false}
+      aria-label="Sort tasks"
+    />
   );
 }
 export function taskRowActionIcon(id: TaskRowActionId): ReactNode {
