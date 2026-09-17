@@ -462,6 +462,7 @@ describe("schema installation", () => {
       { version: 6, description: "bounded dashboard reads" },
       { version: 7, description: "health snapshot without JIT" },
       { version: 8, description: "index-pruned task lists" },
+      { version: 9, description: "composed task-list scope" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

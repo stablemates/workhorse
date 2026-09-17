@@ -92,6 +92,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "index-pruned task lists",
     kind: "additive",
   },
+  {
+    fromVersion: 8,
+    toVersion: 9,
+    file: "0009-composed-task-list-scope.sql",
+    description: "composed task-list scope",
+    kind: "additive",
+  },
 ];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {

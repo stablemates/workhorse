@@ -12509,60 +12509,70 @@ AS $$
   SELECT 65536;
 $$;
 
+-- Which tasks a request can reach, named before the runtime and outcome joins read a row. A tag
+-- filter seeks `task_tags_gin_idx`, and a queue or task-type filter seeks the routing projection's
+-- index. A request that names none of the three reaches every task, and composing the scope here
+-- rather than branching on it in SQL means such a request carries no scope at all: the projection
+-- is read once, as it was before SM-757, instead of joining every task id back to itself. Only
+-- fixed SQL fragments enter the query; values stay in the bound JSON parameter, so the planner
+-- still sees each filter as a value it can seek. The scope chooses which index drives and nothing
+-- more, so `filtered` below applies every predicate and a request naming both a tag and a queue
+-- seeks the tag index and filters on the queue rather than losing either one (SM-783).
 CREATE OR REPLACE FUNCTION workhorse.dashboard_tasks_v1(p_input jsonb)
 RETURNS jsonb
-LANGUAGE sql
+LANGUAGE plpgsql
 AS $$
-  WITH parameters AS (
-    SELECT COALESCE(NULLIF(p_input->>'filter', ''), 'all') AS filter,
-           NULLIF(p_input->>'queue', '') AS queue_filter,
-           NULLIF(p_input->>'worker', '') AS worker_filter,
-           NULLIF(p_input->>'taskType', '') AS type_filter,
-           NULLIF(p_input->>'priority', '')::integer AS priority_filter,
-           workhorse.dashboard_tag_filter_v1(p_input->'tags') AS tag_filter,
-           NULLIF(p_input->>'search', '') AS search,
-           CASE WHEN NULLIF(p_input->>'search', '') IS NULL THEN NULL ELSE
-             '%' || replace(replace(replace(replace(
-               p_input->>'search', '!', '!!'), '%', '!%'), '_', '!_'), '*', '%') || '%'
-           END AS search_filter,
-           COALESCE(NULLIF(p_input->>'page', '')::integer, 1) AS page,
-           COALESCE(NULLIF(p_input->>'pageSize', '')::integer, 50) AS page_size,
-           COALESCE(NULLIF(p_input->>'sort', ''), 'updated') AS sort,
-           COALESCE(NULLIF(p_input->>'count', ''), 'none') AS count_mode,
-           COALESCE((p_input->>'canCompleteHumanWait')::boolean, false)
-             AS can_complete_human_wait
-  -- Which tasks the request can reach, named by the task table's own indexes before the runtime
-  -- and outcome joins read a row. Exactly one branch survives planning, because each branch tests
-  -- only the request: the planner folds the other two away and plans the survivor against the
-  -- value it will seek. The branches choose which index drives, and `filtered` below still applies
-  -- every predicate, so a request that names both a tag and a queue seeks the tag index and
-  -- filters on the queue rather than losing either one.
-  ), task_scope AS (
+DECLARE
+  v_scope text := '';
+  v_scope_from text := 'FROM workhorse.dashboard_task_v1 j';
+  v_query text;
+  v_result jsonb;
+BEGIN
+  IF cardinality(workhorse.dashboard_tag_filter_v1(p_input->'tags')) > 0 THEN
+    v_scope := $scope$task_scope AS (
     SELECT j.id FROM workhorse.dashboard_task_v1 j
-     WHERE cardinality(workhorse.dashboard_tag_filter_v1(p_input->'tags')) > 0
-       AND j.tags && workhorse.dashboard_tag_filter_v1(p_input->'tags')
-    UNION ALL
+     WHERE j.tags && workhorse.dashboard_tag_filter_v1($1->'tags')
+  ), $scope$;
+  ELSIF NULLIF(p_input->>'queue', '') IS NOT NULL
+     OR NULLIF(p_input->>'taskType', '') IS NOT NULL THEN
+    v_scope := $scope$task_scope AS (
     SELECT query_row.task_id AS id FROM workhorse.dashboard_task_query_v1 query_row
-     WHERE cardinality(workhorse.dashboard_tag_filter_v1(p_input->'tags')) = 0
-       AND (NULLIF(p_input->>'queue', '') IS NOT NULL
-            OR NULLIF(p_input->>'taskType', '') IS NOT NULL)
-       AND (NULLIF(p_input->>'queue', '') IS NULL
-            OR query_row.queue_name = NULLIF(p_input->>'queue', ''))
-       AND (NULLIF(p_input->>'taskType', '') IS NULL
-            OR query_row.task_type = NULLIF(p_input->>'taskType', ''))
-    UNION ALL
-    SELECT j.id FROM workhorse.dashboard_task_v1 j
-     WHERE cardinality(workhorse.dashboard_tag_filter_v1(p_input->'tags')) = 0
-       AND NULLIF(p_input->>'queue', '') IS NULL
-       AND NULLIF(p_input->>'taskType', '') IS NULL
-  ), task_rows AS (
+     WHERE (NULLIF($1->>'queue', '') IS NULL
+            OR query_row.queue_name = NULLIF($1->>'queue', ''))
+       AND (NULLIF($1->>'taskType', '') IS NULL
+            OR query_row.task_type = NULLIF($1->>'taskType', ''))
+  ), $scope$;
+  END IF;
+  IF v_scope <> '' THEN
+    v_scope_from := 'FROM task_scope
+      JOIN workhorse.dashboard_task_v1 j ON j.id = task_scope.id';
+  END IF;
+  v_query := replace(replace($query$
+  WITH parameters AS (
+    SELECT COALESCE(NULLIF($1->>'filter', ''), 'all') AS filter,
+           NULLIF($1->>'queue', '') AS queue_filter,
+           NULLIF($1->>'worker', '') AS worker_filter,
+           NULLIF($1->>'taskType', '') AS type_filter,
+           NULLIF($1->>'priority', '')::integer AS priority_filter,
+           workhorse.dashboard_tag_filter_v1($1->'tags') AS tag_filter,
+           NULLIF($1->>'search', '') AS search,
+           CASE WHEN NULLIF($1->>'search', '') IS NULL THEN NULL ELSE
+             '%' || replace(replace(replace(replace(
+               $1->>'search', '!', '!!'), '%', '!%'), '_', '!_'), '*', '%') || '%'
+           END AS search_filter,
+           COALESCE(NULLIF($1->>'page', '')::integer, 1) AS page,
+           COALESCE(NULLIF($1->>'pageSize', '')::integer, 50) AS page_size,
+           COALESCE(NULLIF($1->>'sort', ''), 'updated') AS sort,
+           COALESCE(NULLIF($1->>'count', ''), 'none') AS count_mode,
+           COALESCE(($1->>'canCompleteHumanWait')::boolean, false)
+             AS can_complete_human_wait
+  ), __task_scope__task_rows AS (
     SELECT j.id, j.queue_name AS queue, j.task_type AS type, j.priority,
            COALESCE(r.state, o.state) AS state,
            COALESCE(r.current_attempt, o.current_attempt) AS attempt,
            j.tags, r.worker_id AS current_worker_id, r.wait_name,
            COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at
-      FROM task_scope
-      JOIN workhorse.dashboard_task_v1 j ON j.id = task_scope.id
+      __scope_from__
       LEFT JOIN workhorse.dashboard_task_runtime_v1 r ON r.task_id = j.id
       LEFT JOIN workhorse.dashboard_task_outcome_v1 o ON o.task_id = j.id
   -- No materialization hint: one reference lets the limit reach the filter, and a request that
@@ -12720,6 +12730,10 @@ AS $$
         FROM page CROSS JOIN parameters
     ), '[]'::jsonb)
   ) FROM parameters;
+$query$, '__task_scope__', v_scope), '__scope_from__', v_scope_from);
+  EXECUTE v_query INTO v_result USING p_input;
+  RETURN v_result;
+END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.dashboard_activity_v1(p_input jsonb)
@@ -15324,10 +15338,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (5, 'history partition horizon'),
   (6, 'bounded dashboard reads'),
   (7, 'health snapshot without JIT'),
-  (8, 'index-pruned task lists')
+  (8, 'index-pruned task lists'),
+  (9, 'composed task-list scope')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (8) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (9) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
