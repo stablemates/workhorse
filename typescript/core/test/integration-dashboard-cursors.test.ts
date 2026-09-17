@@ -59,11 +59,31 @@ describe("dashboard cursor pages", () => {
     expect(empty).toMatchObject({ total: 0, tasks: [], nextCursor: null, previousCursor: null });
   });
 
-  it("preserves legacy task responses", async () => {
-    const result = await database.pool.query<{ result: { total: number; page: number } }>(
-      `SELECT workhorse.dashboard_tasks_v1('{"queue":"cursor","page":2,"pageSize":25}') AS result`,
-    );
-    expect(result.rows[0]!.result).toMatchObject({ total: 80, page: 2 });
+  it("preserves legacy task responses and counts them only when asked", async () => {
+    async function offsetPage(input: object) {
+      const result = await database.pool.query<{
+        result: { total: number; page: number; hasMore: boolean; count: string };
+      }>("SELECT workhorse.dashboard_tasks_v1($1::jsonb) AS result", [
+        JSON.stringify({ queue: "cursor", pageSize: 25, ...input }),
+      ]);
+      return result.rows[0]!.result;
+    }
+
+    // Without a count mode the page reports what it proved on the way to this offset: the rows it
+    // read plus the one that shows another page exists.
+    expect(await offsetPage({ page: 2 })).toMatchObject({
+      total: 51,
+      page: 2,
+      hasMore: true,
+      count: "none",
+    });
+    // Past the end that bound is the exact total, because the read never reached its limit.
+    expect(await offsetPage({ page: 4 })).toMatchObject({ total: 80, hasMore: false });
+    expect(await offsetPage({ page: 2, count: "exact" })).toMatchObject({
+      total: 80,
+      page: 2,
+      count: "exact",
+    });
   });
 
   it("seeks retained history without counting or scanning earlier pages", async () => {

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -17,6 +19,10 @@ from ..admin import (
     RedriveResult,
 )
 from ._errors import DashboardRPCError
+
+# How long one health document serves nearby reads, in seconds. It matches the TypeScript host's
+# createDashboardQueueHealthReader, so the three backends agree on staleness.
+QUEUE_HEALTH_TTL = 3.0
 
 
 def _statement(sql: str) -> DriverStatement:
@@ -51,6 +57,8 @@ class DashboardBackend:
         self._configured_workers = tuple(configured_workers)
         self._maintenance_loops = dict(maintenance_loops)
         self._read_only = read_only
+        self._health_lock = threading.Lock()
+        self._health: tuple[float, object] | None = None
 
     def procedures(self) -> dict[str, Callable[[object, str], object]]:
         return {
@@ -67,6 +75,7 @@ class DashboardBackend:
             "events": self.events,
             "eventDetail": self.event_detail,
             "taskDetail": self.task_detail,
+            "checkpointValue": self.checkpoint_value,
             "settings": self.settings,
             "system": self.system,
             "previewRetentionPolicy": self.preview_retention_policy,
@@ -92,6 +101,24 @@ class DashboardBackend:
         value = self._rows(sql, parameters)[0]["result"]
         return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
+    def _queue_health(self) -> object:
+        """Read the raw ``queue_health_v1()`` document and share it for ``QUEUE_HEALTH_TTL``.
+
+        Composing the document is a pass over live queue state, and one dashboard page reads it
+        from several procedures. Each procedure accepts the document as its ``health`` input, so
+        the page pays for one. The lock serialises concurrent misses, so a burst shares one read.
+        A failed read is never cached. The document stays as PostgreSQL returned it, because its
+        only use is to go straight back as procedure input.
+        """
+        with self._health_lock:
+            now = time.monotonic()
+            if self._health is not None and self._health[0] > now:
+                return self._health[1]
+            value = self._rows("SELECT workhorse.queue_health_v1() AS result")[0]["result"]
+            document = json.loads(value) if isinstance(value, str | bytes) else value
+            self._health = (time.monotonic() + QUEUE_HEALTH_TTL, document)
+            return document
+
     def meta(self, _input: object, _actor: str) -> object:
         return {"environment": self._environment}
 
@@ -111,6 +138,7 @@ class DashboardBackend:
             "tags": [],
             "search": None,
             "pageSize": 50,
+            "count": "none",
             **supplied,
             "canCompleteHumanWait": not self._read_only,
         }
@@ -158,7 +186,15 @@ class DashboardBackend:
     def human_waits(self, _input: object, _actor: str) -> object:
         value = self._rows(
             "SELECT workhorse.dashboard_human_waits_v1(%s::jsonb) AS result",
-            (json.dumps({"canComplete": not self._read_only, "canSignal": not self._read_only}),),
+            (
+                json.dumps(
+                    {
+                        "canComplete": not self._read_only,
+                        "canSignal": not self._read_only,
+                        "health": self._queue_health(),
+                    }
+                ),
+            ),
         )[0]["result"]
         return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
@@ -188,12 +224,27 @@ class DashboardBackend:
                         **supplied,
                         "canSignal": not self._read_only,
                         "canCompleteHumanWait": not self._read_only,
+                        "health": self._queue_health(),
                     }
                 ),
             ),
         )[0]["result"]
         if value is None:
             raise DashboardRPCError(404, "NOT_FOUND", "Task not found")
+        return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
+
+    def checkpoint_value(self, input: object, _actor: str) -> object:
+        """Read one saved checkpoint value.
+
+        Task detail withholds a value larger than it carries inline and reports its size, so an
+        operator opens that one value here.
+        """
+        value = self._rows(
+            "SELECT workhorse.dashboard_checkpoint_value_v1(%s::jsonb) AS result",
+            (json.dumps(input),),
+        )[0]["result"]
+        if value is None:
+            raise DashboardRPCError(404, "NOT_FOUND", "Checkpoint not found")
         return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
     def settings(self, _input: object, _actor: str) -> object:

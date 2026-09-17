@@ -1,6 +1,8 @@
 import { expectOneRow } from "@stablemates/workhorse";
-import type { Admin, QueueHealth } from "@stablemates/workhorse";
+import type { Admin } from "@stablemates/workhorse";
 import {
+  DashboardCheckpointValue,
+  DashboardListingCount,
   DashboardActivityGroupBy,
   DashboardActivityPage,
   DashboardActivityPeriod,
@@ -28,27 +30,39 @@ import {
 import { sql, type DashboardDatabase } from "./sql.js";
 import type { DashboardDurabilityProjector } from "./types.js";
 
-export type DashboardQueueHealthReader = () => Promise<QueueHealth>;
+/**
+ * The document `workhorse.queue_health_v1()` returns.
+ *
+ * It is not the converted `QueueHealth` an operator reads, because its one consumer hands it
+ * straight back to PostgreSQL as procedure input, and a converted copy would need converting back.
+ */
+type DashboardQueueHealthDocument = { readonly [key: string]: unknown };
+
+/** Read the health document every dashboard procedure that needs one is given. */
+export type DashboardQueueHealthReader = () => Promise<DashboardQueueHealthDocument>;
 
 /**
  * Share the expensive canonical health snapshot across nearby reads for one dashboard context.
  *
- * The snapshot comes from `Admin.health()` rather than a private conversion of the raw health
- * document. The dashboard is a guest in the caller's process and reads what any operator reads.
+ * Composing the snapshot is a pass over live queue state, and one dashboard page reads it from
+ * several procedures. Each procedure accepts the document as an input, so the page pays for one.
  */
 export function createDashboardQueueHealthReader(
-  admin: Admin,
+  database: DashboardDatabase,
   ttlMs = 3_000,
 ): DashboardQueueHealthReader {
-  let cached: { expiresAt: number; value: QueueHealth } | null = null;
-  let pending: Promise<QueueHealth> | null = null;
+  let cached: { expiresAt: number; value: DashboardQueueHealthDocument } | null = null;
+  let pending: Promise<DashboardQueueHealthDocument> | null = null;
   return async () => {
     const now = Date.now();
     if (cached && cached.expiresAt > now) return cached.value;
     if (pending) return pending;
-    pending = admin
-      .health()
-      .then((value) => {
+    pending = database
+      .execute<{ document: DashboardQueueHealthDocument }>(
+        sql`SELECT workhorse.queue_health_v1() AS document`,
+      )
+      .then((rows) => {
+        const value = expectOneRow(rows, "the queue health document").document;
         cached = { expiresAt: Date.now() + ttlMs, value };
         return value;
       })
@@ -64,9 +78,10 @@ export async function readDashboardHumanWaits(
   _admin: Admin,
   canComplete: boolean,
   canSignal: boolean,
-  _readQueueHealth?: DashboardQueueHealthReader,
+  readQueueHealth?: DashboardQueueHealthReader,
 ): Promise<DashboardHumanWaitPage> {
-  const input = JSON.stringify({ canComplete, canSignal });
+  const health = await readQueueHealth?.();
+  const input = JSON.stringify({ canComplete, canSignal, health });
   const result = await database.execute<{ result: DashboardHumanWaitPage }>(sql`
     SELECT workhorse.dashboard_human_waits_v1(${input}::jsonb) AS result
   `);
@@ -132,6 +147,7 @@ export interface DashboardTasksQuery {
   taskType: string | null;
   priority: number | null;
   sort: DashboardTaskSort;
+  count: DashboardListingCount;
 }
 
 const noDashboardDurability: DashboardDurabilityProjector = () => null;
@@ -155,7 +171,6 @@ export async function readDashboardTasksCursor(
   query: Omit<DashboardTasksQuery, "page"> & {
     cursor: DashboardTaskCursor | null;
     direction: "next" | "previous";
-    count: "none" | "exact";
   },
   projectDurability: DashboardDurabilityProjector = noDashboardDurability,
   canCompleteHumanWait = false,
@@ -171,6 +186,13 @@ export async function readDashboardTasksCursor(
   );
 }
 
+/**
+ * Attach each listed task's durability plan, reading only what the host's projector declared.
+ *
+ * A projector reads a few top-level payload keys to recognize a plan, so a projector that names
+ * them receives those keys instead of every task's whole redacted payload. One that names none
+ * still receives the payload, because a plan it cannot recognize is a listing without progress.
+ */
 async function projectTaskDurability<T extends { tasks: DashboardTasksPage["tasks"] }>(
   database: DashboardDatabase,
   page: T,
@@ -178,13 +200,22 @@ async function projectTaskDurability<T extends { tasks: DashboardTasksPage["task
 ): Promise<T> {
   if (projectDurability === noDashboardDurability || page.tasks.length === 0) return page;
 
+  const payloadKeys = projectDurability.payloadKeys;
+  const payload =
+    payloadKeys === undefined
+      ? sql`task.payload`
+      : sql`CASE WHEN jsonb_typeof(task.payload) <> 'object' THEN task.payload
+                 ELSE COALESCE((SELECT jsonb_object_agg(entry.key, entry.value)
+                                  FROM jsonb_each(task.payload) entry
+                                 WHERE entry.key = ANY(${[...payloadKeys]}::text[])),
+                               '{}'::jsonb) END`;
   const durabilityRows = await database.execute<{
     id: string;
     type: string;
     payload: unknown;
     checkpoint_names: string[];
   }>(sql`
-    SELECT task.id::text AS id, task.task_type AS type, task.payload,
+    SELECT task.id::text AS id, task.task_type AS type, ${payload} AS payload,
            ARRAY(SELECT checkpoint.checkpoint_name
                    FROM workhorse.dashboard_task_checkpoint_v1 checkpoint
                   WHERE checkpoint.task_id = task.id
@@ -265,11 +296,12 @@ export async function readDashboardTaskDetail(
   projectDurability: DashboardDurabilityProjector = () => null,
   _admin?: Admin,
   canSignal = false,
-  _readQueueHealth?: DashboardQueueHealthReader,
+  readQueueHealth?: DashboardQueueHealthReader,
   redactErrorStacks = false,
   canCompleteHumanWait = false,
 ): Promise<DashboardTaskDetail | null> {
-  const input = JSON.stringify({ id, canSignal, canCompleteHumanWait });
+  const health = await readQueueHealth?.();
+  const input = JSON.stringify({ id, canSignal, canCompleteHumanWait, health });
   const result = await database.execute<{ result: DashboardTaskDetail | null }>(sql`
     SELECT workhorse.dashboard_task_detail_v1(${input}::jsonb) AS result
   `);
@@ -280,6 +312,24 @@ export async function readDashboardTaskDetail(
     durability: projectDurability(detail.identity.type, detail.payload),
   };
   return redactErrorStacks ? redactDashboardTaskDetailErrorStacks(projected) : projected;
+}
+
+/**
+ * Read one saved checkpoint value.
+ *
+ * Task detail withholds a value larger than it carries inline and reports its size, so an operator
+ * who opens that one value asks for it here instead of receiving every value on every open.
+ */
+export async function readDashboardCheckpointValue(
+  database: DashboardDatabase,
+  id: string,
+  name: string,
+): Promise<DashboardCheckpointValue | null> {
+  const input = JSON.stringify({ id, name });
+  const rows = await database.execute<{ result: DashboardCheckpointValue | null }>(sql`
+    SELECT workhorse.dashboard_checkpoint_value_v1(${input}::jsonb) AS result
+  `);
+  return expectOneRow(rows, "the dashboard checkpoint value procedure").result;
 }
 
 function redactErrorStack(error: unknown): unknown {
@@ -341,6 +391,8 @@ export interface DashboardEventsQuery {
   /** 1-based page index. */
   page?: number;
   pageSize?: number;
+  /** Whether to count every matching record. Defaults to the page's own proven total. */
+  count?: DashboardListingCount;
   kind?: DashboardEventKind | "all";
   queue?: string | null;
   taskType?: string | null;

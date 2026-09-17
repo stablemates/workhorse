@@ -219,7 +219,14 @@ export interface DashboardSettingsController {
   ): Promise<void>;
 }
 
-export type DashboardDurabilityProjector = (
-  type: string,
-  payload: unknown,
-) => DashboardDurabilityPlan | null;
+export interface DashboardDurabilityProjector {
+  (type: string, payload: unknown): DashboardDurabilityPlan | null;
+  /**
+   * Top-level payload keys this projector reads, if it reads only a few.
+   *
+   * A task listing has to hand the projector each task's payload before it can report durable
+   * progress, and a payload may be as large as a megabyte. A projector that names its keys receives
+   * only those; one that names none receives the whole redacted payload, as it always has.
+   */
+  payloadKeys?: readonly string[];
+}

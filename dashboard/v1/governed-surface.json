@@ -176,6 +176,42 @@
         }
       }
     },
+    "checkpointValue": {
+      "mutation": false,
+      "request": {
+        "id": {
+          "type": "string",
+          "required": true
+        },
+        "name": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "response": {
+        "attempt": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "fenceToken": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "unknown"
+        },
+        "valueBytes": {
+          "type": "number"
+        },
+        "workerId": {
+          "type": "string"
+        }
+      }
+    },
     "completeHumanWait": {
       "mutation": true,
       "request": {
@@ -611,6 +647,14 @@
     "events": {
       "mutation": false,
       "request": {
+        "count": {
+          "type": "enum",
+          "enum": [
+            "exact",
+            "none"
+          ],
+          "required": false
+        },
         "kind": {
           "type": "enum",
           "enum": [
@@ -728,6 +772,13 @@
         "capturedAt": {
           "type": "string"
         },
+        "count": {
+          "type": "enum",
+          "enum": [
+            "exact",
+            "none"
+          ]
+        },
         "events": {
           "type": "array"
         },
@@ -779,6 +830,9 @@
         },
         "events[].workerId": {
           "type": "null|string"
+        },
+        "hasMore": {
+          "type": "boolean"
         },
         "page": {
           "type": "number"
@@ -3074,6 +3128,12 @@
         "checkpoints[].value": {
           "type": "unknown"
         },
+        "checkpoints[].valueBytes": {
+          "type": "number"
+        },
+        "checkpoints[].valueOmitted": {
+          "type": "boolean"
+        },
         "checkpoints[].workerId": {
           "type": "string"
         },
@@ -3166,9 +3226,6 @@
         },
         "current.outcome.state": {
           "type": "string"
-        },
-        "current.result": {
-          "type": "unknown"
         },
         "current.runtime": {
           "type": "null|object"
@@ -3542,6 +3599,21 @@
         "tags[]": {
           "type": "string"
         },
+        "truncated": {
+          "type": "object"
+        },
+        "truncated.attempts": {
+          "type": "boolean"
+        },
+        "truncated.checkpoints": {
+          "type": "boolean"
+        },
+        "truncated.events": {
+          "type": "boolean"
+        },
+        "truncated.waits": {
+          "type": "boolean"
+        },
         "waits": {
           "type": "array"
         },
@@ -3614,6 +3686,14 @@
     "tasks": {
       "mutation": false,
       "request": {
+        "count": {
+          "type": "enum",
+          "enum": [
+            "exact",
+            "none"
+          ],
+          "required": false
+        },
         "filter": {
           "type": "enum",
           "enum": [
@@ -3687,6 +3767,13 @@
         "capturedAt": {
           "type": "string"
         },
+        "count": {
+          "type": "enum",
+          "enum": [
+            "exact",
+            "none"
+          ]
+        },
         "filter": {
           "type": "enum",
           "enum": [
@@ -3701,6 +3788,9 @@
             "scheduled",
             "waiting"
           ]
+        },
+        "hasMore": {
+          "type": "boolean"
         },
         "page": {
           "type": "number"
@@ -3760,9 +3850,6 @@
         "tasks[].createdAt": {
           "type": "string"
         },
-        "tasks[].deadlineAt": {
-          "type": "null|string"
-        },
         "tasks[].durability": {
           "type": "null|object"
         },
@@ -3777,9 +3864,6 @@
         },
         "tasks[].errorMessage": {
           "type": "null|string"
-        },
-        "tasks[].executionTimeoutMs": {
-          "type": "null|number"
         },
         "tasks[].finishedAt": {
           "type": "null|string"
@@ -4008,6 +4092,13 @@
         "capturedAt": {
           "type": "string"
         },
+        "count": {
+          "type": "enum",
+          "enum": [
+            "exact",
+            "none"
+          ]
+        },
         "filter": {
           "type": "enum",
           "enum": [
@@ -4105,9 +4196,6 @@
         "tasks[].createdAt": {
           "type": "string"
         },
-        "tasks[].deadlineAt": {
-          "type": "null|string"
-        },
         "tasks[].durability": {
           "type": "null|object"
         },
@@ -4122,9 +4210,6 @@
         },
         "tasks[].errorMessage": {
           "type": "null|string"
-        },
-        "tasks[].executionTimeoutMs": {
-          "type": "null|number"
         },
         "tasks[].finishedAt": {
           "type": "null|string"

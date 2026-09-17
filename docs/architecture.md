@@ -740,7 +740,7 @@ database-owned contract procedure through
 versioned dashboard views and lifecycle functions. The host supplies `enqueueTest` and
 `setSchedulePaused`, whose behavior belongs to the embedding runtime.
 `python/tests/test_dashboard_conformance.py` executes all six
-scenarios and all 78 exchanges against both writable and read-only hosts.
+scenarios and all 81 exchanges against both writable and read-only hosts.
 
 `workhorse.dashboard_tasks_v1(p_input jsonb)`,
 `workhorse.dashboard_queues_v1(p_input jsonb)`,
@@ -750,7 +750,8 @@ scenarios and all 78 exchanges against both writable and read-only hosts.
 `workhorse.dashboard_events_v1(p_input jsonb)`,
 `workhorse.dashboard_task_detail_v1(p_input jsonb)`, and
 `workhorse.dashboard_human_waits_v1(p_input jsonb)` return their complete `dashboard/v1`
-response documents. `workhorse.dashboard_event_detail_v1(p_input jsonb)` returns one complete
+response documents. `workhorse.dashboard_checkpoint_value_v1(p_input jsonb)` returns one complete
+checkpoint document or SQL `NULL` when the task has no checkpoint of that name. `workhorse.dashboard_event_detail_v1(p_input jsonb)` returns one complete
 event-detail document or SQL `NULL` when the stable event identity does not exist. TypeScript,
 Python, and Go validate the wire input, call the matching function, and decode its single `jsonb`
 result. The TypeScript host may add its application-owned durability summary after
@@ -1275,11 +1276,14 @@ internal `DashboardTasksQuery.worker` is non-null. Without that filter, a termin
 null `lastWorkerId`. If the host configures `DashboardDurabilityProjector`, the TypeScript backend reads
 payload and checkpoint names only for that server-side projection. It still omits payload from
 `DashboardTaskRow`. Without a projector, task-page durability is null and those columns are absent
-from the database result. Task detail still projects the complete durability plan.
+from the database result. Task detail still projects the complete durability plan. A projector that
+declares `payloadKeys` receives only those top-level payload keys instead of the whole redacted
+payload; the demo's `durableDemoPlanForTask` declares `scenario` and `failureMode`.
 
 The dashboard `tasksInput.priority` filter is a nullable integer from 0 through 100. Its `sort` is
 `updated` or `priority` and defaults to `updated`. `readDashboardTasks` accepts these fields through
-`DashboardTasksQuery` and applies the priority filter before counting and pagination. The
+`DashboardTasksQuery` and applies the priority filter before counting and pagination. It also
+accepts `count`, which the `events` procedure accepts with the same meaning. The
 `priority` sort orders by priority descending, then `updated_at` descending, then task identity
 descending. `DashboardTasksPage` returns the effective `priority` and `sort`.
 `parseTaskLocation` reads them from the task URL. `taskLocationHref` writes them as `priority` and
@@ -2330,7 +2334,7 @@ named non-negative integer values. `revert_queue_health_policy_v1` restores name
 defaults. `get_queue_health_policy_v1` returns the policy row. `QueueHealth.budgets` reports the
 values used for the returned verdict; callers cannot supply per-call thresholds.
 
-`workhorse health --json` writes the same `QueueHealth` object and exits 2 when the level is not `healthy`. `createDashboardQueueHealthReader` calls `Admin.health()` on the workspace's `Admin`, so the dashboard reads the health snapshot through the same public operator method any application uses and holds no conversion of its own. It shares an in-flight read and its resolved `QueueHealth` for 3,000 milliseconds. The readers in one host workspace's `DashboardRpcContext` use that cache. A failed read is never cached. `dashboard_system_v1` and `dashboard_settings_v1` call `queue_health_v1` inside PostgreSQL instead. `DashboardSystemPage.status` carries `level` and the raw reasons. The SPA derives human wording through `healthCheckMessages` and adds no thresholds. `DashboardSystemPage.kpis` also projects `dependencies`, `children`, and `externalWaits` from the same snapshot for current-pressure drill-downs. `dashboard_system_v1` groups ready rows by `queue_name` and `priority`. Each `DashboardSystemQueueRow.priorityBacklog` returns `priority`, `ready`, and `oldestReadyMs`, ordered by priority descending. PostgreSQL orders queue rows by `queue_name`; the SPA applies display-risk order.
+`workhorse health --json` writes the same `QueueHealth` object and exits 2 when the level is not `healthy`. `createDashboardQueueHealthReader` reads the raw `queue_health_v1()` document with one SQL statement. It once called `Admin.health()`, but its consumers now hand the document back to PostgreSQL as procedure input, and a converted `QueueHealth` would need converting back. It shares an in-flight read and its document for 3,000 milliseconds. The readers in one host workspace's `DashboardRpcContext` use that cache. A failed read is never cached. The Go `backend.queueHealth` method and the Python `DashboardBackend._queue_health` method keep the same cache with the same bound. `dashboard_system_v1` and `dashboard_settings_v1` call `queue_health_v1` inside PostgreSQL instead. `DashboardSystemPage.status` carries `level` and the raw reasons. The SPA derives human wording through `healthCheckMessages` and adds no thresholds. `DashboardSystemPage.kpis` also projects `dependencies`, `children`, and `externalWaits` from the same snapshot for current-pressure drill-downs. `dashboard_system_v1` groups ready rows by `queue_name` and `priority`. Each `DashboardSystemQueueRow.priorityBacklog` returns `priority`, `ready`, and `oldestReadyMs`, ordered by priority descending. PostgreSQL orders queue rows by `queue_name`; the SPA applies display-risk order.
 
 Retention health includes the persisted policy, oldest retained timestamps, per-category cleanup lag, counts of fully eligible event and attempt partitions, and bounded row counts for both default partitions. Fallback counts are exact through 10,000 rows; `defaultHistoryRowsCapped` marks 10,001 as a lower bound. Live tasks are excluded from terminal identity lag. History lag is based only on fully droppable partitions or expired default rows, not the intentionally retained partial boundary day.
 
@@ -2347,6 +2351,7 @@ Core owns the dashboard's relational read contract. The version 1 views expose t
 - `dashboard_task_event_v1`: `event_id`, `task_id`, `attempt`, `event_type`, `details`, `occurred_at`.
 - `dashboard_task_outcome_v1`: `task_id`, `state`, `current_attempt`, `run_at`, `error`, `finished_at`, `updated_at`. `result` is absent; read it through `dashboard_task_result_v1`.
 - `dashboard_task_progress_v1`: `task_id`, `progress_value`, `revision`, `attempt`, `fence_token`, `worker_id`, `created_at`, `updated_at`.
+- `dashboard_task_query_v1`: `task_id`, `queue_name`, `task_type`, `created_at`. The routing projection is indexed on `queue_name` and on `task_type`. A facet list therefore seeks one row per distinct value.
 - `dashboard_task_runtime_v1`: `task_id`, `queue_name`, `state`, `current_attempt`, `fence_token`, `run_at`, `ready_at`, `worker_id`, `acquired_at`, `heartbeat_at`, `expires_at`, `attempt_timeout_at`, `wait_name`, `attempt_started_at`, `cancel_requested_at`, `cancel_requested_by`, `cancel_reason`, `error`, `updated_at`.
 - `dashboard_task_v1`: `id`, `queue_name`, `task_type`, `concurrency_key`, `payload`, `payload_redact_keys`, `result_redact_keys`, `tags`, `max_attempts`, `retry_policy`, `deadline_at`, `execution_timeout_ms`, `created_at`, `priority`. `payload` is `redact_top_level_keys_v1(payload, payload_redact_keys)`; the key arrays are projected so a reader can report how many keys were withheld.
 - `dashboard_task_wait_v1`: `task_id`, `wait_name`, `mode`, `duration_ms`, `requested_wake_at`, `wake_at`, `attempt`, `fence_token`, `worker_id`, `created_at`.
@@ -2371,10 +2376,16 @@ records both plans.
 `dashboard_task_estimate_v1()` returns the planner tuple estimate for the private `task` table. The
 dashboard uses it to choose exact counts or estimates without naming the private relation.
 `dashboard_tasks_v1(p_input jsonb)` applies the `filter`, `queue`, `worker`, `taskType`,
-`priority`, `tags`, `search`, `sort`, `page`, and `pageSize` inputs. It returns the
+`priority`, `tags`, `search`, `sort`, `page`, `pageSize`, and `count` inputs. It returns the
 complete version 1 task-page JSON document. The wire validator limits `pageSize` to 25, 50, or
 100, `page` to 100, selected tags to 20 values, and each search or string filter to 200 characters
 before the backend calls the function.
+
+`count` defaults to `none`. The function then reads `page * pageSize + 1` matching identities and
+reports how many it read as `total`. It sets `hasMore` when it read the extra row. `total` is exact
+whenever it is at most `page * pageSize`. Otherwise it is one more than the page bound, and the
+caller knows only that more exist. With `count: exact`, `total` counts every matching task. That
+count reads the whole selection rather than one page of it.
 
 `dashboard_tasks_cursor_v1(p_input jsonb)` backs the additive `tasksCursor` procedure.
 It accepts the same filters and page sizes as `tasks`, without a page number.
@@ -2400,9 +2411,17 @@ and the terminal half of `retried` each come from one `EXPLAIN (FORMAT JSON)` pr
 `dashboard_task_outcome_v1` reading `Plan Rows`.
 
 `dashboard_task_facets_v1(p_input jsonb)` accepts `configuredWorkers` and returns the complete
-version 1 facet JSON document: sorted distinct `queues` from `dashboard_task_v1` and
-`dashboard_queue_control_v1`; `workers` from the configured list, `dashboard_task_runtime_v1`,
-and `dashboard_attempt_history_v1`; `taskTypes` and `tags` from `dashboard_task_v1`.
+version 1 facet JSON document: sorted distinct `queues` from `dashboard_task_query_v1` and
+`dashboard_queue_control_v1`; `workers` from the configured list, `dashboard_worker_registry_v1`,
+and `dashboard_task_runtime_v1`; `taskTypes` from `dashboard_task_query_v1`; `tags` from
+`dashboard_task_v1`. The queue and type lists are recursive scans that seek the next distinct value
+through `task_query_queue_created_idx` and `task_query_type_created_idx`. Each costs one index seek
+per distinct value and stops at 1,000 values. The worker list also reads
+`dashboard_attempt_history_v1` through the same recursive scan over `attempt_history_worker_idx`.
+That index exists on every partition, so each distinct worker costs one seek per partition, and the
+list also stops at 1,000 values. A worker that ran tasks and then left the registry is therefore
+still offered as a filter while its history is retained. The tag list still reads every task,
+because no index supports a distinct scan over an array column.
 
 `dashboard_activity_v1(p_input jsonb)` maps `period` to its trailing window and bucket width,
 selects tasks whose runtime or outcome changed inside the window, and applies `filter`, `groupBy`,
@@ -2415,14 +2434,19 @@ each string filter to 200 characters before the backend calls the function.
 exclusive `rangeEnd`. Callers must supply both ISO-8601 range instants, and `rangeEnd` must be later
 than `rangeStart`. The function applies the time bound, `kind`, `queue`, `taskType`, `types`, and
 `taskId` before merging `dashboard_task_event_v1` with `dashboard_attempt_history_v1`. Each source
-reads at most `page * pageSize` rows before the merge, while separate bounded counts produce
-`total`. The wire validator limits `page` to 100 and each string filter to 200 characters before
-the backend calls the function. The function disables JIT because compiling its generic partitioned
-plan costs more than executing the bounded reads. It returns the complete version 1 events JSON
+reads at most `page * pageSize + 1` rows before the merge. The wire validator limits `page` to 100
+and each string filter to 200 characters before the backend calls the function.
+
+`count` defaults to `none`. The merged feed then keeps `page * pageSize + 1` rows and reports how
+many it kept as `total`. It sets `hasMore` when it kept the extra row, exactly as the task listing
+does. With `count: exact`, `total` counts every record matching the window and the filters. That
+count applies the filter to both source tables a second time. A one-time filter on the count mode
+keeps that second pass out of the plan for every other request. The function disables JIT because
+compiling its generic partitioned plan costs more than executing the bounded reads. It returns the complete version 1 events JSON
 document, including the effective range and retention days from `dashboard_retention_policy_v1`.
 
 The event listing also accepts `worker` and `search`.
-Both filters apply before source limits and in the total count.
+Both filters apply before source limits and in the exact count.
 `worker` matches the recorded attempt worker, including lifecycle records linked to that attempt.
 An event's explicit `details.worker_id` takes precedence over the linked attempt worker.
 `search` performs a case-insensitive literal substring match across task ID, queue, type, event name, worker, and recorded details or error message.
@@ -2470,17 +2494,36 @@ timestamps in UTC with millisecond precision and a `Z` suffix.
 
 `dashboard_human_waits_v1(p_input jsonb)` accepts `canComplete` and `canSignal`. It returns the
 first 50 human waits in `(created_at, task_id, token_name)` order. It returns the first 50 signal
-waits in `(created_at, task_id, signal_name)` order. It calls `queue_health_v1()` once and projects
-the `externalWaits` diagnostics into the wire document.
+waits in `(created_at, task_id, signal_name)` order. It projects the `externalWaits` diagnostics
+from the `health` document into the wire document. A caller that already read one for this request
+supplies it as `health`; without it the function calls `queue_health_v1()` itself. Every backend
+supplies it. TypeScript reads it through `createDashboardQueueHealthReader`, Go through
+`backend.queueHealth`, and Python through `DashboardBackend._queue_health`, each caching one document
+for three seconds. `dashboard_task_detail_v1` takes the same input from the same cache.
 
-`dashboard_task_detail_v1(p_input jsonb)` accepts `id` and `canSignal`. One SQL statement builds
-each response section from its own named CTE. The sections cover identity, lineage, policy,
-waits, progress, current state, batch executions, attempts, checkpoints, and events. Dependency
-and redrive lineage read 101 rows and return 100; child lineage reads 102 rows and returns 101.
-The extra row sets each section's `truncated` flag without a separate count. `queue_health_v1()`
-supplies current concurrency utilization only for a live task. The function returns SQL `NULL`
-when `id` does not exist. TypeScript replaces the returned `durability: null` with
+`dashboard_task_detail_v1(p_input jsonb)` accepts `id`, `canSignal`, and `health`. One SQL
+statement builds each response section from its own named CTE. The sections cover identity,
+lineage, policy, waits, progress, current state, batch executions, attempts, checkpoints, and
+events. Dependency and redrive lineage read 101 rows and return 100; child lineage reads 102 rows
+and returns 101. The extra row sets each section's `truncated` flag without a separate count.
+The concurrency utilization of a live task comes from the supplied `health` document, or from
+`queue_health_v1()` when the caller supplied none. The function returns SQL `NULL` when `id` does
+not exist. TypeScript replaces the returned `durability: null` with
 `DashboardDurabilityProjector`; Python and Go leave it null.
+
+`current` carries the terminal result once, under `current.outcome.result`. A result exists only
+once a task finishes, so the second copy beside it doubled what a large result cost to open and
+named no new fact. `current.error` stays, because a live runtime carries one and a reader needs the
+latest without choosing between two branches.
+
+Attempts, checkpoints, and waits each keep their newest `dashboard_task_detail_limit_v1()` rows and
+events keep their newest `dashboard_task_event_limit_v1()` rows, read newest first and returned
+oldest first. Each section reads one row beyond its bound, and the `truncated` object reports which
+of the four were cut. A checkpoint reports `valueBytes` always and carries `value` only when the
+stored value is at most `dashboard_inline_value_bytes_v1()` bytes, setting `valueOmitted` otherwise.
+`dashboard_checkpoint_value_v1(p_input jsonb)` accepts `id` and `name` and returns that one
+checkpoint with its value, whatever its size. The three bounds are 200 rows, 1,000 rows, and 65,536
+bytes.
 
 `dashboard_task_detail_v1(p_input jsonb)` also returns `tags`, `humanWait`, and `canCompleteHumanWait`.
 The host supplies `canCompleteHumanWait` from its operator mode and completion capability.

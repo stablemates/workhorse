@@ -301,7 +301,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
       settingsController: workspace.settingsController ?? options.settingsController,
       projectDurability: workspace.projectDurability ?? options.projectDurability,
       redactErrorStacks: workspace.redactErrorStacks ?? options.redactErrorStacks ?? false,
-      readQueueHealth: createDashboardQueueHealthReader(admin),
+      readQueueHealth: createDashboardQueueHealthReader(database),
     };
   };
 

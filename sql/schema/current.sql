@@ -1322,6 +1322,11 @@ CREATE INDEX IF NOT EXISTS attempt_history_task_time_idx
   ON workhorse.attempt_history (task_id, occurred_at, attempt_id);
 CREATE INDEX IF NOT EXISTS attempt_history_identity_idx
   ON workhorse.attempt_history (attempt_id);
+-- The task listing's worker filter offers every worker a retained attempt names, including one that
+-- has since left the registry. This index makes that list one seek per distinct worker per
+-- partition rather than a pass over all retained history. One closed attempt writes one entry.
+CREATE INDEX IF NOT EXISTS attempt_history_worker_idx
+  ON workhorse.attempt_history (worker_id);
 
 -- One database-owned schedule coordinates low-frequency maintenance across every worker process.
 -- The IANA timezone and local time control the daily history-retention boundary; interval routines remain
@@ -12375,6 +12380,11 @@ $$;
 CREATE OR REPLACE VIEW workhorse.dashboard_task_progress_v1 AS
   SELECT task_id, progress_value, revision, attempt, fence_token, worker_id, created_at, updated_at
     FROM workhorse.task_progress;
+-- The bounded routing projection, indexed on `queue_name` and on `task_type`. A facet list reads
+-- the distinct values here rather than from workhorse.task, whose rows carry payloads and whose
+-- only ordering is by identity, so the read costs one index seek per distinct value.
+CREATE OR REPLACE VIEW workhorse.dashboard_task_query_v1 AS
+  SELECT task_id, queue_name, task_type, created_at FROM workhorse.task_query;
 CREATE OR REPLACE VIEW workhorse.dashboard_task_runtime_v1 AS
   SELECT task_id, queue_name, state, current_attempt, fence_token, run_at, ready_at, worker_id,
          acquired_at, heartbeat_at, expires_at, attempt_timeout_at, wait_name, attempt_started_at,
@@ -12443,6 +12453,42 @@ AS $$
   SELECT to_char(p_value AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
 $$;
 
+-- How many attempts, checkpoints, and waits one task detail carries. A handler declares its
+-- checkpoints and waits by name and Workhorse stops retrying at the task's attempt budget, so this
+-- bound is far above what a task produces and exists to cap the pathological one.
+CREATE OR REPLACE FUNCTION workhorse.dashboard_task_detail_limit_v1()
+RETURNS integer
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+  SELECT 200;
+$$;
+
+-- How many lifecycle events one task detail carries. Every attempt, checkpoint, wait, and signal
+-- writes one, so the bound is larger than the others and still far above one task's record.
+CREATE OR REPLACE FUNCTION workhorse.dashboard_task_event_limit_v1()
+RETURNS integer
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+  SELECT 1000;
+$$;
+
+-- The largest stored value one read carries inline. A checkpoint may hold a megabyte, which no
+-- drawer renders and every task detail would then transfer. Above this size the read reports the
+-- size and the caller asks for the one value it wants. It matches the limit on a progress value,
+-- which is the largest value Workhorse already inlines everywhere.
+CREATE OR REPLACE FUNCTION workhorse.dashboard_inline_value_bytes_v1()
+RETURNS integer
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+  SELECT 65536;
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.dashboard_tasks_v1(p_input jsonb)
 RETURNS jsonb
 LANGUAGE sql
@@ -12463,6 +12509,7 @@ AS $$
            COALESCE(NULLIF(p_input->>'page', '')::integer, 1) AS page,
            COALESCE(NULLIF(p_input->>'pageSize', '')::integer, 50) AS page_size,
            COALESCE(NULLIF(p_input->>'sort', ''), 'updated') AS sort,
+           COALESCE(NULLIF(p_input->>'count', ''), 'none') AS count_mode,
            COALESCE((p_input->>'canCompleteHumanWait')::boolean, false)
              AS can_complete_human_wait
   ), task_rows AS (
@@ -12474,7 +12521,9 @@ AS $$
       FROM workhorse.dashboard_task_v1 j
       LEFT JOIN workhorse.dashboard_task_runtime_v1 r ON r.task_id = j.id
       LEFT JOIN workhorse.dashboard_task_outcome_v1 o ON o.task_id = j.id
-  ), filtered AS MATERIALIZED (
+  -- No materialization hint: one reference lets the limit reach the filter, and a request that
+  -- asks for an exact count adds the second reference PostgreSQL materializes for.
+  ), filtered AS (
     SELECT task_rows.* FROM task_rows CROSS JOIN parameters
      WHERE CASE parameters.filter
        WHEN 'blocked' THEN task_rows.state = 'blocked'
@@ -12514,9 +12563,17 @@ AS $$
             OR task_rows.type ILIKE parameters.search_filter ESCAPE '!'
             OR task_rows.queue ILIKE parameters.search_filter ESCAPE '!'
             OR task_rows.id::text ILIKE parameters.search_filter ESCAPE '!')
-  ), page_ids AS (
+  -- Offset paging already reads every row up to the page, so counting those rows plus one costs
+  -- nothing more and answers what a pager asks: the total when it is this small, and otherwise that
+  -- one more page exists. The exact count over every matching task stays behind "count": "exact".
+  ), candidate_ids AS MATERIALIZED (
     SELECT filtered.id, filtered.priority, filtered.updated_at, parameters.worker_filter
       FROM filtered CROSS JOIN parameters
+     ORDER BY CASE WHEN parameters.sort = 'priority' THEN priority END DESC,
+              updated_at DESC, id DESC
+     LIMIT (SELECT page * page_size + 1 FROM parameters)
+  ), page_ids AS MATERIALIZED (
+    SELECT candidate_ids.* FROM candidate_ids CROSS JOIN parameters
      ORDER BY CASE WHEN parameters.sort = 'priority' THEN priority END DESC,
               updated_at DESC, id DESC
      LIMIT (SELECT page_size FROM parameters)
@@ -12532,7 +12589,7 @@ AS $$
               WHERE dependency.dependent_task_id = j.id AND dependency.released_at IS NULL
            ), '[]'::jsonb) AS prerequisite_task_ids,
            COALESCE(r.current_attempt, o.current_attempt) AS attempt,
-           j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms, j.tags,
+           j.max_attempts, j.retry_policy, j.tags,
            COALESCE(r.run_at, o.run_at) AS run_at,
            r.worker_id AS current_worker_id,
            COALESCE(r.worker_id, durable_wait.worker_id, attempt_worker.worker_id) AS worker_id,
@@ -12578,14 +12635,15 @@ AS $$
     'search', parameters.search,
     'page', parameters.page,
     'pageSize', parameters.page_size,
-    'total', (SELECT count(*) FROM filtered),
+    'count', parameters.count_mode,
+    'hasMore', (SELECT count(*) FROM candidate_ids) > parameters.page * parameters.page_size,
+    'total', CASE WHEN parameters.count_mode = 'exact' THEN (SELECT count(*) FROM filtered)
+      ELSE (SELECT count(*) FROM candidate_ids) END,
     'tasks', COALESCE((
       SELECT jsonb_agg(jsonb_build_object(
         'id', id::text, 'queue', queue, 'type', type, 'priority', priority, 'state', state,
         'blockedReason', blocked_reason, 'prerequisiteTaskIds', prerequisite_task_ids,
-        'attempt', attempt, 'maxAttempts', max_attempts, 'retryPolicy', retry_policy,
-        'deadlineAt', workhorse.dashboard_iso_v1(deadline_at),
-        'executionTimeoutMs', execution_timeout_ms, 'tags', tags,
+        'attempt', attempt, 'maxAttempts', max_attempts, 'retryPolicy', retry_policy, 'tags', tags,
         'keyed', COALESCE(jsonb_typeof(enqueued_details->'idempotency') = 'object', false),
         'enqueueMode', CASE
           WHEN jsonb_typeof(enqueued_details->'debounce') = 'object' THEN 'debounce'
@@ -12789,6 +12847,7 @@ BEGIN
              round(extract(epoch FROM v_to - v_from)) AS window_seconds,
              COALESCE(NULLIF(p_input->>'page', '')::integer, 1) AS page,
              COALESCE(NULLIF(p_input->>'pageSize', '')::integer, 50) AS page_size,
+             COALESCE(NULLIF(p_input->>'count', ''), 'none') AS count_mode,
              COALESCE(NULLIF(p_input->>'kind', ''), 'all') AS kind,
              NULLIF(p_input->>'queue', '') AS queue_filter,
              NULLIF(p_input->>'taskType', '') AS type_filter,
@@ -12829,7 +12888,7 @@ BEGIN
              AND (parameters.type_filter IS NULL OR task.task_type = parameters.type_filter)
          ))
        ORDER BY event.occurred_at DESC, event.event_id DESC
-       LIMIT (SELECT page * page_size FROM parameters)
+       LIMIT (SELECT page * page_size + 1 FROM parameters)
     ), attempt_feed AS (
       SELECT 'attempt'::text AS kind, history.attempt_id AS record_id, history.task_id,
              history.occurred_at, history.attempt, history.outcome AS type,
@@ -12853,14 +12912,23 @@ BEGIN
              AND (parameters.type_filter IS NULL OR task.task_type = parameters.type_filter)
          ))
        ORDER BY history.occurred_at DESC, history.attempt_id DESC
-       LIMIT (SELECT page * page_size FROM parameters)
+       LIMIT (SELECT page * page_size + 1 FROM parameters)
     ), merged AS MATERIALIZED (
       SELECT * FROM event_feed UNION ALL SELECT * FROM attempt_feed
-    ), event_page AS MATERIALIZED (
+    -- Offset paging already merges every row up to the page, so counting those rows plus one costs
+    -- nothing more and answers what a pager asks: the total when it is this small, and otherwise
+    -- that one more page exists. The exact count over the window stays behind "count": "exact".
+    ), candidates AS MATERIALIZED (
       SELECT merged.* FROM merged
+       ORDER BY occurred_at DESC, kind_rank DESC, record_id DESC
+       LIMIT (SELECT page * page_size + 1 FROM parameters)
+    ), event_page AS MATERIALIZED (
+      SELECT candidates.* FROM candidates
        ORDER BY occurred_at DESC, kind_rank DESC, record_id DESC
        LIMIT (SELECT page_size FROM parameters)
       OFFSET (SELECT (page - 1) * page_size FROM parameters)
+    -- The exact count filters both source tables a second time. A one-time filter on the request's
+    -- count mode keeps that second pass out of the plan for every request that did not ask for it.
     ), total AS (
       SELECT count(*) AS count FROM (
         SELECT event.event_id
@@ -12901,6 +12969,7 @@ BEGIN
                AND (parameters.type_filter IS NULL OR task.task_type = parameters.type_filter)
            ))
       ) records
+       WHERE (SELECT count_mode FROM parameters) = 'exact'
     )
     SELECT jsonb_build_object(
       'capturedAt', workhorse.dashboard_iso_v1(parameters.captured_at),
@@ -12908,7 +12977,10 @@ BEGIN
       'rangeStart', workhorse.dashboard_iso_v1(parameters.range_start),
       'rangeEnd', workhorse.dashboard_iso_v1(parameters.range_end),
       'page', parameters.page, 'pageSize', parameters.page_size,
-      'total', (SELECT count FROM total),
+      'count', parameters.count_mode,
+      'hasMore', (SELECT count(*) FROM candidates) > parameters.page * parameters.page_size,
+      'total', CASE WHEN parameters.count_mode = 'exact' THEN (SELECT count FROM total)
+        ELSE (SELECT count(*) FROM candidates) END,
       'retention', jsonb_build_object(
         'taskEventDays', retention.task_event_retention_days,
         'attemptHistoryDays', retention.attempt_history_retention_days),
@@ -13084,24 +13156,46 @@ BEGIN
 END;
 $$;
 
+-- Filter options for the task listing. Each list costs one index seek per distinct value rather
+-- than a pass over every task or every retained attempt: each scan asks its index for the smallest
+-- value above the one before it and stops when there is none.
 CREATE OR REPLACE FUNCTION workhorse.dashboard_task_facets_v1(p_input jsonb)
 RETURNS jsonb
 LANGUAGE sql
 AS $$
-  WITH configured_workers AS (
+  WITH RECURSIVE configured_workers AS (
     SELECT jsonb_array_elements_text(
              CASE WHEN jsonb_typeof(p_input->'configuredWorkers') = 'array'
                   THEN p_input->'configuredWorkers' END
            ) AS worker
+  ), queue_scan AS (
+    SELECT (SELECT min(queue_name) FROM workhorse.dashboard_task_query_v1) AS value
+    UNION ALL
+    SELECT (SELECT min(query_row.queue_name) FROM workhorse.dashboard_task_query_v1 query_row
+             WHERE query_row.queue_name > queue_scan.value)
+      FROM queue_scan WHERE queue_scan.value IS NOT NULL
+  ), type_scan AS (
+    SELECT (SELECT min(task_type) FROM workhorse.dashboard_task_query_v1) AS value
+    UNION ALL
+    SELECT (SELECT min(query_row.task_type) FROM workhorse.dashboard_task_query_v1 query_row
+             WHERE query_row.task_type > type_scan.value)
+      FROM type_scan WHERE type_scan.value IS NOT NULL
+  ), history_worker_scan AS (
+    SELECT (SELECT min(worker_id) FROM workhorse.dashboard_attempt_history_v1) AS value
+    UNION ALL
+    SELECT (SELECT min(history.worker_id) FROM workhorse.dashboard_attempt_history_v1 history
+             WHERE history.worker_id > history_worker_scan.value)
+      FROM history_worker_scan WHERE history_worker_scan.value IS NOT NULL
   ), queue_values AS (
-    SELECT queue_name AS value FROM workhorse.dashboard_task_v1
+    (SELECT value FROM queue_scan WHERE value IS NOT NULL LIMIT 1000)
     UNION SELECT queue_name FROM workhorse.dashboard_queue_control_v1
   ), worker_values AS (
     SELECT worker AS value FROM configured_workers
+    UNION SELECT worker_id FROM workhorse.dashboard_worker_registry_v1
     UNION SELECT worker_id FROM workhorse.dashboard_task_runtime_v1 WHERE worker_id IS NOT NULL
-    UNION SELECT worker_id FROM workhorse.dashboard_attempt_history_v1 WHERE worker_id IS NOT NULL
+    UNION (SELECT value FROM history_worker_scan WHERE value IS NOT NULL LIMIT 1000)
   ), type_values AS (
-    SELECT DISTINCT task_type AS value FROM workhorse.dashboard_task_v1
+    SELECT value FROM type_scan WHERE value IS NOT NULL LIMIT 1000
   ), tag_values AS (
     SELECT DISTINCT unnest(tags) AS value FROM workhorse.dashboard_task_v1
   )
@@ -13473,8 +13567,10 @@ AS $$
   WITH parameters AS (
     SELECT COALESCE((p_input->>'canComplete')::boolean, false) AS can_complete,
            COALESCE((p_input->>'canSignal')::boolean, false) AS can_signal
+  -- The caller may hand in the health document it already read for this request. Computing one is
+  -- a pass over live state, and the dashboard reads it from several procedures per page.
   ), health AS (
-    SELECT workhorse.queue_health_v1() AS value
+    SELECT COALESCE(p_input->'health', workhorse.queue_health_v1()) AS value
   ), diagnostics AS (
     SELECT jsonb_build_object(
       'pendingSignals', (value->>'pending_signal_waits')::integer,
@@ -13668,7 +13764,8 @@ AS $$
       LEFT JOIN LATERAL (
         SELECT item AS value
           FROM jsonb_array_elements(CASE WHEN task.runtime_state IS NULL THEN '[]'::jsonb
-            ELSE workhorse.queue_health_v1()->'concurrency_policies' END) item
+            ELSE COALESCE(p_input->'health', workhorse.queue_health_v1())->'concurrency_policies'
+            END) item
          WHERE item->>'queue_name' = task.queue
       ) measured ON true
   ), signal_wait AS (
@@ -13701,7 +13798,9 @@ AS $$
         'state', outcome_state, 'attempt', outcome_attempt,
         'finishedAt', workhorse.dashboard_iso_v1(finished_at),
         'result', result, 'error', outcome_error) END,
-      'result', result, 'error', COALESCE(outcome_error, runtime_error)
+      -- The result appears under the outcome alone. A result exists only once a task finishes, so
+      -- a second copy beside it doubled what a megabyte result costs to open and named no new fact.
+      'error', COALESCE(outcome_error, runtime_error)
     ) AS value FROM task
   ), batch_executions AS (
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
@@ -13743,6 +13842,9 @@ AS $$
           ) batch_rows
          GROUP BY batch_id, selected_attempt, dispatched_at, batch_wide_failure
       ) executions
+  -- Each history section keeps its most recent rows and reports that it was cut. A task that
+  -- retried for days would otherwise put its whole recorded life into one drawer, and the event
+  -- feed filtered by this task identity is where the rest of it stays readable.
   ), attempts AS (
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
       'attempt', attempt, 'workerId', worker_id, 'outcome', outcome,
@@ -13752,20 +13854,47 @@ AS $$
       'durationMs', extract(epoch FROM finished_at - claimed_at) * 1000,
       'executionMs', extract(epoch FROM finished_at - claimed_at) * 1000,
       'elapsedMs', extract(epoch FROM finished_at - started_at) * 1000,
-      'error', error) ORDER BY attempt, attempt_id) FILTER (WHERE attempt_id IS NOT NULL),
-      '[]'::jsonb) AS value
-      FROM parameters
-      LEFT JOIN workhorse.dashboard_attempt_history_v1 history ON history.task_id = parameters.task_id
+      'error', error) ORDER BY attempt, attempt_id)
+      FILTER (WHERE ordinal <= workhorse.dashboard_task_detail_limit_v1()), '[]'::jsonb) AS value,
+      count(*) > workhorse.dashboard_task_detail_limit_v1() AS truncated
+      FROM (
+        SELECT recent.*, row_number() OVER (ORDER BY recent.attempt DESC, recent.attempt_id DESC)
+                 AS ordinal
+          FROM (
+            SELECT history.* FROM parameters
+              JOIN workhorse.dashboard_attempt_history_v1 history
+                ON history.task_id = parameters.task_id
+             ORDER BY history.attempt DESC, history.attempt_id DESC
+             LIMIT workhorse.dashboard_task_detail_limit_v1() + 1
+          ) recent
+      ) bounded
   ), checkpoints AS (
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
-      'name', checkpoint_name, 'value', checkpoint_value, 'attempt', attempt,
+      'name', checkpoint_name,
+      'value', CASE WHEN value_bytes <= workhorse.dashboard_inline_value_bytes_v1()
+                    THEN checkpoint_value END,
+      'valueBytes', value_bytes,
+      'valueOmitted', value_bytes > workhorse.dashboard_inline_value_bytes_v1(),
+      'attempt', attempt,
       'fenceToken', fence_token::text, 'workerId', worker_id,
       'createdAt', workhorse.dashboard_iso_v1(created_at)
-    ) ORDER BY created_at, checkpoint_name) FILTER (WHERE checkpoint_name IS NOT NULL),
-      '[]'::jsonb) AS value
-      FROM parameters
-      LEFT JOIN workhorse.dashboard_task_checkpoint_v1 checkpoint
-        ON checkpoint.task_id = parameters.task_id
+    ) ORDER BY created_at, checkpoint_name)
+      FILTER (WHERE ordinal <= workhorse.dashboard_task_detail_limit_v1()), '[]'::jsonb) AS value,
+      count(*) > workhorse.dashboard_task_detail_limit_v1() AS truncated
+      FROM (
+        SELECT recent.*,
+               row_number() OVER (ORDER BY recent.created_at DESC, recent.checkpoint_name DESC)
+                 AS ordinal
+          FROM (
+            SELECT checkpoint.*,
+                   octet_length(checkpoint.checkpoint_value::text) AS value_bytes
+              FROM parameters
+              JOIN workhorse.dashboard_task_checkpoint_v1 checkpoint
+                ON checkpoint.task_id = parameters.task_id
+             ORDER BY checkpoint.created_at DESC, checkpoint.checkpoint_name DESC
+             LIMIT workhorse.dashboard_task_detail_limit_v1() + 1
+          ) recent
+      ) bounded
   ), waits AS (
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
       'name', wait_name, 'mode', mode, 'durationMs', duration_ms,
@@ -13773,17 +13902,38 @@ AS $$
       'wakeAt', workhorse.dashboard_iso_v1(wake_at), 'attempt', attempt,
       'fenceToken', fence_token::text, 'workerId', worker_id,
       'createdAt', workhorse.dashboard_iso_v1(created_at)
-    ) ORDER BY created_at, wait_name) FILTER (WHERE wait_name IS NOT NULL), '[]'::jsonb) AS value
-      FROM parameters
-      LEFT JOIN workhorse.dashboard_task_wait_v1 wait_record ON wait_record.task_id = parameters.task_id
+    ) ORDER BY created_at, wait_name)
+      FILTER (WHERE ordinal <= workhorse.dashboard_task_detail_limit_v1()), '[]'::jsonb) AS value,
+      count(*) > workhorse.dashboard_task_detail_limit_v1() AS truncated
+      FROM (
+        SELECT recent.*,
+               row_number() OVER (ORDER BY recent.created_at DESC, recent.wait_name DESC) AS ordinal
+          FROM (
+            SELECT wait_record.* FROM parameters
+              JOIN workhorse.dashboard_task_wait_v1 wait_record
+                ON wait_record.task_id = parameters.task_id
+             ORDER BY wait_record.created_at DESC, wait_record.wait_name DESC
+             LIMIT workhorse.dashboard_task_detail_limit_v1() + 1
+          ) recent
+      ) bounded
   ), events AS (
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
       'id', event_id::text, 'attempt', attempt, 'type', event_type,
       'details', details, 'occurredAt', workhorse.dashboard_iso_v1(occurred_at)
-    ) ORDER BY occurred_at, event_id) FILTER (WHERE event_id IS NOT NULL), '[]'::jsonb) AS value
-      FROM parameters
-      LEFT JOIN workhorse.dashboard_task_event_v1 event_record
-        ON event_record.task_id = parameters.task_id
+    ) ORDER BY occurred_at, event_id)
+      FILTER (WHERE ordinal <= workhorse.dashboard_task_event_limit_v1()), '[]'::jsonb) AS value,
+      count(*) > workhorse.dashboard_task_event_limit_v1() AS truncated
+      FROM (
+        SELECT recent.*,
+               row_number() OVER (ORDER BY recent.occurred_at DESC, recent.event_id DESC) AS ordinal
+          FROM (
+            SELECT event_record.* FROM parameters
+              JOIN workhorse.dashboard_task_event_v1 event_record
+                ON event_record.task_id = parameters.task_id
+             ORDER BY event_record.occurred_at DESC, event_record.event_id DESC
+             LIMIT workhorse.dashboard_task_event_limit_v1() + 1
+          ) recent
+      ) bounded
   )
   SELECT jsonb_build_object(
     'tags', task.tags,
@@ -13807,7 +13957,10 @@ AS $$
     'attempts', attempts.value,
     'checkpoints', checkpoints.value,
     'waits', waits.value,
-    'events', events.value
+    'events', events.value,
+    'truncated', jsonb_build_object(
+      'attempts', attempts.truncated, 'checkpoints', checkpoints.truncated,
+      'waits', waits.truncated, 'events', events.truncated)
   )
     FROM parameters
     JOIN task ON true
@@ -13824,6 +13977,26 @@ AS $$
     JOIN checkpoints ON true
     JOIN waits ON true
     JOIN events ON true;
+$$;
+
+-- One stored checkpoint value, read on its own. Task detail withholds a value larger than the
+-- inline bound and reports its size, so an operator who wants that one value asks for it here
+-- instead of receiving every value on every open.
+CREATE OR REPLACE FUNCTION workhorse.dashboard_checkpoint_value_v1(p_input jsonb)
+RETURNS jsonb
+LANGUAGE sql
+AS $$
+  SELECT jsonb_build_object(
+    'name', checkpoint.checkpoint_name,
+    'value', checkpoint.checkpoint_value,
+    'valueBytes', octet_length(checkpoint.checkpoint_value::text),
+    'attempt', checkpoint.attempt,
+    'fenceToken', checkpoint.fence_token::text,
+    'workerId', checkpoint.worker_id,
+    'createdAt', workhorse.dashboard_iso_v1(checkpoint.created_at))
+    FROM workhorse.dashboard_task_checkpoint_v1 checkpoint
+   WHERE checkpoint.task_id = (p_input->>'id')::uuid
+     AND checkpoint.checkpoint_name = p_input->>'name';
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.dashboard_settings_v1(p_input jsonb)
@@ -14588,7 +14761,7 @@ WITH parameters AS NOT MATERIALIZED (
               WHERE dependency.dependent_task_id = j.id AND dependency.released_at IS NULL
            ), '[]'::jsonb) AS prerequisite_task_ids,
            COALESCE(r.current_attempt, o.current_attempt) AS attempt,
-           j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms, j.tags,
+           j.max_attempts, j.retry_policy, j.tags,
            COALESCE(r.run_at, o.run_at) AS run_at,
            r.worker_id AS current_worker_id,
            COALESCE(r.worker_id, durable_wait.worker_id, attempt_worker.worker_id) AS worker_id,
@@ -14634,6 +14807,7 @@ WITH parameters AS NOT MATERIALIZED (
     'search', parameters.search,
     'page', parameters.page,
     'pageSize', parameters.page_size,
+    'count', parameters.count_mode,
     'total', CASE WHEN parameters.count_mode = 'exact' THEN (SELECT count(*) FROM filtered) END,
     'nextCursor', CASE WHEN (parameters.backwards AND parameters.cursor_id IS NOT NULL)
       OR (NOT parameters.backwards AND (SELECT count(*) FROM candidates) > parameters.page_size)
@@ -14649,9 +14823,7 @@ WITH parameters AS NOT MATERIALIZED (
       SELECT jsonb_agg(jsonb_build_object(
         'id', id::text, 'queue', queue, 'type', type, 'priority', priority, 'state', state,
         'blockedReason', blocked_reason, 'prerequisiteTaskIds', prerequisite_task_ids,
-        'attempt', attempt, 'maxAttempts', max_attempts, 'retryPolicy', retry_policy,
-        'deadlineAt', workhorse.dashboard_iso_v1(deadline_at),
-        'executionTimeoutMs', execution_timeout_ms, 'tags', tags,
+        'attempt', attempt, 'maxAttempts', max_attempts, 'retryPolicy', retry_policy, 'tags', tags,
         'keyed', COALESCE(jsonb_typeof(enqueued_details->'idempotency') = 'object', false),
         'enqueueMode', CASE
           WHEN jsonb_typeof(enqueued_details->'debounce') = 'object' THEN 'debounce'
@@ -15085,10 +15257,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (2, 'schedule catch-up policies'),
   (3, 'named budgets'),
   (4, 'cold history export'),
-  (5, 'history partition horizon')
+  (5, 'history partition horizon'),
+  (6, 'bounded dashboard reads')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (5) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (6) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

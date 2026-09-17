@@ -201,6 +201,8 @@ export const TasksPage = memo(function TasksPage({
       setRedrivingSelection({ cursor, redriven, running: false });
     }
   };
+  // Offset pages report the total they proved rather than a count over every matching task, so the
+  // pager gains one page while more remain and settles on the real last page once it is reached.
   const totalPages = Math.max(1, Math.ceil((data.total ?? 0) / data.pageSize));
   const pagination =
     "nextCursor" in data ? (

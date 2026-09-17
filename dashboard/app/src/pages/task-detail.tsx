@@ -196,9 +196,16 @@ function TaskDetailContent({
         aside={
           <Badge variant="light" color={task.attempts.length > 0 ? "blue" : "gray"}>
             {task.attempts.length}
+            {task.truncated.attempts ? "+" : ""}
           </Badge>
         }
       >
+        {task.truncated.attempts ? (
+          <Text c="dimmed" size="xs" mb="sm">
+            This task has attempted more times than the drawer shows. These are its most recent
+            attempts; the event feed filtered by this task holds the rest.
+          </Text>
+        ) : null}
         {task.attempts.length === 0 ? (
           <Text c="dimmed" size="sm">
             No attempt has finished yet.

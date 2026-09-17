@@ -385,8 +385,6 @@ export interface DashboardTaskRow extends Record<string, unknown> {
   maxAttempts: number;
   /** Retry scheduling persisted with the task identity. Null means the default SQL-owned backoff. */
   retryPolicy: RetryPolicy | null;
-  deadlineAt?: string | null;
-  executionTimeoutMs?: number | null;
   tags: string[];
   /**
    * True when the accepted enqueue recorded deduplication evidence. Derived only from the safe
@@ -546,6 +544,17 @@ export const dashboardRedriveBatchDefault = 100;
 
 export type DashboardTaskCounts = Record<DashboardTaskFilter, number>;
 
+/**
+ * Whether a listing request wants the exact number of matching rows.
+ *
+ * `none` is the default: the listing reports the total it can prove from the rows it already read
+ * to reach the page, which is what a pager needs and costs nothing beyond the page. `exact` asks
+ * PostgreSQL to count every matching row, which reads the whole match rather than one page of it.
+ */
+export const dashboardListingCounts = ["none", "exact"] as const;
+
+export type DashboardListingCount = (typeof dashboardListingCounts)[number];
+
 export type DashboardActivityPeriod = "15m" | "1h" | "6h" | "24h" | "7d";
 
 export type DashboardActivityGroupBy = "queue" | "worker" | "task" | "status";
@@ -578,6 +587,14 @@ export interface DashboardTasksPage {
   search: string | null;
   page: number;
   pageSize: number;
+  /** The count mode this page was read with, echoed so a caller can read `total` correctly. */
+  count: DashboardListingCount;
+  /** True when at least one task matches the filter beyond this page. */
+  hasMore: boolean;
+  /**
+   * Matching tasks. Exact under `count: "exact"`; otherwise the number this page proves, which is
+   * the exact total whenever it fits within the pages read so far and one more beyond that.
+   */
   total: number;
   tasks: DashboardTaskRow[];
 }
@@ -590,7 +607,7 @@ export interface DashboardTaskCursor {
 }
 
 /** Cursor browsing omits the full count unless explicitly requested. */
-export interface DashboardTasksCursorPage extends Omit<DashboardTasksPage, "total"> {
+export interface DashboardTasksCursorPage extends Omit<DashboardTasksPage, "total" | "hasMore"> {
   total: number | null;
   nextCursor: DashboardTaskCursor | null;
   previousCursor: DashboardTaskCursor | null;
@@ -1023,7 +1040,15 @@ export interface DashboardEventsPage {
   /** 1-based page index, matching the task listing. */
   page: number;
   pageSize: number;
-  /** Rows matching the window and filters, across both source tables. */
+  /** The count mode this page was read with, echoed so a caller can read `total` correctly. */
+  count: DashboardListingCount;
+  /** True when at least one record matches the window and filters beyond this page. */
+  hasMore: boolean;
+  /**
+   * Rows matching the window and filters, across both source tables. Exact under `count: "exact"`;
+   * otherwise the number this page proves, which is the exact total whenever it fits within the
+   * pages read so far and one more beyond that.
+   */
   total: number;
   /**
    * Retention days for the two source tables, or null when retention is disabled for one.
@@ -1159,6 +1184,13 @@ export interface DashboardTaskDetail {
       cancellation: DashboardCancellationRequest | null;
       error: unknown;
     } | null;
+    /**
+     * The terminal outcome, or null while the task is still live.
+     *
+     * A result exists only once a task finishes, so this is the one place it appears. `error` below
+     * stays, because a live runtime carries one and a reader needs the latest without choosing
+     * between two branches.
+     */
     outcome: {
       state: string;
       attempt: number;
@@ -1166,7 +1198,6 @@ export interface DashboardTaskDetail {
       result: unknown;
       error: unknown;
     } | null;
-    result: unknown;
     error: unknown;
   };
   batchExecutions: Array<{
@@ -1199,7 +1230,17 @@ export interface DashboardTaskDetail {
   }>;
   checkpoints: Array<{
     name: string;
+    /**
+     * The saved value, or null when it is larger than task detail carries inline.
+     *
+     * A checkpoint may hold a megabyte, and a task detail that carried every value would transfer
+     * all of them to draw a list of names. `valueOmitted` says which of the two a null is, and
+     * `checkpointValue` returns the one value an operator opens.
+     */
     value: unknown;
+    /** Size of the saved value in bytes, whether or not it is carried here. */
+    valueBytes: number;
+    valueOmitted: boolean;
     attempt: number;
     fenceToken: string;
     workerId: string;
@@ -1223,6 +1264,29 @@ export interface DashboardTaskDetail {
     details: unknown;
     occurredAt: string;
   }>;
+  /**
+   * Which sections above hold only their most recent rows.
+   *
+   * A task that retried for days records more than one drawer shows, so each history section is
+   * bounded and says when it was cut. The event feed filtered by this task identity holds the rest.
+   */
+  truncated: {
+    attempts: boolean;
+    checkpoints: boolean;
+    waits: boolean;
+    events: boolean;
+  };
+}
+
+/** One saved checkpoint value, read on its own because task detail withheld it. */
+export interface DashboardCheckpointValue {
+  name: string;
+  value: unknown;
+  valueBytes: number;
+  attempt: number;
+  fenceToken: string;
+  workerId: string;
+  createdAt: string;
 }
 
 export interface DashboardHumanWaitRow {

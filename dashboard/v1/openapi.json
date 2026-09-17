@@ -245,7 +245,7 @@
       "post": {
         "operationId": "dashboard_tasks",
         "summary": "List tasks, filtered and paged",
-        "description": "Returns one page of tasks matching filter, queue, worker, taskType, priority, tags, and search, sorted by updated or priority. page is 1-based and at most 100; pageSize is 25, 50, or 100. Payloads are never included; read one task with taskDetail. canCompleteHumanWait reports whether this deployment can complete human waits.",
+        "description": "Returns one page of tasks matching filter, queue, worker, taskType, priority, tags, and search, sorted by updated or priority. page is 1-based and at most 100; pageSize is 25, 50, or 100. total counts only what the page proves unless count is exact, and hasMore reports whether another page exists. Payloads are never included; read one task with taskDetail. canCompleteHumanWait reports whether this deployment can complete human waits.",
         "tags": [
           "reads"
         ],
@@ -372,6 +372,14 @@
                             "const": 100
                           }
                         ]
+                      },
+                      "count": {
+                        "default": "none",
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "exact"
+                        ]
                       }
                     }
                   }
@@ -425,12 +433,14 @@
                         "tags": [
                           "conformance"
                         ],
+                        "count": "none",
                         "queue": null,
                         "tasks": [],
                         "total": 0,
                         "filter": "discarded",
                         "search": null,
                         "worker": null,
+                        "hasMore": false,
                         "pageSize": 50,
                         "priority": null,
                         "taskType": null,
@@ -593,6 +603,14 @@
                           }
                         ]
                       },
+                      "count": {
+                        "default": "none",
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "exact"
+                        ]
+                      },
                       "cursor": {
                         "default": null,
                         "anyOf": [
@@ -632,14 +650,6 @@
                         "enum": [
                           "next",
                           "previous"
-                        ]
-                      },
-                      "count": {
-                        "default": "none",
-                        "type": "string",
-                        "enum": [
-                          "none",
-                          "exact"
                         ]
                       }
                     }
@@ -686,6 +696,7 @@
                         "page": 1,
                         "sort": "updated",
                         "tags": [],
+                        "count": "none",
                         "queue": null,
                         "tasks": [
                           {
@@ -705,7 +716,6 @@
                             "createdAt": "2026-01-01T00:00:00.000Z",
                             "humanWait": null,
                             "updatedAt": "2026-01-01T00:00:00.000Z",
-                            "deadlineAt": null,
                             "durability": null,
                             "finishedAt": "2026-01-01T00:00:00.000Z",
                             "signalWait": null,
@@ -716,7 +726,6 @@
                             "errorMessage": "conformance.redrive.batch failed",
                             "lastWorkerId": null,
                             "blockedReason": null,
-                            "executionTimeoutMs": null,
                             "prerequisiteTaskIds": []
                           },
                           {
@@ -736,7 +745,6 @@
                             "createdAt": "2026-01-01T00:00:00.000Z",
                             "humanWait": null,
                             "updatedAt": "2026-01-01T00:00:00.000Z",
-                            "deadlineAt": null,
                             "durability": null,
                             "finishedAt": "2026-01-01T00:00:00.000Z",
                             "signalWait": null,
@@ -747,7 +755,6 @@
                             "errorMessage": "conformance.redrive.one failed",
                             "lastWorkerId": null,
                             "blockedReason": null,
-                            "executionTimeoutMs": null,
                             "prerequisiteTaskIds": []
                           },
                           {
@@ -767,7 +774,6 @@
                             "createdAt": "2026-01-01T00:00:00.000Z",
                             "humanWait": null,
                             "updatedAt": "2026-01-01T00:00:00.000Z",
-                            "deadlineAt": null,
                             "durability": null,
                             "finishedAt": null,
                             "signalWait": null,
@@ -778,7 +784,6 @@
                             "errorMessage": null,
                             "lastWorkerId": null,
                             "blockedReason": null,
-                            "executionTimeoutMs": null,
                             "prerequisiteTaskIds": []
                           },
                           {
@@ -798,7 +803,6 @@
                             "createdAt": "2026-01-01T00:00:00.000Z",
                             "humanWait": null,
                             "updatedAt": "2026-01-01T00:00:00.000Z",
-                            "deadlineAt": null,
                             "durability": null,
                             "finishedAt": null,
                             "signalWait": null,
@@ -809,7 +813,6 @@
                             "errorMessage": null,
                             "lastWorkerId": null,
                             "blockedReason": null,
-                            "executionTimeoutMs": null,
                             "prerequisiteTaskIds": []
                           },
                           {
@@ -829,7 +832,6 @@
                             "createdAt": "2026-01-01T00:00:00.000Z",
                             "humanWait": null,
                             "updatedAt": "2026-01-01T00:00:00.000Z",
-                            "deadlineAt": null,
                             "durability": null,
                             "finishedAt": null,
                             "signalWait": null,
@@ -840,7 +842,6 @@
                             "errorMessage": null,
                             "lastWorkerId": null,
                             "blockedReason": null,
-                            "executionTimeoutMs": null,
                             "prerequisiteTaskIds": []
                           },
                           {
@@ -862,7 +863,6 @@
                             "createdAt": "2026-01-01T00:00:00.000Z",
                             "humanWait": null,
                             "updatedAt": "2026-01-01T00:00:00.000Z",
-                            "deadlineAt": null,
                             "durability": null,
                             "finishedAt": null,
                             "signalWait": null,
@@ -873,7 +873,6 @@
                             "errorMessage": null,
                             "lastWorkerId": null,
                             "blockedReason": null,
-                            "executionTimeoutMs": null,
                             "prerequisiteTaskIds": []
                           },
                           {
@@ -899,7 +898,6 @@
                               "deadlineAt": "2026-01-01T00:00:00.000Z"
                             },
                             "updatedAt": "2026-01-01T00:00:00.000Z",
-                            "deadlineAt": null,
                             "durability": null,
                             "finishedAt": null,
                             "signalWait": null,
@@ -910,7 +908,6 @@
                             "errorMessage": null,
                             "lastWorkerId": null,
                             "blockedReason": null,
-                            "executionTimeoutMs": null,
                             "prerequisiteTaskIds": []
                           },
                           {
@@ -930,7 +927,6 @@
                             "createdAt": "2026-01-01T00:00:00.000Z",
                             "humanWait": null,
                             "updatedAt": "2026-01-01T00:00:00.000Z",
-                            "deadlineAt": null,
                             "durability": null,
                             "finishedAt": null,
                             "signalWait": {
@@ -944,7 +940,6 @@
                             "errorMessage": null,
                             "lastWorkerId": null,
                             "blockedReason": null,
-                            "executionTimeoutMs": null,
                             "prerequisiteTaskIds": []
                           },
                           {
@@ -964,7 +959,6 @@
                             "createdAt": "2026-01-01T00:00:00.000Z",
                             "humanWait": null,
                             "updatedAt": "2026-01-01T00:00:00.000Z",
-                            "deadlineAt": null,
                             "durability": null,
                             "finishedAt": "2026-01-01T00:00:00.000Z",
                             "signalWait": null,
@@ -975,7 +969,6 @@
                             "errorMessage": "conformance.fail failed",
                             "lastWorkerId": null,
                             "blockedReason": null,
-                            "executionTimeoutMs": null,
                             "prerequisiteTaskIds": []
                           },
                           {
@@ -997,7 +990,6 @@
                             "createdAt": "2026-01-01T00:00:00.000Z",
                             "humanWait": null,
                             "updatedAt": "2026-01-01T00:00:00.000Z",
-                            "deadlineAt": null,
                             "durability": null,
                             "finishedAt": "2026-01-01T00:00:00.000Z",
                             "signalWait": null,
@@ -1008,7 +1000,6 @@
                             "errorMessage": null,
                             "lastWorkerId": null,
                             "blockedReason": null,
-                            "executionTimeoutMs": null,
                             "prerequisiteTaskIds": []
                           }
                         ],
@@ -1468,7 +1459,7 @@
       "post": {
         "operationId": "dashboard_events",
         "summary": "List task events and attempts in a time range",
-        "description": "Returns one page of task events and attempt outcomes within a fixed window of 15m, 1h, 6h, or 24h, or between an inclusive rangeStart instant and exclusive rangeEnd instant. The feed is filterable by kind (event, attempt, or all), queue, taskType, event types, and one taskId. retention reports how far back events and attempts are kept.",
+        "description": "Returns one page of task events and attempt outcomes within a fixed window of 15m, 1h, 6h, or 24h, or between an inclusive rangeStart instant and exclusive rangeEnd instant. The feed is filterable by kind (event, attempt, or all), queue, taskType, event types, and one taskId. total counts only what the page proves unless count is exact, and hasMore reports whether another page exists. retention reports how far back events and attempts are kept.",
         "tags": [
           "reads"
         ],
@@ -1540,6 +1531,14 @@
                             "type": "number",
                             "const": 100
                           }
+                        ]
+                      },
+                      "count": {
+                        "default": "none",
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "exact"
                         ]
                       },
                       "kind": {
@@ -1717,6 +1716,7 @@
                     "value": {
                       "json": {
                         "page": 1,
+                        "count": "none",
                         "total": 1,
                         "events": [
                           {
@@ -1744,6 +1744,7 @@
                           }
                         ],
                         "window": "1h",
+                        "hasMore": false,
                         "pageSize": 25,
                         "rangeEnd": "2026-01-01T00:00:00.000Z",
                         "retention": {
@@ -2980,7 +2981,7 @@
                               {
                                 "rows": 0,
                                 "deadRows": 0,
-                                "relation": "task_event",
+                                "relation": "attempt_history",
                                 "indexBytes": 0,
                                 "partitions": 7,
                                 "tableBytes": 0,
@@ -2990,7 +2991,7 @@
                               {
                                 "rows": 0,
                                 "deadRows": 0,
-                                "relation": "attempt_history",
+                                "relation": "task_event",
                                 "indexBytes": 0,
                                 "partitions": 7,
                                 "tableBytes": 0,
@@ -3819,7 +3820,7 @@
       "post": {
         "operationId": "dashboard_taskDetail",
         "summary": "Read one task",
-        "description": "Returns one task's identity, lineage (dependencies, children, and redrives), concurrency policy, current attempt, attempts, checkpoints, waits, and events. The payload is redacted. canSignal reports whether signalTask is available for it. Answers NOT_FOUND with the message \"Task not found\" when the id matches nothing.",
+        "description": "Returns one task's identity, lineage (dependencies, children, and redrives), concurrency policy, current attempt, attempts, checkpoints, waits, and events. The payload is redacted. canSignal reports whether signalTask is available for it. Each history section carries only its most recent rows and truncated reports which were cut. A checkpoint value larger than the inline bound is reported by size only; read it with checkpointValue. Answers NOT_FOUND with the message \"Task not found\" when the id matches nothing.",
         "tags": [
           "reads"
         ],
@@ -3916,6 +3917,16 @@
                           },
                           {
                             "id": "00000000-0000-7000-8000-000000000000",
+                            "type": "checkpoint_saved",
+                            "attempt": 1,
+                            "details": {
+                              "name": "conformance-step",
+                              "fence_token": "1"
+                            },
+                            "occurredAt": "2026-01-01T00:00:00.000Z"
+                          },
+                          {
+                            "id": "00000000-0000-7000-8000-000000000000",
                             "type": "succeeded",
                             "attempt": 1,
                             "details": {
@@ -3926,9 +3937,6 @@
                         ],
                         "current": {
                           "error": null,
-                          "result": {
-                            "ok": true
-                          },
                           "outcome": {
                             "error": null,
                             "state": "succeeded",
@@ -3978,9 +3986,28 @@
                         "progress": null,
                         "canSignal": true,
                         "humanWait": null,
+                        "truncated": {
+                          "waits": false,
+                          "events": false,
+                          "attempts": false,
+                          "checkpoints": false
+                        },
                         "durability": null,
                         "signalWait": null,
-                        "checkpoints": [],
+                        "checkpoints": [
+                          {
+                            "name": "conformance-step",
+                            "value": {
+                              "stage": "prepared"
+                            },
+                            "attempt": 1,
+                            "workerId": "conformance-worker",
+                            "createdAt": "2026-01-01T00:00:00.000Z",
+                            "fenceToken": "1",
+                            "valueBytes": 21,
+                            "valueOmitted": false
+                          }
+                        ],
                         "childLineage": {
                           "records": [],
                           "truncated": false
@@ -3996,6 +4023,123 @@
                           "truncated": false
                         },
                         "canCompleteHumanWait": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotSupported"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/SchemaIncompatible"
+          }
+        }
+      }
+    },
+    "/rpc/dashboard/checkpointValue": {
+      "post": {
+        "operationId": "dashboard_checkpointValue",
+        "summary": "Read one saved checkpoint value",
+        "description": "Returns one checkpoint of one task by name, with its saved value and that value's size in bytes. Task detail withholds a value larger than it carries inline, so this is how an operator opens that one value. Answers NOT_FOUND with the message \"Checkpoint not found\" when the id matches nothing.",
+        "tags": [
+          "reads"
+        ],
+        "x-workhorse-mutation": false,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "json": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "name"
+                    ]
+                  }
+                },
+                "required": [
+                  "json"
+                ]
+              },
+              "examples": {
+                "conformance": {
+                  "summary": "Request",
+                  "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: checkpoint-value.",
+                  "value": {
+                    "json": {
+                      "id": "00000000-0000-7000-8000-000000000000",
+                      "name": "conformance-step"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The procedure's result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "json": {
+                      "$ref": "#/components/schemas/DashboardCheckpointValue"
+                    }
+                  },
+                  "required": [
+                    "json"
+                  ]
+                },
+                "examples": {
+                  "conformance": {
+                    "summary": "Response",
+                    "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: checkpoint-value.",
+                    "value": {
+                      "json": {
+                        "name": "conformance-step",
+                        "value": {
+                          "stage": "prepared"
+                        },
+                        "attempt": 1,
+                        "workerId": "conformance-worker",
+                        "createdAt": "2026-01-01T00:00:00.000Z",
+                        "fenceToken": "1",
+                        "valueBytes": 21
                       }
                     }
                   }
@@ -6802,6 +6946,39 @@
           "reason"
         ]
       },
+      "DashboardCheckpointValue": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {},
+          "valueBytes": {
+            "type": "number"
+          },
+          "attempt": {
+            "type": "number"
+          },
+          "fenceToken": {
+            "type": "string"
+          },
+          "workerId": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value",
+          "valueBytes",
+          "attempt",
+          "fenceToken",
+          "workerId",
+          "createdAt"
+        ]
+      },
       "DashboardCompleteHumanWaitResult": {
         "type": "object",
         "properties": {
@@ -7401,6 +7578,15 @@
           "pageSize": {
             "type": "number"
           },
+          "count": {
+            "enum": [
+              "exact",
+              "none"
+            ]
+          },
+          "hasMore": {
+            "type": "boolean"
+          },
           "total": {
             "type": "number"
           },
@@ -7443,6 +7629,8 @@
           "events",
           "page",
           "pageSize",
+          "count",
+          "hasMore",
           "total",
           "retention"
         ]
@@ -10954,13 +11142,11 @@
                   }
                 ]
               },
-              "result": {},
               "error": {}
             },
             "required": [
               "runtime",
               "outcome",
-              "result",
               "error"
             ]
           },
@@ -11083,6 +11269,12 @@
                   "type": "string"
                 },
                 "value": {},
+                "valueBytes": {
+                  "type": "number"
+                },
+                "valueOmitted": {
+                  "type": "boolean"
+                },
                 "attempt": {
                   "type": "number"
                 },
@@ -11099,6 +11291,8 @@
               "required": [
                 "name",
                 "value",
+                "valueBytes",
+                "valueOmitted",
                 "attempt",
                 "fenceToken",
                 "workerId",
@@ -11203,6 +11397,29 @@
                 "occurredAt"
               ]
             }
+          },
+          "truncated": {
+            "type": "object",
+            "properties": {
+              "attempts": {
+                "type": "boolean"
+              },
+              "checkpoints": {
+                "type": "boolean"
+              },
+              "waits": {
+                "type": "boolean"
+              },
+              "events": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "attempts",
+              "checkpoints",
+              "waits",
+              "events"
+            ]
           }
         },
         "required": [
@@ -11224,7 +11441,8 @@
           "attempts",
           "checkpoints",
           "waits",
-          "events"
+          "events",
+          "truncated"
         ]
       },
       "DashboardTaskFacets": {
@@ -11363,26 +11581,6 @@
                   "type",
                   "delayMs"
                 ]
-              }
-            ]
-          },
-          "deadlineAt": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "type": "string"
-              }
-            ]
-          },
-          "executionTimeoutMs": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "type": "number"
               }
             ]
           },
@@ -11701,6 +11899,12 @@
           "capturedAt": {
             "type": "string"
           },
+          "count": {
+            "enum": [
+              "exact",
+              "none"
+            ]
+          },
           "worker": {
             "anyOf": [
               {
@@ -11739,6 +11943,7 @@
           "search",
           "taskType",
           "capturedAt",
+          "count",
           "worker",
           "canCompleteHumanWait",
           "page",
@@ -11837,6 +12042,15 @@
           "pageSize": {
             "type": "number"
           },
+          "count": {
+            "enum": [
+              "exact",
+              "none"
+            ]
+          },
+          "hasMore": {
+            "type": "boolean"
+          },
           "total": {
             "type": "number"
           },
@@ -11860,6 +12074,8 @@
           "search",
           "page",
           "pageSize",
+          "count",
+          "hasMore",
           "total",
           "tasks"
         ]

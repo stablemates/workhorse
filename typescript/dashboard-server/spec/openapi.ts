@@ -89,7 +89,7 @@ export const procedureDocs: Record<ProcedureName, ProcedureDoc> = {
   tasks: {
     summary: "List tasks, filtered and paged",
     description:
-      "Returns one page of tasks matching filter, queue, worker, taskType, priority, tags, and search, sorted by updated or priority. page is 1-based and at most 100; pageSize is 25, 50, or 100. Payloads are never included; read one task with taskDetail. canCompleteHumanWait reports whether this deployment can complete human waits.",
+      "Returns one page of tasks matching filter, queue, worker, taskType, priority, tags, and search, sorted by updated or priority. page is 1-based and at most 100; pageSize is 25, 50, or 100. total counts only what the page proves unless count is exact, and hasMore reports whether another page exists. Payloads are never included; read one task with taskDetail. canCompleteHumanWait reports whether this deployment can complete human waits.",
   },
   taskFacets: {
     summary: "List the values the task filters offer",
@@ -104,7 +104,7 @@ export const procedureDocs: Record<ProcedureName, ProcedureDoc> = {
   events: {
     summary: "List task events and attempts in a time range",
     description:
-      "Returns one page of task events and attempt outcomes within a fixed window of 15m, 1h, 6h, or 24h, or between an inclusive rangeStart instant and exclusive rangeEnd instant. The feed is filterable by kind (event, attempt, or all), queue, taskType, event types, and one taskId. retention reports how far back events and attempts are kept.",
+      "Returns one page of task events and attempt outcomes within a fixed window of 15m, 1h, 6h, or 24h, or between an inclusive rangeStart instant and exclusive rangeEnd instant. The feed is filterable by kind (event, attempt, or all), queue, taskType, event types, and one taskId. total counts only what the page proves unless count is exact, and hasMore reports whether another page exists. retention reports how far back events and attempts are kept.",
   },
   eventDetail: {
     summary: "Read one event or attempt",
@@ -145,8 +145,14 @@ export const procedureDocs: Record<ProcedureName, ProcedureDoc> = {
   taskDetail: {
     summary: "Read one task",
     description:
-      "Returns one task's identity, lineage (dependencies, children, and redrives), concurrency policy, current attempt, attempts, checkpoints, waits, and events. The payload is redacted. canSignal reports whether signalTask is available for it.",
+      "Returns one task's identity, lineage (dependencies, children, and redrives), concurrency policy, current attempt, attempts, checkpoints, waits, and events. The payload is redacted. canSignal reports whether signalTask is available for it. Each history section carries only its most recent rows and truncated reports which were cut. A checkpoint value larger than the inline bound is reported by size only; read it with checkpointValue.",
     notFound: "Task not found",
+  },
+  checkpointValue: {
+    summary: "Read one saved checkpoint value",
+    description:
+      "Returns one checkpoint of one task by name, with its saved value and that value's size in bytes. Task detail withholds a value larger than it carries inline, so this is how an operator opens that one value.",
+    notFound: "Checkpoint not found",
   },
   humanWaits: {
     summary: "List pending human decisions and signal waits",

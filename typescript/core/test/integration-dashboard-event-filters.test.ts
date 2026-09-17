@@ -34,8 +34,9 @@ describe("dashboard event filters and detail metadata", () => {
   }
 
   it("filters both sources before pagination and counts the entire matching result", async () => {
-    const first = await events({ worker: "worker-a", search: "MATCH", pageSize: 25 });
-    const second = await events({ worker: "worker-a", search: "MATCH", pageSize: 25, page: 2 });
+    const counted = { worker: "worker-a", search: "MATCH", pageSize: 25, count: "exact" };
+    const first = await events(counted);
+    const second = await events({ ...counted, page: 2 });
     expect(first.total).toBe(60);
     expect(second.total).toBe(60);
     expect(first.events).toHaveLength(25);
@@ -46,23 +47,37 @@ describe("dashboard event filters and detail metadata", () => {
         (event) => event.workerId === "worker-a" && event.taskType === "invoice.match",
       ),
     ).toBe(true);
-    const lifecycle = await events({ worker: "worker-a", kind: "event" });
+    // Without a count mode a page reports only what it read: the rows up to this page and the one
+    // that shows another page exists.
+    expect(await events({ worker: "worker-a", search: "MATCH", pageSize: 25 })).toMatchObject({
+      total: 26,
+      hasMore: true,
+      count: "none",
+    });
+    const lifecycle = await events({ worker: "worker-a", kind: "event", count: "exact" });
     expect(lifecycle.total).toBe(30);
     const detail = await database.pool.query<{ result: { workerId: string } }>(
       "SELECT workhorse.dashboard_event_detail_v1($1::jsonb) AS result",
       [JSON.stringify({ id: lifecycle.events[0]!.id })],
     );
     expect(detail.rows[0]!.result.workerId).toBe("worker-a");
-    expect((await events({ worker: "worker-a", kind: "attempt" })).total).toBe(30);
+    expect((await events({ worker: "worker-a", kind: "attempt", count: "exact" })).total).toBe(30);
   });
 
   it("searches IDs and event names, treats SQL wildcards literally, and combines filters", async () => {
-    const page = await events({ search: "succeeded", queue: "billing", worker: "worker-b" });
+    const page = await events({
+      search: "succeeded",
+      queue: "billing",
+      worker: "worker-b",
+      count: "exact",
+    });
     expect(page.total).toBe(60);
     const id = page.events[0]!.taskId;
-    expect((await events({ search: id })).total).toBe(2);
-    expect((await events({ search: "%" })).total).toBe(0);
-    expect((await events({ search: "invoice.match", worker: "worker-b" })).total).toBe(0);
+    expect((await events({ search: id, count: "exact" })).total).toBe(2);
+    expect((await events({ search: "%", count: "exact" })).total).toBe(0);
+    expect(
+      (await events({ search: "invoice.match", worker: "worker-b", count: "exact" })).total,
+    ).toBe(0);
   });
 
   it("returns tags and explicit action capability", async () => {

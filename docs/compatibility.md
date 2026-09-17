@@ -405,9 +405,10 @@ generator has recorded it, which needs no hand edit. Taking a break deliberately
 means creating `dashboard/v2` instead, and for SQL it means narrowing
 `workhorse.protocol_version`.
 
-[ADR 0064](decisions/0064-rename-the-unit-noun-from-job-to-task.md) took one exception before any
-consumer outside this repository spoke the contract: the unit-noun rename rewrote `dashboard/v1`
-in place rather than creating `dashboard/v2`.
+[ADR 0064](decisions/0064-rename-the-unit-noun-from-job-to-task.md) holds the exception for
+`dashboard/v1`: while no consumer outside this repository speaks the contract, a break is taken in
+place with `--accept-breaking` and recorded in the deciding issue. Check that condition before
+taking one. The published `openapi.json` is what is most likely to end it.
 
 ### The governed SQL surface
 

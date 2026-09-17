@@ -217,6 +217,7 @@ describe("schema installation", () => {
         "created_at",
         "updated_at",
       ],
+      dashboard_task_query_v1: ["task_id", "queue_name", "task_type", "created_at"],
       dashboard_task_runtime_v1: [
         "task_id",
         "queue_name",
@@ -458,6 +459,7 @@ describe("schema installation", () => {
       { version: 3, description: "named budgets" },
       { version: 4, description: "cold history export" },
       { version: 5, description: "history partition horizon" },
+      { version: 6, description: "bounded dashboard reads" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

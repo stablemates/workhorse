@@ -4,6 +4,7 @@ import {
   ActionIcon,
   Badge,
   Box,
+  Button,
   Code,
   Group,
   Paper,
@@ -22,11 +23,15 @@ import {
 import type { DashboardTaskDetail } from "@stablemates/workhorse-dashboard-server/wire";
 import {
   checkpointOutput,
+  formatBytes,
   formatExact,
   formatJson,
   formatRelative,
   hasStoredValue,
 } from "../preferences.js";
+import { useDashboardClient } from "../core.js";
+
+type Checkpoint = DashboardTaskDetail["checkpoints"][number];
 
 /**
  * One top-level block of the task detail drawer.
@@ -228,9 +233,80 @@ export function TaskOutcome({ task }: { task: DashboardTaskDetail }) {
     </DrawerSection>
   );
 }
+/**
+ * One checkpoint's saved value.
+ *
+ * A checkpoint may hold a megabyte, and a drawer that carried every value would transfer all of
+ * them to show a list of names. Task detail reports the size of a value it did not carry, and this
+ * asks PostgreSQL for the one value an operator opens.
+ */
+function CheckpointValue({
+  taskId,
+  checkpoint,
+  label,
+  maxHeight,
+}: {
+  taskId: string;
+  checkpoint: Checkpoint;
+  label: string;
+  maxHeight?: number;
+}) {
+  const client = useDashboardClient();
+  const [fetched, setFetched] = useState<{ value: unknown } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setFetched(null);
+    setError(null);
+  }, [taskId, checkpoint.name]);
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const value = await client.checkpointValue({ id: taskId, name: checkpoint.name });
+      setFetched({ value: value.value });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Workhorse could not read this value");
+    } finally {
+      setLoading(false);
+    }
+  }, [client, taskId, checkpoint.name]);
+  if (!checkpoint.valueOmitted || fetched !== null) {
+    return (
+      <JsonValue
+        label={label}
+        value={fetched === null ? checkpoint.value : fetched.value}
+        emptyLabel="This checkpoint stored no value."
+        copyLabel={`the ${checkpoint.name} interim result`}
+        maxHeight={maxHeight}
+      />
+    );
+  }
+  return (
+    <Stack gap={4}>
+      <Text fw={600} size="xs">
+        {label}
+      </Text>
+      <Text c="dimmed" size="xs">
+        Workhorse saved {formatBytes(checkpoint.valueBytes)} here, which the drawer does not carry
+        with the rest of the task.
+      </Text>
+      {error === null ? null : (
+        <Text c="red" size="xs">
+          {error}
+        </Text>
+      )}
+      <Group>
+        <Button size="compact-xs" variant="light" loading={loading} onClick={() => void load()}>
+          Show this value
+        </Button>
+      </Group>
+    </Stack>
+  );
+}
 function plannedStepDescription(
   task: DashboardTaskDetail,
-  checkpoint: DashboardTaskDetail["checkpoints"][number] | undefined,
+  checkpoint: Checkpoint | undefined,
   stepIndex: number,
   activeStep: number,
 ) {
@@ -245,9 +321,13 @@ function plannedStepDescription(
         <Text c="dimmed" size="xs">
           Attempt {checkpoint.attempt} · {checkpoint.workerId} · fence {checkpoint.fenceToken}
         </Text>
-        <Code fz="xs" title={JSON.stringify(checkpoint.value)}>
-          {checkpointOutput(checkpoint.value)}
-        </Code>
+        {checkpoint.valueOmitted ? (
+          <Code fz="xs">{formatBytes(checkpoint.valueBytes)} saved</Code>
+        ) : (
+          <Code fz="xs" title={JSON.stringify(checkpoint.value)}>
+            {checkpointOutput(checkpoint.value)}
+          </Code>
+        )}
         {boundary.state === "blocked" ? (
           <Text c="dimmed" size="xs">
             {boundary.label}. {boundary.summary}
@@ -390,11 +470,10 @@ function PlannedDurability({ task }: { task: DashboardTaskDetail }) {
           <Stack gap="xs">
             {unmatchedCheckpoints.map((checkpoint) => (
               <Paper key={checkpoint.name} withBorder p="xs">
-                <JsonValue
+                <CheckpointValue
+                  taskId={task.identity.id}
+                  checkpoint={checkpoint}
                   label={checkpoint.name}
-                  value={checkpoint.value}
-                  emptyLabel="This checkpoint stored no value."
-                  copyLabel={`the ${checkpoint.name} interim result`}
                   maxHeight={160}
                 />
               </Paper>
@@ -414,6 +493,7 @@ export function TaskCheckpoints({ task }: { task: DashboardTaskDetail }) {
       aside={
         <Badge variant="light" color={task.checkpoints.length > 0 ? "teal" : "gray"}>
           {task.checkpoints.length}
+          {task.truncated.checkpoints ? "+" : ""}
         </Badge>
       }
     >
@@ -421,6 +501,9 @@ export function TaskCheckpoints({ task }: { task: DashboardTaskDetail }) {
       <Text c="dimmed" size="xs" mb="sm">
         Interim results show completed work rather than current progress. Workhorse saves each
         result at a named restart boundary, and later attempts reuse it.
+        {task.truncated.checkpoints
+          ? " This task saved more results than the drawer shows; these are its most recent."
+          : ""}
       </Text>
       {task.durability ? (
         <PlannedDurability task={task} />
@@ -451,11 +534,10 @@ export function TaskCheckpoints({ task }: { task: DashboardTaskDetail }) {
                   </Badge>
                 </Group>
                 <Box mt="sm">
-                  <JsonValue
+                  <CheckpointValue
+                    taskId={task.identity.id}
+                    checkpoint={checkpoint}
                     label="Checkpoint output"
-                    value={checkpoint.value}
-                    emptyLabel="This checkpoint stored no value."
-                    copyLabel={`the ${checkpoint.name} interim result`}
                   />
                 </Box>
               </Paper>

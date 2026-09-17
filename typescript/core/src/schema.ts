@@ -71,6 +71,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "history partition horizon",
     kind: "additive",
   },
+  {
+    fromVersion: 5,
+    toVersion: 6,
+    file: "0006-bounded-dashboard-reads.sql",
+    description: "bounded dashboard reads",
+    kind: "additive",
+  },
 ];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {

@@ -6,7 +6,9 @@ import { Worker } from "../../core/src/index.js";
 import { createIntegrationTestContext } from "../../core/test/support/integration.js";
 import { createDashboardHost } from "../src/server/host.js";
 import { createDashboardOperatorControllers } from "../src/server/operator-controllers.js";
+import { readDashboardHumanWaits } from "../src/server/read-model.js";
 import type { DashboardRouter } from "../src/server/router.js";
+import { dashboardDatabase } from "../src/server/sql.js";
 
 const { pool, queue, admin } = createIntegrationTestContext(import.meta.url);
 
@@ -111,6 +113,37 @@ describe("dashboard human waits", () => {
     await expect(admin.getTask(id)).resolves.toMatchObject({
       state: "succeeded",
       result: { approved: true },
+    });
+  });
+});
+
+describe("dashboard human waits health input", () => {
+  // The procedure falls back to queue_health_v1() when no document arrives, so a broken
+  // pass-through would still return plausible numbers. A sentinel the database could never
+  // produce proves the supplied document is the one projected.
+  it("projects the diagnostics from the supplied health document instead of recomputing them", async () => {
+    const page = await readDashboardHumanWaits(
+      dashboardDatabase(pool),
+      admin,
+      true,
+      true,
+      async () => ({
+        pending_human_waits: 42,
+        pending_signal_waits: 7,
+        overdue_external_waits: 3,
+        oldest_external_wait_age_ms: 1234.5,
+        rejected_wait_deliveries: 2,
+        external_wait_counts_capped: true,
+      }),
+    );
+
+    expect(page.diagnostics).toEqual({
+      pendingHumanDecisions: 42,
+      pendingSignals: 7,
+      overdue: 3,
+      oldestPendingAgeMs: 1234.5,
+      rejectedDeliveries: 2,
+      capped: true,
     });
   });
 });

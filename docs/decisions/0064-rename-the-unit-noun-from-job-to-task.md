@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-11
-- **Related:** SM-35, SM-715, [ADR 0042](0042-publish-the-first-public-beta.md),
+- **Related:** SM-35, SM-715, SM-755, [ADR 0042](0042-publish-the-first-public-beta.md),
   [ADR 0054](0054-define-what-1-0-0-promises.md)
 - **Amends:** [ADR 0011](0011-daily-retention-and-split-maintenance.md) (the maintenance
   vocabulary), [ADR 0051](0051-lead-with-durable-job-queue.md) (the category noun),
@@ -61,9 +61,10 @@ two meanings in one commit.
 and allowed a re-cut only while no database was carried forward. That condition still holds in
 fact, though not by date, so this decision re-cuts the baseline in place rather than shipping the
 rename as a migration. `protocol/v1/governed-surface.json` and `dashboard/v1/governed-surface.json`
-are rewritten with `--accept-breaking`. For `dashboard/v1` this is a one-time exception to the rule
-in `docs/compatibility.md` that a break creates `dashboard/v2`: no consumer outside this repository
-speaks the contract yet, and a second directory would document a contract nobody used. `api/go.txt`
+are rewritten with `--accept-breaking`. For `dashboard/v1` this is an exception to the rule in
+`docs/compatibility.md` that a break creates `dashboard/v2`. It holds while no consumer outside this
+repository speaks the contract, because a second directory would document a contract nobody used.
+The next break is judged against that condition, not against a count of earlier exceptions. `api/go.txt`
 records every renamed Go export against the pinned beta tag.
 
 **The change ships as 0.1.4.** ADR 0042 promises that a 0.x minor release may break the schema and

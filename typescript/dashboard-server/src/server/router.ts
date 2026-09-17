@@ -16,6 +16,7 @@ import type {
 } from "../wire.js";
 import {
   dashboardAttemptOutcomes,
+  dashboardListingCounts,
   dashboardTaskEventTypes,
   dashboardRedriveBatchDefault,
   dashboardRedriveBatchMax,
@@ -37,6 +38,7 @@ import type { DashboardDatabase } from "./sql.js";
 import {
   type DashboardQueueHealthReader,
   readDashboardActivity,
+  readDashboardCheckpointValue,
   readDashboardCron,
   readDashboardEvents,
   readDashboardEventDetail,
@@ -96,6 +98,7 @@ const cancellationAuditSchema = z.object({
 });
 
 const taskDetailInput = z.object({ id: z.uuid() });
+const checkpointValueInput = z.object({ id: z.uuid(), name: z.string().trim().min(1).max(200) });
 const eventDetailInput = z.object({
   id: z
     .string()
@@ -108,6 +111,13 @@ const taskSort = z.enum(dashboardTaskSorts);
 const checkedDashboardTaskPriorityMax: typeof MAX_TASK_PRIORITY = dashboardTaskPriorityMax;
 const dashboardFilterString = z.string().trim().min(1).max(200);
 const dashboardPage = z.number().int().min(1).max(100).default(1);
+/**
+ * Whether a listing counts every matching row.
+ *
+ * The default reports the total the page can prove, which is what a pager needs and costs nothing
+ * beyond reading the page. An exact count reads the whole match, so a caller asks for it by name.
+ */
+const listingCount = z.enum(dashboardListingCounts).default("none");
 const tasksInput = z.object({
   filter: taskFilter.default("all"),
   queue: dashboardFilterString.nullable().default(null),
@@ -124,6 +134,7 @@ const tasksInput = z.object({
     .optional()
     .transform((value) => value || null),
   pageSize: z.union([z.literal(25), z.literal(50), z.literal(100)]).default(50),
+  count: listingCount,
 });
 const tasksCursorInput = tasksInput.omit({ page: true }).extend({
   cursor: z
@@ -135,7 +146,6 @@ const tasksCursorInput = tasksInput.omit({ page: true }).extend({
     .nullable()
     .default(null),
   direction: z.enum(["next", "previous"]).default("next"),
-  count: z.enum(["none", "exact"]).default("none"),
 });
 const activityInput = z.object({
   filter: taskFilter.default("all"),
@@ -219,6 +229,7 @@ const eventsInput = z
     rangeEnd: z.iso.datetime().nullable().default(null),
     page: dashboardPage,
     pageSize: z.union([z.literal(25), z.literal(50), z.literal(100)]).default(50),
+    count: listingCount,
     kind: z.enum(["all", "event", "attempt"]).default("all"),
     queue: dashboardFilterString.nullable().default(null),
     taskType: dashboardFilterString.nullable().default(null),
@@ -499,6 +510,17 @@ export const dashboardRouter = {
       );
       if (!detail) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
       return detail;
+    }),
+    /**
+     * One saved checkpoint value, read on its own.
+     *
+     * Task detail reports the size of a value too large to carry inline and withholds it, so the
+     * drawer opens one value when an operator asks for it rather than every value on every open.
+     */
+    checkpointValue: procedure.input(checkpointValueInput).handler(async ({ context, input }) => {
+      const checkpoint = await readDashboardCheckpointValue(context.database, input.id, input.name);
+      if (!checkpoint) throw new ORPCError("NOT_FOUND", { message: "Checkpoint not found" });
+      return checkpoint;
     }),
     humanWaits: procedure.handler(({ context }) =>
       readDashboardHumanWaits(

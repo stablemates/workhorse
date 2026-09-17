@@ -1079,8 +1079,14 @@ describe("Workhorse demo", () => {
       filter: "all",
       page: 1,
       pageSize: 25,
-      total: 448,
+      // Without a count mode a page reports what it proved: this page plus one more row.
+      count: "none",
+      hasMore: true,
+      total: 26,
     });
+    await expect(
+      client.dashboard.tasks({ filter: "all", page: 1, pageSize: 25, count: "exact" }),
+    ).resolves.toMatchObject({ count: "exact", total: 448 });
     await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
       all: 448,
       scheduled: 10,
@@ -1113,7 +1119,7 @@ describe("Workhorse demo", () => {
       tags: expect.arrayContaining(["billing", "email", "reports", "weekly"]),
     });
     expect(firstPage.tasks.some((task) => task.tags.length > 0)).toBe(true);
-    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 448 });
+    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 51 });
     expect(secondPage.tasks).toHaveLength(25);
     expect(
       await client.dashboard.tasks({ filter: "scheduled", page: 1, pageSize: 25 }),
@@ -4508,7 +4514,7 @@ describe("Workhorse dashboard events feed", () => {
       // below are about the feed rather than about how fast the fleet drained.
       for (let index = 0; index < 20; index += 1) await enqueueDemoTest("success");
       await waitFor(
-        () => client.dashboard.events({ window: "1h", pageSize: 100 }),
+        () => client.dashboard.events({ window: "1h", pageSize: 100, count: "exact" }),
         (value) => value.total > 50,
       );
       // Stop writing before comparing two pages: fresh rows arriving between the reads shift every
@@ -4521,15 +4527,16 @@ describe("Workhorse dashboard events feed", () => {
       expect(second.page).toBe(2);
       expect(first.events).toHaveLength(25);
       expect(second.events).toHaveLength(25);
-      expect(first.total).toBeGreaterThan(50);
-      expect(second.total).toBe(first.total);
+      // Each page reports the rows it read plus the one that shows another page exists.
+      expect(first).toMatchObject({ total: 26, hasMore: true });
+      expect(second).toMatchObject({ total: 51, hasMore: true });
       // A later page continues the ordering rather than repeating what the page above it showed.
       const shown = new Set(first.events.map((event) => event.id));
       expect(second.events.filter((event) => shown.has(event.id))).toEqual([]);
       expect(second.events[0]!.occurredAt <= first.events.at(-1)!.occurredAt).toBe(true);
 
-      const full = await client.dashboard.events({ window: "1h", pageSize: 100 });
-      expect(full.total).toBe(first.total);
+      const full = await client.dashboard.events({ window: "1h", pageSize: 100, count: "exact" });
+      expect(full.total).toBeGreaterThan(50);
       expect(full.windowSeconds).toBe(3_600);
       // Depth is bounded by retention, so the page carries the policy rather than leaving an
       // operator to infer it from a feed that simply stops.

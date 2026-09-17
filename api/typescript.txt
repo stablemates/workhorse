@@ -357,6 +357,7 @@ type DashboardAttemptOutcome
 interface DashboardBudgetSummary
 type DashboardCancelStatus
 interface DashboardCancellationRequest
+interface DashboardCheckpointValue
 type DashboardChildHealth
 interface DashboardConcurrencyPolicySummary
 interface DashboardCronPage
@@ -378,6 +379,7 @@ interface DashboardHumanWaitRow
 interface DashboardHumanWaitSummary
 interface DashboardIdempotencyEvidence
 type DashboardLifecycleState
+type DashboardListingCount
 interface DashboardMaintenanceLoopCadences
 type DashboardMaintenancePolicy
 interface DashboardMaintenanceRun
@@ -424,6 +426,7 @@ const dashboardAttemptOutcomes
 function dashboardBudgetSummary
 function dashboardConcurrencyPolicySummary
 const dashboardIdempotencyEventDetailKeys
+const dashboardListingCounts
 function dashboardRateLimitPolicySummary
 const dashboardRedriveBatchDefault
 const dashboardRedriveBatchMax
@@ -499,7 +502,7 @@ interface DashboardCancelTaskResult
 interface DashboardCancellationAuditContext
 interface DashboardCompleteHumanWaitResult
 interface DashboardDatabase
-type DashboardDurabilityProjector
+interface DashboardDurabilityProjector
 type DashboardEnqueueTestOutcome
 interface DashboardEnqueueTestResult
 interface DashboardHost
@@ -582,6 +585,7 @@ type DashboardAttemptOutcome
 interface DashboardBudgetSummary
 type DashboardCancelStatus
 interface DashboardCancellationRequest
+interface DashboardCheckpointValue
 type DashboardChildHealth
 interface DashboardConcurrencyPolicySummary
 interface DashboardCronPage
@@ -603,6 +607,7 @@ interface DashboardHumanWaitRow
 interface DashboardHumanWaitSummary
 interface DashboardIdempotencyEvidence
 type DashboardLifecycleState
+type DashboardListingCount
 interface DashboardMaintenanceLoopCadences
 type DashboardMaintenancePolicy
 interface DashboardMaintenanceRun
@@ -649,6 +654,7 @@ const dashboardAttemptOutcomes
 function dashboardBudgetSummary
 function dashboardConcurrencyPolicySummary
 const dashboardIdempotencyEventDetailKeys
+const dashboardListingCounts
 function dashboardRateLimitPolicySummary
 const dashboardRedriveBatchDefault
 const dashboardRedriveBatchMax
@@ -671,7 +677,7 @@ interface DashboardCancelTaskResult
 interface DashboardCancellationAuditContext
 interface DashboardCompleteHumanWaitResult
 interface DashboardDatabase
-type DashboardDurabilityProjector
+interface DashboardDurabilityProjector
 type DashboardEnqueueTestOutcome
 interface DashboardEnqueueTestResult
 interface DashboardHost
@@ -1200,6 +1206,16 @@ interface DashboardCancellationRequest {
   reason: string | null;
 }
 
+interface DashboardCheckpointValue {
+  name: string;
+  value: unknown;
+  valueBytes: number;
+  attempt: number;
+  fenceToken: string;
+  workerId: string;
+  createdAt: string;
+}
+
 type DashboardChildHealth = QueueHealth["children"];
 
 type DashboardClient = Omit<DashboardProcedures, OptionalDashboardProcedure> & Partial<Pick<DashboardProcedures, OptionalDashboardProcedure>>;
@@ -1335,7 +1351,17 @@ interface DashboardDurabilityPlan {
   } | null;
 }
 
-type DashboardDurabilityProjector = (type: string, payload: unknown) => DashboardDurabilityPlan | null;
+interface DashboardDurabilityProjector {
+  (type: string, payload: unknown): DashboardDurabilityPlan | null;
+  /**
+  * Top-level payload keys this projector reads, if it reads only a few.
+  *
+  * A task listing has to hand the projector each task's payload before it can report durable
+  * progress, and a payload may be as large as a megabyte. A projector that names its keys receives
+  * only those; one that names none receives the whole redacted payload, as it always has.
+  */
+  payloadKeys?: readonly string[];
+}
 
 type DashboardEnqueueTestOutcome = "accepted" | "replayed";
 
@@ -1401,7 +1427,15 @@ interface DashboardEventsPage {
   /** 1-based page index, matching the task listing. */
   page: number;
   pageSize: number;
-  /** Rows matching the window and filters, across both source tables. */
+  /** The count mode this page was read with, echoed so a caller can read `total` correctly. */
+  count: DashboardListingCount;
+  /** True when at least one record matches the window and filters beyond this page. */
+  hasMore: boolean;
+  /**
+  * Rows matching the window and filters, across both source tables. Exact under `count: "exact"`;
+  * otherwise the number this page proves, which is the exact total whenever it fits within the
+  * pages read so far and one more beyond that.
+  */
   total: number;
   /**
   * Retention days for the two source tables, or null when retention is disabled for one.
@@ -1541,6 +1575,8 @@ interface DashboardIdempotencyEvidence {
 }
 
 type DashboardLifecycleState = "scheduled" | "ready" | "active" | DashboardTerminalState | "unknown";
+
+type DashboardListingCount = (typeof dashboardListingCounts)[number];
 
 interface DashboardMaintenanceLoopCadences {
   tickIntervalMs: number;
@@ -1737,7 +1773,7 @@ interface DashboardQueueController {
   }>;
 }
 
-type DashboardQueueHealthReader = () => Promise<QueueHealth>;
+type DashboardQueueHealthReader = () => Promise<unknown>;
 
 interface DashboardQueueRow {
   queue: string;
@@ -2330,6 +2366,13 @@ interface DashboardTaskDetail {
       cancellation: DashboardCancellationRequest | null;
       error: unknown;
     } | null;
+    /**
+    * The terminal outcome, or null while the task is still live.
+    *
+    * A result exists only once a task finishes, so this is the one place it appears. `error` below
+    * stays, because a live runtime carries one and a reader needs the latest without choosing
+    * between two branches.
+    */
     outcome: {
       state: string;
       attempt: number;
@@ -2337,7 +2380,6 @@ interface DashboardTaskDetail {
       result: unknown;
       error: unknown;
     } | null;
-    result: unknown;
     error: unknown;
   };
   batchExecutions: Array<{
@@ -2370,7 +2412,17 @@ interface DashboardTaskDetail {
   }>;
   checkpoints: Array<{
     name: string;
+    /**
+    * The saved value, or null when it is larger than task detail carries inline.
+    *
+    * A checkpoint may hold a megabyte, and a task detail that carried every value would transfer
+    * all of them to draw a list of names. `valueOmitted` says which of the two a null is, and
+    * `checkpointValue` returns the one value an operator opens.
+    */
     value: unknown;
+    /** Size of the saved value in bytes, whether or not it is carried here. */
+    valueBytes: number;
+    valueOmitted: boolean;
     attempt: number;
     fenceToken: string;
     workerId: string;
@@ -2394,6 +2446,18 @@ interface DashboardTaskDetail {
     details: unknown;
     occurredAt: string;
   }>;
+  /**
+  * Which sections above hold only their most recent rows.
+  *
+  * A task that retried for days records more than one drawer shows, so each history section is
+  * bounded and says when it was cut. The event feed filtered by this task identity holds the rest.
+  */
+  truncated: {
+    attempts: boolean;
+    checkpoints: boolean;
+    waits: boolean;
+    events: boolean;
+  };
 }
 
 type DashboardTaskEventType = (typeof dashboardTaskEventTypes)[number];
@@ -2421,8 +2485,6 @@ interface DashboardTaskRow extends Record<string, unknown> {
   maxAttempts: number;
   /** Retry scheduling persisted with the task identity. Null means the default SQL-owned backoff. */
   retryPolicy: RetryPolicy | null;
-  deadlineAt?: string | null;
-  executionTimeoutMs?: number | null;
   tags: string[];
   /**
   * True when the accepted enqueue recorded deduplication evidence. Derived only from the safe
@@ -2460,7 +2522,7 @@ interface DashboardTaskRow extends Record<string, unknown> {
 
 type DashboardTaskSort = (typeof dashboardTaskSorts)[number];
 
-interface DashboardTasksCursorPage extends Omit<DashboardTasksPage, "total"> {
+interface DashboardTasksCursorPage extends Omit<DashboardTasksPage, "total" | "hasMore"> {
   total: number | null;
   nextCursor: DashboardTaskCursor | null;
   previousCursor: DashboardTaskCursor | null;
@@ -2479,6 +2541,14 @@ interface DashboardTasksPage {
   search: string | null;
   page: number;
   pageSize: number;
+  /** The count mode this page was read with, echoed so a caller can read `total` correctly. */
+  count: DashboardListingCount;
+  /** True when at least one task matches the filter beyond this page. */
+  hasMore: boolean;
+  /**
+  * Matching tasks. Exact under `count: "exact"`; otherwise the number this page proves, which is
+  * the exact total whenever it fits within the pages read so far and one more beyond that.
+  */
   total: number;
   tasks: DashboardTaskRow[];
 }
@@ -3006,7 +3076,7 @@ interface LiveProtocolWorker {
 
 const MAXIMUM_PROTOCOL_VERSION = 4;
 
-const MAXIMUM_SCHEMA_VERSION = 5;
+const MAXIMUM_SCHEMA_VERSION = 6;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -4437,7 +4507,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 1;
 
-const WORKHORSE_SCHEMA_VERSION = 5;
+const WORKHORSE_SCHEMA_VERSION = 6;
 
 const WORKHORSE_VERSION = "0.1.5";
 
@@ -4870,6 +4940,8 @@ const dashboardDemoTaskKinds: CompleteDashboardOptions<DashboardDemoTaskKind, ty
 
 const dashboardIdempotencyEventDetailKeys: readonly string[];
 
+const dashboardListingCounts: readonly ["none", "exact"];
+
 function dashboardNodeMiddleware(host: DashboardHost, options?: DashboardNodeMiddlewareOptions): DashboardNodeMiddleware;
 
 const dashboardNotificationPosition = "bottom-right";
@@ -4913,6 +4985,10 @@ const dashboardRouter: {
       tags: z.ZodDefault<z.ZodArray<z.ZodString>>;
       search: z.ZodPipe<z.ZodOptional<z.ZodString>, z.ZodTransform<string | null, string | undefined>>;
       pageSize: z.ZodDefault<z.ZodUnion<readonly [z.ZodLiteral<25>, z.ZodLiteral<50>, z.ZodLiteral<100>]>>;
+      count: z.ZodDefault<z.ZodEnum<{
+        none: "none";
+        exact: "exact";
+      }>>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardTasksPage, import("../wire.js").DashboardTasksPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     tasksCursor: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
       queue: z.ZodDefault<z.ZodNullable<z.ZodString>>;
@@ -4938,6 +5014,10 @@ const dashboardRouter: {
       }>>;
       search: z.ZodPipe<z.ZodOptional<z.ZodString>, z.ZodTransform<string | null, string | undefined>>;
       pageSize: z.ZodDefault<z.ZodUnion<readonly [z.ZodLiteral<25>, z.ZodLiteral<50>, z.ZodLiteral<100>]>>;
+      count: z.ZodDefault<z.ZodEnum<{
+        none: "none";
+        exact: "exact";
+      }>>;
       cursor: z.ZodDefault<z.ZodNullable<z.ZodObject<{
         id: z.ZodUUID;
         updatedAt: z.ZodISODateTime;
@@ -4946,10 +5026,6 @@ const dashboardRouter: {
       direction: z.ZodDefault<z.ZodEnum<{
         next: "next";
         previous: "previous";
-      }>>;
-      count: z.ZodDefault<z.ZodEnum<{
-        none: "none";
-        exact: "exact";
       }>>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardTasksCursorPage, import("../wire.js").DashboardTasksCursorPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     taskFacets: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardTaskFacets, import("../wire.js").DashboardTaskFacets>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
@@ -4994,6 +5070,10 @@ const dashboardRouter: {
       rangeEnd: z.ZodDefault<z.ZodNullable<z.ZodISODateTime>>;
       page: z.ZodDefault<z.ZodNumber>;
       pageSize: z.ZodDefault<z.ZodUnion<readonly [z.ZodLiteral<25>, z.ZodLiteral<50>, z.ZodLiteral<100>]>>;
+      count: z.ZodDefault<z.ZodEnum<{
+        none: "none";
+        exact: "exact";
+      }>>;
       kind: z.ZodDefault<z.ZodEnum<{
         attempt: "attempt";
         all: "all";
@@ -5081,6 +5161,16 @@ const dashboardRouter: {
     taskDetail: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
       id: z.ZodUUID;
     }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardTaskDetail, import("../wire.js").DashboardTaskDetail>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
+    /**
+    * One saved checkpoint value, read on its own.
+    *
+    * Task detail reports the size of a value too large to carry inline and withholds it, so the
+    * drawer opens one value when an operator asks for it rather than every value on every open.
+    */
+    checkpointValue: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+      id: z.ZodUUID;
+      name: z.ZodString;
+    }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardCheckpointValue, import("../wire.js").DashboardCheckpointValue>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     humanWaits: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardHumanWaitPage, import("../wire.js").DashboardHumanWaitPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     enqueueTest: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
       kind: z.ZodEnum<{

@@ -28,9 +28,14 @@ func (service *backend) workers(ctx context.Context, _ any, _ string) (any, erro
 }
 
 func (service *backend) humanWaits(ctx context.Context, _ any, _ string) (any, error) {
+	health, err := service.queueHealth(ctx)
+	if err != nil {
+		return nil, err
+	}
 	input := string(mustJSON(map[string]any{
 		"canComplete": !service.readOnly,
 		"canSignal":   !service.readOnly,
+		"health":      health,
 	}))
 	return service.jsonQuery(
 		ctx,
@@ -67,6 +72,7 @@ func (service *backend) tasks(ctx context.Context, input any, _ string) (any, er
 	defaults := map[string]any{
 		"filter": "all", "queue": nil, "page": 1, "worker": nil, "taskType": nil,
 		"priority": nil, "sort": "updated", "tags": []any{}, "search": nil, "pageSize": 50,
+		"count": "none",
 	}
 	for key, defaultValue := range defaults {
 		if _, exists := value[key]; !exists {
@@ -109,8 +115,13 @@ func (service *backend) previewRetentionPolicy(ctx context.Context, input any, _
 
 func (service *backend) taskDetail(ctx context.Context, input any, _ string) (any, error) {
 	value, _ := document(input)
+	health, err := service.queueHealth(ctx)
+	if err != nil {
+		return nil, err
+	}
 	value["canSignal"] = !service.readOnly
 	value["canCompleteHumanWait"] = !service.readOnly
+	value["health"] = health
 	result, err := service.jsonQuery(
 		ctx,
 		"SELECT workhorse.dashboard_task_detail_v1($1::jsonb) AS result",
@@ -121,6 +132,23 @@ func (service *backend) taskDetail(ctx context.Context, input any, _ string) (an
 	}
 	if result == nil {
 		return nil, &RPCError{Status: 404, Code: "NOT_FOUND", Message: "Task not found"}
+	}
+	return result, nil
+}
+
+// checkpointValue reads one saved checkpoint value. Task detail withholds a value larger than it
+// carries inline and reports its size, so an operator opens that one value here.
+func (service *backend) checkpointValue(ctx context.Context, input any, _ string) (any, error) {
+	result, err := service.jsonQuery(
+		ctx,
+		"SELECT workhorse.dashboard_checkpoint_value_v1($1::jsonb) AS result",
+		string(mustJSON(input)),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, &RPCError{Status: 404, Code: "NOT_FOUND", Message: "Checkpoint not found"}
 	}
 	return result, nil
 }

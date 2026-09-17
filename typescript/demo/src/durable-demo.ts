@@ -134,6 +134,14 @@ export function durableDemoPlanForTask(type: string, payload: unknown): DurableD
   };
 }
 
+/**
+ * The only payload keys the projector above reads.
+ *
+ * The task listing hands each task's payload to the projector, so naming the two keys keeps a
+ * listing from carrying every demonstration payload to count two of their fields.
+ */
+durableDemoPlanForTask.payloadKeys = ["scenario", "failureMode"] as const;
+
 export function persistentFailureFor(scenario: DurableDemoScenario): DurablePersistentFailure {
   const definition = durableDemoScenarios[scenario];
   const index = Math.min(definition.persistentFailAfterStep, definition.steps.length - 2);

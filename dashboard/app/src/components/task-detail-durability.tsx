@@ -348,6 +348,12 @@ export function BoundaryTimeline({ task }: { task: DashboardTaskDetail }) {
       <Text fw={600} size="xs" mb={6}>
         Task history
       </Text>
+      {task.truncated.events ? (
+        <Text c="dimmed" size="xs" mb={6}>
+          This task recorded more events than the drawer shows. These are its most recent ones; the
+          event feed filtered by this task holds the rest.
+        </Text>
+      ) : null}
       <Stack gap={4}>
         {events.map((event) => {
           const claimIndex = claimOrdinals.get(event.id) ?? null;
@@ -543,6 +549,7 @@ export function DurableWaits({ task }: { task: DashboardTaskDetail }) {
       aside={
         <Badge variant="light" color="indigo">
           {task.waits.length}
+          {task.truncated.waits ? "+" : ""}
         </Badge>
       }
     >

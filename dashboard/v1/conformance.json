@@ -173,6 +173,30 @@
           }
         },
         {
+          "id": "save-checkpoint",
+          "sql": "SELECT status FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
+          "parameters": [
+            {
+              "$ref": "succeededTask"
+            },
+            "conformance-worker",
+            {
+              "$ref": "succeededFence"
+            },
+            "conformance-step",
+            {
+              "stage": "prepared"
+            }
+          ],
+          "expect": {
+            "rows": [
+              {
+                "status": "saved"
+              }
+            ]
+          }
+        },
+        {
           "id": "complete-succeeded",
           "sql": "SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted",
           "parameters": [
@@ -788,6 +812,7 @@
                 "page": 1,
                 "sort": "updated",
                 "tags": [],
+                "count": "none",
                 "queue": null,
                 "tasks": [
                   {
@@ -815,7 +840,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": {
                       "$type": "timestamp"
@@ -828,7 +852,6 @@
                     "errorMessage": "conformance.redrive.batch failed",
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -856,7 +879,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": {
                       "$type": "timestamp"
@@ -869,7 +891,6 @@
                     "errorMessage": "conformance.redrive.one failed",
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -897,7 +918,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": null,
@@ -908,7 +928,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -936,7 +955,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": null,
@@ -947,7 +965,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -973,7 +990,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": null,
@@ -984,7 +1000,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -1014,7 +1029,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": null,
@@ -1025,7 +1039,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -1059,7 +1072,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": null,
@@ -1070,7 +1082,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -1096,7 +1107,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": {
@@ -1112,7 +1122,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -1140,7 +1149,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": {
                       "$type": "timestamp"
@@ -1153,7 +1161,6 @@
                     "errorMessage": "conformance.fail failed",
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -1183,7 +1190,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": {
                       "$type": "timestamp"
@@ -1196,7 +1202,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   }
                 ],
@@ -1204,6 +1209,7 @@
                 "filter": "all",
                 "search": null,
                 "worker": null,
+                "hasMore": false,
                 "pageSize": 50,
                 "priority": null,
                 "taskType": null,
@@ -1236,12 +1242,14 @@
                 "tags": [
                   "conformance"
                 ],
+                "count": "none",
                 "queue": null,
                 "tasks": [],
                 "total": 0,
                 "filter": "discarded",
                 "search": null,
                 "worker": null,
+                "hasMore": false,
                 "pageSize": 50,
                 "priority": null,
                 "taskType": null,
@@ -1584,6 +1592,7 @@
             "body": {
               "json": {
                 "page": 1,
+                "count": "none",
                 "total": 26,
                 "events": [
                   {
@@ -2301,17 +2310,14 @@
                       "$type": "string"
                     },
                     "kind": "event",
-                    "type": "claimed",
+                    "type": "checkpoint_saved",
                     "queue": "conformance",
                     "taskId": {
                       "$ref": "succeededTask"
                     },
                     "attempt": 1,
                     "details": {
-                      "worker_id": "conformance-worker",
-                      "expires_at": {
-                        "$type": "timestamp"
-                      },
+                      "name": "conformance-step",
                       "fence_token": "1"
                     },
                     "recordId": {
@@ -2328,6 +2334,7 @@
                   }
                 ],
                 "window": "1h",
+                "hasMore": true,
                 "pageSize": 25,
                 "rangeEnd": {
                   "$type": "timestamp"
@@ -2348,7 +2355,8 @@
           },
           "coerce": {
             "body.json.events.*.details.run_at": "timestamp",
-            "body.json.events.*.durationMs": "integer"
+            "body.json.events.*.durationMs": "integer",
+            "body.json.events.*.details.expires_at": "timestamp"
           },
           "capture": {
             "eventDetailId": "json.events.0.id"
@@ -4165,7 +4173,7 @@
                         "deadRows": {
                           "$type": "integer"
                         },
-                        "relation": "task_event",
+                        "relation": "attempt_history",
                         "indexBytes": {
                           "$type": "integer"
                         },
@@ -4185,7 +4193,7 @@
                         "deadRows": {
                           "$type": "integer"
                         },
-                        "relation": "attempt_history",
+                        "relation": "task_event",
                         "indexBytes": {
                           "$type": "integer"
                         },
@@ -4557,6 +4565,8 @@
           },
           "coerce": {
             "body.json.kpis.queueWait.p50Ms": "number",
+            "body.json.kpis.queueWait.p95Ms": "number",
+            "body.json.kpis.queueWait.p99Ms": "number",
             "body.json.outcomes.*.bucketStart": "timestamp",
             "body.json.outcomes.*.enqueued": "integer",
             "body.json.outcomes.*.succeeded": "integer",
@@ -4892,6 +4902,20 @@
                     "id": {
                       "$type": "uuid"
                     },
+                    "type": "checkpoint_saved",
+                    "attempt": 1,
+                    "details": {
+                      "name": "conformance-step",
+                      "fence_token": "1"
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
                     "type": "succeeded",
                     "attempt": 1,
                     "details": {
@@ -4904,9 +4928,6 @@
                 ],
                 "current": {
                   "error": null,
-                  "result": {
-                    "ok": true
-                  },
                   "outcome": {
                     "error": null,
                     "state": "succeeded",
@@ -4974,9 +4995,30 @@
                 "progress": null,
                 "canSignal": true,
                 "humanWait": null,
+                "truncated": {
+                  "waits": false,
+                  "events": false,
+                  "attempts": false,
+                  "checkpoints": false
+                },
                 "durability": null,
                 "signalWait": null,
-                "checkpoints": [],
+                "checkpoints": [
+                  {
+                    "name": "conformance-step",
+                    "value": {
+                      "stage": "prepared"
+                    },
+                    "attempt": 1,
+                    "workerId": "conformance-worker",
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "fenceToken": "1",
+                    "valueBytes": 21,
+                    "valueOmitted": false
+                  }
+                ],
                 "childLineage": {
                   "records": [],
                   "truncated": false
@@ -4992,6 +5034,36 @@
                   "truncated": false
                 },
                 "canCompleteHumanWait": true
+              }
+            }
+          }
+        },
+        {
+          "id": "checkpoint-value",
+          "procedure": "checkpointValue",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "succeededTask"
+              },
+              "name": "conformance-step"
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "name": "conformance-step",
+                "value": {
+                  "stage": "prepared"
+                },
+                "attempt": 1,
+                "workerId": "conformance-worker",
+                "createdAt": {
+                  "$type": "timestamp"
+                },
+                "fenceToken": "1",
+                "valueBytes": 21
               }
             }
           }
@@ -5073,6 +5145,7 @@
                 "page": 1,
                 "sort": "updated",
                 "tags": [],
+                "count": "none",
                 "queue": null,
                 "tasks": [
                   {
@@ -5100,7 +5173,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": {
                       "$type": "timestamp"
@@ -5113,7 +5185,6 @@
                     "errorMessage": "conformance.redrive.batch failed",
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -5141,7 +5212,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": {
                       "$type": "timestamp"
@@ -5154,7 +5224,6 @@
                     "errorMessage": "conformance.redrive.one failed",
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -5182,7 +5251,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": null,
@@ -5193,7 +5261,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -5221,7 +5288,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": null,
@@ -5232,7 +5298,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -5258,7 +5323,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": null,
@@ -5269,7 +5333,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -5299,7 +5362,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": null,
@@ -5310,7 +5372,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -5344,7 +5405,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": null,
@@ -5355,7 +5415,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -5381,7 +5440,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": {
@@ -5397,7 +5455,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -5425,7 +5482,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": {
                       "$type": "timestamp"
@@ -5438,7 +5494,6 @@
                     "errorMessage": "conformance.fail failed",
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -5468,7 +5523,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": {
                       "$type": "timestamp"
@@ -5481,7 +5535,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   }
                 ],
@@ -6411,6 +6464,7 @@
                 "page": 1,
                 "sort": "updated",
                 "tags": [],
+                "count": "none",
                 "queue": null,
                 "tasks": [
                   {
@@ -6438,7 +6492,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": {
                       "$type": "timestamp"
@@ -6451,7 +6504,6 @@
                     "errorMessage": "conformance.redrive.batch failed",
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -6479,7 +6531,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": {
                       "$type": "timestamp"
@@ -6492,7 +6543,6 @@
                     "errorMessage": "conformance.redrive.one failed",
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -6520,7 +6570,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": null,
@@ -6531,7 +6580,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -6559,7 +6607,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": null,
@@ -6570,7 +6617,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -6596,7 +6642,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": null,
@@ -6607,7 +6652,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -6637,7 +6681,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": null,
@@ -6648,7 +6691,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -6682,7 +6724,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": null,
@@ -6693,7 +6734,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -6719,7 +6759,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": {
@@ -6735,7 +6774,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -6763,7 +6801,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": {
                       "$type": "timestamp"
@@ -6776,7 +6813,6 @@
                     "errorMessage": "conformance.fail failed",
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -6806,7 +6842,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": {
                       "$type": "timestamp"
@@ -6819,7 +6854,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   }
                 ],
@@ -6827,6 +6861,7 @@
                 "filter": "all",
                 "search": null,
                 "worker": null,
+                "hasMore": false,
                 "pageSize": 50,
                 "priority": null,
                 "taskType": null,
@@ -7201,6 +7236,7 @@
                 "page": 1,
                 "sort": "updated",
                 "tags": [],
+                "count": "none",
                 "queue": null,
                 "tasks": [
                   {
@@ -7228,7 +7264,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": {
                       "$type": "timestamp"
@@ -7241,7 +7276,6 @@
                     "errorMessage": "conformance.redrive.batch failed",
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -7269,7 +7303,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": {
                       "$type": "timestamp"
@@ -7282,7 +7315,6 @@
                     "errorMessage": "conformance.redrive.one failed",
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -7310,7 +7342,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": null,
@@ -7321,7 +7352,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -7349,7 +7379,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": null,
@@ -7360,7 +7389,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -7386,7 +7414,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": null,
@@ -7397,7 +7424,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -7427,7 +7453,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": null,
@@ -7438,7 +7463,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -7472,7 +7496,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": null,
@@ -7483,7 +7506,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -7509,7 +7531,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": null,
                     "signalWait": {
@@ -7525,7 +7546,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -7553,7 +7573,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": {
                       "$type": "timestamp"
@@ -7566,7 +7585,6 @@
                     "errorMessage": "conformance.fail failed",
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   },
                   {
@@ -7596,7 +7614,6 @@
                     "updatedAt": {
                       "$type": "timestamp"
                     },
-                    "deadlineAt": null,
                     "durability": null,
                     "finishedAt": {
                       "$type": "timestamp"
@@ -7609,7 +7626,6 @@
                     "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
-                    "executionTimeoutMs": null,
                     "prerequisiteTaskIds": []
                   }
                 ],
@@ -7910,6 +7926,7 @@
             "body": {
               "json": {
                 "page": 1,
+                "count": "none",
                 "total": 1,
                 "events": [
                   {
@@ -7945,6 +7962,7 @@
                   }
                 ],
                 "window": "1h",
+                "hasMore": false,
                 "pageSize": 25,
                 "rangeEnd": {
                   "$type": "timestamp"

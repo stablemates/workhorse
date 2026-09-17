@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	workhorse "github.com/stablemates/workhorse/go"
@@ -17,6 +18,35 @@ type backend struct {
 	configuredWorkers []string
 	readOnly          bool
 	maintenanceLoops  map[string]int
+
+	healthMu        sync.Mutex
+	healthValue     any
+	healthExpiresAt time.Time
+}
+
+// queueHealthTTL bounds how long one health document serves nearby reads. It matches the
+// TypeScript host's createDashboardQueueHealthReader, so the three backends agree on staleness.
+const queueHealthTTL = 3 * time.Second
+
+// queueHealth reads the raw queue_health_v1() document and shares it for queueHealthTTL.
+//
+// Composing the document is a pass over live queue state, and one dashboard page reads it from
+// several procedures. Each procedure accepts the document as its health input, so the page pays
+// for one. The lock also serialises concurrent misses, so a burst shares one read. A failed read
+// is never cached.
+func (service *backend) queueHealth(ctx context.Context) (any, error) {
+	service.healthMu.Lock()
+	defer service.healthMu.Unlock()
+	if service.healthValue != nil && time.Now().Before(service.healthExpiresAt) {
+		return service.healthValue, nil
+	}
+	value, err := service.rawJSONQuery(ctx, "SELECT workhorse.queue_health_v1() AS result")
+	if err != nil {
+		return nil, err
+	}
+	service.healthValue = value
+	service.healthExpiresAt = time.Now().Add(queueHealthTTL)
+	return value, nil
 }
 
 func (service *backend) procedures() map[string]Procedure {
@@ -28,7 +58,8 @@ func (service *backend) procedures() map[string]Procedure {
 		"events": service.events, "eventDetail": service.eventDetail,
 		"previewRetentionPolicy": service.previewRetentionPolicy,
 		"taskDetail":             service.taskDetail, "settings": service.settings, "system": service.system,
-		"setQueuePaused": service.setQueuePaused, "purgeQueue": service.purgeQueue,
+		"checkpointValue": service.checkpointValue,
+		"setQueuePaused":  service.setQueuePaused, "purgeQueue": service.purgeQueue,
 		"setWorkerPaused":           service.setWorkerPaused,
 		"overrideMaintenancePolicy": service.overrideMaintenancePolicy,
 		"revertMaintenancePolicy":   service.revertMaintenancePolicy,

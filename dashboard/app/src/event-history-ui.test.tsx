@@ -40,6 +40,7 @@ function taskWithEvents(events: DashboardTaskDetail["events"]): DashboardTaskDet
   return {
     identity: { id: "task-1", type: "example", state: "scheduled" },
     events,
+    truncated: { attempts: false, checkpoints: false, waits: false, events: false },
   } as DashboardTaskDetail;
 }
 

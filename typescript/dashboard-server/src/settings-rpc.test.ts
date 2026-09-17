@@ -14,7 +14,7 @@ function context(overrides: Partial<DashboardRpcContext> = {}): DashboardRpcCont
     configuredWorkers: [],
     environment: "test",
     authenticatedActor: "operator",
-    readQueueHealth: createDashboardQueueHealthReader(admin),
+    readQueueHealth: createDashboardQueueHealthReader(database),
     maintenanceLoops: { tickIntervalMs: 1_000 },
     operator: { mode: "read-only" },
     ...overrides,

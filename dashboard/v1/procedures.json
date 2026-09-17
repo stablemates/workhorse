@@ -146,6 +146,14 @@
                 "const": 100
               }
             ]
+          },
+          "count": {
+            "default": "none",
+            "type": "string",
+            "enum": [
+              "none",
+              "exact"
+            ]
           }
         }
       },
@@ -267,6 +275,14 @@
               }
             ]
           },
+          "count": {
+            "default": "none",
+            "type": "string",
+            "enum": [
+              "none",
+              "exact"
+            ]
+          },
           "cursor": {
             "default": null,
             "anyOf": [
@@ -306,14 +322,6 @@
             "enum": [
               "next",
               "previous"
-            ]
-          },
-          "count": {
-            "default": "none",
-            "type": "string",
-            "enum": [
-              "none",
-              "exact"
             ]
           }
         }
@@ -480,6 +488,14 @@
                 "type": "number",
                 "const": 100
               }
+            ]
+          },
+          "count": {
+            "default": "none",
+            "type": "string",
+            "enum": [
+              "none",
+              "exact"
             ]
           },
           "kind": {
@@ -825,6 +841,33 @@
       },
       "output": {
         "$ref": "#/$defs/DashboardTaskDetail"
+      }
+    },
+    "checkpointValue": {
+      "path": "/rpc/dashboard/checkpointValue",
+      "mutation": false,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "output": {
+        "$ref": "#/$defs/DashboardCheckpointValue"
       }
     },
     "humanWaits": {
@@ -2316,6 +2359,39 @@
         "reason"
       ]
     },
+    "DashboardCheckpointValue": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {},
+        "valueBytes": {
+          "type": "number"
+        },
+        "attempt": {
+          "type": "number"
+        },
+        "fenceToken": {
+          "type": "string"
+        },
+        "workerId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value",
+        "valueBytes",
+        "attempt",
+        "fenceToken",
+        "workerId",
+        "createdAt"
+      ]
+    },
     "DashboardCompleteHumanWaitResult": {
       "type": "object",
       "properties": {
@@ -2915,6 +2991,15 @@
         "pageSize": {
           "type": "number"
         },
+        "count": {
+          "enum": [
+            "exact",
+            "none"
+          ]
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
         "total": {
           "type": "number"
         },
@@ -2957,6 +3042,8 @@
         "events",
         "page",
         "pageSize",
+        "count",
+        "hasMore",
         "total",
         "retention"
       ]
@@ -6468,13 +6555,11 @@
                 }
               ]
             },
-            "result": {},
             "error": {}
           },
           "required": [
             "runtime",
             "outcome",
-            "result",
             "error"
           ]
         },
@@ -6597,6 +6682,12 @@
                 "type": "string"
               },
               "value": {},
+              "valueBytes": {
+                "type": "number"
+              },
+              "valueOmitted": {
+                "type": "boolean"
+              },
               "attempt": {
                 "type": "number"
               },
@@ -6613,6 +6704,8 @@
             "required": [
               "name",
               "value",
+              "valueBytes",
+              "valueOmitted",
               "attempt",
               "fenceToken",
               "workerId",
@@ -6717,6 +6810,29 @@
               "occurredAt"
             ]
           }
+        },
+        "truncated": {
+          "type": "object",
+          "properties": {
+            "attempts": {
+              "type": "boolean"
+            },
+            "checkpoints": {
+              "type": "boolean"
+            },
+            "waits": {
+              "type": "boolean"
+            },
+            "events": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "attempts",
+            "checkpoints",
+            "waits",
+            "events"
+          ]
         }
       },
       "required": [
@@ -6738,7 +6854,8 @@
         "attempts",
         "checkpoints",
         "waits",
-        "events"
+        "events",
+        "truncated"
       ]
     },
     "DashboardTaskFacets": {
@@ -6877,26 +6994,6 @@
                 "type",
                 "delayMs"
               ]
-            }
-          ]
-        },
-        "deadlineAt": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "executionTimeoutMs": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "number"
             }
           ]
         },
@@ -7215,6 +7312,12 @@
         "capturedAt": {
           "type": "string"
         },
+        "count": {
+          "enum": [
+            "exact",
+            "none"
+          ]
+        },
         "worker": {
           "anyOf": [
             {
@@ -7253,6 +7356,7 @@
         "search",
         "taskType",
         "capturedAt",
+        "count",
         "worker",
         "canCompleteHumanWait",
         "page",
@@ -7351,6 +7455,15 @@
         "pageSize": {
           "type": "number"
         },
+        "count": {
+          "enum": [
+            "exact",
+            "none"
+          ]
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
         "total": {
           "type": "number"
         },
@@ -7374,6 +7487,8 @@
         "search",
         "page",
         "pageSize",
+        "count",
+        "hasMore",
         "total",
         "tasks"
       ]

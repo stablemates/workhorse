@@ -160,6 +160,8 @@ export function EventsPage({
   // addresses nothing in the new result set.
   const filter = (next: Partial<EventsLocationState>) =>
     setQuery({ ...query, ...next, page: 1, eventId: null });
+  // The feed reports the total it proved rather than a count over the whole window, so the pager
+  // gains one page while more remain and settles on the real last page once it is reached.
   const totalPages = Math.max(1, Math.ceil(data.total / data.pageSize));
   const pagination = (label: string) =>
     totalPages > 1 ? (

@@ -138,6 +138,10 @@
       "arguments": ["jsonb"],
       "returns": "jsonb"
     },
+    "dashboard_checkpoint_value_v1": {
+      "arguments": ["jsonb"],
+      "returns": "jsonb"
+    },
     "dashboard_cron_v1": {
       "arguments": ["jsonb"],
       "returns": "jsonb"
@@ -1041,6 +1045,15 @@
         "worker_id": "text"
       }
     },
+    "dashboard_task_query_v1": {
+      "kind": "view",
+      "columns": {
+        "created_at": "timestamptz",
+        "queue_name": "text",
+        "task_id": "uuid",
+        "task_type": "text"
+      }
+    },
     "dashboard_task_redrive_v1": {
       "kind": "view",
       "columns": {
@@ -1459,8 +1472,11 @@
       "cron_field_values_v1",
       "cron_occurrences_v1",
       "dashboard_budgets_v1",
+      "dashboard_inline_value_bytes_v1",
       "dashboard_iso_v1",
+      "dashboard_task_detail_limit_v1",
       "dashboard_task_estimate_v1",
+      "dashboard_task_event_limit_v1",
       "deadline_envelope_v1",
       "enqueue_batch_v1",
       "enqueue_debounce_v1",
