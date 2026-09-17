@@ -355,22 +355,9 @@ export const TasksPage = memo(function TasksPage({
             taskFacets={taskFacets}
             updateLocation={updateLocation}
           />
-          <Group justify="flex-end" wrap="wrap">
-            <Button
-              variant="default"
-              size="xs"
-              mr="auto"
-              leftSection={<ChartBar size={16} />}
-              aria-expanded={chartVisible}
-              aria-controls="task-activity-chart"
-              onClick={() => {
-                const visible = !chartVisible;
-                setChartVisible(visible);
-                saveTaskChartVisibility(visible);
-              }}
-            >
-              {chartVisible ? "Hide chart" : "Show chart"}
-            </Button>
+          {/* Paging leads the row; page size joins the view controls that close it. */}
+          <Group justify="space-between" wrap="wrap">
+            {pagination}
             <Group gap="xs" wrap="wrap">
               {data.filter === "discarded" ? (
                 <Button
@@ -526,7 +513,20 @@ export const TasksPage = memo(function TasksPage({
                 allowDeselect={false}
                 aria-label="Tasks per page"
               />
-              {pagination}
+              <Button
+                variant="default"
+                size="xs"
+                leftSection={<ChartBar size={16} />}
+                aria-expanded={chartVisible}
+                aria-controls="task-activity-chart"
+                onClick={() => {
+                  const visible = !chartVisible;
+                  setChartVisible(visible);
+                  saveTaskChartVisibility(visible);
+                }}
+              >
+                {chartVisible ? "Hide chart" : "Show chart"}
+              </Button>
             </Group>
           </Group>
         </Stack>
@@ -675,7 +675,7 @@ export const TasksPage = memo(function TasksPage({
           </Table>
         </ScrollArea>
         <Divider />
-        <Group justify="flex-end" p="md">
+        <Group justify="flex-start" p="md">
           {pagination}
         </Group>
       </Paper>
