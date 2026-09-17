@@ -176,6 +176,27 @@ The demo container is limited to one CPU, 1 GiB of memory, and 256 processes. Th
 limited to half a CPU, 256 MiB of memory, and 128 processes. Keep equivalent limits so traffic or a
 runaway process cannot consume the host's full capacity.
 
+That memory limit and the image's Node heap ceiling are one pair. `Dockerfile` sets
+`NODE_OPTIONS=--max-old-space-size=128` in its runtime stage. V8 sizes a heap from a fixed default
+rather than from the container, so an uncapped Node process here believes it may grow to 4288 MB.
+It then defers collection while it believes memory remains, the container limit is reached first,
+and the kernel kills the process. That kill carries no message and no stack, so it reads as an
+unexplained restart rather than as a memory problem.
+
+The container runs four Node processes: the supervisor, the server, the TypeScript worker, and the
+staging worker. Each holds about 80 MiB outside its heap, and the Python and Go workers hold under
+60 MiB together, so four ceilings and that overhead must fit the limit. Changing one value alone
+breaks the pair. A larger limit without a larger ceiling is capacity the demo will not use, and a
+smaller limit without a smaller ceiling restores the silent kill.
+`typescript/demo/src/container-memory.test.ts` reads both files and fails when they disagree.
+
+Both values were measured in a container limited to 1 GiB, with both workspaces configured. The
+load was the demo's own recurring schedules plus continuous dashboard reads. Without the ceiling
+the container's resident set peaked at 821 MiB of the 1024 MiB it is allowed, and each Node
+process held about 290 MiB. With the ceiling the container peaked at 611 MiB and no process was
+killed. Nothing fails at the uncapped peak today, because the demo's working set is small. Anything
+that grows that working set reaches the container limit before V8 collects.
+
 The demo answers a fixed public surface. `GET /up` and `GET /robots.txt` respond without touching
 the dashboard host. `GET` requests under the dashboard path serve the application shell, and `GET`
 requests under `assets/` serve packaged files. Every dashboard RPC is a `POST` to
