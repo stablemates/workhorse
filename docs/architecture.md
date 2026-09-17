@@ -2394,16 +2394,18 @@ whenever it is at most `page * pageSize`. Otherwise it is one more than the page
 caller knows only that more exist. With `count: exact`, `total` counts every matching task. That
 count reads the whole selection rather than one page of it.
 
-A `task_scope` branch names which tasks the request can reach before the runtime and outcome joins
-read a row. A `tags` request seeks `task_tags_gin_idx`; otherwise a `queue` or `taskType` request
-seeks `task_query_queue_created_idx` or `task_query_type_created_idx`; otherwise every task is in
-scope. Exactly one branch survives planning, because each branch tests only `p_input`, so the
-planner folds the other two away. The filter list below the scope still applies every predicate, so
-a request that names both a tag and a queue seeks the tag index and filters on the queue. The tag
-array reaches the scan through `dashboard_tag_filter_v1(p_tags jsonb)`, an immutable function that
-returns the request's `tags` as `text[]`; an inline `ARRAY(SELECT jsonb_array_elements_text(...))`
-is a subquery, which the planner evaluates once per execution and never folds into the scan, so
-`task_tags_gin_idx` stays unreachable behind it.
+The function is PL/pgSQL and composes its query, so it names which tasks the request can reach
+before the runtime and outcome joins read a row. A `tags` request adds a `task_scope` CTE that seeks
+`task_tags_gin_idx`; otherwise a `queue` or `taskType` request adds one that seeks
+`task_query_queue_created_idx` or `task_query_type_created_idx`; otherwise no scope is added and
+`task_rows` reads `dashboard_task_v1` directly. Only fixed SQL fragments are composed, and the
+request stays in the bound JSON parameter, so the planner sees each filter as a value it can seek.
+The filter list below the scope still applies every predicate, so a request that names both a tag
+and a queue seeks the tag index and filters on the queue. The tag array reaches the scan through
+`dashboard_tag_filter_v1(p_tags jsonb)`, an immutable function that returns the request's `tags` as
+`text[]`; an inline `ARRAY(SELECT jsonb_array_elements_text(...))` is a subquery, which the planner
+evaluates once per execution and never folds into the scan, so `task_tags_gin_idx` stays unreachable
+behind it.
 
 `dashboard_tasks_cursor_v1(p_input jsonb)` backs the additive `tasksCursor` procedure.
 It accepts the same filters and page sizes as `tasks`, without a page number.
