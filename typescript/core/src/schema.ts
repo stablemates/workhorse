@@ -78,6 +78,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "bounded dashboard reads",
     kind: "additive",
   },
+  {
+    fromVersion: 6,
+    toVersion: 7,
+    file: "0007-health-snapshot-without-jit.sql",
+    description: "health snapshot without JIT",
+    kind: "additive",
+  },
 ];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {

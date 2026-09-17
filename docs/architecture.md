@@ -2315,6 +2315,13 @@ is PostgreSQL's transaction timestamp for the statement.
 Singleton CTEs carry `LIMIT 1` planner hints. Without them, PostgreSQL's row estimates trigger JIT
 compilation and add roughly one second to each snapshot.
 
+One statement covering every correctness-sensitive value gives the plan hundreds of expressions, so
+the hints alone do not hold JIT off as the queue grows. Past a few thousand ready rows the estimated
+cost crosses PostgreSQL's inlining and optimization thresholds, and LLVM spends seconds compiling a
+statement that executes in tens of milliseconds. `queue_health_v1` therefore disables JIT for
+itself, and so do the four dashboard reads that embed the snapshot: `dashboard_human_waits_v1`,
+`dashboard_queues_v1`, `dashboard_settings_v1`, and `dashboard_system_v1`.
+
 Snapshot cost tracks live work, not lifetime history. Live-state counts and depths come from `task_runtime` and are exact. Terminal state counts stop scanning `task_outcome` at `HEALTH_HISTORY_SCAN_LIMIT` (100,000) rows, and the `task_stat_bucket` count stops at the same cap; `terminalCountsCapped` and `statistics.bucketsCapped` mark capped values as lower bounds that are exact until the cap. The rate-limit block reuses the identical SQL as `Queue.rateLimitStatuses()`, so the two surfaces cannot disagree about throttle semantics.
 
 PostgreSQL planner and collector readings are observations rather than transactional facts and are returned under `QueueHealth.observations`: per-relation size and tuple statistics from `pg_stat_user_tables` summed across `pg_partition_tree`, `oldestTransactionAgeMs` and `lockWaitCount` from `pg_stat_activity`, and `pg_notification_queue_usage()`. `queue_health_v1` reads them after the correctness snapshot in the same function call. They may lag until the statistics collector flushes.
@@ -3353,6 +3360,10 @@ interactive stdin and stdout is refused with exit 1.
 - Cold export is off by default. While it is on, event and attempt retention never pass that dataset's `cold_export_dataset.exported_through`, and a day is exportable only after it closed and the minute rollup passed it. One exporter claim covers one UTC day of one dataset; a claim lease is 1,000 through 86,400,000 ms and defaults to one hour.
 - Default work bounds are 1,000 terminal tasks, four history partitions per category, 10,000 default-partition rows per category, and 10,000 schedule occurrences per maintenance pass.
 - Health snapshots scan at most 100,001 terminal outcomes and 100,001 statistic buckets when counting; capped counts are flagged, exact-until-the-cap lower bounds.
+- The health snapshot and the dashboard reads that embed it disable JIT for themselves, because
+  compiling their plan costs far more than executing them. Their remaining cost tracks live
+  `task_runtime` depth: roughly tens of milliseconds at a few thousand ready rows and a few hundred
+  at 200,000.
 - Schedules have one-second precision; cron expressions are evaluated in the definition's validated IANA timezone.
 - Runtime updates centralize churn in one relation and require vacuum and HOT-update validation under sustained heartbeat load.
 - `NOTIFY` is a wake hint. Polling remains the correctness mechanism.

@@ -2186,6 +2186,7 @@ CREATE OR REPLACE FUNCTION workhorse.queue_health_v1(
 ) RETURNS jsonb
 LANGUAGE plpgsql
 VOLATILE
+SET jit = off
 AS $$
 DECLARE
   v_document jsonb;
@@ -13436,6 +13437,7 @@ $$;
 CREATE OR REPLACE FUNCTION workhorse.dashboard_queues_v1(p_input jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
+SET jit = off
 AS $$
 DECLARE
   v_approximate boolean;
@@ -13563,6 +13565,7 @@ $$;
 CREATE OR REPLACE FUNCTION workhorse.dashboard_human_waits_v1(p_input jsonb)
 RETURNS jsonb
 LANGUAGE sql
+SET jit = off
 AS $$
   WITH parameters AS (
     SELECT COALESCE((p_input->>'canComplete')::boolean, false) AS can_complete,
@@ -14002,6 +14005,7 @@ $$;
 CREATE OR REPLACE FUNCTION workhorse.dashboard_settings_v1(p_input jsonb)
 RETURNS jsonb
 LANGUAGE sql
+SET jit = off
 AS $$
   WITH maintenance AS (
     SELECT * FROM workhorse.get_maintenance_policy_v1()
@@ -14152,6 +14156,7 @@ $$;
 CREATE OR REPLACE FUNCTION workhorse.dashboard_system_v1(p_input jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
+SET jit = off
 AS $$
 DECLARE
   v_now timestamptz := clock_timestamp();
@@ -15258,10 +15263,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (3, 'named budgets'),
   (4, 'cold history export'),
   (5, 'history partition horizon'),
-  (6, 'bounded dashboard reads')
+  (6, 'bounded dashboard reads'),
+  (7, 'health snapshot without JIT')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (6) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (7) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

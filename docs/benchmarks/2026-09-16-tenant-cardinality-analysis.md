@@ -73,9 +73,14 @@ the joined task, runtime, and outcome projection before the tag predicate applie
 page pays for every task in the installation.
 
 `queue_health_v1` took 2.5 seconds once the queue held 20,000 ready rows and 2.7 seconds at
-200,000, in both profiles. Its cost tracks ready depth up to its documented sampling caps, not
-tenant count, and the 100-budget cap kept `budget_status_v1` at 2.3 to 2.6 ms with 100,000 budgets
-defined.
+200,000, in both profiles. Its cost tracked ready depth, not tenant count, and the 100-budget cap
+kept `budget_status_v1` at 2.3 to 2.6 ms with 100,000 budgets defined.
+
+SM-758 then found that almost none of those seconds were reads. The snapshot's single statement
+carries hundreds of expressions, so past a few thousand ready rows its estimated cost crossed
+PostgreSQL's JIT inlining and optimization thresholds and LLVM compiled it on every call. The
+snapshot and the four dashboard reads that embed it now disable JIT for themselves, which leaves
+14 ms at 2,000 ready rows, 29 ms at 20,000, and 158 ms at 200,000.
 
 Synchronizing one budget per tenant cost about 130 microseconds per budget through
 `sync_budgets_v1` in chunks of 10,000, so 100,000 tenant budgets took 13.1 seconds at deploy time.
@@ -90,8 +95,8 @@ thousands of tenants without a tenant column or tenant-leading indexes.
 
 Two observations are worth their own tickets rather than a tenancy change. The dashboard task
 list's tag filter pays for the whole task projection before it filters, which is a read-surface
-cost at any tenant count. The health snapshot's cost rises with ready depth, which the caps already
-bound but which an operator running a deep backlog will notice.
+cost at any tenant count. The health snapshot costs seconds once a queue holds a deep backlog,
+which SM-758 traced to JIT compilation rather than to the reads.
 
 Per-tenant budgets are the one mechanism whose cost is linear in tenants, and it lands at deploy
 time rather than on the claim path. An installation with more than a few thousand tenants should
