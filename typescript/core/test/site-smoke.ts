@@ -213,13 +213,16 @@ try {
       throw new Error(`The agent playbook links ${link}, which returned ${linked.status}`);
   }
 
-  // Expanding the tabs cost no size, because the twins already carried all three
-  // languages and de-indenting the fences gave a little back. The bound catches a
-  // generator that starts repeating content, not ordinary growth.
+  // The file is one copy of every documentation page, so it tracks the corpus:
+  // 49 pages hold about 327 KB of source and the generated file is about 320 KB.
+  // The bound sits a quarter above that, because a generator that starts
+  // repeating content roughly doubles the file while a new page adds a few KB.
+  // Site smoke is skipped on main pushes, so raise this deliberately rather than
+  // to clear whichever pull request happens to add the page that crosses it.
   const llmsFullText = await (await fetch(`${baseUrl}/llms-full.txt`)).text();
   const llmsFullBytes = Buffer.byteLength(llmsFullText, "utf8");
-  if (llmsFullBytes > 320_000) {
-    throw new Error(`llms-full.txt grew to ${llmsFullBytes} bytes, well past its 256 KB shape`);
+  if (llmsFullBytes > 400_000) {
+    throw new Error(`llms-full.txt grew to ${llmsFullBytes} bytes, well past its 320 KB shape`);
   }
 
   // The router's lead is the prose above its first `##`. It has to name the
