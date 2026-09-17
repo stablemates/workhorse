@@ -73,17 +73,16 @@ pre-commit:
     - name: check site types
       glob: "site/**"
       run: pnpm docs:typecheck
-    - name: test changed scopes
-      group:
-        jobs:
-          - name: test changed scope
-            run: pnpm test:changed {staged_files}
-          - name: test changed database scope
-            glob: "{typescript/*/src/**,typescript/core/benchmarks/**,typescript/demo/test/app.integration.test.ts,typescript/*/test/integration.test.ts,typescript/core/test/support/**,typescript/core/test/benchmark-conventional.test.ts,typescript/core/test/integration-*.test.ts,typescript/core/test/isolation-canary-*.test.ts,typescript/core/test/schema-installation.test.ts}"
-            run: pnpm test:database:changed {staged_files}
-          - name: test database scope after SQL changes
-            glob: "sql/**"
-            run: pnpm test:schema
+    - name: test changed scope
+      run: pnpm test:changed {staged_files}
+    # `vitest related` cannot select tests from a .sql path, so SQL changes name the schema
+    # suites directly. The changed-file database scope once ran beside this job, but a commit
+    # touching widely imported sources selects nearly the whole suite — past the pre-commit
+    # time budget no matter how the group is scheduled — so that scope now runs in CI's
+    # `typescript` lane (`pnpm test:database:typescript`, every pull request and main push).
+    - name: test database scope after SQL changes
+      glob: "sql/**"
+      run: pnpm test:schema
 
 post-checkout:
   jobs:
