@@ -2426,10 +2426,9 @@ Concurrent state changes can move tasks between pages; browsing does not hold a 
 The SPA uses cursor navigation and preserves legacy page-number links through `tasks`.
 It carries the cursor in the URL, and its pager offers a first-page control that drops the
 cursor while keeping every filter, the sort, the page size, the chart settings, and the open
-drawer. While a page is pinned the SPA states that the list is not following new tasks, beside
-the refresh control on a wide viewport and at the pager on a narrow one, because the paused
-indicator alone names neither the cause nor the way back. Selecting that notice returns to
-the first page. A cursor request answered with `previousCursor: null` was answered from the first page,
+drawer. While a page is pinned the SPA offers a link back to the first page after the refresh
+control, because the paused indicator alone names neither the cause nor the way back. A narrow
+viewport states the same fact at the pager instead, where that row has room for it. A cursor request answered with `previousCursor: null` was answered from the first page,
 so the SPA replaces the URL to drop the anchor it no longer needs. That judgement pairs each
 answer with the request that asked for it, because the page still on screen during a pager
 click reports the same thing about the page the operator left.

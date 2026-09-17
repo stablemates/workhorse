@@ -3,6 +3,7 @@ import type { DashboardDemoTools } from "@stablemates/workhorse-dashboard-server
 import type { DashboardWorkspaceLink } from "@stablemates/workhorse-dashboard-server/server";
 import { Menu, useDropdownActivity } from "../dropdown-activity.js";
 import {
+  Anchor,
   AppShell,
   Badge,
   Box,
@@ -267,30 +268,6 @@ export function DashboardContent({
                 <DashboardWorkspaceSwitcher workspaces={workspaces} workspace={workspace} />
               </Box>
             ) : null}
-            {/* The refresh control says auto refresh is paused; this says what is holding it, in
-                the one place the operator looks when the list stops moving. Selecting it returns
-                to the first page, which is also what resumes auto refresh. The pager repeats it
-                where the header has no room. */}
-            {location.route === "/tasks" && taskListingPinned(location) ? (
-              <Badge
-                component="a"
-                href={mountedHref(basePath, taskListingHeadHref(location))}
-                onClick={(event: MouseEvent<HTMLElement>) =>
-                  handleLink(event, taskListingHeadHref(location))
-                }
-                className="dashboard-header__pinned"
-                variant="light"
-                color="yellow"
-                size="sm"
-                tt="none"
-                visibleFrom="sm"
-                ml={{ sm: "md" }}
-                style={{ cursor: "pointer", flexShrink: 0 }}
-                title="This page is anchored, so it neither follows new tasks nor auto refreshes. Select to return to the first page."
-              >
-                Not following new tasks
-              </Badge>
-            ) : null}
             <Group gap={0} wrap="nowrap" ml={{ sm: "md" }} className="dashboard-refresh-control">
               <Button
                 variant="default"
@@ -356,6 +333,28 @@ export function DashboardContent({
                 />
               ) : null}
             </Group>
+            {/* The refresh control says auto refresh is paused; this says what holds it and
+                offers the way out, beside the control the operator is already looking at. It is a
+                link because it is an action, not a status. The pager repeats the fact where the
+                header has no room. */}
+            {location.route === "/tasks" && taskListingPinned(location) ? (
+              <Anchor
+                href={mountedHref(basePath, taskListingHeadHref(location))}
+                onClick={(event: MouseEvent<HTMLElement>) =>
+                  handleLink(event, taskListingHeadHref(location))
+                }
+                className="dashboard-header__pinned"
+                size="xs"
+                c="blue"
+                td="underline"
+                visibleFrom="sm"
+                ml={{ sm: "xs" }}
+                style={{ whiteSpace: "nowrap", flexShrink: 0 }}
+                title="This page is anchored, so it neither follows new tasks nor auto refreshes. Return to the first page to follow the list again."
+              >
+                Back to first page
+              </Anchor>
+            ) : null}
           </Group>
           <Group className="dashboard-header__status" gap="sm" wrap="nowrap">
             {logoutUrl ? (
