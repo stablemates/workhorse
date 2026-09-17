@@ -111,6 +111,10 @@ describe("dashboard cursor pages", () => {
         "(updated_at, id) < (($1->'cursor'->>'updatedAt')::timestamptz, ($1->'cursor'->>'id')::uuid)",
       )
       .replaceAll("__order__", "updated_at DESC, id DESC")
+      // This request names no queue and no task type, so the procedure joins no routing projection
+      // and the walk stays on the update-time indexes.
+      .replaceAll("__runtime_scope__", "")
+      .replaceAll("__outcome_scope__", "")
       .replaceAll("$1", "$1::jsonb");
     const plan = await database.pool.query<{
       "QUERY PLAN": Array<{ Plan: { "Shared Hit Blocks": number } }>;

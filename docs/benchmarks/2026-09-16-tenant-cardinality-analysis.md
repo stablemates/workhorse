@@ -101,3 +101,15 @@ which SM-758 traced to JIT compilation rather than to the reads.
 Per-tenant budgets are the one mechanism whose cost is linear in tenants, and it lands at deploy
 time rather than on the claim path. An installation with more than a few thousand tenants should
 prefer per-key limits for fair share and reserve budgets for tenants that need a cross-queue cap.
+
+## Follow-up
+
+SM-757 took the first of those two observations, and SM-758 the second. Both task listings now name
+the tasks a request can reach before the runtime and outcome joins read a row, so a tag filter
+seeks `task_tags_gin_idx` and a queue or task-type filter seeks the routing projection's index.
+Re-running the 100,000-tenant keyed rung on 2026-09-17 put the dashboard tag list at 7.4 ms at the
+median against 3.2 ms for the raw `tags &&` count, where it had been 93.9 ms against 3.7 ms. The
+list now costs a small constant above the index it seeks rather than a pass over every task. That
+rung's result is
+[`2026-09-17-task-list-pruning.json`](results/2026-09-17-task-list-pruning.json), measured before
+SM-758 landed, so its `queue_health_v1` figure is the pre-JIT one this page reports above.
