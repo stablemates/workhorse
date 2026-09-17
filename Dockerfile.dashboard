@@ -9,6 +9,11 @@ ENV GOMAXPROCS=${BUILD_CONCURRENCY}
 ENV PNPM_CONFIG_NETWORK_CONCURRENCY=${BUILD_CONCURRENCY}
 ENV PNPM_CONFIG_MAX_SOCKETS=${BUILD_CONCURRENCY}
 
+# V8 sizes every heap at 4288 MB whatever the host has, so compilers running here can promise more
+# memory than a small continuous integration runner owns. Only the build stage sets this, so the
+# published image keeps Node's defaults.
+ENV NODE_OPTIONS=--max-old-space-size=2048
+
 WORKDIR /workhorse
 COPY . .
 RUN pnpm install --frozen-lockfile

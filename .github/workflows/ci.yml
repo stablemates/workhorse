@@ -22,6 +22,11 @@ concurrency:
 
 env:
   PNPM_HOME: ${{ github.workspace }}/.pnpm-home
+  # Every runner here has 8 GB, but V8 sizes each heap at 4288 MB whatever the machine has, so two
+  # Node processes can promise more memory than the runner owns. A runner that runs out of memory
+  # dies without uploading a log, which is how the packed lane failed unseen for eleven nights.
+  # The largest single process measured across these lanes is the site build at 1.6 GB. See SM-775.
+  NODE_OPTIONS: --max-old-space-size=2048
 
 jobs:
   plan:
