@@ -66,6 +66,11 @@ if a running server returns a `504` for a `.vite/deps` chunk.
 The demo writes continuously to its database. Run repository commands from the checkout that owns
 their data so one checkout cannot change another checkout's test state.
 
+Measuring the demo container is the exception. When an issue asks for its resident set or its CPU
+cost, build the image and run it under the limits the deployment gives it. Point it at the
+databases of the checkout you work in. Publish it on a port the proxy does not serve, and remove
+the container when the measurement ends. Nothing visual comes from that run, so it needs no browser.
+
 ## Maintainers own public deployment
 
 Do not run a production setup, deploy, rollback, or container lifecycle command unless a maintainer
