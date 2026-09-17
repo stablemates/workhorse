@@ -211,13 +211,29 @@ export const TasksPage = memo(function TasksPage({
   // pager gains one page while more remain and settles on the real last page once it is reached.
   const totalPages = Math.max(1, Math.ceil((data.total ?? 0) / data.pageSize));
   const pinned = taskListingPinned(locationState);
+  /**
+   * What a page other than the first costs the operator, said beside the pager that caused it.
+   *
+   * The header states that auto refresh is paused, but not why, and it is nowhere near the control
+   * that pinned the list. This page holds still while tasks keep changing, which is the fact the
+   * operator is owed, and the control that undoes it sits immediately after this note.
+   */
+  const pinnedNotice = pinned ? (
+    <Text
+      size="xs"
+      c="dimmed"
+      title="This page is anchored, so it neither follows new tasks nor auto refreshes. Return to the first page to follow the list again."
+    >
+      Not following new tasks
+    </Text>
+  ) : null;
   const pagination =
     "nextCursor" in data ? (
       <Group gap="xs" aria-label="Tasks pagination">
-        {/* The anchor a pinned page holds is not otherwise visible, so the way back is stated. */}
+        {pinnedNotice}
         <Button
           size="xs"
-          variant="subtle"
+          variant={pinned ? "light" : "subtle"}
           disabled={!pinned}
           title="Return to the first page, so the list follows new work again"
           onClick={() => navigate(taskListingHeadHref(locationState))}
@@ -255,13 +271,16 @@ export const TasksPage = memo(function TasksPage({
         </Button>
       </Group>
     ) : (
-      <Pagination
-        value={Math.min(data.page, totalPages)}
-        onChange={(page) => navigate(taskHref({ ...locationState, page }))}
-        total={totalPages}
-        size="xs"
-        aria-label="Tasks pagination"
-      />
+      <Group gap="xs">
+        {pinnedNotice}
+        <Pagination
+          value={Math.min(data.page, totalPages)}
+          onChange={(page) => navigate(taskHref({ ...locationState, page }))}
+          total={totalPages}
+          size="xs"
+          aria-label="Tasks pagination"
+        />
+      </Group>
     );
   const enqueueTestTask = (kind: DemoTaskKind, options?: DemoTaskOptions) =>
     runDemoTask?.(kind, options);

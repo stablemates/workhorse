@@ -295,6 +295,8 @@ export function DashboardContent({
                       borderLeft: "none",
                     }}
                     aria-label={refreshPauseDescription}
+                    // The reason auto refresh stopped was reaching assistive technology only.
+                    title={refreshPauseDescription}
                   >
                     {autoRefreshPaused
                       ? "paused"
