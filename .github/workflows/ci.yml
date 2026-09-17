@@ -22,6 +22,11 @@ concurrency:
 
 env:
   PNPM_HOME: ${{ github.workspace }}/.pnpm-home
+  # Every runner here has 8 GB, but V8 sizes each heap at 4288 MB whatever the machine has, so two
+  # Node processes can promise more memory than the runner owns. A runner that runs out of memory
+  # dies without uploading a log, which is how the packed lane failed unseen for eleven nights.
+  # The largest single process measured across these lanes is the site build at 1.6 GB. See SM-775.
+  NODE_OPTIONS: --max-old-space-size=2048
 
 jobs:
   plan:
@@ -371,3 +376,36 @@ jobs:
     steps:
       - name: Require every merge-gate job
         run: echo "$RESULTS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")'
+
+  notify:
+    name: report a failed schedule
+    # Nobody watches the Actions tab, and a runner that dies uploads no log, so the packed lane
+    # failed for eleven nights unseen. A scheduled failure opens an issue instead. See SM-775.
+    if: always() && github.event_name == 'schedule' && contains(needs.*.result, 'failure')
+    needs: [plan, static, unit, typescript, python, go, runtime-smoke, packed, demo, required]
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      RESULTS: ${{ toJSON(needs) }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      TITLE: Scheduled CI is failing
+    steps:
+      - name: Open or update the failure issue
+        run: |
+          set -euo pipefail
+          failed=$(echo "$RESULTS" | jq -r '[to_entries[] | select(.value.result == "failure") | .key] | join(", ")')
+          body=$(printf '%s failed at %s.\n\nFailed jobs: %s\n\nA runner that runs out of memory uploads no log, so an empty job here means the runner died rather than a check failing.\n' "$RUN_URL" "$GITHUB_SHA" "$failed")
+          # Matching the title rather than searching keeps one open issue per outage, because the
+          # search index lags a fresh issue by long enough for the next night to open a second one.
+          number=$(gh issue list --state open --limit 100 --json number,title \
+            --jq "[.[] | select(.title == \"$TITLE\")] | .[0].number // empty")
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi

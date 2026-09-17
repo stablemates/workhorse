@@ -35,6 +35,11 @@ invalidating branch protection.
 Each language matrix runs at most two lanes concurrently. The cap limits database contention during
 the weekly compatibility run without affecting the single-lane pull request and push feedback.
 
+A failed scheduled run opens a repository issue, or comments on the open one. A pull request and a
+push announce their own result to the person waiting on it; a schedule announces it to nobody, and a
+runner that exhausts its memory dies before it can upload a log. The issue is therefore the only
+signal that a scheduled lane has stopped reporting.
+
 `.github/workflows/benchmark.yml` runs smoke benchmarks weekly and on manual dispatch. It is
 informational and is not a required check because timing on shared hardware is not comparable. The
 benchmark selects workspace source exports so the adapter and core share one telemetry provider.

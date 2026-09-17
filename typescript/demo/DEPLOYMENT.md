@@ -30,6 +30,11 @@ Both Dockerfiles pin every base image by its multi-platform manifest digest. Whe
 image, resolve the new tag to a digest and commit both values together. The tag documents the
 intended release; the digest prevents a registry-side tag change from altering a build.
 
+Both builds cap each Node process at a 2 GiB heap. V8 otherwise sizes a heap from a fixed default,
+not from the machine. Concurrent compilers on a small build machine can then ask for more memory
+than it has. If a build genuinely needs more, raise `NODE_OPTIONS` at build time. Only the build
+stages set it, so neither published image carries the ceiling.
+
 The demo image installs Python runtime dependencies from the committed `python/uv.lock`. Update that
 lock with uv whenever `python/pyproject.toml` changes; the image build rejects a stale lock.
 

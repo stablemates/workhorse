@@ -19,6 +19,11 @@ ENV PNPM_CONFIG_MAX_SOCKETS=${BUILD_CONCURRENCY}
 ENV UV_CONCURRENT_DOWNLOADS=${BUILD_CONCURRENCY}
 ENV UV_CONCURRENT_INSTALLS=${BUILD_CONCURRENCY}
 
+# V8 sizes every heap at 4288 MB whatever the host has, so the site build here can promise more
+# memory than the machine building the image owns. Only this stage sets it, and the runtime stage
+# is nginx, so nothing reaches the published image.
+ENV NODE_OPTIONS=--max-old-space-size=2048
+
 WORKDIR /workhorse
 COPY . .
 RUN pnpm install --frozen-lockfile

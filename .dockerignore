@@ -4,6 +4,7 @@
 **/secrets.env
 node_modules
 **/node_modules
+.pnpm-home
 dist
 **/dist
 .next

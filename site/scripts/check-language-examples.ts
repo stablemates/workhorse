@@ -1,6 +1,6 @@
 import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -16,6 +16,24 @@ import type { LandingSnippetId } from "../lib/landing-snippets.js";
 const siteRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(siteRoot, "..");
 const execFileAsync = promisify(execFile);
+
+// Every Go example compiles the whole Workhorse Go module, so checking them all at once costs
+// gigabytes rather than seconds. An image build sets BUILD_CONCURRENCY because the container sees
+// every core of its host, not the share the build is meant to use.
+const requestedConcurrency = Number(process.env.BUILD_CONCURRENCY);
+const checkConcurrency = Math.min(
+  availableParallelism(),
+  requestedConcurrency > 0 ? requestedConcurrency : Number.POSITIVE_INFINITY,
+);
+
+async function inParallel(checks: readonly (() => Promise<unknown>)[]): Promise<void> {
+  const pending = [...checks];
+  const workers = Array.from({ length: Math.min(checkConcurrency, pending.length) }, async () => {
+    for (let check = pending.shift(); check; check = pending.shift()) await check();
+  });
+  await Promise.all(workers);
+}
+
 const supportManifest = JSON.parse(
   readFileSync(resolve(repositoryRoot, "support.json"), "utf8"),
 ) as {
@@ -492,26 +510,29 @@ try {
   }
 
   await execFileAsync("go", ["mod", "tidy"], { cwd: temporaryRoot });
-  await Promise.all([
-    execFileAsync("tsc", ["--project", resolve(temporaryRoot, "tsconfig.json")]),
-    execFileAsync("uv", [
-      "run",
-      "--project",
-      resolve(repositoryRoot, "python"),
-      "ruff",
-      "format",
-      "--check",
-      ...pythonPaths,
-    ]),
-    execFileAsync("uv", [
-      "run",
-      "--project",
-      resolve(repositoryRoot, "python"),
-      "mypy",
-      ...pythonPaths,
-    ]),
-    ...goPaths.map((goPath) =>
-      execFileAsync("go", ["test", "-mod=readonly", goPath], { cwd: temporaryRoot }),
+  await inParallel([
+    () => execFileAsync("tsc", ["--project", resolve(temporaryRoot, "tsconfig.json")]),
+    () =>
+      execFileAsync("uv", [
+        "run",
+        "--project",
+        resolve(repositoryRoot, "python"),
+        "ruff",
+        "format",
+        "--check",
+        ...pythonPaths,
+      ]),
+    () =>
+      execFileAsync("uv", [
+        "run",
+        "--project",
+        resolve(repositoryRoot, "python"),
+        "mypy",
+        ...pythonPaths,
+      ]),
+    ...goPaths.map(
+      (goPath) => () =>
+        execFileAsync("go", ["test", "-mod=readonly", goPath], { cwd: temporaryRoot }),
     ),
   ]);
 } finally {
