@@ -460,6 +460,7 @@ describe("schema installation", () => {
       { version: 4, description: "cold history export" },
       { version: 5, description: "history partition horizon" },
       { version: 6, description: "bounded dashboard reads" },
+      { version: 7, description: "health snapshot without JIT" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
