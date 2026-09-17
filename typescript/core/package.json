@@ -1,6 +1,6 @@
 {
   "name": "@stablemates/workhorse",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "private": false,
   "description": "A durable task queue for PostgreSQL. Public beta.",
   "homepage": "https://workhorse.run",
@@ -59,7 +59,7 @@
     "typescript": "^5.8.3"
   },
   "peerDependencies": {
-    "@stablemates/workhorse-dashboard": ">=0.1.0 <0.2.0"
+    "@stablemates/workhorse-dashboard": ">=0.2.0 <0.3.0"
   },
   "peerDependenciesMeta": {
     "@stablemates/workhorse-dashboard": {

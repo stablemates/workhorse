@@ -15,6 +15,39 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 `0.1.0` the schema upgrades in place: every release ships ordered, immutable migrations, and inside
 a major line a migration only adds. Breaking changes are always listed with upgrade steps.
 
+## 0.2.0 — 2026-09-17
+
+The npm packages, Python distribution, and Go module release from one source commit.
+
+Requires **schema v1**, Node.js **22** or newer, and PostgreSQL **15** or newer.
+
+**A 0.1.5 database upgrades in place.** This is the first release that ships migrations. Run
+`workhorse schema migrate` from a deployment step before any process from this release starts. It
+applies migrations 0002 through 0006 and leaves the installation at schema version 6. No database is
+dropped and no data is lost.
+
+- Add named budgets that span queues. `Queue.syncBudgets()` declares a namespace of budgets,
+  `Queue.listBudgets()` reads them, and an enqueue names one through `budget`. A budget caps the
+  unexpired active tasks that name it, refills one shared token bucket, or does both
+  ([ADR 0067](docs/decisions/0067-add-named-budgets-that-span-queues.md)).
+- Skip missed schedule occurrences by default. Each schedule carries a `catchupPolicy` of `skip`,
+  `latest`, or `all` and a durable evaluation position. A schedule that a paused deployment left
+  behind no longer enqueues every occurrence it missed. Existing schedules take `skip`
+  ([ADR 0066](docs/decisions/0066-skip-missed-schedule-occurrences-by-default.md)).
+- Ship the cold history export ledger behind the rollup watermark. `Queue.setColdExportPolicy()` and
+  `Queue.getColdExportStatus()` drive it, and retention holds a day until an exporter reports it
+  copied. Export is off on a clean install and no exporter ships with this release
+  ([ADR 0068](docs/decisions/0068-export-cold-history-behind-the-rollup-watermark.md)).
+- Derive the history partition horizon from the preparation cadence, so a slower maintenance
+  schedule still prepares each partition before a writer needs it.
+- Bound every dashboard read procedure to the page it returns. `DashboardQueueHealthReader` resolves
+  a `DashboardQueueHealthDocument` where it resolved `unknown`.
+- Split the dashboard browser bundle into page chunks and serve its assets compressed and cached.
+- Document two tenancy tiers. One database per tenant is the boundary Workhorse enforces; a shared
+  database carries the tenant on the concurrency key, a budget, and a tag
+  ([ADR 0069](docs/decisions/0069-isolate-tenants-by-database-and-carry-tenant-identity-as-task-metadata.md)).
+- Move every optional package's peer range on `@stablemates/workhorse` to `>=0.2.0 <0.3.0`.
+
 ## 0.1.5 — 2026-09-14
 
 The npm packages, Python distribution, and Go module release from one source commit.
