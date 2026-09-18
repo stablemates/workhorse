@@ -2424,6 +2424,14 @@ prunes before the ordering walk reads a task; absent both, no join enters the qu
 stays on the update-time indexes, which already return the page in order.
 Concurrent state changes can move tasks between pages; browsing does not hold a snapshot across requests.
 The SPA uses cursor navigation and preserves legacy page-number links through `tasks`.
+It carries the cursor in the URL, and its pager offers a first-page control that drops the
+cursor while keeping every filter, the sort, the page size, the chart settings, and the open
+drawer. While a page is pinned the SPA offers a link back to the first page after the refresh
+control, because the paused indicator alone names neither the cause nor the way back. A narrow
+viewport states the same fact at the pager instead, where that row has room for it. A cursor request answered with `previousCursor: null` was answered from the first page,
+so the SPA replaces the URL to drop the anchor it no longer needs. That judgement pairs each
+answer with the request that asked for it, because the page still on screen during a pager
+click reports the same thing about the page the operator left.
 
 `dashboard_task_counts_v1(p_input jsonb)` returns the complete version 1 sidebar-count JSON
 document and ignores its input. If the task estimate is below 50,000, it counts every filter
@@ -3422,6 +3430,11 @@ interactive stdin and stdout is refused with exit 1.
 The SPA shares identical in-flight reads by route and filter. Background refreshes skip an
 identical pending page request. After a mutation, a foreground refresh waits for an older read
 and then fetches the committed result. Failures release the pending entry so a later refresh can retry.
+
+Auto refresh pauses while a task listing is pinned to a cursor or to a page beyond the first,
+because update-time ordering moves exactly the tasks a refresh would report out of the pinned
+window. Manual refresh is unaffected, and returning to the first page resumes the configured
+cadence through the usual resume countdown.
 
 `dashboard_system_v1` captures one timestamp for its window bounds and response timestamp.
 A materialized CTE reads the current statistics window once for outcomes, summaries, queue-wait

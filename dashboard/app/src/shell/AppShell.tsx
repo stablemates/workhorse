@@ -1,8 +1,9 @@
-import { taskFilterHref } from "../task-location.js";
+import { taskFilterHref, taskListingHeadHref, taskListingPinned } from "../task-location.js";
 import type { DashboardDemoTools } from "@stablemates/workhorse-dashboard-server";
 import type { DashboardWorkspaceLink } from "@stablemates/workhorse-dashboard-server/server";
 import { Menu, useDropdownActivity } from "../dropdown-activity.js";
 import {
+  Anchor,
   AppShell,
   Badge,
   Box,
@@ -39,7 +40,7 @@ import {
   useDashboardWindowActivityRefreshBlocker,
 } from "../refresh-blockers.js";
 import { useMediaQuery } from "@mantine/hooks";
-import { useCallback, useLayoutEffect, useRef } from "react";
+import { useCallback, useLayoutEffect, useRef, type MouseEvent } from "react";
 import { dashboardRefreshIntervalMs, dashboardRefreshIntervals } from "../refresh-policy.js";
 import {
   taskDrawerCloseOnEscape,
@@ -295,6 +296,8 @@ export function DashboardContent({
                       borderLeft: "none",
                     }}
                     aria-label={refreshPauseDescription}
+                    // The reason auto refresh stopped was reaching assistive technology only.
+                    title={refreshPauseDescription}
                   >
                     {autoRefreshPaused
                       ? "paused"
@@ -330,6 +333,28 @@ export function DashboardContent({
                 />
               ) : null}
             </Group>
+            {/* The refresh control says auto refresh is paused; this says what holds it and
+                offers the way out, beside the control the operator is already looking at. It is a
+                link because it is an action, not a status. The pager repeats the fact where the
+                header has no room. */}
+            {location.route === "/tasks" && taskListingPinned(location) ? (
+              <Anchor
+                href={mountedHref(basePath, taskListingHeadHref(location))}
+                onClick={(event: MouseEvent<HTMLElement>) =>
+                  handleLink(event, taskListingHeadHref(location))
+                }
+                className="dashboard-header__pinned"
+                size="xs"
+                c="blue"
+                td="underline"
+                visibleFrom="sm"
+                ml={{ sm: "xs" }}
+                style={{ whiteSpace: "nowrap", flexShrink: 0 }}
+                title="This page is anchored, so it neither follows new tasks nor auto refreshes. Return to the first page to follow the list again."
+              >
+                Back to first page
+              </Anchor>
+            ) : null}
           </Group>
           <Group className="dashboard-header__status" gap="sm" wrap="nowrap">
             {logoutUrl ? (

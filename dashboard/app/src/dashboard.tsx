@@ -11,6 +11,7 @@ export {
 export {
   TaskListingFilters,
   TaskName,
+  TaskSortSelect,
   TaskTags,
   TaskTagsTooltipContent,
   TaskWaitBadge,

@@ -7,7 +7,13 @@ import {
   type DashboardTasksPage,
   type DashboardTasksCursorPage,
 } from "@stablemates/workhorse-dashboard-server/wire";
-import { taskPageSizes, type TaskLocationState, type TaskPageSize } from "../task-location.js";
+import {
+  taskListingHeadHref,
+  taskListingPinned,
+  taskPageSizes,
+  type TaskLocationState,
+  type TaskPageSize,
+} from "../task-location.js";
 import { type RunNowFeedback } from "../run-now.js";
 import {
   lazy,
@@ -62,6 +68,7 @@ import {
   TaskName,
   TaskEnqueueBadge,
   TaskRowActions,
+  TaskSortSelect,
   TaskTags,
   TaskStatusIndicators,
   taskDuration,
@@ -204,9 +211,36 @@ export const TasksPage = memo(function TasksPage({
   // Offset pages report the total they proved rather than a count over every matching task, so the
   // pager gains one page while more remain and settles on the real last page once it is reached.
   const totalPages = Math.max(1, Math.ceil((data.total ?? 0) / data.pageSize));
+  const pinned = taskListingPinned(locationState);
+  /**
+   * What a page other than the first costs the operator, for the screens the header cannot say it on.
+   *
+   * The header carries this notice beside the refresh control it explains. That row has no room on
+   * a narrow screen, so the same fact appears at the pager instead, and never in both places.
+   */
+  const pinnedNotice = pinned ? (
+    <Text
+      size="xs"
+      c="dimmed"
+      hiddenFrom="sm"
+      title="This page is anchored, so it neither follows new tasks nor auto refreshes. Return to the first page to follow the list again."
+    >
+      Not following new tasks
+    </Text>
+  ) : null;
   const pagination =
     "nextCursor" in data ? (
       <Group gap="xs" aria-label="Tasks pagination">
+        {pinnedNotice}
+        <Button
+          size="xs"
+          variant={pinned ? "default" : "subtle"}
+          disabled={!pinned}
+          title="Return to the first page, so the list follows new work again"
+          onClick={() => navigate(taskListingHeadHref(locationState))}
+        >
+          First
+        </Button>
         <Button
           size="xs"
           variant="subtle"
@@ -238,13 +272,16 @@ export const TasksPage = memo(function TasksPage({
         </Button>
       </Group>
     ) : (
-      <Pagination
-        value={Math.min(data.page, totalPages)}
-        onChange={(page) => navigate(taskHref({ ...locationState, page }))}
-        total={totalPages}
-        size="xs"
-        aria-label="Tasks pagination"
-      />
+      <Group gap="xs">
+        {pinnedNotice}
+        <Pagination
+          value={Math.min(data.page, totalPages)}
+          onChange={(page) => navigate(taskHref({ ...locationState, page }))}
+          total={totalPages}
+          size="xs"
+          aria-label="Tasks pagination"
+        />
+      </Group>
     );
   const enqueueTestTask = (kind: DemoTaskKind, options?: DemoTaskOptions) =>
     runDemoTask?.(kind, options);
@@ -319,22 +356,9 @@ export const TasksPage = memo(function TasksPage({
             taskFacets={taskFacets}
             updateLocation={updateLocation}
           />
-          <Group justify="flex-end" wrap="wrap">
-            <Button
-              variant="default"
-              size="xs"
-              mr="auto"
-              leftSection={<ChartBar size={16} />}
-              aria-expanded={chartVisible}
-              aria-controls="task-activity-chart"
-              onClick={() => {
-                const visible = !chartVisible;
-                setChartVisible(visible);
-                saveTaskChartVisibility(visible);
-              }}
-            >
-              {chartVisible ? "Hide chart" : "Show chart"}
-            </Button>
+          {/* Paging leads the row; page size joins the view controls that close it. */}
+          <Group justify="space-between" wrap="wrap">
+            {pagination}
             <Group gap="xs" wrap="wrap">
               {data.filter === "discarded" ? (
                 <Button
@@ -474,6 +498,7 @@ export const TasksPage = memo(function TasksPage({
                   </Menu.Dropdown>
                 </Menu>
               ) : null}
+              <TaskSortSelect sort={data.sort} updateLocation={updateLocation} />
               <Select
                 size="xs"
                 w={76}
@@ -490,7 +515,20 @@ export const TasksPage = memo(function TasksPage({
                 allowDeselect={false}
                 aria-label="Tasks per page"
               />
-              {pagination}
+              <Button
+                variant="default"
+                size="xs"
+                leftSection={<ChartBar size={16} />}
+                aria-expanded={chartVisible}
+                aria-controls="task-activity-chart"
+                onClick={() => {
+                  const visible = !chartVisible;
+                  setChartVisible(visible);
+                  saveTaskChartVisibility(visible);
+                }}
+              >
+                {chartVisible ? "Hide chart" : "Show chart"}
+              </Button>
             </Group>
           </Group>
         </Stack>
@@ -639,7 +677,7 @@ export const TasksPage = memo(function TasksPage({
           </Table>
         </ScrollArea>
         <Divider />
-        <Group justify="flex-end" p="md">
+        <Group justify="flex-start" p="md">
           {pagination}
         </Group>
       </Paper>
