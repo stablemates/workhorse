@@ -366,7 +366,8 @@ One locked attempt-outcome arbiter accepts the first lifecycle outcome. Cancella
 `acknowledge_cancel_v1` under the claimed worker and fence even if the handler catches the signal
 and returns. Deadline and timeout transitions remain owned by `expire_owned_v1`. Lease loss raises
 `StaleLeaseError` and prevents completion or failure. The worker stops and joins the background
-thread before final settlement.
+thread before final settlement. A lost lease ends only that attempt: the handler outcome records
+`lease_lost`, and `run()` and `run_once()` keep dispatching because lease recovery owns the task.
 
 `run_once()` refills freed slots until one empty queue sweep, drains every claimed task, and returns
 whether the pass claimed any work. `run()` repeats sweeps until `stop()` is called. `pause()` stops
@@ -548,19 +549,25 @@ Each call includes every active task's ID, fence token, and lease duration. Hear
 overlap.
 The earlier of `deadline_at` and `attempt_timeout_at` cancels the handler context. The supervisor
 then retries `expire_owned_telemetry_v1` while PostgreSQL returns `not_due` within its 1000
-millisecond clock-skew budget. If the supervisor settles expiration, `execute` records the outcome
-without repeating the fenced transition. `cancel_requested` cancels the context and settles through
+millisecond clock-skew budget. The supervisor leaves the heartbeat batch before it calls
+`expire_owned_telemetry_v1`, and the heartbeat goroutine delivers each ownership result without
+blocking. A slow expiration therefore cannot stall heartbeats for other tasks. If the supervisor
+settles expiration, `execute` records the outcome without repeating the fenced transition. `cancel_requested` cancels the context and settles through
 `acknowledge_cancel_v1`; `stale` cancels it without another fenced write. `context.Cause` returns
 `CancellationRequestedError`, `DeadlineExceededError`, `ExecutionTimeoutError`, or `LeaseLostError`.
 
 `Worker.Run` borrows a pool connection for each claim or settlement query. No connection remains
 checked out while a handler runs. A separate maintenance goroutine calls `tick_v1(100, 100)`
 immediately, then repeats on every `MaintenanceInterval`. Handler
-duration and claim throughput do not delay it. Heartbeat, maintenance, claim, and settlement queries
+duration and claim throughput do not delay it. A phase error that `tick_v1` returns as data is
+logged at warn level with `workhorse.maintenance.phase`, and the next tick retries the phase. It
+stops neither `Run` nor `RunOnce`. Heartbeat, maintenance, claim, and settlement queries
 serialize safely when the pool has one connection.
 A handler error passes a JSON envelope and a null retry override to `fail_v1`, so PostgreSQL selects
-retry timing and attempt exhaustion. A rejected completion or `stale` failure returns
-`StaleLeaseError`, which matches `ErrStaleLease` through `errors.Is`.
+retry timing and attempt exhaustion. A `stale` heartbeat, a rejected completion, or a `stale`
+failure ends that attempt with the `lease_lost` handler outcome. `Run` and `RunOnce` keep
+dispatching, because lease recovery already owns the task. An expiration that PostgreSQL still
+reports as `not_due` after the clock-skew budget ends the same way and logs a warning.
 `callHandler` recovers a panic and converts it to `handler for <type> panicked: <value>`. The worker
 passes that error through the same `fail_v1` path, waits for the ownership supervisor, and keeps the
 dispatch loop alive.

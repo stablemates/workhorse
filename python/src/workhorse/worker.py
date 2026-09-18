@@ -1703,6 +1703,10 @@ class Worker:
     def _run_claimed_task(self, task: ClaimedTask) -> None:
         try:
             self._execute_claimed_task(task)
+        except StaleLeaseError:
+            # A lost lease ends this attempt only. Lease recovery already owns the task, and the
+            # execution log records the lease_lost outcome, so the worker keeps claiming.
+            pass
         except BaseException as error:
             with self._state_lock:
                 self._run_errors.append(error)

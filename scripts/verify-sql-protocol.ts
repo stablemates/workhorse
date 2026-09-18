@@ -151,6 +151,8 @@ export interface LeaseLossRuntimeFixture extends RuntimeFixtureBase {
   expectedRejectedWriteError: string;
   expectedState: ExpectedRuntimeState;
   expectedAttemptOutcome: TaskAttemptOutcome;
+  /** "processed": the run pass returns normally after the lease loss, so the worker keeps running. */
+  expectedRunOutcome: "processed";
 }
 
 export interface HeartbeatCadenceRuntimeFixture extends RuntimeFixtureBase {

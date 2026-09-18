@@ -443,7 +443,7 @@ async function executeLeaseLossRuntimeFixture(
     );
     await expect(queue.recoverExpired(100, 0)).resolves.toBe(1);
     allowHeartbeat.resolve();
-    await expect(execution).resolves.toBe(true);
+    await expect(execution).resolves.toBe(fixture.expectedRunOutcome === "processed");
     expect(abortMessage).toBe(fixture.expectedAbortMessage);
     expect([...rejectedWrites.keys()]).toEqual(fixture.expectedRejectedWrites);
     expect(fixture.expectedRejectedWrites).toEqual(

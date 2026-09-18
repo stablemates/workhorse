@@ -151,7 +151,8 @@
     ],
     "expectedRejectedWriteError": "Task lease was lost",
     "expectedState": { "state": "ready", "attempt": 2 },
-    "expectedAttemptOutcome": "lease_expired"
+    "expectedAttemptOutcome": "lease_expired",
+    "expectedRunOutcome": "processed"
   },
   {
     "id": "heartbeats-never-overlap",

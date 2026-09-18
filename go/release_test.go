@@ -107,9 +107,12 @@ pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL_TEST"))
 	command := exec.Command("go", "run", "-mod=mod", ".")
 	command.Dir = consumerRoot
 	command.Env = append(os.Environ(), "GOWORK=off", "DATABASE_URL_TEST="+databaseURL)
-	output, err := command.CombinedOutput()
+	// The worker logs to slog.Default, which writes to standard error; the task ID is on standard out.
+	var stderr strings.Builder
+	command.Stderr = &stderr
+	output, err := command.Output()
 	if err != nil {
-		t.Fatalf("run external module: %v\n%s", err, output)
+		t.Fatalf("run external module: %v\n%s%s", err, output, stderr.String())
 	}
 	taskID := strings.TrimSpace(string(output))
 	if taskID == "" {

@@ -67,6 +67,9 @@ func resetTimer(timer *time.Timer, delay time.Duration) {
 
 type ownershipStatus string
 
+// errExpirationNotDue reports that PostgreSQL kept refusing an expiration the local timer fired for.
+var errExpirationNotDue = errors.New(expirationNotDueMessage)
+
 // ErrStaleLease matches a lifecycle settlement rejected under an expired or superseded fence.
 var ErrStaleLease = errors.New(staleLeaseMessage)
 
@@ -216,6 +219,15 @@ type heartbeatMember struct {
 	result        chan ownershipResult
 }
 
+// deliver hands the first ownership result to the supervising goroutine without blocking. The
+// heartbeat loop is shared by every member, so a later result for the same member is dropped.
+func (member *heartbeatMember) deliver(result ownershipResult) {
+	select {
+	case member.result <- result:
+	default:
+	}
+}
+
 type fencedLease struct {
 	taskID     string
 	workerID   string
@@ -331,7 +343,7 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 	}
 	logger := options.Logger
 	if logger == nil {
-		logger = slog.New(discardLogHandler{})
+		logger = slog.Default()
 	}
 	runPermit := make(chan struct{}, 1)
 	runPermit <- struct{}{}
@@ -738,7 +750,15 @@ func (worker *Worker) runMaintenance(ctx context.Context) error {
 			continue
 		}
 		if row[rowErrorField] != nil {
-			return fmt.Errorf(maintenancePhaseErrorFormat, phase, row[rowErrorField])
+			// tick_v1 reports a phase failure as data, and the next tick retries the phase. Returning
+			// it would stop every worker in the fleet on one lock timeout.
+			worker.logger.WarnContext(
+				ctx,
+				fmt.Sprintf(maintenancePhaseErrorFormat, phase, row[rowErrorField]),
+				slog.String(maintenancePhaseAttribute, phase),
+				slog.String(workerIDAttribute, worker.workerID),
+			)
+			continue
 		}
 		if phase == recoverMaintenancePhase {
 			worker.recordRecovery(ctx, row)
@@ -948,6 +968,21 @@ func (worker *Worker) execute(
 			attributes,
 		)
 	}()
+	// A lost lease ends this attempt only. Lease recovery already owns the task, so the worker
+	// records lease_lost and keeps claiming instead of stopping Run.
+	defer func() {
+		if errors.Is(resultError, ErrStaleLease) || errors.Is(resultError, errExpirationNotDue) {
+			if errors.Is(resultError, errExpirationNotDue) {
+				worker.logger.WarnContext(
+					handlerParent,
+					expirationNotDueMessage,
+					taskLogAttributes(task, worker.workerID)...,
+				)
+			}
+			outcome = handlerOutcomeLeaseLost
+			resultError = nil
+		}
+	}()
 	cancelDeadline := func() {}
 	if expiration, cause := ownershipExpiration(task); expiration != nil {
 		handlerParent, cancelDeadline = context.WithDeadlineCause(handlerParent, *expiration, cause)
@@ -995,7 +1030,7 @@ func (worker *Worker) execute(
 		return &StaleLeaseError{TaskID: task.ID}
 	}
 	if ownership.status == workerOwnershipNotDue {
-		return errors.New(expirationNotDueMessage)
+		return errExpirationNotDue
 	}
 	if errors.Is(cause, ErrCancellationRequested) {
 		outcome = handlerOutcomeCanceled
@@ -1098,6 +1133,9 @@ func (worker *Worker) superviseOwnership(
 				return
 			case <-expiration:
 				cancelHandler(expirationCause)
+				// Leave the heartbeat batch first: expireOwnership can retry for a while, and this
+				// goroutine does not read member.result until it returns.
+				worker.unregisterHeartbeat(member)
 				status, err := worker.expireOwnership(ctx, task)
 				done <- ownershipResult{status: status, expirationSettled: err == nil, err: err}
 				return
@@ -1227,7 +1265,7 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
 		}
 		member.cancelHandler(ownershipCause(member.task, status))
 		worker.recordRejectedHeartbeat(member.ctx, member.task, status)
-		member.result <- ownershipResult{status: status}
+		member.deliver(ownershipResult{status: status})
 	}
 }
 
@@ -1236,7 +1274,7 @@ func (worker *Worker) deliverHeartbeatError(members []*heartbeatMember, err erro
 	for _, member := range members {
 		if registered[member] {
 			member.cancelHandler(err)
-			member.result <- ownershipResult{err: err}
+			member.deliver(ownershipResult{err: err})
 		}
 	}
 }
@@ -1396,7 +1434,7 @@ func (worker *Worker) settleExpiration(ctx context.Context, executor Executor, t
 	case workerOwnershipStale:
 		return &StaleLeaseError{TaskID: task.ID}
 	default:
-		return errors.New(expirationNotDueMessage)
+		return errExpirationNotDue
 	}
 }
 

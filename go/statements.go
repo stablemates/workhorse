@@ -413,6 +413,7 @@ const (
 	taskTypeAttribute              = "workhorse.task.type"
 	taskAttemptAttribute           = "workhorse.task.attempt"
 	workerIDAttribute              = "workhorse.worker.id"
+	maintenancePhaseAttribute      = "workhorse.maintenance.phase"
 	handlerOutcomeAttribute        = "workhorse.handler.outcome"
 	attemptOutcomeAttribute        = "workhorse.attempt.outcome"
 	claimResultAttribute           = "workhorse.claim.result"

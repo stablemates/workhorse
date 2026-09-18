@@ -60,6 +60,7 @@ type workerRuntimeFixture struct {
 	ExpectedState                        workerFixtureTaskState            `json:"expectedState"`
 	ExpectedAfterRuns                    []workerFixtureTaskState          `json:"expectedAfterRuns"`
 	ExpectedAttemptOutcome               string                            `json:"expectedAttemptOutcome"`
+	ExpectedRunOutcome                   string                            `json:"expectedRunOutcome"`
 	ExpectedAttemptOutcomes              []string                          `json:"expectedAttemptOutcomes"`
 	Concurrency                          int                               `json:"concurrency"`
 	TaskCount                            int                               `json:"taskCount"`
@@ -247,8 +248,8 @@ func TestHandlerContextReturnsTypedFenceErrorsForCheckpointAndWait(t *testing.T)
 	})
 
 	processed, runError := worker.RunOnce(ctx)
-	if !processed || !errors.Is(runError, workhorse.ErrStaleLease) {
-		t.Fatalf("expected stale settlement after competing completion: processed=%t err=%v", processed, runError)
+	if !processed || runError != nil {
+		t.Fatalf("expected the worker to survive a competing completion: processed=%t err=%v", processed, runError)
 	}
 	checkpointErr := <-checkpointError
 	var checkpointLeaseLost *workhorse.CheckpointLeaseLostError
@@ -394,8 +395,8 @@ func TestHandlerContextReturnsTypedProgressFenceAndRateLimitErrors(t *testing.T)
 	})
 
 	processed, runError := worker.RunOnce(ctx)
-	if !processed || !errors.Is(runError, workhorse.ErrStaleLease) {
-		t.Fatalf("expected stale settlement: processed=%t err=%v", processed, runError)
+	if !processed || runError != nil {
+		t.Fatalf("expected the worker to survive a stale settlement: processed=%t err=%v", processed, runError)
 	}
 	var limited *workhorse.ProgressRateLimitError
 	if !errors.As(rateLimitError, &limited) || limited.TaskID != taskID || limited.RetryAfter <= 0 {
@@ -1151,7 +1152,7 @@ func TestWorkerRunStopsClaimsAndDrainsWithinTheGracePeriod(t *testing.T) {
 	}
 }
 
-func TestWorkerSurfacesRejectedSettlementAsTypedStaleLease(t *testing.T) {
+func TestWorkerRecordsARejectedSettlementAsALeaseLoss(t *testing.T) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-stale")
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -1165,8 +1166,10 @@ func TestWorkerSurfacesRejectedSettlementAsTypedStaleLease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var logs lockedBuffer
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
 		Queue: "go-worker-stale", WorkerID: "go-worker-stale", LeaseDuration: time.Second,
+		Logger: slog.New(slog.NewTextHandler(&logs, nil)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1208,13 +1211,22 @@ func TestWorkerSurfacesRejectedSettlementAsTypedStaleLease(t *testing.T) {
 		t.Fatal("fault-injection settlement was rejected")
 	}
 	close(release)
-	err = <-workerResult
-	if !errors.Is(err, workhorse.ErrStaleLease) {
-		t.Fatalf("expected errors.Is stale lease match, received %v", err)
+	if err := <-workerResult; err != nil {
+		t.Fatalf("expected the worker to survive a rejected settlement, received %v", err)
 	}
-	var stale *workhorse.StaleLeaseError
-	if !errors.As(err, &stale) || stale.TaskID != taskID {
-		t.Fatalf("expected typed stale lease for %s, received %#v", taskID, err)
+	if !strings.Contains(logs.String(), "workhorse.handler.outcome=lease_lost") {
+		t.Fatalf("expected a lease_lost execution outcome, logged:\n%s", logs.String())
+	}
+	var result []byte
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT result::text FROM workhorse.task_outcome WHERE task_id = $1::uuid",
+		taskID,
+	).Scan(&result); err != nil {
+		t.Fatal(err)
+	}
+	if string(result) != `{"source": "competing-settlement"}` {
+		t.Fatalf("stale handler result overwrote the competing settlement: %s", result)
 	}
 }
 
@@ -1562,10 +1574,14 @@ func executeWorkerLeaseLossFixture(t *testing.T, fixture workerRuntimeFixture) {
 		rejectedWrites <- rejectedWriteResults{names: rejected, messages: messages}
 		return map[string]any{"mustNotSettle": true}, nil
 	})
-	workerResult := make(chan error, 1)
+	type runOnceResult struct {
+		processed bool
+		err       error
+	}
+	workerResult := make(chan runOnceResult, 1)
 	go func() {
-		_, err := worker.RunOnce(ctx)
-		workerResult <- err
+		processed, err := worker.RunOnce(ctx)
+		workerResult <- runOnceResult{processed: processed, err: err}
 	}()
 	<-started
 	var staleFence int64
@@ -1593,9 +1609,12 @@ func executeWorkerLeaseLossFixture(t *testing.T, fixture workerRuntimeFixture) {
 	}
 	releaseHeartbeat()
 
-	err = <-workerResult
-	if !errors.Is(err, workhorse.ErrStaleLease) {
-		t.Fatalf("expected stale settlement refusal, received %v", err)
+	run := <-workerResult
+	if fixture.ExpectedRunOutcome != "processed" || !run.processed || run.err != nil {
+		t.Fatalf(
+			"expected run outcome %q, received processed=%t err=%v",
+			fixture.ExpectedRunOutcome, run.processed, run.err,
+		)
 	}
 	observed := <-cause
 	if !errors.Is(observed, workhorse.ErrLeaseLost) {

@@ -391,6 +391,9 @@ def execute_lease_loss_fixture(
             except BaseException as error:
                 assert isinstance(error, LifecycleError)
                 rejected_writes[name] = str(error)
+        # The worker survives the loss and would claim the retried attempt next. run_once drains
+        # until an empty sweep, so pause claims to keep the fixture's ready state observable.
+        worker.pause()
         return {"late": True}
 
     worker = Worker(
@@ -400,7 +403,8 @@ def execute_lease_loss_fixture(
         lease_ms=fixture["leaseMs"],
         heartbeat_ms=fixture["heartbeatMs"],
     ).handle(fixture["taskType"], handler)
-    thread = run_in_thread(worker.run_once, errors)
+    run_results: list[bool] = []
+    thread = run_in_thread(lambda: run_results.append(worker.run_once()), errors)
     assert started.wait(timeout=5)
     connection.execute(
         "UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 ms' "
@@ -413,7 +417,9 @@ def execute_lease_loss_fixture(
     ).fetchone()
     assert recovered == (1,)
     join(thread)
-    assert len(errors) == 1 and isinstance(errors[0], StaleLeaseError)
+    assert errors == []
+    assert fixture["expectedRunOutcome"] == "processed"
+    assert run_results == [True]
     assert abort_messages == [fixture["expectedAbortMessage"]]
     assert set(fixture["portableRejectedWrites"]) <= set(fixture["expectedRejectedWrites"])
     assert list(rejected_writes) == fixture["portableRejectedWrites"]
