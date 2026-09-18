@@ -958,10 +958,6 @@ export class Worker {
     return tasks;
   }
 
-  private async claimNext(): Promise<ClaimedTask | null> {
-    return (await this.claimNextMany(1))[0] ?? null;
-  }
-
   private async runBatch(
     includeMaintenance: boolean,
     shouldStop: () => boolean = () => this.stopping,
@@ -1083,6 +1079,11 @@ export class Worker {
     };
     const controller = new AbortController();
     const arbiter = new AttemptOutcomeArbiter();
+    // Every durable side effect first confirms that this attempt still owns the task.
+    const requireLease = (): void => {
+      if (controller.signal.aborted)
+        throw controller.signal.reason ?? new Error("Task lease was lost");
+    };
     const suspend = (outcome: "suspended_for_wait" | "suspended_for_child"): never => {
       const reason =
         outcome === "suspended_for_wait" ? DURABLE_WAIT_SUSPENSION : CHILD_TASK_SUSPENSION;
@@ -1227,9 +1228,7 @@ export class Worker {
       const setProgress: HandlerContext["setProgress"] = async <TValue extends Json>(
         value: TValue,
       ) => {
-        if (controller.signal.aborted) {
-          throw controller.signal.reason ?? new Error("Task lease was lost");
-        }
+        requireLease();
         const updated = await this.queue.updateProgress(task, this.workerId, value);
         progressLoad = Promise.resolve(updated);
         return updated;
@@ -1245,8 +1244,7 @@ export class Worker {
           const checkpointCache = await loadCheckpoints();
           const existing = checkpointCache.get(name) as TaskCheckpoint<TValue> | undefined;
           if (existing) return existing.value;
-          if (controller.signal.aborted)
-            throw controller.signal.reason ?? new Error("Task lease was lost");
+          requireLease();
           const value = await operation();
           const saved = await this.queue.saveCheckpoint(task, this.workerId, name, value);
           checkpointCache.set(name, saved);
@@ -1267,9 +1265,7 @@ export class Worker {
         const pending = inFlightWaits.get(name);
         if (pending) return pending;
         const execution = (async () => {
-          if (controller.signal.aborted) {
-            throw controller.signal.reason ?? new Error("Task lease was lost");
-          }
+          requireLease();
           const scheduled = await this.queue.scheduleWait(task, this.workerId, name, request);
           waits?.set(name, scheduled.wait);
           if (scheduled.status === "scheduled" && arbiter.submit("suspended_for_wait")) {
@@ -1297,9 +1293,7 @@ export class Worker {
         const pending = inFlightSignals.get(name);
         if (pending) return (await pending) as TPayload;
         const execution = (async (): Promise<TPayload> => {
-          if (controller.signal.aborted) {
-            throw controller.signal.reason ?? new Error("Task lease was lost");
-          }
+          requireLease();
           const signal = await this.queue.waitForSignal<TPayload>(
             task,
             this.workerId,
@@ -1335,9 +1329,7 @@ export class Worker {
           return (await pending.execution) as TResult;
         }
         const execution = (async (): Promise<TResult> => {
-          if (controller.signal.aborted) {
-            throw controller.signal.reason ?? new Error("Task lease was lost");
-          }
+          requireLease();
           const token = await this.queue.waitForHuman<TContext, TResult>(
             task,
             this.workerId,
@@ -1377,9 +1369,7 @@ export class Worker {
           return pending.execution as Promise<TResult>;
         }
         const execution = (async (): Promise<TResult> => {
-          if (controller.signal.aborted) {
-            throw controller.signal.reason ?? new Error("Task lease was lost");
-          }
+          requireLease();
           const processed = await this.queue.createChild<TChildPayload, TResult>(
             task,
             this.workerId,
@@ -1416,9 +1406,7 @@ export class Worker {
           return inFlightChildSet.execution as Promise<TJoined>;
         }
         const execution = (async (): Promise<TJoined> => {
-          if (controller.signal.aborted) {
-            throw controller.signal.reason ?? new Error("Task lease was lost");
-          }
+          requireLease();
           const processed =
             mode === "settled"
               ? await this.queue.createChildren(task, this.workerId, children)
@@ -1478,8 +1466,7 @@ export class Worker {
         recordExecution("lease_lost");
         return;
       }
-      if (controller.signal.aborted)
-        throw controller.signal.reason ?? new Error("Task lease was lost");
+      requireLease();
       await this.inject("beforeComplete", task);
       const accepted = await this.queue.complete(task, this.workerId, result);
       if (!accepted) {
