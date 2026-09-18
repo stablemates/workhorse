@@ -47,6 +47,7 @@ import type {
   WorkerRegistration,
 } from "./types.js";
 import { workerCheckpointsRead, workerProgressRead, workerWaitsRead } from "./worker-internal.js";
+import { setUnrefTimeoutAt } from "./timers.js";
 
 const DURABLE_WAIT_SUSPENSION = Symbol("workhorse.durableWaitSuspension");
 const CHILD_TASK_SUSPENSION = Symbol("workhorse.childTaskSuspension");
@@ -1089,17 +1090,15 @@ export class Worker {
       if (arbiter.submit(outcome)) controller.abort(reason);
       throw reason;
     };
-    let expirationTimer: NodeJS.Timeout | undefined;
+    let cancelExpirationTimer: (() => void) | undefined;
     let expirationPromise: Promise<ExpireOwnedStatus> | undefined;
     let heartbeatStopped = false;
     let removeHeartbeatLease: (() => void) | undefined;
     const stopHeartbeat = (): void => {
       heartbeatStopped = true;
       removeHeartbeatLease?.();
-      if (expirationTimer) {
-        clearTimeout(expirationTimer);
-        expirationTimer = undefined;
-      }
+      cancelExpirationTimer?.();
+      cancelExpirationTimer = undefined;
     };
     const markCancellationRequested = (): void => {
       arbiter.submit("cancelled");
@@ -1150,9 +1149,13 @@ export class Worker {
       null,
     );
     if (expirationAt) {
-      expirationTimer = setTimeout(
+      cancelExpirationTimer = setUnrefTimeoutAt(
+        // The extra millisecond keeps the timer from leading the database clock: expirationAt was
+        // truncated to milliseconds on the way to the client, so firing at it exactly can precede
+        // the stored microsecond value and earn a not_due answer from expiration.
+        expirationAt.getTime() + 1,
         () => {
-          expirationTimer = undefined;
+          cancelExpirationTimer = undefined;
           const isDeadline =
             task.deadlineAt !== null &&
             (task.attemptTimeoutAt === null || task.deadlineAt <= task.attemptTimeoutAt);
@@ -1165,12 +1168,7 @@ export class Worker {
           stopHeartbeat();
           expireOwnershipInBackground();
         },
-        // The extra millisecond keeps the timer from leading the database clock: expirationAt was
-        // truncated to milliseconds on the way to the client, so firing at it exactly can precede
-        // the stored microsecond value and earn a not_due answer from expiration.
-        Math.max(0, expirationAt.getTime() + 1 - Date.now()),
       );
-      expirationTimer.unref();
     }
     removeHeartbeatLease = this.addHeartbeatLease(task, refreshOwnership, (error) => {
       if (heartbeatStopped) return;
