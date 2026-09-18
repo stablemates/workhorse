@@ -41,8 +41,9 @@ behind them never runs, and every lease lapses at once. TypeScript workers there
 dedicated heartbeat connection per pool, shared the way the listener is. Budget that connection on
 top of the listener and whatever handlers take. When the pool is too small for all three, workers
 heartbeat through the shared pool instead. The heartbeat connection runs only self-contained
-statements, so it works behind a transaction-mode pooler. Go and Python workers still heartbeat
-through the shared pool.
+statements, so it works behind a transaction-mode pooler. Go workers still heartbeat through the
+shared pool. A Python worker opens its own heartbeat connection only when you pass it a
+`heartbeat_connection_factory`.
 
 ## What is unsafe?
 
