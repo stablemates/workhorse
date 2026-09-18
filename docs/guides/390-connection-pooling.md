@@ -36,6 +36,14 @@ polls instead of listening. Behind any pooler that cannot deliver notifications 
 is held without delivering anything, which is budget spent on both the client pool and the
 pooler's client cap.
 
+Heartbeats need headroom of their own. If handlers hold every pooled connection, a heartbeat queued
+behind them never runs, and every lease lapses at once. TypeScript workers therefore keep one
+dedicated heartbeat connection per pool, shared the way the listener is. Budget that connection on
+top of the listener and whatever handlers take. When the pool is too small for all three, workers
+heartbeat through the shared pool instead. The heartbeat connection runs only self-contained
+statements, so it works behind a transaction-mode pooler. Go and Python workers still heartbeat
+through the shared pool.
+
 ## What is unsafe?
 
 Pointing `notificationPool` at a transaction-mode pooler or at PgCat, because the hints die

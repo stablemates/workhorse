@@ -64,11 +64,11 @@ export function createWorkhorseAdapter<TTransaction = Queryable>(
 }
 
 /**
- * A node-postgres pool an ORM adapter hands over for LISTEN connections only.
+ * A node-postgres pool an ORM adapter hands over for dedicated connections only.
  *
- * Most ORMs cannot lend out a dedicated session, and a wake hint needs one that stays open. The
- * pool is never used for queries; it exists so notification-assisted dispatch has somewhere to
- * take a connection from, and its identity is what lets Workhorse share one listener per pool.
+ * Most ORMs cannot lend out a dedicated session. A wake hint needs one that stays open, and workers
+ * keep one for heartbeats so busy handlers cannot starve lease renewal. Ordinary queue operations
+ * never use this pool. Its identity lets Workhorse share one of each connection per pool.
  */
 export interface AdapterNotificationPool extends Queryable {
   connect(): Promise<unknown>;
@@ -79,7 +79,7 @@ export interface AdapterNotificationPool extends Queryable {
 export interface ProviderAdapterOptions {
   defaultQueue?: string;
   queueOptions?: QueueOptions;
-  /** Optional node-postgres pool used only for dedicated LISTEN connections. */
+  /** Optional node-postgres pool used only for the LISTEN and heartbeat connections. */
   notificationPool?: AdapterNotificationPool;
   /**
    * Optional provider cleanup. A caller-owned database stays open by default, because an adapter

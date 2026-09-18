@@ -3300,7 +3300,7 @@ interface ProviderAdapterDefinition<TExecutor> extends ProviderAdapterOptions {
 interface ProviderAdapterOptions {
   defaultQueue?: string;
   queueOptions?: QueueOptions;
-  /** Optional node-postgres pool used only for dedicated LISTEN connections. */
+  /** Optional node-postgres pool used only for the LISTEN and heartbeat connections. */
   notificationPool?: AdapterNotificationPool;
   /**
   * Optional provider cleanup. A caller-owned database stays open by default, because an adapter
@@ -3476,6 +3476,7 @@ class Queue {
   createChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(parent: ClaimedTask, workerId: string, children: readonly ChildTaskRequest[]): Promise<CreateChildrenResult<TResult>>;
   complete<TResult extends Json>(task: ClaimedTask, workerId: string, result: TResult): Promise<boolean>;
   [workerCompletionPrepare](task: ClaimedTask, workerId: string, result: Json): Promise<() => Promise<boolean>>;
+  [workerHeartbeatReservation](): WorkerHeartbeatChannel | undefined;
   /** Seed immutable JSON Schema contracts and the application-selected current versions. */
   syncContracts(): Promise<void>;
   fail(task: ClaimedTask, workerId: string, error: unknown, retryDelayMs?: number): Promise<"ready" | "scheduled" | "failed" | "cancel_requested" | "deadline_exceeded" | "timeout_exceeded" | "stale">;
@@ -4615,6 +4616,13 @@ interface WorkerClientProtocol {
   /** The protocol version, or `null` for workers whose SDK predates the column. */
   readonly version: number | null;
   readonly workers: number;
+}
+
+interface WorkerHeartbeatChannel {
+  /** Take the connection now, ahead of any handler that could exhaust the pool. */
+  reserve(): void;
+  heartbeatMany(tasks: readonly ClaimedTask[], workerId: string, leaseMs: number, timeoutMs: number): Promise<Map<string, HeartbeatStatus>>;
+  close(): Promise<void>;
 }
 
 type WorkerMaintenanceLoop = "tick" | "statistics_rollup" | "background_routines";

@@ -952,6 +952,9 @@ pool mode as a separate lane to prove the boundary.
   advisory lock is transaction-scoped (`pg_advisory_xact_lock`, `pg_try_advisory_xact_lock`,
   `pg_advisory_xact_lock_shared`), including the schema-migration lock, so no production path is
   affected; the session forms exist only in test harnesses.
+- The TypeScript worker's reserved heartbeat connection holds no session state. It runs only
+  `heartbeat_many_v1`, bounds each round on the client, and never issues `SET`, so it works in
+  every pool mode.
 - Schema operations run under transaction pooling: `installSchema` sends `schema.sql` as one
   multi-statement simple query, and each migration step is one `BEGIN`…`COMMIT` script that takes
   its transaction-scoped lock behind `SET LOCAL lock_timeout`.
@@ -2289,6 +2292,21 @@ the heartbeat, and aborts the handler's signal. Settlement then records `lease_l
 so the watchdog is what bounds how long a handler outlives its lease. Python and Go workers do not
 yet keep this watchdog.
 
+TypeScript workers send heartbeat rounds on one reserved pooled connection, so handlers that hold
+every other connection cannot starve lease renewal. `holdHeartbeatConnection` offers the
+reservation only when the queryable has `connect()` and a known capacity
+(`notificationConnectionCapacity`, else `options.max`) of at least 3. That leaves room for the
+notification listener and one claim. A smaller or unknown pool heartbeats through the shared
+queryable as before. Every worker on one pool shares the reservation, keyed like the listener by
+`notificationConnectionIdentity`, else the queryable itself. The last holder to close it returns
+the client to the pool. `Worker.run()` takes a hold before its first maintenance pass and keeps it
+until the run ends. `runOnce()` takes one when the first attempt registers its lease, before the
+handler starts, and closes it with the last lease. Each round on the reservation is bounded by
+`heartbeatMs`. A round that exceeds the bound, or whose statement fails, releases the client with an
+error. node-postgres then destroys the connection rather than pooling it, which is the client-side
+cancel, and the next round connects a new one. No session `SET` is involved, so the reservation is
+safe under transaction pooling. Python and Go workers still heartbeat through the shared pool.
+
 ### Cancellation
 
 `cancel_v1` locks the sole runtime row, serializing cancellation with completion, failure, checkpoint, wait, heartbeat, and recovery. Ready, future-scheduled, and durable-wait continuations delete runtime and insert one immutable `canceled` outcome immediately. Never-started work emits no attempt history. A durable wait whose logical attempt already started closes exactly one canceled attempt using retained provenance.
@@ -3481,6 +3499,8 @@ interactive stdin and stdout is refused with exit 1.
   `$client.options.max`. The Prisma, TypeORM, and Kysely adapters forward `connect()` from their
   optional `notificationPool`, use that pool as `notificationConnectionIdentity`, and read capacity
   from `notificationPool.options.max`. Without those capabilities, an adapter remains polling-only.
+  The same capability lends the TypeScript workers on that pool their shared heartbeat connection
+  when that capacity is at least 3.
   The capability check sees the pool's shape, not its pooling mode: a transaction-mode pooler
   accepts `LISTEN` without ever delivering a notification, so capability stays reported while the
   fallback poll does the work (see [Connection poolers](#connection-poolers)).

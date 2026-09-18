@@ -50,8 +50,11 @@ import type {
 } from "./types.js";
 import {
   type WorkerCompletionPreparation,
+  type WorkerHeartbeatChannel,
+  type WorkerHeartbeatReservation,
   workerCheckpointsRead,
   workerCompletionPrepare,
+  workerHeartbeatReservation,
   workerProgressRead,
   workerWaitsRead,
 } from "./worker-internal.js";
@@ -484,6 +487,27 @@ export class Worker {
     }
   >();
   private heartbeatTimer: NodeJS.Timeout | undefined;
+  private heartbeatChannel: WorkerHeartbeatChannel | undefined;
+
+  // The reserved heartbeat connection, taken on first use. A queue that cannot lend one heartbeats
+  // through its shared pool.
+  private reservedHeartbeatChannel(): WorkerHeartbeatChannel | undefined {
+    if (this.heartbeatChannel !== undefined) return this.heartbeatChannel;
+    const reservation = (this.queue as Partial<WorkerHeartbeatReservation>)[
+      workerHeartbeatReservation
+    ];
+    this.heartbeatChannel = reservation?.call(this.queue);
+    return this.heartbeatChannel;
+  }
+
+  // A running worker keeps its reservation between tasks; otherwise it is returned with the last
+  // lease.
+  private async releaseHeartbeatChannel(): Promise<void> {
+    if (this.running || this.heartbeatLeases.size > 0) return;
+    const channel = this.heartbeatChannel;
+    this.heartbeatChannel = undefined;
+    await channel?.close();
+  }
 
   private scheduleHeartbeatBatch(): void {
     if (this.heartbeatTimer !== undefined || this.heartbeatLeases.size === 0) return;
@@ -493,21 +517,31 @@ export class Worker {
       // A lease renewed by this round runs from the moment the request left, which can only be
       // earlier than the database's renewal, so local lease windows never outlast the real ones.
       const sentAt = Date.now();
-      const heartbeat = this.queue.heartbeatMany
-        ? this.queue.heartbeatMany(
+      const channel = this.reservedHeartbeatChannel();
+      // A round on the reserved connection is bounded by the heartbeat interval, so a statement
+      // stuck on it cannot hold back the next round.
+      const heartbeat = channel
+        ? channel.heartbeatMany(
             leases.map((lease) => lease.task),
             this.workerId,
             this.leaseMs,
+            this.heartbeatMs,
           )
-        : Promise.all(
-            leases.map(
-              async (lease) =>
-                [
-                  lease.task.id,
-                  await this.queue.heartbeatStatus(lease.task, this.workerId, this.leaseMs),
-                ] as const,
-            ),
-          ).then((statuses) => new Map(statuses));
+        : this.queue.heartbeatMany
+          ? this.queue.heartbeatMany(
+              leases.map((lease) => lease.task),
+              this.workerId,
+              this.leaseMs,
+            )
+          : Promise.all(
+              leases.map(
+                async (lease) =>
+                  [
+                    lease.task.id,
+                    await this.queue.heartbeatStatus(lease.task, this.workerId, this.leaseMs),
+                  ] as const,
+              ),
+            ).then((statuses) => new Map(statuses));
       void heartbeat
         .then(
           (statuses) => {
@@ -533,6 +567,8 @@ export class Worker {
   ): () => void {
     const lease = { task, status };
     this.heartbeatLeases.set(task.id, lease);
+    // Reserving before the handler starts queues this connect ahead of anything the handler takes.
+    this.reservedHeartbeatChannel()?.reserve();
     this.scheduleHeartbeatBatch();
     return () => {
       if (this.heartbeatLeases.get(task.id) === lease) this.heartbeatLeases.delete(task.id);
@@ -540,6 +576,7 @@ export class Worker {
         clearTimeout(this.heartbeatTimer);
         this.heartbeatTimer = undefined;
       }
+      void this.releaseHeartbeatChannel();
     };
   }
   private wakeController = new AbortController();
@@ -1392,6 +1429,7 @@ export class Worker {
 
     const notificationSubscriptions: TaskNotificationSubscription[] = [];
     this.notificationSubscriptions = notificationSubscriptions;
+    this.reservedHeartbeatChannel()?.reserve();
     const runFailure = await (async () => {
       if (shouldStop()) return;
       await this.runMaintenance();
@@ -1425,6 +1463,7 @@ export class Worker {
 
     this.running = false;
     this.draining = this.activeSlots > 0;
+    await this.releaseHeartbeatChannel();
     const failures: unknown[] = [];
     if (runFailure) failures.push(runFailure.error);
     for (const subscription of notificationSubscriptions) {
