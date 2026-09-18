@@ -3,78 +3,78 @@ pre-commit:
   jobs:
     - name: check generated SQL catalogues
       glob: "{protocol/v1/manifest.json,scripts/generate-sql-catalogues.ts,go/sql_catalogue_generated.go,typescript/core/src/queue/sql-catalogue.generated.ts,python/src/workhorse/_statements.py}"
-      run: pnpm sql-catalogues:check
+      run: mise exec -- pnpm sql-catalogues:check
     - name: check parity tables
       glob: "{typescript/core/test/support/parity-capabilities.ts,docs/parity.md,scripts/generate-parity-tables.ts}"
-      run: pnpm parity:check
+      run: mise exec -- pnpm parity:check
     - name: check the TypeScript public API snapshot
       glob: "{typescript/*/src/**,typescript/*/package.json,typescript/dashboard-contract/index.d.ts,scripts/typescript-api.ts,scripts/generate-typescript-api.ts,scripts/api-snapshot.ts,api/typescript.txt}"
-      run: pnpm typescript-api:check
+      run: mise exec -- pnpm typescript-api:check
     - name: check the Python public API snapshot
       glob: "{python/src/**,python/tools/api_snapshot.py,scripts/generate-python-api.ts,scripts/api-snapshot.ts,api/python.txt}"
-      run: pnpm python-api:check
+      run: mise exec -- pnpm python-api:check
     - name: check the Go public API for unaccepted breaks
       glob: "{go/**,scripts/generate-go-api.ts,scripts/api-snapshot.ts,api/go.txt}"
-      run: pnpm go-api:check
+      run: mise exec -- pnpm go-api:check
     - name: check adapter conformance types
       glob: "typescript/adapter-conformance/**"
-      run: pnpm --filter @stablemates/workhorse-adapter-conformance typecheck
+      run: mise exec -- pnpm --filter @stablemates/workhorse-adapter-conformance typecheck
     - name: check core types
       glob: "typescript/core/**"
-      run: pnpm --filter @stablemates/workhorse typecheck
+      run: mise exec -- pnpm --filter @stablemates/workhorse typecheck
     - name: check dashboard contract types
       glob: "typescript/dashboard-contract/**"
-      run: pnpm --filter @stablemates/workhorse-dashboard-contract typecheck
+      run: mise exec -- pnpm --filter @stablemates/workhorse-dashboard-contract typecheck
     - name: check dashboard server types
       glob: "typescript/dashboard-server/**"
-      run: pnpm --filter @stablemates/workhorse-dashboard-server typecheck
+      run: mise exec -- pnpm --filter @stablemates/workhorse-dashboard-server typecheck
     - name: check generated dashboard specification
       glob: "{dashboard/v1/**,typescript/dashboard-server/spec/**,typescript/dashboard-server/src/router.ts,typescript/dashboard-server/src/wire.ts,go/dashboard/v1_generated.go,python/src/workhorse/dashboard_v1.py}"
-      run: pnpm dashboard-spec:check
+      run: mise exec -- pnpm dashboard-spec:check
     - name: check generated dashboard bundle
       glob: "{dashboard/app/**,dashboard/v1/bundle/**,dashboard/v1/manifest.json,scripts/build-runtime.ts,scripts/generate-dashboard-bundle.ts,go/dashboard/bundle.json,go/dashboard/read-surface-*.tar.gz,python/src/workhorse/dashboard/bundle.json,python/src/workhorse/dashboard/read-surface-*.tar.gz}"
-      run: pnpm dashboard-bundle:check
+      run: mise exec -- pnpm dashboard-bundle:check
     - name: check dashboard types
       glob: "typescript/dashboard/**"
-      run: pnpm --filter @stablemates/workhorse-dashboard typecheck
+      run: mise exec -- pnpm --filter @stablemates/workhorse-dashboard typecheck
     - name: check demo types
       glob: "typescript/demo/**"
-      run: pnpm --filter @stablemates/workhorse-demo typecheck
+      run: mise exec -- pnpm --filter @stablemates/workhorse-demo typecheck
     - name: check drizzle types
       glob: "typescript/drizzle/**"
-      run: pnpm --filter @stablemates/workhorse-drizzle typecheck
+      run: mise exec -- pnpm --filter @stablemates/workhorse-drizzle typecheck
     - name: check kysely types
       glob: "typescript/kysely/**"
-      run: pnpm --filter @stablemates/workhorse-kysely typecheck
+      run: mise exec -- pnpm --filter @stablemates/workhorse-kysely typecheck
     - name: check prisma types
       glob: "typescript/prisma/**"
-      run: pnpm --filter @stablemates/workhorse-prisma typecheck
+      run: mise exec -- pnpm --filter @stablemates/workhorse-prisma typecheck
     - name: check typeorm types
       glob: "typescript/typeorm/**"
-      run: pnpm --filter @stablemates/workhorse-typeorm typecheck
+      run: mise exec -- pnpm --filter @stablemates/workhorse-typeorm typecheck
     - name: check Python types
       glob: "python/**"
-      run: pnpm python:typecheck
+      run: mise exec -- pnpm python:typecheck
     - name: lint Python
       glob: "python/**"
-      run: pnpm python:lint
+      run: mise exec -- pnpm python:lint
     - name: test Python unit scope
       glob: "python/**"
-      run: pnpm python:test:unit
+      run: mise exec -- pnpm python:test:unit
     - name: vet Go
       glob: "go/**"
-      run: pnpm go:vet
+      run: mise exec -- pnpm go:vet
     - name: lint Go
       glob: "go/**"
-      run: pnpm go:lint
+      run: mise exec -- pnpm go:lint
     - name: test Go unit scope
       glob: "go/**"
-      run: pnpm go:test:unit
+      run: mise exec -- pnpm go:test:unit
     - name: check site types
       glob: "site/**"
-      run: pnpm docs:typecheck
+      run: mise exec -- pnpm docs:typecheck
     - name: test changed scope
-      run: pnpm test:changed {staged_files}
+      run: mise exec -- pnpm test:changed {staged_files}
     # `vitest related` cannot select tests from a .sql path, so SQL changes name the schema
     # suites directly. The changed-file database scope once ran beside this job, but a commit
     # touching widely imported sources selects nearly the whole suite — past the pre-commit
@@ -82,7 +82,7 @@ pre-commit:
     # `typescript` lane (`pnpm test:database:typescript`, every pull request and main push).
     - name: test database scope after SQL changes
       glob: "sql/**"
-      run: pnpm test:schema
+      run: mise exec -- pnpm test:schema
 
 post-checkout:
   jobs:

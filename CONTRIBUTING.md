@@ -10,6 +10,26 @@ from `CLA.md`. Stablemates will not merge copyrightable Contributions without it
 The agreement assigns copyrightable Contributions to Stablemates and licenses them
 back to you under Apache-2.0, so the core stays ownable.
 
+## Development environment
+
+The repository pins its development tools in `mise.toml`. In an interactive shell, activate
+`mise` once so commands such as `pnpm` resolve from the pinned toolchain:
+
+```bash
+eval "$(mise activate bash)"
+```
+
+Use `mise exec --` for scripts, Git hooks, CI, and remote or non-interactive shells. Those shells
+do not read the interactive startup configuration:
+
+```bash
+mise exec -- pnpm install --frozen-lockfile
+mise exec -- pnpm test:unit
+```
+
+When Git creates a linked worktree, the `post-checkout` hook installs dependencies and runs
+`pnpm worktree:setup` through `mise`. That setup provisions databases owned by the worktree.
+
 ## Generative tooling
 
 You may use an assistant to draft a patch. You still review every line before you
