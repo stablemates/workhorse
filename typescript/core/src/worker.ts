@@ -48,7 +48,13 @@ import type {
   Json,
   WorkerRegistration,
 } from "./types.js";
-import { workerCheckpointsRead, workerProgressRead, workerWaitsRead } from "./worker-internal.js";
+import {
+  type WorkerCompletionPreparation,
+  workerCheckpointsRead,
+  workerCompletionPrepare,
+  workerProgressRead,
+  workerWaitsRead,
+} from "./worker-internal.js";
 import { createHandlerContext } from "./handler-context.js";
 import { TaskAttempt } from "./task-attempt.js";
 
@@ -56,6 +62,12 @@ const DEFAULT_POLL_MS = 250;
 const DEFAULT_NOTIFICATION_FALLBACK_POLL_MS = 5_000;
 const MAX_EMPTY_POLL_MS = 5_000;
 const NOTIFICATION_CLAIM_DELAY_MS = 50;
+
+/** Tasks one claim pass leased, and the error that ended the pass early, if any. */
+interface ClaimAttempt {
+  claimed: ClaimedTask[];
+  error?: unknown;
+}
 
 /**
  * @internal Crash boundary a test or benchmark asks a worker to model process loss at. This is
@@ -869,38 +881,49 @@ export class Worker {
     return this.withExclusiveExecution(() => this.runBatch(true));
   }
 
-  private async claimNextMany(limit: number): Promise<ClaimedTask[]> {
+  // Claims up to `limit` tasks across this worker's queues. A failing claim on a later queue must
+  // not strand tasks already claimed from earlier ones: each holds a lease and would burn an attempt
+  // at lease recovery without ever running. The caller therefore gets them together with the error.
+  private async claimNextMany(limit: number): Promise<ClaimAttempt> {
     const tasks: ClaimedTask[] = [];
-    if (!this.queue.claimMany) {
-      let emptyQueues = 0;
-      while (tasks.length < limit && emptyQueues < this.queueNames.length) {
+    try {
+      if (!this.queue.claimMany) {
+        let emptyQueues = 0;
+        while (tasks.length < limit && emptyQueues < this.queueNames.length) {
+          const queueName = this.queueNames[this.nextQueueIndex]!;
+          this.nextQueueIndex = (this.nextQueueIndex + 1) % this.queueNames.length;
+          const task = await this.queue.claim(this.workerId, {
+            queue: queueName,
+            leaseMs: this.leaseMs,
+          });
+          if (task) {
+            tasks.push(task);
+            emptyQueues = 0;
+          } else {
+            emptyQueues += 1;
+          }
+        }
+        return { claimed: tasks };
+      }
+      for (
+        let checked = 0;
+        checked < this.queueNames.length && tasks.length < limit;
+        checked += 1
+      ) {
         const queueName = this.queueNames[this.nextQueueIndex]!;
         this.nextQueueIndex = (this.nextQueueIndex + 1) % this.queueNames.length;
-        const task = await this.queue.claim(this.workerId, {
-          queue: queueName,
-          leaseMs: this.leaseMs,
-        });
-        if (task) {
-          tasks.push(task);
-          emptyQueues = 0;
-        } else {
-          emptyQueues += 1;
-        }
+        const remaining = limit - tasks.length;
+        tasks.push(
+          ...(await this.queue.claimMany(this.workerId, remaining, {
+            queue: queueName,
+            leaseMs: this.leaseMs,
+          })),
+        );
       }
-      return tasks;
+      return { claimed: tasks };
+    } catch (error) {
+      return { claimed: tasks, error };
     }
-    for (let checked = 0; checked < this.queueNames.length && tasks.length < limit; checked += 1) {
-      const queueName = this.queueNames[this.nextQueueIndex]!;
-      this.nextQueueIndex = (this.nextQueueIndex + 1) % this.queueNames.length;
-      const remaining = limit - tasks.length;
-      tasks.push(
-        ...(await this.queue.claimMany(this.workerId, remaining, {
-          queue: queueName,
-          leaseMs: this.leaseMs,
-        })),
-      );
-    }
-    return tasks;
   }
 
   private async runBatch(
@@ -918,11 +941,10 @@ export class Worker {
     let claimFailed = false;
     const freeSlots = this.concurrency - this.activeSlots;
     if (!shouldStop() && !this.paused && freeSlots > 0) {
-      try {
-        const tasks = await this.claimNextMany(freeSlots);
-        executions.push(...tasks.map((task) => this.startExecution(task)));
-      } catch (error) {
-        claimError = error;
+      const claim = await this.claimNextMany(freeSlots);
+      executions.push(...claim.claimed.map((task) => this.startExecution(task)));
+      if ("error" in claim) {
+        claimError = claim.error;
         claimFailed = true;
       }
     }
@@ -1008,68 +1030,93 @@ export class Worker {
       activation,
     );
     try {
-      // afterClaim is outside the committed claim transaction. Throwing here leaves the lease
-      // exactly as a killed process would, which allows deterministic expiry-recovery testing.
-      await this.inject("afterClaim", task);
-      const handler = this.handlers.get(task.type);
-      if (!handler) {
-        const error = new Error(`No handler registered for ${task.type}`);
-        span.recordException(error);
-        span.setStatus("error");
-        const failed = await this.queue.fail(task, this.workerId, error);
-        span.setAttribute("workhorse.handler.outcome", failed);
-        if (failed === "cancel_requested") {
-          attempt.markCancellationRequested();
+      let writeCompletion: () => Promise<boolean>;
+      try {
+        // afterClaim is outside the committed claim transaction. Throwing here leaves the lease
+        // exactly as a killed process would, which allows deterministic expiry-recovery testing.
+        await this.inject("afterClaim", task);
+        const handler = this.handlers.get(task.type);
+        if (!handler) {
+          const error = new Error(`No handler registered for ${task.type}`);
+          span.recordException(error);
+          span.setStatus("error");
+          const failed = await this.queue.fail(task, this.workerId, error);
+          span.setAttribute("workhorse.handler.outcome", failed);
+          if (failed === "cancel_requested") {
+            attempt.markCancellationRequested();
+            await attempt.acknowledgeCancellation();
+          } else attempt.recordFailure(failed);
+          return;
+        }
+        await this.inject("beforeHandler", task);
+        const result = await handler(
+          task.payload,
+          createHandlerContext(this.queue, this.workerId, task, attempt),
+        );
+        await this.inject("afterHandler", task);
+        if (attempt.arbiter.isSuspended()) {
+          logWarn("workhorse.handler.signal_swallowed", "Task handler swallowed its abort signal", {
+            ...taskSpanAttributes(task),
+            "workhorse.queue.name": task.queue,
+            "workhorse.worker.id": this.workerId,
+            "workhorse.handler.outcome": "suspended",
+          });
+          span.setAttribute("workhorse.handler.outcome", "suspended");
+          attempt.recordExecution("suspended");
+          return;
+        }
+        if (attempt.arbiter.is("cancelled")) {
           await attempt.acknowledgeCancellation();
-        } else attempt.recordFailure(failed);
+          span.setAttribute("workhorse.handler.outcome", "canceled");
+          return;
+        }
+        if (attempt.arbiter.is("lease_expired")) {
+          span.setAttribute("workhorse.handler.outcome", "stale");
+          attempt.recordExecution("lease_lost");
+          return;
+        }
+        attempt.requireLease();
+        await this.inject("beforeComplete", task);
+        writeCompletion = await this.prepareCompletion(task, result);
+      } catch (error) {
+        await this.settleFailure(task, span, attempt, error);
         return;
       }
-      await this.inject("beforeHandler", task);
-      const result = await handler(
-        task.payload,
-        createHandlerContext(this.queue, this.workerId, task, attempt),
-      );
-      await this.inject("afterHandler", task);
-      if (attempt.arbiter.isSuspended()) {
-        logWarn("workhorse.handler.signal_swallowed", "Task handler swallowed its abort signal", {
-          ...taskSpanAttributes(task),
-          "workhorse.queue.name": task.queue,
-          "workhorse.worker.id": this.workerId,
-          "workhorse.handler.outcome": "suspended",
-        });
-        span.setAttribute("workhorse.handler.outcome", "suspended");
-        attempt.recordExecution("suspended");
-        return;
-      }
-      if (attempt.arbiter.is("cancelled")) {
-        await attempt.acknowledgeCancellation();
-        span.setAttribute("workhorse.handler.outcome", "canceled");
-        return;
-      }
-      if (attempt.arbiter.is("lease_expired")) {
-        span.setAttribute("workhorse.handler.outcome", "stale");
-        attempt.recordExecution("lease_lost");
-        return;
-      }
-      attempt.requireLease();
-      await this.inject("beforeComplete", task);
-      const accepted = await this.queue.complete(task, this.workerId, result);
+      // The write runs outside the handler's try. A database error here is a settlement failure,
+      // not the handler's, so it propagates like a failing fail_v1 instead of charging the attempt.
+      const accepted = await writeCompletion();
       if (!accepted) {
         if (await attempt.acknowledgeCancellation()) {
           span.setAttribute("workhorse.handler.outcome", "canceled");
           return;
         }
-        throw new Error("Completion rejected because the lease is stale or expired");
+        await this.settleFailure(
+          task,
+          span,
+          attempt,
+          new Error("Completion rejected because the lease is stale or expired"),
+        );
+        return;
       }
       if (!attempt.arbiter.submit("completed")) return;
       span.setAttribute("workhorse.handler.outcome", "succeeded");
       attempt.recordExecution("succeeded");
       await this.inject("afterComplete", task);
-    } catch (error) {
-      await this.settleFailure(task, span, attempt, error);
     } finally {
       attempt.stop();
     }
+  }
+
+  // Validates the result as the handler's responsibility and returns the fenced completion write.
+  // A queue without the internal capability validates inside complete(), so its errors count as
+  // settlement failures.
+  private async prepareCompletion(
+    task: ClaimedTask,
+    result: Json,
+  ): Promise<() => Promise<boolean>> {
+    const prepare = (this.queue as Partial<WorkerCompletionPreparation>)[workerCompletionPrepare];
+    if (prepare) return prepare(task, this.workerId, result);
+    return () => this.queue.complete(task, this.workerId, result);
   }
 
   // Settles an attempt whose handler, hooks, or completion threw.
@@ -1088,6 +1135,12 @@ export class Worker {
     // A crash failpoint models process disappearance, so converting it into fail_v1 would produce
     // the wrong durable state. Ordinary handler errors do close and retry the attempt.
     if (error instanceof InjectedCrashError) throw error;
+    // Another owner may hold the task now, so fail_v1 could only answer stale.
+    if (arbiter.is("lease_expired")) {
+      span.setAttribute("workhorse.handler.outcome", "stale");
+      attempt.recordExecution("lease_lost");
+      return;
+    }
     const abortReason: unknown = attempt.signal.reason;
     if (
       arbiter.is("cancelled") ||
@@ -1482,11 +1535,11 @@ export class Worker {
         }
         this.lastClaimAt = Date.now();
         const claimWakeVersion = this.dispatchWakeVersion;
-        let tasks: ClaimedTask[];
-        try {
-          tasks = await this.claimNextMany(this.concurrency - active.size);
-        } catch (error) {
-          claimError = error;
+        const claim = await this.claimNextMany(this.concurrency - active.size);
+        const tasks = claim.claimed;
+        if ("error" in claim) {
+          for (const task of tasks) launch(task);
+          claimError = claim.error;
           break;
         }
         if (tasks.length === 0) {
