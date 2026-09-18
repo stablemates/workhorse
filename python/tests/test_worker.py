@@ -315,8 +315,7 @@ def test_checkpoint_rejects_a_stale_fence_with_its_specific_error(database_url: 
         worker = Worker(worker_connection, worker_id="python-stale-checkpoint-worker").handle(
             "checkpoint.stale", handle
         )
-        with pytest.raises(StaleLeaseError):
-            worker.run_once()
+        assert worker.run_once() is True
         assert len(observed) == 1
         assert observed[0].task_id == task_id
         assert observed[0].checkpoint_name == "too-late"
@@ -385,8 +384,7 @@ def test_handler_context_returns_typed_progress_errors(database_url: str) -> Non
         worker = Worker(worker_connection, worker_id="python-progress-errors").handle(
             "progress.errors", handle
         )
-        with pytest.raises(StaleLeaseError):
-            worker.run_once()
+        assert worker.run_once() is True
 
     assert len(observed_rate_limits) == 1
     assert observed_rate_limits[0].task_id == task_id
@@ -1409,8 +1407,9 @@ def test_worker_classifies_an_execution_timeout(database_url: str) -> None:
         assert outcome == ("failed", "ExecutionTimeout")
 
 
-def test_stale_fence_is_a_typed_lifecycle_error(database_url: str) -> None:
+def test_worker_keeps_running_after_a_lease_loss(database_url: str) -> None:
     handler_started = Event()
+    observed_reasons: list[BaseException | None] = []
     worker_error: list[BaseException] = []
 
     with (
@@ -1422,39 +1421,64 @@ def test_stale_fence_is_a_typed_lifecycle_error(database_url: str) -> None:
         enqueue_connection.commit()
 
         def wait_for_lease_loss(_payload: object, context: HandlerContext) -> None:
+            if context.task.attempt > 1:
+                return
             handler_started.set()
             assert context.cancellation.wait(timeout=5)
+            observed_reasons.append(context.cancellation.reason)
             context.cancellation.raise_if_cancelled()
 
-        worker = Worker(
-            worker_connection,
-            worker_id="python-stale-worker",
-            lease_ms=150,
-            heartbeat_ms=40,
-        ).handle("lease.expires", wait_for_lease_loss)
+        worker = (
+            Worker(
+                worker_connection,
+                worker_id="python-stale-worker",
+                lease_ms=150,
+                heartbeat_ms=40,
+                poll_ms=10,
+            )
+            .handle("lease.expires", wait_for_lease_loss)
+            .handle("lease.follow-up", lambda _payload, _context: {"ran": True})
+        )
 
         def run_worker() -> None:
             try:
-                worker.run_once()
+                worker.run()
             except BaseException as error:
                 worker_error.append(error)
 
         thread = Thread(target=run_worker)
         thread.start()
-        assert handler_started.wait(timeout=5)
+        try:
+            assert handler_started.wait(timeout=5)
 
-        blocking_connection.execute(
-            "SELECT task_id FROM workhorse.task_runtime WHERE task_id = %s FOR UPDATE", (task_id,)
-        ).fetchone()
-        sleep(0.2)
-        blocking_connection.commit()
+            blocking_connection.execute(
+                "SELECT task_id FROM workhorse.task_runtime WHERE task_id = %s FOR UPDATE",
+                (task_id,),
+            ).fetchone()
+            sleep(0.2)
+            blocking_connection.commit()
+            eventually(lambda: len(observed_reasons) == 1, "the handler never observed the loss")
+            assert isinstance(observed_reasons[0], StaleLeaseError)
+            assert observed_reasons[0].task_id == task_id
 
-        thread.join(timeout=5)
+            follow_up_id = Queue(enqueue_connection).enqueue("lease.follow-up", {})
+            enqueue_connection.commit()
+            eventually(
+                lambda: (
+                    worker_connection.execute(
+                        "SELECT state FROM workhorse.task_outcome WHERE task_id = %s",
+                        (follow_up_id,),
+                    ).fetchone()
+                    == ("succeeded",)
+                ),
+                "the worker stopped claiming after the lease loss",
+            )
+            assert thread.is_alive()
+        finally:
+            worker.stop()
+            thread.join(timeout=5)
         assert not thread.is_alive()
-        assert len(worker_error) == 1
-        assert isinstance(worker_error[0], StaleLeaseError)
-
-        assert worker_error[0].task_id == task_id
+        assert worker_error == []
 
 
 def test_worker_recovers_an_expired_claim_before_dispatch(database_url: str) -> None:

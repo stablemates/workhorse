@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import psycopg
-import pytest
 
 from workhorse import (
     ChildConflictError,
@@ -12,7 +11,6 @@ from workhorse import (
     EnqueueOptions,
     HandlerContext,
     Queue,
-    StaleLeaseError,
     Worker,
 )
 
@@ -373,8 +371,7 @@ def test_child_calls_surface_stale_fences_and_local_limits_as_typed_errors(
         worker = Worker(worker_connection, worker_id="python-typed-child-worker").handle(
             "typed-child-errors", handle
         )
-        with pytest.raises(StaleLeaseError):
-            worker.run_once()
+        assert worker.run_once() is True
         assert len(limit_errors) == 1
         assert limit_errors[0].parent_task_id == parent_id
         assert len(result_limit_errors) == 1
