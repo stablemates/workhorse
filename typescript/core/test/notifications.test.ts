@@ -64,7 +64,10 @@ describe("task notification hub", () => {
       if (connects % 2 === 1) throw new Error("connection refused");
       return new FakeClient(async (client, text) => {
         if (text.startsWith("LISTEN")) {
-          setImmediate(() => client.emit("error", new Error("socket reset")));
+          // A released client belongs to the pool, which owns its later errors.
+          setImmediate(() => {
+            if (client.released.length === 0) client.emit("error", new Error("socket reset"));
+          });
         }
         return { rows: [] };
       });
