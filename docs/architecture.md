@@ -139,7 +139,8 @@ must encode to at most 65536 UTF-8 bytes. Delivery idempotency keys contain 1 th
 bytes, and `requested_by` contains 1 through 200 characters.
 
 Every non-empty Python mutation first executes `SELECT version FROM workhorse.schema_version ORDER
-BY version`. `python/src/workhorse/_protocol.py` accepts schema version 1 and client protocol 1.
+BY version`. `Queue` and `AsyncQueue` enqueue through a per-queue cached check instead, so a warm
+enqueue issues only `enqueue_many_v1`. `python/src/workhorse/_protocol.py` accepts schema version 1 and client protocol 1.
 It refuses an unreadable, missing, older, or newer schema before the mutating statement. Enqueue
 batches contain at most 1000 requests. Default priority is 0, default attempt budget is 25, default
 payload and result limits are 1048576 bytes, and default idempotency retention is 86400000
@@ -147,8 +148,12 @@ milliseconds.
 
 `python/src/workhorse/_statements.py` owns each statement in `STATEMENTS` with explicit Psycopg and
 asyncpg parameter dialects. `assert_sync_compatible` and `assert_async_compatible` query on every
-call. `CachedCompatibilityCheck` and `AsyncCachedCompatibilityCheck` cache the first query result
-for worker loops that opt into a one-shot gate. `python/src/workhorse/compatibility.py` publishes
+call. `CachedCompatibilityCheck` and `AsyncCachedCompatibilityCheck` cache the first answered
+result, success or `ProtocolCompatibilityError`, for worker loops and producer enqueue. A driver
+error is not cached, so the next call queries again. After `sync_contracts`, each queue caches the
+`get_contract_definition_v1` row for a task type on first enqueue. It refreshes that entry on a
+`contract_mismatch` row and retries once, as TypeScript does. A second mismatch raises
+`RuntimeError`. `python/src/workhorse/compatibility.py` publishes
 that check to applications as `assert_schema_compatible(connection)` for synchronous Psycopg, and
 `assert_schema_compatible_psycopg(connection)` and `assert_schema_compatible_asyncpg(connection)`
 for the two asynchronous drivers. Each wraps the caller-owned connection in the matching executor,
@@ -648,7 +653,12 @@ below the oldest served version is `schema-too-new`, and one above the newest se
 `AssertSchemaCompatible` executes the `compatibility_state` statement on every call, which returns
 both facts in one round trip as `kind`/`version` rows, and translates SQLSTATE `42P01` or `3F000` to
 `schema-not-installed`. It accepts exactly one `schema` row. `NewCachedCompatibilityCheck` returns a `CachedCompatibilityCheck` whose
-`Assert` uses `sync.Once` to cache the first result, including a compatibility or database error.
+`Assert` caches the first answered result: success or a `*CompatibilityError`. A database error is
+not cached, so the next call queries again. Each `Queue` holds one for its enqueue path. After
+`SyncContracts`, the queue caches each task type's `get_contract_definition_v1` row on first
+enqueue. It refreshes that entry on a `contract_mismatch` row and retries once, as TypeScript does.
+A second mismatch returns `ErrContractPolicyChanged`. A warm enqueue therefore issues only
+`enqueue_many_v1`.
 `AssertCompatible` remains as a deprecated Go alias for the rest of the `0.x` line and is removed in
 `1.0.0`. `go/compatibility_test.go` executes every case in `protocol/v1/compatibility.json`.
 

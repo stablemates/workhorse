@@ -1002,12 +1002,15 @@ func TestQueueLooksEachContractedTaskTypeUpOncePerBatch(t *testing.T) {
 		t.Fatalf("uncontracted request was altered: %#v", request[2])
 	}
 
-	executor.responses = [][]workhorse.Row{compatibility, {definition}}
+	before := len(executor.calls)
 	_, err = queue.EnqueueManyWithResults(ctx, []workhorse.EnqueueRequest{
 		{Type: "email.send", Payload: map[string]any{"missing": "name"}},
 	})
 	var validation *workhorse.TaskContractValidationError
 	if !errors.As(err, &validation) || validation.Kind != "payload" || validation.Version != "v1" {
 		t.Fatalf("expected payload validation error, received %v", err)
+	}
+	if len(executor.calls) != before {
+		t.Fatalf("expected the cached contract to reject the payload without a query, recorded %d", len(executor.calls)-before)
 	}
 }

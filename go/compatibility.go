@@ -119,24 +119,34 @@ func AssertSchemaCompatible(ctx context.Context, executor Executor) error {
 	return CheckCompatibility(installed, ProtocolVersion, served)
 }
 
-// CachedCompatibilityCheck runs one compatibility query and reuses its result.
+// CachedCompatibilityCheck runs the compatibility query until PostgreSQL answers it, then reuses
+// that answer. A driver error is not an answer, so the next call queries again.
 type CachedCompatibilityCheck struct {
 	executor Executor
-	once     sync.Once
+	mu       sync.Mutex
+	answered bool
 	err      error
 }
 
-// NewCachedCompatibilityCheck builds the opt-in one-shot gate for hot worker loops.
+// NewCachedCompatibilityCheck builds the gate that workers and producers hold for their lifetime.
 func NewCachedCompatibilityCheck(executor Executor) *CachedCompatibilityCheck {
 	return &CachedCompatibilityCheck{executor: executor}
 }
 
-// Assert returns the result of the first compatibility query for every call.
+// Assert returns the first answered compatibility result for every call.
 func (check *CachedCompatibilityCheck) Assert(ctx context.Context) error {
-	check.once.Do(func() {
-		check.err = AssertSchemaCompatible(ctx, check.executor)
-	})
-	return check.err
+	check.mu.Lock()
+	defer check.mu.Unlock()
+	if check.answered {
+		return check.err
+	}
+	err := AssertSchemaCompatible(ctx, check.executor)
+	var refusal *CompatibilityError
+	if err == nil || errors.As(err, &refusal) {
+		check.answered = true
+		check.err = err
+	}
+	return err
 }
 
 type sqlStateCarrier interface {

@@ -243,7 +243,8 @@ def test_contracted_batches_look_each_task_type_up_once() -> None:
     assert serialized[2]["contractVersion"] is None
     assert serialized[2]["payloadMaxBytes"] == 1048576
 
-    connection.responses = [compatibility, [definition]]
+    before = len(connection.calls)
     with pytest.raises(TaskContractValidationError) as rejected:
         queue.enqueue_many_with_results([EnqueueRequest("email.send", {"missing": "name"})])
     assert rejected.value.kind == "payload"
+    assert len(connection.calls) == before

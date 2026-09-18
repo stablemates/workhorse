@@ -156,6 +156,7 @@ const (
 	invalidCancelFinishedAtMessage       = "workhorse.cancel_v1 returned an invalid finished timestamp"
 
 	enqueueAcceptedValue       = "accepted"
+	contractMismatchOutcome    = "contract_mismatch"
 	enqueueReplayedValue       = "replayed"
 	enqueueReplacedValue       = "replaced"
 	enqueueNonReplaceableValue = "non_replaceable"
@@ -242,6 +243,7 @@ const (
 
 	enqueueBatchTooLargeMessage         = "enqueue batch exceeds the shared limit"
 	invalidEnqueueResultMessage         = "PostgreSQL returned an invalid enqueue result"
+	contractPolicyChangedMessage        = "contract policy changed again while retrying enqueue"
 	invalidEnqueueOptionsMessage        = "invalid enqueue options"
 	tooManyEnqueueOptionsMessage        = "%w: enqueue accepts at most one EnqueueOptions value"
 	tooManySyncSchedulesOptionsMessage  = "%w: sync schedules accepts at most one SyncSchedulesOptions value"

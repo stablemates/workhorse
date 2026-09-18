@@ -6,6 +6,8 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 
 from ._compatibility import (
+    AsyncCachedCompatibilityCheck as _AsyncCachedCompatibilityCheck,
+    CachedCompatibilityCheck as _CachedCompatibilityCheck,
     assert_async_compatible as _assert_async_compatible,
     assert_sync_compatible as _assert_sync_compatible,
 )
@@ -77,7 +79,11 @@ class Queue:
     def __init__(self, connection: _SyncConnection, default_queue: str = "default") -> None:
         self._executor = _SyncExecutor(cast(_PsycopgConnection, connection))
         self.default_queue = default_queue
+        self._compatibility = _CachedCompatibilityCheck(self._executor)
         self._contract_validators: dict[tuple[str, str], Any] = {}
+        # A task type's current contract, or None when it has none. A contract_mismatch row
+        # refreshes a stale entry, so the cache needs no expiry.
+        self._contract_definitions: dict[str, _Row | None] = {}
         self._contracts_enabled = False
 
     def enqueue(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> str:
@@ -120,25 +126,40 @@ class Queue:
     def enqueue_many_with_results(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]:
         if not requests:
             return []
-        _assert_sync_compatible(self._executor)
-        values = _serialize_request_values(requests, self.default_queue, _inject_trace_context())
-        if self._contracts_enabled:
-            # One lookup per distinct task type: a batch of one type costs one round trip.
-            definitions: dict[str, _Row | None] = {}
+        self._compatibility.assert_compatible()
+        for _attempt in range(2):
+            values = _serialize_request_values(
+                requests, self.default_queue, _inject_trace_context()
+            )
             for request, value in zip(requests, values, strict=True):
-                if request.type not in definitions:
-                    rows = self._executor.rows(_STATEMENTS.get_contract, (request.type, None))
-                    definitions[request.type] = rows[0] if rows else None
-                definition = definitions[request.type]
+                definition = self._contract_definition(request.type)
                 if definition is not None:
                     _apply_contract(
                         definition, request.type, request.payload, value, self._contract_validators
                     )
-        payload = _encode_request_values(values)
-        try:
-            return _results(self._executor.rows(_STATEMENTS.enqueue_many, (payload,)))
-        except Exception as error:
-            _raise_translated(error)
+            payload = _encode_request_values(values)
+            try:
+                rows = self._executor.rows(_STATEMENTS.enqueue_many, (payload,))
+            except Exception as error:
+                _raise_translated(error)
+            stale_types = _contract_mismatch(rows)
+            if stale_types is None:
+                return _results(rows)
+            for task_type in stale_types:
+                self._contract_definitions[task_type] = self._load_contract(task_type)
+        raise RuntimeError(_CONTRACT_POLICY_CHANGED)
+
+    def _contract_definition(self, task_type: str) -> _Row | None:
+        """Return the cached contract, loading it once; unsynced queues use reported types only."""
+        if task_type not in self._contract_definitions:
+            if not self._contracts_enabled:
+                return None
+            self._contract_definitions[task_type] = self._load_contract(task_type)
+        return self._contract_definitions[task_type]
+
+    def _load_contract(self, task_type: str) -> _Row | None:
+        rows = self._executor.rows(_STATEMENTS.get_contract, (task_type, None))
+        return rows[0] if rows else None
 
     def sync_schedules(
         self,
@@ -210,6 +231,7 @@ class Queue:
         _assert_sync_compatible(self._executor)
         payload = json.dumps(_serialize_contracts(contracts), separators=(",", ":"))
         self._executor.rows(_STATEMENTS.sync_contracts, (payload,))
+        self._contract_definitions.clear()
         self._contracts_enabled = True
 
     def send_signal(
@@ -261,7 +283,11 @@ class AsyncQueue:
     ) -> None:
         self._executor = executor
         self.default_queue = default_queue
+        self._compatibility = _AsyncCachedCompatibilityCheck(executor)
         self._contract_validators: dict[tuple[str, str], Any] = {}
+        # A task type's current contract, or None when it has none. A contract_mismatch row
+        # refreshes a stale entry, so the cache needs no expiry.
+        self._contract_definitions: dict[str, _Row | None] = {}
         self._contracts_enabled = False
 
     @classmethod
@@ -320,24 +346,40 @@ class AsyncQueue:
     ) -> list[EnqueueResult]:
         if not requests:
             return []
-        await _assert_async_compatible(self._executor)
-        values = _serialize_request_values(requests, self.default_queue, _inject_trace_context())
-        if self._contracts_enabled:
-            definitions: dict[str, _Row | None] = {}
+        await self._compatibility.assert_compatible()
+        for _attempt in range(2):
+            values = _serialize_request_values(
+                requests, self.default_queue, _inject_trace_context()
+            )
             for request, value in zip(requests, values, strict=True):
-                if request.type not in definitions:
-                    rows = await self._executor.rows(_STATEMENTS.get_contract, (request.type, None))
-                    definitions[request.type] = rows[0] if rows else None
-                definition = definitions[request.type]
+                definition = await self._contract_definition(request.type)
                 if definition is not None:
                     _apply_contract(
                         definition, request.type, request.payload, value, self._contract_validators
                     )
-        payload = _encode_request_values(values)
-        try:
-            return _results(await self._executor.rows(_STATEMENTS.enqueue_many, (payload,)))
-        except Exception as error:
-            _raise_translated(error)
+            payload = _encode_request_values(values)
+            try:
+                rows = await self._executor.rows(_STATEMENTS.enqueue_many, (payload,))
+            except Exception as error:
+                _raise_translated(error)
+            stale_types = _contract_mismatch(rows)
+            if stale_types is None:
+                return _results(rows)
+            for task_type in stale_types:
+                self._contract_definitions[task_type] = await self._load_contract(task_type)
+        raise RuntimeError(_CONTRACT_POLICY_CHANGED)
+
+    async def _contract_definition(self, task_type: str) -> _Row | None:
+        """Return the cached contract, loading it once; unsynced queues use reported types only."""
+        if task_type not in self._contract_definitions:
+            if not self._contracts_enabled:
+                return None
+            self._contract_definitions[task_type] = await self._load_contract(task_type)
+        return self._contract_definitions[task_type]
+
+    async def _load_contract(self, task_type: str) -> _Row | None:
+        rows = await self._executor.rows(_STATEMENTS.get_contract, (task_type, None))
+        return rows[0] if rows else None
 
     async def sync_schedules(
         self,
@@ -415,6 +457,7 @@ class AsyncQueue:
         await _assert_async_compatible(self._executor)
         payload = json.dumps(_serialize_contracts(contracts), separators=(",", ":"))
         await self._executor.rows(_STATEMENTS.sync_contracts, (payload,))
+        self._contract_definitions.clear()
         self._contracts_enabled = True
 
     async def send_signal(
@@ -520,6 +563,23 @@ def _cancel_result(row: _Row, task_id: str) -> CancelResult:
         reason=cast(str | None, row["reason"]),
         finished_at=cast(datetime | None, row["finished_at"]),
     )
+
+
+_CONTRACT_POLICY_CHANGED = "contract policy changed again while retrying enqueue"
+
+
+def _contract_mismatch(rows: Sequence[_Row]) -> list[str] | None:
+    """Return the task types PostgreSQL reports as carrying a stale contract, if any."""
+    for row in rows:
+        if row["outcome"] != "contract_mismatch":
+            continue
+        reason = row.get("reason")
+        detail = json.loads(reason) if isinstance(reason, str) else None
+        task_types = detail.get("taskTypes") if isinstance(detail, Mapping) else None
+        if not isinstance(task_types, list) or not all(isinstance(t, str) for t in task_types):
+            raise RuntimeError("PostgreSQL returned invalid contract mismatch details")
+        return cast(list[str], task_types)
+    return None
 
 
 def _results(rows: Sequence[_Row]) -> list[EnqueueResult]:
