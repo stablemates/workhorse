@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import gc
+import weakref
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from threading import Event, Thread
@@ -1573,3 +1575,39 @@ def test_handler_failure_retries_on_the_database_schedule(database_url: str) -> 
             (task_id,),
         ).fetchone()
         assert outcome == ("succeeded", 2, {"delivered": True})
+
+
+def test_durable_sleeps_do_not_retain_handler_frames(database_url: str) -> None:
+    class HandlerLocal:
+        pass
+
+    handler_locals: list[weakref.ref[HandlerLocal]] = []
+    sleeps = 1_000
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+    ):
+        queue = Queue(enqueue_connection)
+        for _ in range(sleeps):
+            queue.enqueue("sleep.retention", {})
+        enqueue_connection.commit()
+
+        def handle(_payload: object, context: HandlerContext) -> None:
+            local = HandlerLocal()
+            handler_locals.append(weakref.ref(local))
+            context.sleep("nap", 3_600_000)
+
+        worker = Worker(
+            worker_connection, worker_id="python-sleep-retention", concurrency=8
+        ).handle("sleep.retention", handle)
+        assert worker.run_once() is True
+        suspended = worker_connection.execute(
+            "SELECT count(*) FROM workhorse.task_runtime WHERE state = 'scheduled'"
+        ).fetchone()
+
+    assert suspended == (sleeps,)
+    assert len(handler_locals) == sleeps
+    gc.collect()
+    # A suspension that outlives its task keeps the handler frame, and every local in it, alive.
+    assert sum(reference() is not None for reference in handler_locals) == 0

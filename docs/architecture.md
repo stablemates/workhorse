@@ -362,6 +362,10 @@ returns. A handler that finishes releases its slot and wakes the dispatcher.
 `expire_owned_v1` at the earlier of `deadline_at` and `attempt_timeout_at`. If PostgreSQL returns
 `not_due`, the thread retries after 5 milliseconds and does not abandon the live attempt.
 
+A handler that raises a `BaseException` such as `SystemExit` still stops the heartbeat and joins
+the expiration thread. The lease then lapses for recovery, and the process can exit. Each durable
+wait raises a new suspension instance, so a suspended handler's frames are released with its task.
+
 One locked attempt-outcome arbiter accepts the first lifecycle outcome. Cancellation calls
 `acknowledge_cancel_v1` under the claimed worker and fence even if the handler catches the signal
 and returns. Deadline and timeout transitions remain owned by `expire_owned_v1`. Lease loss raises
