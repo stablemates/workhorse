@@ -938,6 +938,61 @@ describe("Workhorse OpenTelemetry metrics", () => {
     ]);
   });
 
+  it("records a handler that throws after a lease loss as lease_lost exactly once", async () => {
+    const { Worker } = await import("../src/worker.js");
+    const task: ClaimedTask = {
+      id: "task-lease-lost",
+      queue: "mail",
+      type: "email.send",
+      priority: 0,
+      payload: null,
+      contractVersion: null,
+      resultMaxBytes: 1_048_576,
+      redactErrorDetails: false,
+      traceContext: null,
+      attempt: 1,
+      maxAttempts: 3,
+      retryPolicy: null,
+      deadlineAt: null,
+      executionTimeoutMs: null,
+      attemptTimeoutAt: null,
+      fenceToken: 1n,
+      leaseExpiresAt: new Date(Date.now() + 30_000),
+    };
+    const fail = vi.fn<WorkerQueueApi["fail"]>(async () => "stale");
+    const queue = workerQueue({
+      claim: async () => task,
+      heartbeatStatus: async () => "stale",
+      fail,
+    });
+    const worker = new Worker(queue, {
+      queue: "mail",
+      registryIntervalMs: 0,
+      leaseMs: 1_000,
+      heartbeatMs: 10,
+    }).handle("email.send", async (_payload, context) => {
+      await new Promise<void>((resolve) => {
+        context.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      throw context.signal.reason;
+    });
+
+    await worker.runOnce();
+    await collect();
+
+    expect(fail).not.toHaveBeenCalled();
+    expect(metric("workhorse.handler.executions")?.dataPoints).toEqual([
+      expect.objectContaining({
+        attributes: {
+          "workhorse.handler.outcome": "lease_lost",
+          "workhorse.task.type": "email.send",
+          "workhorse.queue.name": "mail",
+        },
+        value: 1,
+      }),
+    ]);
+  });
+
   it("records durable wait suspension without treating it as a failure", async () => {
     const { Worker } = await import("../src/worker.js");
     const task: ClaimedTask = {

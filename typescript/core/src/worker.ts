@@ -57,6 +57,12 @@ const DEFAULT_NOTIFICATION_FALLBACK_POLL_MS = 5_000;
 const MAX_EMPTY_POLL_MS = 5_000;
 const NOTIFICATION_CLAIM_DELAY_MS = 50;
 
+/** Tasks one claim pass leased, and the error that ended the pass early, if any. */
+interface ClaimAttempt {
+  claimed: ClaimedTask[];
+  error?: unknown;
+}
+
 /**
  * @internal Crash boundary a test or benchmark asks a worker to model process loss at. This is
  * test support, not application API: `stripInternal` keeps it out of the published declarations,
@@ -869,38 +875,49 @@ export class Worker {
     return this.withExclusiveExecution(() => this.runBatch(true));
   }
 
-  private async claimNextMany(limit: number): Promise<ClaimedTask[]> {
+  // Claims up to `limit` tasks across this worker's queues. A failing claim on a later queue must
+  // not strand tasks already claimed from earlier ones: each holds a lease and would burn an attempt
+  // at lease recovery without ever running. The caller therefore gets them together with the error.
+  private async claimNextMany(limit: number): Promise<ClaimAttempt> {
     const tasks: ClaimedTask[] = [];
-    if (!this.queue.claimMany) {
-      let emptyQueues = 0;
-      while (tasks.length < limit && emptyQueues < this.queueNames.length) {
+    try {
+      if (!this.queue.claimMany) {
+        let emptyQueues = 0;
+        while (tasks.length < limit && emptyQueues < this.queueNames.length) {
+          const queueName = this.queueNames[this.nextQueueIndex]!;
+          this.nextQueueIndex = (this.nextQueueIndex + 1) % this.queueNames.length;
+          const task = await this.queue.claim(this.workerId, {
+            queue: queueName,
+            leaseMs: this.leaseMs,
+          });
+          if (task) {
+            tasks.push(task);
+            emptyQueues = 0;
+          } else {
+            emptyQueues += 1;
+          }
+        }
+        return { claimed: tasks };
+      }
+      for (
+        let checked = 0;
+        checked < this.queueNames.length && tasks.length < limit;
+        checked += 1
+      ) {
         const queueName = this.queueNames[this.nextQueueIndex]!;
         this.nextQueueIndex = (this.nextQueueIndex + 1) % this.queueNames.length;
-        const task = await this.queue.claim(this.workerId, {
-          queue: queueName,
-          leaseMs: this.leaseMs,
-        });
-        if (task) {
-          tasks.push(task);
-          emptyQueues = 0;
-        } else {
-          emptyQueues += 1;
-        }
+        const remaining = limit - tasks.length;
+        tasks.push(
+          ...(await this.queue.claimMany(this.workerId, remaining, {
+            queue: queueName,
+            leaseMs: this.leaseMs,
+          })),
+        );
       }
-      return tasks;
+      return { claimed: tasks };
+    } catch (error) {
+      return { claimed: tasks, error };
     }
-    for (let checked = 0; checked < this.queueNames.length && tasks.length < limit; checked += 1) {
-      const queueName = this.queueNames[this.nextQueueIndex]!;
-      this.nextQueueIndex = (this.nextQueueIndex + 1) % this.queueNames.length;
-      const remaining = limit - tasks.length;
-      tasks.push(
-        ...(await this.queue.claimMany(this.workerId, remaining, {
-          queue: queueName,
-          leaseMs: this.leaseMs,
-        })),
-      );
-    }
-    return tasks;
   }
 
   private async runBatch(
@@ -918,11 +935,10 @@ export class Worker {
     let claimFailed = false;
     const freeSlots = this.concurrency - this.activeSlots;
     if (!shouldStop() && !this.paused && freeSlots > 0) {
-      try {
-        const tasks = await this.claimNextMany(freeSlots);
-        executions.push(...tasks.map((task) => this.startExecution(task)));
-      } catch (error) {
-        claimError = error;
+      const claim = await this.claimNextMany(freeSlots);
+      executions.push(...claim.claimed.map((task) => this.startExecution(task)));
+      if ("error" in claim) {
+        claimError = claim.error;
         claimFailed = true;
       }
     }
@@ -1088,6 +1104,12 @@ export class Worker {
     // A crash failpoint models process disappearance, so converting it into fail_v1 would produce
     // the wrong durable state. Ordinary handler errors do close and retry the attempt.
     if (error instanceof InjectedCrashError) throw error;
+    // Another owner may hold the task now, so fail_v1 could only answer stale.
+    if (arbiter.is("lease_expired")) {
+      span.setAttribute("workhorse.handler.outcome", "stale");
+      attempt.recordExecution("lease_lost");
+      return;
+    }
     const abortReason: unknown = attempt.signal.reason;
     if (
       arbiter.is("cancelled") ||
@@ -1482,11 +1504,11 @@ export class Worker {
         }
         this.lastClaimAt = Date.now();
         const claimWakeVersion = this.dispatchWakeVersion;
-        let tasks: ClaimedTask[];
-        try {
-          tasks = await this.claimNextMany(this.concurrency - active.size);
-        } catch (error) {
-          claimError = error;
+        const claim = await this.claimNextMany(this.concurrency - active.size);
+        const tasks = claim.claimed;
+        if ("error" in claim) {
+          for (const task of tasks) launch(task);
+          claimError = claim.error;
           break;
         }
         if (tasks.length === 0) {
