@@ -1602,10 +1602,12 @@ describe("worker registry", () => {
   ] as const)("models a crash at %s", async (failpoint, expectedEffects, expectedState) => {
     const id = await queue.enqueue("work", {}, { maxAttempts: 2 });
     let effects = 0;
+    // The lease leaves room for a loaded database: the local lease watchdog aborts a handler whose
+    // renewal has not been accepted within one lease, which would preempt the modeled crash.
     const worker = new Worker(queue, {
       workerId: "crashing-worker",
-      leaseMs: 100,
-      heartbeatMs: 50,
+      leaseMs: 500,
+      heartbeatMs: 100,
       failpoint,
     }).handle("work", () => {
       effects += 1;
@@ -1616,7 +1618,7 @@ describe("worker registry", () => {
     expect(effects).toBe(expectedEffects);
     expect((await admin.getTask(id))?.state).toBe(expectedState);
 
-    if (expectedState === "active") await sleep(130);
+    if (expectedState === "active") await sleep(530);
     const recovered = await queue.recoverExpired();
     const stateAfterRecovery = (await admin.getTask(id))?.state;
     expect(recovered).toBe(expectedState === "active" ? 1 : 0);

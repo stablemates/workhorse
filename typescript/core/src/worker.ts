@@ -474,12 +474,13 @@ export class Worker {
   private executionTail: Promise<void> = Promise.resolve();
   /** Serializes only durable batch announcements; batch callbacks still execute concurrently. */
   private batchDispatchRecording: Promise<void> = Promise.resolve();
+  // When each claimed task's claim request left, which starts its first local lease window.
+  private readonly claimSentAt = new WeakMap<ClaimedTask, number>();
   private readonly heartbeatLeases = new Map<
     string,
     {
       task: ClaimedTask;
-      status: (status: HeartbeatStatus) => void;
-      error: (error: unknown) => void;
+      status: (status: HeartbeatStatus, sentAt: number) => void;
     }
   >();
   private heartbeatTimer: NodeJS.Timeout | undefined;
@@ -489,6 +490,9 @@ export class Worker {
     this.heartbeatTimer = setTimeout(() => {
       this.heartbeatTimer = undefined;
       const leases = [...this.heartbeatLeases.values()];
+      // A lease renewed by this round runs from the moment the request left, which can only be
+      // earlier than the database's renewal, so local lease windows never outlast the real ones.
+      const sentAt = Date.now();
       const heartbeat = this.queue.heartbeatMany
         ? this.queue.heartbeatMany(
             leases.map((lease) => lease.task),
@@ -509,13 +513,13 @@ export class Worker {
           (statuses) => {
             for (const lease of leases) {
               if (this.heartbeatLeases.get(lease.task.id) !== lease) continue;
-              lease.status(statuses.get(lease.task.id) ?? "stale");
+              lease.status(statuses.get(lease.task.id) ?? "stale", sentAt);
             }
           },
-          (error: unknown) => {
-            for (const lease of leases) {
-              if (this.heartbeatLeases.get(lease.task.id) === lease) lease.error(error);
-            }
+          () => {
+            // A failed round proves nothing about ownership, so every task keeps running and the
+            // next round retries. Each attempt's lease watchdog aborts it once its last accepted
+            // renewal is a full lease old.
           },
         )
         .finally(() => this.scheduleHeartbeatBatch());
@@ -525,10 +529,9 @@ export class Worker {
 
   private addHeartbeatLease(
     task: ClaimedTask,
-    status: (status: HeartbeatStatus) => void,
-    error: (error: unknown) => void,
+    status: (status: HeartbeatStatus, sentAt: number) => void,
   ): () => void {
-    const lease = { task, status, error };
+    const lease = { task, status };
     this.heartbeatLeases.set(task.id, lease);
     this.scheduleHeartbeatBatch();
     return () => {
@@ -892,11 +895,13 @@ export class Worker {
         while (tasks.length < limit && emptyQueues < this.queueNames.length) {
           const queueName = this.queueNames[this.nextQueueIndex]!;
           this.nextQueueIndex = (this.nextQueueIndex + 1) % this.queueNames.length;
+          const sentAt = Date.now();
           const task = await this.queue.claim(this.workerId, {
             queue: queueName,
             leaseMs: this.leaseMs,
           });
           if (task) {
+            this.claimSentAt.set(task, sentAt);
             tasks.push(task);
             emptyQueues = 0;
           } else {
@@ -913,12 +918,13 @@ export class Worker {
         const queueName = this.queueNames[this.nextQueueIndex]!;
         this.nextQueueIndex = (this.nextQueueIndex + 1) % this.queueNames.length;
         const remaining = limit - tasks.length;
-        tasks.push(
-          ...(await this.queue.claimMany(this.workerId, remaining, {
-            queue: queueName,
-            leaseMs: this.leaseMs,
-          })),
-        );
+        const sentAt = Date.now();
+        const claimed = await this.queue.claimMany(this.workerId, remaining, {
+          queue: queueName,
+          leaseMs: this.leaseMs,
+        });
+        for (const task of claimed) this.claimSentAt.set(task, sentAt);
+        tasks.push(...claimed);
       }
       return { claimed: tasks };
     } catch (error) {
@@ -1022,12 +1028,13 @@ export class Worker {
       task,
       {
         workerId: this.workerId,
+        leaseMs: this.leaseMs,
         acknowledgeCancel: (claimed, workerId) => this.queue.acknowledgeCancel(claimed, workerId),
         expireOwned: (claimed, workerId) => this.queue.expireOwned(claimed, workerId),
-        addHeartbeatLease: (claimed, status, error) =>
-          this.addHeartbeatLease(claimed, status, error),
+        addHeartbeatLease: (claimed, status) => this.addHeartbeatLease(claimed, status),
       },
       activation,
+      this.claimSentAt.get(task) ?? Date.now(),
     );
     try {
       let writeCompletion: () => Promise<boolean>;
