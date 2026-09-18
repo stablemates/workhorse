@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 	"sync"
@@ -55,11 +57,17 @@ type HandlerOptions struct {
 	MaintenanceLoops  map[string]int
 	// Procedures permits host-supplied extensions and is primarily useful for enqueueTest.
 	Procedures map[string]Procedure
+	// AllowedHosts lists the host[:port] values this dashboard answers to. When set, a request
+	// under Path whose Host is not listed receives 421 Misdirected Request before Authorize runs.
+	// Letter case and a default port do not matter. Leave it empty when the embedding application
+	// already validates Host.
+	AllowedHosts []string
 }
 
 type handler struct {
 	options                HandlerOptions
 	basePath               string
+	allowedHosts           map[string]bool
 	skipCompatibilityCheck bool
 	compatible             bool
 	compatibilityMu        sync.Mutex
@@ -127,7 +135,33 @@ func newHandler(options HandlerOptions, skipCompatibilityCheck bool) (http.Handl
 		builtins[name] = procedure
 	}
 	options.Procedures = builtins
-	return &handler{options: options, basePath: normalizePath(options.Path), skipCompatibilityCheck: skipCompatibilityCheck}, nil
+	var allowedHosts map[string]bool
+	if len(options.AllowedHosts) > 0 {
+		allowedHosts = make(map[string]bool, len(options.AllowedHosts))
+		for _, entry := range options.AllowedHosts {
+			parsed, err := url.Parse("http://" + entry)
+			if err != nil || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Host != entry {
+				return nil, fmt.Errorf("dashboard allowed host must be a bare host[:port]: %q", entry)
+			}
+			allowedHosts[canonicalHost(entry, "http")] = true
+			allowedHosts[canonicalHost(entry, "https")] = true
+		}
+	}
+	return &handler{options: options, basePath: normalizePath(options.Path), allowedHosts: allowedHosts, skipCompatibilityCheck: skipCompatibilityCheck}, nil
+}
+
+// canonicalHost lowercases a host[:port] and drops the scheme's default port, so one address has
+// one spelling.
+func canonicalHost(host, scheme string) string {
+	host = strings.ToLower(host)
+	name, port, err := net.SplitHostPort(host)
+	if err != nil || !(scheme == "http" && port == "80" || scheme == "https" && port == "443") {
+		return scheme + "://" + host
+	}
+	if strings.Contains(name, ":") {
+		name = "[" + name + "]"
+	}
+	return scheme + "://" + name
 }
 
 func (host *handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -135,6 +169,18 @@ func (host *handler) ServeHTTP(response http.ResponseWriter, request *http.Reque
 	if !host.owns(pathname) {
 		http.NotFound(response, request)
 		return
+	}
+	// A name the dashboard does not answer to may resolve to this listener, so its requests are
+	// refused before any credential or session is consulted.
+	if host.allowedHosts != nil {
+		scheme := "http"
+		if request.TLS != nil {
+			scheme = "https"
+		}
+		if !host.allowedHosts[canonicalHost(request.Host, scheme)] {
+			writeJSON(response, http.StatusMisdirectedRequest, map[string]any{"error": "Misdirected Request"})
+			return
+		}
 	}
 	authorization := host.options.Authorize(request)
 	if authorization.Response != nil {

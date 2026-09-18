@@ -112,6 +112,66 @@ describe("standalone dashboard listener security", () => {
     }
   });
 
+  it("answers 421 on a loopback listener to a host that is not its own address", async () => {
+    const running = await startDashboardServer(database, {
+      hostname: "127.0.0.1",
+      port: 0,
+      allowMutations: false,
+      actor: "test",
+    });
+    try {
+      const port = new URL(running.url).port;
+      const statusFor = (host: string) =>
+        new Promise<number>((resolve, reject) => {
+          const request = httpRequest(
+            { hostname: "127.0.0.1", port, path: "/assets/absent.js", headers: { host } },
+            (response) => {
+              response.resume();
+              response.once("end", () => resolve(response.statusCode ?? 0));
+            },
+          );
+          request.once("error", reject);
+          request.end();
+        });
+
+      expect(await statusFor(`rebound.example:${port}`)).toBe(421);
+      expect(await statusFor("127.0.0.1")).toBe(421);
+      expect(await statusFor(`127.0.0.1:${port}`)).not.toBe(421);
+      expect(await statusFor(`localhost:${port}`)).not.toBe(421);
+    } finally {
+      await running.close();
+    }
+  });
+
+  it("serves any host on a Unix socket, whose address has no host name", async () => {
+    const scratch = await mkdtemp(path.join(tmpdir(), "workhorse-dashboard-host-"));
+    scratchRoots.push(scratch);
+    const socketPath = path.join(scratch, "dashboard.sock");
+    const running = await startDashboardServer(database, {
+      hostname: "127.0.0.1",
+      port: 3000,
+      socketPath,
+      allowMutations: false,
+      actor: "test",
+    });
+    try {
+      const status = await new Promise<number>((resolve, reject) => {
+        const request = httpRequest(
+          { socketPath, path: "/assets/absent.js", headers: { host: "proxy.example" } },
+          (response) => {
+            response.resume();
+            response.once("end", () => resolve(response.statusCode ?? 0));
+          },
+        );
+        request.once("error", reject);
+        request.end();
+      });
+      expect(status).not.toBe(421);
+    } finally {
+      await running.close();
+    }
+  });
+
   it("requires an HTTPS public origin for an authenticated remote listener", async () => {
     const authentication = {
       username: "operator",

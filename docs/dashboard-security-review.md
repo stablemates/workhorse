@@ -116,6 +116,11 @@ browser's ambient credentials.
   pathname against an exact tree of `encodeURIComponent`-encoded segments; the classifier joins
   the same segments after dropping empty ones. Any path the classifier reads more loosely than
   oRPC must be one oRPC refuses to dispatch.
+- Confirm a standalone TCP listener without a public origin answers 421 to a `Host` other than
+  its bound loopback address and port, before login or authorization runs. Confirm the Go and
+  Python hosts refuse an unlisted `Host` the same way when `AllowedHosts` or `allowed_hosts` is
+  set, and that `dashboard/v1/conformance.json` still carries the `foreign-host-rejection`
+  scenario the verifier requires.
 - Confirm the session cookie keeps its `__Host-` prefix, `HttpOnly`, `Secure`, and
   `SameSite=Strict`.
 - Confirm the standalone listener states a Content Security Policy, `X-Content-Type-Options`,
@@ -124,8 +129,8 @@ browser's ambient credentials.
   intersect with the application's; `typescript/dashboard-server/README.md` states the policy an
   embedder copies.
 
-**Re-walk when** the mount adds a header, when the Origin check or the mutation classifier
-changes, when the cookie attributes change, or when the oRPC path matcher changes.
+**Re-walk when** the mount adds a header, when the Host check, the Origin check, or the mutation
+classifier changes, when the cookie attributes change, or when the oRPC path matcher changes.
 
 ## Row 6: what the standalone credential mode enforces
 

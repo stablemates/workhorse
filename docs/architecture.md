@@ -739,11 +739,12 @@ fixture format and the harness a backend under test must present.
 
 `workhorse.dashboard.DashboardHost` is the Python WSGI backend. Its constructor takes one
 caller-owned Psycopg connection plus `authorize`, `path`, `environment`, `audit_actor`, `read_only`,
-`browser_modules`, `configured_workers`, `maintenance_loops`, and the optional `enqueue_test`
-extension. The connection must have `autocommit=True`; the host rejects transactional connections
+`browser_modules`, `configured_workers`, `maintenance_loops`, `allowed_hosts`, and the optional
+`enqueue_test` extension. The connection must have `autocommit=True`; the host rejects transactional connections
 so a WSGI request cannot leave locks or an idle transaction behind. `DashboardPrincipal.actor` is
 the authenticated identity. `DashboardResponse` lets the
-authorization hook return a complete denial or redirect response. The host authorizes before
+authorization hook return a complete denial or redirect response. A non-empty `allowed_hosts`
+refuses any other `HTTP_HOST` with 421 before `authorize` runs. The host authorizes before
 `assert_sync_compatible`, rejects cross-origin mutations before decoding input, validates through
 `dashboard_v1.validate_input`, overwrites `audit.actor`, and then calls the private
 `workhorse.dashboard._backend.DashboardBackend`. Its `procedures()` implements every
@@ -771,7 +772,9 @@ in-process callback rather than database state.
 
 `dashboard.NewHandler` is the Go `net/http` backend. `HandlerOptions` takes a caller-owned
 `workhorse.Executor`, `Authorize`, `Path`, `Environment`, `AuditActor`, `ReadOnly`,
-`BrowserModules`, `ConfiguredWorkers`, `MaintenanceLoops`, and optional `Procedures` extensions.
+`BrowserModules`, `ConfiguredWorkers`, `MaintenanceLoops`, `AllowedHosts`, and optional
+`Procedures` extensions. A non-empty `AllowedHosts` refuses any other `Request.Host` with 421
+before `Authorize` runs.
 `Principal.Actor` supplies authenticated attribution; `Authorization.Response` can supply a
 complete denial or redirect. The handler preserves the same authorization, compatibility, CSRF,
 validation, attribution, and dispatch order as Python. `RPCError` carries defined status, code,
@@ -2821,6 +2824,17 @@ request URL. If `publicOrigin` is configured, that canonical HTTP or HTTPS origi
 scheme and authority instead. This keeps Secure-cookie and same-origin mutation policy independent
 of untrusted proxy headers. The CLI maps `--socket`, `--public-origin`, and
 `WORKHORSE_DASHBOARD_PUBLIC_ORIGIN` to those options.
+
+`DashboardHostOptions.allowedHosts` lists the `host[:port]` values a host answers to. When it is
+set, `createDashboardHost` answers any owned request whose URL host is not listed with 421 and
+`{ "error": "Misdirected Request" }`. The check runs before the single-admin login and logout
+routes and before `authorize`. Entries compare as `URL.host` does, so letter case and the
+protocol's default port do not matter; an entry that is not a bare `host[:port]` fails
+construction. `startDashboardServer` binds first and then sets `allowedHosts` for a TCP listener
+without `publicOrigin`: the bound loopback address with its port, and `localhost` with that port.
+A Unix socket has no host name to check, and a configured `publicOrigin` replaces the inbound host,
+so neither sets the list. An embedded host that leaves it unset relies on its application to
+validate `Host`.
 
 `startDashboardServer` sets five browser headers on every response, before the middleware writes,
 so a dashboard response that names one of them still wins: `content-security-policy`,

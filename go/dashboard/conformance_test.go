@@ -65,6 +65,7 @@ type dashboardExchange struct {
 	Method    string                    `json:"method"`
 	Mode      string                    `json:"mode"`
 	Origin    string                    `json:"origin"`
+	Host      string                    `json:"host"`
 	Request   any                       `json:"request"`
 	Expect    dashboardExchangeExpected `json:"expect"`
 	Capture   map[string]string         `json:"capture"`
@@ -161,7 +162,7 @@ $1::text, $2::text, $3::boolean, $4::text, $5::text) AS paused`, value["namespac
 		},
 		Path: harness.BasePath, Environment: harness.Environment, ReadOnly: readOnly,
 		ConfiguredWorkers: harness.ConfiguredWorkers, MaintenanceLoops: harness.MaintenanceLoops,
-		Procedures: procedures,
+		Procedures: procedures, AllowedHosts: []string{strings.TrimPrefix(harness.Origin, "http://")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +184,11 @@ func executeDashboardExchange(t *testing.T, handler http.Handler, harness dashbo
 	if method == "" {
 		method = http.MethodPost
 	}
-	request := httptest.NewRequest(method, harness.Origin+harness.BasePath+"/rpc/dashboard/"+exchange.Procedure, bytes.NewReader(payload))
+	base := harness.Origin
+	if exchange.Host == "foreign" {
+		base = harness.CrossOrigin
+	}
+	request := httptest.NewRequest(method, base+harness.BasePath+"/rpc/dashboard/"+exchange.Procedure, bytes.NewReader(payload))
 	switch exchange.Origin {
 	case "none":
 	case "cross":

@@ -66,7 +66,7 @@ func main() {
 			Authorize: func(*http.Request) dashboard.Authorization {
 				return dashboard.Authorization{Principal: &dashboard.Principal{Actor: "conformance"}}
 			},
-			Path: "/workhorse", Environment: "conformance", ConfiguredWorkers: []string{"conformance-worker"}, MaintenanceLoops: map[string]int{"tickIntervalMs": 1000}, ReadOnly: readOnly, Procedures: procedures})
+			Path: "/workhorse", Environment: "conformance", ConfiguredWorkers: []string{"conformance-worker"}, MaintenanceLoops: map[string]int{"tickIntervalMs": 1000}, ReadOnly: readOnly, Procedures: procedures, AllowedHosts: []string{"dashboard.conformance.test"}})
 		if err != nil {
 			panic(err)
 		}
@@ -75,7 +75,8 @@ func main() {
 	pgxWritable, pgxReadOnly := harness(workhorse.NewPGXExecutor(pool), false), harness(workhorse.NewPGXExecutor(pool), true)
 	sqlWritable, sqlReadOnly := harness(workhorse.NewSQLExecutor(sqlDatabase), false), harness(workhorse.NewSQLExecutor(sqlDatabase), true)
 	server := &http.Server{Handler: http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		request.Host = "dashboard.conformance.test"
+		// The fixture runner cannot set Host through fetch, so it names the request host here.
+		request.Host = request.Header.Get("X-Workhorse-Conformance-Host")
 		writable, readOnly := pgxWritable, pgxReadOnly
 		if request.Header.Get("X-Workhorse-Executor") == "database-sql" {
 			writable, readOnly = sqlWritable, sqlReadOnly

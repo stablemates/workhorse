@@ -107,17 +107,21 @@ server-side and answer `BAD_REQUEST`.
 The reference host processes every owned request in this order; a conforming backend must not
 reorder authorization behind procedure execution:
 
-1. **Authorization.** Every dashboard, RPC, and asset request is authorized by the host
+1. **Host check.** A backend configured with the host names it answers to refuses any other
+   request host with 421 and `{ "error": "Misdirected Request" }`. Letter case and a default port
+   do not matter. The check runs before authorization, so a name that merely resolves to the
+   listener never reaches a credential or a session.
+2. **Authorization.** Every dashboard, RPC, and asset request is authorized by the host
    application (or by built-in single-admin sessions). An unauthenticated request answers 401,
    an unauthorized one 403.
-2. **Schema compatibility.** An incompatible installed Workhorse schema answers 503 with
+3. **Schema compatibility.** An incompatible installed Workhorse schema answers 503 with
    `{ "error": "…" }`.
-3. **Same-origin check.** A procedure flagged `mutation` requires an `Origin` header whose origin
+4. **Same-origin check.** A procedure flagged `mutation` requires an `Origin` header whose origin
    equals the request URL's origin; a missing, mismatched, or unparsable `Origin` answers 403
    with `{ "error": "A same-origin mutation request is required" }` before the procedure runs.
    This is the dashboard's CSRF protection; it relies on the browser sending `Origin` on
    cross-origin POSTs and assumes cookie-authenticated deployments stay same-origin.
-4. **Input validation**, then the procedure.
+5. **Input validation**, then the procedure.
 
 Mutations additionally require the backend to be writable: a read-only backend answers
 `FORBIDDEN` for every `mutation: true` procedure. Audit attribution (`audit.actor`) is
@@ -182,8 +186,9 @@ The file's `scenarios` run strictly in order against one freshly installed schem
 - An `exchange` posts one literal oRPC envelope from `request` (after `$ref` resolution) to
   `POST {basePath}/rpc/dashboard/{procedure}` and asserts the exact response `status` and `body`.
   `mode` selects the writable or read-only deployment (default `"writable"`), `origin` sends the
-  harness origin, the mismatched `crossOrigin`, or no Origin header (default `"same"`), and
-  `method` overrides POST for the 405 fixture.
+  harness origin, the mismatched `crossOrigin`, or no Origin header (default `"same"`), `host`
+  addresses the request to the harness origin's host or to the host of `crossOrigin` (default
+  `"same"`), and `method` overrides POST for the 405 fixture.
 
 Expected bodies are exact: every key must appear and no other key may. Two escape hatches keep
 them portable: `{"$ref": "name"}` must equal a captured value, and `{"$type": "..."}` accepts any
@@ -199,12 +204,12 @@ supplies. Most timestamps in the fixtures are clock-derived and match through `{
 a durable signal is committed literally and does not.
 
 The fixtures must cover every procedure in `manifest.json` with a successful exchange, every
-mutation with both a cross-origin rejection and a read-only `FORBIDDEN` exchange, and the 400,
-404, and 405 error envelopes; the verifier fails the run when any of that coverage is missing.
+mutation with both a cross-origin rejection and a read-only `FORBIDDEN` exchange, the 400,
+404, and 405 error envelopes, and a 421 refusal of a foreign host; the verifier fails the run when any of that coverage is missing.
 
 The `harness` block is part of the contract for the backend under test: authorize every request
 as `authenticatedActor` (the fixtures pin server-assigned attribution to it), report
-`environment`, mount at `basePath` on `origin`, and configure `configuredWorkers` and
+`environment`, mount at `basePath` on `origin`, answer only to the host of `origin`, and configure `configuredWorkers` and
 `maintenanceLoops` as given. Two members of the writable deployment have no shared SQL function
 and must be supplied by the harness exactly as the reference harness
 (`typescript/dashboard-server/test/support/conformance-harness.ts`) does: an `enqueueTest`

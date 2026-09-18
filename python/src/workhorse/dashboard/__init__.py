@@ -78,8 +78,34 @@ def _normalize_dashboard_path(path: str) -> str:
     return "" if normalized == "/" else normalized
 
 
+def _canonical_host(host: str, scheme: str) -> str:
+    """Lowercase a host[:port] and drop the default port, so one address has one spelling."""
+    host = host.lower()
+    default = {"http": ":80", "https": ":443"}.get(scheme)
+    if default is not None and host.endswith(default):
+        host = host[: -len(default)]
+    return f"{scheme}://{host}"
+
+
+def _allowed_hosts(entries: tuple[str, ...]) -> frozenset[str]:
+    allowed: set[str] = set()
+    for entry in entries:
+        parsed = urlsplit("http://" + entry)
+        if parsed.netloc != entry or parsed.path or parsed.query or parsed.fragment or "@" in entry:
+            raise ValueError(f"dashboard allowed host must be a bare host[:port]: {entry!r}")
+        allowed.add(_canonical_host(entry, "http"))
+        allowed.add(_canonical_host(entry, "https"))
+    return frozenset(allowed)
+
+
 class DashboardHost:
-    """A WSGI application serving one embedded dashboard and its RPC contract."""
+    """A WSGI application serving one embedded dashboard and its RPC contract.
+
+    ``allowed_hosts`` lists the ``host[:port]`` values the dashboard answers to. When set, a
+    request under ``path`` whose ``Host`` is not listed receives 421 Misdirected Request before
+    ``authorize`` runs. Letter case and a default port do not matter. Leave it empty when the
+    embedding application already validates ``Host``.
+    """
 
     def __init__(
         self,
@@ -95,12 +121,14 @@ class DashboardHost:
         maintenance_loops: Mapping[str, int] | None = None,
         enqueue_test: DashboardProcedure | None = None,
         set_schedule_paused: DashboardProcedure | None = None,
+        allowed_hosts: tuple[str, ...] = (),
         _procedures: Mapping[str, DashboardProcedure] | None = None,
         _skip_compatibility_check: bool = False,
     ) -> None:
         if getattr(connection, "autocommit", None) is not True:
             raise ValueError("dashboard connection must use autocommit=True")
         self.base_path = _normalize_dashboard_path(path)
+        self._allowed_hosts = _allowed_hosts(allowed_hosts)
         self._authorize = authorize
         self._environment = environment
         self._audit_actor = audit_actor
@@ -149,6 +177,15 @@ class DashboardHost:
         path = str(environ.get("PATH_INFO", ""))
         if not self.owns(path):
             return self._json(404, {"error": "Not Found"})
+        # A name the dashboard does not answer to may resolve to this listener, so its requests
+        # are refused before any credential or session is consulted.
+        if self._allowed_hosts and (
+            _canonical_host(
+                str(environ.get("HTTP_HOST", "")), str(environ.get("wsgi.url_scheme", "http"))
+            )
+            not in self._allowed_hosts
+        ):
+            return self._json(421, {"error": "Misdirected Request"})
         authorization = self._authorize(environ)
         if isinstance(authorization, DashboardResponse):
             return authorization

@@ -6086,6 +6086,46 @@
       ]
     },
     {
+      "id": "foreign-host-rejection",
+      "exchanges": [
+        {
+          "id": "queues-foreign-host",
+          "procedure": "queues",
+          "request": {},
+          "host": "foreign",
+          "expect": {
+            "status": 421,
+            "body": {
+              "error": "Misdirected Request"
+            }
+          }
+        },
+        {
+          "id": "enqueue-test-foreign-host",
+          "procedure": "enqueueTest",
+          "request": {
+            "json": {
+              "kind": "success",
+              "priority": 0,
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "host": "foreign",
+          "origin": "cross",
+          "expect": {
+            "status": 421,
+            "body": {
+              "error": "Misdirected Request"
+            }
+          }
+        }
+      ]
+    },
+    {
       "id": "read-only-forbidden",
       "exchanges": [
         {

@@ -1536,6 +1536,15 @@ interface DashboardHostOptions {
   authorize?: (request: Request, workspace: string | null) => boolean | DashboardPrincipal | Response | Promise<boolean | DashboardPrincipal | Response>;
   /** Standalone single-administrator credentials. Mutually exclusive with `authorize`. */
   singleAdmin?: DashboardSingleAdminOptions;
+  /**
+  * The `host[:port]` values this dashboard answers to.
+  *
+  * When set, a request under `path` whose URL host is not listed receives `421 Misdirected
+  * Request` before authorization runs. Letter case and a default port do not matter. Leave it
+  * unset when the embedding application already validates `Host`, or when a configured public
+  * origin replaces the inbound host.
+  */
+  allowedHosts?: readonly string[];
 }
 
 interface DashboardHumanWaitPage {

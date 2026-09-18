@@ -1336,7 +1336,7 @@ type Authorize = Callable[[dict[str, object]], DashboardPrincipal | bool | Dashb
 
 class DashboardHost
   def __call__(self, environ: dict[str, object], start_response: Callable[[str, list[tuple[str, str]]], object]) -> Iterable[bytes]
-  def __init__(self, connection: object, *, authorize: Authorize, path: str = '/workhorse', environment: str = 'development', audit_actor: str | None = None, read_only: bool = False, browser_modules: tuple[str, ...] = (), configured_workers: tuple[str, ...] = (), maintenance_loops: Mapping[str, int] | None = None, enqueue_test: DashboardProcedure | None = None, set_schedule_paused: DashboardProcedure | None = None, _procedures: Mapping[str, DashboardProcedure] | None = None, _skip_compatibility_check: bool = False) -> None
+  def __init__(self, connection: object, *, authorize: Authorize, path: str = '/workhorse', environment: str = 'development', audit_actor: str | None = None, read_only: bool = False, browser_modules: tuple[str, ...] = (), configured_workers: tuple[str, ...] = (), maintenance_loops: Mapping[str, int] | None = None, enqueue_test: DashboardProcedure | None = None, set_schedule_paused: DashboardProcedure | None = None, allowed_hosts: tuple[str, ...] = (), _procedures: Mapping[str, DashboardProcedure] | None = None, _skip_compatibility_check: bool = False) -> None
   def handle(self, environ: dict[str, object]) -> DashboardResponse
   def owns(self, path: str) -> bool
 

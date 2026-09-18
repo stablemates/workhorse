@@ -31,7 +31,7 @@ it("passes dashboard/v1 through the Go embedded backend", { timeout: 120_000 }, 
   const report = await verifyDashboardConformanceFixtures(database.pool, repository, {
     async handle(mode: DashboardConformanceMode, request: Request) {
       const headers = new Headers(request.headers);
-      headers.set("host", new URL(fixtures.harness.origin).host);
+      headers.set("x-workhorse-conformance-host", new URL(request.url).host);
       headers.set("x-workhorse-conformance-mode", mode);
       const response = await fetch(`http://${address}${new URL(request.url).pathname}`, {
         method: request.method,
@@ -151,7 +151,7 @@ async function rpc(
     method: "POST",
     headers: {
       "content-type": "application/json",
-      host: new URL(origin).host,
+      "x-workhorse-conformance-host": new URL(origin).host,
       ...(databaseSQL ? { "x-workhorse-executor": "database-sql" } : {}),
     },
     body: JSON.stringify({ json: input }),

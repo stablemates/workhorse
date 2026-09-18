@@ -14,9 +14,9 @@ import type {
  * Bind the reference TypeScript dashboard server to the conformance fixtures' harness contract.
  *
  * The fixtures pin server-assigned values, so every backend under test must present the same
- * harness: authorize every request as `harness.authenticatedActor`, report `harness.environment`,
- * and expose a writable deployment whose controllers execute through the shared versioned SQL
- * surface — plus a second, read-only deployment of the same backend. The `enqueueTest` operator
+ * harness: answer only to the host of `harness.origin`, authorize every request as
+ * `harness.authenticatedActor`, report `harness.environment`, and expose a writable deployment
+ * whose controllers execute through the shared versioned SQL surface — plus a second, read-only deployment of the same backend. The `enqueueTest` operator
  * and `setSchedulePaused` controller have no shared SQL function; the harness supplies the
  * minimal implementations the fixtures assume (enqueue one `conformance.demo-{kind}` task on the
  * `conformance-demo` queue; set `workhorse.schedule_definition.paused`).
@@ -65,6 +65,7 @@ export function createDashboardConformanceTransport(
     configuredWorkers: harness.configuredWorkers,
     maintenanceLoops: harness.maintenanceLoops,
     authorize: () => ({ actor: harness.authenticatedActor }),
+    allowedHosts: [new URL(harness.origin).host],
   };
   const writable = createDashboardHost({
     ...shared,

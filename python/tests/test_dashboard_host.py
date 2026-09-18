@@ -25,13 +25,14 @@ def _request(
     method: str = "GET",
     body: object | None = None,
     origin: str | None = None,
+    http_host: str = "example.test",
 ) -> tuple[str, dict[str, str], bytes]:
     payload = b"" if body is None else json.dumps(body).encode()
     environ: dict[str, object] = {
         "REQUEST_METHOD": method,
         "PATH_INFO": path,
         "wsgi.url_scheme": "https",
-        "HTTP_HOST": "example.test",
+        "HTTP_HOST": http_host,
         "CONTENT_LENGTH": str(len(payload)),
         "CONTENT_TYPE": "application/json",
         "wsgi.input": io.BytesIO(payload),
@@ -108,6 +109,46 @@ def test_dashboard_host_authorizes_before_dispatch() -> None:
     assert called is True
     assert status == "401 Unauthorized"
     assert json.loads(body) == {"error": "Unauthorized"}
+
+
+def test_dashboard_host_refuses_a_foreign_host_before_authorization() -> None:
+    calls: list[str] = []
+
+    def authorize(environ: dict[str, object]) -> bool:
+        calls.append(str(environ["HTTP_HOST"]))
+        return False
+
+    host = DashboardHost(
+        _Connection(),
+        authorize=authorize,
+        allowed_hosts=("127.0.0.1:4100", "Dashboard.Example:443"),
+        _skip_compatibility_check=True,
+    )
+
+    status, _headers, body = _request(
+        host,
+        "/workhorse/rpc/dashboard/queues",
+        method="POST",
+        body={},
+        http_host="rebound.example:4100",
+    )
+    assert status == "421 Misdirected Request"
+    assert json.loads(body) == {"error": "Misdirected Request"}
+    assert calls == []
+
+    for listed in ("127.0.0.1:4100", "DASHBOARD.example", "dashboard.example:443"):
+        status, _headers, _body = _request(host, "/workhorse", http_host=listed)
+        assert status.startswith("401 ")
+    assert len(calls) == 3
+
+
+def test_dashboard_host_rejects_an_allowed_host_that_is_not_a_bare_host() -> None:
+    with pytest.raises(ValueError, match="host"):
+        DashboardHost(
+            _Connection(),
+            authorize=lambda _: True,
+            allowed_hosts=("http://127.0.0.1:4100/",),
+        )
 
 
 def test_dashboard_host_returns_custom_authorization_responses() -> None:
