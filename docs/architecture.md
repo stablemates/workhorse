@@ -2017,7 +2017,7 @@ Payload, queue, type, priority, scheduling, retry, contract, tag, deadline, time
 
 ### Promotion
 
-`promote_v1` locks a bounded due set with `FOR UPDATE SKIP LOCKED`, updates those runtime rows from scheduled to ready, preserves priority, assigns new FIFO sequences, appends events, and emits a wake hint. Every promoted row emits `promoted`; its locked `due` CTE also carries any durable `wait_name` through the update so timer-backed rows append `wait_elapsed` before the marker is cleared.
+`promote_v1` locks a bounded due set with `FOR UPDATE SKIP LOCKED`, updates those runtime rows from scheduled to ready, preserves priority, assigns new FIFO sequences, appends events, and emits a wake hint. Every promoted row emits `promoted`; its locked `due` CTE also carries any durable `wait_name` through the update so timer-backed rows append `wait_elapsed` before the marker is cleared. It reads `clock_timestamp()` once into `v_now` and selects rows with `run_at <= v_now`, so the scan seeks `task_runtime_scheduled_idx` to the current time instead of filtering every delayed row.
 
 Production maintenance is worker-owned and split by cadence and failure domain.
 
@@ -2313,7 +2313,7 @@ races remain row-lock ordered and first-committer-wins.
 
 `fail_v1` locks the matching unexpired active generation. If budget remains, it calls the PostgreSQL delay selector, compare-and-set increments the attempt, persists any next jitter state, and places the row in ready or scheduled state. Otherwise it deletes runtime and inserts a failed outcome. In both cases it closes attempt history and appends an event atomically. `retry_scheduled` details include `retry_policy`, `retry_delay_ms`, and `retry_delay_source`.
 
-`recover_expired_v1` cooperatively locks expired active rows in bounded batches. A row carrying a cancellation request becomes canceled and does not retry. Other rows perform policy selection and increment-and-requeue or delete-and-outcome transition using the observed fence and expiry as CAS guards. `Queue.recoverExpired(limit)` passes an omitted delay as SQL `NULL`, allowing persisted policy selection; an explicit number remains an override. `lease_expired` details include the policy, selected delay, and source. Old workers cannot later complete because their active generation no longer exists.
+`recover_expired_v1` cooperatively locks expired active rows in bounded batches. A row carrying a cancellation request becomes canceled and does not retry. Other rows perform policy selection and increment-and-requeue or delete-and-outcome transition using the observed fence and expiry as CAS guards. `Queue.recoverExpired(limit)` passes an omitted delay as SQL `NULL`, allowing persisted policy selection; an explicit number remains an override. `lease_expired` details include the policy, selected delay, and source. Old workers cannot later complete because their active generation no longer exists. The deadline, timeout, and lease scans compare against one `v_now` read at entry, so the deadline and timeout scans seek `task_runtime_deadline_idx` and `task_runtime_timeout_idx` to the current time. The lease scan reads every active row through `task_runtime_expired_active_idx`, which has no `expires_at` key. The writes and their per-row compare-and-set guards still read `clock_timestamp()`.
 
 `recover_expired_v1` also sets transaction-local counts for expired leases and tasks returned to live
 work. `recover_expired_telemetry_v1` returns those counts with total affected rows. `tick_v1` carries
