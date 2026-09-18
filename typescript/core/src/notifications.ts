@@ -28,11 +28,21 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   return { promise, resolve };
 }
 
-function waitForAbort(signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.resolve();
-  return new Promise((resolve) => {
-    signal.addEventListener("abort", () => resolve(), { once: true });
+const ABORTED = Symbol("workhorse.notificationAborted");
+
+/** Settles with `pending`, or with ABORTED once `signal` aborts, and never leaves a listener. */
+async function raceAbort<T>(pending: Promise<T>, signal: AbortSignal): Promise<T | typeof ABORTED> {
+  if (signal.aborted) return ABORTED;
+  let onAbort!: () => void;
+  const aborted = new Promise<typeof ABORTED>((resolve) => {
+    onAbort = () => resolve(ABORTED);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
+  try {
+    return await Promise.race([pending, aborted]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
 }
 
 async function abortableSleep(durationMs: number, signal: AbortSignal): Promise<void> {
@@ -78,19 +88,16 @@ async function connectUntilAbort(
   signal: AbortSignal,
 ): Promise<NotificationClient | null> {
   const pending = connect(database);
-  const client = await Promise.race([pending, waitForAbort(signal).then(() => null)]);
-  if (client && !signal.aborted) return client;
-  if (client) client.release();
+  const client = await raceAbort(pending, signal);
+  if (client !== ABORTED && !signal.aborted) return client;
+  if (client !== ABORTED) client.release();
   else void pending.then((lateClient) => lateClient.release()).catch(() => undefined);
   return null;
 }
 
 async function listenUntilAbort(client: NotificationClient, signal: AbortSignal): Promise<boolean> {
   const pending = client.query(`LISTEN ${CHANNEL}`);
-  const listening = await Promise.race([
-    pending.then(() => true),
-    waitForAbort(signal).then(() => false),
-  ]);
+  const listening = (await raceAbort(pending, signal)) !== ABORTED;
   if (!listening) void pending.catch(() => undefined);
   return listening;
 }
@@ -118,10 +125,14 @@ class TaskNotificationHub {
       close: async () => {
         if (closed) return;
         closed = true;
-        this.subscribers.delete(subscriberId);
-        if (this.subscribers.size > 0) return;
+        if (this.subscribers.size > 1) {
+          this.subscribers.delete(subscriberId);
+          return;
+        }
+        // The last subscriber stays registered through shutdown so it observes an UNLISTEN failure.
         this.controller?.abort();
         await this.running;
+        this.subscribers.delete(subscriberId);
       },
     };
   }
@@ -151,7 +162,14 @@ class TaskNotificationHub {
   }
 
   private report(error: unknown): void {
-    for (const subscriber of this.subscribers.values()) subscriber.error(error);
+    for (const subscriber of this.subscribers.values()) {
+      // A throwing callback must not end the hub, which would stop every subscriber's wakeups.
+      try {
+        subscriber.error(error);
+      } catch {
+        // The subscriber owns its callback's failures.
+      }
+    }
   }
 
   private async run(signal: AbortSignal): Promise<void> {
@@ -179,11 +197,9 @@ class TaskNotificationHub {
         this.listening = true;
         reconnectMs = RECONNECT_INITIAL_MS;
         this.wakeAll();
-        connectionError = await Promise.race([
-          disconnected.promise,
-          waitForAbort(signal).then(() => undefined),
-        ]);
-        if (connectionError) {
+        const disconnection = await raceAbort(disconnected.promise, signal);
+        if (disconnection !== ABORTED) {
+          connectionError = disconnection;
           this.report(connectionError);
           this.wakeAll();
         }
@@ -194,8 +210,8 @@ class TaskNotificationHub {
         this.listening = false;
         if (client) {
           client.removeListener("notification", onNotification);
-          client.removeListener("error", onError);
           client.removeListener("end", onEnd);
+          // The error listener stays until release: an unobserved client error event throws.
           if (!connectionError) {
             try {
               await client.query(`UNLISTEN ${CHANNEL}`);
@@ -205,6 +221,7 @@ class TaskNotificationHub {
             }
           }
           client.release(connectionError);
+          client.removeListener("error", onError);
         }
       }
 

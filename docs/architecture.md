@@ -3439,6 +3439,8 @@ interactive stdin and stdout is refused with exit 1.
   reconnect also wake all subscribers, so work committed during the gap gets an immediate claim.
   `WorkerOptions.onNotificationError` observes failures; they never fail dispatch. The final
   subscriber issues `UNLISTEN`, releases the shared connection, and lets normal worker drain finish.
+  That subscriber still observes an `UNLISTEN` failure. The listener keeps its `error` handler until
+  release, and a throwing `onNotificationError` never stops the listener.
 - Notification-capable `Worker.run()` uses a 5,000 ms default fallback poll with ±10% jitter. A
   notification adds a random delay from 0 through 50 ms before claiming. An explicit `pollMs`
   replaces the fallback base. While no listener is active, consecutive empty waits double through a
