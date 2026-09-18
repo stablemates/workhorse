@@ -181,7 +181,6 @@ class _DurableWaitSuspension(BaseException):
     pass
 
 
-_DURABLE_WAIT_SUSPENSION = _DurableWaitSuspension()
 _MAX_WAIT_DURATION_MS = 31_536_000_000
 
 
@@ -215,6 +214,14 @@ class _HandlerDurability:
         self._human_calls: dict[str, tuple[str, Future[Json]]] = {}
         self._child_calls: dict[str, tuple[str, Future[Json]]] = {}
         self._children_call: tuple[str, Future[dict[str, Json]]] | None = None
+
+    def _suspension(self, *, cancel: bool) -> _DurableWaitSuspension:
+        # Every wait raises its own instance. Re-raising one shared instance would append each
+        # raise's frames to its traceback, keeping every suspended handler's locals alive.
+        suspension = _DurableWaitSuspension()
+        if cancel:
+            self._cancellation._cancel(suspension)
+        return suspension
 
     def context(self) -> HandlerContext:
         return HandlerContext(
@@ -460,8 +467,7 @@ class _HandlerDurability:
                 if self._waits is not None:
                     self._waits[name] = wait
             if status == "scheduled" and self._arbiter.submit("suspended_for_wait"):
-                self._cancellation._cancel(_DURABLE_WAIT_SUSPENSION)
-                raise _DURABLE_WAIT_SUSPENSION
+                raise self._suspension(cancel=True)
             pending.set_result(None)
         except BaseException as error:
             pending.set_exception(error)
@@ -506,9 +512,7 @@ class _HandlerDurability:
             if status == "limit_exceeded":
                 raise SignalWaitLimitExceededError(self._task.id)
             if status == "waiting":
-                if self._arbiter.submit("suspended_for_wait"):
-                    self._cancellation._cancel(_DURABLE_WAIT_SUSPENSION)
-                raise _DURABLE_WAIT_SUSPENSION
+                raise self._suspension(cancel=self._arbiter.submit("suspended_for_wait"))
             if status != "delivered":
                 raise RuntimeError(f"Unexpected signal wait status: {status}")
             result = cast(Json, row["payload"])
@@ -564,9 +568,7 @@ class _HandlerDurability:
             if status == "conflict":
                 raise HumanWaitConflictError(self._task.id, name)
             if status == "waiting":
-                if self._arbiter.submit("suspended_for_wait"):
-                    self._cancellation._cancel(_DURABLE_WAIT_SUSPENSION)
-                raise _DURABLE_WAIT_SUSPENSION
+                raise self._suspension(cancel=self._arbiter.submit("suspended_for_wait"))
             if status != "completed":
                 raise RuntimeError(f"Unexpected human wait status: {status}")
             result = cast(Json, row["result"])
@@ -633,9 +635,7 @@ class _HandlerDurability:
                     },
                 )
             if status == "created":
-                if self._arbiter.submit("suspended_for_child"):
-                    self._cancellation._cancel(_DURABLE_WAIT_SUSPENSION)
-                raise _DURABLE_WAIT_SUSPENSION
+                raise self._suspension(cancel=self._arbiter.submit("suspended_for_child"))
             if status != "completed":
                 raise RuntimeError(f"Unexpected child status: {status}")
             result = cast(Json, row["result"])
@@ -734,9 +734,7 @@ class _HandlerDurability:
                     },
                 )
             if status == "created":
-                if self._arbiter.submit("suspended_for_child"):
-                    self._cancellation._cancel(_DURABLE_WAIT_SUSPENSION)
-                raise _DURABLE_WAIT_SUSPENSION
+                raise self._suspension(cancel=self._arbiter.submit("suspended_for_child"))
             if status != "completed":
                 raise RuntimeError(f"Unexpected child-set status: {status}")
             joined = cast(list[dict[str, Json]], row["children"] or [])
@@ -1851,10 +1849,19 @@ class Worker:
             arbiter,
         )
 
-        def finish_ownership_lifecycle(cause: Exception | None = None) -> bool:
+        ownership_released = False
+
+        def release_ownership() -> None:
+            nonlocal ownership_released
+            if ownership_released:
+                return
+            ownership_released = True
             unregister_heartbeat()
             heartbeat_stop.set()
             expiration_thread.join()
+
+        def finish_ownership_lifecycle(cause: Exception | None = None) -> bool:
+            release_ownership()
             if self._finish_lifecycle_outcome(task, arbiter.outcome):
                 return True
             if heartbeat_error:
@@ -1881,6 +1888,10 @@ class Worker:
             )
             arbiter.submit(failure_outcome)
             return
+        finally:
+            # A BaseException such as SystemExit skips both handlers above. Stop renewing the lease
+            # and join the non-daemon expiration thread anyway, or the process cannot exit.
+            release_ownership()
         if finish_ownership_lifecycle():
             if arbiter.outcome in {"suspended_for_wait", "suspended_for_child"}:
                 _emit_log(

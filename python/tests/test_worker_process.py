@@ -16,6 +16,7 @@ from workhorse import Queue, Worker, run_worker_process
 
 PROCESS_RUNNER_FIXTURE = Path(__file__).parent / "fixtures" / "process_runner.py"
 CRASH_FIXTURE = Path(__file__).parent / "fixtures" / "crash_worker.py"
+EXITING_FIXTURE = Path(__file__).parent / "fixtures" / "exiting_worker.py"
 DEDICATED_WORKER_EXAMPLE = Path(__file__).parents[1] / "examples" / "dedicated_worker.py"
 pytestmark = pytest.mark.slow
 
@@ -193,3 +194,40 @@ def test_built_wheel_runs_a_worker_for_a_clean_consumer(
         timeout=10,
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.integration
+def test_handler_system_exit_releases_ownership_and_exits_the_process(database_url: str) -> None:
+    with psycopg.connect(database_url) as enqueue_connection:
+        task_id = Queue(enqueue_connection).enqueue("process.system-exit", {})
+        enqueue_connection.commit()
+
+    exiting = subprocess.Popen(
+        [sys.executable, str(EXITING_FIXTURE), database_url, "3"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    stdout, stderr = _finish(exiting)
+    assert exiting.returncode == 3, f"stdout: {stdout!r} stderr: {stderr!r}"
+
+    # The exited worker renews nothing, so its lease lapses and another worker takes the task.
+    completions = 0
+    with psycopg.connect(database_url, autocommit=True) as recovery_connection:
+
+        def complete(_payload: object, _context: object) -> dict[str, bool]:
+            nonlocal completions
+            completions += 1
+            return {"recovered": True}
+
+        worker = Worker(
+            recovery_connection,
+            worker_id="python-exit-recovery-worker",
+        ).handle("process.system-exit", complete)
+        eventually(worker.run_once, "the exited worker's lease was never released")
+        outcome = recovery_connection.execute(
+            "SELECT state, current_attempt, result FROM workhorse.task_outcome WHERE task_id = %s",
+            (task_id,),
+        ).fetchone()
+    assert outcome == ("succeeded", 2, {"recovered": True})
+    assert completions == 1
