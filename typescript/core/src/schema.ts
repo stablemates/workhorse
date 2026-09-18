@@ -106,6 +106,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "budget admission lock",
     kind: "additive",
   },
+  {
+    fromVersion: 10,
+    toVersion: 11,
+    file: "0011-debounce-replaces-only-pending-tasks.sql",
+    description: "debounce replaces only pending tasks",
+    kind: "additive",
+  },
 ];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {

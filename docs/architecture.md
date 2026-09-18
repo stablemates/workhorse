@@ -1931,7 +1931,9 @@ can progress in parallel. Persisted occurrence keys remain the final duplicate b
 The four-argument `run_task_now_v1(task_id, requested_by, reason, request_id)` releases an
 ordinary future-scheduled task without changing its recurring definition or bypassing a durable
 wait. Actor contains 1 through 200 characters, reason contains 1 through 2,000 characters, and the
-request ID contains 1 through 512 UTF-8 bytes. A successful release appends one `promoted` event.
+request ID contains 1 through 512 UTF-8 bytes. A successful release deletes the task's
+`enqueue_idempotency` row when its `coalescing_mode` is `debounce`, which ends the debounce window.
+It appends one `promoted` event.
 Its details contain `reason = 'manual'`, `requested_by`, `request_reason`,
 `request_id_preview`, the 12-character `request_id_digest`, and `request_id_length`. Calls that do
 not change the task append no event. Every dashboard backend calls this function directly and
@@ -1980,9 +1982,9 @@ outcome.
 
 `enqueue_debounce_v1` hashes the scoped key, takes the same transaction advisory lock as enqueue idempotency, and stores `coalescing_mode = 'debounce'` on `enqueue_idempotency`. It never persists the raw key. A new key creates one scheduled task through `enqueue_batch_v1` and returns `accepted`.
 
-If the retained runtime is `scheduled` or `ready`, PostgreSQL validates the replacement through `enqueue_batch_v1`. The key window must still be active. PostgreSQL then updates the accepted task definition and runtime atomically. `reset` derives a new run time and key expiry from the statement clock. `preserve` retains both. The stable task ID and current attempt remain unchanged. A `debounced` event records the safe key preview and digest, schedule policy, window, expiry, prior request digest, and replacement request digest.
+If the retained runtime is `scheduled` or `ready`, has a null `attempt_started_at` and `wait_name`, and is on `current_attempt = 1`, PostgreSQL validates the replacement through `enqueue_batch_v1`. The key window must still be active. PostgreSQL then updates the accepted task definition and runtime atomically. `reset` derives a new run time and key expiry from the statement clock. `preserve` retains both. The stable task ID and current attempt remain unchanged. A `debounced` event records the safe key preview and digest, schedule policy, window, expiry, prior request digest, and replacement request digest.
 
-An active runtime, terminal outcome, incompatible idempotency key, or elapsed-but-still-pending runtime returns `non_replaceable` with the retained task ID. `enqueue_many_v1` also returns `not_pending`, `incompatible_key_mode`, or `window_elapsed_pending` as its reason. PostgreSQL discards the new request's payload and leaves the accepted definition unchanged. It appends `debounce_rejected` with the same bounded reason. If the key window elapsed after the old task became active or terminal, a new pending identity can be accepted. Queue purge removes the key before the task identity, so a purged key can also accept fresh work. These rules preserve one runtime or outcome for every accepted identity and prevent promotion lag from creating two pending tasks for one elapsed key.
+An active runtime, a started or waiting runtime, terminal outcome, incompatible idempotency key, or elapsed-but-still-pending runtime returns `non_replaceable` with the retained task ID. A `scheduled` or `ready` runtime counts as started when `attempt_started_at` or `wait_name` is set, or when `current_attempt` exceeds 1 after a retry; its reason is `not_pending`. `enqueue_many_v1` also returns `not_pending`, `incompatible_key_mode`, or `window_elapsed_pending` as its reason. PostgreSQL discards the new request's payload and leaves the accepted definition unchanged. It appends `debounce_rejected` with the same bounded reason. If the key window elapsed after the old task became active or terminal, a new pending identity can be accepted. Queue purge removes the key before the task identity, so a purged key can also accept fresh work. `run_task_now_v1` deletes a released task's debounce identity, so the next same-key request is `accepted` as a new task. These rules preserve one runtime or outcome for every accepted identity and prevent promotion lag from creating two pending tasks for one elapsed key.
 
 #### Keyed throttle
 

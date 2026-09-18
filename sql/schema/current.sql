@@ -5766,6 +5766,9 @@ AS $$
   ))) ORDER BY ordinal LIMIT 1;
 $$;
 
+-- Keyed debounce. Inside the window a same-key request replaces the pending definition. Only a task
+-- that has never started an attempt and holds no durable wait is pending: a scheduled row may be a
+-- suspended wait or a retry backoff, and replacing it would rewrite an attempt already under way.
 CREATE OR REPLACE FUNCTION workhorse.enqueue_debounce_v1(p_request jsonb)
 RETURNS TABLE (task_id uuid, outcome text)
 LANGUAGE plpgsql
@@ -5868,7 +5871,10 @@ BEGIN
   IF v_has_identity AND v_existing.expires_at > v_now THEN
     IF v_existing.coalescing_mode <> 'debounce'
        OR v_runtime.state IS NULL
-       OR v_runtime.state NOT IN ('ready', 'scheduled') THEN
+       OR v_runtime.state NOT IN ('ready', 'scheduled')
+       OR v_runtime.attempt_started_at IS NOT NULL
+       OR v_runtime.wait_name IS NOT NULL
+       OR v_runtime.current_attempt > 1 THEN
       INSERT INTO workhorse.task_event(task_id, event_type, details)
       VALUES (v_existing.task_id, 'debounce_rejected', jsonb_build_object(
         'state', COALESCE(v_runtime.state, 'terminal'),
@@ -7270,7 +7276,9 @@ END;
 $$;
 
 -- Audited operator release. The request identity is recorded only when the call
--- changes the task, and the raw request id never enters retained history.
+-- changes the task, and the raw request id never enters retained history. A release also ends a
+-- live debounce window: the released definition runs now, and the next same-key request starts a
+-- new task.
 CREATE OR REPLACE FUNCTION workhorse.run_task_now_v1(
   p_task_id uuid,
   p_requested_by text,
@@ -7328,6 +7336,8 @@ BEGIN
     IF NOT FOUND THEN
       RAISE EXCEPTION 'locked scheduled task % changed state unexpectedly', p_task_id;
     END IF;
+    DELETE FROM workhorse.enqueue_idempotency identity
+     WHERE identity.task_id = p_task_id AND identity.coalescing_mode = 'debounce';
 
     INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
       VALUES (
@@ -15389,10 +15399,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (7, 'health snapshot without JIT'),
   (8, 'index-pruned task lists'),
   (9, 'composed task-list scope'),
-  (10, 'budget admission lock')
+  (10, 'budget admission lock'),
+  (11, 'debounce replaces only pending tasks')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (10) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (11) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

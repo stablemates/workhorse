@@ -32,15 +32,18 @@ A pending replacement is `replaced`.
 
 ## Replacement stops when processing starts
 
-Only a `scheduled` or `ready` task can be replaced. If a worker owns the task, or the task is already
-terminal, the outcome is `non_replaceable`. Workhorse discards the new request's payload and
+Only a `scheduled` or `ready` task that has never started can be replaced. A task can also be
+`scheduled` while it waits durably or backs off before a retry. Replacing it would rewrite an attempt
+already under way. So if a worker owns the task, the task has started, or it is already terminal, the
+outcome is `non_replaceable`. Workhorse discards the new request's payload and
 returns the retained task's stable `taskId`, while its accepted payload stays unchanged. The result's
 `reason` distinguishes a task that is no longer pending, an incompatible key mode, and a pending task
 whose window elapsed.
 
 If the window elapses before promotion runs, Workhorse also refuses replacement. This prevents a
 late request from creating a second live task beside overdue work. After an operator purges the old
-identity, the same key can accept a fresh task.
+identity, the same key can accept a fresh task. An operator who runs a debounced task now also ends
+its window, so the next request with that key starts a new task.
 
 Debounce and [enqueue idempotency](210-enqueue-idempotency.md) solve different problems. Idempotency
 replays an equivalent request and rejects a changed one. Debounce deliberately accepts changed
