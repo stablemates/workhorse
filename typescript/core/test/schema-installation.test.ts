@@ -466,6 +466,7 @@ describe("schema installation", () => {
       { version: 10, description: "budget admission lock" },
       { version: 11, description: "debounce replaces only pending tasks" },
       { version: 12, description: "task counts guard the wait probe" },
+      { version: 13, description: "stable time for promotion and recovery" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

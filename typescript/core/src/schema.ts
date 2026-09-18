@@ -120,6 +120,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "task counts guard the wait probe",
     kind: "additive",
   },
+  {
+    fromVersion: 12,
+    toVersion: 13,
+    file: "0013-stable-time-for-promotion-and-recovery.sql",
+    description: "stable time for promotion and recovery",
+    kind: "additive",
+  },
 ];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {

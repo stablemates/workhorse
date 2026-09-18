@@ -7237,13 +7237,16 @@ RETURNS integer
 LANGUAGE plpgsql
 AS $$
 DECLARE
+  -- One stable time lets the comparison seek task_runtime_scheduled_idx; the volatile
+  -- clock_timestamp() would filter every scheduled row instead.
+  v_now timestamptz := clock_timestamp();
   v_count integer;
   v_notify_queues text[];
   v_notify_queue text;
 BEGIN
   WITH due AS (
     SELECT r.task_id, r.wait_name, r.run_at AS wake_at FROM workhorse.task_runtime r
-     WHERE r.state = 'scheduled' AND r.run_at <= clock_timestamp()
+     WHERE r.state = 'scheduled' AND r.run_at <= v_now
      ORDER BY r.run_at, r.task_id FOR UPDATE SKIP LOCKED
      LIMIT GREATEST(1, LEAST(p_limit, 10000))
   ), promoted AS (
@@ -9647,17 +9650,20 @@ DECLARE
   v_retry_dimensions jsonb := '[]'::jsonb;
   v_notify_queues text[] := '{}';
   v_notify_queue text;
+  -- The three scans compare against one stable time so the deadline and timeout comparisons
+  -- seek their partial indexes, and the three scans agree on which work is due.
+  v_now timestamptz := clock_timestamp();
 BEGIN
   PERFORM set_config('workhorse.recovery_expired_leases', '0', true);
   PERFORM set_config('workhorse.recovery_retried', '0', true);
   PERFORM set_config('workhorse.recovery_retry_dimensions', '[]', true);
   FOR v_runtime IN
     SELECT runtime.* FROM workhorse.task_runtime runtime
-     WHERE runtime.deadline_at IS NOT NULL AND runtime.deadline_at <= clock_timestamp()
+     WHERE runtime.deadline_at IS NOT NULL AND runtime.deadline_at <= v_now
        AND (
          runtime.state <> 'active'
          OR runtime.attempt_timeout_at IS NULL
-         OR runtime.attempt_timeout_at > clock_timestamp()
+         OR runtime.attempt_timeout_at > v_now
          OR runtime.deadline_at <= runtime.attempt_timeout_at
        )
      ORDER BY runtime.deadline_at, runtime.task_id FOR UPDATE SKIP LOCKED
@@ -9673,10 +9679,10 @@ BEGIN
     FOR v_runtime IN
       SELECT runtime.* FROM workhorse.task_runtime runtime
        WHERE runtime.state = 'active' AND runtime.attempt_timeout_at IS NOT NULL
-         AND runtime.attempt_timeout_at <= clock_timestamp()
+         AND runtime.attempt_timeout_at <= v_now
          AND (
            runtime.deadline_at IS NULL
-           OR runtime.deadline_at > clock_timestamp()
+           OR runtime.deadline_at > v_now
            OR runtime.attempt_timeout_at < runtime.deadline_at
          )
        ORDER BY runtime.attempt_timeout_at, runtime.task_id FOR UPDATE SKIP LOCKED
@@ -9714,14 +9720,14 @@ BEGIN
 
   FOR v_runtime IN
     SELECT r.* FROM workhorse.task_runtime r
-     WHERE r.state = 'active' AND r.expires_at <= clock_timestamp()
+     WHERE r.state = 'active' AND r.expires_at <= v_now
        AND (
          r.cancel_requested_at IS NOT NULL
-         OR r.deadline_at IS NULL OR r.deadline_at > clock_timestamp()
+         OR r.deadline_at IS NULL OR r.deadline_at > v_now
        )
        AND (
          r.cancel_requested_at IS NOT NULL
-         OR r.attempt_timeout_at IS NULL OR r.attempt_timeout_at > clock_timestamp()
+         OR r.attempt_timeout_at IS NULL OR r.attempt_timeout_at > v_now
        )
      ORDER BY r.expires_at, r.task_id FOR UPDATE SKIP LOCKED
      LIMIT GREATEST(0, LEAST(p_limit, 10000) - v_count)
@@ -15406,10 +15412,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (9, 'composed task-list scope'),
   (10, 'budget admission lock'),
   (11, 'debounce replaces only pending tasks'),
-  (12, 'task counts guard the wait probe')
+  (12, 'task counts guard the wait probe'),
+  (13, 'stable time for promotion and recovery')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (12) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (13) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
