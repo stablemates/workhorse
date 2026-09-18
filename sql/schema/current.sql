@@ -12837,6 +12837,7 @@ AS $$
            COALESCE(runtime.state, outcome.state) AS state,
            COALESCE(runtime.current_attempt, outcome.current_attempt) AS attempt,
            COALESCE(runtime.updated_at, outcome.updated_at) AS updated_at,
+           runtime.wait_name,
            task.tags,
            CASE WHEN windowed.group_by = 'worker' OR windowed.worker_filter IS NOT NULL
              THEN COALESCE(runtime.worker_id, (
@@ -12860,7 +12861,8 @@ AS $$
              WHEN 'worker' THEN task_inputs.worker_id
            END AS group_key,
            task_inputs.state,
-           EXISTS (
+           -- Both wait views require this predicate; see dashboard_task_counts_v1.
+           task_inputs.state = 'scheduled' AND task_inputs.wait_name IS NOT NULL AND EXISTS (
              SELECT 1 FROM workhorse.dashboard_signal_wait_v1 signal_wait
               WHERE signal_wait.task_id = task_inputs.task_id
              UNION ALL
@@ -13186,6 +13188,7 @@ $$;
 CREATE OR REPLACE FUNCTION workhorse.dashboard_task_counts_v1(p_input jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
+SET jit = off
 AS $$
 DECLARE
   v_estimate bigint;
@@ -13203,7 +13206,9 @@ BEGIN
     RETURN (
       WITH tasks AS (
         SELECT COALESCE(r.state, o.state) AS state,
-               EXISTS (
+               -- Both wait views require this predicate, so the guard only skips probes that
+               -- could never match.
+               r.state = 'scheduled' AND r.wait_name IS NOT NULL AND EXISTS (
                  SELECT 1 FROM workhorse.dashboard_signal_wait_v1 signal_wait
                   WHERE signal_wait.task_id = j.id
                  UNION ALL
@@ -13233,7 +13238,7 @@ BEGIN
   -- task_runtime stays small by design (live tasks only), so live states are always counted
   -- exactly; task and task_outcome grow without bound and switch to planner estimates.
   SELECT count(*) FILTER (WHERE state = 'blocked')::integer AS blocked,
-         count(*) FILTER (WHERE EXISTS (
+         count(*) FILTER (WHERE state = 'scheduled' AND wait_name IS NOT NULL AND EXISTS (
            SELECT 1 FROM workhorse.dashboard_signal_wait_v1 signal_wait
             WHERE signal_wait.task_id = runtime.task_id
            UNION ALL
@@ -15400,10 +15405,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (8, 'index-pruned task lists'),
   (9, 'composed task-list scope'),
   (10, 'budget admission lock'),
-  (11, 'debounce replaces only pending tasks')
+  (11, 'debounce replaces only pending tasks'),
+  (12, 'task counts guard the wait probe')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (11) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (12) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
