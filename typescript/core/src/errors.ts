@@ -173,3 +173,30 @@ export function expectOneRow<TRow>(
   if (row === undefined) throw new MissingRowError(source);
   return row;
 }
+
+/** AbortSignal reason used when PostgreSQL reports a cancellation request for an owned task. */
+export class CancellationRequestedError extends WorkhorseError {
+  constructor(readonly taskId: string) {
+    super(`Cancellation was requested for task ${taskId}`);
+    this.name = "CancellationRequestedError";
+  }
+}
+
+/** AbortSignal reason used when a task's immutable absolute deadline is reached. */
+export class DeadlineExceededError extends WorkhorseError {
+  constructor(readonly taskId: string) {
+    super(`Deadline was exceeded for task ${taskId}`);
+    this.name = "DeadlineExceededError";
+  }
+}
+
+/** AbortSignal reason used when one logical attempt consumes its active execution budget. */
+export class ExecutionTimeoutError extends WorkhorseError {
+  constructor(
+    readonly taskId: string,
+    readonly attempt: number,
+  ) {
+    super(`Execution timeout was exceeded for task ${taskId} attempt ${attempt}`);
+    this.name = "ExecutionTimeoutError";
+  }
+}
