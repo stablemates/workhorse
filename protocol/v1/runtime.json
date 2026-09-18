@@ -187,5 +187,17 @@
     "expectedActiveAtStop": 2,
     "expectedSucceeded": 2,
     "expectedReady": 1
+  },
+  {
+    "id": "budget-admission-holds-across-queues",
+    "kind": "budget-admission-race",
+    "covers": ["budget-admission-serialization"],
+    "taskType": "protocol.budget-race",
+    "maxActive": 1,
+    "queueRate": { "limit": 1000, "intervalMs": 1000, "burst": 1000 },
+    "leaseMs": 30000,
+    "expectedHolderClaims": 1,
+    "expectedLateClaims": 0,
+    "expectedActive": 1
   }
 ]

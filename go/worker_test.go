@@ -68,6 +68,11 @@ type workerRuntimeFixture struct {
 	ExpectedActiveAtStop                 int                               `json:"expectedActiveAtStop"`
 	ExpectedSucceeded                    int                               `json:"expectedSucceeded"`
 	ExpectedReady                        int                               `json:"expectedReady"`
+	MaxActive                            int                               `json:"maxActive"`
+	QueueRate                            workhorse.RateLimit               `json:"queueRate"`
+	ExpectedHolderClaims                 int                               `json:"expectedHolderClaims"`
+	ExpectedLateClaims                   int                               `json:"expectedLateClaims"`
+	ExpectedActive                       int                               `json:"expectedActive"`
 }
 
 type workerFixtureTaskState struct {

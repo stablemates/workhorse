@@ -71,6 +71,7 @@ func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 		"poll-cadence":             executeWorkerPollCadenceFixture,
 		"graceful-drain":           executeWorkerGracefulDrainFixture,
 		"trace-propagation":        executeWorkerTracePropagationFixture,
+		"budget-admission-race":    executeBudgetAdmissionRaceFixture,
 	}
 	coverage := make(map[string]struct{}, len(manifest.RuntimeCoverage))
 	for _, fixture := range fixtures {
@@ -429,4 +430,202 @@ func containsString(values []string, expected string) bool {
 		}
 	}
 	return false
+}
+
+const budgetRaceClaimStatement = "SELECT * FROM workhorse.claim_v1($1::text, $2::text, $3::integer)"
+
+// executeBudgetAdmissionRaceFixture commits a budgeted task on one queue while that queue's
+// claim is already past its first read, and holds a second claim of the same budget open on
+// another queue until the first claim has admitted or started waiting. The first claim's queue
+// carries a rate policy so a test session can park it on the queue's token-bucket row, which
+// every claim locks after it has sampled its ready rows.
+func executeBudgetAdmissionRaceFixture(t *testing.T, fixture workerRuntimeFixture) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "budget-admission-race-fixture")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	name := "runtime-" + fixture.ID
+	budget := name
+	lateQueue := name + "-late"
+	holderQueue := name + "-holder"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), name)
+	maxActive := fixture.MaxActive
+	if _, err := queue.SyncBudgets(ctx, name, []workhorse.BudgetDefinition{
+		{Name: budget, MaxActive: &maxActive},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queue.SyncRateLimitPolicies(ctx, name, []workhorse.RateLimitPolicyDefinition{
+		{Queue: lateQueue, Rate: fixture.QueueRate},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// One unbudgeted start creates the late queue's token-bucket row for the blocker to lock.
+	if _, err := queue.Enqueue(ctx, fixture.TaskType, map[string]any{"role": "bucket"}, workhorse.EnqueueOptions{
+		Queue: lateQueue,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if started := countBudgetRaceClaims(t, ctx, pool, lateQueue, name+"-bucket", fixture.LeaseMS); started != 1 {
+		t.Fatal("the late queue did not admit its unbudgeted start")
+	}
+	if _, err := queue.Enqueue(ctx, fixture.TaskType, map[string]any{"role": "holder"}, workhorse.EnqueueOptions{
+		Queue: holderQueue, Budget: budget,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	blocker := acquireBudgetRaceConnection(t, ctx, pool)
+	late := acquireBudgetRaceConnection(t, ctx, pool)
+	holder := acquireBudgetRaceConnection(t, ctx, pool)
+	var lateClaim chan budgetRaceClaimResult
+	defer func() {
+		_, _ = blocker.Exec(ctx, "ROLLBACK")
+		_, _ = holder.Exec(ctx, "ROLLBACK")
+		if lateClaim != nil {
+			<-lateClaim
+		}
+		blocker.Release()
+		late.Release()
+		holder.Release()
+	}()
+
+	var latePID uint32
+	if err := late.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&latePID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blocker.Exec(ctx, "BEGIN"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blocker.Exec(ctx, `SELECT 1 FROM workhorse.rate_limit_bucket
+		WHERE queue_name = $1 AND bucket_scope = 'queue' FOR UPDATE`, lateQueue); err != nil {
+		t.Fatal(err)
+	}
+
+	lateClaim = make(chan budgetRaceClaimResult, 1)
+	var lateSettled atomic.Bool
+	go func() {
+		claims, err := countClaimRows(ctx, late.Conn(), lateQueue, name+"-late", fixture.LeaseMS)
+		lateSettled.Store(true)
+		lateClaim <- budgetRaceClaimResult{claims: claims, err: err}
+	}()
+	waitForBudgetRace(t, name+": the late claim never reached the bucket row", func() bool {
+		return backendWaitsOnLock(t, ctx, pool, latePID, nil)
+	})
+
+	if _, err := queue.Enqueue(ctx, fixture.TaskType, map[string]any{"role": "late"}, workhorse.EnqueueOptions{
+		Queue: lateQueue, Budget: budget,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holder.Exec(ctx, "BEGIN"); err != nil {
+		t.Fatal(err)
+	}
+	holderClaims, err := countClaimRows(ctx, holder.Conn(), holderQueue, name+"-holder", fixture.LeaseMS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blocker.Exec(ctx, "COMMIT"); err != nil {
+		t.Fatal(err)
+	}
+	advisory := "advisory"
+	waitForBudgetRace(t, name+": the late claim neither finished nor waited for the budget", func() bool {
+		return lateSettled.Load() || backendWaitsOnLock(t, ctx, pool, latePID, &advisory)
+	})
+	if _, err := holder.Exec(ctx, "COMMIT"); err != nil {
+		t.Fatal(err)
+	}
+	result := <-lateClaim
+	lateClaim = nil
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+
+	var active int
+	if err := pool.QueryRow(ctx, `SELECT count(*)::integer FROM workhorse.task_runtime
+		WHERE state = 'active' AND budget_name = $1`, budget).Scan(&active); err != nil {
+		t.Fatal(err)
+	}
+	if holderClaims != fixture.ExpectedHolderClaims || result.claims != fixture.ExpectedLateClaims ||
+		active != fixture.ExpectedActive {
+		t.Fatalf(
+			"budget admission race: expected holder=%d late=%d active=%d, received holder=%d late=%d active=%d",
+			fixture.ExpectedHolderClaims, fixture.ExpectedLateClaims, fixture.ExpectedActive,
+			holderClaims, result.claims, active,
+		)
+	}
+}
+
+type budgetRaceClaimResult struct {
+	claims int
+	err    error
+}
+
+func acquireBudgetRaceConnection(t *testing.T, ctx context.Context, pool *pgxpool.Pool) *pgxpool.Conn {
+	t.Helper()
+	connection, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return connection
+}
+
+func countBudgetRaceClaims(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	queueName string,
+	workerID string,
+	leaseMS int,
+) int {
+	t.Helper()
+	connection := acquireBudgetRaceConnection(t, ctx, pool)
+	defer connection.Release()
+	claims, err := countClaimRows(ctx, connection.Conn(), queueName, workerID, leaseMS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return claims
+}
+
+func countClaimRows(ctx context.Context, connection *pgx.Conn, queueName string, workerID string, leaseMS int) (int, error) {
+	rows, err := connection.Query(ctx, budgetRaceClaimStatement, queueName, workerID, leaseMS)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	claims := 0
+	for rows.Next() {
+		claims++
+	}
+	return claims, rows.Err()
+}
+
+// backendWaitsOnLock reports whether a backend waits on a heavyweight lock, optionally of one kind.
+func backendWaitsOnLock(t *testing.T, ctx context.Context, pool *pgxpool.Pool, pid uint32, lock *string) bool {
+	t.Helper()
+	var waiting bool
+	if err := pool.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM pg_stat_activity
+		 WHERE pid = $1 AND wait_event_type = 'Lock' AND ($2::text IS NULL OR wait_event = $2)
+	)`, int32(pid), lock).Scan(&waiting); err != nil {
+		t.Fatal(err)
+	}
+	return waiting
+}
+
+func waitForBudgetRace(t *testing.T, message string, predicate func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if predicate() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal(message)
 }

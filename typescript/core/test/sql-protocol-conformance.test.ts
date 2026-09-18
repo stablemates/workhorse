@@ -31,6 +31,7 @@ import {
 } from "../../../scripts/verify-sql-protocol.js";
 import type {
   BatchRuntimeFixture,
+  BudgetAdmissionRaceRuntimeFixture,
   CooperativeCancellationRuntimeFixture,
   ExpirationRuntimeFixture,
   GracefulDrainRuntimeFixture,
@@ -50,6 +51,8 @@ import {
   Worker,
   WORKHORSE_SCHEMA_VERSION,
 } from "../src/index.js";
+import type { Pool } from "pg";
+import { raceBudgetAdmission } from "./support/budget-race.js";
 import { createDatabaseTestHarness } from "./support/db.js";
 
 const compatibilityDatabase = createDatabaseTestHarness(
@@ -644,6 +647,25 @@ async function executeGracefulDrainRuntimeFixture(
   }
 }
 
+async function executeBudgetAdmissionRaceRuntimeFixture(
+  queue: Queue,
+  pool: Pool,
+  fixture: BudgetAdmissionRaceRuntimeFixture,
+): Promise<void> {
+  const outcome = await raceBudgetAdmission(pool, queue, {
+    name: `runtime-${fixture.id}`,
+    taskType: fixture.taskType,
+    maxActive: fixture.maxActive,
+    queueRate: fixture.queueRate,
+    leaseMs: fixture.leaseMs,
+  });
+  expect(outcome).toEqual({
+    holderClaims: fixture.expectedHolderClaims,
+    lateClaims: fixture.expectedLateClaims,
+    active: fixture.expectedActive,
+  });
+}
+
 async function executeTracePropagationRuntimeFixture(
   queue: Queue,
   database: Queryable,
@@ -909,6 +931,9 @@ describe("SQL protocol conformance fixtures", () => {
             break;
           case "trace-propagation":
             await executeTracePropagationRuntimeFixture(queue, runtimeDatabase.pool, fixture);
+            break;
+          case "budget-admission-race":
+            await executeBudgetAdmissionRaceRuntimeFixture(queue, runtimeDatabase.pool, fixture);
         }
       }
       expect(coverage).toEqual(new Set(fixtures.manifest.runtimeCoverage));

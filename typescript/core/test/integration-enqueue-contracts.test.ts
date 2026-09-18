@@ -23,6 +23,36 @@ import { createIntegrationTestContext } from "./support/integration.js";
 const { pool, queue, safeKeyDigest, safeKeyPreview, admin, adminAudit } =
   createIntegrationTestContext(import.meta.url);
 
+/**
+ * Makes a debounced task ready while its debounce identity stays live. That is the state a manual
+ * release left behind before schema version 11, so it pins what replacement does with it.
+ */
+async function releaseInsideDebounceWindow(taskId: string): Promise<void> {
+  const released = await pool.query(
+    `UPDATE workhorse.task_runtime
+        SET state = 'ready', run_at = clock_timestamp(), ready_at = clock_timestamp(),
+            sequence = nextval('workhorse.ready_sequence_seq'), updated_at = clock_timestamp()
+      WHERE task_id = $1 AND state = 'scheduled'`,
+    [taskId],
+  );
+  expect(released.rowCount).toBe(1);
+}
+
+/** The task definition, runtime row, and debounce identity, whole. */
+async function debouncedTaskRows(taskId: string): Promise<Record<string, unknown>> {
+  const result = await pool.query<Record<string, unknown>>(
+    `SELECT to_jsonb(task) AS task, to_jsonb(runtime) AS runtime,
+            (SELECT jsonb_agg(to_jsonb(identity) - 'idempotency_key_hash')
+               FROM workhorse.enqueue_idempotency identity
+              WHERE identity.task_id = task.id) AS identity
+       FROM workhorse.task task
+       JOIN workhorse.task_runtime runtime ON runtime.task_id = task.id
+      WHERE task.id = $1`,
+    [taskId],
+  );
+  return result.rows[0]!;
+}
+
 const dependencyCoalescingCases = [
   ["debounce", "prerequisiteTaskId"],
   ["debounce", "dependencies"],
@@ -1120,9 +1150,7 @@ describe("enqueue contracts", () => {
       { revision: 1 },
       { debounce },
     );
-    await expect(
-      admin.runTaskNow(accepted.taskId, adminAudit("run contract task")),
-    ).resolves.toMatchObject({ status: "released" });
+    await releaseInsideDebounceWindow(accepted.taskId);
     const claimed = await queue.claim("debounce-lifecycle-worker");
     expect(claimed).toMatchObject({ id: accepted.taskId, payload: { revision: 1 } });
 
@@ -1191,6 +1219,100 @@ describe("enqueue contracts", () => {
       taskId: incompatibleAccepted.taskId,
       outcome: "non_replaceable",
       reason: "incompatible_key_mode",
+    });
+  });
+
+  it.each(["waiting", "woken", "retrying"] as const)(
+    "refuses to replace a %s debounced task whose window is still open",
+    async (lifecycle) => {
+      const queueName = `debounce-started-${lifecycle}`;
+      const debounce = {
+        key: lifecycle,
+        scope: "debounce-started",
+        windowMs: 60_000,
+        schedule: "reset",
+      } as const;
+      const accepted = await queue.enqueueWithResult(
+        "debounce-started",
+        { revision: 1 },
+        { queue: queueName, debounce },
+      );
+      await releaseInsideDebounceWindow(accepted.taskId);
+      const claimed = await queue.claim("debounce-started-worker", { queue: queueName });
+      expect(claimed).toMatchObject({ id: accepted.taskId });
+      await expect(
+        queue.waitForSignal(claimed!, "debounce-started-worker", "approval", {
+          timeoutMs: 600_000,
+        }),
+      ).resolves.toMatchObject({ status: "waiting" });
+      if (lifecycle !== "waiting") {
+        await queue.sendSignal(
+          accepted.taskId,
+          "approval",
+          { approved: true },
+          {
+            idempotencyKey: `debounce-started-${lifecycle}`,
+            requestedBy: "operator",
+          },
+        );
+      }
+      // A retrying task resumes from its wait and fails into retry backoff.
+      const retried =
+        lifecycle === "retrying"
+          ? await queue.fail(
+              (await queue.claim("debounce-started-worker", { queue: queueName }))!,
+              "debounce-started-worker",
+              new Error("retry later"),
+              600_000,
+            )
+          : null;
+      expect(retried).toBe(lifecycle === "retrying" ? "scheduled" : null);
+      const before = await debouncedTaskRows(accepted.taskId);
+      expect(before.runtime).toMatchObject({
+        state: lifecycle === "woken" ? "ready" : "scheduled",
+      });
+
+      await expect(
+        queue.enqueueWithResult(
+          "debounce-started-replacement",
+          { revision: 2 },
+          { queue: queueName, debounce, maxAttempts: 9 },
+        ),
+      ).resolves.toEqual({
+        taskId: accepted.taskId,
+        outcome: "non_replaceable",
+        reason: "not_pending",
+      });
+      await expect(debouncedTaskRows(accepted.taskId)).resolves.toEqual(before);
+    },
+  );
+
+  it("ends the debounce window when an operator runs the task now", async () => {
+    const queueName = "debounce-run-now";
+    const debounce = { key: "run-now", windowMs: 60_000, schedule: "reset" } as const;
+    const first = await queue.enqueueWithResult(
+      "debounce-run-now",
+      { revision: 1 },
+      { queue: queueName, debounce },
+    );
+    await expect(
+      admin.runTaskNow(first.taskId, adminAudit("run debounced task now")),
+    ).resolves.toMatchObject({ status: "released" });
+
+    const second = await queue.enqueueWithResult(
+      "debounce-run-now",
+      { revision: 2 },
+      { queue: queueName, debounce },
+    );
+    expect(second).toMatchObject({ outcome: "accepted" });
+    expect(second.taskId).not.toBe(first.taskId);
+    await expect(admin.getTask(first.taskId)).resolves.toMatchObject({
+      state: "ready",
+      payload: { revision: 1 },
+    });
+    await expect(admin.getTask(second.taskId)).resolves.toMatchObject({
+      state: "scheduled",
+      payload: { revision: 2 },
     });
   });
 
@@ -1268,7 +1390,7 @@ describe("enqueue contracts", () => {
         { debounce },
       );
       if (transition === "claim") {
-        await admin.runTaskNow(accepted.taskId, adminAudit("run accepted task"));
+        await releaseInsideDebounceWindow(accepted.taskId);
       }
 
       const transitionClient = await pool.connect();

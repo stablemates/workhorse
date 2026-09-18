@@ -34,6 +34,10 @@ cooperative cancellation, deadline and execution-timeout settlement against the 
 lease-loss fencing, serialized worker-level heartbeat batches, and graceful drain without further claims.
 Its poll-cadence fixture pins the empty-claim backoff step, and every language holds its worker at
 the end of each empty claim so the step in force at the enqueue is the fixture's, not the runner's.
+Its budget-admission fixture pins that `max_active` holds across queues. A claim is parked on its
+queue's token-bucket row after it samples its ready rows. A budgeted task then commits on that
+queue, and a claim of the same budget on another queue stays open until the parked claim either
+returns or waits for the budget's lock.
 
 `v1/requests.json` maps public enqueue inputs to the exact JSON request sent to PostgreSQL. The
 TypeScript suite executes these mappings through `Queue`, so serialization changes fail alongside

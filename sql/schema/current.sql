@@ -5069,8 +5069,9 @@ END;
 $$;
 
 -- Whether one budget admits one more start now. Counts only unexpired active leases naming the
--- budget and probes the bucket without consuming. claim_v1 holds the workhorse:budgets advisory
--- lock while calling this, so two claims cannot both admit the last slot.
+-- budget and probes the bucket without consuming. It first takes the transaction advisory lock keyed
+-- by the budget name, so the count reads every start another claim committed before the lock was
+-- granted, and a start admitted here is charged before any other claim can read the same budget.
 CREATE OR REPLACE FUNCTION workhorse.budget_admission_v1(
   p_budget_name text,
   p_now timestamptz
@@ -5085,6 +5086,7 @@ BEGIN
   IF p_budget_name IS NULL THEN RETURN true; END IF;
   SELECT * INTO v_budget FROM workhorse.budget budget WHERE budget.budget_name = p_budget_name;
   IF NOT FOUND THEN RETURN true; END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:budget:' || p_budget_name, 0));
   IF v_budget.max_active IS NOT NULL THEN
     SELECT count(*)::integer INTO v_active
       FROM workhorse.task_runtime active
@@ -5764,6 +5766,9 @@ AS $$
   ))) ORDER BY ordinal LIMIT 1;
 $$;
 
+-- Keyed debounce. Inside the window a same-key request replaces the pending definition. Only a task
+-- that has never started an attempt and holds no durable wait is pending: a scheduled row may be a
+-- suspended wait or a retry backoff, and replacing it would rewrite an attempt already under way.
 CREATE OR REPLACE FUNCTION workhorse.enqueue_debounce_v1(p_request jsonb)
 RETURNS TABLE (task_id uuid, outcome text)
 LANGUAGE plpgsql
@@ -5866,7 +5871,10 @@ BEGIN
   IF v_has_identity AND v_existing.expires_at > v_now THEN
     IF v_existing.coalescing_mode <> 'debounce'
        OR v_runtime.state IS NULL
-       OR v_runtime.state NOT IN ('ready', 'scheduled') THEN
+       OR v_runtime.state NOT IN ('ready', 'scheduled')
+       OR v_runtime.attempt_started_at IS NOT NULL
+       OR v_runtime.wait_name IS NOT NULL
+       OR v_runtime.current_attempt > 1 THEN
       INSERT INTO workhorse.task_event(task_id, event_type, details)
       VALUES (v_existing.task_id, 'debounce_rejected', jsonb_build_object(
         'state', COALESCE(v_runtime.state, 'terminal'),
@@ -7268,7 +7276,9 @@ END;
 $$;
 
 -- Audited operator release. The request identity is recorded only when the call
--- changes the task, and the raw request id never enters retained history.
+-- changes the task, and the raw request id never enters retained history. A release also ends a
+-- live debounce window: the released definition runs now, and the next same-key request starts a
+-- new task.
 CREATE OR REPLACE FUNCTION workhorse.run_task_now_v1(
   p_task_id uuid,
   p_requested_by text,
@@ -7326,6 +7336,8 @@ BEGIN
     IF NOT FOUND THEN
       RAISE EXCEPTION 'locked scheduled task % changed state unexpectedly', p_task_id;
     END IF;
+    DELETE FROM workhorse.enqueue_idempotency identity
+     WHERE identity.task_id = p_task_id AND identity.coalescing_mode = 'debounce';
 
     INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
       VALUES (
@@ -7365,13 +7377,17 @@ $$;
 -- Policy-aware claim. Governed queues serialize the short admission transaction through policy
 -- rows, count only unexpired active leases, refill durable rate tokens from PostgreSQL time, and
 -- inspect at most the highest-priority 100 ready rows. Concurrency remains a dispatch budget rather than a
--- guarantee that expired handler code has stopped executing. A queue holding ready work that names
--- a budget also serializes on the workhorse:budgets advisory lock, because budget capacity is
--- counted across queues (ADR 0067).
-CREATE OR REPLACE FUNCTION workhorse.claim_v1(
+-- guarantee that expired handler code has stopped executing. Budget capacity is counted across
+-- queues (ADR 0067), so a claim locks every budget named in its priority window, one advisory lock
+-- per budget name, before it reads the clock. It takes those locks in name order so two claims
+-- that share budgets cannot deadlock. A claim that already holds budget locks from an earlier claim
+-- in the same transaction passes p_wait_for_budgets = false: it takes only the locks it can get
+-- without waiting and leaves rows naming any other budget for a later claim.
+CREATE OR REPLACE FUNCTION workhorse.claim_one_v1(
   p_queue_name text,
   p_worker_id text,
-  p_lease_ms integer DEFAULT 30000
+  p_lease_ms integer,
+  p_wait_for_budgets boolean
 ) RETURNS TABLE (
   task_id uuid, task_type text, priority integer, payload jsonb, contract_version text, result_max_bytes integer,
   redact_error_details boolean,
@@ -7388,7 +7404,8 @@ DECLARE
   v_rate_policy workhorse.rate_limit_policy%ROWTYPE;
   v_rate_status record;
   v_active integer;
-  v_budgeted boolean;
+  v_budget_name text;
+  v_budget_names text[] := '{}';
   v_fence bigint;
   v_now timestamptz;
   v_expires timestamptz;
@@ -7413,16 +7430,30 @@ BEGIN
     FROM workhorse.rate_limit_policy policy
    WHERE policy.queue_name = p_queue_name
    FOR UPDATE;
-  -- Budget admission counts across queues, so claims that can admit budget-named work serialize
-  -- on one lock. A queue without budget-named ready work never takes it.
-  SELECT EXISTS (
-    SELECT 1 FROM workhorse.task_runtime waiting
-     WHERE waiting.state = 'ready' AND waiting.queue_name = p_queue_name
-       AND waiting.budget_name IS NOT NULL
-  ) INTO v_budgeted;
-  IF v_budgeted THEN
-    PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:budgets', 0));
-  END IF;
+  -- Budget admission counts across queues. Lock each budget the priority window can name, in name
+  -- order, before reading the clock. The window may still reach a row whose budget committed after
+  -- this sample; that row is not admitted, because its lock was never taken in order.
+  FOR v_budget_name IN
+    SELECT DISTINCT sample.budget_name
+      FROM (
+        SELECT runtime.budget_name
+          FROM workhorse.task_runtime runtime
+         WHERE runtime.state = 'ready' AND runtime.queue_name = p_queue_name
+         ORDER BY runtime.priority DESC, runtime.sequence, runtime.task_id
+         LIMIT 100
+      ) sample
+     WHERE sample.budget_name IS NOT NULL
+     ORDER BY sample.budget_name
+  LOOP
+    IF p_wait_for_budgets THEN
+      PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:budget:' || v_budget_name, 0));
+    ELSIF NOT pg_try_advisory_xact_lock(
+      hashtextextended('workhorse:budget:' || v_budget_name, 0)
+    ) THEN
+      CONTINUE;
+    END IF;
+    v_budget_names := v_budget_names || v_budget_name;
+  END LOOP;
   v_now := clock_timestamp();
   v_expires := v_now + make_interval(secs => p_lease_ms::double precision / 1000.0);
   WITH oldest_key_buckets AS MATERIALIZED (
@@ -7480,7 +7511,7 @@ BEGIN
      FOR UPDATE OF runtime SKIP LOCKED
      LIMIT CASE
        WHEN v_policy.queue_name IS NULL AND v_rate_policy.per_key_limit IS NULL
-         AND NOT v_budgeted THEN 1
+         AND cardinality(v_budget_names) = 0 THEN 1
        ELSE 100
      END
   ), candidate AS (
@@ -7503,7 +7534,12 @@ BEGIN
              AND active.expires_at > v_now
         ) < v_policy.max_active_per_key
      ) AND keyed_rate.allowed
-       AND workhorse.budget_admission_v1(ready.budget_name, v_now)
+       AND CASE
+         WHEN ready.budget_name IS NULL THEN true
+         WHEN ready.budget_name = ANY(v_budget_names)
+           THEN workhorse.budget_admission_v1(ready.budget_name, v_now)
+         ELSE false
+       END
      ORDER BY ready.priority DESC, ready.sequence, ready.task_id
      LIMIT 1
   )
@@ -7550,8 +7586,29 @@ BEGIN
 END;
 $$;
 
--- Claim several tasks through one client round trip while retaining claim_v1 as the single owner
--- of ordering, policy admission, rate tokens, fencing, and claim event semantics.
+-- Policy-aware claim of one task. claim_one_v1 owns ordering, policy and budget admission, rate
+-- tokens, fencing, and the claim event; a standalone claim may wait for the budgets it needs.
+CREATE OR REPLACE FUNCTION workhorse.claim_v1(
+  p_queue_name text,
+  p_worker_id text,
+  p_lease_ms integer DEFAULT 30000
+) RETURNS TABLE (
+  task_id uuid, task_type text, priority integer, payload jsonb, contract_version text, result_max_bytes integer,
+  redact_error_details boolean,
+  trace_context jsonb,
+  attempt integer, max_attempts integer,
+  retry_policy jsonb, deadline_at timestamptz, execution_timeout_ms bigint,
+  attempt_timeout_at timestamptz, fence_token bigint, lease_expires_at timestamptz
+)
+LANGUAGE sql
+AS $$
+  SELECT * FROM workhorse.claim_one_v1(p_queue_name, p_worker_id, p_lease_ms, true);
+$$;
+
+-- Claim several tasks through one client round trip while retaining claim_one_v1 as the single
+-- owner of ordering, policy admission, rate tokens, fencing, and claim event semantics. Only the
+-- first claim may wait for a budget lock; later claims already hold budget locks, so waiting on
+-- another budget could deadlock against a batch that holds them in a different order.
 CREATE OR REPLACE FUNCTION workhorse.claim_many_v1(
   p_queue_name text,
   p_worker_id text,
@@ -7574,7 +7631,9 @@ BEGIN
     RAISE EXCEPTION 'limit must be between 1 and 100';
   END IF;
   FOR v_index IN 1..p_limit LOOP
-    RETURN QUERY SELECT * FROM workhorse.claim_v1(p_queue_name, p_worker_id, p_lease_ms);
+    RETURN QUERY SELECT * FROM workhorse.claim_one_v1(
+      p_queue_name, p_worker_id, p_lease_ms, v_index = 1
+    );
     GET DIAGNOSTICS v_claimed = ROW_COUNT;
     EXIT WHEN v_claimed = 0;
   END LOOP;
@@ -15339,10 +15398,12 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (6, 'bounded dashboard reads'),
   (7, 'health snapshot without JIT'),
   (8, 'index-pruned task lists'),
-  (9, 'composed task-list scope')
+  (9, 'composed task-list scope'),
+  (10, 'budget admission lock'),
+  (11, 'debounce replaces only pending tasks')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (9) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (11) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

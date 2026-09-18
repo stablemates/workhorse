@@ -1703,10 +1703,19 @@ fingerprint only when present, so a request accepted before schema version 3 kee
 `enqueue_debounce_v1` updates it on replacement and `redrive_v1` copies it. A task whose budget has
 no row admits freely, the way a queue with no policy row has no limit.
 
-`claim_v1` probes `task_runtime_ready_budget_queue_idx` for ready rows in its queue that name a
-budget. When one exists it takes the exclusive `workhorse:budgets` advisory lock before it reads
-the clock, inspects the 100-row priority window, and calls `budget_admission_v1(budget_name, now)`
-for each candidate. Admission counts active rows through `task_runtime_active_budget_expiry_idx`
+`claim_v1` delegates to `claim_one_v1(queue, worker, lease_ms, wait_for_budgets)` with waiting
+allowed. Before it reads the clock, the claim samples the first 100 ready rows of its queue in
+priority order. It takes the exclusive transaction advisory lock `workhorse:budget:<budget_name>`
+for each distinct budget name in that sample, in name order, so two claims that share budgets
+cannot deadlock. It then inspects the 100-row priority window and calls
+`budget_admission_v1(budget_name, now)` only for a candidate whose budget lock it holds. A
+candidate whose budget first appears after the sample is not admitted by that claim.
+`budget_admission_v1` takes the same per-budget lock itself whenever the budget row exists, so the
+count it reads includes every start another claim committed before the lock was granted.
+`claim_many_v1` lets only its first claim wait for a budget lock. Each later claim in the batch uses
+`pg_try_advisory_xact_lock` and skips any budget it cannot lock at once, because the batch already
+holds budget locks and waiting on another could deadlock against a batch that holds them in a
+different order. Admission counts active rows through `task_runtime_active_budget_expiry_idx`
 whose `expires_at` is later than now, and probes `budget_bucket_v1(budget_name, now, false)`
 without consuming. After the runtime update selects a candidate,
 `budget_bucket_v1(budget_name, now, true)` consumes one token. `budget_bucket` holds one row per
@@ -1933,7 +1942,9 @@ can progress in parallel. Persisted occurrence keys remain the final duplicate b
 The four-argument `run_task_now_v1(task_id, requested_by, reason, request_id)` releases an
 ordinary future-scheduled task without changing its recurring definition or bypassing a durable
 wait. Actor contains 1 through 200 characters, reason contains 1 through 2,000 characters, and the
-request ID contains 1 through 512 UTF-8 bytes. A successful release appends one `promoted` event.
+request ID contains 1 through 512 UTF-8 bytes. A successful release deletes the task's
+`enqueue_idempotency` row when its `coalescing_mode` is `debounce`, which ends the debounce window.
+It appends one `promoted` event.
 Its details contain `reason = 'manual'`, `requested_by`, `request_reason`,
 `request_id_preview`, the 12-character `request_id_digest`, and `request_id_length`. Calls that do
 not change the task append no event. Every dashboard backend calls this function directly and
@@ -1982,9 +1993,9 @@ outcome.
 
 `enqueue_debounce_v1` hashes the scoped key, takes the same transaction advisory lock as enqueue idempotency, and stores `coalescing_mode = 'debounce'` on `enqueue_idempotency`. It never persists the raw key. A new key creates one scheduled task through `enqueue_batch_v1` and returns `accepted`.
 
-If the retained runtime is `scheduled` or `ready`, PostgreSQL validates the replacement through `enqueue_batch_v1`. The key window must still be active. PostgreSQL then updates the accepted task definition and runtime atomically. `reset` derives a new run time and key expiry from the statement clock. `preserve` retains both. The stable task ID and current attempt remain unchanged. A `debounced` event records the safe key preview and digest, schedule policy, window, expiry, prior request digest, and replacement request digest.
+If the retained runtime is `scheduled` or `ready`, has a null `attempt_started_at` and `wait_name`, and is on `current_attempt = 1`, PostgreSQL validates the replacement through `enqueue_batch_v1`. The key window must still be active. PostgreSQL then updates the accepted task definition and runtime atomically. `reset` derives a new run time and key expiry from the statement clock. `preserve` retains both. The stable task ID and current attempt remain unchanged. A `debounced` event records the safe key preview and digest, schedule policy, window, expiry, prior request digest, and replacement request digest.
 
-An active runtime, terminal outcome, incompatible idempotency key, or elapsed-but-still-pending runtime returns `non_replaceable` with the retained task ID. `enqueue_many_v1` also returns `not_pending`, `incompatible_key_mode`, or `window_elapsed_pending` as its reason. PostgreSQL discards the new request's payload and leaves the accepted definition unchanged. It appends `debounce_rejected` with the same bounded reason. If the key window elapsed after the old task became active or terminal, a new pending identity can be accepted. Queue purge removes the key before the task identity, so a purged key can also accept fresh work. These rules preserve one runtime or outcome for every accepted identity and prevent promotion lag from creating two pending tasks for one elapsed key.
+An active runtime, a started or waiting runtime, terminal outcome, incompatible idempotency key, or elapsed-but-still-pending runtime returns `non_replaceable` with the retained task ID. A `scheduled` or `ready` runtime counts as started when `attempt_started_at` or `wait_name` is set, or when `current_attempt` exceeds 1 after a retry; its reason is `not_pending`. `enqueue_many_v1` also returns `not_pending`, `incompatible_key_mode`, or `window_elapsed_pending` as its reason. PostgreSQL discards the new request's payload and leaves the accepted definition unchanged. It appends `debounce_rejected` with the same bounded reason. If the key window elapsed after the old task became active or terminal, a new pending identity can be accepted. Queue purge removes the key before the task identity, so a purged key can also accept fresh work. `run_task_now_v1` deletes a released task's debounce identity, so the next same-key request is `accepted` as a new task. These rules preserve one runtime or outcome for every accepted identity and prevent promotion lag from creating two pending tasks for one elapsed key.
 
 #### Keyed throttle
 
@@ -2141,7 +2152,7 @@ it refills the queue bucket from PostgreSQL time and returns null when no queue 
 
 Priority dispatch has no aging or fair-share control. A sustained stream of higher-priority ready work can starve lower-priority rows in the same queue.
 
-When the queue holds ready rows that name a budget, `claim_v1` also takes the exclusive `workhorse:budgets` advisory lock before reading the clock and checks each candidate with `budget_admission_v1`, so a saturated budget is passed over inside the same 100-row window. A queue with no budget-named ready work never takes that lock and keeps the one-row fast path. See [`budget`](#budget-and-budget_bucket).
+When the queue's first 100 ready rows name budgets, `claim_v1` also takes one exclusive advisory lock per budget name, in name order, before reading the clock. It checks each candidate with `budget_admission_v1`, so a saturated budget is passed over inside the same 100-row window. Claims of unrelated budgets do not serialize. A queue with no budget-named ready work takes no budget lock and keeps the one-row fast path. See [`budget`](#budget-and-budget_bucket).
 
 If concurrency-key or rate-key limits apply, `claim_v1` inspects at most the first 100 ready rows by
 priority descending, FIFO sequence, and task identity. It selects the earliest candidate whose queue-scoped key has concurrency capacity and
@@ -2151,7 +2162,7 @@ runtime update selects a candidate. Competing worker processes serialize on the 
 one durable token admits one start even when claims overlap. Returning null after exhausting the
 window enters the Worker's normal bounded empty-claim wait instead of a claim loop.
 
-One runtime update changes the selected row to active and installs worker, global fence, acquisition, heartbeat, and expiry data. The same transaction appends the claim event before returning identity, payload, normalized `retryPolicy`, contract version, result limit, and error-redaction flag. No transaction remains open while user code runs. `Queue.claim` uses `claim_v1`. `claim_many_v1(queue, worker, limit, lease_ms)` accepts a limit from 1 through 100. It invokes the same transition repeatedly inside one database call until it reaches the limit or `claim_v1` returns no row.
+One runtime update changes the selected row to active and installs worker, global fence, acquisition, heartbeat, and expiry data. The same transaction appends the claim event before returning identity, payload, normalized `retryPolicy`, contract version, result limit, and error-redaction flag. No transaction remains open while user code runs. `Queue.claim` uses `claim_v1`. `claim_many_v1(queue, worker, limit, lease_ms)` accepts a limit from 1 through 100. It invokes the same transition, `claim_one_v1`, repeatedly inside one database call until it reaches the limit or a claim returns no row. Only the first claim of the batch waits for a budget lock.
 
 ### Worker concurrency and lifecycle
 
