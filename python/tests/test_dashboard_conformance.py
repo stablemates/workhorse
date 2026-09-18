@@ -53,6 +53,7 @@ def test_python_dashboard_read_procedures_match_the_shared_contract(database_url
                 environment=harness["environment"],
                 configured_workers=tuple(harness["configuredWorkers"]),
                 maintenance_loops=harness["maintenanceLoops"],
+                allowed_hosts=(harness["origin"].removeprefix("http://"),),
                 enqueue_test=lambda input, _actor: {
                     "taskId": Queue(dashboard_connection, default_queue="conformance-demo").enqueue(
                         f"conformance.demo-{cast(dict[str, object], input)['kind']}",
@@ -71,6 +72,7 @@ def test_python_dashboard_read_procedures_match_the_shared_contract(database_url
                 environment=harness["environment"],
                 configured_workers=tuple(harness["configuredWorkers"]),
                 maintenance_loops=harness["maintenanceLoops"],
+                allowed_hosts=(harness["origin"].removeprefix("http://"),),
                 read_only=True,
             )
             exchanges = fixture["scenarios"][1]["exchanges"]
@@ -191,7 +193,11 @@ def request(
         "REQUEST_METHOD": exchange.get("method", "POST"),
         "PATH_INFO": f"/workhorse/rpc/dashboard/{exchange['procedure']}",
         "wsgi.url_scheme": "http",
-        "HTTP_HOST": origin.removeprefix("http://"),
+        "HTTP_HOST": (
+            "attacker.conformance.test"
+            if exchange.get("host") == "foreign"
+            else origin.removeprefix("http://")
+        ),
         "CONTENT_LENGTH": str(len(payload)),
         "CONTENT_TYPE": "application/json",
         "wsgi.input": io.BytesIO(payload),

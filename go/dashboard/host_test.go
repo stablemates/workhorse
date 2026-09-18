@@ -126,3 +126,49 @@ func TestHandlerForbidsUnavailableOptionalMutation(t *testing.T) {
 		t.Fatalf("response = %d %s", response.Code, response.Body.String())
 	}
 }
+
+func TestHandlerRefusesAForeignHostBeforeAuthorization(t *testing.T) {
+	authorized := 0
+	handler, err := newHandler(HandlerOptions{
+		Executor:     rejectingExecutor{},
+		AllowedHosts: []string{"127.0.0.1:4100", "Dashboard.Example:80"},
+		Authorize: func(*http.Request) Authorization {
+			authorized++
+			return Authorization{}
+		},
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	refused := httptest.NewRecorder()
+	handler.ServeHTTP(refused, httptest.NewRequest(http.MethodPost, "http://rebound.example:4100/workhorse/rpc/dashboard/queues", strings.NewReader(`{}`)))
+	if refused.Code != http.StatusMisdirectedRequest || strings.TrimSpace(refused.Body.String()) != `{"error":"Misdirected Request"}` {
+		t.Fatalf("foreign host = %d %s", refused.Code, refused.Body.String())
+	}
+	if authorized != 0 {
+		t.Fatalf("authorize ran %d times for a foreign host", authorized)
+	}
+
+	for _, target := range []string{"http://127.0.0.1:4100/workhorse", "http://DASHBOARD.example/workhorse", "http://dashboard.example:80/workhorse"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("%s = %d", target, response.Code)
+		}
+	}
+	if authorized != 3 {
+		t.Fatalf("authorize ran %d times for listed hosts", authorized)
+	}
+}
+
+func TestHandlerRejectsAnAllowedHostThatIsNotABareHost(t *testing.T) {
+	_, err := NewHandler(HandlerOptions{
+		Executor:     rejectingExecutor{},
+		AllowedHosts: []string{"http://127.0.0.1:4100/"},
+		Authorize:    func(*http.Request) Authorization { return Authorization{} },
+	})
+	if err == nil || !strings.Contains(err.Error(), "host") {
+		t.Fatalf("err = %v", err)
+	}
+}

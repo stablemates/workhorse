@@ -52,6 +52,18 @@ function isLoopbackHostname(hostname: string): boolean {
   return family === 6 && normalized === "::1";
 }
 
+/**
+ * The `host:port` values a browser uses to reach a loopback listener.
+ *
+ * `localhost` is included because browsers resolve it to loopback themselves, so no remote name
+ * server can point it elsewhere.
+ */
+function loopbackHosts(hostname: string, port: number): string[] {
+  const bare = hostname.replace(/^\[|\]$/g, "");
+  const address = isIP(bare) === 6 ? `[${bare}]` : bare;
+  return [`${address}:${port}`, `localhost:${port}`];
+}
+
 export const startDashboardServer: DashboardStandaloneModule<Queryable>["startDashboardServer"] =
   async (database, options) => {
     const publicOrigin = options.publicOrigin
@@ -98,43 +110,9 @@ export const startDashboardServer: DashboardStandaloneModule<Queryable>["startDa
         ? database
         : undefined;
 
-    const host = createDashboardHost({
-      path: "/",
-      environment: "standalone",
-      auditActor: options.actor,
-      ...(options.authentication
-        ? { singleAdmin: options.authentication }
-        : {
-            // The missing credential mode is an explicit local development bypass. The CLI keeps
-            // it on loopback unless an operator deliberately widens the listener.
-            authorize: () => true,
-          }),
-      ...(workspaceTarget
-        ? {
-            workspaces: Object.fromEntries(
-              Object.entries(workspaceTarget.workspaces).map(([name, workspaceDatabase]) => [
-                name,
-                { database: workspaceDatabase, ...workspaceControls(workspaceDatabase) },
-              ]),
-            ),
-            defaultWorkspace: workspaceTarget.defaultWorkspace,
-          }
-        : { database: database as Queryable, ...workspaceControls(database as Queryable) }),
-    });
-
-    const middleware = dashboardNodeMiddleware(host, { publicOrigin });
-    const server = createServer((request, response) => {
-      // Set before the middleware writes, so every response the listener produces carries them and
-      // a dashboard response that names one of these headers itself still wins.
-      for (const [name, value] of Object.entries(STANDALONE_SECURITY_HEADERS)) {
-        response.setHeader(name, value);
-      }
-      middleware(request, response, () => {
-        response.statusCode = 404;
-        response.end("Not found");
-      });
-    });
-
+    // The listener binds first because a loopback listener's own address, including a port the
+    // operating system picked, is the only host name it answers to.
+    const server = createServer();
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       const onListening = (): void => {
@@ -147,6 +125,52 @@ export const startDashboardServer: DashboardStandaloneModule<Queryable>["startDa
 
     const address = server.address();
     const port = typeof address === "object" && address ? address.port : options.port;
+    try {
+      const host = createDashboardHost({
+        path: "/",
+        environment: "standalone",
+        auditActor: options.actor,
+        // A Unix socket has no host name, and a public origin replaces the inbound one.
+        ...(tcpListener && !publicOrigin
+          ? { allowedHosts: loopbackHosts(options.hostname, port) }
+          : {}),
+        ...(options.authentication
+          ? { singleAdmin: options.authentication }
+          : {
+              // The missing credential mode is an explicit local development bypass. The CLI keeps
+              // it on loopback unless an operator deliberately widens the listener.
+              authorize: () => true,
+            }),
+        ...(workspaceTarget
+          ? {
+              workspaces: Object.fromEntries(
+                Object.entries(workspaceTarget.workspaces).map(([name, workspaceDatabase]) => [
+                  name,
+                  { database: workspaceDatabase, ...workspaceControls(workspaceDatabase) },
+                ]),
+              ),
+              defaultWorkspace: workspaceTarget.defaultWorkspace,
+            }
+          : { database: database as Queryable, ...workspaceControls(database as Queryable) }),
+      });
+
+      const middleware = dashboardNodeMiddleware(host, { publicOrigin });
+      server.on("request", (request, response) => {
+        // Set before the middleware writes, so every response the listener produces carries them
+        // and a dashboard response that names one of these headers itself still wins.
+        for (const [name, value] of Object.entries(STANDALONE_SECURITY_HEADERS)) {
+          response.setHeader(name, value);
+        }
+        middleware(request, response, () => {
+          response.statusCode = 404;
+          response.end("Not found");
+        });
+      });
+    } catch (error) {
+      server.close();
+      throw error;
+    }
+
     return {
       url:
         publicOrigin ??

@@ -93,6 +93,15 @@ export interface DashboardHostOptions {
   ) => boolean | DashboardPrincipal | Response | Promise<boolean | DashboardPrincipal | Response>;
   /** Standalone single-administrator credentials. Mutually exclusive with `authorize`. */
   singleAdmin?: DashboardSingleAdminOptions;
+  /**
+   * The `host[:port]` values this dashboard answers to.
+   *
+   * When set, a request under `path` whose URL host is not listed receives `421 Misdirected
+   * Request` before authorization runs. Letter case and a default port do not matter. Leave it
+   * unset when the embedding application already validates `Host`, or when a configured public
+   * origin replaces the inbound host.
+   */
+  allowedHosts?: readonly string[];
 }
 
 /** One named workspace served by a dashboard host. See `DashboardHostOptions.workspaces`. */
@@ -223,6 +232,37 @@ function rpcProcedure(pathname: string, prefix: string): string {
   return pathname.slice(prefix.length).split("/").filter(Boolean).join(".");
 }
 
+/**
+ * Build the check for `DashboardHostOptions.allowedHosts`.
+ *
+ * Each entry is compared the way `URL.host` reports the request's host, so letter case and a
+ * default port for the request's protocol do not matter.
+ */
+function createHostCheck(allowedHosts: readonly string[]): (url: URL) => boolean {
+  for (const entry of allowedHosts) {
+    let parsed: URL | undefined;
+    try {
+      parsed = new URL(`http://${entry}`);
+    } catch {
+      parsed = undefined;
+    }
+    if (
+      !parsed ||
+      parsed.username ||
+      parsed.password ||
+      parsed.pathname !== "/" ||
+      parsed.search ||
+      parsed.hash ||
+      `${parsed.hostname}${parsed.port ? `:${parsed.port}` : ""}` !==
+        entry.toLowerCase().replace(/:80$/, "")
+    ) {
+      throw new TypeError(`Dashboard allowed host must be a bare host[:port]: ${entry}`);
+    }
+  }
+  return (url) =>
+    allowedHosts.some((entry) => new URL(`${url.protocol}//${entry}`).host === url.host);
+}
+
 function rejectCrossOriginMutation(request: Request): Response | null {
   const origin = request.headers.get("origin");
   if (origin) {
@@ -253,6 +293,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
     throw new TypeError("Configure exactly one of a dashboard database or dashboard workspaces");
   }
   const path = normalizeDashboardPath(options.path ?? "/workhorse");
+  const hostAllowed = options.allowedHosts ? createHostCheck(options.allowedHosts) : undefined;
   const assets = dashboardAssetsDirectory();
   const singleAdmin = options.singleAdmin
     ? createSingleAdminAuthentication(
@@ -384,6 +425,12 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
       const url = new URL(request.url);
       const pathname = url.pathname;
       if (!owns(pathname)) return null;
+
+      // A name the dashboard does not answer to may resolve to this listener, so its requests
+      // are refused before any credential or session is consulted.
+      if (hostAllowed && !hostAllowed(url)) {
+        return Response.json({ error: "Misdirected Request" }, { status: 421 });
+      }
 
       const authenticationResponse = await singleAdmin?.handle(
         request,

@@ -41,6 +41,10 @@ Standalone deployments must use `singleAdmin`, bind to loopback or a Unix socket
 and set the exact HTTPS `publicOrigin` when a proxy terminates TLS. Operator authorization remains the
 host application's responsibility.
 
+Set `allowedHosts` to the `host[:port]` values the dashboard answers to when the application does
+not already validate `Host`. The host then answers any other host with `421 Misdirected Request`
+before `authorize` runs. `workhorse dashboard` sets it to its own loopback address.
+
 ## Response headers an embedder owns
 
 `workhorse dashboard` owns its whole origin, so it sends a Content Security Policy,

@@ -40,6 +40,7 @@ export interface DashboardConformanceSeedStep {
 
 export type DashboardConformanceMode = "writable" | "read-only";
 export type DashboardConformanceOrigin = "same" | "cross" | "none";
+export type DashboardConformanceHost = "same" | "foreign";
 
 export interface DashboardConformanceExchange {
   id: string;
@@ -48,6 +49,8 @@ export interface DashboardConformanceExchange {
   mode?: DashboardConformanceMode;
   /** Origin header behavior. Defaults to "same". */
   origin?: DashboardConformanceOrigin;
+  /** Request host: the harness origin's host, or the host of `crossOrigin`. Defaults to "same". */
+  host?: DashboardConformanceHost;
   /** HTTP method. Defaults to "POST". */
   method?: string;
   /** Literal JSON request body (the oRPC envelope), after `$ref` resolution. */
@@ -106,8 +109,9 @@ export function conformanceExchangeRequest(
   if (origin === "same") headers.set("origin", harness.origin);
   if (origin === "cross") headers.set("origin", harness.crossOrigin);
   const method = exchange.method ?? "POST";
+  const base = exchange.host === "foreign" ? harness.crossOrigin : harness.origin;
   return new Request(
-    `${harness.origin}${harness.basePath}/rpc/dashboard/${exchange.procedure}`,
+    `${base}${harness.basePath}/rpc/dashboard/${exchange.procedure}`,
     method === "GET" || method === "HEAD"
       ? { method, headers }
       : { method, headers, body: JSON.stringify(body) },
@@ -190,7 +194,7 @@ export async function verifyDashboardConformanceFixtures(
 /**
  * Require the fixtures to exercise the whole procedure surface: a successful exchange for every
  * procedure, plus the cross-origin rejection and read-only FORBIDDEN behavior for every mutation,
- * and at least one exchange for each error envelope status the contract names.
+ * at least one exchange for each error envelope status the contract names, and a refused host.
  */
 function assertConformanceCoverage(
   fixtures: DashboardConformanceFixtures,
@@ -200,6 +204,7 @@ function assertConformanceCoverage(
   const crossRejected = new Set<string>();
   const readOnlyForbidden = new Set<string>();
   const errorStatuses = new Set<number>();
+  let foreignHostRefused = false;
 
   for (const scenario of fixtures.scenarios) {
     for (const exchange of scenario.exchanges ?? []) {
@@ -207,6 +212,7 @@ function assertConformanceCoverage(
       const origin = exchange.origin ?? "same";
       const status = exchange.expect.status;
       if (status >= 400) errorStatuses.add(status);
+      if (status === 421 && exchange.host === "foreign") foreignHostRefused = true;
       if (status < 300 && mode === "writable" && origin === "same") {
         succeeded.add(exchange.procedure);
       }
@@ -232,6 +238,7 @@ function assertConformanceCoverage(
   for (const status of [400, 404, 405]) {
     if (!errorStatuses.has(status)) missing.push(`no exchange covers status ${status}`);
   }
+  if (!foreignHostRefused) missing.push("no exchange refuses a foreign host with status 421");
   if (missing.length > 0) {
     throw new Error(`Dashboard conformance fixtures lack coverage:\n${missing.join("\n")}`);
   }
