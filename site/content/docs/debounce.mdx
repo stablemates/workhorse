@@ -43,8 +43,12 @@ first request fixes the run time and later requests should update only the paylo
 the task, it becomes terminal, or its window elapses, PostgreSQL returns `non_replaceable` and keeps
 the accepted payload unchanged.
 
-Only `scheduled` or `ready` tasks can be replaced. A refused replacement includes a stable `reason`
-so callers can distinguish lifecycle movement from an incompatible request.
+Only `scheduled` or `ready` tasks that have never started can be replaced. A task that waits durably
+or backs off before a retry is also `scheduled`, and it is refused. A refused replacement includes a
+stable `reason` so callers can distinguish lifecycle movement from an incompatible request.
+
+Running a debounced task now from the dashboard or `Admin.runTaskNow` ends its window. The next
+request with the same key starts a new task.
 
 Debounce cannot share a request with idempotency, throttle, or dependencies because each mechanism
 assigns a different meaning to a repeated key or immutable edge.

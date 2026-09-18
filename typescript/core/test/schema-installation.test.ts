@@ -464,6 +464,7 @@ describe("schema installation", () => {
       { version: 8, description: "index-pruned task lists" },
       { version: 9, description: "composed task-list scope" },
       { version: 10, description: "budget admission lock" },
+      { version: 11, description: "debounce replaces only pending tasks" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
