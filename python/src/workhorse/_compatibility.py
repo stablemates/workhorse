@@ -41,7 +41,10 @@ async def assert_async_compatible(executor: AsyncRowExecutor) -> None:
 
 
 class CachedCompatibilityCheck:
-    """Run one synchronous compatibility query and reuse its result."""
+    """Run the synchronous compatibility query until it is answered, then reuse the answer.
+
+    A driver error is not an answer, so the next call queries again.
+    """
 
     def __init__(self, executor: SyncRowExecutor) -> None:
         self._executor = executor
@@ -54,7 +57,7 @@ class CachedCompatibilityCheck:
             if not self._checked:
                 try:
                     assert_sync_compatible(self._executor)
-                except Exception as error:
+                except ProtocolCompatibilityError as error:
                     self._error = error
                 self._checked = True
         if self._error is not None:
@@ -62,7 +65,10 @@ class CachedCompatibilityCheck:
 
 
 class AsyncCachedCompatibilityCheck:
-    """Run one asynchronous compatibility query and reuse its result."""
+    """Run the asynchronous compatibility query until it is answered, then reuse the answer.
+
+    A driver error is not an answer, so the next call queries again.
+    """
 
     def __init__(self, executor: AsyncRowExecutor) -> None:
         self._executor = executor
@@ -75,7 +81,7 @@ class AsyncCachedCompatibilityCheck:
             if not self._checked:
                 try:
                     await assert_async_compatible(self._executor)
-                except Exception as error:
+                except ProtocolCompatibilityError as error:
                     self._error = error
                 self._checked = True
         if self._error is not None:

@@ -45,14 +45,21 @@ func (err *TaskContractUnavailableError) Error() string {
 	return fmt.Sprintf(contractUnavailableErrorFormat, err.TaskType, err.Version)
 }
 
+// contractCache holds each task type's current contract between enqueues. A nil definition records
+// that the type has none. PostgreSQL reports a stale entry as a contract_mismatch row, which
+// refreshes it, so the cache needs no expiry.
 type contractCache struct {
-	mu         sync.RWMutex
-	validators map[string]*jsonschema.Schema
-	enabled    bool
+	mu          sync.RWMutex
+	validators  map[string]*jsonschema.Schema
+	definitions map[string]*payloadContract
+	enabled     bool
 }
 
 func newContractCache() contractCache {
-	return contractCache{validators: make(map[string]*jsonschema.Schema)}
+	return contractCache{
+		validators:  make(map[string]*jsonschema.Schema),
+		definitions: make(map[string]*payloadContract),
+	}
 }
 
 var schemaValues = keywordSet(contractSchemaValueKeywords)
@@ -189,6 +196,7 @@ func (queue *Queue) SyncContracts(ctx context.Context, contracts map[string]Task
 	if err == nil {
 		queue.contracts.mu.Lock()
 		queue.contracts.enabled = true
+		clear(queue.contracts.definitions)
 		queue.contracts.mu.Unlock()
 	}
 	return err

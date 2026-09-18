@@ -27,6 +27,10 @@ var ErrEnqueueBatchTooLarge = errors.New(enqueueBatchTooLargeMessage)
 // ErrInvalidEnqueueResult reports a result set that violates the SQL protocol contract.
 var ErrInvalidEnqueueResult = errors.New(invalidEnqueueResultMessage)
 
+// ErrContractPolicyChanged reports a batch whose contract policy changed again after the queue
+// refreshed its cached contracts and retried once.
+var ErrContractPolicyChanged = errors.New(contractPolicyChangedMessage)
+
 // ErrInvalidEnqueueOptions reports an option combination rejected before PostgreSQL is queried.
 var ErrInvalidEnqueueOptions = errors.New(invalidEnqueueOptionsMessage)
 
@@ -172,9 +176,10 @@ type EnqueueResult struct {
 
 // Queue enqueues tasks through a caller-owned executor.
 type Queue struct {
-	executor     Executor
-	defaultQueue string
-	contracts    contractCache
+	executor      Executor
+	defaultQueue  string
+	compatibility *CachedCompatibilityCheck
+	contracts     contractCache
 }
 
 // QueueHealth is PostgreSQL's versioned health document. Stable fields and reason codes are
@@ -225,7 +230,12 @@ type CancelResult struct {
 
 // NewQueue constructs an enqueue client without taking ownership of the executor.
 func NewQueue(executor Executor, defaultQueue string) *Queue {
-	return &Queue{executor: executor, defaultQueue: defaultQueue, contracts: newContractCache()}
+	return &Queue{
+		executor:      executor,
+		defaultQueue:  defaultQueue,
+		compatibility: NewCachedCompatibilityCheck(executor),
+		contracts:     newContractCache(),
+	}
 }
 
 // Health reads PostgreSQL's database-authoritative queue health snapshot.
@@ -432,6 +442,29 @@ func (queue *Queue) EnqueueManyWithResults(
 	if len(requests) > MaxEnqueueBatchSize {
 		return nil, ErrEnqueueBatchTooLarge
 	}
+	for attempt := 0; ; attempt++ {
+		rows, err := queue.enqueueAttempt(ctx, requests)
+		if err != nil {
+			return nil, err
+		}
+		taskTypes, mismatched, err := contractMismatch(rows)
+		if err != nil {
+			return nil, err
+		}
+		if !mismatched {
+			return enqueueResults(rows, len(requests))
+		}
+		if err := queue.refreshPayloadContracts(ctx, taskTypes); err != nil {
+			return nil, err
+		}
+		if attempt > 0 {
+			return nil, ErrContractPolicyChanged
+		}
+	}
+}
+
+// enqueueAttempt serializes the batch against the cached contracts and runs enqueue_many_v1.
+func (queue *Queue) enqueueAttempt(ctx context.Context, requests []EnqueueRequest) ([]Row, error) {
 	inputs, err := serializeEnqueueRequests(
 		requests,
 		queue.defaultQueue,
@@ -441,7 +474,7 @@ func (queue *Queue) EnqueueManyWithResults(
 	if err != nil {
 		return nil, err
 	}
-	if err := AssertSchemaCompatible(ctx, queue.executor); err != nil {
+	if err := queue.compatibility.Assert(ctx); err != nil {
 		return nil, err
 	}
 	if err := queue.applyPayloadContracts(ctx, inputs); err != nil {
@@ -455,15 +488,37 @@ func (queue *Queue) EnqueueManyWithResults(
 	if err != nil {
 		return nil, translateEnqueueError(err)
 	}
+	return rows, nil
+}
 
-	if len(rows) != len(requests) {
+// contractMismatch reports the task types PostgreSQL names when a batch carried a stale contract.
+func contractMismatch(rows []Row) ([]string, bool, error) {
+	for _, row := range rows {
+		if row[rowOutcomeField] != contractMismatchOutcome {
+			continue
+		}
+		reason, _ := row[rowReasonField].(string)
+		var detail struct {
+			TaskTypes []string `json:"taskTypes"`
+		}
+		if err := json.Unmarshal([]byte(reason), &detail); err != nil || detail.TaskTypes == nil {
+			return nil, true, ErrInvalidEnqueueResult
+		}
+		return detail.TaskTypes, true, nil
+	}
+	return nil, false, nil
+}
+
+// enqueueResults places canonical results in request order.
+func enqueueResults(rows []Row, requestCount int) ([]EnqueueResult, error) {
+	if len(rows) != requestCount {
 		return nil, ErrInvalidEnqueueResult
 	}
-	results := make([]EnqueueResult, len(requests))
-	seen := make([]bool, len(requests))
+	results := make([]EnqueueResult, requestCount)
+	seen := make([]bool, requestCount)
 	for _, row := range rows {
 		ordinal, ok := integer(row[rowOrdinalField])
-		if !ok || ordinal < 1 || ordinal > len(requests) || seen[ordinal-1] {
+		if !ok || ordinal < 1 || ordinal > requestCount || seen[ordinal-1] {
 			return nil, ErrInvalidEnqueueResult
 		}
 		result, err := enqueueResult(row)
@@ -477,26 +532,28 @@ func (queue *Queue) EnqueueManyWithResults(
 }
 
 // applyPayloadContracts validates each contracted payload and stamps the batch with the
-// contract fields PostgreSQL enforces. It looks each distinct task type up once per batch, so a
-// batch of one type costs one get_contract_definition_v1 round trip rather than one per request.
+// contract fields PostgreSQL enforces. Each task type is looked up once for the queue's lifetime;
+// refreshPayloadContracts replaces an entry PostgreSQL reports as stale. Before SyncContracts,
+// only types PostgreSQL has reported are stamped.
 func (queue *Queue) applyPayloadContracts(ctx context.Context, inputs []enqueueInput) error {
-	queue.contracts.mu.RLock()
-	contractsEnabled := queue.contracts.enabled
-	queue.contracts.mu.RUnlock()
-	if !contractsEnabled {
-		return nil
-	}
-	definitions := make(map[string]*payloadContract, len(inputs))
 	for index := range inputs {
 		input := &inputs[index]
-		contract, known := definitions[input.Type]
+		queue.contracts.mu.RLock()
+		contract, known := queue.contracts.definitions[input.Type]
+		contractsEnabled := queue.contracts.enabled
+		queue.contracts.mu.RUnlock()
 		if !known {
+			if !contractsEnabled {
+				continue
+			}
 			loaded, err := queue.loadPayloadContract(ctx, input.Type)
 			if err != nil {
 				return err
 			}
 			contract = loaded
-			definitions[input.Type] = contract
+			queue.contracts.mu.Lock()
+			queue.contracts.definitions[input.Type] = contract
+			queue.contracts.mu.Unlock()
 		}
 		if contract == nil {
 			continue
@@ -521,6 +578,20 @@ func (queue *Queue) applyPayloadContracts(ctx context.Context, inputs []enqueueI
 		input.ResultMaxBytes = contract.resultMaxBytes
 		input.SensitivePayloadKeys = contract.sensitivePayloadKeys
 		input.SensitiveResultKeys = contract.sensitiveResultKeys
+	}
+	return nil
+}
+
+// refreshPayloadContracts reloads the current contract of each task type PostgreSQL reported.
+func (queue *Queue) refreshPayloadContracts(ctx context.Context, taskTypes []string) error {
+	for _, taskType := range taskTypes {
+		contract, err := queue.loadPayloadContract(ctx, taskType)
+		if err != nil {
+			return err
+		}
+		queue.contracts.mu.Lock()
+		queue.contracts.definitions[taskType] = contract
+		queue.contracts.mu.Unlock()
 	}
 	return nil
 }
