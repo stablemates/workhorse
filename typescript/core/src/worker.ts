@@ -1,11 +1,14 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
-import { isDeepStrictEqual } from "node:util";
-import { WorkhorseError } from "./errors.js";
+import {
+  CancellationRequestedError,
+  DeadlineExceededError,
+  ExecutionTimeoutError,
+  WorkhorseError,
+} from "./errors.js";
 import { Queue } from "./queue.js";
 import { errorForTelemetry, type FailureStatus } from "./queue/claim-lease-fence.js";
-import { ChildConflictError } from "./queue/child-tasks.js";
 import { jitterDuration } from "./notifications.js";
 import type { TaskNotificationSubscription } from "./notifications.js";
 import type {
@@ -23,7 +26,6 @@ import {
   logDebug,
   logInfo,
   logWarn,
-  recordHandlerExecution,
   recordMaintenanceMetrics,
   telemetryMetrics,
   type WorkhorseTelemetrySpan,
@@ -47,46 +49,13 @@ import type {
   WorkerRegistration,
 } from "./types.js";
 import { workerCheckpointsRead, workerProgressRead, workerWaitsRead } from "./worker-internal.js";
-import { setUnrefTimeoutAt } from "./timers.js";
+import { createHandlerContext } from "./handler-context.js";
+import { TaskAttempt } from "./task-attempt.js";
 
-const DURABLE_WAIT_SUSPENSION = Symbol("workhorse.durableWaitSuspension");
-const CHILD_TASK_SUSPENSION = Symbol("workhorse.childTaskSuspension");
 const DEFAULT_POLL_MS = 250;
 const DEFAULT_NOTIFICATION_FALLBACK_POLL_MS = 5_000;
 const MAX_EMPTY_POLL_MS = 5_000;
 const NOTIFICATION_CLAIM_DELAY_MS = 50;
-
-type AttemptOutcome =
-  | "completed"
-  | "failed"
-  | "lease_expired"
-  | "deadline_exceeded"
-  | "attempt_timeout"
-  | "cancelled"
-  | "suspended_for_wait"
-  | "suspended_for_child";
-
-class AttemptOutcomeArbiter {
-  private accepted: AttemptOutcome | undefined;
-
-  get outcome(): AttemptOutcome | undefined {
-    return this.accepted;
-  }
-
-  submit(outcome: AttemptOutcome): boolean {
-    if (this.accepted !== undefined) return false;
-    this.accepted = outcome;
-    return true;
-  }
-
-  is(outcome: AttemptOutcome): boolean {
-    return this.accepted === outcome;
-  }
-
-  isSuspended(): boolean {
-    return this.is("suspended_for_wait") || this.is("suspended_for_child");
-  }
-}
 
 /**
  * @internal Crash boundary a test or benchmark asks a worker to model process loss at. This is
@@ -329,32 +298,7 @@ export class InjectedCrashError extends WorkhorseError {
   }
 }
 
-/** AbortSignal reason used when PostgreSQL reports a cancellation request for an owned task. */
-export class CancellationRequestedError extends WorkhorseError {
-  constructor(readonly taskId: string) {
-    super(`Cancellation was requested for task ${taskId}`);
-    this.name = "CancellationRequestedError";
-  }
-}
-
-/** AbortSignal reason used when a task's immutable absolute deadline is reached. */
-export class DeadlineExceededError extends WorkhorseError {
-  constructor(readonly taskId: string) {
-    super(`Deadline was exceeded for task ${taskId}`);
-    this.name = "DeadlineExceededError";
-  }
-}
-
-/** AbortSignal reason used when one logical attempt consumes its active execution budget. */
-export class ExecutionTimeoutError extends WorkhorseError {
-  constructor(
-    readonly taskId: string,
-    readonly attempt: number,
-  ) {
-    super(`Execution timeout was exceeded for task ${taskId} attempt ${attempt}`);
-    this.name = "ExecutionTimeoutError";
-  }
-}
+export { CancellationRequestedError, DeadlineExceededError, ExecutionTimeoutError };
 
 export interface WorkerOptions {
   /** Queue name used for claims. */
@@ -1052,132 +996,20 @@ export class Worker {
     span: WorkhorseTelemetrySpan,
     activation: { outcome: TaskExecutionOutcome },
   ): Promise<void> {
-    // afterClaim is outside the committed claim transaction. Throwing here leaves the lease exactly
-    // as a killed process would, which allows deterministic expiry-recovery testing.
-    const recordExecution = (outcome: TaskExecutionOutcome): void => {
-      if (activation.outcome !== "unknown") return;
-      activation.outcome = outcome;
-      recordHandlerExecution(task.queue, task.type, outcome);
-      logInfo("workhorse.task.execution_finished", "Task execution finished", {
-        ...taskSpanAttributes(task),
-        "workhorse.queue.name": task.queue,
-        "workhorse.worker.id": this.workerId,
-        "workhorse.handler.outcome": outcome,
-      });
-    };
-    const recordFailure = (state: Awaited<ReturnType<WorkerQueueApi["fail"]>>): void => {
-      if (state === "ready" || state === "scheduled") {
-        if (arbiter.submit("failed")) recordExecution("retry");
-      } else if (state === "failed") {
-        if (arbiter.submit("failed")) recordExecution("failed");
-      } else if (state === "deadline_exceeded") {
-        if (arbiter.submit("deadline_exceeded")) recordExecution("deadline_exceeded");
-      } else if (state === "timeout_exceeded") {
-        if (arbiter.submit("attempt_timeout")) recordExecution("timeout");
-      } else if (state === "stale") {
-        if (arbiter.submit("lease_expired")) recordExecution("lease_lost");
-      }
-    };
-    const controller = new AbortController();
-    const arbiter = new AttemptOutcomeArbiter();
-    // Every durable side effect first confirms that this attempt still owns the task.
-    const requireLease = (): void => {
-      if (controller.signal.aborted)
-        throw controller.signal.reason ?? new Error("Task lease was lost");
-    };
-    const suspend = (outcome: "suspended_for_wait" | "suspended_for_child"): never => {
-      const reason =
-        outcome === "suspended_for_wait" ? DURABLE_WAIT_SUSPENSION : CHILD_TASK_SUSPENSION;
-      if (arbiter.submit(outcome)) controller.abort(reason);
-      throw reason;
-    };
-    let cancelExpirationTimer: (() => void) | undefined;
-    let expirationPromise: Promise<ExpireOwnedStatus> | undefined;
-    let heartbeatStopped = false;
-    let removeHeartbeatLease: (() => void) | undefined;
-    const stopHeartbeat = (): void => {
-      heartbeatStopped = true;
-      removeHeartbeatLease?.();
-      cancelExpirationTimer?.();
-      cancelExpirationTimer = undefined;
-    };
-    const markCancellationRequested = (): void => {
-      arbiter.submit("cancelled");
-      stopHeartbeat();
-      if (!controller.signal.aborted) controller.abort(new CancellationRequestedError(task.id));
-    };
-    const acknowledgeCancellation = async (): Promise<boolean> => {
-      const accepted = await this.queue.acknowledgeCancel(task, this.workerId);
-      if (accepted && arbiter.is("cancelled")) recordExecution("canceled");
-      return accepted;
-    };
-    const expireOwnership = (): Promise<ExpireOwnedStatus> => {
-      expirationPromise ??= this.queue.expireOwned(task, this.workerId).then((status) => {
-        if (status === "cancel_requested") markCancellationRequested();
-        else if (status === "deadline_exceeded") arbiter.submit("deadline_exceeded");
-        else if (status === "timeout_exceeded") arbiter.submit("attempt_timeout");
-        else if (status === "stale") arbiter.submit("lease_expired");
-        return status;
-      });
-      return expirationPromise;
-    };
-    const expireOwnershipInBackground = (): void => {
-      // Observe the memoized promise without replacing it: the settlement path still awaits the
-      // original rejection, while a handler that ignores abort cannot cause an unhandled rejection.
-      void expireOwnership().catch((error: unknown) => controller.abort(error));
-    };
-    const refreshOwnership = (status: HeartbeatStatus): void => {
-      if (status === "cancel_requested") {
-        markCancellationRequested();
-      } else if (status === "deadline_exceeded") {
-        stopHeartbeat();
-        expireOwnershipInBackground();
-        if (!controller.signal.aborted) controller.abort(new DeadlineExceededError(task.id));
-      } else if (status === "timeout_exceeded") {
-        stopHeartbeat();
-        expireOwnershipInBackground();
-        if (!controller.signal.aborted)
-          controller.abort(new ExecutionTimeoutError(task.id, task.attempt));
-      } else if (status === "stale") {
-        arbiter.submit("lease_expired");
-        stopHeartbeat();
-        if (!controller.signal.aborted) controller.abort(new Error("Task lease was lost"));
-      }
-    };
-    const expirationAt = [task.deadlineAt, task.attemptTimeoutAt].reduce<Date | null>(
-      (earliest, candidate) =>
-        candidate !== null && (earliest === null || candidate < earliest) ? candidate : earliest,
-      null,
+    const attempt = new TaskAttempt(
+      task,
+      {
+        workerId: this.workerId,
+        acknowledgeCancel: (claimed, workerId) => this.queue.acknowledgeCancel(claimed, workerId),
+        expireOwned: (claimed, workerId) => this.queue.expireOwned(claimed, workerId),
+        addHeartbeatLease: (claimed, status, error) =>
+          this.addHeartbeatLease(claimed, status, error),
+      },
+      activation,
     );
-    if (expirationAt) {
-      cancelExpirationTimer = setUnrefTimeoutAt(
-        // The extra millisecond keeps the timer from leading the database clock: expirationAt was
-        // truncated to milliseconds on the way to the client, so firing at it exactly can precede
-        // the stored microsecond value and earn a not_due answer from expiration.
-        expirationAt.getTime() + 1,
-        () => {
-          cancelExpirationTimer = undefined;
-          const isDeadline =
-            task.deadlineAt !== null &&
-            (task.attemptTimeoutAt === null || task.deadlineAt <= task.attemptTimeoutAt);
-          if (isDeadline) {
-            if (!controller.signal.aborted) controller.abort(new DeadlineExceededError(task.id));
-          } else {
-            if (!controller.signal.aborted)
-              controller.abort(new ExecutionTimeoutError(task.id, task.attempt));
-          }
-          stopHeartbeat();
-          expireOwnershipInBackground();
-        },
-      );
-    }
-    removeHeartbeatLease = this.addHeartbeatLease(task, refreshOwnership, (error) => {
-      if (heartbeatStopped) return;
-      stopHeartbeat();
-      controller.abort(error);
-    });
-
     try {
+      // afterClaim is outside the committed claim transaction. Throwing here leaves the lease
+      // exactly as a killed process would, which allows deterministic expiry-recovery testing.
       await this.inject("afterClaim", task);
       const handler = this.handlers.get(task.type);
       if (!handler) {
@@ -1187,263 +1019,18 @@ export class Worker {
         const failed = await this.queue.fail(task, this.workerId, error);
         span.setAttribute("workhorse.handler.outcome", failed);
         if (failed === "cancel_requested") {
-          markCancellationRequested();
-          await acknowledgeCancellation();
-        } else recordFailure(failed);
+          attempt.markCancellationRequested();
+          await attempt.acknowledgeCancellation();
+        } else attempt.recordFailure(failed);
         return;
       }
       await this.inject("beforeHandler", task);
-      let checkpoints: Map<string, TaskCheckpoint> | undefined;
-      let checkpointsLoad: Promise<Map<string, TaskCheckpoint>> | undefined;
-      const loadCheckpoints = (): Promise<Map<string, TaskCheckpoint>> => {
-        checkpointsLoad ??= this.queue.listCheckpoints(task.id).then((items) => {
-          checkpoints = new Map(items.map((item) => [item.name, item]));
-          return checkpoints;
-        });
-        return checkpointsLoad;
-      };
-      let waits: Map<string, TaskWait> | undefined;
-      let waitsLoad: Promise<Map<string, TaskWait>> | undefined;
-      const loadWaits = (): Promise<Map<string, TaskWait>> => {
-        waitsLoad ??= this.queue.listWaits(task.id).then((items) => {
-          waits = new Map(items.map((item) => [item.name, item]));
-          return waits;
-        });
-        return waitsLoad;
-      };
-      // No database transaction or row lock spans this call. Handlers are at least once and must
-      // use external idempotency for effects that cannot safely repeat.
-      const getCheckpoint: HandlerContext["getCheckpoint"] = async <TValue extends Json>(
-        name: string,
-      ) => ((await loadCheckpoints()).get(name) as TaskCheckpoint<TValue> | undefined) ?? null;
-      const getWait: HandlerContext["getWait"] = async (name: string) =>
-        (await loadWaits()).get(name) ?? null;
-      let progressLoad: Promise<TaskProgress | null> | undefined;
-      const getProgress: HandlerContext["getProgress"] = async <TValue extends Json>() => {
-        progressLoad ??= this.queue.getProgress(task.id);
-        return (await progressLoad) as TaskProgress<TValue> | null;
-      };
-      const setProgress: HandlerContext["setProgress"] = async <TValue extends Json>(
-        value: TValue,
-      ) => {
-        requireLease();
-        const updated = await this.queue.updateProgress(task, this.workerId, value);
-        progressLoad = Promise.resolve(updated);
-        return updated;
-      };
-      const inFlightCheckpoints = new Map<string, Promise<Json>>();
-      const checkpoint: HandlerContext["checkpoint"] = async <TValue extends Json>(
-        name: string,
-        operation: () => Promise<TValue> | TValue,
-      ): Promise<TValue> => {
-        const pending = inFlightCheckpoints.get(name);
-        if (pending) return (await pending) as TValue;
-        const execution = (async (): Promise<TValue> => {
-          const checkpointCache = await loadCheckpoints();
-          const existing = checkpointCache.get(name) as TaskCheckpoint<TValue> | undefined;
-          if (existing) return existing.value;
-          requireLease();
-          const value = await operation();
-          const saved = await this.queue.saveCheckpoint(task, this.workerId, name, value);
-          checkpointCache.set(name, saved);
-          return saved.value;
-        })();
-        inFlightCheckpoints.set(name, execution);
-        try {
-          return await execution;
-        } finally {
-          if (inFlightCheckpoints.get(name) === execution) inFlightCheckpoints.delete(name);
-        }
-      };
-      const inFlightWaits = new Map<string, Promise<void>>();
-      const scheduleWait = (
-        name: string,
-        request: { durationMs: number } | { wakeAt: Date },
-      ): Promise<void> => {
-        const pending = inFlightWaits.get(name);
-        if (pending) return pending;
-        const execution = (async () => {
-          requireLease();
-          const scheduled = await this.queue.scheduleWait(task, this.workerId, name, request);
-          waits?.set(name, scheduled.wait);
-          if (scheduled.status === "scheduled" && arbiter.submit("suspended_for_wait")) {
-            controller.abort(DURABLE_WAIT_SUSPENSION);
-            throw DURABLE_WAIT_SUSPENSION;
-          }
-        })();
-        inFlightWaits.set(name, execution);
-        void execution
-          .finally(() => {
-            if (inFlightWaits.get(name) === execution) inFlightWaits.delete(name);
-          })
-          .catch(() => undefined);
-        return execution;
-      };
-      const durableSleep: HandlerContext["sleep"] = (name, durationMs) =>
-        scheduleWait(name, { durationMs });
-      const sleepUntil: HandlerContext["sleepUntil"] = (name, wakeAt) =>
-        scheduleWait(name, { wakeAt });
-      const inFlightSignals = new Map<string, Promise<Json>>();
-      const waitForSignal: HandlerContext["waitForSignal"] = async <TPayload extends Json>(
-        name: string,
-        options: ExternalWaitOptions = {},
-      ): Promise<TPayload> => {
-        const pending = inFlightSignals.get(name);
-        if (pending) return (await pending) as TPayload;
-        const execution = (async (): Promise<TPayload> => {
-          requireLease();
-          const signal = await this.queue.waitForSignal<TPayload>(
-            task,
-            this.workerId,
-            name,
-            options,
-          );
-          if (signal.status === "waiting") {
-            suspend("suspended_for_wait");
-          }
-          return signal.payload as TPayload;
-        })();
-        inFlightSignals.set(name, execution);
-        try {
-          return await execution;
-        } finally {
-          if (inFlightSignals.get(name) === execution) inFlightSignals.delete(name);
-        }
-      };
-      const inFlightHumanWaits = new Map<string, { context: Json; execution: Promise<Json> }>();
-      const waitForHuman: HandlerContext["waitForHuman"] = async <
-        TContext extends Json,
-        TResult extends Json = Json,
-      >(
-        name: string,
-        context: TContext,
-        options: ExternalWaitOptions = {},
-      ): Promise<TResult> => {
-        const pending = inFlightHumanWaits.get(name);
-        if (pending) {
-          if (JSON.stringify(pending.context) !== JSON.stringify(context)) {
-            throw new Error(`Human wait ${name} is already in flight with different context`);
-          }
-          return (await pending.execution) as TResult;
-        }
-        const execution = (async (): Promise<TResult> => {
-          requireLease();
-          const token = await this.queue.waitForHuman<TContext, TResult>(
-            task,
-            this.workerId,
-            name,
-            context,
-            options,
-          );
-          if (token.status === "waiting") {
-            suspend("suspended_for_wait");
-          }
-          return token.payload as TResult;
-        })();
-        inFlightHumanWaits.set(name, { context, execution });
-        try {
-          return await execution;
-        } finally {
-          const currentWait = inFlightHumanWaits.get(name);
-          if (currentWait?.execution === execution) inFlightHumanWaits.delete(name);
-        }
-      };
-      const inFlightChildren = new Map<string, { request: unknown; execution: Promise<Json> }>();
-      const runChild: HandlerContext["runChild"] = <
-        TChildPayload extends Json,
-        TResult extends Json = Json,
-      >(
-        name: string,
-        type: string,
-        payload: TChildPayload,
-        options?: ChildTaskOptions,
-      ): Promise<TResult> => {
-        const request = structuredClone({ type, payload, options: options ?? {} });
-        const pending = inFlightChildren.get(name);
-        if (pending) {
-          if (!isDeepStrictEqual(pending.request, request)) {
-            return Promise.reject(new ChildConflictError(task.id, name));
-          }
-          return pending.execution as Promise<TResult>;
-        }
-        const execution = (async (): Promise<TResult> => {
-          requireLease();
-          const processed = await this.queue.createChild<TChildPayload, TResult>(
-            task,
-            this.workerId,
-            name,
-            type,
-            payload,
-            options,
-          );
-          if (processed.status === "created") {
-            suspend("suspended_for_child");
-          }
-          return processed.child.result as TResult;
-        })();
-        inFlightChildren.set(name, { request, execution: execution as Promise<Json> });
-        void execution
-          .finally(() => {
-            if (inFlightChildren.get(name)?.execution === execution) inFlightChildren.delete(name);
-          })
-          .catch(() => undefined);
-        return execution;
-      };
-      let inFlightChildSet:
-        | { request: unknown; execution: Promise<Record<string, Json>> }
-        | undefined;
-      const runChildSet = <TJoined extends Record<string, Json>>(
-        children: readonly ChildTaskRequest[],
-        mode: "settled" | "all_success",
-      ): Promise<TJoined> => {
-        const request = { children: structuredClone(children), mode };
-        if (inFlightChildSet) {
-          if (!isDeepStrictEqual(inFlightChildSet.request, request)) {
-            return Promise.reject(new ChildConflictError(task.id, "child set"));
-          }
-          return inFlightChildSet.execution as Promise<TJoined>;
-        }
-        const execution = (async (): Promise<TJoined> => {
-          requireLease();
-          const processed =
-            mode === "settled"
-              ? await this.queue.createChildren(task, this.workerId, children)
-              : await this.queue.createChildrenAll(task, this.workerId, children);
-          if (processed.status === "created") {
-            return suspend("suspended_for_child");
-          }
-          return processed.results as TJoined;
-        })();
-        inFlightChildSet = { request, execution: execution as Promise<Record<string, Json>> };
-        void execution
-          .finally(() => {
-            if (inFlightChildSet?.execution === execution) inFlightChildSet = undefined;
-          })
-          .catch(() => undefined);
-        return execution;
-      };
-      const runChildren: HandlerContext["runChildren"] = (children) =>
-        runChildSet(children, "settled");
-      const runChildrenAll: HandlerContext["runChildrenAll"] = (children) =>
-        runChildSet(children, "all_success");
-      const result = await handler(task.payload, {
-        task,
-        signal: controller.signal,
-        getCheckpoint,
-        getWait,
-        getProgress,
-        setProgress,
-        checkpoint,
-        sleep: durableSleep,
-        sleepUntil,
-        waitForSignal,
-        waitForHuman,
-        runChild,
-        runChildren,
-        runChildrenAll,
-      });
+      const result = await handler(
+        task.payload,
+        createHandlerContext(this.queue, this.workerId, task, attempt),
+      );
       await this.inject("afterHandler", task);
-      if (arbiter.isSuspended()) {
+      if (attempt.arbiter.isSuspended()) {
         logWarn("workhorse.handler.signal_swallowed", "Task handler swallowed its abort signal", {
           ...taskSpanAttributes(task),
           "workhorse.queue.name": task.queue,
@@ -1451,113 +1038,113 @@ export class Worker {
           "workhorse.handler.outcome": "suspended",
         });
         span.setAttribute("workhorse.handler.outcome", "suspended");
-        recordExecution("suspended");
+        attempt.recordExecution("suspended");
         return;
       }
-      if (arbiter.is("cancelled")) {
-        await acknowledgeCancellation();
+      if (attempt.arbiter.is("cancelled")) {
+        await attempt.acknowledgeCancellation();
         span.setAttribute("workhorse.handler.outcome", "canceled");
         return;
       }
-      if (arbiter.is("lease_expired")) {
+      if (attempt.arbiter.is("lease_expired")) {
         span.setAttribute("workhorse.handler.outcome", "stale");
-        recordExecution("lease_lost");
+        attempt.recordExecution("lease_lost");
         return;
       }
-      requireLease();
+      attempt.requireLease();
       await this.inject("beforeComplete", task);
       const accepted = await this.queue.complete(task, this.workerId, result);
       if (!accepted) {
-        if (await acknowledgeCancellation()) {
+        if (await attempt.acknowledgeCancellation()) {
           span.setAttribute("workhorse.handler.outcome", "canceled");
           return;
         }
         throw new Error("Completion rejected because the lease is stale or expired");
       }
-      if (!arbiter.submit("completed")) return;
+      if (!attempt.arbiter.submit("completed")) return;
       span.setAttribute("workhorse.handler.outcome", "succeeded");
-      recordExecution("succeeded");
+      attempt.recordExecution("succeeded");
       await this.inject("afterComplete", task);
     } catch (error) {
-      if (arbiter.isSuspended()) {
-        span.setAttribute("workhorse.handler.outcome", "suspended");
-        recordExecution("suspended");
-        return;
-      }
-      // A crash failpoint models process disappearance, so converting it into fail_v1 would produce
-      // the wrong durable state. Ordinary handler errors do close and retry the attempt.
-      if (error instanceof InjectedCrashError) throw error;
-      if (
-        arbiter.is("cancelled") ||
-        error instanceof CancellationRequestedError ||
-        controller.signal.reason instanceof CancellationRequestedError
-      ) {
-        arbiter.submit("cancelled");
-        await acknowledgeCancellation();
+      await this.settleFailure(task, span, attempt, error);
+    } finally {
+      attempt.stop();
+    }
+  }
+
+  // Settles an attempt whose handler, hooks, or completion threw.
+  private async settleFailure(
+    task: ClaimedTask,
+    span: WorkhorseTelemetrySpan,
+    attempt: TaskAttempt,
+    error: unknown,
+  ): Promise<void> {
+    const { arbiter } = attempt;
+    if (arbiter.isSuspended()) {
+      span.setAttribute("workhorse.handler.outcome", "suspended");
+      attempt.recordExecution("suspended");
+      return;
+    }
+    // A crash failpoint models process disappearance, so converting it into fail_v1 would produce
+    // the wrong durable state. Ordinary handler errors do close and retry the attempt.
+    if (error instanceof InjectedCrashError) throw error;
+    const abortReason: unknown = attempt.signal.reason;
+    if (
+      arbiter.is("cancelled") ||
+      error instanceof CancellationRequestedError ||
+      abortReason instanceof CancellationRequestedError
+    ) {
+      arbiter.submit("cancelled");
+      await attempt.acknowledgeCancellation();
+      span.setAttribute("workhorse.handler.outcome", "canceled");
+      return;
+    }
+    if (
+      arbiter.is("deadline_exceeded") ||
+      arbiter.is("attempt_timeout") ||
+      error instanceof DeadlineExceededError ||
+      error instanceof ExecutionTimeoutError ||
+      abortReason instanceof DeadlineExceededError ||
+      abortReason instanceof ExecutionTimeoutError
+    ) {
+      await attempt.settleExpiration();
+      if (arbiter.is("cancelled")) {
+        await attempt.acknowledgeCancellation();
         span.setAttribute("workhorse.handler.outcome", "canceled");
         return;
       }
-      if (
-        arbiter.is("deadline_exceeded") ||
-        arbiter.is("attempt_timeout") ||
-        error instanceof DeadlineExceededError ||
-        error instanceof ExecutionTimeoutError ||
-        controller.signal.reason instanceof DeadlineExceededError ||
-        controller.signal.reason instanceof ExecutionTimeoutError
-      ) {
-        // "not_due" is the database refusing the transition: its clock has not reached the stored
-        // expiry the local timer fired for. Timestamps round-trip to the client at millisecond
-        // precision while PostgreSQL stores microseconds, so the timer can lead by a fraction.
-        // Ask again until the database agrees — returning on not_due would abandon an attempt the
-        // handler already gave up, leaving it active under a live lease until lease recovery.
-        let expirationStatus = await expirationPromise;
-        const expirationRetryBudgetAt = Date.now() + 1_000;
-        while (expirationStatus === "not_due" && Date.now() < expirationRetryBudgetAt) {
-          await sleep(5);
-          expirationPromise = undefined;
-          expirationStatus = await expireOwnership();
-        }
-        if (arbiter.is("cancelled")) {
-          await acknowledgeCancellation();
-          span.setAttribute("workhorse.handler.outcome", "canceled");
-          return;
-        }
-        if (arbiter.is("lease_expired")) {
-          recordExecution("lease_lost");
-          span.setAttribute("workhorse.handler.outcome", "stale");
-          return;
-        }
-        if (arbiter.outcome === undefined) {
-          arbiter.submit(
-            error instanceof ExecutionTimeoutError ||
-              controller.signal.reason instanceof ExecutionTimeoutError
-              ? "attempt_timeout"
-              : "deadline_exceeded",
-          );
-        }
-        const executionTimedOut = arbiter.is("attempt_timeout");
-        recordExecution(executionTimedOut ? "timeout" : "deadline_exceeded");
-        span.setAttribute(
-          "workhorse.handler.outcome",
-          executionTimedOut ? "timeout_exceeded" : "deadline_exceeded",
-        );
+      if (arbiter.is("lease_expired")) {
+        attempt.recordExecution("lease_lost");
+        span.setAttribute("workhorse.handler.outcome", "stale");
         return;
       }
-      span.recordException(errorForTelemetry(error, task.redactErrorDetails));
-      span.setStatus("error");
-      const delay =
-        typeof this.options.retryDelayMs === "function"
-          ? this.options.retryDelayMs(task.attempt, task)
-          : this.options.retryDelayMs;
-      const failed = await this.queue.fail(task, this.workerId, error, delay);
-      span.setAttribute("workhorse.handler.outcome", failed);
-      if (failed === "cancel_requested") {
-        markCancellationRequested();
-        await acknowledgeCancellation();
-      } else recordFailure(failed);
-    } finally {
-      stopHeartbeat();
+      if (arbiter.outcome === undefined) {
+        arbiter.submit(
+          error instanceof ExecutionTimeoutError || abortReason instanceof ExecutionTimeoutError
+            ? "attempt_timeout"
+            : "deadline_exceeded",
+        );
+      }
+      const executionTimedOut = arbiter.is("attempt_timeout");
+      attempt.recordExecution(executionTimedOut ? "timeout" : "deadline_exceeded");
+      span.setAttribute(
+        "workhorse.handler.outcome",
+        executionTimedOut ? "timeout_exceeded" : "deadline_exceeded",
+      );
+      return;
     }
+    span.recordException(errorForTelemetry(error, task.redactErrorDetails));
+    span.setStatus("error");
+    const delay =
+      typeof this.options.retryDelayMs === "function"
+        ? this.options.retryDelayMs(task.attempt, task)
+        : this.options.retryDelayMs;
+    const failed = await this.queue.fail(task, this.workerId, error, delay);
+    span.setAttribute("workhorse.handler.outcome", failed);
+    if (failed === "cancel_requested") {
+      attempt.markCancellationRequested();
+      await attempt.acknowledgeCancellation();
+    } else attempt.recordFailure(failed);
   }
 
   /**
