@@ -52,12 +52,14 @@ class AttemptOutcomeArbiter {
 /** The worker services one attempt needs to hold and give up its task's ownership. */
 export interface TaskAttemptServices {
   workerId: string;
+  /** The lease duration each claim and accepted heartbeat grants. */
+  leaseMs: number;
   acknowledgeCancel(task: ClaimedTask, workerId: string): Promise<boolean>;
   expireOwned(task: ClaimedTask, workerId: string): Promise<ExpireOwnedStatus>;
+  /** Registers the task for heartbeats; `sentAt` is when the reporting round's request left. */
   addHeartbeatLease(
     task: ClaimedTask,
-    status: (status: HeartbeatStatus) => void,
-    error: (error: unknown) => void,
+    status: (status: HeartbeatStatus, sentAt: number) => void,
   ): () => void;
 }
 
@@ -67,12 +69,16 @@ export interface TaskAttemptServices {
  * The attempt owns the abort signal the handler sees, and the arbiter that decides which outcome
  * wins when cancellation, expiry, lease loss, suspension, and completion race. It keeps the lease
  * alive through the worker's heartbeat batch and fires the deadline or attempt timeout locally.
- * Construction starts both; `stop()` ends both.
+ *
+ * A lease watchdog aborts the attempt once its last accepted renewal is a full lease old. By then
+ * another worker may own the task, and fencing only protects the database, not external effects.
+ * Construction starts the heartbeat, the expiration timer, and the watchdog; `stop()` ends them.
  */
 export class TaskAttempt {
   readonly arbiter = new AttemptOutcomeArbiter();
   private readonly controller = new AbortController();
   private cancelExpirationTimer: (() => void) | undefined;
+  private cancelLeaseWatchdog: (() => void) | undefined;
   private expirationPromise: Promise<ExpireOwnedStatus> | undefined;
   private heartbeatStopped = false;
   private removeHeartbeatLease: (() => void) | undefined;
@@ -81,6 +87,7 @@ export class TaskAttempt {
     readonly task: ClaimedTask,
     private readonly services: TaskAttemptServices,
     private readonly activation: { outcome: TaskExecutionOutcome },
+    claimSentAt: number,
   ) {
     const expirationAt = [task.deadlineAt, task.attemptTimeoutAt].reduce<Date | null>(
       (earliest, candidate) =>
@@ -108,14 +115,9 @@ export class TaskAttempt {
         },
       );
     }
-    this.removeHeartbeatLease = services.addHeartbeatLease(
-      task,
-      (status) => this.refreshOwnership(status),
-      (error) => {
-        if (this.heartbeatStopped) return;
-        this.stop();
-        this.controller.abort(error);
-      },
+    this.renewLease(claimSentAt);
+    this.removeHeartbeatLease = services.addHeartbeatLease(task, (status, sentAt) =>
+      this.refreshOwnership(status, sentAt),
     );
   }
 
@@ -151,6 +153,8 @@ export class TaskAttempt {
     this.removeHeartbeatLease?.();
     this.cancelExpirationTimer?.();
     this.cancelExpirationTimer = undefined;
+    this.cancelLeaseWatchdog?.();
+    this.cancelLeaseWatchdog = undefined;
   }
 
   markCancellationRequested(): void {
@@ -234,8 +238,21 @@ export class TaskAttempt {
     void this.expireOwnership().catch((error: unknown) => this.controller.abort(error));
   }
 
-  private refreshOwnership(status: HeartbeatStatus): void {
-    if (status === "cancel_requested") {
+  private renewLease(sentAt: number): void {
+    if (this.heartbeatStopped) return;
+    this.cancelLeaseWatchdog?.();
+    this.cancelLeaseWatchdog = setUnrefTimeoutAt(sentAt + this.services.leaseMs, () => {
+      this.cancelLeaseWatchdog = undefined;
+      this.arbiter.submit("lease_expired");
+      this.stop();
+      this.abort(new Error("No heartbeat was accepted within the task lease"));
+    });
+  }
+
+  private refreshOwnership(status: HeartbeatStatus, sentAt: number): void {
+    if (status === "accepted") {
+      this.renewLease(sentAt);
+    } else if (status === "cancel_requested") {
       this.markCancellationRequested();
     } else if (status === "deadline_exceeded") {
       this.stop();

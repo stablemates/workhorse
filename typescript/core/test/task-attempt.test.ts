@@ -29,17 +29,16 @@ function claimedTask(overrides: Partial<ClaimedTask> = {}): ClaimedTask {
 
 function fakeServices() {
   const heartbeat: {
-    status?: (status: HeartbeatStatus) => void;
-    error?: (error: unknown) => void;
+    status?: (status: HeartbeatStatus, sentAt: number) => void;
     removed: number;
   } = { removed: 0 };
   const services: TaskAttemptServices = {
     workerId: "attempt-worker",
+    leaseMs: 30_000,
     acknowledgeCancel: vi.fn<TaskAttemptServices["acknowledgeCancel"]>(async () => true),
     expireOwned: vi.fn<TaskAttemptServices["expireOwned"]>(async () => "deadline_exceeded"),
-    addHeartbeatLease: (_task, status, error) => {
+    addHeartbeatLease: (_task, status) => {
       heartbeat.status = status;
-      heartbeat.error = error;
       return () => {
         heartbeat.removed += 1;
       };
@@ -60,7 +59,7 @@ function thrownBy(operation: () => unknown): unknown {
 function startAttempt(task = claimedTask()) {
   const { services, heartbeat } = fakeServices();
   const activation: { outcome: TaskExecutionOutcome } = { outcome: "unknown" };
-  const attempt = new TaskAttempt(task, services, activation);
+  const attempt = new TaskAttempt(task, services, activation, Date.now());
   return { attempt, services, heartbeat, activation };
 }
 
@@ -73,7 +72,7 @@ describe("TaskAttempt", () => {
     const { attempt, heartbeat } = startAttempt();
     expect(() => attempt.requireLease()).not.toThrow();
 
-    heartbeat.status!("stale");
+    heartbeat.status!("stale", Date.now());
 
     expect(attempt.signal.aborted).toBe(true);
     expect(() => attempt.requireLease()).toThrow("Task lease was lost");
@@ -84,7 +83,7 @@ describe("TaskAttempt", () => {
   it("rethrows the abort reason when an expiry ended the attempt", () => {
     const { attempt, heartbeat } = startAttempt();
 
-    heartbeat.status!("timeout_exceeded");
+    heartbeat.status!("timeout_exceeded", Date.now());
 
     expect(() => attempt.requireLease()).toThrow(ExecutionTimeoutError);
   });
@@ -134,8 +133,34 @@ describe("TaskAttempt", () => {
     expect(attempt.signal.aborted).toBe(false);
     expect(services.expireOwned).not.toHaveBeenCalled();
     expect(heartbeat.removed).toBe(1);
-    heartbeat.error!(new Error("late heartbeat failure"));
+    heartbeat.status!("accepted", Date.now());
+    vi.advanceTimersByTime(60_000);
     expect(attempt.signal.aborted).toBe(false);
+  });
+
+  it("aborts as lease_expired once no renewal has been accepted for one lease", () => {
+    vi.useFakeTimers({ now: 0 });
+    const { attempt } = startAttempt();
+
+    vi.advanceTimersByTime(29_999);
+    expect(attempt.signal.aborted).toBe(false);
+    vi.advanceTimersByTime(1);
+
+    expect(attempt.arbiter.is("lease_expired")).toBe(true);
+    expect(thrownBy(() => attempt.requireLease())).toBeInstanceOf(Error);
+  });
+
+  it("extends the lease window from the send time of each accepted heartbeat", () => {
+    vi.useFakeTimers({ now: 0 });
+    const { attempt, heartbeat } = startAttempt();
+
+    vi.advanceTimersByTime(20_000);
+    heartbeat.status!("accepted", 15_000);
+    vi.advanceTimersByTime(24_999);
+    expect(attempt.signal.aborted).toBe(false);
+    vi.advanceTimersByTime(1);
+
+    expect(attempt.arbiter.is("lease_expired")).toBe(true);
   });
 
   it("records the first execution outcome only", () => {
