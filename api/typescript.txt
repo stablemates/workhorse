@@ -1241,6 +1241,11 @@ interface DashboardCommandOptions {
  actor: string;
  /** Omit only for an explicit local development bypass. */
  authentication?: DashboardSingleAdminOptions;
+ /**
+ * Serve persisted worker stack traces to a remotely reachable listener. A listener that is not
+ * loopback, or that has a remote public origin, omits them unless this is true.
+ */
+ revealErrorStacks?: boolean;
 }
 
 interface DashboardCompleteHumanWaitResult {

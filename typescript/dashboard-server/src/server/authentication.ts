@@ -232,7 +232,8 @@ export function createSingleAdminAuthentication(
       return new Response(null, {
         status: 303,
         headers: {
-          location: "/",
+          // The login route sits directly under the mount path, which is where a session starts.
+          location: loginPath.slice(0, -"/login".length) || "/",
           "set-cookie": `${SESSION_COOKIE}=${token}; Path=/; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Strict`,
           "cache-control": "no-store",
         },

@@ -2717,8 +2717,12 @@ worker stacks that the mounted dashboard never shows. `readDashboardEventDetail`
 argument and defaults it the same way, because `dashboard_event_detail_v1` projects the whole
 `attempt_history.error` for an attempt record and the Events drawer renders it. Both procedures
 pass `DashboardRpcContext.redactErrorStacks`, so a host that withholds a stack from task detail
-withholds it from the event record that carries the same column. A host reads through the procedure it
-already mounts. `readDashboardEvents`, `readDashboardEventDetail`, `readDashboardWorkers`, and
+withholds it from the event record that carries the same column. `startDashboardServer` sets
+`redactErrorStacks` when the listener is remotely reachable: a TCP listener that is not loopback,
+or any listener whose `publicOrigin` names a non-loopback host.
+`DashboardCommandOptions.revealErrorStacks`, which the CLI maps from `--reveal-error-stacks`, turns
+that default off. A loopback or Unix-socket listener without a remote public origin keeps stacks.
+A host reads through the procedure it already mounts. `readDashboardEvents`, `readDashboardEventDetail`, `readDashboardWorkers`, and
 `DashboardEventsQuery` therefore leave `./server`, which had exposed three of those readers for no
 stated reason. This repository's own suites import the module by relative path, as they already do
 for `readDashboardTaskDetail`.
@@ -2785,8 +2789,9 @@ created fail authentication. The CLI maps the pair from
 The server stores only a random 32-byte session token and its expiry. The browser receives the
 token in `__Host-workhorse-dashboard-session` with `Path=/`, `Max-Age`, `Secure`, `HttpOnly`, and
 `SameSite=Strict`. `POST /logout` deletes the server record and expires the cookie. An expired
-server record never authorizes a request, even if a client retains its cookie. Each process retains
-at most 16 sessions. Login removes expired records and evicts the oldest record before exceeding
+server record never authorizes a request, even if a client retains its cookie. A successful login
+answers `303` to the mount path, which is the login path without its trailing `/login`, or `/` for a
+root mount. Each process retains at most 16 sessions. Login removes expired records and evicts the oldest record before exceeding
 that bound.
 
 `loginPage()` renders the shipped `login.html` document with the Workhorse mark, light and dark
@@ -3025,6 +3030,13 @@ Workhorse never logs payloads, results, error messages, cancellation reasons, id
 progress and checkpoint values. The active OpenTelemetry context remains attached at emission, so
 an SDK can correlate handler logs with the current trace. If the host installs no Logs SDK, the API
 remains a no-op and queue behavior is unchanged.
+
+`createDashboardHost` reads at most `MAX_RPC_BODY_BYTES`, 131,072 bytes, of an RPC request body.
+A request that declares a larger `content-length` receives `413` with the `PAYLOAD_TOO_LARGE`
+error envelope before any procedure is matched. oRPC's `BodyLimitPlugin` enforces the same bound
+on a body that declares no length while it is read. The bound is twice the 65,536-byte cap the
+database places on a signal payload or a human-wait result. Every `audit.reason` accepts at most
+2,000 characters, the limit the database enforces.
 
 `createDashboardHost` emits one OpenTelemetry log after `RPCHandler` returns a matched dashboard
 RPC response. `workhorse.dashboard.rpc_completed` uses debug below 1,000 milliseconds and warning

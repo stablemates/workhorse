@@ -82,7 +82,7 @@ const mutationProcedure = procedure.meta({ mutation: true });
 
 const auditSchema = z.object({
   actor: z.string().trim().min(1),
-  reason: z.string().trim().min(1),
+  reason: z.string().trim().min(1).max(2_000),
   requestId: z.string().trim().min(1),
 });
 const cancellationAuditSchema = z.object({

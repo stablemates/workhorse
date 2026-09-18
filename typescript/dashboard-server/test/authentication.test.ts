@@ -176,6 +176,24 @@ dashboardAuthenticationSuite(dashboardAuthenticationSuiteName, () => {
     expect(application?.headers.get("location")).toBe("/tasks");
   });
 
+  it("returns to its mount path after a login under a mounted path", async () => {
+    const host = createDashboardHost({
+      database,
+      path: "/workhorse",
+      singleAdmin: { username: "operator", passwordHash },
+    });
+    const response = await host.handle(
+      new Request("https://dashboard.test/workhorse/login", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ username: "operator", password: "correct horse" }),
+      }),
+    );
+
+    expect(response?.status).toBe(303);
+    expect(response?.headers.get("location")).toBe("/workhorse");
+  });
+
   it("invalidates the server-side session on logout", async () => {
     const host = createDashboardHost({
       database,

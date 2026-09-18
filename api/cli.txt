@@ -88,6 +88,7 @@ resume-worker <worker-id>  mutates
 --host <string>
 --port <string>
 --public-origin <string>
+--reveal-error-stacks
 --socket <string>
 --workspace <string>  (repeatable)
 

@@ -26,6 +26,11 @@ export interface DashboardCommandOptions {
   actor: string;
   /** Omit only for an explicit local development bypass. */
   authentication?: DashboardSingleAdminOptions;
+  /**
+   * Serve persisted worker stack traces to a remotely reachable listener. A listener that is not
+   * loopback, or that has a remote public origin, omits them unless this is true.
+   */
+  revealErrorStacks?: boolean;
 }
 
 /** A standalone dashboard listener whose database connection remains owned by its caller. */

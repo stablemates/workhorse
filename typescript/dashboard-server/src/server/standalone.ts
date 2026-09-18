@@ -95,15 +95,22 @@ export const startDashboardServer: DashboardStandaloneModule<Queryable>["startDa
         "An authenticated remote dashboard requires an explicit HTTPS public origin",
       );
     }
+    // A persisted stack names container paths and package internals. A browser that is not on
+    // this machine sees them only when the operator asks for them.
+    const remotelyReachable =
+      (tcpListener && !loopbackListener) ||
+      (publicOrigin !== undefined && !isLoopbackHostname(new URL(publicOrigin).hostname));
+    const redactErrorStacks = remotelyReachable && !options.revealErrorStacks;
     // Each database gets its own clients so mutations in one workspace can never reach another.
     const workspaceControls = (workspaceDatabase: Queryable) => {
       const queue = new Queue(workspaceDatabase);
       const admin = new Admin(workspaceDatabase);
-      return options.allowMutations
+      const controls = options.allowMutations
         ? createDashboardOperatorControllers({
             run: (_action, operation) => operation({ admin, queue }),
           })
         : { operator: { mode: "read-only" as const } };
+      return { ...controls, redactErrorStacks };
     };
     const workspaceTarget =
       typeof database === "object" && database !== null && "workspaces" in database

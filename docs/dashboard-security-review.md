@@ -98,6 +98,8 @@ Confirm an error body reveals nothing about container paths or package internals
   `redactErrorStacks`. Both `taskDetail` and `eventDetail` project
   `workhorse.attempt_history.error`, and a host that withholds stacks from one has to withhold
   them from the other.
+- Confirm the standalone listener sets `redactErrorStacks` whenever it is remotely reachable,
+  unless the operator passed `--reveal-error-stacks`.
 - Confirm the schema-compatibility `503` body carries only version information.
 
 **Re-walk when** a read starts projecting a persisted error, when `redactErrorStacks` changes
@@ -146,6 +148,8 @@ Confirm the CLI's single-administrator mode is the boundary it claims to be.
   `application/x-www-form-urlencoded`, throttles failures in a fixed window, reserves throttle
   capacity before `scrypt` yields, and returns one generic failure for a wrong username and a
   wrong password alike.
+- Confirm every RPC request body is bounded before a procedure is matched, whether or not it
+  declares its length.
 - Confirm sessions are server-side, bounded in count, bounded in lifetime, minted only at a
   successful login, and deleted at logout and at expiry.
 - Confirm a rotated previous password and every session created with it end at the configured
