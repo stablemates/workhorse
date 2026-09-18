@@ -3461,6 +3461,7 @@ class Queue {
   createChildren<TResult extends Record<string, Json> = Record<string, Json>>(parent: ClaimedTask, workerId: string, children: readonly ChildTaskRequest[]): Promise<CreateChildrenResult<ChildOutcomes<TResult>>>;
   createChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(parent: ClaimedTask, workerId: string, children: readonly ChildTaskRequest[]): Promise<CreateChildrenResult<TResult>>;
   complete<TResult extends Json>(task: ClaimedTask, workerId: string, result: TResult): Promise<boolean>;
+  [workerCompletionPrepare](task: ClaimedTask, workerId: string, result: Json): Promise<() => Promise<boolean>>;
   /** Seed immutable JSON Schema contracts and the application-selected current versions. */
   syncContracts(): Promise<void>;
   fail(task: ClaimedTask, workerId: string, error: unknown, retryDelayMs?: number): Promise<"ready" | "scheduled" | "failed" | "cancel_requested" | "deadline_exceeded" | "timeout_exceeded" | "stale">;

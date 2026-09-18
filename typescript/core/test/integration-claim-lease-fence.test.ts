@@ -9,6 +9,7 @@ import {
   Queue,
   Worker,
 } from "../src/index.js";
+import { SQL_STATEMENTS } from "../src/queue/sql-catalogue.generated.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { deferred, pool, queue, waitForDatabaseCondition, admin } = createIntegrationTestContext(
@@ -1680,5 +1681,28 @@ describe("claim lease fence", () => {
         ]),
       ]),
     ).rejects.toThrow(/traceContext/);
+  });
+
+  it("surfaces a database error on the completion write without charging the attempt", async () => {
+    const queueName = `settlement-write-${randomUUID()}`;
+    const writeError = new Error("connection reset during complete_v1");
+    const flakyWrites = new Queue(
+      {
+        query: (text: string, values?: readonly unknown[]) =>
+          text === SQL_STATEMENTS.complete_v1
+            ? Promise.reject(writeError)
+            : pool.query(text, values as unknown[]),
+      },
+      queueName,
+    );
+    const id = await flakyWrites.enqueue("settlement-write", null, { maxAttempts: 1 });
+    const worker = new Worker(flakyWrites, {
+      workerId: "settlement-write-worker",
+      registryIntervalMs: 0,
+    }).handle("settlement-write", async () => ({ ok: true }));
+
+    await expect(worker.runOnce()).rejects.toBe(writeError);
+
+    await expect(admin.getTask(id)).resolves.toMatchObject({ state: "active", currentAttempt: 1 });
   });
 });

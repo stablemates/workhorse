@@ -48,7 +48,13 @@ import type {
   Json,
   WorkerRegistration,
 } from "./types.js";
-import { workerCheckpointsRead, workerProgressRead, workerWaitsRead } from "./worker-internal.js";
+import {
+  type WorkerCompletionPreparation,
+  workerCheckpointsRead,
+  workerCompletionPrepare,
+  workerProgressRead,
+  workerWaitsRead,
+} from "./worker-internal.js";
 import { createHandlerContext } from "./handler-context.js";
 import { TaskAttempt } from "./task-attempt.js";
 
@@ -1024,68 +1030,93 @@ export class Worker {
       activation,
     );
     try {
-      // afterClaim is outside the committed claim transaction. Throwing here leaves the lease
-      // exactly as a killed process would, which allows deterministic expiry-recovery testing.
-      await this.inject("afterClaim", task);
-      const handler = this.handlers.get(task.type);
-      if (!handler) {
-        const error = new Error(`No handler registered for ${task.type}`);
-        span.recordException(error);
-        span.setStatus("error");
-        const failed = await this.queue.fail(task, this.workerId, error);
-        span.setAttribute("workhorse.handler.outcome", failed);
-        if (failed === "cancel_requested") {
-          attempt.markCancellationRequested();
+      let writeCompletion: () => Promise<boolean>;
+      try {
+        // afterClaim is outside the committed claim transaction. Throwing here leaves the lease
+        // exactly as a killed process would, which allows deterministic expiry-recovery testing.
+        await this.inject("afterClaim", task);
+        const handler = this.handlers.get(task.type);
+        if (!handler) {
+          const error = new Error(`No handler registered for ${task.type}`);
+          span.recordException(error);
+          span.setStatus("error");
+          const failed = await this.queue.fail(task, this.workerId, error);
+          span.setAttribute("workhorse.handler.outcome", failed);
+          if (failed === "cancel_requested") {
+            attempt.markCancellationRequested();
+            await attempt.acknowledgeCancellation();
+          } else attempt.recordFailure(failed);
+          return;
+        }
+        await this.inject("beforeHandler", task);
+        const result = await handler(
+          task.payload,
+          createHandlerContext(this.queue, this.workerId, task, attempt),
+        );
+        await this.inject("afterHandler", task);
+        if (attempt.arbiter.isSuspended()) {
+          logWarn("workhorse.handler.signal_swallowed", "Task handler swallowed its abort signal", {
+            ...taskSpanAttributes(task),
+            "workhorse.queue.name": task.queue,
+            "workhorse.worker.id": this.workerId,
+            "workhorse.handler.outcome": "suspended",
+          });
+          span.setAttribute("workhorse.handler.outcome", "suspended");
+          attempt.recordExecution("suspended");
+          return;
+        }
+        if (attempt.arbiter.is("cancelled")) {
           await attempt.acknowledgeCancellation();
-        } else attempt.recordFailure(failed);
+          span.setAttribute("workhorse.handler.outcome", "canceled");
+          return;
+        }
+        if (attempt.arbiter.is("lease_expired")) {
+          span.setAttribute("workhorse.handler.outcome", "stale");
+          attempt.recordExecution("lease_lost");
+          return;
+        }
+        attempt.requireLease();
+        await this.inject("beforeComplete", task);
+        writeCompletion = await this.prepareCompletion(task, result);
+      } catch (error) {
+        await this.settleFailure(task, span, attempt, error);
         return;
       }
-      await this.inject("beforeHandler", task);
-      const result = await handler(
-        task.payload,
-        createHandlerContext(this.queue, this.workerId, task, attempt),
-      );
-      await this.inject("afterHandler", task);
-      if (attempt.arbiter.isSuspended()) {
-        logWarn("workhorse.handler.signal_swallowed", "Task handler swallowed its abort signal", {
-          ...taskSpanAttributes(task),
-          "workhorse.queue.name": task.queue,
-          "workhorse.worker.id": this.workerId,
-          "workhorse.handler.outcome": "suspended",
-        });
-        span.setAttribute("workhorse.handler.outcome", "suspended");
-        attempt.recordExecution("suspended");
-        return;
-      }
-      if (attempt.arbiter.is("cancelled")) {
-        await attempt.acknowledgeCancellation();
-        span.setAttribute("workhorse.handler.outcome", "canceled");
-        return;
-      }
-      if (attempt.arbiter.is("lease_expired")) {
-        span.setAttribute("workhorse.handler.outcome", "stale");
-        attempt.recordExecution("lease_lost");
-        return;
-      }
-      attempt.requireLease();
-      await this.inject("beforeComplete", task);
-      const accepted = await this.queue.complete(task, this.workerId, result);
+      // The write runs outside the handler's try. A database error here is a settlement failure,
+      // not the handler's, so it propagates like a failing fail_v1 instead of charging the attempt.
+      const accepted = await writeCompletion();
       if (!accepted) {
         if (await attempt.acknowledgeCancellation()) {
           span.setAttribute("workhorse.handler.outcome", "canceled");
           return;
         }
-        throw new Error("Completion rejected because the lease is stale or expired");
+        await this.settleFailure(
+          task,
+          span,
+          attempt,
+          new Error("Completion rejected because the lease is stale or expired"),
+        );
+        return;
       }
       if (!attempt.arbiter.submit("completed")) return;
       span.setAttribute("workhorse.handler.outcome", "succeeded");
       attempt.recordExecution("succeeded");
       await this.inject("afterComplete", task);
-    } catch (error) {
-      await this.settleFailure(task, span, attempt, error);
     } finally {
       attempt.stop();
     }
+  }
+
+  // Validates the result as the handler's responsibility and returns the fenced completion write.
+  // A queue without the internal capability validates inside complete(), so its errors count as
+  // settlement failures.
+  private async prepareCompletion(
+    task: ClaimedTask,
+    result: Json,
+  ): Promise<() => Promise<boolean>> {
+    const prepare = (this.queue as Partial<WorkerCompletionPreparation>)[workerCompletionPrepare];
+    if (prepare) return prepare(task, this.workerId, result);
+    return () => this.queue.complete(task, this.workerId, result);
   }
 
   // Settles an attempt whose handler, hooks, or completion threw.

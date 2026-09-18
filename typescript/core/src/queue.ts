@@ -130,7 +130,12 @@ import type {
   ExternalWaitQuery,
   ExternalWaitOptions,
 } from "./queue/external-waits.js";
-import { workerCheckpointsRead, workerProgressRead, workerWaitsRead } from "./worker-internal.js";
+import {
+  workerCheckpointsRead,
+  workerCompletionPrepare,
+  workerProgressRead,
+  workerWaitsRead,
+} from "./worker-internal.js";
 
 export type { MaintenancePhase, MaintenancePhaseResult } from "./queue/retention-maintenance.js";
 
@@ -723,6 +728,16 @@ export class Queue {
     return this.modules.claimLeaseFence.complete(task, workerId, result, () =>
       this.modules.enqueueContracts.validateResult(task, result),
     );
+  }
+
+  async [workerCompletionPrepare](
+    task: ClaimedTask,
+    workerId: string,
+    result: Json,
+  ): Promise<() => Promise<boolean>> {
+    const serialized = await this.modules.enqueueContracts.validateResult(task, result);
+    return () =>
+      this.modules.claimLeaseFence.complete(task, workerId, result, async () => serialized);
   }
 
   /** Seed immutable JSON Schema contracts and the application-selected current versions. */
