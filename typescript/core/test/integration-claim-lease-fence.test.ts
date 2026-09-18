@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
+import { Pool, type PoolClient } from "pg";
 import { describe, expect, it } from "vitest";
 import {
   CancellationRequestedError,
@@ -12,9 +13,8 @@ import {
 import { SQL_STATEMENTS } from "../src/queue/sql-catalogue.generated.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { deferred, pool, queue, waitForDatabaseCondition, admin } = createIntegrationTestContext(
-  import.meta.url,
-);
+const { databaseUrl, deferred, pool, queue, waitForDatabaseCondition, admin } =
+  createIntegrationTestContext(import.meta.url);
 
 describe("claim lease fence", () => {
   it("heartbeats every owned lease in one HOT batch update", async () => {
@@ -1704,5 +1704,38 @@ describe("claim lease fence", () => {
     await expect(worker.runOnce()).rejects.toBe(writeError);
 
     await expect(admin.getTask(id)).resolves.toMatchObject({ state: "active", currentAttempt: 1 });
+  });
+  it("renews leases on a reserved connection while handlers hold every other pooled one", async () => {
+    const leaseMs = 300;
+    const small = new Pool({ connectionString: databaseUrl, max: 3 });
+    try {
+      const smallQueue = new Queue(small, `reserved-heartbeat-${randomUUID()}`);
+      const id = await smallQueue.enqueue("reserved-heartbeat", null, { maxAttempts: 1 });
+      let abortedBy: unknown;
+      const worker = new Worker(smallQueue, {
+        workerId: "reserved-heartbeat-worker",
+        registryIntervalMs: 0,
+        leaseMs,
+        heartbeatMs: 100,
+      }).handle("reserved-heartbeat", async (_payload, context) => {
+        // Take every connection the pool can still lend, as busy handlers would.
+        const held: PoolClient[] = [];
+        while (small.totalCount < 3 || small.idleCount > 0) held.push(await small.connect());
+        try {
+          await sleep(leaseMs * 3);
+        } finally {
+          for (const client of held) client.release();
+        }
+        abortedBy = context.signal.reason;
+        return { ok: true };
+      });
+
+      await expect(worker.runOnce()).resolves.toBe(true);
+
+      expect(abortedBy).toBeUndefined();
+      await expect(admin.getTask(id)).resolves.toMatchObject({ state: "succeeded" });
+    } finally {
+      await small.end();
+    }
   });
 });

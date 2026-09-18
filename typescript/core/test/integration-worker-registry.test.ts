@@ -545,7 +545,8 @@ describe("worker registry", () => {
     const ids = await Promise.all(
       [1, 2, 3].map((sequence) => queue.enqueue("paused-concurrency", { sequence })),
     );
-    const heartbeat = vi.spyOn(queue, "heartbeatMany");
+    // Rounds run on a Queue bound to the reserved heartbeat connection, so observe the prototype.
+    const heartbeat = vi.spyOn(Queue.prototype, "heartbeatMany");
     const worker = new Worker(queue, {
       workerId: "paused-concurrency-worker",
       concurrency: 2,
@@ -581,15 +582,20 @@ describe("worker registry", () => {
     }
   });
 
-  it("batches per-task heartbeats without overlapping a slow batch", async () => {
+  it("batches per-task heartbeats without overlapping a slow batch on the shared pool", async () => {
     const releaseHandlers = deferred();
+    // Without connect() the queue cannot reserve a heartbeat connection, so every round waits for
+    // the one before it however long that takes.
+    const shared = new Queue({
+      query: (text: string, values?: readonly unknown[]) => pool.query(text, values as unknown[]),
+    });
     const heartbeatGates: ReturnType<typeof deferred<Map<string, "accepted">>>[] = [];
     let heartbeatCalls = 0;
     let inFlight = 0;
     let maxInFlight = 0;
     let latestIds: string[] = [];
-    for (const sequence of [1, 2]) await queue.enqueue("slow-heartbeat", { sequence });
-    const heartbeat = vi.spyOn(queue, "heartbeatMany").mockImplementation((tasks) => {
+    for (const sequence of [1, 2]) await shared.enqueue("slow-heartbeat", { sequence });
+    const heartbeat = vi.spyOn(shared, "heartbeatMany").mockImplementation((tasks) => {
       heartbeatCalls += 1;
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
@@ -600,7 +606,7 @@ describe("worker registry", () => {
         inFlight -= 1;
       });
     });
-    const worker = new Worker(queue, {
+    const worker = new Worker(shared, {
       workerId: "slow-heartbeat-worker",
       concurrency: 2,
       heartbeatMs: 10,
@@ -697,7 +703,8 @@ describe("worker registry", () => {
       ids.push(await queue.enqueue("signal-abort-drain", { sequence }));
     }
     const claim = vi.spyOn(queue, "claimMany");
-    const heartbeat = vi.spyOn(queue, "heartbeatMany");
+    // Rounds run on a Queue bound to the reserved heartbeat connection, so observe the prototype.
+    const heartbeat = vi.spyOn(Queue.prototype, "heartbeatMany");
     const worker = new Worker(queue, {
       workerId: "signal-abort-drain-worker",
       concurrency: 2,

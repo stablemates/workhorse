@@ -133,9 +133,12 @@ import type {
 import {
   workerCheckpointsRead,
   workerCompletionPrepare,
+  workerHeartbeatReservation,
   workerProgressRead,
   workerWaitsRead,
+  type WorkerHeartbeatChannel,
 } from "./worker-internal.js";
+import { holdHeartbeatConnection } from "./heartbeat-connection.js";
 
 export type { MaintenancePhase, MaintenancePhaseResult } from "./queue/retention-maintenance.js";
 
@@ -738,6 +741,20 @@ export class Queue {
     const serialized = await this.modules.enqueueContracts.validateResult(task, result);
     return () =>
       this.modules.claimLeaseFence.complete(task, workerId, result, async () => serialized);
+  }
+
+  [workerHeartbeatReservation](): WorkerHeartbeatChannel | undefined {
+    const connection = holdHeartbeatConnection(this.database);
+    if (connection === undefined) return undefined;
+    return {
+      reserve: () => connection.reserve(),
+      heartbeatMany: (tasks, workerId, leaseMs, timeoutMs) =>
+        connection.run(
+          (client) => this.forDatabase(client).heartbeatMany(tasks, workerId, leaseMs),
+          timeoutMs,
+        ),
+      close: () => connection.close(),
+    };
   }
 
   /** Seed immutable JSON Schema contracts and the application-selected current versions. */

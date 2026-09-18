@@ -54,6 +54,7 @@ import {
 import type { Pool } from "pg";
 import { raceBudgetAdmission } from "./support/budget-race.js";
 import { createDatabaseTestHarness } from "./support/db.js";
+import { workerHeartbeatReservation } from "../src/worker-internal.js";
 
 const compatibilityDatabase = createDatabaseTestHarness(
   new URL("?compatibility", import.meta.url).href,
@@ -380,6 +381,17 @@ async function executeExpirationRuntimeFixture(
   await expectAttemptOutcome(database, id, fixture.expectedAttemptOutcomes);
 }
 
+// A fixture that stalls heartbeatMany pins round scheduling on the shared pool. A reserved heartbeat
+// connection would bound the stalled round instead, so those fixtures hide the reservation.
+function withoutHeartbeatReservation<T extends object>(queue: T): T {
+  return new Proxy(queue, {
+    get(target, property, receiver) {
+      if (property === workerHeartbeatReservation) return undefined;
+      return Reflect.get(target, property, receiver) as unknown;
+    },
+  });
+}
+
 async function executeLeaseLossRuntimeFixture(
   queue: Queue,
   admin: Admin,
@@ -404,7 +416,7 @@ async function executeLeaseLossRuntimeFixture(
     await allowHeartbeat.promise;
     return heartbeatMany(...arguments_);
   });
-  const worker = new Worker(queue, {
+  const worker = new Worker(withoutHeartbeatReservation(queue), {
     workerId: `runtime-${fixture.id}`,
     queue: queueName,
     leaseMs: fixture.leaseMs,
@@ -481,6 +493,7 @@ async function executeHeartbeatCadenceRuntimeFixture(
   let maximumOverlap = 0;
   const delayedHeartbeatQueue = new Proxy(queue, {
     get(target, property, receiver) {
+      if (property === workerHeartbeatReservation) return undefined;
       if (property !== "heartbeatMany") return Reflect.get(target, property, receiver);
       return async (...args: Parameters<Queue["heartbeatMany"]>) => {
         heartbeatCalls += 1;

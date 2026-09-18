@@ -50,6 +50,13 @@ capped at one connection polls instead of listening. Behind any pooler that cann
 notifications the listener slot is held without delivering anything — budget for it on both
 sides, or drop the capability.
 
+Heartbeats need headroom too. If handlers hold every pooled connection, a heartbeat queued behind
+them never runs and every lease lapses at once. TypeScript workers therefore keep one dedicated
+heartbeat connection per pool, shared the way the listener is, so budget it on top of the listener
+and your handlers. When the pool is too small for all three, workers heartbeat through the shared
+pool instead. The heartbeat connection runs only self-contained statements, so it works in every
+pool mode. Go and Python workers still heartbeat through the shared pool.
+
 ## What is unsafe
 
 Two configurations fail quietly. Pointing `notificationPool` at transaction-mode PgBouncer or at
