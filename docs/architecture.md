@@ -2462,7 +2462,11 @@ bucket exactly from `dashboard_task_v1` joined to `dashboard_task_runtime_v1` an
 buckets (`blocked`, `waiting`, `scheduled`, `queued`, `running`, and the live half of `retried`)
 are counted exactly from `dashboard_task_runtime_v1`, and `completed`, `discarded`, `canceled`,
 and the terminal half of `retried` each come from one `EXPLAIN (FORMAT JSON)` probe over
-`dashboard_task_outcome_v1` reading `Plan Rows`.
+`dashboard_task_outcome_v1` reading `Plan Rows`. Both branches count `waiting` by probing
+`dashboard_signal_wait_v1` and `dashboard_human_wait_v1` only for a row whose runtime state is
+`scheduled` with a non-null `wait_name`, the predicate both views already require, so a ready or
+delayed row costs no index probe. The waiting filter of `dashboard_activity_v1` applies the same
+guard. The function disables JIT for itself.
 
 `dashboard_task_facets_v1(p_input jsonb)` accepts `configuredWorkers` and returns the complete
 version 1 facet JSON document: sorted distinct `queues` from `dashboard_task_query_v1` and

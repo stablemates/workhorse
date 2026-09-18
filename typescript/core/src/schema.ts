@@ -113,6 +113,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "debounce replaces only pending tasks",
     kind: "additive",
   },
+  {
+    fromVersion: 11,
+    toVersion: 12,
+    file: "0012-task-counts-guard-the-wait-probe.sql",
+    description: "task counts guard the wait probe",
+    kind: "additive",
+  },
 ];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {
