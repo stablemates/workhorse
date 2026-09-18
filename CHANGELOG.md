@@ -15,6 +15,26 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 `0.1.0` the schema upgrades in place: every release ships ordered, immutable migrations, and inside
 a major line a migration only adds. Breaking changes are always listed with upgrade steps.
 
+## 0.2.1 — 2026-09-18
+
+The npm packages, Python distribution, and Go module release from one source commit.
+
+Requires **schema v1**, Node.js **22** or newer, and PostgreSQL **15** or newer.
+
+**A 0.2.0 database upgrades in place.** Run `workhorse schema migrate` from a deployment step before
+any process from this release starts. It applies migrations 0007 through 0009 and leaves the
+installation at schema version 9. The migrations change read functions and no table. No database is
+dropped and no data is lost.
+
+- Prune the dashboard task lists on the task table's indexes. A list filtered by a tag, a queue, or
+  a task type seeks that index before it reads the runtime and outcome projections, and an
+  unfiltered list no longer joins every task back to itself.
+- Stop compiling the queue health snapshot with JIT on every call. Past a few thousand ready tasks,
+  compilation cost about two seconds for a statement that executes in tens of milliseconds.
+- Release a pinned task page in the dashboard. While a pager click holds the list on an older
+  page, auto refresh pauses and says why, and a first-page control returns to the live list with
+  every filter kept.
+
 ## 0.2.0 — 2026-09-17
 
 The npm packages, Python distribution, and Go module release from one source commit.
