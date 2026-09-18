@@ -231,8 +231,8 @@ second async implementation. `AsyncCancellationToken.wait(timeout)` is awaitable
 Both factories accept `queue`, `queues`, `worker_id`, `concurrency`, `poll_ms`, `lease_ms`,
 `heartbeat_ms`, `maintenance_interval_ms`, `registry_interval_ms`, `schedule_namespaces`, and
 `schedule_catchup_limit` with the same validation and limits as `Worker`. They also accept an
-awaitable `notification_connection_factory`, `on_notification_error`, and
-`on_registration_error` callbacks.
+awaitable `notification_connection_factory`, an awaitable `heartbeat_connection_factory`,
+and `on_notification_error` and `on_registration_error` callbacks.
 `registry_interval_ms` defaults to 5000. It accepts `0` to disable registration or a non-boolean
 integer of at least 100 milliseconds.
 `AsyncWorker.handle(type, handler)` receives `(Json, AsyncHandlerContext)`. The context exposes
@@ -244,10 +244,11 @@ duration_ms)`, `sleep_until(name, wake_at)`, `get_progress()`, `set_progress(val
 the same limits as `Worker.handle_batch`. `run_once()`, `run()`, `pause()`, `resume()`,
 `is_paused()`, and `stop()` match their synchronous names and return contracts.
 
-`Worker.run_once()` and `Worker.run()` use a cached compatibility check. Each dispatch sweep first
-calls `promote_v1(100)` and then `recover_expired_telemetry_v1(100, NULL)`. Promotion makes due
-retries and durable waits claimable. Recovery uses the persisted retry policy before the sweep
-calls `claim_v1`. `queue` selects one queue, while `queues` selects an ordered, de-duplicated set.
+`Worker.run_once()` and `Worker.run()` use a cached compatibility check. A dispatch sweep runs
+`tick_v1(100, 100)` when `maintenance_interval_ms` has elapsed since the last tick. The tick
+promotes due retries and durable waits, and it recovers expired leases with the persisted retry
+policy. A sweep between ticks issues no `promote_v1` or `recover_expired_telemetry_v1`; it only
+claims. `queue` selects one queue, while `queues` selects an ordered, de-duplicated set.
 If the caller supplies both, `Worker` raises `ValueError`. Every claim attempt advances the
 round-robin queue index.
 The sweep stops after every queue returns empty without an intervening claim.
@@ -353,7 +354,12 @@ uses a 30000 millisecond default lease. `lease_ms` accepts 100 through 86400000.
 defaults to the greater of 100 or one third of `lease_ms`; it must be positive and less than
 `lease_ms`. Each claimed task starts one handler thread. One worker heartbeat timer submits every
 active lease through `heartbeat_many_v1`, and it schedules the next batch only after the prior call
-returns. A handler that finishes releases its slot and wakes the dispatcher.
+returns. Without `heartbeat_connection_factory`, heartbeats share the worker connection. A slow
+handler statement on that connection then delays lease renewal. With the factory, the worker opens
+one autocommit connection for heartbeats on first need. It reopens that connection after a failed
+heartbeat and closes it when the run returns. `AsyncWorker.from_psycopg` and `from_asyncpg` accept
+an awaitable factory with the same behavior. A handler that finishes releases its slot and wakes the
+dispatcher.
 
 `heartbeat_many_v1` status `cancel_requested` cancels the matching token with
 `CancellationRequestedError`.

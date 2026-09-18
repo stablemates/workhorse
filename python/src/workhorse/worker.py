@@ -108,6 +108,9 @@ if TYPE_CHECKING:
 else:
     _SyncConnection = _PsycopgConnection
 
+# Opens the heartbeat executor and returns it with the callable that closes it.
+_HeartbeatExecutorFactory = Callable[[], tuple[_SyncRowExecutor, Callable[[], None]]]
+
 Handler = Callable[[Any, HandlerContext], Json]
 BatchHandler = Callable[[Sequence[BatchHandlerItem]], Sequence[BatchHandlerOutcome]]
 
@@ -773,7 +776,9 @@ class Worker:
         notification_connection_factory: _NotificationConnectionFactory | None = None,
         on_notification_error: Callable[[BaseException], None] | None = None,
         on_registration_error: Callable[[BaseException], None] | None = None,
+        heartbeat_connection_factory: Callable[[], _SyncConnection] | None = None,
         _executor: _SyncRowExecutor | None = None,
+        _heartbeat_executor_factory: _HeartbeatExecutorFactory | None = None,
     ) -> None:
         if _executor is None and getattr(connection, "autocommit", False) is not True:
             raise ValueError("Worker requires a dedicated Psycopg connection in autocommit mode")
@@ -866,6 +871,15 @@ class Worker:
         self._heartbeat_members: dict[str, _HeartbeatMember] = {}
         self._heartbeat_thread: Thread | None = None
         self._heartbeat_wake = Event()
+        # Heartbeats get their own connection when one is configured, so a slow handler statement
+        # on the shared connection cannot hold a lease renewal back.
+        self._heartbeat_executor_factory = _heartbeat_executor_factory or (
+            None
+            if heartbeat_connection_factory is None
+            else _psycopg_heartbeat_executor_factory(heartbeat_connection_factory, connection)
+        )
+        self._heartbeat_connection_lock = Lock()
+        self._heartbeat_connection: tuple[_SyncRowExecutor, Callable[[], None]] | None = None
 
     def _register_heartbeat(
         self,
@@ -914,9 +928,8 @@ class Worker:
                     }
                     for task in (member.task for member in members)
                 ]
-                rows = self._executor.rows(
-                    _STATEMENTS.heartbeat_many,
-                    (self.worker_id, json.dumps(leases, separators=(",", ":"))),
+                rows = self._heartbeat_rows(
+                    (self.worker_id, json.dumps(leases, separators=(",", ":")))
                 )
                 statuses = {str(row["task_id"]): row["status"] for row in rows}
                 for member in members:
@@ -957,6 +970,29 @@ class Worker:
                             continue
                     member.errors.append(error)
                     member.cancellation._cancel(error)
+
+    def _heartbeat_rows(self, parameters: Sequence[object]) -> list[Mapping[str, object]]:
+        if self._heartbeat_executor_factory is None:
+            return self._executor.rows(_STATEMENTS.heartbeat_many, parameters)
+        with self._heartbeat_connection_lock:
+            if self._heartbeat_connection is None:
+                self._heartbeat_connection = self._heartbeat_executor_factory()
+            executor, close = self._heartbeat_connection
+            try:
+                return executor.rows(_STATEMENTS.heartbeat_many, parameters)
+            except BaseException:
+                # Reconnect on the next beat rather than reuse a connection in an unknown state.
+                self._heartbeat_connection = None
+                with suppress(Exception):
+                    close()
+                raise
+
+    def _close_heartbeat_connection(self) -> None:
+        with self._heartbeat_connection_lock:
+            connection, self._heartbeat_connection = self._heartbeat_connection, None
+        if connection is not None:
+            with suppress(Exception):
+                connection[1]()
 
     def _expire_owned_task(self, task: ClaimedTask, parent_context: object) -> object:
         expiration = _require_lifecycle_row(
@@ -1315,10 +1351,8 @@ class Worker:
                     if self._dispatch_state() != "ready":
                         continue
 
-                maintenance_was_due = self._run_maintenance_if_due()
-                if not maintenance_was_due:
-                    _require_lifecycle_row(self._executor.rows(_STATEMENTS.promote, (100,)))
-                    self._recover_expired()
+                # tick_v1 promotes and recovers, so a pass between ticks only claims.
+                self._run_maintenance_if_due()
                 empty_attempts = 0
                 while empty_attempts < len(self.queues):
                     if self._dispatch_state() != "ready":
@@ -1382,6 +1416,7 @@ class Worker:
                 listener.close()
             self._refresh_registration(force=True, draining=True)
             self._drain_active_threads()
+            self._close_heartbeat_connection()
             self._deregister()
             with self._state_lock:
                 self._stopping = False
@@ -1612,30 +1647,6 @@ class Worker:
         self._registered = False
         with suppress(Exception):
             self._executor.rows(_STATEMENTS.deregister_worker, (self.worker_id,))
-
-    def _recover_expired(self) -> None:
-        with _start_span("workhorse.recovery", {}) as recovery_span:
-            recovery = _require_lifecycle_row(
-                self._executor.rows(_STATEMENTS.recover_expired, (100, None))
-            )
-            rows_affected = int(cast(int, recovery["rows_affected"]))
-            expired_leases = int(cast(int, recovery["expired_leases"]))
-            retried = int(cast(int, recovery["retried"]))
-            recovery_span.set_attribute("workhorse.recovery.rows_affected", rows_affected)
-            recovery_span.set_attribute("workhorse.recovery.expired_leases", expired_leases)
-            recovery_span.set_attribute("workhorse.recovery.retried", retried)
-            _record_recovery(expired_leases, retried, recovery["retry_dimensions"])
-            if rows_affected > 0:
-                _emit_log(
-                    "INFO",
-                    "workhorse.leases.recovered",
-                    "Expired leases recovered",
-                    {
-                        "workhorse.recovery.rows_affected": rows_affected,
-                        "workhorse.recovery.expired_leases": expired_leases,
-                        "workhorse.recovery.retried": retried,
-                    },
-                )
 
     def _dispatch_wait_seconds(
         self, listener: _TaskNotificationListener | None, consecutive_empty_claims: int = 0
@@ -2113,6 +2124,21 @@ def _wait_record(task_id: str, row: _Row, *, name: str | None = None) -> TaskWai
         worker_id=str(row["worker_id"]),
         created_at=cast(datetime, row["created_at"]),
     )
+
+
+def _psycopg_heartbeat_executor_factory(
+    factory: Callable[[], _SyncConnection], query_connection: object
+) -> _HeartbeatExecutorFactory:
+    def open_heartbeat_executor() -> tuple[_SyncRowExecutor, Callable[[], None]]:
+        connection = factory()
+        if connection is query_connection:
+            raise ValueError("Heartbeat connection must be separate from the worker")
+        if getattr(connection, "autocommit", False) is not True:
+            connection.close()
+            raise ValueError("Heartbeat connection must be in autocommit mode")
+        return _SyncExecutor(cast(_PsycopgConnection, connection)), connection.close
+
+    return open_heartbeat_executor
 
 
 def _require_lifecycle_row(rows: list[_Row]) -> _Row:
