@@ -96,8 +96,8 @@ post-checkout:
         # tree was just created and has nothing installed yet, so provision it from scratch.
         if [ "{1}" = "0000000000000000000000000000000000000000" ] &&
           [ "$(git rev-parse --git-dir)" != "$(git rev-parse --git-common-dir)" ]; then
-          pnpm install --frozen-lockfile
-          pnpm worktree:setup
+          mise exec -- pnpm install --frozen-lockfile
+          mise exec -- pnpm worktree:setup
         # Any other branch checkout can still move dependencies underneath us. The primary
         # clone never satisfies the branch above, so switching branches there left node_modules
         # describing the branch being left behind: a dependency added on the branch being
@@ -105,29 +105,29 @@ post-checkout:
         # Comparing the lockfile keeps unrelated switches instant. This must stay an elif
         # because the null SHA above is not a valid argument to git diff.
         elif [ "{3}" = "1" ] && ! git diff --quiet "{1}" "{2}" -- pnpm-lock.yaml; then
-          pnpm install --frozen-lockfile
+          mise exec -- pnpm install --frozen-lockfile
         fi
         if [ "{3}" = "1" ] && [ "{1}" != "0000000000000000000000000000000000000000" ]; then
           if ! git diff --quiet "{1}" "{2}" -- python/uv.lock; then
-            uv sync --project python --frozen
+            mise exec -- uv sync --project python --frozen
           fi
           if ! git diff --quiet "{1}" "{2}" -- go/go.sum; then
-            go -C go mod download
+            mise exec -- go -C go mod download
           fi
         fi
-        pnpm worktree:prune
+        mise exec -- pnpm worktree:prune
 
 post-merge:
   jobs:
     - name: synchronize changed dependencies and clean removed worktrees
       run: |
         if ! git diff --quiet ORIG_HEAD HEAD -- pnpm-lock.yaml; then
-          pnpm install --frozen-lockfile
+          mise exec -- pnpm install --frozen-lockfile
         fi
         if ! git diff --quiet ORIG_HEAD HEAD -- python/uv.lock; then
-          uv sync --project python --frozen
+          mise exec -- uv sync --project python --frozen
         fi
         if ! git diff --quiet ORIG_HEAD HEAD -- go/go.sum; then
-          go -C go mod download
+          mise exec -- go -C go mod download
         fi
-        pnpm worktree:prune
+        mise exec -- pnpm worktree:prune
