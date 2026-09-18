@@ -442,7 +442,6 @@
     },
     {
       "name": "promote_v1",
-      "pythonBinding": "promote",
       "arity": 1,
       "contract": "SELECT workhorse.promote_v1($1::integer) AS promoted",
       "catalogues": ["internal"]
@@ -476,7 +475,6 @@
     },
     {
       "name": "recover_expired_telemetry_v1",
-      "pythonBinding": "recover_expired",
       "arity": 2,
       "contract": "SELECT * FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)",
       "catalogues": ["protocol"]

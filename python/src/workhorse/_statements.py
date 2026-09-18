@@ -536,11 +536,9 @@ class StatementRegistry:
     list_progress: DriverStatement
     list_rate_limit_policies: DriverStatement
     list_waits: DriverStatement
-    promote: DriverStatement
     health: DriverStatement
     record_batch_dispatch: DriverStatement
     record_batch_failure: DriverStatement
-    recover_expired: DriverStatement
     register_worker: DriverStatement
     run_maintenance: DriverStatement
     save_checkpoint: DriverStatement
@@ -579,11 +577,9 @@ STATEMENTS = StatementRegistry(
     list_progress=_statement("list_progress"),
     list_rate_limit_policies=_statement("list_rate_limit_policies"),
     list_waits=_statement("list_waits"),
-    promote=_statement("promote_v1"),
     health=_statement("queue_health_v1"),
     record_batch_dispatch=_statement("record_batch_dispatch_v1"),
     record_batch_failure=_statement("record_batch_failure_v1"),
-    recover_expired=_statement("recover_expired_telemetry_v1"),
     register_worker=_statement("register_worker_v1"),
     run_maintenance=_statement("run_maintenance_v1"),
     save_checkpoint=_statement("save_checkpoint_v1"),
