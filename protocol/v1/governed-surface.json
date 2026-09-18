@@ -1465,6 +1465,7 @@
       "budget_admission_v1",
       "budget_bucket_v1",
       "cancellation_envelope_v1",
+      "claim_one_v1",
       "cold_export_exportable_through_internal_v1",
       "cold_export_oldest_history_day_internal_v1",
       "create_history_day_v1",

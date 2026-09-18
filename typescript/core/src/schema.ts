@@ -99,6 +99,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "composed task-list scope",
     kind: "additive",
   },
+  {
+    fromVersion: 9,
+    toVersion: 10,
+    file: "0010-budget-admission-lock.sql",
+    description: "budget admission lock",
+    kind: "additive",
+  },
 ];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {

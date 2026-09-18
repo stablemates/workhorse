@@ -1692,10 +1692,19 @@ fingerprint only when present, so a request accepted before schema version 3 kee
 `enqueue_debounce_v1` updates it on replacement and `redrive_v1` copies it. A task whose budget has
 no row admits freely, the way a queue with no policy row has no limit.
 
-`claim_v1` probes `task_runtime_ready_budget_queue_idx` for ready rows in its queue that name a
-budget. When one exists it takes the exclusive `workhorse:budgets` advisory lock before it reads
-the clock, inspects the 100-row priority window, and calls `budget_admission_v1(budget_name, now)`
-for each candidate. Admission counts active rows through `task_runtime_active_budget_expiry_idx`
+`claim_v1` delegates to `claim_one_v1(queue, worker, lease_ms, wait_for_budgets)` with waiting
+allowed. Before it reads the clock, the claim samples the first 100 ready rows of its queue in
+priority order. It takes the exclusive transaction advisory lock `workhorse:budget:<budget_name>`
+for each distinct budget name in that sample, in name order, so two claims that share budgets
+cannot deadlock. It then inspects the 100-row priority window and calls
+`budget_admission_v1(budget_name, now)` only for a candidate whose budget lock it holds. A
+candidate whose budget first appears after the sample is not admitted by that claim.
+`budget_admission_v1` takes the same per-budget lock itself whenever the budget row exists, so the
+count it reads includes every start another claim committed before the lock was granted.
+`claim_many_v1` lets only its first claim wait for a budget lock. Each later claim in the batch uses
+`pg_try_advisory_xact_lock` and skips any budget it cannot lock at once, because the batch already
+holds budget locks and waiting on another could deadlock against a batch that holds them in a
+different order. Admission counts active rows through `task_runtime_active_budget_expiry_idx`
 whose `expires_at` is later than now, and probes `budget_bucket_v1(budget_name, now, false)`
 without consuming. After the runtime update selects a candidate,
 `budget_bucket_v1(budget_name, now, true)` consumes one token. `budget_bucket` holds one row per
@@ -2130,7 +2139,7 @@ it refills the queue bucket from PostgreSQL time and returns null when no queue 
 
 Priority dispatch has no aging or fair-share control. A sustained stream of higher-priority ready work can starve lower-priority rows in the same queue.
 
-When the queue holds ready rows that name a budget, `claim_v1` also takes the exclusive `workhorse:budgets` advisory lock before reading the clock and checks each candidate with `budget_admission_v1`, so a saturated budget is passed over inside the same 100-row window. A queue with no budget-named ready work never takes that lock and keeps the one-row fast path. See [`budget`](#budget-and-budget_bucket).
+When the queue's first 100 ready rows name budgets, `claim_v1` also takes one exclusive advisory lock per budget name, in name order, before reading the clock. It checks each candidate with `budget_admission_v1`, so a saturated budget is passed over inside the same 100-row window. Claims of unrelated budgets do not serialize. A queue with no budget-named ready work takes no budget lock and keeps the one-row fast path. See [`budget`](#budget-and-budget_bucket).
 
 If concurrency-key or rate-key limits apply, `claim_v1` inspects at most the first 100 ready rows by
 priority descending, FIFO sequence, and task identity. It selects the earliest candidate whose queue-scoped key has concurrency capacity and
@@ -2140,7 +2149,7 @@ runtime update selects a candidate. Competing worker processes serialize on the 
 one durable token admits one start even when claims overlap. Returning null after exhausting the
 window enters the Worker's normal bounded empty-claim wait instead of a claim loop.
 
-One runtime update changes the selected row to active and installs worker, global fence, acquisition, heartbeat, and expiry data. The same transaction appends the claim event before returning identity, payload, normalized `retryPolicy`, contract version, result limit, and error-redaction flag. No transaction remains open while user code runs. `Queue.claim` uses `claim_v1`. `claim_many_v1(queue, worker, limit, lease_ms)` accepts a limit from 1 through 100. It invokes the same transition repeatedly inside one database call until it reaches the limit or `claim_v1` returns no row.
+One runtime update changes the selected row to active and installs worker, global fence, acquisition, heartbeat, and expiry data. The same transaction appends the claim event before returning identity, payload, normalized `retryPolicy`, contract version, result limit, and error-redaction flag. No transaction remains open while user code runs. `Queue.claim` uses `claim_v1`. `claim_many_v1(queue, worker, limit, lease_ms)` accepts a limit from 1 through 100. It invokes the same transition, `claim_one_v1`, repeatedly inside one database call until it reaches the limit or a claim returns no row. Only the first claim of the batch waits for a budget lock.
 
 ### Worker concurrency and lifecycle
 

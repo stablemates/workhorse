@@ -185,6 +185,20 @@ export interface TracePropagationRuntimeFixture extends RuntimeFixtureBase {
   kind: "trace-propagation";
 }
 
+/**
+ * Two claims of one budget on different queues. The late queue's claim samples its ready rows
+ * before a budgeted task commits there, and admits while the holder queue's claim is still open.
+ */
+export interface BudgetAdmissionRaceRuntimeFixture extends RuntimeFixtureBase {
+  kind: "budget-admission-race";
+  maxActive: number;
+  queueRate: { limit: number; intervalMs: number; burst: number };
+  leaseMs: number;
+  expectedHolderClaims: number;
+  expectedLateClaims: number;
+  expectedActive: number;
+}
+
 export type RuntimeFixture =
   | BatchRuntimeFixture
   | SuspensionReplayRuntimeFixture
@@ -194,7 +208,8 @@ export type RuntimeFixture =
   | HeartbeatCadenceRuntimeFixture
   | PollCadenceRuntimeFixture
   | GracefulDrainRuntimeFixture
-  | TracePropagationRuntimeFixture;
+  | TracePropagationRuntimeFixture
+  | BudgetAdmissionRaceRuntimeFixture;
 
 export interface RequestFixture {
   id: string;

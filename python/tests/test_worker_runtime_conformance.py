@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import Empty, SimpleQueue
@@ -16,15 +17,18 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from workhorse import (
+    BudgetDefinition,
     ChildTaskRequest,
     EnqueueOptions,
     HandlerContext,
     LifecycleError,
     Queue,
+    RateLimit,
+    RateLimitPolicyDefinition,
     StaleLeaseError,
     Worker,
 )
-from workhorse._statements import STATEMENTS, DriverStatement
+from workhorse._statements import SQL_STATEMENTS, STATEMENTS, DriverStatement
 
 REPOSITORY = Path(__file__).parents[2]
 
@@ -58,6 +62,10 @@ def execute_runtime_fixture(
         ),
         "graceful-drain": execute_graceful_drain_fixture,
         "trace-propagation": execute_trace_propagation_fixture,
+        # The race holds three sessions of its own besides the setup connection.
+        "budget-admission-race": lambda setup_connection, race_fixture: (
+            execute_budget_admission_race_fixture(setup_connection, race_fixture, database_url)
+        ),
     }
     assert fixture["kind"] in executors, f"Unsupported runtime fixture kind: {fixture['kind']}"
     executors[fixture["kind"]](connection, fixture)
@@ -636,6 +644,138 @@ def execute_graceful_drain_fixture(
     states = [task_state(connection, task_id)["state"] for task_id in task_ids]
     assert states.count("succeeded") == fixture["expectedSucceeded"]
     assert states.count("ready") == fixture["expectedReady"]
+
+
+CLAIM_V1 = SQL_STATEMENTS["claim_v1"][0]
+
+
+def execute_budget_admission_race_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any], database_url: str
+) -> None:
+    """Commits a budgeted task on one queue while that queue's claim is already past its first read.
+
+    A second claim of the same budget stays open on another queue until the first claim has
+    admitted or started waiting. The first claim's queue carries a rate policy so a test session
+    can park it on the queue's token-bucket row, which every claim locks after sampling its ready
+    rows. Mirrors typescript/core/test/support/budget-race.ts.
+    """
+    name = runtime_queue(fixture)
+    budget = name
+    late_queue = f"{name}-late"
+    holder_queue = f"{name}-holder"
+    rate = fixture["queueRate"]
+    queue = Queue(connection)
+    queue.sync_budgets(name, [BudgetDefinition(name=budget, max_active=fixture["maxActive"])])
+    queue.sync_rate_limit_policies(
+        name,
+        [
+            RateLimitPolicyDefinition(
+                queue=late_queue,
+                rate=RateLimit(
+                    limit=rate["limit"], interval_ms=rate["intervalMs"], burst=rate["burst"]
+                ),
+            )
+        ],
+    )
+    # One unbudgeted start creates the late queue's token-bucket row for the blocker to lock.
+    queue.enqueue(fixture["taskType"], {"role": "bucket"}, EnqueueOptions(queue=late_queue))
+    bucket_claim = connection.execute(
+        CLAIM_V1, (late_queue, f"{name}-bucket", fixture["leaseMs"])
+    ).fetchall()
+    assert bucket_claim, "the late queue did not admit its unbudgeted start"
+    queue.enqueue(
+        fixture["taskType"], {"role": "holder"}, EnqueueOptions(queue=holder_queue, budget=budget)
+    )
+
+    with (
+        psycopg.connect(database_url, autocommit=True) as blocker,
+        psycopg.connect(database_url, autocommit=True) as late,
+        psycopg.connect(database_url, autocommit=True) as holder,
+    ):
+        late_thread: Thread | None = None
+        try:
+            late_pid = backend_pid(late)
+            blocker.execute("BEGIN")
+            blocker.execute(
+                "SELECT 1 FROM workhorse.rate_limit_bucket "
+                "WHERE queue_name = %s AND bucket_scope = 'queue' FOR UPDATE",
+                (late_queue,),
+            ).fetchall()
+
+            late_claims: list[int] = []
+            errors: list[BaseException] = []
+
+            def claim_late() -> None:
+                rows = late.execute(
+                    CLAIM_V1, (late_queue, f"{name}-late", fixture["leaseMs"])
+                ).fetchall()
+                late_claims.append(len(rows))
+
+            late_thread = run_in_thread(claim_late, errors)
+            wait_until(
+                lambda: waits_on(connection, late_pid, None),
+                f"{name}: the late claim never reached the bucket row",
+            )
+
+            queue.enqueue(
+                fixture["taskType"],
+                {"role": "late"},
+                EnqueueOptions(queue=late_queue, budget=budget),
+            )
+            holder.execute("BEGIN")
+            holder_claims = len(
+                holder.execute(
+                    CLAIM_V1, (holder_queue, f"{name}-holder", fixture["leaseMs"])
+                ).fetchall()
+            )
+            blocker.execute("COMMIT")
+            thread = late_thread
+            wait_until(
+                lambda: not thread.is_alive() or waits_on(connection, late_pid, "advisory"),
+                f"{name}: the late claim neither finished nor waited for the budget",
+            )
+            holder.execute("COMMIT")
+            join(late_thread)
+            assert errors == []
+
+            row = connection.execute(
+                "SELECT count(*) FROM workhorse.task_runtime "
+                "WHERE state = 'active' AND budget_name = %s",
+                (budget,),
+            ).fetchone()
+            assert row is not None
+            assert holder_claims == fixture["expectedHolderClaims"]
+            assert late_claims == [fixture["expectedLateClaims"]]
+            assert row[0] == fixture["expectedActive"]
+        finally:
+            for session in (blocker, holder):
+                with suppress(psycopg.Error):
+                    session.execute("ROLLBACK")
+            if late_thread is not None:
+                late_thread.join(timeout=10)
+
+
+def backend_pid(connection: psycopg.Connection[Any]) -> int:
+    row = connection.execute("SELECT pg_backend_pid()").fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+def waits_on(connection: psycopg.Connection[Any], pid: int, lock: str | None) -> bool:
+    """Whether a backend waits on a heavyweight lock, optionally of one kind."""
+    row = connection.execute(
+        "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = %s "
+        "AND wait_event_type = 'Lock' AND (%s::text IS NULL OR wait_event = %s::text))",
+        (pid, lock, lock),
+    ).fetchone()
+    return bool(row and row[0])
+
+
+def wait_until(condition: Callable[[], bool], message: str) -> None:
+    deadline = monotonic() + 10
+    while not condition():
+        assert monotonic() < deadline, message
+        sleep(0.01)
 
 
 def assert_task_states(

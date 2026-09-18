@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import { raceBudgetAdmission } from "./support/budget-race.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { pool, queue, admin } = createIntegrationTestContext(import.meta.url);
@@ -73,6 +74,19 @@ describe("named budgets", () => {
     await expect(queue.claim("budget-worker-b", { queue: queueB })).resolves.toMatchObject({
       id: secondId,
     });
+  });
+
+  it("holds maxActive when a budgeted task commits while another queue's claim is in flight", async () => {
+    // The late queue's claim samples its ready rows before the budgeted task commits, then admits
+    // from a window that contains it while the other queue's claim of the same budget is still open.
+    const outcome = await raceBudgetAdmission(pool, queue, {
+      name: `budget-race-${randomUUID()}`,
+      taskType: "budget-race",
+      maxActive: 1,
+      queueRate: { limit: 1_000, intervalMs: 1_000, burst: 1_000 },
+      leaseMs: 30_000,
+    });
+    expect(outcome).toEqual({ holderClaims: 1, lateClaims: 0, active: 1 });
   });
 
   it("admits freely when a task names a budget nobody synchronized", async () => {

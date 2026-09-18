@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-15
+- **Amended by:** SM-800 (admission takes one advisory lock per budget name; see below)
 - **Related:** SM-738, [ADR 0053](0053-start-migrations-at-0-1-0-and-keep-them-additive.md),
   [ADR 0054](0054-define-what-1-0-0-promises.md),
   [ADR 0056](0056-set-the-1-0-0-exit-criteria.md)
@@ -55,6 +56,13 @@ at least one ready row that names a budget, `claim_v1` takes the exclusive trans
 budget-named ready work never takes the lock and keeps the one-row fast path. The lock is held for
 one short claim transaction, and budgets exist to protect a scarce resource, so serializing their
 admission is the cost accepted in exchange for an exact cap.
+
+_Amended by SM-800._ The `EXISTS` probe and the window read different snapshots, so a budgeted
+task committed between them was admitted without the lock, and two claims exceeded `max_active`.
+The single lock also serialized claims of unrelated budgets. Admission now takes the transaction
+advisory lock `workhorse:budget:<budget_name>` inside `budget_admission_v1`. `claim_v1` locks each
+budget named in its window, in name order, before it reads the clock, and admits only rows whose
+budget lock it holds. Migration `0010-budget-admission-lock.sql` carries the change.
 
 **Capacity follows leases.** `max_active` counts active rows whose lease has not expired, through a
 partial index on `budget_name`. An expired lease returns budget capacity before maintenance recovers
