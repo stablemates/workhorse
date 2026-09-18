@@ -1,2 +1,2 @@
 /** Published Workhorse package version. Kept in sync with the release manifest by a parity test. */
-export const WORKHORSE_VERSION = "0.2.0";
+export const WORKHORSE_VERSION = "0.2.1";
