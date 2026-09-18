@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { readFile as readFileAsync } from "node:fs/promises";
 import { join } from "node:path";
 import { SeverityNumber, logs } from "@opentelemetry/api-logs";
-import { RPCHandler } from "@orpc/server/fetch";
+import { BodyLimitPlugin, RPCHandler } from "@orpc/server/fetch";
 import type { DashboardSingleAdminOptions } from "@stablemates/workhorse-dashboard-contract";
 import { Admin, assertSchemaCompatible, Queue, type Queryable } from "@stablemates/workhorse";
 import { WORKHORSE_VERSION } from "@stablemates/workhorse/version";
@@ -173,6 +173,28 @@ interface HostWorkspace {
 }
 
 const SLOW_RPC_REQUEST_MS = 1_000;
+
+/**
+ * Largest RPC request body the host reads.
+ *
+ * The largest legitimate envelope carries a signal payload or a human-wait result, which the
+ * database caps at 64 KiB, plus its audit fields. Twice that leaves room for JSON escaping.
+ */
+const MAX_RPC_BODY_BYTES = 128 * 1024;
+
+function payloadTooLarge(): Response {
+  return Response.json(
+    {
+      json: {
+        defined: false,
+        code: "PAYLOAD_TOO_LARGE",
+        status: 413,
+        message: "Payload Too Large",
+      },
+    },
+    { status: 413 },
+  );
+}
 const rpcLogRecords = {
   completed: {
     severityNumber: SeverityNumber.DEBUG,
@@ -260,7 +282,11 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
         readFileSync(join(assets, "login.html"), "utf8"),
       )
     : undefined;
-  const rpc = new RPCHandler(dashboardRouter);
+  // The plugin bounds a body that declares no length while oRPC reads it; the host refuses a
+  // declared length itself before it dispatches.
+  const rpc = new RPCHandler(dashboardRouter, {
+    plugins: [new BodyLimitPlugin({ maxBodySize: MAX_RPC_BODY_BYTES })],
+  });
   const staticAssets = createStaticAssetCache(assets);
   // The packaged template never changes for the life of the process; the dev hook stays
   // per-request because its whole point is to follow source edits.
@@ -439,6 +465,9 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
       if (pathname === `${basePath}/rpc` || pathname.startsWith(`${basePath}/rpc/`)) {
         const rpcPrefix = `${basePath}/rpc`;
         const procedure = rpcProcedure(pathname, rpcPrefix);
+        if (Number(request.headers.get("content-length")) > MAX_RPC_BODY_BYTES) {
+          return payloadTooLarge();
+        }
         if (isDashboardMutation(procedure)) {
           const rejection = rejectCrossOriginMutation(request);
           if (rejection) return rejection;

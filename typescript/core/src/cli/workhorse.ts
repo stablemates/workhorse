@@ -166,6 +166,7 @@ ${DATABASE_HELP}  --port <port>            TCP port (default: 3000).
   --socket <path>          Listen on a Unix socket instead of TCP.
   --public-origin <origin> Public HTTPS origin for a remote authenticated listener.
   --allow-mutations        Enable dashboard mutations.
+  --reveal-error-stacks    Show worker stack traces on a remotely reachable listener.
   --actor <name>           Actor recorded for mutations (default: workhorse-cli).
   --workspace <name=url>   Serve <url> as workspace <name>. Repeatable.
   --config <file>          JSON workspace configuration file.
@@ -175,6 +176,7 @@ The dashboard binds 127.0.0.1 and is read-only unless told otherwise. Set
 WORKHORSE_DASHBOARD_USERNAME and WORKHORSE_DASHBOARD_PASSWORD_HASH, or their _FILE variants, to
 enable single-administrator sessions. Unauthenticated listeners are limited to loopback or a Unix
 socket. A remote authenticated listener requires WORKHORSE_DASHBOARD_PUBLIC_ORIGIN with HTTPS.
+A listener that is not loopback, or that has a remote public origin, omits worker stack traces.
 
 Workspaces serve several databases from one dashboard, switchable in the browser. The
 configuration file holds {"workspaces": {"<name>": {"url": "..."}}, "defaultWorkspace": "<name>"};
@@ -631,6 +633,7 @@ async function runDashboardCommand(args: readonly string[]): Promise<void> {
   }
   const publicOrigin = values["public-origin"] ?? process.env.WORKHORSE_DASHBOARD_PUBLIC_ORIGIN;
   const allowMutations = values["allow-mutations"] ?? false;
+  const revealErrorStacks = values["reveal-error-stacks"] ?? false;
   const actor = values.actor ?? "workhorse-cli";
   const authentication = await resolveDashboardAuthentication();
 
@@ -662,6 +665,7 @@ async function runDashboardCommand(args: readonly string[]): Promise<void> {
     allowMutations,
     actor,
     authentication,
+    revealErrorStacks,
   });
   process.stdout.write(
     `Workhorse dashboard on ${running.url} (${allowMutations ? "mutations enabled" : "read-only"})\n`,
