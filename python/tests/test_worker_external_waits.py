@@ -174,7 +174,11 @@ def test_signal_wait_uses_the_shorter_caller_timeout(database_url: str) -> None:
     ):
         task_id = Queue(enqueue_connection).enqueue("signal.timeout", {})
         enqueue_connection.commit()
-        worker = Worker(worker_connection, worker_id="python-signal-timeout-worker").handle(
+        worker = Worker(
+            worker_connection,
+            worker_id="python-signal-timeout-worker",
+            maintenance_interval_ms=100,
+        ).handle(
             "signal.timeout",
             lambda _payload, context: context.wait_for_signal("approval", timeout_ms=40),
         )
@@ -188,7 +192,8 @@ def test_signal_wait_uses_the_shorter_caller_timeout(database_url: str) -> None:
         assert timeout_ms is not None
         assert float(timeout_ms[0]) == pytest.approx(40, abs=5)
 
-        sleep(0.06)
+        # The next tick, not the dispatch pass, settles the elapsed wait.
+        sleep(0.1)
         assert worker.run_once() is False
         assert worker_connection.execute(
             "SELECT state, error->>'name' FROM workhorse.task_outcome WHERE task_id = %s",

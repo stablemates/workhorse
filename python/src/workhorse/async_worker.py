@@ -45,6 +45,7 @@ AsyncBatchHandler = Callable[
     [Sequence[AsyncBatchHandlerItem]], Awaitable[Sequence[BatchHandlerOutcome]]
 ]
 _AsyncNotificationConnectionFactory = Callable[[], Awaitable[Any]]
+_AsyncHeartbeatConnectionFactory = Callable[[], Awaitable[Any]]
 
 _CHANNEL = "workhorse_tasks"
 _RECONNECT_INITIAL_SECONDS = 0.1
@@ -199,6 +200,7 @@ class AsyncWorker:
         notification_connection_factory: _AsyncNotificationConnectionFactory | None = None,
         on_notification_error: Callable[[BaseException], None] | None = None,
         on_registration_error: Callable[[BaseException], None] | None = None,
+        heartbeat_connection_factory: _AsyncHeartbeatConnectionFactory | None = None,
         **worker_options: Any,
     ) -> None:
         self._bridge = _AsyncExecutorBridge(executor)
@@ -208,11 +210,15 @@ class AsyncWorker:
         self._on_notification_error = on_notification_error
         self._loop: asyncio.AbstractEventLoop | None = None
         self._running = False
+        self._heartbeat_connection_factory = heartbeat_connection_factory
         self._inner = Worker(
             cast(Any, query_connection),
             on_notification_error=on_notification_error,
             on_registration_error=on_registration_error,
             _executor=self._bridge,
+            _heartbeat_executor_factory=(
+                None if heartbeat_connection_factory is None else self._open_heartbeat_executor
+            ),
             **worker_options,
         )
 
@@ -235,6 +241,7 @@ class AsyncWorker:
         notification_connection_factory: _AsyncNotificationConnectionFactory | None = None,
         on_notification_error: Callable[[BaseException], None] | None = None,
         on_registration_error: Callable[[BaseException], None] | None = None,
+        heartbeat_connection_factory: _AsyncHeartbeatConnectionFactory | None = None,
     ) -> AsyncWorker:
         if getattr(connection, "autocommit", False) is not True:
             raise ValueError(
@@ -247,6 +254,7 @@ class AsyncWorker:
             notification_connection_factory=notification_connection_factory,
             on_notification_error=on_notification_error,
             on_registration_error=on_registration_error,
+            heartbeat_connection_factory=heartbeat_connection_factory,
             queue=queue,
             queues=queues,
             worker_id=worker_id,
@@ -279,6 +287,7 @@ class AsyncWorker:
         notification_connection_factory: _AsyncNotificationConnectionFactory | None = None,
         on_notification_error: Callable[[BaseException], None] | None = None,
         on_registration_error: Callable[[BaseException], None] | None = None,
+        heartbeat_connection_factory: _AsyncHeartbeatConnectionFactory | None = None,
     ) -> AsyncWorker:
         if connection.is_in_transaction():
             raise ValueError("AsyncWorker requires a dedicated asyncpg connection")
@@ -289,6 +298,7 @@ class AsyncWorker:
             notification_connection_factory=notification_connection_factory,
             on_notification_error=on_notification_error,
             on_registration_error=on_registration_error,
+            heartbeat_connection_factory=heartbeat_connection_factory,
             queue=queue,
             queues=queues,
             worker_id=worker_id,
@@ -400,6 +410,35 @@ class AsyncWorker:
             self._inner.stop()
             await run
             raise
+
+    def _open_heartbeat_executor(self) -> tuple[_AsyncExecutorBridge, Callable[[], None]]:
+        """Open the heartbeat connection on the run's loop, behind its own driver lock."""
+        loop = self._require_loop()
+        factory = cast(_AsyncHeartbeatConnectionFactory, self._heartbeat_connection_factory)
+        connection = asyncio.run_coroutine_threadsafe(_await_value(factory()), loop).result()
+
+        def close() -> None:
+            async def close_connection() -> None:
+                closed = connection.close()
+                if inspect.isawaitable(closed):
+                    await closed
+
+            asyncio.run_coroutine_threadsafe(close_connection(), loop).result()
+
+        if connection is self._query_connection:
+            raise ValueError("Heartbeat connection must be separate from the worker")
+        if self._driver == "psycopg":
+            if getattr(connection, "autocommit", False) is not True:
+                close()
+                raise ValueError("Heartbeat connection must be in autocommit mode")
+            executor: _AsyncRowExecutor = _AsyncPsycopgExecutor(
+                cast(_AsyncPsycopgConnection, connection)
+            )
+        else:
+            executor = _AsyncpgExecutor(cast(_AsyncpgConnection, connection))
+        bridge = _AsyncExecutorBridge(executor)
+        bridge.bind(loop)
+        return bridge, close
 
     def _require_loop(self) -> asyncio.AbstractEventLoop:
         if self._loop is None:
