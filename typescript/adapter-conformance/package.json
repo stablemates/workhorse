@@ -13,7 +13,7 @@
     "@stablemates/workhorse-prisma": "workspace:*",
     "@stablemates/workhorse-typeorm": "workspace:*",
     "drizzle-orm": "^0.45.2",
-    "kysely": "0.29.5",
+    "kysely": "0.29.6",
     "magicast": "0.3.5",
     "pg": "^8.16.3",
     "typeorm": "1.1.1",

@@ -89,12 +89,10 @@ describe("documentation site integration catalog", () => {
       await Promise.all(
         workspace
           .filter((entry) => entry.isDirectory())
-          .map(
-            async (entry): Promise<[string, PackageManifest | undefined]> => [
-              `typescript/${entry.name}`,
-              await readManifest(`typescript/${entry.name}`).catch(() => undefined),
-            ],
-          ),
+          .map(async (entry): Promise<[string, PackageManifest | undefined]> => [
+            `typescript/${entry.name}`,
+            await readManifest(`typescript/${entry.name}`).catch(() => undefined),
+          ]),
       ),
     );
     const byName = new Map(
