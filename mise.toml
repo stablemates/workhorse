@@ -1,6 +1,6 @@
 [tools]
 go = "1.25.14"
-lefthook = "2.1.10"
+lefthook = "2.1.14"
 node = "24"
 pnpm = "10.18.3"
 python = "3.12"

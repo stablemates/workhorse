@@ -31,7 +31,7 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^4.7.0",
-    "fumadocs-mdx": "15.4.1",
+    "fumadocs-mdx": "15.2.2",
     "parse5": "8.0.1",
     "tailwindcss": "^4.1.18",
     "tsx": "^4.23.13",
