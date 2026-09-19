@@ -44,7 +44,7 @@ listener and whatever handlers take. If the pool cannot spare it, or states no s
 refuses to start and says why. Set `sharedHeartbeats` to send heartbeats through the shared pool
 instead, and accept that busy handlers can then delay renewal. The heartbeat connection runs only
 self-contained statements, so it works behind a transaction-mode pooler. Go names that opt-out
-`SharedHeartbeats`, and Python names it `shared_heartbeats`.
+`SharedHeartbeats`.
 
 ## What is unsafe?
 
