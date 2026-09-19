@@ -172,9 +172,9 @@ type WorkerOptions struct {
 	ShutdownGracePeriod  time.Duration
 	PollingOnly          bool
 	// SharedHeartbeats opts out of the dedicated heartbeat connection reservation.
-	SharedHeartbeats     bool
-	Logger               *slog.Logger
-	OnRegistrationError  func(error)
+	SharedHeartbeats    bool
+	Logger              *slog.Logger
+	OnRegistrationError func(error)
 }
 
 // Worker claims and settles tasks through a caller-owned pool.
@@ -249,7 +249,7 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		return nil, errors.New(nilWorkerPoolMessage)
 	}
 	if pool.Config().MaxConns < 3 && !options.SharedHeartbeats {
-		return nil, fmt.Errorf("worker cannot reserve a dedicated heartbeat connection: MaxConns is %d; need at least 3 (set SharedHeartbeats to opt out)", pool.Config().MaxConns)
+		return nil, fmt.Errorf(workerHeartbeatCapacityErrorFormat, pool.Config().MaxConns)
 	}
 	if options.Queue != emptyString && len(options.Queues) > 0 {
 		return nil, errors.New(workerQueueOptionsMessage)
@@ -1300,7 +1300,7 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
 				connection.Release()
 			}
 		}
-		worker.logger.Warn("heartbeat round failed; retrying", "error", err)
+		worker.logger.Warn(heartbeatRoundFailedLogMessage, errorLogField, err)
 		return
 	}
 	statuses := make(map[string]ownershipStatus, len(rows))
@@ -1322,7 +1322,10 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
 			status = workerOwnershipStale
 		}
 		if status == workerOwnershipAccepted {
-			select { case member.renewed <- struct{}{}: default: }
+			select {
+			case member.renewed <- struct{}{}:
+			default:
+			}
 			continue
 		}
 		member.cancelHandler(ownershipCause(member.task, status))
@@ -1332,7 +1335,7 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
 }
 
 func (worker *Worker) deliverHeartbeatError(members []*heartbeatMember, err error) {
-	worker.logger.Warn("heartbeat round failed; retrying", "error", err)
+	worker.logger.Warn(heartbeatRoundFailedLogMessage, errorLogField, err)
 }
 
 func (worker *Worker) recordRejectedHeartbeat(
