@@ -61,6 +61,18 @@ as a noun, and `pause` as the operator action.
 `BatchHandlerContext` continues to omit all suspension and child-join methods. One member cannot
 release its lease while a shared callback still owes an outcome for every other member.
 
+## Amendment: `child_pending` is deferred (2026-09-19)
+
+The `blockedReason` union above was never built. Every layer still reports the single
+`prerequisite_pending` value: the SQL read functions emit it as a literal for any `blocked` runtime,
+TypeScript types it as `"prerequisite_pending" | null`, Python types it as
+`Literal["prerequisite_pending"] | None`, and Go returns the same string the database sent.
+
+The decision to distinguish the mechanisms stands. Only the projection is deferred: no workflow
+runtime depends on the union yet, and a child-controlled parent is still identifiable from the
+retained `task_child` evidence the same read already returns. Widening the union is an additive
+read-contract change that can land when a consumer needs it.
+
 ## Consequences
 
 - A workflow runtime composes explicit timers, signals, human decisions, child joins, and

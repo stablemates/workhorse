@@ -389,7 +389,8 @@ remember.
 
 ### Dashboard schema
 
-The current build requires Workhorse schema version 1. The baseline includes custom event date-time
+The current build ships Workhorse schema version 16; its packaged migrations carry a version 1
+baseline forward to it. The baseline includes custom event date-time
 ranges, event worker/search filters, task detail tags and human-decision metadata, and task enqueue
 modes.
 Runtime processes validate compatibility and never install or migrate the schema at startup.

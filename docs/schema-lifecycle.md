@@ -2,9 +2,10 @@
 
 ## Current policy
 
-Schema version 1 is current and is the migration baseline. `sql/schema/current.sql` is the tracked source and
+Schema version 1 is the migration baseline and schema version 16 is current. `sql/schema/current.sql` is the tracked source and
 `sql/schema.sql` is a build artifact for published packages. `sql/releases/0001.sql` contains the baseline clean-install artifact.
-`sql/migrations/` is empty; future schema versions add ordered steps there.
+`sql/migrations/` holds the ordered steps that carry a baseline installation forward to the current
+version; each new schema version adds one more step there.
 
 **The migration chain begins at 0.1.0** ([ADR 0053](decisions/0053-start-migrations-at-0-1-0-and-keep-them-additive.md)).
 A database this project has agreed to carry forward exists from that release, so a schema change is

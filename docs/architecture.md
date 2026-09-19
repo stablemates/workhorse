@@ -102,7 +102,7 @@ extra adds asyncpg 0.31 or newer and below 1. `python/src/workhorse/client.py` e
 asynchronous `AsyncQueue.from_psycopg` and `AsyncQueue.from_asyncpg` constructors. Both clients
 expose `enqueue`, `enqueue_with_result`, `enqueue_many`, `enqueue_many_with_results`, and
 `sync_schedules`. Both also expose `cancel`, `send_signal`, and `complete_human_wait`. Enqueue calls
-use `enqueue_many_v1`; recurring definitions use `sync_schedule_definitions_v1`. Cancellation uses
+use `enqueue_many_v1`; recurring definitions use `sync_schedule_definitions_v2`. Cancellation uses
 `cancel_v1`; signal delivery uses `send_signal_v1`; human completion uses
 `complete_human_wait_v1`.
 
@@ -183,7 +183,7 @@ zero or one `SyncSchedulesOptions`. `ScheduleDefinition` contains `Name`, `Sched
 optional `Enabled`; nil enables the definition. `ScheduledTask` contains `Type`, `Payload`, `Queue`,
 `Priority`, `ConcurrencyKey`, `MaxAttempts`, and `RetryPolicy`. An omitted option prunes by default;
 `SyncSchedulesOptions{Prune: false}` preserves definitions omitted from the desired set. Every call
-serializes the full set, checks compatibility, and invokes `sync_schedule_definitions_v1` through
+serializes the full set, checks compatibility, and invokes `sync_schedule_definitions_v2` through
 the caller-owned `Executor`.
 
 A zero `ScheduledTask.Queue` uses the queue default. `Priority` accepts 0 through 100. A zero
@@ -1251,7 +1251,7 @@ For every accepted task, exactly one of `task_runtime` and `task_outcome` must e
 
 Stable identity and the current accepted definition. `id` and `created_at` do not change. An ordinary
 enqueue inserts the row once. While keyed debounce owns a `scheduled` or `ready` runtime inside its
-replacement window, `enqueue_debounced_v1` may update `queue_name`, `task_type`, `concurrency_key`,
+replacement window, `enqueue_debounce_v1` may update `queue_name`, `task_type`, `concurrency_key`,
 `payload`, contract version and limits, redaction keys, trace context, tags, priority, attempt budget,
 retry policy, deadline, and execution timeout on the same identity. It updates matching routing and
 runtime fields in the same transaction. Dispatch, terminal state, or an elapsed replacement window
@@ -1419,7 +1419,7 @@ The only mutable lifecycle relation. Its check constraint makes state-specific f
 - `scheduled`: `run_at` is populated; ready and ownership fields are null; `wait_name` and `attempt_started_at` are either both null for enqueue/retry delay or both populated for a durable timer
 - `blocked`: `run_at` preserves the requested dispatch time; ready, ownership, wait, and attempt-start fields are null; no dispatch partial index contains the row
 - `ready`: `ready_at` and FIFO `sequence` are populated; ownership fields and `wait_name` are null; a resumed timer may preserve `attempt_started_at`
-- `active`: worker, acquisition, heartbeat, expiry, positive fence, and logical `attempt_started_at` are populated; ready placement and `wait_name` are null; optional cancellation-request timestamp, attribution, and reason are all present or all absent
+- `active`: worker, acquisition, heartbeat, expiry, positive fence, and logical `attempt_started_at` are populated; ready placement and `wait_name` are null; the optional cancellation-request timestamp carries optional attribution and reason, each of which may stay null, and neither may appear without the timestamp
 
 `task_runtime.priority` duplicates the accepted `task.priority` so claim can remain on the ready index.
 Pending debounce replaces both values in one transaction. Retry, recovery, durable waits, and
@@ -1910,8 +1910,8 @@ current local date. Maintenance state stores `last_started_at` and `last_complet
 watermark. `maintenance_state.terminal_prune_dependency_starved` records whether
 the last `prune_terminal_tasks_v1` call deleted nothing from its exact locked candidate window while
 that window contained a prerequisite protected by a dependency edge. Workers poll all four
-database-scheduled routines — the statistics rollup included — every minute by default, while
-PostgreSQL performs the global due check and advisory-lock coordination.
+database-scheduled routines — the statistics rollup included — on their SDK's maintenance interval,
+while PostgreSQL performs the global due check and advisory-lock coordination.
 
 `maintenance_run` retains the newest 50 recorded executions for each of those four routines.
 Each row stores its UUIDv7 `run_id`, start and completion instants, `succeeded`, `failed`, or
@@ -3263,7 +3263,7 @@ Schedule occurrence deduplication prevents duplicate enqueue for one occurrence 
 `Queue.syncSchedules(namespace, definitions, { prune })` is a desired-state reconciler:
 
 1. It validates stable namespace and schedule names plus queue task definitions, including optional retry policies.
-2. It atomically upserts deployment intent and by default deactivates omitted names through `sync_schedule_definitions_v1`, without changing the durable operator pause.
+2. It atomically upserts deployment intent and by default deactivates omitted names through `sync_schedule_definitions_v2`, without changing the durable operator pause.
 3. A per-namespace advisory lock serializes concurrent deployments of the same namespace.
 
 Because definitions live only in the target database, a deployment is one transaction: there is no second metadata database to converge. Every material definition change increments a revision, and worker fires pass the revision they loaded. A stale in-process schedule therefore becomes a no-op instead of running a new payload at an old cadence. Definition row locking also makes a disable deployment wait for a fire that already began before returning.

@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-12
+- **Amended by:** [ADR 0047](0047-coordinate-schedules-per-namespace.md)
 - **Related:** [ADR 0003](0003-worker-owned-scheduler.md), [ADR 0004](0004-two-cadence-maintenance.md)
 
 ## Context

@@ -83,8 +83,9 @@ Canceling a blocked parent leaves the child independent. A later child outcome c
 terminal parent to dispatch.
 
 Canceling an active child first requests cooperative cancellation. The parent remains blocked until
-the child acknowledges it, then PostgreSQL cancels the parent once. Canceling a child that already
-finished returns its terminal state and leaves the parent-child record unchanged.
+the child acknowledges it. The default join then returns that cancellation as the child's outcome
+and releases the parent; the all-success operation cancels the parent instead. Canceling a child
+that already finished returns its terminal state and leaves the parent-child record unchanged.
 
 Retry keeps the same parent identity, so it reuses the same child names, results, and join evidence.
 Redrive creates a fresh parent identity instead. The dashboard shows the redrive link beside the

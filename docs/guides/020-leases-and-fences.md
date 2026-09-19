@@ -34,8 +34,8 @@ back in the queue for another attempt. The new claim gets a **new, higher fence 
 ## The clever part
 
 Now imagine the original worker wasn't really dead. Its machine was frozen, or it was stuck
-on a slow network call, and thirty seconds later it wakes up and tries to mark the task
-complete.
+on a slow network call, and it wakes up well after its lease expired and tries to mark the
+task complete.
 
 By now another worker is running that task. If the first worker's write went through, you'd
 have chaos: a task marked succeeded while a second copy is still running it.
