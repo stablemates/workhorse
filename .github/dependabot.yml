@@ -29,6 +29,11 @@ updates:
       day: monday
     open-pull-requests-limit: 10
     groups:
+      # Mantine requires one version across its packages, so a lone `@mantine/core` bump cannot
+      # build. This group carries every update type, majors included, for that reason. The two
+      # groups below deliberately do not, because an ungrouped major is easier to review alone.
+      mantine:
+        patterns: ["@mantine/*"]
       npm-development:
         dependency-type: development
         update-types: [minor, patch]
@@ -69,3 +74,21 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    # Both base images carry a version this repository decides elsewhere. The Go line is a
+    # supported runtime recorded in support.json, and the uv line matches mise.toml; tests hold
+    # the Dockerfiles to both. Dependabot reads neither file, so a version bump here is always
+    # wrong by default and arrives every week until someone closes it.
+    #
+    # Only the version is ignored. A digest update on the same version still opens, which is the
+    # base image's own security patches, and `ignore` never applies to security updates.
+    ignore:
+      - dependency-name: golang
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
+      - dependency-name: ghcr.io/astral-sh/uv
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
