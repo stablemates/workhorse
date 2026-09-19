@@ -2484,6 +2484,11 @@ and a queue seeks the tag index and filters on the queue. The tag array reaches 
 evaluates once per execution and never folds into the scan, so `task_tags_gin_idx` stays unreachable
 behind it.
 
+Both task listings constrain their page-scoped `enqueued` event lookup to the interval from
+`task.created_at` through `statement_timestamp()`. An enqueued event is committed before a
+dashboard read statement can observe it. The bounds prune daily partitions before the task existed
+and prepared partitions after the read began. Both functions disable JIT for input-specific plans.
+
 `dashboard_tasks_cursor_v1(p_input jsonb)` backs the additive `tasksCursor` procedure.
 It accepts the same filters and page sizes as `tasks`, without a page number.
 `cursor` contains `id`, `priority`, and `updatedAt` with six fractional timestamp digits.
@@ -2500,7 +2505,8 @@ It reads the tag filter through `dashboard_tag_filter_v1` for the same reason `t
 prunes before the ordering walk reads a task; absent both, no join enters the query and the walk
 stays on the update-time indexes, which already return the page in order.
 Concurrent state changes can move tasks between pages; browsing does not hold a snapshot across requests.
-The SPA uses cursor navigation and preserves legacy page-number links through `tasks`.
+The SPA uses cursor navigation. It preserves a legacy page-number link by walking `tasksCursor`
+from the first page until it reaches the requested page or the last available page.
 It carries the cursor in the URL, and its pager offers a first-page control that drops the
 cursor while keeping every filter, the sort, the page size, the chart settings, and the open
 drawer. While a page is pinned the SPA offers a link back to the first page after the refresh
@@ -2526,15 +2532,16 @@ guard. The function disables JIT for itself.
 `dashboard_task_facets_v1(p_input jsonb)` accepts `configuredWorkers` and returns the complete
 version 1 facet JSON document: sorted distinct `queues` from `dashboard_task_query_v1` and
 `dashboard_queue_control_v1`; `workers` from the configured list, `dashboard_worker_registry_v1`,
-and `dashboard_task_runtime_v1`; `taskTypes` from `dashboard_task_query_v1`; `tags` from
-`dashboard_task_v1`. The queue and type lists are recursive scans that seek the next distinct value
+and `dashboard_task_runtime_v1`; `taskTypes` from `dashboard_task_query_v1`; `tags` from the newest
+10,000 rows of `dashboard_task_v1`. The queue and type lists are recursive scans that seek the next distinct value
 through `task_query_queue_created_idx` and `task_query_type_created_idx`. Each costs one index seek
 per distinct value and stops at 1,000 values. The worker list also reads
 `dashboard_attempt_history_v1` through the same recursive scan over `attempt_history_worker_idx`.
 That index exists on every partition, so each distinct worker costs one seek per partition, and the
 list also stops at 1,000 values. A worker that ran tasks and then left the registry is therefore
-still offered as a filter while its history is retained. The tag list still reads every task,
-because no index supports a distinct scan over an array column.
+still offered as a filter while its history is retained. The tag sample walks
+`task_created_retention_idx` newest first and returns at most 1,000 distinct values. The bound keeps
+facet latency independent of the full task table because no index supports a distinct array scan.
 
 `dashboard_activity_v1(p_input jsonb)` maps `period` to its trailing window and bucket width,
 selects tasks whose runtime or outcome changed inside the window, and applies `filter`, `groupBy`,
