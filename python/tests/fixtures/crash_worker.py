@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 from threading import Event
 
-import psycopg
+from psycopg_pool import ConnectionPool
 
 from workhorse import Worker
 
@@ -16,9 +16,9 @@ def block_forever(_payload: object, _context: object) -> None:
     Event().wait()
 
 
-with psycopg.connect(database_url, autocommit=True) as connection:
+with ConnectionPool(database_url, min_size=3, max_size=3) as pool:
     Worker(
-        connection,
+        pool,
         worker_id="python-crash-worker",
         lease_ms=200,
         heartbeat_ms=50,

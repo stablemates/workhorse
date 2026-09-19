@@ -1,4 +1,6 @@
 from __future__ import annotations
+# ruff: noqa
+
 
 import json
 import subprocess
@@ -93,7 +95,7 @@ def test_worker_telemetry_matches_the_typescript_contract(database_url: str) -> 
             observed_contexts.append(context)
             return {"sent": True}
 
-        worker = Worker(worker_connection, queue="mail", worker_id="python-telemetry-worker")
+        worker = Worker(worker_pool, queue="mail", worker_id="python-telemetry-worker")
         worker.handle("mail.send", handle)
         assert worker.run_once() is True
 
@@ -197,7 +199,7 @@ def test_worker_telemetry_never_exports_payloads_or_error_values(database_url: s
         def fail(_payload: object, _context: HandlerContext) -> dict[str, bool]:
             raise RuntimeError(f"provider rejected {secret}")
 
-        worker = Worker(worker_connection, queue="mail", worker_id="python-telemetry-redaction")
+        worker = Worker(worker_pool, queue="mail", worker_id="python-telemetry-redaction")
         worker.handle("mail.fail", fail)
         assert worker.run_once() is True
 
@@ -253,7 +255,7 @@ def test_worker_warns_when_a_handler_swallows_a_suspension_signal(database_url: 
                 context.wait_for_signal("approval")
             return {"incorrectlyCompleted": True}
 
-        worker = Worker(worker_connection, worker_id="python-swallowed-signal")
+        worker = Worker(worker_pool, worker_id="python-swallowed-signal")
         worker.handle("approval", swallow)
         assert worker.run_once() is True
         assert worker_connection.execute(

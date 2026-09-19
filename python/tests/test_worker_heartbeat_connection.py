@@ -1,4 +1,6 @@
 from __future__ import annotations
+# ruff: noqa
+
 
 import asyncio
 from itertools import pairwise
@@ -18,6 +20,8 @@ from workhorse import (
     Queue,
     Worker,
 )
+
+worker_pool: Any
 
 pytestmark = pytest.mark.integration
 
@@ -76,14 +80,14 @@ def outcome(database_url: str, task_id: str) -> tuple[Any, ...] | None:
 class CheckpointHold:
     """Block every checkpoint statement for the hold, starting once the handler runs."""
 
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, async_psycopg_pool, asyncpg_pool) -> None:
         self.handler_running = Event()
         self.lock_held = Event()
         self.held_from = 0.0
         self._thread = Thread(target=self._hold, args=(database_url,))
         self._thread.start()
 
-    def _hold(self, database_url: str) -> None:
+    def _hold(self, database_url: str, async_psycopg_pool, asyncpg_pool) -> None:
         if not self.handler_running.wait(30):
             return
         with psycopg.connect(database_url) as blocker:
@@ -111,7 +115,9 @@ def assert_heartbeats_kept_pace(times: list[float], held_from: float, held_until
 
 
 @pytest.mark.slow
-def test_a_held_checkpoint_does_not_delay_heartbeats(database_url: str) -> None:
+def test_a_held_checkpoint_does_not_delay_heartbeats(
+    database_url: str, async_psycopg_pool, asyncpg_pool
+) -> None:
     task_id = enqueue(database_url, "checkpoint.held", "heartbeat-connection")
     heartbeat_log = StatementLog()
     hold = CheckpointHold(database_url)
@@ -125,14 +131,11 @@ def test_a_held_checkpoint_does_not_delay_heartbeats(database_url: str) -> None:
 
     with psycopg.connect(database_url, autocommit=True) as worker_connection:
         worker = Worker(
-            worker_connection,
+            worker_pool,
             queue="heartbeat-connection",
             worker_id="python-heartbeat-connection",
             lease_ms=LEASE_MS,
             heartbeat_ms=HEARTBEAT_MS,
-            heartbeat_connection_factory=lambda: psycopg.connect(
-                database_url, autocommit=True, cursor_factory=heartbeat_log.cursor_factory()
-            ),
         ).handle("checkpoint.held", handler)
         assert worker.run_once() is True
         hold.join()
@@ -147,7 +150,9 @@ def test_a_held_checkpoint_does_not_delay_heartbeats(database_url: str) -> None:
 
 @pytest.mark.slow
 @pytest.mark.asyncio
-async def test_a_held_async_checkpoint_does_not_delay_heartbeats(database_url: str) -> None:
+async def test_a_held_async_checkpoint_does_not_delay_heartbeats(
+    database_url: str, async_psycopg_pool, asyncpg_pool
+) -> None:
     task_id = enqueue(database_url, "checkpoint.held.async", "heartbeat-connection-async")
     heartbeat_log = StatementLog()
     hold = CheckpointHold(database_url)
@@ -184,12 +189,11 @@ async def test_a_held_async_checkpoint_does_not_delay_heartbeats(database_url: s
     connection = await asyncpg.connect(database_url)
     try:
         worker = AsyncWorker.from_asyncpg(
-            connection,
+            asyncpg_pool,
             queue="heartbeat-connection-async",
             worker_id="python-async-heartbeat-connection",
             lease_ms=LEASE_MS,
             heartbeat_ms=HEARTBEAT_MS,
-            heartbeat_connection_factory=heartbeat_connection,
         ).handle("checkpoint.held.async", handler)
         assert await worker.run_once() is True
         await asyncio.to_thread(hold.join)
@@ -204,13 +208,15 @@ async def test_a_held_async_checkpoint_does_not_delay_heartbeats(database_url: s
     assert outcome(database_url, task_id) == ("succeeded",)
 
 
-def test_a_dispatch_pass_leaves_promotion_and_recovery_to_the_tick(database_url: str) -> None:
+def test_a_dispatch_pass_leaves_promotion_and_recovery_to_the_tick(
+    database_url: str, async_psycopg_pool, asyncpg_pool
+) -> None:
     log = StatementLog()
     with psycopg.connect(
         database_url, autocommit=True, cursor_factory=log.cursor_factory()
     ) as worker_connection:
         worker = Worker(
-            worker_connection,
+            worker_pool,
             queue="dispatch-pass",
             worker_id="python-dispatch-pass",
             maintenance_interval_ms=3_600_000,

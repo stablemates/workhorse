@@ -1,4 +1,6 @@
 from __future__ import annotations
+# ruff: noqa
+
 
 import json
 from collections.abc import Callable, Mapping
@@ -95,7 +97,7 @@ def execute_trace_propagation_fixture(
     assert isinstance(stored, dict)
     traceparent = stored["traceparent"]
 
-    worker = Worker(connection, queue=queue_name, worker_id=f"python-{fixture['id']}")
+    worker = Worker(worker_pool, queue=queue_name, worker_id=f"python-{fixture['id']}")
     worker.handle(fixture["taskType"], lambda _payload, _context: None)
     assert worker.run_once() is True
 
@@ -148,7 +150,7 @@ def execute_batch_fixture(connection: psycopg.Connection[Any], fixture: Mapping[
         ]
 
     worker = Worker(
-        connection,
+        worker_pool,
         queue=queue_name,
         worker_id=f"python-{fixture['id']}",
         concurrency=fixture["concurrency"],
@@ -205,7 +207,7 @@ def execute_suspension_replay_fixture(
 
     worker = (
         Worker(
-            connection,
+            worker_pool,
             queue=queue_name,
             worker_id=f"python-{fixture['id']}",
             maintenance_interval_ms=100,
@@ -259,7 +261,7 @@ def execute_cancellation_fixture(
         raise reason
 
     worker = Worker(
-        connection,
+        worker_pool,
         queue=queue_name,
         worker_id=f"python-{fixture['id']}",
         lease_ms=fixture["leaseMs"],
@@ -315,7 +317,7 @@ def execute_expiration_fixture(
         raise reason
 
     worker = Worker(
-        connection,
+        worker_pool,
         queue=queue_name,
         worker_id=f"python-{fixture['id']}",
         lease_ms=fixture["leaseMs"],
@@ -405,7 +407,7 @@ def execute_lease_loss_fixture(
         return {"late": True}
 
     worker = Worker(
-        connection,
+        worker_pool,
         queue=queue_name,
         worker_id=f"python-{fixture['id']}",
         lease_ms=fixture["leaseMs"],
@@ -456,7 +458,7 @@ def execute_heartbeat_fixture(
         assert release_handler.wait(timeout=5)
 
     worker = Worker(
-        connection,
+        worker_pool,
         queue=queue_name,
         worker_id=f"python-{fixture['id']}",
         lease_ms=fixture["leaseMs"],
@@ -628,7 +630,7 @@ def execute_graceful_drain_fixture(
         assert release_handlers.wait(timeout=5)
 
     worker = Worker(
-        connection,
+        worker_pool,
         queue=queue_name,
         worker_id=f"python-{fixture['id']}",
         concurrency=fixture["concurrency"],

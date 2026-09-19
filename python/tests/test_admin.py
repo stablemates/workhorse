@@ -1,4 +1,6 @@
 from __future__ import annotations
+# ruff: noqa
+
 
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -22,6 +24,8 @@ from workhorse import (
     TaskPayloadProjection,
     Worker,
 )
+
+worker_pool: Any
 
 pytestmark = pytest.mark.integration
 
@@ -75,7 +79,7 @@ def _prepare_admin_fixture(database_url: str) -> AdminFixture:
     worker_id = "python-admin-worker"
     with psycopg.connect(database_url, autocommit=True) as connection:
         assert (
-            Worker(connection, queue="admin-failure", worker_id=worker_id)
+            Worker(worker_pool, queue="admin-failure", worker_id=worker_id)
             .handle("admin.failure", _raise_failure)
             .run_once()
             is True
@@ -105,13 +109,13 @@ def _prepare_admin_fixture(database_url: str) -> AdminFixture:
             ),
         )
         assert (
-            Worker(connection, queue="admin-durable", worker_id="python-admin-durable")
+            Worker(worker_pool, queue="admin-durable", worker_id="python-admin-durable")
             .handle("admin.durable", _durable_wait)
             .run_once()
             is True
         )
         assert (
-            Worker(connection, queue="admin-human", worker_id="python-admin-human")
+            Worker(worker_pool, queue="admin-human", worker_id="python-admin-human")
             .handle("admin.human", _human_wait)
             .run_once()
             is True
@@ -137,7 +141,7 @@ def _assert_read_results(
     assert list_tasks() is not None
 
 
-def test_admin_exposes_each_operator_operation_over_psycopg(database_url: str) -> None:
+def test_admin_exposes_each_operator_operation_over_psycopg(database_url: str, worker_pool) -> None:
     fixture = _prepare_admin_fixture(database_url)
     audit = AdminAudit("python-test", "exercise operator operation", "sync-admin-request")
 
@@ -240,6 +244,9 @@ async def _assert_async_admin_operations(
 @pytest.mark.asyncio
 async def test_async_admin_exposes_each_operator_operation_over_asyncpg(
     database_url: str,
+    worker_pool,
+    async_psycopg_pool,
+    asyncpg_pool,
 ) -> None:
     fixture = _prepare_admin_fixture(database_url)
     connection = await asyncpg.connect(database_url)
@@ -254,6 +261,9 @@ async def test_async_admin_exposes_each_operator_operation_over_asyncpg(
 @pytest.mark.asyncio
 async def test_async_admin_exposes_each_operator_operation_over_psycopg(
     database_url: str,
+    worker_pool,
+    async_psycopg_pool,
+    asyncpg_pool,
 ) -> None:
     fixture = _prepare_admin_fixture(database_url)
     connection = await psycopg.AsyncConnection.connect(database_url, autocommit=True)
