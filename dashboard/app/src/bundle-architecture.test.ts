@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 const controller = readFileSync(new URL("./shell/controller.tsx", import.meta.url), "utf8");
 const taskList = readFileSync(new URL("./components/task-list.tsx", import.meta.url), "utf8");
 const activityChart = readFileSync(new URL("./charts/activity.tsx", import.meta.url), "utf8");
+const tasksPage = readFileSync(new URL("./pages/tasks.tsx", import.meta.url), "utf8");
 const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
 
 describe("dashboard bundle boundaries", () => {
@@ -17,6 +18,12 @@ describe("dashboard bundle boundaries", () => {
   it("lets the controller polling clock own activity refreshes", () => {
     expect(activityChart).not.toContain("setInterval");
     expect(activityChart).toContain("refreshKey");
+    expect(controller).toContain("setActivityPollTick((tick) => tick + 1)");
+    expect(controller).toMatch(
+      /setActivityPollTick\(\(tick\) => tick \+ 1\);\s*void loadPage\(\{ background: true \}\);/,
+    );
+    expect(tasksPage).toContain("refreshKey={activityPollTick}");
+    expect(tasksPage).not.toContain("refreshKey={data}");
   });
 
   it("imports only the Mantine component styles used by the shell", () => {

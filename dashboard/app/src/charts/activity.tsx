@@ -45,7 +45,7 @@ export default function TasksActivityChart({
   tags: string[];
   queue: string | null;
   worker: string | null;
-  refreshKey: object;
+  refreshKey: number;
   updateLocation: (updates: Partial<TaskLocationState>) => void;
 }) {
   const client = useDashboardClient();

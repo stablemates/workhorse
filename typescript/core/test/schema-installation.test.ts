@@ -467,6 +467,7 @@ describe("schema installation", () => {
       { version: 11, description: "debounce replaces only pending tasks" },
       { version: 12, description: "task counts guard the wait probe" },
       { version: 13, description: "stable time for promotion and recovery" },
+      { version: 14, description: "bin dashboard activity once" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

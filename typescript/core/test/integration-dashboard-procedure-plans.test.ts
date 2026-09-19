@@ -49,9 +49,9 @@ describe("dashboard procedure plans", () => {
 
   afterAll(async () => database.teardown());
 
-  it("disables JIT for generic high-cost dashboard plans", async () => {
-    // PostgreSQL applies proconfig before planning the function body, so this covers every
-    // input-specific events branch without relying on a wall-clock assertion.
+  it("pins planner settings for generic high-cost dashboard plans", async () => {
+    // PostgreSQL applies proconfig before planning each function body. Pin the activity aggregate
+    // choice and every input-specific events branch without relying on a wall-clock assertion.
     const result = await database.pool.query<{ proname: string; proconfig: string[] | null }>(
       `SELECT routine.proname, routine.proconfig
          FROM pg_proc routine
@@ -62,7 +62,10 @@ describe("dashboard procedure plans", () => {
     );
 
     expect(result.rows).toEqual([
-      { proname: "dashboard_activity_v1", proconfig: ["jit=off"] },
+      {
+        proname: "dashboard_activity_v1",
+        proconfig: ["jit=off", "enable_sort=off"],
+      },
       { proname: "dashboard_events_v1", proconfig: ["jit=off"] },
     ]);
   });

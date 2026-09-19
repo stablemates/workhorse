@@ -196,6 +196,7 @@ export function useDashboardController(
     [],
   );
   const pollingClock = useMemo(() => createDashboardPollingClock(() => undefined), []);
+  const [activityPollTick, setActivityPollTick] = useState(0);
   const [refreshScheduleResetKey, setRefreshScheduleResetKey] = useState(0);
   const resetRefreshSchedule = useCallback(() => setRefreshScheduleResetKey((key) => key + 1), []);
   const eventsQuery = location.events;
@@ -846,10 +847,11 @@ export function useDashboardController(
       : "Auto refresh interval");
   useEffect(() => {
     pollingClock.setRefresh(() => {
+      if (route === "/tasks") setActivityPollTick((tick) => tick + 1);
       void loadPage({ background: true });
       void loadTaskCounts({ background: true });
     });
-  }, [loadPage, loadTaskCounts, pollingClock]);
+  }, [loadPage, loadTaskCounts, pollingClock, route]);
   useEffect(() => {
     pollingClock.reset(dashboardRefreshIntervalMs(refreshInterval), autoRefreshPausedRef.current);
   }, [location.route, pollingClock, refreshInterval, refreshScheduleResetKey]);
@@ -901,6 +903,7 @@ export function useDashboardController(
         runTaskNow={runTaskNow}
         auditActor={auditActor}
         reload={reloadTasks}
+        activityPollTick={activityPollTick}
       />
     );
   } else if (loadState.data?.route === "/events") {
