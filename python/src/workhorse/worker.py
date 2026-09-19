@@ -22,7 +22,9 @@ from ._compatibility import (
 )
 from ._contracts import compile_contract_schema as _compile_contract_schema
 from ._drivers import (
+    PooledSyncExecutor as _PooledSyncExecutor,
     PsycopgConnection as _PsycopgConnection,
+    PsycopgPool as _PsycopgPool,
     Row as _Row,
     SyncExecutor as _SyncExecutor,
 )
@@ -756,11 +758,11 @@ class _HandlerDurability:
 
 
 class Worker:
-    """A synchronous worker over a dedicated, thread-safe Psycopg connection."""
+    """A synchronous worker over a Psycopg connection pool."""
 
     def __init__(
         self,
-        connection: _SyncConnection,
+        pool: _PsycopgPool,
         *,
         queue: str | None = None,
         queues: Sequence[str] | None = None,
@@ -773,15 +775,23 @@ class Worker:
         registry_interval_ms: int = 5_000,
         schedule_namespaces: Sequence[str] = (),
         schedule_catchup_limit: int = 100,
-        notification_connection_factory: _NotificationConnectionFactory | None = None,
         on_notification_error: Callable[[BaseException], None] | None = None,
         on_registration_error: Callable[[BaseException], None] | None = None,
-        heartbeat_connection_factory: Callable[[], _SyncConnection] | None = None,
+        shared_heartbeats: bool = False,
         _executor: _SyncRowExecutor | None = None,
         _heartbeat_executor_factory: _HeartbeatExecutorFactory | None = None,
     ) -> None:
-        if _executor is None and getattr(connection, "autocommit", False) is not True:
-            raise ValueError("Worker requires a dedicated Psycopg connection in autocommit mode")
+        capacity = getattr(pool, "max_size", None)
+        if capacity is None:
+            get_max_size = getattr(pool, "get_max_size", None)
+            if callable(get_max_size):
+                capacity = get_max_size()
+        if not shared_heartbeats and (not isinstance(capacity, int) or capacity < 3):
+            found = "unknown" if capacity is None else str(capacity)
+            raise ValueError(
+                f"Worker pool capacity must be at least 3 (found {found}); "
+                "set shared_heartbeats=True to opt out"
+            )
         if queue is not None and queues is not None:
             raise ValueError("queue and queues cannot be configured together")
         configured_queues = queues if queues is not None else (queue or "default",)
@@ -803,7 +813,7 @@ class Worker:
             or resolved_poll_ms < 1
         ):
             raise ValueError("poll_ms must be a positive integer")
-        self._executor = _executor or _SyncExecutor(cast(_PsycopgConnection, connection))
+        self._executor = _executor or _PooledSyncExecutor(pool)
         self._compatibility = _CachedCompatibilityCheck(self._executor)
         self._handlers: dict[str, Handler] = {}
         self.queues = unique_queues
@@ -812,8 +822,8 @@ class Worker:
         self.concurrency = concurrency
         self.poll_ms = resolved_poll_ms
         self._notification_poll_ms = poll_ms if poll_ms is not None else 5_000
-        self._query_connection = connection
-        self._notification_connection_factory = notification_connection_factory
+        self._pool = pool
+        self._shared_heartbeats = shared_heartbeats
         self._notification_wake = Event()
         self._notification_listening = Event()
         self._on_notification_error = on_notification_error
@@ -874,12 +884,13 @@ class Worker:
         # Heartbeats get their own connection when one is configured, so a slow handler statement
         # on the shared connection cannot hold a lease renewal back.
         self._heartbeat_executor_factory = _heartbeat_executor_factory or (
-            None
-            if heartbeat_connection_factory is None
-            else _psycopg_heartbeat_executor_factory(heartbeat_connection_factory, connection)
+            None if shared_heartbeats else _psycopg_pool_heartbeat_executor_factory(pool)
         )
         self._heartbeat_connection_lock = Lock()
         self._heartbeat_connection: tuple[_SyncRowExecutor, Callable[[], None]] | None = None
+        self._notification_connection_factory: _NotificationConnectionFactory = (
+            _psycopg_pool_notification_factory(pool)
+        )
 
     def _register_heartbeat(
         self,
@@ -1685,7 +1696,7 @@ class Worker:
             self.queues,
             self._wake_from_notification,
             self._on_notification_error,
-            self._query_connection,
+            None,
         )
         listener.start()
         return listener
@@ -2126,13 +2137,38 @@ def _wait_record(task_id: str, row: _Row, *, name: str | None = None) -> TaskWai
     )
 
 
-def _psycopg_heartbeat_executor_factory(
-    factory: Callable[[], _SyncConnection], query_connection: object
-) -> _HeartbeatExecutorFactory:
+class _PoolConnectionLease:
+    def __init__(self, context: Any, connection: Any) -> None:
+        self._context = context
+        self._connection = connection
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._connection, name)
+
+    def close(self) -> None:
+        self._context.__exit__(None, None, None)
+
+
+def _pool_connection(pool: _PsycopgPool) -> _PoolConnectionLease:
+    context = pool.connection()
+    connection = context.__enter__()
+    return _PoolConnectionLease(context, connection)
+
+
+def _psycopg_pool_notification_factory(pool: _PsycopgPool) -> _NotificationConnectionFactory:
+    def open_connection() -> _SyncConnection:
+        connection = _pool_connection(pool)
+        if getattr(connection, "autocommit", False) is not True:
+            connection.close()
+            raise ValueError("Notification connection must be in autocommit mode")
+        return cast(_SyncConnection, connection)
+
+    return open_connection
+
+
+def _psycopg_pool_heartbeat_executor_factory(pool: _PsycopgPool) -> _HeartbeatExecutorFactory:
     def open_heartbeat_executor() -> tuple[_SyncRowExecutor, Callable[[], None]]:
-        connection = factory()
-        if connection is query_connection:
-            raise ValueError("Heartbeat connection must be separate from the worker")
+        connection = _pool_connection(pool)
         if getattr(connection, "autocommit", False) is not True:
             connection.close()
             raise ValueError("Heartbeat connection must be in autocommit mode")

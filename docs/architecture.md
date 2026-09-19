@@ -217,7 +217,8 @@ return `EnqueueIdempotencyConflictError`, `DependencyCycleError`, and
 `IncompatibleKeyMode`, `NotPending`, and `WindowElapsedPending` remain as deprecated Go aliases of
 the same values for the rest of the `0.x` line and are removed in `1.0.0`.
 
-`python/src/workhorse/worker.py` exports `Worker` for a dedicated synchronous Psycopg connection
+`python/src/workhorse/worker.py` exports `Worker` for a Psycopg `ConnectionPool`; it borrows one
+autocommit connection per statement. The pool replaces the dedicated synchronous connection.
 whose `autocommit` property is `True`. `Worker.handle(type, handler)` registers a handler whose
 arguments are the JSON payload and `HandlerContext`. `HandlerContext.task` is the `ClaimedTask`
 returned by `claim_v1`. `HandlerContext.cancellation` is a `CancellationToken` with `cancelled`,
@@ -2311,7 +2312,7 @@ handler starts, and closes it with the last lease. Each round on the reservation
 error. node-postgres then destroys the connection rather than pooling it, which is the client-side
 cancel, and the next round connects a new one. No session `SET` is involved, so the reservation is
 safe under transaction pooling. Go workers use the pool's dedicated heartbeat connection unless `WorkerOptions.SharedHeartbeats` opts out. A Python worker
-uses its own heartbeat connection only when given `heartbeat_connection_factory`.
+takes its dedicated heartbeat connection from the supplied pool.
 
 ### Cancellation
 
