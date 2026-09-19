@@ -12454,7 +12454,7 @@ CREATE OR REPLACE VIEW workhorse.dashboard_task_query_v1 AS
 CREATE OR REPLACE VIEW workhorse.dashboard_task_runtime_v1 AS
   SELECT task_id, queue_name, state, current_attempt, fence_token, run_at, ready_at, worker_id,
          acquired_at, heartbeat_at, expires_at, attempt_timeout_at, wait_name, attempt_started_at,
-         cancel_requested_at, cancel_requested_by, cancel_reason, error, updated_at
+         cancel_requested_at, cancel_requested_by, cancel_reason, error, updated_at, priority
     FROM workhorse.task_runtime;
 -- `payload` is redacted here, not by each backend, for the reason recorded on
 -- dashboard_task_outcome_v1. The key arrays stay projected so the dashboard can report how many
@@ -13604,11 +13604,19 @@ DECLARE
 BEGIN
   SELECT estimate >= 50000 INTO v_approximate
     FROM workhorse.dashboard_task_estimate_v1();
-  v_health := workhorse.queue_health_v1();
+  v_health := COALESCE(p_input->'health', workhorse.queue_health_v1());
 
   FOR v_row IN
-    WITH known_queues AS (
-      SELECT queue_name FROM workhorse.dashboard_task_v1
+    WITH RECURSIVE task_queues(queue_name) AS (
+      SELECT min(queue_name) FROM workhorse.dashboard_task_query_v1
+      UNION ALL
+      SELECT (
+        SELECT min(query_row.queue_name)
+          FROM workhorse.dashboard_task_query_v1 query_row
+         WHERE query_row.queue_name > task_queues.queue_name
+      ) FROM task_queues WHERE task_queues.queue_name IS NOT NULL
+    ), known_queues AS (
+      SELECT queue_name FROM task_queues WHERE queue_name IS NOT NULL
       UNION SELECT queue_name FROM workhorse.dashboard_queue_control_v1
       UNION SELECT queue_name FROM workhorse.dashboard_concurrency_policy_v1
       UNION SELECT queue_name FROM workhorse.dashboard_rate_limit_policy_v1
@@ -14219,7 +14227,7 @@ AS $$
   ), retention_provenance AS (
     SELECT document FROM provenance WHERE policy = 'retention'
   ), health AS (
-    SELECT workhorse.queue_health_v1() AS document
+    SELECT COALESCE(p_input->'health', workhorse.queue_health_v1()) AS document
   ), enqueue_rate AS (
     SELECT COALESCE(sum(stat.enqueued), 0)::bigint AS tasks
       FROM workhorse.stat_buckets_v1(
@@ -14334,7 +14342,7 @@ DECLARE
 BEGIN
   v_seconds := CASE v_window WHEN '15m' THEN 900 WHEN '24h' THEN 86400 ELSE 3600 END;
   v_minutes := v_seconds::double precision / 60;
-  v_health := workhorse.queue_health_v1();
+  v_health := COALESCE(p_input->'health', workhorse.queue_health_v1());
 
   WITH current_stats AS MATERIALIZED (SELECT * FROM workhorse.stat_buckets_v1(
         date_bin('1 minute', v_now, timestamp '2000-01-01' AT TIME ZONE 'UTC')
@@ -14442,14 +14450,13 @@ WITH rolled AS (
            count(*) FILTER (WHERE state = 'scheduled'
              AND current_attempt > 1)::integer AS retrying
       FROM workhorse.dashboard_task_runtime_v1 GROUP BY queue_name
-  ), priorities AS (
-    SELECT runtime.queue_name, task.priority, count(*)::integer AS ready,
+  ), priorities AS MATERIALIZED (
+    SELECT runtime.queue_name, runtime.priority, count(*)::integer AS ready,
            (extract(epoch FROM v_now - min(runtime.ready_at)) * 1000)::text
              AS oldest_ready_ms
       FROM workhorse.dashboard_task_runtime_v1 runtime
-      JOIN workhorse.dashboard_task_v1 task ON task.id = runtime.task_id
      WHERE runtime.state = 'ready'
-     GROUP BY runtime.queue_name, task.priority
+     GROUP BY runtime.queue_name, runtime.priority
   ), rows AS (
     SELECT queue_names.queue_name AS queue, COALESCE(control.paused, false) AS paused,
            COALESCE(runtime.ready, 0)::integer AS ready, runtime.oldest_ready_ms,
@@ -15436,10 +15443,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (11, 'debounce replaces only pending tasks'),
   (12, 'task counts guard the wait probe'),
   (13, 'stable time for promotion and recovery'),
-  (14, 'bin dashboard activity once')
+  (14, 'bin dashboard activity once'),
+  (15, 'cached health dashboard reads')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (14) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (15) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

@@ -3,6 +3,9 @@ import type { DashboardEventDetail, DashboardTaskDetail } from "../wire.js";
 import {
   readDashboardEventDetail,
   readDashboardHumanWaits,
+  readDashboardQueues,
+  readDashboardSettings,
+  readDashboardSystem,
   readDashboardTaskDetail,
   redactDashboardTaskDetailErrorStacks,
 } from "./read-model.js";
@@ -103,5 +106,29 @@ describe("dashboard health pass-through", () => {
     expect(inputs()).toEqual([
       { id: "task-1", canSignal: true, canCompleteHumanWait: false, health },
     ]);
+  });
+
+  it("hands the same document to the queues procedure", async () => {
+    const { database: db, inputs } = capturingDatabase();
+
+    await readDashboardQueues(db, async () => health);
+
+    expect(inputs()).toEqual([{ health }]);
+  });
+
+  it("hands the same document to the settings procedure", async () => {
+    const { database: db, inputs } = capturingDatabase();
+
+    await readDashboardSettings(db, true, false, async () => health);
+
+    expect(inputs()).toEqual([{ writable: true, settingsController: false, health }]);
+  });
+
+  it("hands the same document to the system procedure", async () => {
+    const { database: db, inputs } = capturingDatabase();
+
+    await readDashboardSystem(db, "24h", async () => health);
+
+    expect(inputs()).toEqual([{ window: "24h", health }]);
   });
 });

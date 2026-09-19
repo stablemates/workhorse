@@ -238,6 +238,7 @@ describe("schema installation", () => {
         "cancel_reason",
         "error",
         "updated_at",
+        "priority",
       ],
       dashboard_task_v1: [
         "id",
@@ -468,6 +469,7 @@ describe("schema installation", () => {
       { version: 12, description: "task counts guard the wait probe" },
       { version: 13, description: "stable time for promotion and recovery" },
       { version: 14, description: "bin dashboard activity once" },
+      { version: 15, description: "cached health dashboard reads" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
