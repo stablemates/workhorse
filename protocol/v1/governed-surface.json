@@ -186,6 +186,10 @@
       "arguments": ["uuid"],
       "returns": "jsonb"
     },
+    "dashboard_task_value_v1": {
+      "arguments": ["jsonb"],
+      "returns": "jsonb"
+    },
     "dashboard_tasks_cursor_v1": {
       "arguments": ["jsonb"],
       "returns": "jsonb"

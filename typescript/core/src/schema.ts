@@ -148,6 +148,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "bounded dashboard task reads",
     kind: "additive",
   },
+  {
+    fromVersion: 16,
+    toVersion: 17,
+    file: "0017-bounded-dashboard-task-values.sql",
+    description: "bounded dashboard task values",
+    kind: "additive",
+  },
 ];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {

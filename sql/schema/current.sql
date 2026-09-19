@@ -13819,6 +13819,14 @@ AS $$
       LEFT JOIN workhorse.dashboard_task_progress_v1 progress ON progress.task_id = j.id
       LEFT JOIN workhorse.dashboard_signal_wait_v1 signal_wait
         ON signal_wait.task_id = j.id AND signal_wait.signal_name = runtime.wait_name
+  ), task_values AS (
+    -- The payload and the result are measured once here, because both the outcome and the document
+    -- below decide on the same two sizes and re-measuring a megabyte twice is the cost this bound
+    -- exists to avoid. A task with neither measures zero, which reads as present and empty.
+    SELECT COALESCE(octet_length(task.payload::text), 0) AS payload_bytes,
+           COALESCE(octet_length(task.result::text), 0) AS result_bytes,
+           workhorse.dashboard_inline_value_bytes_v1() AS inline_bytes
+      FROM task
   ), identity AS (
     SELECT jsonb_build_object(
       'id', task.id::text, 'queue', task.queue, 'type', task.type, 'priority', task.priority,
@@ -13967,11 +13975,16 @@ AS $$
       'outcome', CASE WHEN outcome_state IS NOT NULL THEN jsonb_build_object(
         'state', outcome_state, 'attempt', outcome_attempt,
         'finishedAt', workhorse.dashboard_iso_v1(finished_at),
-        'result', result, 'error', outcome_error) END,
+        -- A result larger than the inline bound is reported by size alone, exactly as a checkpoint
+        -- value is. `dashboard_task_value_v1` returns the one an operator opens.
+        'result', CASE WHEN task_values.result_bytes <= task_values.inline_bytes THEN result END,
+        'resultBytes', task_values.result_bytes,
+        'resultOmitted', task_values.result_bytes > task_values.inline_bytes,
+        'error', outcome_error) END,
       -- The result appears under the outcome alone. A result exists only once a task finishes, so
       -- a second copy beside it doubled what a megabyte result costs to open and named no new fact.
       'error', COALESCE(outcome_error, runtime_error)
-    ) AS value FROM task
+    ) AS value FROM task CROSS JOIN task_values
   ), batch_executions AS (
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
       'id', batch_id, 'attempt', selected_attempt,
@@ -14119,7 +14132,10 @@ AS $$
     'concurrencyPolicy', concurrency_policy.value,
     'signalWait', signal_wait.value,
     'canSignal', parameters.can_signal,
-    'payload', task.payload,
+    'payload', CASE WHEN task_values.payload_bytes <= task_values.inline_bytes
+                    THEN task.payload END,
+    'payloadBytes', task_values.payload_bytes,
+    'payloadOmitted', task_values.payload_bytes > task_values.inline_bytes,
     'progress', progress.value,
     'durability', NULL,
     'current', current_state.value,
@@ -14134,6 +14150,7 @@ AS $$
   )
     FROM parameters
     JOIN task ON true
+    JOIN task_values ON true
     JOIN identity ON true
     JOIN dependency_lineage ON true
     JOIN child_lineage ON true
@@ -14167,6 +14184,31 @@ AS $$
     FROM workhorse.dashboard_task_checkpoint_v1 checkpoint
    WHERE checkpoint.task_id = (p_input->>'id')::uuid
      AND checkpoint.checkpoint_name = p_input->>'name';
+$$;
+
+-- One stored task value, read on its own. Task detail withholds a payload or a result larger than
+-- the inline bound and reports its size, so an operator who opens that one value asks for it here
+-- rather than receiving a megabyte on every task they open. `kind` names which of the two.
+--
+-- The result is read through `dashboard_task_result_v1`, so the redaction task detail applies holds
+-- here as well: this door serves the whole stored value, never an unredacted one. A task that has
+-- not finished has no result, and answers with a null value and a size of zero.
+CREATE OR REPLACE FUNCTION workhorse.dashboard_task_value_v1(p_input jsonb)
+RETURNS jsonb
+LANGUAGE sql
+AS $$
+  SELECT jsonb_build_object(
+    'id', task.id::text,
+    'kind', p_input->>'kind',
+    'value', stored.value,
+    'valueBytes', COALESCE(octet_length(stored.value::text), 0))
+    FROM workhorse.dashboard_task_v1 task
+    CROSS JOIN LATERAL (
+      SELECT CASE WHEN p_input->>'kind' = 'payload' THEN task.payload
+                  ELSE workhorse.dashboard_task_result_v1(task.id) END AS value
+    ) stored
+   WHERE task.id = (p_input->>'id')::uuid
+     AND p_input->>'kind' IN ('payload', 'result');
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.dashboard_settings_v1(p_input jsonb)
@@ -15457,10 +15499,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (13, 'stable time for promotion and recovery'),
   (14, 'bin dashboard activity once'),
   (15, 'cached health dashboard reads'),
-  (16, 'bounded dashboard task reads')
+  (16, 'bounded dashboard task reads'),
+  (17, 'bounded dashboard task values')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (16) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (17) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
