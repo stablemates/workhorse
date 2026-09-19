@@ -5,6 +5,7 @@ import {
   holdHeartbeatConnection,
   ReservedConnection,
 } from "../src/heartbeat-connection.js";
+import { attachConnectionPool } from "../src/index.js";
 import type { Queryable } from "../src/types.js";
 
 const emptyResult: QueryResult = { command: "", rowCount: 0, oid: 0, fields: [], rows: [] };
@@ -31,8 +32,10 @@ function fakePool(max = 10) {
 }
 
 // The mocks record calls with concrete rows, while Queryable is generic over its row type.
-function asDatabase(database: object): ConstructorParameters<typeof ReservedConnection>[0] {
-  return database as ConstructorParameters<typeof ReservedConnection>[0];
+function asDatabase(
+  database: object,
+): Queryable & ConstructorParameters<typeof ReservedConnection>[0] {
+  return database as Queryable & ConstructorParameters<typeof ReservedConnection>[0];
 }
 
 function never(): Promise<never> {
@@ -176,17 +179,15 @@ describe("shared heartbeat connection", () => {
     expect(pool.connect).toHaveBeenCalledTimes(2);
   });
 
-  it("shares by notification identity, so two adapters on one pool hold one connection", async () => {
+  it("shares by pool, so two adapter queryables on one pool hold one connection", async () => {
     const { pool } = fakePool();
-    const adapterQueryable = (identity: object) =>
-      asDatabase({
-        query: pool.query,
-        connect: pool.connect,
-        notificationConnectionCapacity: 10,
-        notificationConnectionIdentity: identity,
-      });
-    const first = holdHeartbeatConnection(adapterQueryable(pool))!;
-    const second = holdHeartbeatConnection(adapterQueryable(pool))!;
+    const adapterQueryable = (): Queryable => {
+      const queryable = asDatabase({ query: pool.query });
+      attachConnectionPool(queryable, asDatabase(pool));
+      return queryable;
+    };
+    const first = holdHeartbeatConnection(adapterQueryable())!;
+    const second = holdHeartbeatConnection(adapterQueryable())!;
 
     await first.run((client) => client.query("SELECT 1"), 1_000);
     await second.run((client) => client.query("SELECT 2"), 1_000);

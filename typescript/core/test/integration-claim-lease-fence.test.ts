@@ -1697,6 +1697,8 @@ describe("claim lease fence", () => {
     );
     const id = await flakyWrites.enqueue("settlement-write", null, { maxAttempts: 1 });
     const worker = new Worker(flakyWrites, {
+      // The wrapper has no pool to lend a heartbeat connection from.
+      sharedHeartbeats: true,
       workerId: "settlement-write-worker",
       registryIntervalMs: 0,
     }).handle("settlement-write", async () => ({ ok: true }));

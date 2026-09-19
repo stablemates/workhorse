@@ -24,9 +24,10 @@ delivered — nothing errors, and the worker keeps dispatching on its fallback p
 every mode: it holds a notification until the client sends another query, which an idle listener
 never does.
 
-To keep wake hints, give the listener a connection that reaches PostgreSQL without those poolers —
-direct, or session-mode PgBouncer. The ORM adapters take a `notificationPool` for exactly this.
-A `Queue` built on a queryable without `connect()` stays polling-only.
+To keep wake hints, give the worker a pool that reaches PostgreSQL without those poolers — direct,
+or session-mode PgBouncer. Drizzle and TypeORM workers use the ORM's own pool. The Prisma and
+Kysely adapters take a `pool` for exactly this. A `Queue` built on a queryable without `connect()`
+has no listener, and its worker logs one warning when it starts.
 
 ## How do I budget connections?
 
@@ -39,16 +40,16 @@ pooler's client cap.
 Heartbeats need headroom of their own. If handlers hold every pooled connection, a heartbeat queued
 behind them never runs, and every lease lapses at once. TypeScript workers therefore keep one
 dedicated heartbeat connection per pool, shared the way the listener is. Budget that connection on
-top of the listener and whatever handlers take. When the pool is too small for all three, workers
-heartbeat through the shared pool instead. The heartbeat connection runs only self-contained
-statements, so it works behind a transaction-mode pooler. Go workers still heartbeat through the
+top of the listener and whatever handlers take. If the pool cannot spare it, or states no size, the
+worker refuses to start and says why. Set `sharedHeartbeats` to send heartbeats through the shared
+pool instead, and accept that busy handlers can then delay renewal. The heartbeat connection runs
+only self-contained statements, so it works behind a transaction-mode pooler. Go workers still heartbeat through the
 shared pool. A Python worker opens its own heartbeat connection only when you pass it a
 `heartbeat_connection_factory`.
 
 ## What is unsafe?
 
-Pointing `notificationPool` at a transaction-mode pooler or at PgCat, because the hints die
-silently. Session-level advisory locks under transaction pooling, because exclusion stops holding
+Giving a worker a pool behind a transaction-mode pooler or PgCat, because the hints die silently. Session-level advisory locks under transaction pooling, because exclusion stops holding
 between clients and grants leak onto pooled backends. Any session state a client leaves behind,
 because the next client to borrow that backend inherits it. One PgCat-only detail: its
 configuration names each pool, so a client can only reach a database the pooler was configured

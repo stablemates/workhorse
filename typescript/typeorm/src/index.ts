@@ -2,7 +2,7 @@ import {
   createProviderAdapter,
   createProviderQueryable,
   QueryError,
-  type AdapterNotificationPool,
+  type AdapterConnectionPoolSource,
   type ProviderAdapterOptions,
   type Queryable,
   type WorkhorseAdapter,
@@ -14,7 +14,7 @@ export interface TypeOrmExecutor {
   query<T = unknown>(statement: string, values?: unknown[]): Promise<T>;
 }
 
-export interface TypeOrmAdapterOptions extends ProviderAdapterOptions {}
+export interface TypeOrmAdapterOptions extends Omit<ProviderAdapterOptions, "pool"> {}
 
 export class TypeOrmQueryError extends QueryError {
   constructor(statement: string, cause: unknown) {
@@ -26,12 +26,12 @@ export class TypeOrmQueryError extends QueryError {
 /** Convert a TypeORM data source or entity manager into Workhorse's database protocol. */
 export function typeOrmQueryable(
   executor: TypeOrmExecutor,
-  notificationPool?: AdapterNotificationPool,
+  connectionPool?: AdapterConnectionPoolSource,
 ): Queryable {
   return createProviderQueryable({
     execute: (statement, values) => executor.query<QueryResultRow[]>(statement, [...values]),
     wrapError: (statement, cause) => new TypeOrmQueryError(statement, cause),
-    notificationPool,
+    connectionPool,
   });
 }
 
@@ -44,5 +44,7 @@ export function createTypeOrmAdapter<TTransaction extends TypeOrmExecutor = Type
     database,
     toQueryable: typeOrmQueryable,
     ...options,
+    // PostgresDriver creates its node-postgres pool as driver.master when the data source initializes.
+    connectionPool: () => (database as { driver?: { master?: unknown } }).driver?.master,
   });
 }

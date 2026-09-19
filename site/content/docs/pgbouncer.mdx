@@ -36,11 +36,12 @@ poll. That fallback is the correctness mechanism, so tasks still run; wake-up is
 To keep wake hints, give the listener a connection that reaches PostgreSQL directly or through
 session-mode PgBouncer:
 
-- The Drizzle adapter forwards its node-postgres pool for listening; point that pool at a
-  session-mode alias.
-- The Prisma, TypeORM, and Kysely adapters take a `notificationPool` for exactly this. Give it a
-  session-pooled PgBouncer or direct pool.
-- A `Queue` built on a queryable without `connect()` stays polling-only by design.
+- The Drizzle and TypeORM adapters use the ORM's own node-postgres pool for listening; point that
+  pool at a session-mode alias.
+- The Prisma and Kysely adapters take a `pool` for exactly this. Give it a session-pooled PgBouncer
+  or direct pool.
+- A `Queue` built on a queryable without `connect()` has no listener, so its worker polls and logs
+  one warning when it starts.
 
 ## Connection budgets
 
@@ -53,15 +54,16 @@ sides, or drop the capability.
 Heartbeats need headroom too. If handlers hold every pooled connection, a heartbeat queued behind
 them never runs and every lease lapses at once. TypeScript workers therefore keep one dedicated
 heartbeat connection per pool, shared the way the listener is, so budget it on top of the listener
-and your handlers. When the pool is too small for all three, workers heartbeat through the shared
-pool instead. The heartbeat connection runs only self-contained statements, so it works in every
-pool mode. Go workers still heartbeat through the shared pool. A Python worker opens its own
+and your handlers. If the pool cannot spare it, or states no size, the worker refuses to start and
+says why. Set `sharedHeartbeats` to send heartbeats through the shared pool instead, and accept
+that busy handlers can then delay renewal. The heartbeat connection runs only self-contained
+statements, so it works in every pool mode. Go workers still heartbeat through the shared pool. A Python worker opens its own
 heartbeat connection only when you pass it a `heartbeat_connection_factory`.
 
 ## What is unsafe
 
-Two configurations fail quietly. Pointing `notificationPool` at transaction-mode PgBouncer or at
-PgCat accepts `LISTEN` and delivers nothing. And session-level advisory locks — `pg_advisory_lock`,
+Two configurations fail quietly. Giving a worker a pool behind transaction-mode PgBouncer or PgCat
+accepts `LISTEN` and delivers nothing. And session-level advisory locks — `pg_advisory_lock`,
 not the transaction-scoped forms Workhorse uses — stop excluding across clients under transaction
 pooling, because each statement may land on a different server session and a grant outlives the
 client that took it. Any `SET` left behind lands on the next client to borrow that backend.

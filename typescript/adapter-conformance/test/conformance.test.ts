@@ -24,12 +24,13 @@ import {
   type TypeOrmExecutor,
 } from "@stablemates/workhorse-typeorm";
 import {
-  type AdapterNotificationPool,
+  type AdapterConnectionPool,
   EnqueueIdempotencyConflictError,
   QueryError,
   RedriveIdempotencyConflictError,
   type Queryable,
-  type Queue,
+  Queue,
+  Worker,
   type WorkhorseAdapter,
 } from "@stablemates/workhorse";
 import { sql as drizzleSql, type SQL } from "drizzle-orm";
@@ -64,7 +65,7 @@ interface QueryableProvider {
   QueryError: new (...arguments_: never[]) => Error;
   error: Error;
   expectedCode: string;
-  queryable(execute: Execute, notificationPool?: AdapterNotificationPool): Queryable;
+  queryable(execute: Execute, pool?: AdapterConnectionPool): Queryable;
   adapter(
     execute: Execute,
     close: () => Promise<void>,
@@ -91,7 +92,7 @@ const queryableProviders: QueryableProvider[] = [
     QueryError: DrizzleQueryError,
     error: Object.assign(new Error("duplicate secret@example.com"), { code: "23505" }),
     expectedCode: "23505",
-    queryable(execute, notificationPool) {
+    queryable(execute, pool) {
       return drizzleQueryable(
         {
           execute: async (query) => {
@@ -99,7 +100,7 @@ const queryableProviders: QueryableProvider[] = [
             return pgResult(await execute(compiled.sql, compiled.params));
           },
         } as DrizzleExecutor,
-        notificationPool,
+        pool,
       );
     },
     adapter(execute, close) {
@@ -121,12 +122,12 @@ const queryableProviders: QueryableProvider[] = [
       meta: { code: "P1001" },
     }),
     expectedCode: "P1001",
-    queryable(execute, notificationPool) {
+    queryable(execute, pool) {
       const executor: PrismaExecutor = {
         $queryRawUnsafe: async <T = unknown>(text: string, ...parameters: unknown[]) =>
           (await execute(text, parameters)) as T,
       };
-      return prismaQueryable(executor, notificationPool);
+      return prismaQueryable(executor, pool);
     },
     adapter(execute, close) {
       const executor: PrismaExecutor = {
@@ -144,13 +145,13 @@ const queryableProviders: QueryableProvider[] = [
       driverError: Object.assign(new Error("duplicate secret@example.com"), { code: "23505" }),
     }),
     expectedCode: "23505",
-    queryable(execute, notificationPool) {
+    queryable(execute, pool) {
       return typeOrmQueryable(
         {
           query: async <T = unknown>(text: string, parameters: unknown[] = []) =>
             (await execute(text, parameters)) as T,
         },
-        notificationPool,
+        pool,
       );
     },
     adapter(execute, close) {
@@ -169,12 +170,12 @@ const queryableProviders: QueryableProvider[] = [
       cause: Object.assign(new Error("database rejected query"), { code: "23505" }),
     }),
     expectedCode: "23505",
-    queryable(execute, notificationPool) {
+    queryable(execute, pool) {
       return kyselyQueryable(
         {
           executeQuery: async (query) => ({ rows: await execute(query.sql, query.parameters) }),
         } as KyselyExecutor,
-        notificationPool,
+        pool,
       );
     },
     adapter(execute, close) {
@@ -239,27 +240,23 @@ describe.each(queryableProviders)("$name queryable contract", (provider) => {
     }
   });
 
-  it("exposes an optional notification pool with its capacity and sharing identity", async () => {
-    const connect = vi.fn<() => Promise<void>>(async () => undefined);
-    const notificationPool: AdapterNotificationPool = {
-      connect,
-      options: { max: 4 },
+  it("lets a worker reserve its heartbeat connection from an attached pool", () => {
+    const pool = (max: number): AdapterConnectionPool => ({
+      connect: vi.fn<() => Promise<void>>(async () => undefined),
+      options: { max },
       query: async <R extends QueryResultRow = QueryResultRow>() => pgResult([]) as QueryResult<R>,
-    };
-    const queryable = provider.queryable(
-      vi.fn<Execute>(async () => []),
-      notificationPool,
-    ) as Queryable & {
-      connect(): Promise<unknown>;
-      notificationConnectionCapacity?: number;
-      notificationConnectionIdentity?: object;
-    };
+    });
+    const queue = (lent?: AdapterConnectionPool) =>
+      new Queue(
+        provider.queryable(
+          vi.fn<Execute>(async () => []),
+          lent,
+        ),
+      );
 
-    await queryable.connect();
-
-    expect(connect).toHaveBeenCalledOnce();
-    expect(queryable.notificationConnectionCapacity).toBe(4);
-    expect(queryable.notificationConnectionIdentity).toBe(notificationPool);
+    expect(() => new Worker(queue(pool(4)))).not.toThrow();
+    expect(() => new Worker(queue(pool(2)))).toThrow(/allows 2 connections/);
+    expect(() => new Worker(queue())).toThrow(/sharedHeartbeats: true/);
   });
 
   it("adapts transactions and closes configured resources once", async () => {
@@ -286,7 +283,8 @@ const database = createDatabaseTestHarness(import.meta.url, {
   extraSchemas: ["public"],
 });
 const { databaseUrl, pool } = database;
-const drizzlePool = new Pool({ connectionString: databaseUrl, max: 2 });
+// Drizzle's own pool lends the worker its listener and heartbeat connections, so it needs room.
+const drizzlePool = new Pool({ connectionString: databaseUrl, max: 4 });
 const drizzleDatabase = drizzle({ client: drizzlePool });
 const drizzleAdapter = createDrizzleAdapter(drizzleDatabase, { close: () => drizzlePool.end() });
 const kyselyPool = new Pool({ connectionString: databaseUrl, max: 2 });
@@ -294,12 +292,12 @@ const kyselyDatabase = new Kysely<Record<string, never>>({
   dialect: new PostgresDialect({ pool: kyselyPool }),
 });
 const kyselyAdapter = createKyselyAdapter(kyselyDatabase, {
-  notificationPool: pool,
+  pool,
   close: () => kyselyDatabase.destroy(),
 });
 const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
 const prismaAdapter = createPrismaAdapter(prisma, {
-  notificationPool: pool,
+  pool,
   close: () => prisma.$disconnect(),
 });
 const typeOrmDatabase = new DataSource({
@@ -307,10 +305,10 @@ const typeOrmDatabase = new DataSource({
   url: databaseUrl,
   entities: [],
   synchronize: false,
-  extra: { max: 2 },
+  // TypeORM's own pool (driver.master) lends the worker its dedicated connections.
+  extra: { max: 4 },
 });
 const typeOrmAdapter = createTypeOrmAdapter(typeOrmDatabase, {
-  notificationPool: pool,
   close: () => typeOrmDatabase.destroy(),
 });
 
@@ -390,6 +388,15 @@ beforeEach(async () => {
 afterAll(async () => {
   await Promise.all(integrationProviders.map(({ adapter }) => adapter.close()));
   await database.teardown();
+});
+
+describe("TypeORM worker pool", () => {
+  it("finds the node-postgres pool TypeORM creates as driver.master", () => {
+    // TypeORM keeps the pool on a public but undocumented field; this pins the accessor.
+    const master = (typeOrmDatabase.driver as unknown as { master?: unknown }).master;
+    expect(master).toBeInstanceOf(Pool);
+    expect(() => typeOrmAdapter.createWorker()).not.toThrow();
+  });
 });
 
 describe.each(integrationProviders)("$name built-package conformance", (provider) => {

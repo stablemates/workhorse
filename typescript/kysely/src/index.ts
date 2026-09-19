@@ -2,7 +2,7 @@ import {
   createProviderAdapter,
   createProviderQueryable,
   QueryError,
-  type AdapterNotificationPool,
+  type AdapterConnectionPoolSource,
   type ProviderAdapterOptions,
   type Queryable,
   type WorkhorseAdapter,
@@ -25,12 +25,12 @@ export class KyselyQueryError extends QueryError {
 
 export function kyselyQueryable(
   executor: KyselyExecutor,
-  notificationPool?: AdapterNotificationPool,
+  connectionPool?: AdapterConnectionPoolSource,
 ): Queryable {
   return createProviderQueryable({
     execute: (statement, values) => executeKysely(executor, statement, values),
     wrapError: (statement, cause) => new KyselyQueryError(statement, cause),
-    notificationPool,
+    connectionPool,
   });
 }
 

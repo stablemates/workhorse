@@ -134,11 +134,12 @@ import {
   workerCheckpointsRead,
   workerCompletionPrepare,
   workerHeartbeatReservation,
+  workerHeartbeatReservationProblem,
   workerProgressRead,
   workerWaitsRead,
   type WorkerHeartbeatChannel,
 } from "./worker-internal.js";
-import { holdHeartbeatConnection } from "./heartbeat-connection.js";
+import { heartbeatReservationProblem, holdHeartbeatConnection } from "./heartbeat-connection.js";
 
 export type { MaintenancePhase, MaintenancePhaseResult } from "./queue/retention-maintenance.js";
 
@@ -741,6 +742,10 @@ export class Queue {
     const serialized = await this.modules.enqueueContracts.validateResult(task, result);
     return () =>
       this.modules.claimLeaseFence.complete(task, workerId, result, async () => serialized);
+  }
+
+  [workerHeartbeatReservationProblem](): string | undefined {
+    return heartbeatReservationProblem(this.database);
   }
 
   [workerHeartbeatReservation](): WorkerHeartbeatChannel | undefined {

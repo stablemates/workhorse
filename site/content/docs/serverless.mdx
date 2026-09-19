@@ -78,7 +78,9 @@ or an autonomous worker loop.
 The web tier and worker tier only need access to the same PostgreSQL database. Keep request
 handlers on the serverless platform. Run `workhorse worker` in compute that owns a continuous
 process, such as a VM, Kubernetes deployment, ECS/Fargate service, or
-[Cloud Run worker pool](https://docs.cloud.google.com/run/docs/overview/what-is-cloud-run#services-jobs-worker-pools).
+[Cloud Run worker pool](https://docs.cloud.google.com/run/docs/overview/what-is-cloud-run#services-jobs-worker-pools). Give that worker a pool with room for its
+dedicated connections; [connection poolers](/docs/pgbouncer) explains the budget and the opt-out for
+a pool that cannot spare them.
 
 Use [Worker processes](/docs/worker-processes) for the process definition, probes, termination
 signals, and drain contract. Use [Deployment and operations](/docs/operations) to size pools and

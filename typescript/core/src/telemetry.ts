@@ -181,6 +181,7 @@ export type WorkhorseLogEvent =
   | "workhorse.schedules.synchronized"
   | "workhorse.worker.deregistered"
   | "workhorse.worker.paused"
+  | "workhorse.worker.polling_only"
   | "workhorse.worker.registered"
   | "workhorse.worker.registration_failed"
   | "workhorse.worker.resumed"

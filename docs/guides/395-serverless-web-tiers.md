@@ -46,7 +46,9 @@ Hyperdrive therefore does not turn Cloudflare Workers into a supported producer 
 
 The producer and worker only need access to the same PostgreSQL database. Keep request handlers on
 the serverless platform. Run `workhorse worker` on a virtual machine, a container service, a
-Kubernetes deployment, or a Cloud Run worker pool.
+Kubernetes deployment, or a Cloud Run worker pool. Give that worker a pool with room for its
+dedicated connections; the [connection pooling guide](390-connection-pooling.md) explains the
+budget and the opt-out for a pool that cannot spare them.
 
 The [worker process guide](310-workers.md) explains handler execution. The
 [operations guide](350-production-telemetry.md) explains how to observe the separate worker tier.

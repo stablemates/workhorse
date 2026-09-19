@@ -131,7 +131,7 @@ export function renderWorkerConfig(project: DetectedProject): string {
     const database = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
     return createPrismaAdapter(database, {
       defaultQueue: QUEUE,
-      notificationPool: pool,
+      pool,
       close: async () => {
         await database.$disconnect();
         await pool.end();
@@ -142,16 +142,11 @@ export function renderWorkerConfig(project: DetectedProject): string {
     case "typeorm": {
       adapterImport =
         'import { createTypeOrmAdapter } from "@stablemates/workhorse-typeorm";\nimport { DataSource } from "typeorm";';
-      adapterBody = `    const pool = new Pool({ connectionString: databaseUrl });
-    const database = new DataSource({ type: "postgres", url: databaseUrl });
+      adapterBody = `    const database = new DataSource({ type: "postgres", url: databaseUrl });
     await database.initialize();
     return createTypeOrmAdapter(database, {
       defaultQueue: QUEUE,
-      notificationPool: pool,
-      close: async () => {
-        await database.destroy();
-        await pool.end();
-      },
+      close: () => database.destroy(),
     });`;
       break;
     }
@@ -162,7 +157,7 @@ export function renderWorkerConfig(project: DetectedProject): string {
     const database = new Kysely({ dialect: new PostgresDialect({ pool }) });
     return createKyselyAdapter(database, {
       defaultQueue: QUEUE,
-      notificationPool: pool,
+      pool,
       close: () => database.destroy(),
     });`;
       break;
@@ -183,7 +178,9 @@ export function renderWorkerConfig(project: DetectedProject): string {
   const coreImports =
     project.orm === "pg"
       ? "createWorkhorseAdapter, defineWorkerProcess, Pool"
-      : "defineWorkerProcess, Pool";
+      : project.orm === "typeorm"
+        ? "defineWorkerProcess"
+        : "defineWorkerProcess, Pool";
   return `import { ${coreImports} } from "@stablemates/workhorse";
 ${adapterImport}
 

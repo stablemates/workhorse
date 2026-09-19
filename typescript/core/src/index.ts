@@ -1,6 +1,6 @@
 export { Pool } from "pg";
 export {
-  attachNotificationPool,
+  attachConnectionPool,
   createProviderAdapter,
   createProviderQueryable,
   createWorkhorseAdapter,
@@ -17,7 +17,8 @@ export {
 export type { SchemaCompatibilityCode, SchemaCompatibilityVersions } from "./errors.js";
 export { WorkhorseMetricsObserver } from "./metrics-observer.js";
 export type {
-  AdapterNotificationPool,
+  AdapterConnectionPool,
+  AdapterConnectionPoolSource,
   ProviderAdapterDefinition,
   ProviderAdapterOptions,
   ProviderQueryableOptions,

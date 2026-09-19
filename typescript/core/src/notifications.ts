@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { DatabaseNotification, NotificationClient, Queryable } from "./types.js";
+import { connectionPoolOf, type ConnectionPool } from "./connection-pool.js";
 
 const CHANNEL = "workhorse_tasks";
 const RECONNECT_INITIAL_MS = 100;
@@ -53,23 +54,15 @@ async function abortableSleep(durationMs: number, signal: AbortSignal): Promise<
   }
 }
 
-type NotificationDatabase = Queryable & {
-  connect?: () => Promise<unknown>;
-  notificationConnectionCapacity?: number;
-  notificationConnectionIdentity?: object;
-  options?: { max?: number };
-};
-
-function canListen(database: Queryable): database is NotificationDatabase & {
-  connect: () => Promise<unknown>;
-} {
-  const candidate = database as NotificationDatabase;
-  const capacity = candidate.notificationConnectionCapacity ?? candidate.options?.max;
-  return typeof candidate.connect === "function" && (capacity === undefined || capacity > 1);
+// The pool a listener can use, or undefined when the database has none or can spare no connection.
+function listeningPool(database: Queryable): ConnectionPool | undefined {
+  const pool = connectionPoolOf(database);
+  const capacity = pool?.options?.max;
+  return pool !== undefined && (capacity === undefined || capacity > 1) ? pool : undefined;
 }
 
-async function connect(database: NotificationDatabase): Promise<NotificationClient> {
-  const client = await database.connect!.call(database);
+async function connect(pool: ConnectionPool): Promise<NotificationClient> {
+  const client = await pool.connect();
   if (
     typeof client !== "object" ||
     client === null ||
@@ -84,10 +77,10 @@ async function connect(database: NotificationDatabase): Promise<NotificationClie
 }
 
 async function connectUntilAbort(
-  database: NotificationDatabase,
+  pool: ConnectionPool,
   signal: AbortSignal,
 ): Promise<NotificationClient | null> {
-  const pending = connect(database);
+  const pending = connect(pool);
   const client = await raceAbort(pending, signal);
   if (client !== ABORTED && !signal.aborted) return client;
   if (client !== ABORTED) client.release();
@@ -109,7 +102,7 @@ class TaskNotificationHub {
   private running: Promise<void> | null = null;
   private listening = false;
 
-  constructor(private readonly database: NotificationDatabase) {}
+  constructor(private readonly pool: ConnectionPool) {}
 
   async subscribe(subscriber: NotificationSubscriber): Promise<TaskNotificationSubscription> {
     if (this.controller?.signal.aborted && this.running) await this.running;
@@ -185,7 +178,7 @@ class TaskNotificationHub {
         disconnected.resolve(new Error("PostgreSQL notification connection ended"));
 
       try {
-        client = await connectUntilAbort(this.database, signal);
+        client = await connectUntilAbort(this.pool, signal);
         if (!client) return;
         client.on("notification", onNotification);
         client.on("error", onError);
@@ -236,19 +229,19 @@ class TaskNotificationHub {
 const hubs = new WeakMap<object, TaskNotificationHub>();
 
 export function supportsTaskNotifications(database: Queryable): boolean {
-  return canListen(database);
+  return listeningPool(database) !== undefined;
 }
 
 export function subscribeToTaskNotifications(
   database: Queryable,
   subscriber: NotificationSubscriber,
 ): Promise<TaskNotificationSubscription | null> {
-  if (!canListen(database)) return Promise.resolve(null);
-  const identity = (database as NotificationDatabase).notificationConnectionIdentity ?? database;
-  let hub = hubs.get(identity);
+  const pool = listeningPool(database);
+  if (pool === undefined) return Promise.resolve(null);
+  let hub = hubs.get(pool);
   if (!hub) {
-    hub = new TaskNotificationHub(database);
-    hubs.set(identity, hub);
+    hub = new TaskNotificationHub(pool);
+    hubs.set(pool, hub);
   }
   return hub.subscribe(subscriber);
 }

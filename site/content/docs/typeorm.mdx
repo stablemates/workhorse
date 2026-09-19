@@ -54,12 +54,13 @@ If the callback throws, TypeORM rolls back both writes. Nothing outside the tran
 half-committed pair. The adapter's default queue remains outside that transaction — use it for
 enqueues that stand alone.
 
-## Enable notification-assisted workers
+## Workers use the data source's pool
 
-TypeORM does not expose its internal node-postgres pool as a stable API. Supply a separate
-caller-owned pool as `notificationPool` when workers should reserve a connection for
-`LISTEN/NOTIFY` and pick up new tasks immediately. Without it, workers use bounded polling and keep
-the same durable behavior — tasks still run, just on the polling cadence.
+When the data source initializes, TypeORM's Postgres driver creates a node-postgres pool as
+`dataSource.driver.master`. Workers take their heartbeat connection and their `LISTEN/NOTIFY`
+connection from it, so initialize the data source before you create a worker. The pool must allow
+room for both connections plus claims; TypeORM's `extra.max` sets its size. An integration test
+pins that accessor, because TypeORM does not document it.
 
 Database execution failures become `TypeOrmQueryError`, which retains the statement, original
 cause, and PostgreSQL driver code. Typed Workhorse conflicts — idempotency, checkpoint, and wait

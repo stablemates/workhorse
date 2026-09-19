@@ -39,4 +39,10 @@ export interface WorkerHeartbeatChannel {
 
 export interface WorkerHeartbeatReservation {
   [workerHeartbeatReservation](): WorkerHeartbeatChannel | undefined;
+  [workerHeartbeatReservationProblem](): string | undefined;
 }
+
+/** Explains why the queue cannot lend a heartbeat connection, or returns undefined when it can. */
+export const workerHeartbeatReservationProblem = Symbol(
+  "workhorse.worker.heartbeat-reservation-problem",
+);

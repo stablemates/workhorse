@@ -333,7 +333,9 @@ describe("notification capability", () => {
     expect(queue.supportsTaskNotifications()).toBe(false);
 
     const handled: string[] = [];
+    // A query-only database cannot lend a heartbeat connection either.
     const worker = new Worker(queue, {
+      sharedHeartbeats: true,
       workerId: "pooling-query-only-dispatch",
       registryIntervalMs: 0,
     }).handle<{ token: string }>("pooling.query-only", ({ token }) => {

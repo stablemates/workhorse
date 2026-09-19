@@ -569,7 +569,9 @@ async function executePollCadenceRuntimeFixture(
   } as Queryable;
   const queue = new Queue(pollingDatabase);
   const handled = deferred<number>();
+  // The polling wrapper has no pool to lend a heartbeat connection from.
   const worker = new Worker(queue, {
+    sharedHeartbeats: true,
     workerId: `runtime-${fixture.id}`,
     queue: queueName,
     pollMs: fixture.pollMs,

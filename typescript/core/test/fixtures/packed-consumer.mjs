@@ -11,7 +11,8 @@ import { installSchema, Pool, startWorkerProcess, Worker } from "@stablemates/wo
 
 const databaseUrl =
   process.env.DATABASE_URL_TEST ?? "postgres://workhorse:workhorse@localhost:5432/workhorse_test";
-const pool = new Pool({ connectionString: databaseUrl, max: 2 });
+// The worker reserves a listener and a heartbeat connection, so the pool needs room for claims too.
+const pool = new Pool({ connectionString: databaseUrl, max: 4 });
 const db = drizzle({ client: pool });
 let closeCount = 0;
 const adapter = createDrizzleAdapter(db, {

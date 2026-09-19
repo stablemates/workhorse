@@ -19,7 +19,7 @@ npm install @stablemates/workhorse @stablemates/workhorse-kysely kysely pg
 import { createKyselyAdapter } from "@stablemates/workhorse-kysely";
 
 const workhorse = createKyselyAdapter(database, {
-  notificationPool: pool,
+  pool,
   close: () => database.destroy(),
 });
 
@@ -35,8 +35,9 @@ await database.transaction().execute(async (transaction) => {
 
 The adapter never destroys a caller-owned Kysely database unless `close` is configured.
 [Workhorse core](https://workhorse.run/docs/installation) owns schema installation and changes.
-Pass the `pg` pool used by `PostgresDialect` as `notificationPool` for `LISTEN/NOTIFY`; otherwise
-workers poll. Database errors become `KyselyQueryError`, with the original error in `cause` and its
+Pass the `pg` pool used by `PostgresDialect` as `pool`. Workers take their heartbeat and
+`LISTEN/NOTIFY` connections from it, and refuse to start without it unless `sharedHeartbeats` is
+set. Database errors become `KyselyQueryError`, with the original error in `cause` and its
 PostgreSQL code copied to `code`.
 
 ## Next

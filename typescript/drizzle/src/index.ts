@@ -2,7 +2,8 @@ import {
   createProviderAdapter,
   createProviderQueryable,
   QueryError,
-  type AdapterNotificationPool,
+  type AdapterConnectionPool,
+  type AdapterConnectionPoolSource,
   type ProviderAdapterOptions,
   type Queryable,
   type WorkhorseAdapter,
@@ -12,10 +13,10 @@ import { executeDrizzle } from "./query.js";
 
 export interface DrizzleExecutor {
   execute(query: SQL): PromiseLike<unknown>;
-  readonly $client?: AdapterNotificationPool;
+  readonly $client?: AdapterConnectionPool;
 }
 
-export interface DrizzleAdapterOptions extends Omit<ProviderAdapterOptions, "notificationPool"> {}
+export interface DrizzleAdapterOptions extends Omit<ProviderAdapterOptions, "pool"> {}
 
 export class DrizzleQueryError extends QueryError {
   constructor(statement: string, cause: unknown) {
@@ -26,12 +27,12 @@ export class DrizzleQueryError extends QueryError {
 
 export function drizzleQueryable(
   executor: DrizzleExecutor,
-  notificationPool?: AdapterNotificationPool,
+  connectionPool?: AdapterConnectionPoolSource,
 ): Queryable {
   return createProviderQueryable({
     execute: (statement, values) => executeDrizzle(executor, statement, values),
     wrapError: (statement, cause) => new DrizzleQueryError(statement, cause),
-    notificationPool,
+    connectionPool,
   });
 }
 
@@ -43,6 +44,7 @@ export function createDrizzleAdapter<TTransaction extends DrizzleExecutor = Driz
     database,
     toQueryable: drizzleQueryable,
     ...options,
-    notificationPool: database.$client,
+    // The node-postgres pool Drizzle runs on lends the worker its dedicated connections.
+    connectionPool: database.$client,
   });
 }
