@@ -46,13 +46,13 @@
   },
   "dependencies": {
     "@stablemates/workhorse-dashboard-contract": "workspace:*",
-    "@types/pg": "^8.15.5",
-    "ajv": "8.18.0",
-    "pg": "^8.16.3"
+    "@types/pg": "^8.23.1",
+    "ajv": "8.20.0",
+    "pg": "^8.23.0"
   },
   "devDependencies": {
     "@opentelemetry/api": "1.9.1",
-    "@opentelemetry/api-logs": "0.221.0",
+    "@opentelemetry/api-logs": "0.222.0",
     "@stablemates/workhorse-dashboard": "workspace:*",
     "@stablemates/workhorse-otel": "workspace:*",
     "@types/node": "^26.6.1",
