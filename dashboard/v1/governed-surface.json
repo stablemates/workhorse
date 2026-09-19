@@ -3224,6 +3224,12 @@
         "current.outcome.result": {
           "type": "unknown"
         },
+        "current.outcome.resultBytes": {
+          "type": "number"
+        },
+        "current.outcome.resultOmitted": {
+          "type": "boolean"
+        },
         "current.outcome.state": {
           "type": "string"
         },
@@ -3512,6 +3518,12 @@
         "payload": {
           "type": "unknown"
         },
+        "payloadBytes": {
+          "type": "number"
+        },
+        "payloadOmitted": {
+          "type": "boolean"
+        },
         "progress": {
           "type": "null|object"
         },
@@ -3680,6 +3692,41 @@
         },
         "workers[]": {
           "type": "string"
+        }
+      }
+    },
+    "taskValue": {
+      "mutation": false,
+      "request": {
+        "id": {
+          "type": "string",
+          "required": true
+        },
+        "kind": {
+          "type": "enum",
+          "enum": [
+            "payload",
+            "result"
+          ],
+          "required": true
+        }
+      },
+      "response": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "enum",
+          "enum": [
+            "payload",
+            "result"
+          ]
+        },
+        "value": {
+          "type": "unknown"
+        },
+        "valueBytes": {
+          "type": "number"
         }
       }
     },

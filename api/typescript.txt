@@ -416,6 +416,8 @@ interface DashboardTaskFacets
 type DashboardTaskFilter
 interface DashboardTaskRow
 type DashboardTaskSort
+interface DashboardTaskValue
+type DashboardTaskValueKind
 interface DashboardTasksCursorPage
 interface DashboardTasksPage
 type DashboardTerminalState
@@ -435,6 +437,7 @@ const dashboardTaskEventTypes
 const dashboardTaskFilters
 const dashboardTaskPriorityMax
 const dashboardTaskSorts
+const dashboardTaskValueKinds
 function hasDashboardIdempotencyEvidence
 function hasIdempotencyEvidence
 const idempotencyEventDetailKeys
@@ -644,6 +647,8 @@ interface DashboardTaskFacets
 type DashboardTaskFilter
 interface DashboardTaskRow
 type DashboardTaskSort
+interface DashboardTaskValue
+type DashboardTaskValueKind
 interface DashboardTasksCursorPage
 interface DashboardTasksPage
 type DashboardTerminalState
@@ -663,6 +668,7 @@ const dashboardTaskEventTypes
 const dashboardTaskFilters
 const dashboardTaskPriorityMax
 const dashboardTaskSorts
+const dashboardTaskValueKinds
 function hasDashboardIdempotencyEvidence
 function hasIdempotencyEvidence
 const idempotencyEventDetailKeys
@@ -1520,6 +1526,14 @@ interface DashboardHostOptions {
   projectDurability?: DashboardDurabilityProjector;
   /** Omit persisted worker stack traces from task-detail RPC responses. */
   redactErrorStacks?: boolean;
+  /**
+  * How long one dashboard read may run before PostgreSQL cancels it and the RPC answers TIMEOUT.
+  *
+  * Defaults to `DASHBOARD_STATEMENT_TIMEOUT_MS`. Raise it for a database whose honest answers
+  * genuinely take longer; the bound exists so that a read nobody is waiting for stops occupying a
+  * connection of the embedding application's pool.
+  */
+  statementTimeoutMs?: number;
   auditActor?: string;
   /** Trusted host-owned ES modules loaded before the dashboard browser entry. */
   browserModules?: readonly string[];
@@ -2358,7 +2372,17 @@ interface DashboardTaskDetail {
   /** The actionable signal boundary which currently owns this task's suspension. */
   signalWait: DashboardSignalWaitSummary | null;
   canSignal: boolean;
+  /**
+  * The redacted payload, or null when it is larger than task detail carries inline.
+  *
+  * A payload may hold a megabyte, which no drawer renders and every open would then transfer.
+  * `payloadOmitted` says which of the two a null is, and `taskValue` returns the whole value when
+  * an operator asks for it.
+  */
   payload: unknown;
+  /** Size of the redacted payload in bytes, whether or not it is carried here. */
+  payloadBytes: number;
+  payloadOmitted: boolean;
   progress: {
     value: unknown;
     revision: string;
@@ -2398,7 +2422,16 @@ interface DashboardTaskDetail {
       state: string;
       attempt: number;
       finishedAt: string;
+      /**
+      * The redacted result, or null when it is larger than task detail carries inline.
+      *
+      * `resultOmitted` says which of the two a null is, under the same bound the payload and a
+      * checkpoint value carry. `taskValue` returns the whole value.
+      */
       result: unknown;
+      /** Size of the redacted result in bytes, whether or not it is carried here. */
+      resultBytes: number;
+      resultOmitted: boolean;
       error: unknown;
     } | null;
     error: unknown;
@@ -2543,6 +2576,15 @@ interface DashboardTaskRow extends Record<string, unknown> {
 
 type DashboardTaskSort = (typeof dashboardTaskSorts)[number];
 
+interface DashboardTaskValue {
+  id: string;
+  kind: DashboardTaskValueKind;
+  value: unknown;
+  valueBytes: number;
+}
+
+type DashboardTaskValueKind = (typeof dashboardTaskValueKinds)[number];
+
 interface DashboardTasksCursorPage extends Omit<DashboardTasksPage, "total" | "hasMore"> {
   total: number | null;
   nextCursor: DashboardTaskCursor | null;
@@ -2670,6 +2712,8 @@ interface DashboardWorkspaceOptions {
   projectDurability?: DashboardDurabilityProjector;
   /** Override task-detail stack redaction for this workspace. */
   redactErrorStacks?: boolean;
+  /** Override the read bound for this workspace. See `DashboardHostOptions.statementTimeoutMs`. */
+  statementTimeoutMs?: number;
 }
 
 interface DeadLetter {
@@ -3097,7 +3141,7 @@ interface LiveProtocolWorker {
 
 const MAXIMUM_PROTOCOL_VERSION = 4;
 
-const MAXIMUM_SCHEMA_VERSION = 16;
+const MAXIMUM_SCHEMA_VERSION = 17;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -4537,7 +4581,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 1;
 
-const WORKHORSE_SCHEMA_VERSION = 16;
+const WORKHORSE_SCHEMA_VERSION = 17;
 
 const WORKHORSE_VERSION = "0.2.1";
 
@@ -4973,7 +5017,7 @@ function dashboardBudgetSummary(status: QueueBudgetStatus): DashboardBudgetSumma
 
 function dashboardConcurrencyPolicySummary(policy: QueueConcurrencyPolicy): DashboardConcurrencyPolicySummary;
 
-function dashboardDatabase(database: Queryable): DashboardDatabase;
+function dashboardDatabase(database: Queryable, timeoutMs?: number): DashboardDatabase;
 
 const dashboardDemoFeatureExamples: ReadonlyArray<{
   feature: DashboardDemoFeature;
@@ -5000,13 +5044,13 @@ const dashboardRedriveBatchMax = 1000;
 
 const dashboardRouter: {
   dashboard: {
-    meta: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<{
+    meta: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<{
       environment: string;
     }, {
       environment: string;
     }>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    taskCounts: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardTaskCounts, import("../wire.js").DashboardTaskCounts>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    tasks: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    taskCounts: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardTaskCounts, import("../wire.js").DashboardTaskCounts>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
+    tasks: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       filter: z.ZodDefault<z.ZodEnum<{
         canceled: "canceled";
         scheduled: "scheduled";
@@ -5036,7 +5080,7 @@ const dashboardRouter: {
         exact: "exact";
       }>>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardTasksPage, import("../wire.js").DashboardTasksPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    tasksCursor: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    tasksCursor: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       queue: z.ZodDefault<z.ZodNullable<z.ZodString>>;
       priority: z.ZodDefault<z.ZodNullable<z.ZodNumber>>;
       tags: z.ZodDefault<z.ZodArray<z.ZodString>>;
@@ -5074,8 +5118,8 @@ const dashboardRouter: {
         previous: "previous";
       }>>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardTasksCursorPage, import("../wire.js").DashboardTasksCursorPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    taskFacets: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardTaskFacets, import("../wire.js").DashboardTaskFacets>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    activity: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    taskFacets: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardTaskFacets, import("../wire.js").DashboardTaskFacets>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
+    activity: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       filter: z.ZodDefault<z.ZodEnum<{
         canceled: "canceled";
         scheduled: "scheduled";
@@ -5105,7 +5149,7 @@ const dashboardRouter: {
       queue: z.ZodDefault<z.ZodNullable<z.ZodString>>;
       worker: z.ZodDefault<z.ZodNullable<z.ZodString>>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardActivityPage, import("../wire.js").DashboardActivityPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    events: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    events: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       window: z.ZodDefault<z.ZodEnum<{
         "15m": "15m";
         "1h": "1h";
@@ -5175,21 +5219,21 @@ const dashboardRouter: {
       }>>>;
       taskId: z.ZodDefault<z.ZodNullable<z.ZodUUID>>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardEventsPage, import("../wire.js").DashboardEventsPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    eventDetail: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    eventDetail: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       id: z.ZodString;
     }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardEventDetail, import("../wire.js").DashboardEventDetail>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    cron: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardCronPage, import("../wire.js").DashboardCronPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    queues: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardQueuesPage, import("../wire.js").DashboardQueuesPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    system: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    cron: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardCronPage, import("../wire.js").DashboardCronPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
+    queues: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardQueuesPage, import("../wire.js").DashboardQueuesPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
+    system: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       window: z.ZodDefault<z.ZodEnum<{
         "15m": "15m";
         "1h": "1h";
         "24h": "24h";
       }>>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardSystemPage, import("../wire.js").DashboardSystemPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    workers: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardWorkersPage, import("../wire.js").DashboardWorkersPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    settings: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardSettingsPage, import("../wire.js").DashboardSettingsPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    previewRetentionPolicy: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    workers: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardWorkersPage, import("../wire.js").DashboardWorkersPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
+    settings: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardSettingsPage, import("../wire.js").DashboardSettingsPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
+    previewRetentionPolicy: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       definition: z.ZodObject<{
         taskIdentityRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
         terminalOutcomeRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
@@ -5204,7 +5248,7 @@ const dashboardRouter: {
         statisticsRowsPerPass: z.ZodOptional<z.ZodNumber>;
       }, z.core.$strip>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("@stablemates/workhorse").RetentionPolicyImpact, import("@stablemates/workhorse").RetentionPolicyImpact>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    taskDetail: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    taskDetail: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       id: z.ZodUUID;
     }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardTaskDetail, import("../wire.js").DashboardTaskDetail>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     /**
@@ -5213,12 +5257,26 @@ const dashboardRouter: {
     * Task detail reports the size of a value too large to carry inline and withholds it, so the
     * drawer opens one value when an operator asks for it rather than every value on every open.
     */
-    checkpointValue: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    checkpointValue: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       id: z.ZodUUID;
       name: z.ZodString;
     }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardCheckpointValue, import("../wire.js").DashboardCheckpointValue>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    humanWaits: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardHumanWaitPage, import("../wire.js").DashboardHumanWaitPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    enqueueTest: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    /**
+    * One task's whole stored payload or result, read on its own.
+    *
+    * Task detail reports the size of a value too large to carry inline and withholds it, so a
+    * megabyte payload is transferred when an operator asks to see it rather than every time they
+    * open the task.
+    */
+    taskValue: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
+      id: z.ZodUUID;
+      kind: z.ZodEnum<{
+        payload: "payload";
+        result: "result";
+      }>;
+    }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardTaskValue, import("../wire.js").DashboardTaskValue>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
+    humanWaits: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardHumanWaitPage, import("../wire.js").DashboardHumanWaitPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
+    enqueueTest: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       kind: z.ZodEnum<{
         retry: "retry";
         success: "success";
@@ -5261,7 +5319,7 @@ const dashboardRouter: {
         requestId: z.ZodString;
       }, z.core.$strip>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("./types.js").DashboardEnqueueTestResult, import("./types.js").DashboardEnqueueTestResult>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    setSchedulePaused: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    setSchedulePaused: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       kind: z.ZodLiteral<"user">;
       namespace: z.ZodString;
       name: z.ZodString;
@@ -5276,7 +5334,7 @@ const dashboardRouter: {
     }, {
       paused: boolean;
     }>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    setQueuePaused: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    setQueuePaused: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       queue: z.ZodString;
       paused: z.ZodBoolean;
       audit: z.ZodObject<{
@@ -5289,7 +5347,7 @@ const dashboardRouter: {
     }, {
       paused: boolean;
     }>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    purgeQueue: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    purgeQueue: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       queue: z.ZodString;
       audit: z.ZodObject<{
         actor: z.ZodString;
@@ -5301,7 +5359,7 @@ const dashboardRouter: {
     }, {
       deletedCount: number;
     }>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    setWorkerPaused: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    setWorkerPaused: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       workerId: z.ZodString;
       paused: z.ZodBoolean;
       audit: z.ZodObject<{
@@ -5314,7 +5372,7 @@ const dashboardRouter: {
     }, {
       paused: boolean;
     }>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    overrideMaintenancePolicy: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    overrideMaintenancePolicy: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       definition: z.ZodObject<{
         timezone: z.ZodOptional<z.ZodString>;
         partitionPreparationIntervalMs: z.ZodOptional<z.ZodNumber>;
@@ -5330,7 +5388,7 @@ const dashboardRouter: {
         requestId: z.ZodString;
       }, z.core.$strip>;
     }, z.core.$strip>, import("@orpc/server").Schema<void, void>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    revertMaintenancePolicy: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    revertMaintenancePolicy: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       settings: z.ZodArray<z.ZodEnum<{
         timezone: "timezone";
         partitionPreparationIntervalMs: "partitionPreparationIntervalMs";
@@ -5346,7 +5404,7 @@ const dashboardRouter: {
         requestId: z.ZodString;
       }, z.core.$strip>;
     }, z.core.$strip>, import("@orpc/server").Schema<void, void>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    overrideRetentionPolicy: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    overrideRetentionPolicy: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       definition: z.ZodObject<{
         taskIdentityRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
         terminalOutcomeRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
@@ -5366,7 +5424,7 @@ const dashboardRouter: {
         requestId: z.ZodString;
       }, z.core.$strip>;
     }, z.core.$strip>, import("@orpc/server").Schema<void, void>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    revertRetentionPolicy: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    revertRetentionPolicy: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       settings: z.ZodArray<z.ZodEnum<{
         taskIdentityRetentionDays: "taskIdentityRetentionDays";
         terminalOutcomeRetentionDays: "terminalOutcomeRetentionDays";
@@ -5386,7 +5444,7 @@ const dashboardRouter: {
         requestId: z.ZodString;
       }, z.core.$strip>;
     }, z.core.$strip>, import("@orpc/server").Schema<void, void>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    runTaskNow: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    runTaskNow: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       id: z.ZodUUID;
       audit: z.ZodObject<{
         actor: z.ZodString;
@@ -5399,7 +5457,7 @@ const dashboardRouter: {
     * distinguish an immediate cancellation from a cooperative request an active handler still has
     * to observe, and from a terminal task that was left untouched.
     */
-    cancelTask: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    cancelTask: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       id: z.ZodUUID;
       audit: z.ZodObject<{
         actor: z.ZodString;
@@ -5407,7 +5465,7 @@ const dashboardRouter: {
         requestId: z.ZodString;
       }, z.core.$strip>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("./types.js").DashboardCancelTaskResult, import("./types.js").DashboardCancelTaskResult>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    signalTask: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    signalTask: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       id: z.ZodUUID;
       name: z.ZodString;
       payload: z.ZodJSONSchema;
@@ -5418,7 +5476,7 @@ const dashboardRouter: {
         requestId: z.ZodString;
       }, z.core.$strip>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("./types.js").DashboardSignalTaskResult, import("./types.js").DashboardSignalTaskResult>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    completeHumanWait: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    completeHumanWait: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       id: z.ZodUUID;
       name: z.ZodString;
       result: z.ZodJSONSchema;
@@ -5436,7 +5494,7 @@ const dashboardRouter: {
     * and the reported status distinguishes a new task from the replay of a request that was
     * already applied under the same identity.
     */
-    redriveTask: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    redriveTask: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       id: z.ZodUUID;
       audit: z.ZodObject<{
         actor: z.ZodString;
@@ -5450,7 +5508,7 @@ const dashboardRouter: {
     * Every result is reported, including a source PostgreSQL refused, so an operator reads what
     * the batch actually did rather than a count that hides the refusals inside it.
     */
-    redriveDeadLetters: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    redriveDeadLetters: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       queue: z.ZodDefault<z.ZodNullable<z.ZodString>>;
       taskType: z.ZodDefault<z.ZodNullable<z.ZodString>>;
       tags: z.ZodDefault<z.ZodArray<z.ZodString>>;
@@ -5494,6 +5552,8 @@ const dashboardTaskFilters: readonly ["all", "blocked", "waiting", "scheduled", 
 const dashboardTaskPriorityMax = 100;
 
 const dashboardTaskSorts: readonly ["updated", "priority"];
+
+const dashboardTaskValueKinds: readonly ["payload", "result"];
 
 function databaseErrorCode(error: unknown): string | undefined;
 
@@ -5643,6 +5703,7 @@ function readTaskResultEvidence(input: {
     state: string;
     result: unknown;
     error: unknown;
+    resultOmitted?: boolean;
   } | null;
   runtimeError: unknown;
   currentError: unknown;

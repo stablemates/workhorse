@@ -3752,6 +3752,8 @@ class DashboardTaskDetail(dict)
   def items(...)
   def keys(...)
   payload: ForwardRef('Required[object]', module='dashboard_v1')
+  payloadBytes: ForwardRef('Required[float]', module='dashboard_v1')
+  payloadOmitted: ForwardRef('Required[bool]', module='dashboard_v1')
   def pop(...)
   def popitem(self)
   progress: ForwardRef('Required[DashboardTaskDetailProgress | None]', module='dashboard_v1')
@@ -3925,6 +3927,8 @@ class DashboardTaskDetailCurrentOutcome(dict)
   def pop(...)
   def popitem(self)
   result: ForwardRef('Required[object]', module='dashboard_v1')
+  resultBytes: ForwardRef('Required[float]', module='dashboard_v1')
+  resultOmitted: ForwardRef('Required[bool]', module='dashboard_v1')
   def setdefault(self, key, default=None)
   state: ForwardRef('Required[str]', module='dashboard_v1')
   def update(...)
@@ -4378,6 +4382,25 @@ class DashboardTaskRowWait(dict)
   def update(...)
   def values(...)
   wakeAt: ForwardRef('Required[str]', module='dashboard_v1')
+
+class DashboardTaskValue(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  id: ForwardRef('Required[str]', module='dashboard_v1')
+  def items(...)
+  def keys(...)
+  kind: ForwardRef("Required[Literal['payload', 'result']]", module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  def update(...)
+  value: ForwardRef('Required[object]', module='dashboard_v1')
+  valueBytes: ForwardRef('Required[float]', module='dashboard_v1')
+  def values(...)
 
 class DashboardTasksCursorPage(dict)
   def __init__(self, *args, **kwargs)
@@ -5274,6 +5297,25 @@ type TaskFacetsInput = None
 
 type TaskFacetsOutput = DashboardTaskFacets
 
+class TaskValueInput(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  id: ForwardRef('Required[str]', module='dashboard_v1')
+  def items(...)
+  def keys(...)
+  kind: ForwardRef("Required[Literal['payload', 'result']]", module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  def update(...)
+  def values(...)
+
+type TaskValueOutput = DashboardTaskValue
+
 class TasksCursorInput(dict)
   def __init__(self, *args, **kwargs)
   def __iter__(self)
@@ -5410,6 +5452,8 @@ def validate_task_counts_input(value: object) -> None
 def validate_task_detail_input(value: object) -> None
 
 def validate_task_facets_input(value: object) -> None
+
+def validate_task_value_input(value: object) -> None
 
 def validate_tasks_cursor_input(value: object) -> None
 
