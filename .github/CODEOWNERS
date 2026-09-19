@@ -1,0 +1,27 @@
+# Review owners for the files that decide what CI and the release jobs execute.
+#
+# A change to a workflow, to a lockfile, or to the publish script changes what runs against a
+# credential, and it does so without touching any code a reviewer would think to read. Naming
+# owners here puts a maintainer in front of exactly those paths. Everything else keeps the
+# repository's normal review.
+#
+# This file enforces nothing on its own: it takes effect when branch protection on main requires
+# review from code owners.
+
+# Workflows, dependabot, and this file.
+/.github/ @skyeagle @leoisadev1
+
+# The published image and the deployment contract it satisfies. Nothing here deploys — the live
+# deployment consumes these files from a private operations repository (ADR 0060).
+/Dockerfile @skyeagle @leoisadev1
+/Dockerfile.dashboard @skyeagle @leoisadev1
+/Dockerfile.site @skyeagle @leoisadev1
+/typescript/demo/DEPLOYMENT.md @skyeagle @leoisadev1
+
+# The script that holds the npm publication identity and writes to the registry.
+/scripts/publish-npm.ts @skyeagle @leoisadev1
+
+# The lockfiles. They are the only record of what a machine installs before any test runs.
+/pnpm-lock.yaml @skyeagle @leoisadev1
+/python/uv.lock @skyeagle @leoisadev1
+/go/go.sum @skyeagle @leoisadev1
