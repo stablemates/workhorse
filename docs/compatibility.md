@@ -29,7 +29,7 @@ This boundary is about correctness only. It is not a performance claim; see
 | ---------- | -------------- | ------- | -------------------------------------------------------------- | ------------------------------------------------------- |
 | Node.js    | 22, 24         | 22      | 22: 2027-04-30, 24: 2028-04-30                                 | Even-numbered releases only. `engines.node` is `>=22`.  |
 | Python     | 3.12–3.14      | 3.12    | 3.12: 2028-10, 3.13: 2029-10, 3.14: 2030-10                    | `stablemates-workhorse` ships one `py3-none-any` wheel. |
-| Go         | 1.25 and newer | 1.25    | No date; Go supports its two most recent releases              | pgx v5.9.2 is the minimum and the tested version.       |
+| Go         | 1.25 and newer | 1.25    | No date; Go supports its two most recent releases              | pgx v5.11.0 is the minimum and the tested version.      |
 | PostgreSQL | 15, 16, 17, 18 | 15      | 15: 2027-11-11, 16: 2028-11-09, 17: 2029-11-08, 18: 2030-11-14 | No extension beyond the default `plpgsql` is installed. |
 
 Pull requests and pushes run the newest Node.js and PostgreSQL versions. The weekly schedule runs
@@ -50,7 +50,7 @@ checks that the active Python and PostgreSQL versions belong to this matrix. Pul
 pushes run the newest Python and PostgreSQL versions. The weekly schedule runs every Python and
 PostgreSQL combination.
 
-The Go module declares Go 1.25 or newer and requires pgx v5.9.2. That is a minimum rather than a
+The Go module declares Go 1.25 or newer and requires pgx v5.11.0. That is a minimum rather than a
 pin: minimal version selection lets a consumer's own module graph choose a higher pgx v5, which is
 expected to work and is not tested. Its repository
 lane exercises enqueue through pgx transactions, pgx pools, and `database/sql` with pgx stdlib. It
