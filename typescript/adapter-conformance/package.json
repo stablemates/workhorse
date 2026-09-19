@@ -6,7 +6,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
-    "@prisma/client": "6.19.3",
+    "@prisma/client": "7.10.0",
     "@stablemates/workhorse": "workspace:*",
     "@stablemates/workhorse-drizzle": "workspace:*",
     "@stablemates/workhorse-kysely": "workspace:*",
