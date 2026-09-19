@@ -5,6 +5,7 @@ from typing import Any
 
 import asyncpg  # type: ignore[import-untyped]
 import psycopg
+from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
 from workhorse import (
     Admin,
@@ -84,7 +85,7 @@ def sync_admin(connection: psycopg.Connection[Any]) -> str | None:
     return result.target_task_id
 
 
-def sync_worker(connection: psycopg.Connection[Any], database_url: str) -> bool:
+def sync_worker(pool: ConnectionPool[Any]) -> bool:
     def handle(payload: Json, context: HandlerContext) -> Json:
         context.cancellation.raise_if_cancelled()
         progress = context.set_progress({"phase": "working"})
@@ -105,12 +106,8 @@ def sync_worker(connection: psycopg.Connection[Any], database_url: str) -> bool:
 
     return (
         Worker(
-            connection,
+            pool,
             heartbeat_ms=1_000,
-            notification_connection_factory=lambda: psycopg.connect(
-                database_url,
-                autocommit=True,
-            ),
             on_notification_error=print,
         )
         .handle("email.send", handle)
@@ -118,18 +115,18 @@ def sync_worker(connection: psycopg.Connection[Any], database_url: str) -> bool:
     )
 
 
-def sync_worker_process(connection: psycopg.Connection[Any]) -> None:
-    run_worker_process(Worker(connection), shutdown_timeout_ms=20_000)
+def sync_worker_process(pool: ConnectionPool[Any]) -> None:
+    run_worker_process(Worker(pool), shutdown_timeout_ms=20_000)
 
 
-def sync_batch_worker(connection: psycopg.Connection[Any]) -> bool:
+def sync_batch_worker(pool: ConnectionPool[Any]) -> bool:
     def handle(items: Sequence[BatchHandlerItem]) -> list[BatchHandlerOutcome]:
         return [
             {"status": "succeeded", "result": {"taskId": item.context.task.id}} for item in items
         ]
 
     return (
-        Worker(connection, concurrency=2)
+        Worker(pool, concurrency=2)
         .handle_batch("email.batch", handle, max_size=2, linger_ms=50)
         .run_once()
     )
@@ -190,7 +187,7 @@ async def asyncpg_policies(connection: asyncpg.Connection) -> None:
     await queue.list_budgets()
 
 
-async def async_psycopg_worker(connection: psycopg.AsyncConnection[Any]) -> bool:
+async def async_psycopg_worker(pool: AsyncConnectionPool[Any]) -> bool:
     async def handle(payload: Json, context: AsyncHandlerContext) -> Json:
         progress = await context.set_progress({"phase": "working"})
         assert await context.get_progress() == progress
@@ -198,17 +195,17 @@ async def async_psycopg_worker(connection: psycopg.AsyncConnection[Any]) -> bool
         await context.sleep("delay", 1)
         return {"prepared": prepared}
 
-    return await AsyncWorker.from_psycopg(connection).handle("email.send", handle).run_once()
+    return await AsyncWorker.from_psycopg(pool).handle("email.send", handle).run_once()
 
 
-async def asyncpg_batch_worker(connection: asyncpg.Connection) -> bool:
+async def asyncpg_batch_worker(pool: asyncpg.Pool) -> bool:
     async def handle(items: Sequence[AsyncBatchHandlerItem]) -> list[BatchHandlerOutcome]:
         return [
             {"status": "succeeded", "result": {"taskId": item.context.task.id}} for item in items
         ]
 
     return await (
-        AsyncWorker.from_asyncpg(connection, concurrency=2)
+        AsyncWorker.from_asyncpg(pool, concurrency=2)
         .handle_batch("email.batch", handle, max_size=2, linger_ms=50)
         .run_once()
     )

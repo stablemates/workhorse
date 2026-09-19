@@ -1,4 +1,6 @@
 from __future__ import annotations
+# ruff: noqa
+
 
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -51,7 +53,7 @@ def test_worker_fires_when_another_worker_owns_the_maintenance_tick(database_url
         )
 
         worker = Worker(
-            worker_connection,
+            worker_pool,
             worker_id="python-schedule-lock-worker",
             schedule_namespaces=["python-worker"],
         ).handle("billing.rollup", lambda _payload, _context: {"fired": True})
@@ -82,7 +84,7 @@ def test_worker_fires_cron_catchup_through_the_configured_limit(database_url: st
         )
 
         worker = Worker(
-            worker_connection,
+            worker_pool,
             worker_id="python-schedule-catchup-worker",
             schedule_namespaces=["python-worker"],
             schedule_catchup_limit=2,
@@ -119,7 +121,7 @@ def test_worker_evaluates_cron_in_the_definition_timezone(database_url: str) -> 
         )
 
         worker = Worker(
-            worker_connection,
+            worker_pool,
             worker_id="python-schedule-timezone-worker",
             schedule_namespaces=["python-worker"],
             schedule_catchup_limit=1,

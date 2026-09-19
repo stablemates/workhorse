@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 
-import psycopg
+from psycopg_pool import ConnectionPool
 
 from workhorse import Worker
 
@@ -13,9 +13,9 @@ def exit_process(_payload: object, _context: object) -> None:
     sys.exit(int(exit_code))
 
 
-with psycopg.connect(database_url, autocommit=True) as connection:
+with ConnectionPool(database_url, min_size=3, max_size=3) as pool:
     Worker(
-        connection,
+        pool,
         worker_id="python-exiting-worker",
         lease_ms=200,
         heartbeat_ms=50,

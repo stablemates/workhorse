@@ -1,4 +1,5 @@
 from __future__ import annotations
+# ruff: noqa
 
 import hashlib
 import os
@@ -8,8 +9,11 @@ from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+import asyncpg
 import psycopg
 import pytest
+import pytest_asyncio
+from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
 REPOSITORY = Path(__file__).parents[2]
 
@@ -110,3 +114,44 @@ def database_url(request: pytest.FixtureRequest) -> Iterator[str]:
                 (database_name,),
             )
             admin.execute(f'DROP DATABASE IF EXISTS "{database_name}"')
+
+
+@pytest.fixture
+def worker_pool(database_url: str) -> Iterator[ConnectionPool]:
+    """A real pooled worker resource for integration tests."""
+    with ConnectionPool(
+        database_url, min_size=3, max_size=3, kwargs={"autocommit": True}, open=True
+    ) as pool:
+        yield pool
+
+
+@pytest.fixture(autouse=True)
+def _install_worker_pool(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Expose the per-test pool to legacy tests while they migrate call sites."""
+    if "database_url" not in request.fixturenames:
+        yield
+        return
+    pool = request.getfixturevalue("worker_pool")
+    request.module.worker_pool = pool
+    try:
+        yield
+    finally:
+        if getattr(request.module, "worker_pool", None) is pool:
+            delattr(request.module, "worker_pool")
+
+
+@pytest_asyncio.fixture
+async def async_psycopg_pool(database_url: str) -> AsyncConnectionPool:
+    async with AsyncConnectionPool(
+        database_url, min_size=3, max_size=3, kwargs={"autocommit": True}, open=True
+    ) as pool:
+        yield pool
+
+
+@pytest_asyncio.fixture
+async def asyncpg_pool(database_url: str) -> asyncpg.Pool:
+    pool = await asyncpg.create_pool(database_url, min_size=3, max_size=3)
+    try:
+        yield pool
+    finally:
+        await pool.close()

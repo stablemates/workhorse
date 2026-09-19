@@ -1,4 +1,6 @@
 from __future__ import annotations
+# ruff: noqa
+
 
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
@@ -18,6 +20,7 @@ from workhorse import (
     SignalWaitLeaseLostError,
     Worker,
 )
+from workhorse._drivers import SyncExecutor
 
 
 def test_signal_wait_suspends_and_replays_the_delivered_payload(database_url: str) -> None:
@@ -37,7 +40,7 @@ def test_signal_wait_suspends_and_replays_the_delivered_payload(database_url: st
             approval = context.wait_for_signal("approval")
             return {"approval": approval}
 
-        worker = Worker(worker_connection, worker_id="python-signal-worker").handle(
+        worker = Worker(worker_pool, worker_id="python-signal-worker").handle(
             "signal.approval", handle
         )
 
@@ -96,7 +99,7 @@ def test_human_wait_replays_only_for_equal_context(database_url: str) -> None:
             )
             return {"decision": decision}
 
-        worker = Worker(worker_connection, worker_id="python-human-worker").handle(
+        worker = Worker(worker_pool, worker_id="python-human-worker").handle(
             "account.review", handle
         )
 
@@ -148,7 +151,7 @@ def test_human_wait_rejects_changed_context_on_replay(database_url: str) -> None
                 conflicts.append(error)
                 return {"conflict": True}
 
-        worker = Worker(worker_connection, worker_id="python-human-conflict-worker").handle(
+        worker = Worker(worker_pool, worker_id="python-human-conflict-worker").handle(
             "human.conflict", handle
         )
         assert worker.run_once() is True
@@ -175,7 +178,7 @@ def test_signal_wait_uses_the_shorter_caller_timeout(database_url: str) -> None:
         task_id = Queue(enqueue_connection).enqueue("signal.timeout", {})
         enqueue_connection.commit()
         worker = Worker(
-            worker_connection,
+            worker_pool,
             worker_id="python-signal-timeout-worker",
             maintenance_interval_ms=100,
         ).handle(
@@ -214,7 +217,7 @@ def test_signal_wait_uses_an_earlier_task_deadline(database_url: str) -> None:
             EnqueueOptions(deadline=deadline),
         )
         enqueue_connection.commit()
-        worker = Worker(worker_connection, worker_id="python-signal-deadline-worker").handle(
+        worker = Worker(worker_pool, worker_id="python-signal-deadline-worker").handle(
             "signal.deadline",
             lambda _payload, context: context.wait_for_signal("approval", timeout_ms=5_000),
         )
@@ -239,7 +242,7 @@ def test_signal_payload_limit_counts_utf8_json_bytes(database_url: str) -> None:
         queue = Queue(enqueue_connection)
         task_id = queue.enqueue("signal.unicode", {})
         enqueue_connection.commit()
-        worker = Worker(worker_connection, worker_id="python-signal-unicode-worker").handle(
+        worker = Worker(worker_pool, worker_id="python-signal-unicode-worker").handle(
             "signal.unicode", lambda _payload, context: context.wait_for_signal("content")
         )
 
@@ -277,7 +280,7 @@ def test_signal_wait_rejects_a_stale_fence_with_its_specific_error(database_url:
                 observed.append(error)
             return {"ignored": True}
 
-        worker = Worker(worker_connection, worker_id="python-signal-stale-worker").handle(
+        worker = Worker(worker_pool, worker_id="python-signal-stale-worker").handle(
             "signal.stale", handle
         )
         assert worker.run_once() is True
@@ -329,7 +332,7 @@ class _BlockingWaitConnection:
         )
 
 
-def test_concurrent_same_name_signal_waits_coalesce(database_url: str) -> None:
+def test_concurrent_same_name_signal_waits_coalesce(database_url: str, worker_pool) -> None:
     wait_query_reached = Event()
     release_wait_query = Event()
 
@@ -361,8 +364,11 @@ def test_concurrent_same_name_signal_waits_coalesce(database_url: str) -> None:
             assert len(errors) == 2
 
         worker = Worker(
-            _BlockingWaitConnection(worker_connection, wait_query_reached, release_wait_query),  # type: ignore[arg-type]
+            worker_pool,
             worker_id="python-signal-coalesce-worker",
+            _executor=SyncExecutor(
+                _BlockingWaitConnection(worker_connection, wait_query_reached, release_wait_query)
+            ),
         ).handle("signal.concurrent", handle)
 
         assert worker.run_once() is True

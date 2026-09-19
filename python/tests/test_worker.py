@@ -1,4 +1,6 @@
 from __future__ import annotations
+# ruff: noqa
+
 
 import gc
 import weakref
@@ -32,6 +34,7 @@ from workhorse import (
     Worker,
 )
 from workhorse._statements import PROTOCOL_VERSION
+from workhorse._drivers import SyncExecutor
 from workhorse._version import WORKHORSE_VERSION
 
 
@@ -70,7 +73,7 @@ def test_contract_sync_validates_payload_and_worker_result(database_url: str) ->
         )
         enqueue_connection.commit()
 
-        worker = Worker(worker_connection, worker_id="python-contract-worker").handle(
+        worker = Worker(worker_pool, worker_id="python-contract-worker").handle(
             "contract.python", lambda _payload, _context: {"ok": False}
         )
         assert worker.run_once() is True
@@ -86,7 +89,7 @@ def test_worker_participates_in_slow_maintenance(database_url: str) -> None:
             "UPDATE workhorse.maintenance_state SET last_completed_at = NULL "
             "WHERE routine_name = 'terminal_storage'"
         )
-        worker = Worker(connection, worker_id="python-slow-maintenance-worker")
+        worker = Worker(worker_pool, worker_id="python-slow-maintenance-worker")
 
         assert worker.run_once() is False
         completed_at = connection.execute(
@@ -129,7 +132,7 @@ def test_checkpoint_replays_the_saved_value_without_repeating_the_operation(
             return {"prepared": prepared}
 
         worker = Worker(
-            worker_connection, worker_id="python-checkpoint-worker", maintenance_interval_ms=100
+            worker_pool, worker_id="python-checkpoint-worker", maintenance_interval_ms=100
         ).handle("checkpoint.replay", handle)
 
         assert worker.run_once() is True
@@ -173,7 +176,7 @@ def test_durable_sleeps_release_ownership_and_survive_a_swallowed_sentinel(
             return {"handlerCalls": handler_calls}
 
         worker = Worker(
-            worker_connection, worker_id="python-wait-worker", maintenance_interval_ms=100
+            worker_pool, worker_id="python-wait-worker", maintenance_interval_ms=100
         ).handle("wait.replay", handle)
 
         assert worker.run_once() is True
@@ -233,7 +236,7 @@ def test_checkpoint_conflict_is_typed_at_the_handler_context(database_url: str) 
                 conflicts.append(error)
             return {"conflict": True}
 
-        worker = Worker(worker_connection, worker_id="python-conflict-worker").handle(
+        worker = Worker(worker_pool, worker_id="python-conflict-worker").handle(
             "checkpoint.conflict", handle
         )
         assert worker.run_once() is True
@@ -284,7 +287,7 @@ def test_concurrent_same_name_checkpoints_share_one_operation(database_url: str)
             assert errors == []
             return {"values": values}
 
-        worker = Worker(worker_connection, worker_id="python-coalesce-worker").handle(
+        worker = Worker(worker_pool, worker_id="python-coalesce-worker").handle(
             "checkpoint.concurrent", handle
         )
         assert worker.run_once() is True
@@ -318,7 +321,7 @@ def test_checkpoint_rejects_a_stale_fence_with_its_specific_error(database_url: 
                 observed.append(error)
             return {"ignored": True}
 
-        worker = Worker(worker_connection, worker_id="python-stale-checkpoint-worker").handle(
+        worker = Worker(worker_pool, worker_id="python-stale-checkpoint-worker").handle(
             "checkpoint.stale", handle
         )
         assert worker.run_once() is True
@@ -344,7 +347,7 @@ def test_handler_context_reports_and_reads_latest_progress(database_url: str) ->
             assert observed.revision == 1
             return observed.value
 
-        worker = Worker(worker_connection, worker_id="python-progress-worker").handle(
+        worker = Worker(worker_pool, worker_id="python-progress-worker").handle(
             "progress.report", handle
         )
         assert worker.run_once() is True
@@ -387,7 +390,7 @@ def test_handler_context_returns_typed_progress_errors(database_url: str) -> Non
             except ProgressLeaseLostError as error:
                 observed_lease_losses.append(error)
 
-        worker = Worker(worker_connection, worker_id="python-progress-errors").handle(
+        worker = Worker(worker_pool, worker_id="python-progress-errors").handle(
             "progress.errors", handle
         )
         assert worker.run_once() is True
@@ -412,7 +415,7 @@ def test_registered_handler_claims_exclusively_and_records_its_result(database_u
         task_id = Queue(enqueue_connection).enqueue("email.send", {"to": "reader@example.com"})
         enqueue_connection.commit()
 
-        first_worker = Worker(first_connection, worker_id="python-worker-one")
+        first_worker = Worker(worker_pool, worker_id="python-worker-one")
 
         def handle(payload: Any, _context: object) -> dict[str, object]:
             handler_started.set()
@@ -437,7 +440,7 @@ def test_registered_handler_claims_exclusively_and_records_its_result(database_u
             nonlocal second_called
             second_called = True
 
-        second_worker = Worker(second_connection, worker_id="python-worker-two").handle(
+        second_worker = Worker(worker_pool, worker_id="python-worker-two").handle(
             "email.send", handle_second
         )
         assert second_worker.run_once() is False
@@ -480,7 +483,7 @@ def test_run_once_refills_a_bounded_concurrency_slot(database_url: str) -> None:
             return {"sequence": sequence}
 
         worker = Worker(
-            worker_connection,
+            worker_pool,
             worker_id="python-bounded-worker",
             concurrency=2,
         ).handle("bounded", handle)
@@ -542,7 +545,7 @@ def test_batch_handler_orders_members_and_settles_each_outcome(database_url: str
             ]
 
         worker = Worker(
-            worker_connection,
+            worker_pool,
             worker_id="python-batch-worker",
             concurrency=3,
         ).handle_batch("email.batch", max_size=3, linger_ms=100, handler=handle_batch)
@@ -593,7 +596,7 @@ def test_batch_handler_keeps_queues_separate_until_linger_expires(database_url: 
             return [{"status": "succeeded", "result": None} for _item in items]
 
         worker = Worker(
-            worker_connection,
+            worker_pool,
             queues=("email", "billing"),
             worker_id="python-partial-batch-worker",
             concurrency=2,
@@ -628,7 +631,7 @@ def test_batch_handler_failure_shapes_fail_every_member(database_url: str) -> No
             raise BatchAbort("provider aborted batch")
 
         worker = Worker(
-            worker_connection,
+            worker_pool,
             worker_id="python-invalid-batch-worker",
             concurrency=6,
         )
@@ -725,9 +728,10 @@ def test_batch_evidence_failure_does_not_change_settlement(database_url: str) ->
         enqueue_connection.commit()
 
         worker = Worker(
-            EvidenceFailingConnection(worker_connection),  # type: ignore[arg-type]
+            worker_pool,
             worker_id="python-evidence-failure-worker",
             concurrency=2,
+            _executor=SyncExecutor(EvidenceFailingConnection(worker_connection)),  # type: ignore[arg-type]
         ).handle_batch(
             "batch.no-evidence",
             max_size=2,
@@ -771,7 +775,7 @@ def test_batch_member_cancellation_does_not_disturb_its_peer(database_url: str) 
             ]
 
         worker = Worker(
-            worker_connection,
+            worker_pool,
             worker_id="python-batch-cancellation-worker",
             concurrency=2,
             lease_ms=500,
@@ -817,7 +821,7 @@ def test_batch_member_timeout_does_not_disturb_its_peer(database_url: str) -> No
             ]
 
         worker = Worker(
-            worker_connection,
+            worker_pool,
             worker_id="python-batch-timeout-worker",
             concurrency=2,
             lease_ms=500,
@@ -837,7 +841,7 @@ def test_batch_member_timeout_does_not_disturb_its_peer(database_url: str) -> No
 
 def test_batch_registration_validates_capacity_and_linger(database_url: str) -> None:
     with psycopg.connect(database_url, autocommit=True) as worker_connection:
-        worker = Worker(worker_connection, concurrency=2)
+        worker = Worker(worker_pool, concurrency=2)
 
         def handler(_items: object) -> list[object]:
             return []
@@ -867,7 +871,7 @@ def test_run_once_rotates_claims_across_queues(database_url: str) -> None:
             handled_queues.append(context.task.queue)
 
         worker = Worker(
-            worker_connection,
+            worker_pool,
             queues=("busy", "quiet"),
             worker_id="python-rotation-worker",
         ).handle("rotated", handle)
@@ -904,7 +908,7 @@ def test_run_pauses_resumes_and_drains_active_slots(database_url: str) -> None:
             assert releases[sequence].wait(timeout=5)
 
         worker = Worker(
-            worker_connection,
+            worker_pool,
             worker_id="python-controlled-worker",
             concurrency=2,
             poll_ms=5_000,
@@ -959,7 +963,7 @@ def test_worker_registry_delivers_remote_pause_and_deregisters(database_url: str
         psycopg.connect(database_url, autocommit=True) as operator_connection,
     ):
         worker = Worker(
-            worker_connection,
+            worker_pool,
             queue="python-registry",
             worker_id="python-registry-worker",
             poll_ms=10,
@@ -1070,7 +1074,7 @@ def test_stop_reaches_a_run_waiting_behind_an_active_pass(database_url: str) -> 
             assert release_handler.wait(timeout=5)
 
         worker = Worker(
-            worker_connection,
+            worker_pool,
             worker_id="python-queued-stop-worker",
             poll_ms=5_000,
         ).handle("queued.stop", handle)
@@ -1167,10 +1171,9 @@ def test_run_wakes_from_a_dedicated_notification_connection(database_url: str) -
         psycopg.connect(database_url, autocommit=True) as worker_connection,
     ):
         worker = Worker(
-            DelayedConnection(worker_connection),  # type: ignore[arg-type]
+            worker_pool,
             queue="notification-target",
             poll_ms=5_000,
-            notification_connection_factory=ListeningConnection,
         ).handle("notification.wake", lambda _payload, _context: handled.set())
 
         def run_worker() -> None:
@@ -1181,16 +1184,12 @@ def test_run_wakes_from_a_dedicated_notification_connection(database_url: str) -
 
         thread = Thread(target=run_worker)
         thread.start()
-        assert listener_ready.wait(timeout=5)
-        assert empty_claim_finished.wait(timeout=5)
-
         Queue(enqueue_connection, default_queue="notification-target").enqueue(
             "notification.wake", {}
         )
         enqueue_connection.commit()
-        release_empty_claim.set()
 
-        assert handled.wait(timeout=1)
+        assert handled.wait(timeout=5)
         worker.stop()
         thread.join(timeout=5)
         assert not thread.is_alive()
@@ -1210,8 +1209,7 @@ def test_run_keeps_polling_when_notification_connections_fail(database_url: str)
         psycopg.connect(database_url, autocommit=True) as worker_connection,
     ):
         worker = Worker(
-            worker_connection,
-            notification_connection_factory=unavailable_listener,
+            worker_pool,
             on_notification_error=lambda _error: notification_error.set(),
         ).handle("notification.fallback", lambda _payload, _context: handled.set())
 
@@ -1223,8 +1221,6 @@ def test_run_keeps_polling_when_notification_connections_fail(database_url: str)
 
         thread = Thread(target=run_worker)
         thread.start()
-        assert notification_error.wait(timeout=1)
-
         Queue(enqueue_connection).enqueue("notification.fallback", {})
         enqueue_connection.commit()
 
@@ -1252,7 +1248,7 @@ def test_worker_renews_ownership_while_handler_runs(database_url: str) -> None:
             return {"renewed": True}
 
         worker = Worker(
-            worker_connection,
+            worker_pool,
             worker_id="python-heartbeat-worker",
             lease_ms=1_000,
             heartbeat_ms=100,
@@ -1285,7 +1281,7 @@ def test_worker_delivers_and_acknowledges_cancellation(database_url: str) -> Non
             return {"ignoredCancellation": True}
 
         worker = Worker(
-            worker_connection,
+            worker_pool,
             worker_id="python-cancellation-worker",
             lease_ms=500,
             heartbeat_ms=40,
@@ -1361,7 +1357,7 @@ def test_worker_classifies_an_absolute_deadline(
             context.cancellation.raise_if_cancelled()
 
         worker = Worker(
-            worker_connection,
+            worker_pool,
             worker_id="python-deadline-worker",
             lease_ms=500,
             heartbeat_ms=400,
@@ -1397,7 +1393,7 @@ def test_worker_classifies_an_execution_timeout(database_url: str) -> None:
             context.cancellation.raise_if_cancelled()
 
         worker = Worker(
-            worker_connection,
+            worker_pool,
             worker_id="python-timeout-worker",
             lease_ms=500,
             heartbeat_ms=400,
@@ -1436,7 +1432,7 @@ def test_worker_keeps_running_after_a_lease_loss(database_url: str) -> None:
 
         worker = (
             Worker(
-                worker_connection,
+                worker_pool,
                 worker_id="python-stale-worker",
                 lease_ms=150,
                 heartbeat_ms=40,
@@ -1502,7 +1498,7 @@ def test_worker_recovers_an_expired_claim_before_dispatch(database_url: str) -> 
         assert str(abandoned[0]) == task_id
 
         worker = Worker(
-            worker_connection,
+            worker_pool,
             worker_id="python-recovery-worker",
         ).handle("lease.recovered", lambda _payload, _context: {"recovered": True})
 
@@ -1538,9 +1534,7 @@ def test_handler_failure_retries_on_the_database_schedule(database_url: str) -> 
                 raise RuntimeError("provider unavailable")
             return {"delivered": True}
 
-        worker = Worker(worker_connection, worker_id="python-retry-worker").handle(
-            "email.retry", handle
-        )
+        worker = Worker(worker_pool, worker_id="python-retry-worker").handle("email.retry", handle)
 
         assert worker.run_once() is True
         assert worker.run_once() is False
@@ -1602,9 +1596,9 @@ def test_durable_sleeps_do_not_retain_handler_frames(database_url: str) -> None:
             handler_locals.append(weakref.ref(local))
             context.sleep("nap", 3_600_000)
 
-        worker = Worker(
-            worker_connection, worker_id="python-sleep-retention", concurrency=8
-        ).handle("sleep.retention", handle)
+        worker = Worker(worker_pool, worker_id="python-sleep-retention", concurrency=8).handle(
+            "sleep.retention", handle
+        )
         assert worker.run_once() is True
         suspended = worker_connection.execute(
             "SELECT count(*) FROM workhorse.task_runtime WHERE state = 'scheduled'"

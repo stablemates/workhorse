@@ -1,4 +1,6 @@
 from __future__ import annotations
+# ruff: noqa
+
 
 import psycopg
 
@@ -44,12 +46,12 @@ def test_child_task_suspends_the_parent_and_replays_its_retained_result(
             return {"receiptId": charge["receiptId"]}  # type: ignore[index]
 
         parent_worker = Worker(
-            parent_connection,
+            worker_pool,
             queue="child-parents",
             worker_id="python-child-parent-worker",
         ).handle("checkout", handle_parent)
         child_worker = Worker(
-            child_connection,
+            worker_pool,
             queue="child-workers",
             worker_id="python-child-worker",
         ).handle("charge-card", lambda _payload, _context: {"receiptId": "receipt-1"})
@@ -105,12 +107,12 @@ def test_child_fan_out_joins_results_by_stable_name(database_url: str) -> None:
             )
 
         parent_worker = Worker(
-            parent_connection,
+            worker_pool,
             queue="fan-out-parents",
             worker_id="python-fan-out-parent-worker",
         ).handle("fan-out-parent", handle_parent)
         child_worker = Worker(
-            child_connection,
+            worker_pool,
             queue="fan-out-children",
             worker_id="python-fan-out-child-worker",
         ).handle(
@@ -149,7 +151,7 @@ def test_empty_child_fan_out_completes_without_replay(database_url: str) -> None
             activations += 1
             return context.run_children(())
 
-        assert Worker(worker_connection).handle("empty-fan-out", handle).run_once() is True
+        assert Worker(worker_pool).handle("empty-fan-out", handle).run_once() is True
         assert activations == 1
         assert worker_connection.execute(
             "SELECT state, result FROM workhorse.task_outcome WHERE task_id = %s",
@@ -202,12 +204,12 @@ def test_child_fan_out_returns_mixed_settled_outcomes(database_url: str) -> None
             return {"value": 1}
 
         parent_worker = Worker(
-            parent_connection,
+            worker_pool,
             queue="python-settled-parents",
             worker_id="python-settled-parent-worker",
         ).handle("settled-parent", handle_parent)
         child_worker = Worker(
-            child_connection,
+            worker_pool,
             queue="python-settled-children",
             worker_id="python-settled-child-worker",
         ).handle("settled-child", handle_child)
@@ -258,12 +260,12 @@ def test_child_fan_out_all_success_propagates_failure(database_url: str) -> None
             raise RuntimeError("rejected")
 
         parent_worker = Worker(
-            parent_connection,
+            worker_pool,
             queue="python-all-success-parents",
             worker_id="python-all-success-parent-worker",
         ).handle("all-success-parent", handle_parent)
         child_worker = Worker(
-            child_connection,
+            worker_pool,
             queue="python-all-success-children",
             worker_id="python-all-success-child-worker",
         ).handle("all-success-child", reject_child)
@@ -304,12 +306,12 @@ def test_changed_child_request_replays_as_a_typed_conflict(database_url: str) ->
             return {"conflict": bool(conflicts)}
 
         parent_worker = Worker(
-            parent_connection,
+            worker_pool,
             queue="conflicting-parents",
             worker_id="python-conflicting-parent-worker",
         ).handle("conflicting-parent", handle)
         child_worker = Worker(
-            child_connection,
+            worker_pool,
             queue="conflicting-children",
             worker_id="python-conflicting-child-worker",
         ).handle("conflicting-child", lambda _payload, _context: None)
@@ -368,7 +370,7 @@ def test_child_calls_surface_stale_fences_and_local_limits_as_typed_errors(
             except ChildLeaseLostError as error:
                 stale_errors.append(error)
 
-        worker = Worker(worker_connection, worker_id="python-typed-child-worker").handle(
+        worker = Worker(worker_pool, worker_id="python-typed-child-worker").handle(
             "typed-child-errors", handle
         )
         assert worker.run_once() is True

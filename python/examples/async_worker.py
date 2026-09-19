@@ -19,53 +19,64 @@ async def run(database_url: str, driver: str) -> None:
 
     if driver == "psycopg":
         import psycopg
+        from psycopg_pool import AsyncConnectionPool
 
         enqueue_connection = await psycopg.AsyncConnection.connect(database_url)
-        worker_connection = await psycopg.AsyncConnection.connect(database_url, autocommit=True)
+        worker_pool = AsyncConnectionPool(
+            database_url,
+            min_size=3,
+            max_size=3,
+            kwargs={"autocommit": True},
+            open=False,
+        )
+        await worker_pool.open()
         try:
             async with enqueue_connection.transaction():
                 task_id = await AsyncQueue.from_psycopg(
                     enqueue_connection, default_queue=queue_name
                 ).enqueue(task_type, {"value": 42})
             worker = AsyncWorker.from_psycopg(
-                worker_connection,
+                worker_pool,
                 queue=queue_name,
                 worker_id=f"python-example-{driver}-{suffix}",
             ).handle(task_type, handler)
             assert await worker.run_once() is True
-            cursor = await worker_connection.execute(
-                "SELECT state, result = %s::jsonb FROM workhorse.task_outcome WHERE task_id = %s",
-                (json.dumps({"driver": driver, "value": 42}), task_id),
-            )
-            outcome = await cursor.fetchone()
+            async with worker_pool.connection() as connection:
+                cursor = await connection.execute(
+                    "SELECT state, result = %s::jsonb "
+                    "FROM workhorse.task_outcome WHERE task_id = %s",
+                    (json.dumps({"driver": driver, "value": 42}), task_id),
+                )
+                outcome = await cursor.fetchone()
         finally:
-            await worker_connection.close()
+            await worker_pool.close()
             await enqueue_connection.close()
     elif driver == "asyncpg":
         import asyncpg  # type: ignore[import-untyped]
 
         enqueue_connection = await asyncpg.connect(database_url)
-        worker_connection = await asyncpg.connect(database_url)
+        worker_pool = await asyncpg.create_pool(database_url, min_size=3, max_size=3)
         try:
             async with enqueue_connection.transaction():
                 task_id = await AsyncQueue.from_asyncpg(
                     enqueue_connection, default_queue=queue_name
                 ).enqueue(task_type, {"value": 42})
             worker = AsyncWorker.from_asyncpg(
-                worker_connection,
+                worker_pool,
                 queue=queue_name,
                 worker_id=f"python-example-{driver}-{suffix}",
             ).handle(task_type, handler)
             assert await worker.run_once() is True
-            row = await worker_connection.fetchrow(
-                "SELECT state, result = $2::jsonb AS matches "
-                "FROM workhorse.task_outcome WHERE task_id = $1::uuid",
-                task_id,
-                json.dumps({"driver": driver, "value": 42}),
-            )
+            async with worker_pool.acquire() as connection:
+                row = await connection.fetchrow(
+                    "SELECT state, result = $2::jsonb AS matches "
+                    "FROM workhorse.task_outcome WHERE task_id = $1::uuid",
+                    task_id,
+                    json.dumps({"driver": driver, "value": 42}),
+                )
             outcome = None if row is None else (row["state"], row["matches"])
         finally:
-            await worker_connection.close()
+            await worker_pool.close()
             await enqueue_connection.close()
     else:
         raise ValueError(f"unsupported driver: {driver}")

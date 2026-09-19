@@ -30,7 +30,7 @@ result that becomes the task's durable outcome.
   <Tab value="Python">
     ```python
     worker = Worker(
-        connection,
+        pool,
         queues=["email", "billing"],
         concurrency=worker_concurrency,
     )
@@ -102,7 +102,7 @@ accidentally write as a stale owner after the task moves on.
   <Tab value="Python">
     ```python
     worker = Worker(
-        connection,
+        pool,
         queues=["email", "billing"],
         concurrency=worker_concurrency,
         lease_ms=worker_lease_ms,
@@ -181,14 +181,13 @@ their own process. `defineWorkerProcess` describes the adapter and workers; the
   </Tab>
   <Tab value="Python">
     ```python
-    with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
-        worker = Worker(
-            connection,
-            queues=["email", "billing"],
-            concurrency=worker_concurrency,
-        )
-        worker.handle("email.send", send_email)
-        run_worker_process(worker)
+    worker = Worker(
+        pool,
+        queues=["email", "billing"],
+        concurrency=worker_concurrency,
+    )
+    worker.handle("email.send", send_email)
+    run_worker_process(worker)
     ```
   </Tab>
   <Tab value="Go">

@@ -57,8 +57,8 @@ heartbeat connection per pool, shared the way the listener is, so budget it on t
 and your handlers. If the pool cannot spare it, or states no size, the worker refuses to start and
 says why. Set `sharedHeartbeats` to send heartbeats through the shared pool instead, and accept
 that busy handlers can then delay renewal. The heartbeat connection runs only self-contained
-statements, so it works in every pool mode. Go workers still heartbeat through the shared pool. A Python worker opens its own
-heartbeat connection only when you pass it a `heartbeat_connection_factory`.
+statements, so it works in every pool mode. Go workers reserve one heartbeat connection from the shared pool (or opt out with `SharedHeartbeats`). A Python worker opens its own
+heartbeat connection from the supplied Psycopg or asyncpg pool.
 
 ## What is unsafe
 

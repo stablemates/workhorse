@@ -253,6 +253,7 @@ namespace fires it.
   <Tab value="Python">
     ```python verify
     import psycopg
+    from psycopg_pool import ConnectionPool
 
     from workhorse import (
         HandlerContext,
@@ -288,9 +289,11 @@ namespace fires it.
             )
 
         # Worker process: evaluate and fire schedules for that namespace.
-        with psycopg.connect(database_url, autocommit=True) as connection:
+        with ConnectionPool(
+            database_url, min_size=3, max_size=3, kwargs={"autocommit": True}
+        ) as pool:
             worker = Worker(
-                connection,
+                pool,
                 queue="billing",
                 schedule_namespaces=("billing-production",),
             ).handle("invoice.generate", generate_invoices)

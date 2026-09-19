@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import random
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, cast
+from typing import Any, Literal, Protocol, TypeVar, cast
 
 from ._compatibility import AsyncRowExecutor as _AsyncRowExecutor
 from ._drivers import (
-    AsyncpgConnection as _AsyncpgConnection,
     AsyncpgExecutor as _AsyncpgExecutor,
-    AsyncPsycopgConnection as _AsyncPsycopgConnection,
+    AsyncpgPool as _AsyncpgPool,
     AsyncPsycopgExecutor as _AsyncPsycopgExecutor,
+    AsyncPsycopgPool as _AsyncPsycopgPool,
+    PooledAsyncpgExecutor as _PooledAsyncpgExecutor,
+    PooledAsyncPsycopgExecutor as _PooledAsyncPsycopgExecutor,
 )
 from ._statements import DriverStatement as _DriverStatement
 from .types import (
@@ -33,19 +34,11 @@ from .types import (
 )
 from .worker import Worker
 
-if TYPE_CHECKING:
-    import psycopg
-
-    _AsyncPsycopgConnectionInput = psycopg.AsyncConnection[Any]
-else:
-    _AsyncPsycopgConnectionInput = _AsyncPsycopgConnection
-
 AsyncHandler = Callable[[Any, AsyncHandlerContext], Awaitable[Json]]
 AsyncBatchHandler = Callable[
     [Sequence[AsyncBatchHandlerItem]], Awaitable[Sequence[BatchHandlerOutcome]]
 ]
 _AsyncNotificationConnectionFactory = Callable[[], Awaitable[Any]]
-_AsyncHeartbeatConnectionFactory = Callable[[], Awaitable[Any]]
 
 _CHANNEL = "workhorse_tasks"
 _RECONNECT_INITIAL_SECONDS = 0.1
@@ -63,11 +56,9 @@ class _AsyncExecutorBridge:
     def __init__(self, executor: _AsyncRowExecutor) -> None:
         self._executor = executor
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._driver_lock: asyncio.Lock | None = None
 
     def bind(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
-        self._driver_lock = asyncio.Lock()
 
     def rows(
         self, statement: _DriverStatement, parameters: Sequence[object] = ()
@@ -81,11 +72,9 @@ class _AsyncExecutorBridge:
     async def _rows(
         self, statement: _DriverStatement, parameters: Sequence[object]
     ) -> list[Mapping[str, object]]:
-        lock = self._driver_lock
-        if lock is None:
+        if self._loop is None:
             raise RuntimeError("AsyncWorker database bridge is not bound")
-        async with lock:
-            rows = await self._executor.rows(statement, parameters)
+        rows = await self._executor.rows(statement, parameters)
         # Executors already return fresh dicts per row; nothing else holds them.
         return list(rows)
 
@@ -194,30 +183,30 @@ class AsyncWorker:
     def __init__(
         self,
         executor: _AsyncRowExecutor,
-        query_connection: object,
+        pool: object,
         driver: Literal["psycopg", "asyncpg"],
         *,
-        notification_connection_factory: _AsyncNotificationConnectionFactory | None = None,
         on_notification_error: Callable[[BaseException], None] | None = None,
         on_registration_error: Callable[[BaseException], None] | None = None,
-        heartbeat_connection_factory: _AsyncHeartbeatConnectionFactory | None = None,
+        shared_heartbeats: bool = False,
         **worker_options: Any,
     ) -> None:
         self._bridge = _AsyncExecutorBridge(executor)
-        self._query_connection = query_connection
+        self._pool = pool
         self._driver = driver
-        self._notification_connection_factory = notification_connection_factory
+        self._notification_connection_factory = None
         self._on_notification_error = on_notification_error
         self._loop: asyncio.AbstractEventLoop | None = None
         self._running = False
-        self._heartbeat_connection_factory = heartbeat_connection_factory
+        self._heartbeat_connection_factory = None
         self._inner = Worker(
-            cast(Any, query_connection),
+            cast(Any, pool),
             on_notification_error=on_notification_error,
             on_registration_error=on_registration_error,
             _executor=self._bridge,
+            shared_heartbeats=shared_heartbeats,
             _heartbeat_executor_factory=(
-                None if heartbeat_connection_factory is None else self._open_heartbeat_executor
+                None if shared_heartbeats else self._open_heartbeat_executor
             ),
             **worker_options,
         )
@@ -225,7 +214,7 @@ class AsyncWorker:
     @classmethod
     def from_psycopg(
         cls,
-        connection: _AsyncPsycopgConnectionInput,
+        pool: _AsyncPsycopgPool,
         *,
         queue: str | None = None,
         queues: Sequence[str] | None = None,
@@ -238,23 +227,17 @@ class AsyncWorker:
         registry_interval_ms: int = 5_000,
         schedule_namespaces: Sequence[str] = (),
         schedule_catchup_limit: int = 100,
-        notification_connection_factory: _AsyncNotificationConnectionFactory | None = None,
         on_notification_error: Callable[[BaseException], None] | None = None,
         on_registration_error: Callable[[BaseException], None] | None = None,
-        heartbeat_connection_factory: _AsyncHeartbeatConnectionFactory | None = None,
+        shared_heartbeats: bool = False,
     ) -> AsyncWorker:
-        if getattr(connection, "autocommit", False) is not True:
-            raise ValueError(
-                "AsyncWorker requires a dedicated Psycopg connection in autocommit mode"
-            )
         return cls(
-            _AsyncPsycopgExecutor(cast(_AsyncPsycopgConnection, connection)),
-            connection,
+            _PooledAsyncPsycopgExecutor(pool),
+            pool,
             "psycopg",
-            notification_connection_factory=notification_connection_factory,
             on_notification_error=on_notification_error,
             on_registration_error=on_registration_error,
-            heartbeat_connection_factory=heartbeat_connection_factory,
+            shared_heartbeats=shared_heartbeats,
             queue=queue,
             queues=queues,
             worker_id=worker_id,
@@ -271,7 +254,7 @@ class AsyncWorker:
     @classmethod
     def from_asyncpg(
         cls,
-        connection: _AsyncpgConnection,
+        pool: _AsyncpgPool,
         *,
         queue: str | None = None,
         queues: Sequence[str] | None = None,
@@ -284,21 +267,17 @@ class AsyncWorker:
         registry_interval_ms: int = 5_000,
         schedule_namespaces: Sequence[str] = (),
         schedule_catchup_limit: int = 100,
-        notification_connection_factory: _AsyncNotificationConnectionFactory | None = None,
         on_notification_error: Callable[[BaseException], None] | None = None,
         on_registration_error: Callable[[BaseException], None] | None = None,
-        heartbeat_connection_factory: _AsyncHeartbeatConnectionFactory | None = None,
+        shared_heartbeats: bool = False,
     ) -> AsyncWorker:
-        if connection.is_in_transaction():
-            raise ValueError("AsyncWorker requires a dedicated asyncpg connection")
         return cls(
-            _AsyncpgExecutor(connection),
-            connection,
+            _PooledAsyncpgExecutor(pool),
+            pool,
             "asyncpg",
-            notification_connection_factory=notification_connection_factory,
             on_notification_error=on_notification_error,
             on_registration_error=on_registration_error,
-            heartbeat_connection_factory=heartbeat_connection_factory,
+            shared_heartbeats=shared_heartbeats,
             queue=queue,
             queues=queues,
             worker_id=worker_id,
@@ -367,19 +346,14 @@ class AsyncWorker:
     async def run(self) -> None:
         self._start_run()
         stop_notifications = asyncio.Event()
-        listener = (
-            asyncio.create_task(self._listen(stop_notifications))
-            if self._notification_connection_factory is not None
-            else None
-        )
+        listener = asyncio.create_task(self._listen(stop_notifications))
         try:
             await self._run_inner(self._inner.run)
         finally:
             stop_notifications.set()
-            if listener is not None:
-                listener.cancel()
-                with suppress(asyncio.CancelledError):
-                    await listener
+            listener.cancel()
+            with suppress(asyncio.CancelledError):
+                await listener
             self._running = False
 
     def pause(self) -> None:
@@ -412,30 +386,39 @@ class AsyncWorker:
             raise
 
     def _open_heartbeat_executor(self) -> tuple[_AsyncExecutorBridge, Callable[[], None]]:
-        """Open the heartbeat connection on the run's loop, behind its own driver lock."""
+        """Reserve one pool connection for heartbeat rounds."""
         loop = self._require_loop()
-        factory = cast(_AsyncHeartbeatConnectionFactory, self._heartbeat_connection_factory)
-        connection = asyncio.run_coroutine_threadsafe(_await_value(factory()), loop).result()
+
+        async def acquire() -> tuple[Any, Callable[[], Coroutine[Any, Any, None]]]:
+            if self._driver == "psycopg":
+                psycopg_pool = cast(_AsyncPsycopgPool, self._pool)
+                context = psycopg_pool.connection()
+                connection = await context.__aenter__()
+
+                async def close_psycopg() -> None:
+                    await context.__aexit__(None, None, None)
+
+                return connection, close_psycopg
+            asyncpg_pool = cast(_AsyncpgPool, self._pool)
+            connection = await asyncpg_pool.acquire()
+
+            async def close_asyncpg() -> None:
+                await asyncpg_pool.release(connection)
+
+            return connection, close_asyncpg
+
+        connection, close_async = asyncio.run_coroutine_threadsafe(acquire(), loop).result()
 
         def close() -> None:
-            async def close_connection() -> None:
-                closed = connection.close()
-                if inspect.isawaitable(closed):
-                    await closed
+            asyncio.run_coroutine_threadsafe(close_async(), loop).result()
 
-            asyncio.run_coroutine_threadsafe(close_connection(), loop).result()
-
-        if connection is self._query_connection:
-            raise ValueError("Heartbeat connection must be separate from the worker")
         if self._driver == "psycopg":
             if getattr(connection, "autocommit", False) is not True:
                 close()
                 raise ValueError("Heartbeat connection must be in autocommit mode")
-            executor: _AsyncRowExecutor = _AsyncPsycopgExecutor(
-                cast(_AsyncPsycopgConnection, connection)
-            )
+            executor: _AsyncRowExecutor = _AsyncPsycopgExecutor(connection)
         else:
-            executor = _AsyncpgExecutor(cast(_AsyncpgConnection, connection))
+            executor = _AsyncpgExecutor(connection)
         bridge = _AsyncExecutorBridge(executor)
         bridge.bind(loop)
         return bridge, close
@@ -449,14 +432,15 @@ class AsyncWorker:
         reconnect_seconds = _RECONNECT_INITIAL_SECONDS
         while not stop.is_set():
             connection: Any | None = None
+            context: Any | None = None
             try:
-                factory = cast(
-                    _AsyncNotificationConnectionFactory, self._notification_connection_factory
-                )
-                connection = await factory()
-                if connection is self._query_connection:
-                    connection = None
-                    raise ValueError("Notification connection must be separate from the worker")
+                if self._driver == "psycopg":
+                    psycopg_pool = cast(_AsyncPsycopgPool, self._pool)
+                    context = psycopg_pool.connection()
+                    connection = await context.__aenter__()
+                else:
+                    asyncpg_pool = cast(_AsyncpgPool, self._pool)
+                    connection = await asyncpg_pool.acquire()
                 if self._driver == "psycopg":
                     await self._listen_psycopg(connection, stop)
                 else:
@@ -472,9 +456,10 @@ class AsyncWorker:
                 self._inner._set_notification_listening(False)
                 if connection is not None:
                     try:
-                        closed = connection.close()
-                        if inspect.isawaitable(closed):
-                            await closed
+                        if self._driver == "psycopg":
+                            await cast(Any, context).__aexit__(None, None, None)
+                        else:
+                            await cast(_AsyncpgPool, self._pool).release(connection)
                     except BaseException as error:
                         if self._on_notification_error is not None:
                             self._on_notification_error(error)

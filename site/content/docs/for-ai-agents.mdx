@@ -186,10 +186,15 @@ and reads the durable result.
                 ),
             )
 
-    with psycopg.connect(database_url, autocommit=True) as worker_connection:
-        worker = Worker(worker_connection).handle("order.created", handle_order_created)
+    from psycopg_pool import ConnectionPool
+
+    with ConnectionPool(
+        database_url, min_size=3, max_size=3, kwargs={"autocommit": True}
+    ) as worker_pool:
+        worker = Worker(worker_pool).handle("order.created", handle_order_created)
         worker.run_once()  # Production worker processes call worker.run().
-        task = Admin(worker_connection).get_task(task_id)
+        with worker_pool.connection() as admin_connection:
+            task = Admin(admin_connection).get_task(task_id)
         print(task.state if task else None, task.result if task else None)
     ```
 

@@ -49,6 +49,28 @@ class AsyncpgConnection(Protocol):
     def is_in_transaction(self) -> bool: ...
 
 
+class PsycopgPool(Protocol):
+    @property
+    def max_size(self) -> int: ...
+
+    def connection(self) -> Any: ...
+
+
+class AsyncPsycopgPool(Protocol):
+    @property
+    def max_size(self) -> int: ...
+
+    def connection(self) -> Any: ...
+
+
+class AsyncpgPool(Protocol):
+    async def acquire(self) -> Any: ...
+
+    async def release(self, connection: Any) -> None: ...
+
+    def get_max_size(self) -> int: ...
+
+
 class SyncExecutor:
     dialect: DriverDialect = "psycopg"
 
@@ -97,6 +119,46 @@ class AsyncpgExecutor:
                     row[column] = json.loads(value)
             rows.append(row)
         return rows
+
+
+class PooledSyncExecutor:
+    dialect: DriverDialect = "psycopg"
+
+    def __init__(self, pool: PsycopgPool) -> None:
+        self.pool = pool
+
+    def rows(self, statement: DriverStatement, parameters: Sequence[object] = ()) -> list[Row]:
+        with self.pool.connection() as connection:
+            return SyncExecutor(connection).rows(statement, parameters)
+
+
+class PooledAsyncPsycopgExecutor:
+    dialect: DriverDialect = "psycopg"
+
+    def __init__(self, pool: AsyncPsycopgPool) -> None:
+        self.pool = pool
+
+    async def rows(
+        self, statement: DriverStatement, parameters: Sequence[object] = ()
+    ) -> list[Row]:
+        async with self.pool.connection() as connection:
+            return await AsyncPsycopgExecutor(connection).rows(statement, parameters)
+
+
+class PooledAsyncpgExecutor:
+    dialect: DriverDialect = "asyncpg"
+
+    def __init__(self, pool: AsyncpgPool) -> None:
+        self.pool = pool
+
+    async def rows(
+        self, statement: DriverStatement, parameters: Sequence[object] = ()
+    ) -> list[Row]:
+        connection = await self.pool.acquire()
+        try:
+            return await AsyncpgExecutor(connection).rows(statement, parameters)
+        finally:
+            await self.pool.release(connection)
 
 
 _JSON_COLUMNS = frozenset(

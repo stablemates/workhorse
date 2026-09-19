@@ -2041,6 +2041,7 @@ func TestWorkerOwnershipLifecycleSupportsASingleConnectionPool(t *testing.T) {
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
 		Queue:               queueName,
 		WorkerID:            "single-connection-worker",
+		SharedHeartbeats:    true,
 		LeaseDuration:       10 * time.Second,
 		HeartbeatInterval:   20 * time.Millisecond,
 		PollInterval:        5 * time.Millisecond,
@@ -2113,6 +2114,7 @@ func TestWorkerNotificationsWakeClaimsAndReconnectAfterListenerLoss(t *testing.T
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
 		Queue:               queueName,
 		WorkerID:            "notification-worker",
+		SharedHeartbeats:    true,
 		LeaseDuration:       time.Second,
 		HeartbeatInterval:   20 * time.Millisecond,
 		PollInterval:        5 * time.Second,

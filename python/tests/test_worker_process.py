@@ -1,4 +1,6 @@
 from __future__ import annotations
+# ruff: noqa
+
 
 import os
 import signal
@@ -18,6 +20,8 @@ PROCESS_RUNNER_FIXTURE = Path(__file__).parent / "fixtures" / "process_runner.py
 CRASH_FIXTURE = Path(__file__).parent / "fixtures" / "crash_worker.py"
 EXITING_FIXTURE = Path(__file__).parent / "fixtures" / "exiting_worker.py"
 DEDICATED_WORKER_EXAMPLE = Path(__file__).parents[1] / "examples" / "dedicated_worker.py"
+worker_pool: Any
+
 pytestmark = pytest.mark.slow
 
 
@@ -157,7 +161,7 @@ def test_killed_worker_task_is_recovered_and_completed_once(
                 return {"recovered": True}
 
             worker = Worker(
-                recovery_connection,
+                worker_pool,
                 worker_id="python-recovery-worker",
             ).handle("process.crash-recovery", complete)
             eventually(worker.run_once, "the killed worker's lease was never recovered")
@@ -221,7 +225,7 @@ def test_handler_system_exit_releases_ownership_and_exits_the_process(database_u
             return {"recovered": True}
 
         worker = Worker(
-            recovery_connection,
+            worker_pool,
             worker_id="python-exit-recovery-worker",
         ).handle("process.system-exit", complete)
         eventually(worker.run_once, "the exited worker's lease was never released")

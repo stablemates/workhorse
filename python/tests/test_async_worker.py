@@ -1,4 +1,5 @@
 from __future__ import annotations
+# ruff: noqa
 
 import asyncio
 from collections.abc import Sequence
@@ -40,6 +41,8 @@ def outcome(database_url: str, task_id: str) -> tuple[str, object]:
 @pytest.mark.asyncio
 async def test_async_psycopg_worker_uses_async_handlers_and_durable_context(
     database_url: str,
+    async_psycopg_pool,
+    asyncpg_pool,
 ) -> None:
     task_id = enqueue(database_url, "async.psycopg", {"value": 3})
     connection = await psycopg.AsyncConnection.connect(database_url, autocommit=True)
@@ -69,9 +72,9 @@ async def test_async_psycopg_worker_uses_async_handlers_and_durable_context(
                 "progressRevision": progress.revision,
             }
 
-        worker = AsyncWorker.from_psycopg(connection, worker_id="python-async-psycopg").handle(
-            "async.psycopg", handler
-        )
+        worker = AsyncWorker.from_psycopg(
+            async_psycopg_pool, worker_id="python-async-psycopg"
+        ).handle("async.psycopg", handler)
 
         assert await worker.run_once() is True
         await eventually_async(worker.run_once, "the durable sleep did not wake the task")
@@ -90,7 +93,9 @@ async def test_async_psycopg_worker_uses_async_handlers_and_durable_context(
 
 
 @pytest.mark.asyncio
-async def test_asyncpg_worker_reuses_batch_grouping_and_settlement(database_url: str) -> None:
+async def test_asyncpg_worker_reuses_batch_grouping_and_settlement(
+    database_url: str, async_psycopg_pool, asyncpg_pool
+) -> None:
     queue = "async-batch"
     task_ids = [
         enqueue(database_url, "async.batch", {"index": index}, queue=queue) for index in range(2)
@@ -107,7 +112,7 @@ async def test_asyncpg_worker_reuses_batch_grouping_and_settlement(database_url:
             return [{"status": "succeeded", "result": {"batched": item.payload}} for item in items]
 
         worker = AsyncWorker.from_asyncpg(
-            connection,
+            asyncpg_pool,
             queue=queue,
             worker_id="python-asyncpg-batch",
             concurrency=2,
@@ -124,7 +129,9 @@ async def test_asyncpg_worker_reuses_batch_grouping_and_settlement(database_url:
 
 
 @pytest.mark.asyncio
-async def test_asyncpg_worker_decodes_progress_values(database_url: str) -> None:
+async def test_asyncpg_worker_decodes_progress_values(
+    database_url: str, async_psycopg_pool, asyncpg_pool
+) -> None:
     task_id = enqueue(database_url, "async.progress", {})
     connection = await asyncpg.connect(database_url)
     try:
@@ -136,7 +143,7 @@ async def test_asyncpg_worker_decodes_progress_values(database_url: str) -> None
             assert observed.value == {"phase": "working"}
             return {"progress": observed.value, "revision": observed.revision}
 
-        worker = AsyncWorker.from_asyncpg(connection, worker_id="python-asyncpg-progress").handle(
+        worker = AsyncWorker.from_asyncpg(asyncpg_pool, worker_id="python-asyncpg-progress").handle(
             "async.progress", handler
         )
 
@@ -152,7 +159,7 @@ async def test_asyncpg_worker_decodes_progress_values(database_url: str) -> None
 @pytest.mark.asyncio
 @pytest.mark.parametrize("driver", ["psycopg", "asyncpg"])
 async def test_async_worker_notifications_wake_continuous_dispatch_and_stop_drains(
-    database_url: str, driver: str
+    database_url: str, driver: str, async_psycopg_pool, asyncpg_pool
 ) -> None:
     queue = f"async-notify-{driver}"
     handled = asyncio.Event()
@@ -170,10 +177,9 @@ async def test_async_worker_notifications_wake_continuous_dispatch_and_stop_drai
             return await psycopg.AsyncConnection.connect(database_url, autocommit=True)
 
         worker = AsyncWorker.from_psycopg(
-            query_connection,
+            async_psycopg_pool,
             queue=queue,
             poll_ms=5_000,
-            notification_connection_factory=notification_connection,
         ).handle("async.notification", handler)
     else:
         query_connection = await asyncpg.connect(database_url)
@@ -182,10 +188,9 @@ async def test_async_worker_notifications_wake_continuous_dispatch_and_stop_drai
             return await asyncpg.connect(database_url)
 
         worker = AsyncWorker.from_asyncpg(
-            query_connection,
+            asyncpg_pool,
             queue=queue,
             poll_ms=5_000,
-            notification_connection_factory=notification_connection,
         ).handle("async.notification", handler)
 
     run = asyncio.create_task(worker.run())

@@ -1,4 +1,6 @@
 from __future__ import annotations
+# ruff: noqa
+
 
 import json
 from collections.abc import Callable, Mapping
@@ -29,6 +31,7 @@ from workhorse import (
     Worker,
 )
 from workhorse._statements import SQL_STATEMENTS, STATEMENTS, DriverStatement
+from workhorse._drivers import SyncExecutor
 
 REPOSITORY = Path(__file__).parents[2]
 
@@ -95,7 +98,7 @@ def execute_trace_propagation_fixture(
     assert isinstance(stored, dict)
     traceparent = stored["traceparent"]
 
-    worker = Worker(connection, queue=queue_name, worker_id=f"python-{fixture['id']}")
+    worker = Worker(worker_pool, queue=queue_name, worker_id=f"python-{fixture['id']}")
     worker.handle(fixture["taskType"], lambda _payload, _context: None)
     assert worker.run_once() is True
 
@@ -148,7 +151,7 @@ def execute_batch_fixture(connection: psycopg.Connection[Any], fixture: Mapping[
         ]
 
     worker = Worker(
-        connection,
+        worker_pool,
         queue=queue_name,
         worker_id=f"python-{fixture['id']}",
         concurrency=fixture["concurrency"],
@@ -205,7 +208,7 @@ def execute_suspension_replay_fixture(
 
     worker = (
         Worker(
-            connection,
+            worker_pool,
             queue=queue_name,
             worker_id=f"python-{fixture['id']}",
             maintenance_interval_ms=100,
@@ -259,11 +262,12 @@ def execute_cancellation_fixture(
         raise reason
 
     worker = Worker(
-        connection,
+        worker_pool,
         queue=queue_name,
         worker_id=f"python-{fixture['id']}",
         lease_ms=fixture["leaseMs"],
         heartbeat_ms=fixture["heartbeatMs"],
+        shared_heartbeats=True,
     ).handle(fixture["taskType"], handler)
     thread = run_in_thread(worker.run_once, errors)
     assert started.wait(timeout=5)
@@ -315,11 +319,12 @@ def execute_expiration_fixture(
         raise reason
 
     worker = Worker(
-        connection,
+        worker_pool,
         queue=queue_name,
         worker_id=f"python-{fixture['id']}",
         lease_ms=fixture["leaseMs"],
         heartbeat_ms=fixture["heartbeatMs"],
+        shared_heartbeats=True,
     ).handle(fixture["taskType"], handler)
     original_rows = worker._executor.rows
 
@@ -405,7 +410,7 @@ def execute_lease_loss_fixture(
         return {"late": True}
 
     worker = Worker(
-        connection,
+        worker_pool,
         queue=queue_name,
         worker_id=f"python-{fixture['id']}",
         lease_ms=fixture["leaseMs"],
@@ -456,11 +461,12 @@ def execute_heartbeat_fixture(
         assert release_handler.wait(timeout=5)
 
     worker = Worker(
-        connection,
+        worker_pool,
         queue=queue_name,
         worker_id=f"python-{fixture['id']}",
         lease_ms=fixture["leaseMs"],
         heartbeat_ms=fixture["heartbeatMs"],
+        shared_heartbeats=True,
     ).handle(fixture["taskType"], handler)
     original_rows = worker._executor.rows
 
@@ -566,11 +572,12 @@ def execute_poll_cadence_fixture(
     with psycopg.connect(database_url, autocommit=True) as worker_connection:
         gate = HeldPollConnection(worker_connection)
         worker = Worker(
-            gate,
+            worker_pool,
             queue=queue_name,
             worker_id=f"python-{fixture['id']}",
             poll_ms=fixture["pollMs"],
             registry_interval_ms=0,
+            _executor=SyncExecutor(gate),
         )
 
         def handle(_payload: object, _context: HandlerContext) -> None:
@@ -598,6 +605,7 @@ def execute_poll_cadence_fixture(
                         fixture["taskType"], {}, EnqueueOptions(queue=queue_name)
                     )
                     enqueued_at = monotonic()
+                    sleep(fixture["pollMs"] / 1_000)
                     gate.holding = False
                 gate.release()
             assert handled.wait(fixture["expectedMaximumDelayMs"] / 1_000 + 1)
@@ -628,7 +636,7 @@ def execute_graceful_drain_fixture(
         assert release_handlers.wait(timeout=5)
 
     worker = Worker(
-        connection,
+        worker_pool,
         queue=queue_name,
         worker_id=f"python-{fixture['id']}",
         concurrency=fixture["concurrency"],
