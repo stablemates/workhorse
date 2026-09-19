@@ -12586,6 +12586,7 @@ $$;
 CREATE OR REPLACE FUNCTION workhorse.dashboard_tasks_v1(p_input jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
+SET jit = off
 AS $$
 DECLARE
   v_scope text := '';
@@ -12734,6 +12735,8 @@ BEGIN
       LEFT JOIN LATERAL (
         SELECT event.details FROM workhorse.dashboard_task_event_v1 event
          WHERE event.task_id = j.id AND event.event_type = 'enqueued'
+           AND event.occurred_at >= j.created_at
+           AND event.occurred_at <= statement_timestamp()
          ORDER BY event.occurred_at, event.event_id LIMIT 1
       ) enqueued_event ON true
       LEFT JOIN LATERAL (
@@ -13346,8 +13349,15 @@ AS $$
     UNION (SELECT value FROM history_worker_scan WHERE value IS NOT NULL LIMIT 1000)
   ), type_values AS (
     SELECT value FROM type_scan WHERE value IS NOT NULL LIMIT 1000
+  ), tag_tasks AS MATERIALIZED (
+    SELECT tags FROM workhorse.dashboard_task_v1
+     ORDER BY created_at DESC, id DESC
+     LIMIT 10000
   ), tag_values AS (
-    SELECT DISTINCT unnest(tags) AS value FROM workhorse.dashboard_task_v1
+    SELECT DISTINCT tag.value
+      FROM tag_tasks
+      CROSS JOIN LATERAL unnest(tag_tasks.tags) AS tag(value)
+     LIMIT 1000
   )
   SELECT jsonb_build_object(
     'queues', COALESCE((
@@ -14962,6 +14972,8 @@ __outcome_scope__
       LEFT JOIN LATERAL (
         SELECT event.details FROM workhorse.dashboard_task_event_v1 event
          WHERE event.task_id = j.id AND event.event_type = 'enqueued'
+           AND event.occurred_at >= j.created_at
+           AND event.occurred_at <= statement_timestamp()
          ORDER BY event.occurred_at, event.event_id LIMIT 1
       ) enqueued_event ON true
       LEFT JOIN LATERAL (
@@ -15444,10 +15456,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (12, 'task counts guard the wait probe'),
   (13, 'stable time for promotion and recovery'),
   (14, 'bin dashboard activity once'),
-  (15, 'cached health dashboard reads')
+  (15, 'cached health dashboard reads'),
+  (16, 'bounded dashboard task reads')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (15) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (16) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

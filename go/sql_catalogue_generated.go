@@ -4,13 +4,13 @@ package workhorse
 
 const (
 	// ProtocolVersion is the SQL protocol version implemented by this module.
-	ProtocolVersion        = 4
+	ProtocolVersion = 4
 	minimumProtocolVersion = 1
 	maximumProtocolVersion = 4
-	minimumSchemaVersion   = 1
-	maximumSchemaVersion   = 15
+	minimumSchemaVersion = 1
+	maximumSchemaVersion = 16
 	// MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
-	MaxEnqueueBatchSize      = 1000
+	MaxEnqueueBatchSize = 1000
 	defaultTaskValueMaxBytes = 1048576
 )
 
@@ -18,36 +18,36 @@ var internalStatementRegistry = map[string]string{
 	"deregister_worker_v1": `SELECT workhorse.deregister_worker_v1($1::text) AS deregistered`,
 	"fire_due_schedules_v2": `SELECT namespace, schedule_name, occurrence_at, task_id
   FROM workhorse.fire_due_schedules_v2($1::text[], $2::timestamptz, $3::integer, $4::bigint)`,
-	"list_checkpoint":           `SELECT checkpoint_value FROM workhorse.task_checkpoint WHERE task_id = $1::uuid AND checkpoint_name = $2::text`,
+	"list_checkpoint": `SELECT checkpoint_value FROM workhorse.task_checkpoint WHERE task_id = $1::uuid AND checkpoint_name = $2::text`,
 	"list_concurrency_policies": `SELECT namespace, queue_name, max_active, max_active_per_key, updated_at FROM workhorse.concurrency_policy, (SELECT $1::text[] AS names) AS filter WHERE cardinality(filter.names) = 0 OR queue_name = ANY(filter.names) ORDER BY queue_name`,
 	"list_progress": `SELECT progress_value, revision::text, attempt, fence_token::text,
        worker_id, created_at, updated_at
   FROM workhorse.task_progress
  WHERE task_id = $1::uuid`,
 	"list_rate_limit_policies": `SELECT namespace, queue_name, rate_limit, rate_interval_ms, rate_burst, per_key_limit, per_key_interval_ms, per_key_burst, updated_at FROM workhorse.rate_limit_policy, (SELECT $1::text[] AS names) AS filter WHERE cardinality(filter.names) = 0 OR queue_name = ANY(filter.names) ORDER BY queue_name`,
-	"promote_v1":               `SELECT workhorse.promote_v1($1::integer) AS promoted`,
+	"promote_v1": `SELECT workhorse.promote_v1($1::integer) AS promoted`,
 	"register_worker_v1": `SELECT workhorse.register_worker_v1(
        $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::text[],
        $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,
        $12::integer, $13::integer, $14::integer, $15::boolean,
        $16::integer, $17::text, $18::text
      ) AS paused`,
-	"run_maintenance_v1":           `SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)`,
-	"schema_version":               `SELECT version FROM workhorse.schema_version ORDER BY version`,
+	"run_maintenance_v1": `SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)`,
+	"schema_version": `SELECT version FROM workhorse.schema_version ORDER BY version`,
 	"sync_concurrency_policies_v1": `SELECT * FROM workhorse.sync_concurrency_policies_v1($1::text, $2::jsonb, $3::boolean)`,
-	"sync_rate_limit_policies_v1":  `SELECT * FROM workhorse.sync_rate_limit_policies_v1($1::text, $2::jsonb, $3::boolean)`,
-	"sync_budgets_v1":              `SELECT * FROM workhorse.sync_budgets_v1($1::text, $2::jsonb, $3::boolean)`,
-	"list_budgets":                 `SELECT namespace, budget_name, max_active, rate_limit, rate_interval_ms, rate_burst, updated_at FROM workhorse.budget, (SELECT $1::text[] AS names) AS filter WHERE cardinality(filter.names) = 0 OR budget_name = ANY(filter.names) ORDER BY budget_name`,
-	"budget_status_v1":             `SELECT * FROM workhorse.budget_status_v1($1::text[])`,
+	"sync_rate_limit_policies_v1": `SELECT * FROM workhorse.sync_rate_limit_policies_v1($1::text, $2::jsonb, $3::boolean)`,
+	"sync_budgets_v1": `SELECT * FROM workhorse.sync_budgets_v1($1::text, $2::jsonb, $3::boolean)`,
+	"list_budgets": `SELECT namespace, budget_name, max_active, rate_limit, rate_interval_ms, rate_burst, updated_at FROM workhorse.budget, (SELECT $1::text[] AS names) AS filter WHERE cardinality(filter.names) = 0 OR budget_name = ANY(filter.names) ORDER BY budget_name`,
+	"budget_status_v1": `SELECT * FROM workhorse.budget_status_v1($1::text[])`,
 	"sync_schedule_definitions_v2": `SELECT workhorse.sync_schedule_definitions_v2($1::text, $2::jsonb, $3::boolean)`,
-	"tick_v1":                      `SELECT * FROM workhorse.tick_v1($1::integer, $2::integer)`,
-	"run_task_now_v1":              `SELECT status, state, run_at FROM workhorse.run_task_now_v1($1::uuid, $2::text, $3::text, $4::text)`,
-	"purge_queue_v1":               `SELECT * FROM workhorse.purge_queue_v1($1::text, $2::text, $3::text, $4::text)`,
+	"tick_v1": `SELECT * FROM workhorse.tick_v1($1::integer, $2::integer)`,
+	"run_task_now_v1": `SELECT status, state, run_at FROM workhorse.run_task_now_v1($1::uuid, $2::text, $3::text, $4::text)`,
+	"purge_queue_v1": `SELECT * FROM workhorse.purge_queue_v1($1::text, $2::text, $3::text, $4::text)`,
 	"concurrency_policy": `SELECT namespace, queue_name, max_active, max_active_per_key, updated_at
          FROM workhorse.concurrency_policy
         WHERE cardinality($1::text[]) = 0 OR queue_name = ANY($1::text[])
         ORDER BY queue_name`,
-	"queue_control":       `SELECT queue_name, paused FROM workhorse.queue_control`,
+	"queue_control": `SELECT queue_name, paused FROM workhorse.queue_control`,
 	"schedule_definition": `SELECT DISTINCT namespace FROM workhorse.schedule_definition ORDER BY namespace`,
 	"worker_registry": `SELECT served.queue_name,
                CASE WHEN last_heartbeat_at < clock_timestamp() - interval '30 seconds'
@@ -235,9 +235,9 @@ var internalStatementRegistry = map[string]string{
            $1::uuid, $2::integer, $3::timestamptz, $4::text, $5::uuid
          )`,
 	"list_dead_letters_v1": `SELECT * FROM workhorse.list_dead_letters_v1($1::jsonb, $2::integer, $3::timestamptz, $4::uuid)`,
-	"redrive_v1":           `SELECT * FROM workhorse.redrive_v1($1::uuid, $2::text, $3::text, $4::text)`,
-	"redrive_many_v1":      `SELECT status, source_task_id, target_task_id, source_state, target_state, requested_at, source_finished_at_cursor, has_more FROM workhorse.redrive_many_v1($1::jsonb, $2::integer, $3::boolean, $4::text, $5::text, $6::text, $7::timestamptz, $8::uuid) ORDER BY ordinal`,
-	"redrive_lineage_v1":   `SELECT * FROM workhorse.redrive_lineage_v1($1::uuid, $2::integer)`,
+	"redrive_v1": `SELECT * FROM workhorse.redrive_v1($1::uuid, $2::text, $3::text, $4::text)`,
+	"redrive_many_v1": `SELECT status, source_task_id, target_task_id, source_state, target_state, requested_at, source_finished_at_cursor, has_more FROM workhorse.redrive_many_v1($1::jsonb, $2::integer, $3::boolean, $4::text, $5::text, $6::text, $7::timestamptz, $8::uuid) ORDER BY ordinal`,
+	"redrive_lineage_v1": `SELECT * FROM workhorse.redrive_lineage_v1($1::uuid, $2::integer)`,
 	"task_dependency": `SELECT dependent_task_id, prerequisite_task_id, on_success, on_failure, on_cancellation,
               created_at, released_at, resolution
          FROM workhorse.task_dependency
@@ -298,26 +298,26 @@ var internalStatementRegistry = map[string]string{
          ) children ON true
          LEFT JOIN workhorse.task_progress p ON p.task_id = j.id
         WHERE j.id = $1::uuid`,
-	"promote_v1__queue_administration":          `SELECT workhorse.promote_v1($1::integer) AS count`,
-	"set_queue_paused_v1":                       `SELECT workhorse.set_queue_paused_v1($1::text, true, $2::text, $3::text, $4::text)`,
+	"promote_v1__queue_administration": `SELECT workhorse.promote_v1($1::integer) AS count`,
+	"set_queue_paused_v1": `SELECT workhorse.set_queue_paused_v1($1::text, true, $2::text, $3::text, $4::text)`,
 	"set_queue_paused_v1__queue_administration": `SELECT workhorse.set_queue_paused_v1($1::text, false, $2::text, $3::text, $4::text)`,
-	"prepare_history_partitions_v1":             `SELECT * FROM workhorse.prepare_history_partitions_v1($1::boolean, $2::timestamptz)`,
-	"rollup_stats_v1":                           `SELECT * FROM workhorse.rollup_stats_v1($1::boolean, $2::timestamptz, $3::integer)`,
-	"retain_history_v1":                         `SELECT * FROM workhorse.retain_history_v1($1::boolean, $2::timestamptz)`,
-	"prune_terminal_storage_v1":                 `SELECT * FROM workhorse.prune_terminal_storage_v1($1::boolean, $2::timestamptz)`,
-	"set_cold_export_policy_v1":                 `SELECT * FROM workhorse.set_cold_export_policy_v1($1::boolean, $2::timestamptz)`,
-	"get_cold_export_status_v1":                 `SELECT * FROM workhorse.get_cold_export_status_v1()`,
-	"claim_cold_export_segment_v1":              `SELECT * FROM workhorse.claim_cold_export_segment_v1($1::text, $2::text, $3::integer, $4::timestamptz)`,
-	"read_cold_export_rows_v1":                  `SELECT * FROM workhorse.read_cold_export_rows_v1($1::text, $2::timestamptz, $3::timestamptz, $4::timestamptz, $5::uuid, $6::integer)`,
-	"complete_cold_export_segment_v1":           `SELECT workhorse.complete_cold_export_segment_v1($1::text, $2::timestamptz, $3::integer, $4::text, $5::text, $6::text, $7::bigint, $8::bigint) AS exported_through`,
-	"fail_cold_export_segment_v1":               `SELECT workhorse.fail_cold_export_segment_v1($1::text, $2::timestamptz, $3::integer, $4::jsonb)`,
+	"prepare_history_partitions_v1": `SELECT * FROM workhorse.prepare_history_partitions_v1($1::boolean, $2::timestamptz)`,
+	"rollup_stats_v1": `SELECT * FROM workhorse.rollup_stats_v1($1::boolean, $2::timestamptz, $3::integer)`,
+	"retain_history_v1": `SELECT * FROM workhorse.retain_history_v1($1::boolean, $2::timestamptz)`,
+	"prune_terminal_storage_v1": `SELECT * FROM workhorse.prune_terminal_storage_v1($1::boolean, $2::timestamptz)`,
+	"set_cold_export_policy_v1": `SELECT * FROM workhorse.set_cold_export_policy_v1($1::boolean, $2::timestamptz)`,
+	"get_cold_export_status_v1": `SELECT * FROM workhorse.get_cold_export_status_v1()`,
+	"claim_cold_export_segment_v1": `SELECT * FROM workhorse.claim_cold_export_segment_v1($1::text, $2::text, $3::integer, $4::timestamptz)`,
+	"read_cold_export_rows_v1": `SELECT * FROM workhorse.read_cold_export_rows_v1($1::text, $2::timestamptz, $3::timestamptz, $4::timestamptz, $5::uuid, $6::integer)`,
+	"complete_cold_export_segment_v1": `SELECT workhorse.complete_cold_export_segment_v1($1::text, $2::timestamptz, $3::integer, $4::text, $5::text, $6::text, $7::bigint, $8::bigint) AS exported_through`,
+	"fail_cold_export_segment_v1": `SELECT workhorse.fail_cold_export_segment_v1($1::text, $2::timestamptz, $3::integer, $4::jsonb)`,
 	"sync_retention_policy_v1": `SELECT (policy).* FROM workhorse.sync_retention_policy_v1(
          $1::integer, $2::integer, $3::integer, $4::integer, $5::integer,
          $6::integer, $7::integer, $8::integer, $9::integer, $10::integer,
          $11::integer, $12::boolean
        ) policy`,
 	"override_retention_policy_v1": `SELECT (policy).* FROM workhorse.override_retention_policy_v1($1::jsonb) policy`,
-	"revert_retention_policy_v1":   `SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1::text[]) policy`,
+	"revert_retention_policy_v1": `SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1::text[]) policy`,
 	"retention_policy_preview": `SELECT
         (SELECT count(*)::integer FROM (
           SELECT 1 FROM workhorse.task task
@@ -368,13 +368,13 @@ var internalStatementRegistry = map[string]string{
          $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer
        ) policy`,
 	"revert_maintenance_policy_v1": `SELECT (policy).* FROM workhorse.revert_maintenance_policy_v1($1::text[]) policy`,
-	"get_maintenance_policy_v1":    `SELECT (policy).* FROM workhorse.get_maintenance_policy_v1() policy`,
-	"set_worker_paused_v1":         `SELECT * FROM workhorse.set_worker_paused_v1($1::text, $2::boolean, $3::text, $4::text, $5::text)`,
+	"get_maintenance_policy_v1": `SELECT (policy).* FROM workhorse.get_maintenance_policy_v1() policy`,
+	"set_worker_paused_v1": `SELECT * FROM workhorse.set_worker_paused_v1($1::text, $2::boolean, $3::text, $4::text, $5::text)`,
 	"worker_registry__worker_registry": `SELECT worker_id, instance_id, hostname, pid, queue_names, schedule_namespaces, queue_name, concurrency, active_slots, draining, paused, paused_by,
               paused_reason, paused_at, started_at, last_heartbeat_at
          FROM workhorse.worker_registry
         ORDER BY last_heartbeat_at DESC, worker_id`,
-	"prune_worker_registry_v1":   `SELECT workhorse.prune_worker_registry_v1(make_interval(secs => $1::double precision)) AS count`,
+	"prune_worker_registry_v1": `SELECT workhorse.prune_worker_registry_v1(make_interval(secs => $1::double precision)) AS count`,
 	"worker_client_protocols_v1": `SELECT client_protocol_version, workers FROM workhorse.worker_client_protocols_v1()`,
 	"live_workers_on_protocols": `SELECT worker_id, hostname, client_protocol_version, sdk_language, sdk_version, last_heartbeat_at
          FROM workhorse.worker_registry registry
@@ -640,34 +640,34 @@ var internalStatementRegistry = map[string]string{
 }
 
 var protocolStatementRegistry = map[string]string{
-	"acknowledge_cancel_v1":        `SELECT workhorse.acknowledge_cancel_v1($1::uuid, $2::text, $3::bigint) AS accepted`,
-	"cancel_v1":                    `SELECT status, state, current_attempt, requested_at, requested_by, reason, finished_at FROM workhorse.cancel_v1($1::uuid, $2::text, $3::text)`,
-	"claim_many_v1":                `SELECT * FROM workhorse.claim_many_v1($1::text, $2::text, $3::integer, $4::integer)`,
-	"claim_v1":                     `SELECT * FROM workhorse.claim_v1($1::text, $2::text, $3::integer)`,
-	"complete_human_wait_v1":       `SELECT status, result, completed_at, completed_by FROM workhorse.complete_human_wait_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,
-	"complete_v1":                  `SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted`,
-	"create_child_v1":              `SELECT status, child_task_id, child_type, created_at, joined_at, result FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
-	"create_children_v1":           `SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)`,
-	"dashboard_human_wait_v1":      `SELECT task_id, queue_name, task_type, token_name AS wait_name, context, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_human_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, task_id, token_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, task_id, token_name LIMIT $1::integer`,
-	"dashboard_signal_wait_v1":     `SELECT task_id, queue_name, task_type, signal_name AS wait_name, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_signal_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, task_id, signal_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, task_id, signal_name LIMIT $1::integer`,
-	"enqueue_many_v1":              `SELECT ordinal, task_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal`,
-	"expire_owned_telemetry_v1":    `SELECT * FROM workhorse.expire_owned_telemetry_v1($1::uuid, $2::text, $3::bigint)`,
-	"fail_v1":                      `SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state`,
-	"get_contract_definition_v1":   `SELECT (definition).* FROM workhorse.get_contract_definition_v1($1::text, $2::text) definition`,
-	"heartbeat_many_v1":            `SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v1($1::text, $2::jsonb) ORDER BY ordinal`,
-	"heartbeat_v1":                 `SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status`,
-	"queue_health_v1":              `SELECT workhorse.queue_health_v1($1::timestamptz) AS snapshot`,
-	"record_batch_dispatch_v1":     `SELECT workhorse.record_batch_dispatch_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,
-	"record_batch_failure_v1":      `SELECT workhorse.record_batch_failure_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,
+	"acknowledge_cancel_v1": `SELECT workhorse.acknowledge_cancel_v1($1::uuid, $2::text, $3::bigint) AS accepted`,
+	"cancel_v1": `SELECT status, state, current_attempt, requested_at, requested_by, reason, finished_at FROM workhorse.cancel_v1($1::uuid, $2::text, $3::text)`,
+	"claim_many_v1": `SELECT * FROM workhorse.claim_many_v1($1::text, $2::text, $3::integer, $4::integer)`,
+	"claim_v1": `SELECT * FROM workhorse.claim_v1($1::text, $2::text, $3::integer)`,
+	"complete_human_wait_v1": `SELECT status, result, completed_at, completed_by FROM workhorse.complete_human_wait_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,
+	"complete_v1": `SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted`,
+	"create_child_v1": `SELECT status, child_task_id, child_type, created_at, joined_at, result FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
+	"create_children_v1": `SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)`,
+	"dashboard_human_wait_v1": `SELECT task_id, queue_name, task_type, token_name AS wait_name, context, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_human_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, task_id, token_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, task_id, token_name LIMIT $1::integer`,
+	"dashboard_signal_wait_v1": `SELECT task_id, queue_name, task_type, signal_name AS wait_name, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_signal_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, task_id, signal_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, task_id, signal_name LIMIT $1::integer`,
+	"enqueue_many_v1": `SELECT ordinal, task_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal`,
+	"expire_owned_telemetry_v1": `SELECT * FROM workhorse.expire_owned_telemetry_v1($1::uuid, $2::text, $3::bigint)`,
+	"fail_v1": `SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state`,
+	"get_contract_definition_v1": `SELECT (definition).* FROM workhorse.get_contract_definition_v1($1::text, $2::text) definition`,
+	"heartbeat_many_v1": `SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v1($1::text, $2::jsonb) ORDER BY ordinal`,
+	"heartbeat_v1": `SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status`,
+	"queue_health_v1": `SELECT workhorse.queue_health_v1($1::timestamptz) AS snapshot`,
+	"record_batch_dispatch_v1": `SELECT workhorse.record_batch_dispatch_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,
+	"record_batch_failure_v1": `SELECT workhorse.record_batch_failure_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,
 	"recover_expired_telemetry_v1": `SELECT * FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)`,
-	"run_maintenance_v1":           `SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)`,
-	"save_checkpoint_v1":           `SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
-	"schedule_wait_v1":             `SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)`,
-	"send_signal_v1":               `SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,
+	"run_maintenance_v1": `SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)`,
+	"save_checkpoint_v1": `SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
+	"schedule_wait_v1": `SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)`,
+	"send_signal_v1": `SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,
 	"sync_contract_definitions_v1": `SELECT workhorse.sync_contract_definitions_v1($1::jsonb)`,
-	"update_progress_v1":           `SELECT status, progress_value, revision::text, attempt, fence_token::text, worker_id, created_at, updated_at, retry_after_ms::text FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)`,
-	"wait_for_human_v1":            `SELECT status, result FROM workhorse.wait_for_human_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::bigint)`,
-	"wait_for_signal_v1":           `SELECT status, payload FROM workhorse.wait_for_signal_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint)`,
+	"update_progress_v1": `SELECT status, progress_value, revision::text, attempt, fence_token::text, worker_id, created_at, updated_at, retry_after_ms::text FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)`,
+	"wait_for_human_v1": `SELECT status, result FROM workhorse.wait_for_human_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::bigint)`,
+	"wait_for_signal_v1": `SELECT status, payload FROM workhorse.wait_for_signal_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint)`,
 }
 
 var adminStatementRegistry = map[string]string{
@@ -713,9 +713,9 @@ var adminStatementRegistry = map[string]string{
          ) children ON true
          LEFT JOIN workhorse.task_progress p ON p.task_id = j.id
         WHERE j.id = $1::uuid`,
-	"get_progress":      `SELECT task_id::text task_id,progress_value,revision::text revision,attempt,fence_token::text fence_token,worker_id,created_at,updated_at FROM workhorse.task_progress WHERE task_id=$1::uuid`,
-	"get_wait":          `SELECT task_id::text task_id,wait_name,mode,duration_ms::text duration_ms,requested_wake_at,wake_at,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_wait WHERE task_id=$1::uuid AND wait_name=$2::text`,
-	"list_checkpoints":  `SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_checkpoint WHERE task_id=$1::uuid ORDER BY created_at,checkpoint_name`,
+	"get_progress": `SELECT task_id::text task_id,progress_value,revision::text revision,attempt,fence_token::text fence_token,worker_id,created_at,updated_at FROM workhorse.task_progress WHERE task_id=$1::uuid`,
+	"get_wait": `SELECT task_id::text task_id,wait_name,mode,duration_ms::text duration_ms,requested_wake_at,wake_at,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_wait WHERE task_id=$1::uuid AND wait_name=$2::text`,
+	"list_checkpoints": `SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_checkpoint WHERE task_id=$1::uuid ORDER BY created_at,checkpoint_name`,
 	"list_dead_letters": `SELECT task_id::text task_id,queue_name,task_type,concurrency_key,priority,payload,tags,current_attempt,max_attempts,retry_policy,deadline_at,execution_timeout_ms,error,finished_at,redrive_count,has_more,cursor_finished_at FROM workhorse.list_dead_letters_v1($1::jsonb,$2::integer,$3::timestamptz,$4::uuid)`,
 	"list_human_waits": `WITH parameters AS (
          SELECT $1::integer AS page_limit, $2::timestamptz AS cursor_created_at,
@@ -771,11 +771,11 @@ var adminStatementRegistry = map[string]string{
         WHERE parameters.cursor_created_at IS NULL OR (created_at, task_id, signal_name) >
               (parameters.cursor_created_at, parameters.cursor_task_id, parameters.cursor_name)
         ORDER BY created_at, task_id, signal_name LIMIT (SELECT page_limit FROM parameters)`,
-	"list_waits":       `SELECT task_id::text task_id,wait_name,mode,duration_ms::text duration_ms,requested_wake_at,wake_at,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_wait WHERE task_id=$1::uuid ORDER BY created_at,wait_name`,
-	"list_workers":     `SELECT worker_id,instance_id,hostname,pid,queue_names,schedule_namespaces,queue_name,concurrency,active_slots,draining,paused,paused_by,paused_reason,paused_at,started_at,last_heartbeat_at FROM workhorse.worker_registry ORDER BY last_heartbeat_at DESC,worker_id`,
-	"purge_queue":      `SELECT deleted_count FROM workhorse.purge_queue_v1($1::text,$2::text,$3::text,$4::text)`,
-	"redrive":          `SELECT status,source_task_id::text source_task_id,target_task_id::text target_task_id,source_state,target_state,requested_at FROM workhorse.redrive_v1($1::uuid,$2::text,$3::text,$4::text)`,
-	"redrive_many":     `SELECT status,source_task_id::text source_task_id,target_task_id::text target_task_id,source_state,target_state,requested_at,source_finished_at_cursor,has_more FROM workhorse.redrive_many_v1($1::jsonb,$2::integer,$3::boolean,$4::text,$5::text,$6::text,$7::timestamptz,$8::uuid) ORDER BY ordinal`,
+	"list_waits": `SELECT task_id::text task_id,wait_name,mode,duration_ms::text duration_ms,requested_wake_at,wake_at,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_wait WHERE task_id=$1::uuid ORDER BY created_at,wait_name`,
+	"list_workers": `SELECT worker_id,instance_id,hostname,pid,queue_names,schedule_namespaces,queue_name,concurrency,active_slots,draining,paused,paused_by,paused_reason,paused_at,started_at,last_heartbeat_at FROM workhorse.worker_registry ORDER BY last_heartbeat_at DESC,worker_id`,
+	"purge_queue": `SELECT deleted_count FROM workhorse.purge_queue_v1($1::text,$2::text,$3::text,$4::text)`,
+	"redrive": `SELECT status,source_task_id::text source_task_id,target_task_id::text target_task_id,source_state,target_state,requested_at FROM workhorse.redrive_v1($1::uuid,$2::text,$3::text,$4::text)`,
+	"redrive_many": `SELECT status,source_task_id::text source_task_id,target_task_id::text target_task_id,source_state,target_state,requested_at,source_finished_at_cursor,has_more FROM workhorse.redrive_many_v1($1::jsonb,$2::integer,$3::boolean,$4::text,$5::text,$6::text,$7::timestamptz,$8::uuid) ORDER BY ordinal`,
 	"set_queue_paused": `SELECT workhorse.set_queue_paused_v1($1::text,$2::boolean,$3::text,$4::text,$5::text)`,
 	"set_worker_paused": `SELECT * FROM workhorse.set_worker_paused_v1(
          $1::text, $2::boolean, $3::text, $4::text, $5::text)`,

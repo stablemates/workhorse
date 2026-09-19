@@ -69,6 +69,7 @@ import {
 } from "../core.js";
 import { subscribeTimeZone } from "../preferences.js";
 import type { DemoTaskOptions } from "../pages/tasks.js";
+import { seekDashboardTaskPage } from "../task-page-seek.js";
 
 const TasksPage = lazy(() =>
   import("../pages/tasks.js").then((module) => ({ default: module.TasksPage })),
@@ -322,7 +323,7 @@ export function useDashboardController(
                 route: "/tasks",
                 value:
                   listing.page > 1 && !listing.cursor
-                    ? await client.tasks({ ...query, page: listing.page })
+                    ? await seekDashboardTaskPage(client, query, listing.page)
                     : await client.tasksCursor({
                         ...query,
                         cursor: listing.cursor ?? null,
