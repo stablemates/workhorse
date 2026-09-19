@@ -116,9 +116,7 @@ def assert_heartbeats_kept_pace(times: list[float], held_from: float, held_until
 
 
 @pytest.mark.slow
-def test_a_held_checkpoint_does_not_delay_heartbeats(
-    database_url: str
-) -> None:
+def test_a_held_checkpoint_does_not_delay_heartbeats(database_url: str) -> None:
     task_id = enqueue(database_url, "checkpoint.held", "heartbeat-connection")
     heartbeat_log = StatementLog()
     hold = CheckpointHold(database_url)

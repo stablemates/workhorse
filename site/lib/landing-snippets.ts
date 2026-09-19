@@ -28,6 +28,7 @@ const worker = new Worker(queue, { concurrency: 4 }).handle(
 await worker.run();`,
 
   heroPython: `import psycopg
+from psycopg_pool import ConnectionPool
 
 from workhorse import HandlerContext, Json, Queue, Worker
 
@@ -40,8 +41,10 @@ def run(database_url: str) -> None:
         assert isinstance(payload, dict)
         return {"deliveredTo": payload["to"]}
 
-    with psycopg.connect(database_url, autocommit=True) as connection:
-        Worker(connection, concurrency=4).handle("email.welcome", welcome).run()`,
+    with ConnectionPool(
+        database_url, min_size=3, max_size=3, kwargs={"autocommit": True}
+    ) as pool:
+        Worker(pool, concurrency=4).handle("email.welcome", welcome).run()`,
 
   heroGo: `package example
 
@@ -432,6 +435,7 @@ const worker = new Worker(queue, {
 });`,
 
   schedulesPython: `import psycopg
+from psycopg_pool import ConnectionPool
 
 from workhorse import (
     HandlerContext,
@@ -459,9 +463,11 @@ def run_billing(database_url: str) -> None:
     def generate(payload: object, _context: HandlerContext) -> dict[str, Json]:
         return {"generated": True}
 
-    with psycopg.connect(database_url, autocommit=True) as connection:
+    with ConnectionPool(
+        database_url, min_size=3, max_size=3, kwargs={"autocommit": True}
+    ) as pool:
         Worker(
-            connection,
+            pool,
             schedule_namespaces=("billing",),
         ).handle("invoices.generate", generate).run()`,
 
@@ -1276,6 +1282,7 @@ export default defineWorkerProcess({
   deployPython: `import os
 
 import psycopg
+from psycopg_pool import ConnectionPool
 
 from workhorse import HandlerContext, Json, Worker, run_worker_process
 
@@ -1286,15 +1293,13 @@ def send_email(payload: object, _context: HandlerContext) -> dict[str, Json]:
 
 
 database_url = os.environ["DATABASE_URL"]
-with psycopg.connect(database_url, autocommit=True) as connection:
+with ConnectionPool(
+    database_url, min_size=3, max_size=3, kwargs={"autocommit": True}
+) as pool:
     worker = Worker(
-        connection,
+        pool,
         queues=("email",),
         concurrency=8,
-        notification_connection_factory=lambda: psycopg.connect(
-            database_url,
-            autocommit=True,
-        ),
     )
     worker.handle("email.send", send_email)
     run_worker_process(worker, shutdown_timeout_ms=25_000)`,

@@ -106,6 +106,7 @@ file so you can watch the whole lifecycle.
     import os
 
     import psycopg
+    from psycopg_pool import ConnectionPool
 
     from workhorse import Queue, Worker
 
@@ -113,18 +114,21 @@ file so you can watch the whole lifecycle.
     with psycopg.connect(database_url) as connection:
         task_id = Queue(connection).enqueue("email.welcome", {"to": "ada@example.com"})
 
-    with psycopg.connect(database_url, autocommit=True) as connection:
-        worker = Worker(connection).handle(
+    with ConnectionPool(
+        database_url, min_size=3, max_size=3, kwargs={"autocommit": True}
+    ) as worker_pool:
+        worker = Worker(worker_pool).handle(
             "email.welcome",
             lambda payload, _context: {"deliveredTo": payload["to"]},
         )
         worker.run_once()  # production uses run()
-        print(
-            connection.execute(
-                "SELECT state, result FROM workhorse.task_outcome WHERE task_id = %s",
-                (task_id,),
-            ).fetchone()
-        )
+        with worker_pool.connection() as connection:
+            print(
+                connection.execute(
+                    "SELECT state, result FROM workhorse.task_outcome WHERE task_id = %s",
+                    (task_id,),
+                ).fetchone()
+            )
     ```
 
   </Tab>
