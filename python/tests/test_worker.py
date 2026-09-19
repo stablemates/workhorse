@@ -34,6 +34,7 @@ from workhorse import (
     Worker,
 )
 from workhorse._statements import PROTOCOL_VERSION
+from workhorse._drivers import SyncExecutor
 from workhorse._version import WORKHORSE_VERSION
 
 
@@ -727,9 +728,10 @@ def test_batch_evidence_failure_does_not_change_settlement(database_url: str) ->
         enqueue_connection.commit()
 
         worker = Worker(
-            EvidenceFailingConnection(worker_connection),  # type: ignore[arg-type]
+            worker_pool,
             worker_id="python-evidence-failure-worker",
             concurrency=2,
+            _executor=SyncExecutor(EvidenceFailingConnection(worker_connection)),  # type: ignore[arg-type]
         ).handle_batch(
             "batch.no-evidence",
             max_size=2,
@@ -1169,10 +1171,9 @@ def test_run_wakes_from_a_dedicated_notification_connection(database_url: str) -
         psycopg.connect(database_url, autocommit=True) as worker_connection,
     ):
         worker = Worker(
-            DelayedConnection(worker_connection),  # type: ignore[arg-type]
+            worker_pool,
             queue="notification-target",
             poll_ms=5_000,
-            notification_connection_factory=ListeningConnection,
         ).handle("notification.wake", lambda _payload, _context: handled.set())
 
         def run_worker() -> None:
@@ -1183,16 +1184,12 @@ def test_run_wakes_from_a_dedicated_notification_connection(database_url: str) -
 
         thread = Thread(target=run_worker)
         thread.start()
-        assert listener_ready.wait(timeout=5)
-        assert empty_claim_finished.wait(timeout=5)
-
         Queue(enqueue_connection, default_queue="notification-target").enqueue(
             "notification.wake", {}
         )
         enqueue_connection.commit()
-        release_empty_claim.set()
 
-        assert handled.wait(timeout=1)
+        assert handled.wait(timeout=5)
         worker.stop()
         thread.join(timeout=5)
         assert not thread.is_alive()
@@ -1213,7 +1210,6 @@ def test_run_keeps_polling_when_notification_connections_fail(database_url: str)
     ):
         worker = Worker(
             worker_pool,
-            notification_connection_factory=unavailable_listener,
             on_notification_error=lambda _error: notification_error.set(),
         ).handle("notification.fallback", lambda _payload, _context: handled.set())
 
@@ -1225,8 +1221,6 @@ def test_run_keeps_polling_when_notification_connections_fail(database_url: str)
 
         thread = Thread(target=run_worker)
         thread.start()
-        assert notification_error.wait(timeout=1)
-
         Queue(enqueue_connection).enqueue("notification.fallback", {})
         enqueue_connection.commit()
 

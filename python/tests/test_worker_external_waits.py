@@ -20,6 +20,7 @@ from workhorse import (
     SignalWaitLeaseLostError,
     Worker,
 )
+from workhorse._drivers import SyncExecutor
 
 
 def test_signal_wait_suspends_and_replays_the_delivered_payload(database_url: str) -> None:
@@ -331,7 +332,7 @@ class _BlockingWaitConnection:
         )
 
 
-def test_concurrent_same_name_signal_waits_coalesce(database_url: str) -> None:
+def test_concurrent_same_name_signal_waits_coalesce(database_url: str, worker_pool) -> None:
     wait_query_reached = Event()
     release_wait_query = Event()
 
@@ -363,8 +364,11 @@ def test_concurrent_same_name_signal_waits_coalesce(database_url: str) -> None:
             assert len(errors) == 2
 
         worker = Worker(
-            _BlockingWaitConnection(worker_connection, wait_query_reached, release_wait_query),  # type: ignore[arg-type]
+            worker_pool,
             worker_id="python-signal-coalesce-worker",
+            _executor=SyncExecutor(
+                _BlockingWaitConnection(worker_connection, wait_query_reached, release_wait_query)
+            ),
         ).handle("signal.concurrent", handle)
 
         assert worker.run_once() is True

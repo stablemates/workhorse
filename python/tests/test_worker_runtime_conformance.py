@@ -31,6 +31,7 @@ from workhorse import (
     Worker,
 )
 from workhorse._statements import SQL_STATEMENTS, STATEMENTS, DriverStatement
+from workhorse._drivers import SyncExecutor
 
 REPOSITORY = Path(__file__).parents[2]
 
@@ -266,6 +267,7 @@ def execute_cancellation_fixture(
         worker_id=f"python-{fixture['id']}",
         lease_ms=fixture["leaseMs"],
         heartbeat_ms=fixture["heartbeatMs"],
+        shared_heartbeats=True,
     ).handle(fixture["taskType"], handler)
     thread = run_in_thread(worker.run_once, errors)
     assert started.wait(timeout=5)
@@ -568,11 +570,12 @@ def execute_poll_cadence_fixture(
     with psycopg.connect(database_url, autocommit=True) as worker_connection:
         gate = HeldPollConnection(worker_connection)
         worker = Worker(
-            gate,
+            worker_pool,
             queue=queue_name,
             worker_id=f"python-{fixture['id']}",
             poll_ms=fixture["pollMs"],
             registry_interval_ms=0,
+            _executor=SyncExecutor(gate),
         )
 
         def handle(_payload: object, _context: HandlerContext) -> None:
@@ -600,6 +603,7 @@ def execute_poll_cadence_fixture(
                         fixture["taskType"], {}, EnqueueOptions(queue=queue_name)
                     )
                     enqueued_at = monotonic()
+                    sleep(fixture["pollMs"] / 1_000)
                     gate.holding = False
                 gate.release()
             assert handled.wait(fixture["expectedMaximumDelayMs"] / 1_000 + 1)
