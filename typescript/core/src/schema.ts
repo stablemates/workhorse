@@ -127,6 +127,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "stable time for promotion and recovery",
     kind: "additive",
   },
+  {
+    fromVersion: 13,
+    toVersion: 14,
+    file: "0014-bin-dashboard-activity-once.sql",
+    description: "bin dashboard activity once",
+    kind: "additive",
+  },
 ];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {

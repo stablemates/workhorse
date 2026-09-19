@@ -100,6 +100,7 @@ export const TasksPage = memo(function TasksPage({
   runTaskNow,
   auditActor,
   reload,
+  activityPollTick,
 }: {
   data: DashboardTasksPage | DashboardTasksCursorPage;
   navigate: (href: string) => void;
@@ -116,6 +117,7 @@ export const TasksPage = memo(function TasksPage({
   runTaskNow: ((id: string) => Promise<RunNowFeedback>) | null;
   auditActor: string;
   reload: () => Promise<void>;
+  activityPollTick: number;
 }) {
   const client = useDashboardClient();
   const [chartVisible, setChartVisible] = useState(readTaskChartVisibility);
@@ -335,13 +337,13 @@ export const TasksPage = memo(function TasksPage({
             }
           >
             <TasksActivityChart
-              filter={data.filter}
+              filter={locationState.filter}
               period={locationState.period}
               groupBy={locationState.group}
-              tags={data.tags}
-              queue={data.queue}
-              worker={data.worker}
-              refreshKey={data}
+              tags={locationState.tags}
+              queue={locationState.queue}
+              worker={locationState.worker}
+              refreshKey={activityPollTick}
               updateLocation={updateLocation}
             />
           </Suspense>
