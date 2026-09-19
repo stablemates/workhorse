@@ -261,8 +261,9 @@ Restart=on-failure
 
 The dedicated process lifecycle does not implement:
 
-- OpenTelemetry spans or process metrics;
-- handler execution deadlines or forced handler cancellation;
+- process-level metrics such as resident set, CPU, or event-loop delay, beyond the task and
+  maintenance spans and metrics every worker already emits through the telemetry provider;
+- forced handler cancellation;
 - cross-queue weighted scheduling;
 - dynamic configuration reload;
 - zero-downtime handler registry version negotiation.
