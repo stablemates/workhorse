@@ -153,6 +153,23 @@ func (service *backend) checkpointValue(ctx context.Context, input any, _ string
 	return result, nil
 }
 
+// taskValue reads one task's whole payload or result. Task detail withholds either one when it is
+// larger than it carries inline and reports its size, so an operator opens that one value here.
+func (service *backend) taskValue(ctx context.Context, input any, _ string) (any, error) {
+	result, err := service.jsonQuery(
+		ctx,
+		"SELECT workhorse.dashboard_task_value_v1($1::jsonb) AS result",
+		string(mustJSON(input)),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, &RPCError{Status: 404, Code: "NOT_FOUND", Message: "Task not found"}
+	}
+	return result, nil
+}
+
 func (service *backend) settings(ctx context.Context, _ any, _ string) (any, error) {
 	return service.jsonQuery(
 		ctx,

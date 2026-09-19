@@ -4937,7 +4937,9 @@
                     "attempt": 1,
                     "finishedAt": {
                       "$type": "timestamp"
-                    }
+                    },
+                    "resultBytes": 12,
+                    "resultOmitted": false
                   },
                   "runtime": null
                 },
@@ -5023,6 +5025,8 @@
                   "records": [],
                   "truncated": false
                 },
+                "payloadBytes": 11,
+                "payloadOmitted": false,
                 "redriveLineage": {
                   "records": [],
                   "truncated": false
@@ -5064,6 +5068,60 @@
                 },
                 "fenceToken": "1",
                 "valueBytes": 21
+              }
+            }
+          }
+        },
+        {
+          "id": "task-value-payload",
+          "procedure": "taskValue",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "succeededTask"
+              },
+              "kind": "payload"
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "id": {
+                  "$ref": "succeededTask"
+                },
+                "kind": "payload",
+                "value": {
+                  "step": 1
+                },
+                "valueBytes": 11
+              }
+            }
+          }
+        },
+        {
+          "id": "task-value-result",
+          "procedure": "taskValue",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "succeededTask"
+              },
+              "kind": "result"
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "id": {
+                  "$ref": "succeededTask"
+                },
+                "kind": "result",
+                "value": {
+                  "ok": true
+                },
+                "valueBytes": 12
               }
             }
           }

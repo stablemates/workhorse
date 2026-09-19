@@ -7,6 +7,7 @@ import {
   readDashboardSettings,
   readDashboardSystem,
   readDashboardTaskDetail,
+  readDashboardTaskValue,
   redactDashboardTaskDetailErrorStacks,
 } from "./read-model.js";
 import type { DashboardDatabase, DashboardSql } from "./sql.js";
@@ -86,6 +87,16 @@ function capturingDatabase(): { database: DashboardDatabase; inputs: () => unkno
       execute.mock.calls.map(([query]) => JSON.parse(query.values[0] as string) as unknown),
   };
 }
+
+describe("dashboard task value reads", () => {
+  it("names the task and the kind the procedure is asked for", async () => {
+    const { database: db, inputs } = capturingDatabase();
+
+    await readDashboardTaskValue(db, "task-1", "result");
+
+    expect(inputs()).toEqual([{ id: "task-1", kind: "result" }]);
+  });
+});
 
 describe("dashboard health pass-through", () => {
   const health = { level: "healthy", pending_human_waits: 42 };

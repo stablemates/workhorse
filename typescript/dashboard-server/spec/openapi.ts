@@ -145,7 +145,7 @@ export const procedureDocs: Record<ProcedureName, ProcedureDoc> = {
   taskDetail: {
     summary: "Read one task",
     description:
-      "Returns one task's identity, lineage (dependencies, children, and redrives), concurrency policy, current attempt, attempts, checkpoints, waits, and events. The payload is redacted. canSignal reports whether signalTask is available for it. Each history section carries only its most recent rows and truncated reports which were cut. A checkpoint value larger than the inline bound is reported by size only; read it with checkpointValue.",
+      "Returns one task's identity, lineage (dependencies, children, and redrives), concurrency policy, current attempt, attempts, checkpoints, waits, and events. The payload is redacted. canSignal reports whether signalTask is available for it. Each history section carries only its most recent rows and truncated reports which were cut. A payload, a result, or a checkpoint value larger than the inline bound is reported by size and an omission flag only; read a checkpoint value with checkpointValue and a payload or result with taskValue.",
     notFound: "Task not found",
   },
   checkpointValue: {
@@ -153,6 +153,12 @@ export const procedureDocs: Record<ProcedureName, ProcedureDoc> = {
     description:
       "Returns one checkpoint of one task by name, with its saved value and that value's size in bytes. Task detail withholds a value larger than it carries inline, so this is how an operator opens that one value.",
     notFound: "Checkpoint not found",
+  },
+  taskValue: {
+    summary: "Read one task's whole payload or result",
+    description:
+      "Returns one task's redacted payload or result in full, with its size in bytes, chosen by kind. Task detail withholds either one when it is larger than it carries inline, so this is how an operator opens that one value. A task that has not finished answers with a null result and a size of zero.",
+    notFound: "Task not found",
   },
   humanWaits: {
     summary: "List pending human decisions and signal waits",

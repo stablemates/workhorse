@@ -224,60 +224,84 @@ export function TaskOutcome({ task }: { task: DashboardTaskDetail }) {
           Attempt {outcome.attempt} finished {formatRelative(outcome.finishedAt)}
         </Text>
       ) : null}
-      <JsonValue
-        label={described.valueLabel ?? "Final result"}
-        value={evidence.value}
-        emptyLabel={described.emptyLabel ?? "Nothing was stored."}
-        copyLabel={(described.valueLabel ?? "final result").toLowerCase()}
-      />
+      {/* Only a succeeded outcome shows the stored result; every other value here is an error,
+          which task detail always carries. */}
+      {outcome?.state === "succeeded" && described.valueLabel !== null ? (
+        <TaskStoredValue
+          taskId={task.identity.id}
+          kind="result"
+          omitted={outcome.resultOmitted}
+          valueBytes={outcome.resultBytes}
+          value={evidence.value}
+          label={described.valueLabel ?? "Final result"}
+          emptyLabel={described.emptyLabel ?? "Nothing was stored."}
+          copyLabel={(described.valueLabel ?? "final result").toLowerCase()}
+        />
+      ) : (
+        <JsonValue
+          label={described.valueLabel ?? "Final result"}
+          value={evidence.value}
+          emptyLabel={described.emptyLabel ?? "Nothing was stored."}
+          copyLabel={(described.valueLabel ?? "final result").toLowerCase()}
+        />
+      )}
     </DrawerSection>
   );
 }
 /**
- * One checkpoint's saved value.
+ * One stored value the drawer did not carry, shown by size until an operator asks for it.
  *
- * A checkpoint may hold a megabyte, and a drawer that carried every value would transfer all of
- * them to show a list of names. Task detail reports the size of a value it did not carry, and this
- * asks PostgreSQL for the one value an operator opens.
+ * A payload, a result, or a checkpoint may hold a megabyte, and a drawer that carried every one of
+ * them would transfer all of them to draw a summary. Task detail reports the size of a value it
+ * withheld, and this asks PostgreSQL for the one value an operator opens.
  */
-function CheckpointValue({
-  taskId,
-  checkpoint,
+function StoredValue({
+  identity,
+  omitted,
+  valueBytes,
+  value,
+  read,
   label,
+  emptyLabel,
+  copyLabel,
   maxHeight,
 }: {
-  taskId: string;
-  checkpoint: Checkpoint;
+  /** Changing this discards a value fetched for the previous one. */
+  identity: string;
+  omitted: boolean;
+  valueBytes: number;
+  value: unknown;
+  read: () => Promise<unknown>;
   label: string;
+  emptyLabel: string;
+  copyLabel: string;
   maxHeight?: number;
 }) {
-  const client = useDashboardClient();
   const [fetched, setFetched] = useState<{ value: unknown } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     setFetched(null);
     setError(null);
-  }, [taskId, checkpoint.name]);
+  }, [identity]);
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const value = await client.checkpointValue({ id: taskId, name: checkpoint.name });
-      setFetched({ value: value.value });
+      setFetched({ value: await read() });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Workhorse could not read this value");
     } finally {
       setLoading(false);
     }
-  }, [client, taskId, checkpoint.name]);
-  if (!checkpoint.valueOmitted || fetched !== null) {
+  }, [read]);
+  if (!omitted || fetched !== null) {
     return (
       <JsonValue
         label={label}
-        value={fetched === null ? checkpoint.value : fetched.value}
-        emptyLabel="This checkpoint stored no value."
-        copyLabel={`the ${checkpoint.name} interim result`}
+        value={fetched === null ? value : fetched.value}
+        emptyLabel={emptyLabel}
+        copyLabel={copyLabel}
         maxHeight={maxHeight}
       />
     );
@@ -288,8 +312,8 @@ function CheckpointValue({
         {label}
       </Text>
       <Text c="dimmed" size="xs">
-        Workhorse saved {formatBytes(checkpoint.valueBytes)} here, which the drawer does not carry
-        with the rest of the task.
+        Workhorse stored {formatBytes(valueBytes)} here, which the drawer does not carry with the
+        rest of the task.
       </Text>
       {error === null ? null : (
         <Text c="red" size="xs">
@@ -302,6 +326,77 @@ function CheckpointValue({
         </Button>
       </Group>
     </Stack>
+  );
+}
+
+/** One task's whole stored payload or result, read on demand when the drawer withheld it. */
+export function TaskStoredValue({
+  taskId,
+  kind,
+  omitted,
+  valueBytes,
+  value,
+  label,
+  emptyLabel,
+  copyLabel,
+}: {
+  taskId: string;
+  kind: "payload" | "result";
+  omitted: boolean;
+  valueBytes: number;
+  value: unknown;
+  label: string;
+  emptyLabel: string;
+  copyLabel: string;
+}) {
+  const client = useDashboardClient();
+  const read = useCallback(
+    async () => (await client.taskValue({ id: taskId, kind })).value,
+    [client, taskId, kind],
+  );
+  return (
+    <StoredValue
+      identity={`${taskId}:${kind}`}
+      omitted={omitted}
+      valueBytes={valueBytes}
+      value={value}
+      read={read}
+      label={label}
+      emptyLabel={emptyLabel}
+      copyLabel={copyLabel}
+    />
+  );
+}
+
+/** One checkpoint's saved value, read on demand when the drawer withheld it. */
+function CheckpointValue({
+  taskId,
+  checkpoint,
+  label,
+  maxHeight,
+}: {
+  taskId: string;
+  checkpoint: Checkpoint;
+  label: string;
+  maxHeight?: number;
+}) {
+  const client = useDashboardClient();
+  const read = useCallback(
+    async () => (await client.checkpointValue({ id: taskId, name: checkpoint.name })).value,
+    [client, taskId, checkpoint.name],
+  );
+  return (
+    <StoredValue
+      identity={`${taskId}:${checkpoint.name}`}
+      omitted={checkpoint.valueOmitted}
+      valueBytes={checkpoint.valueBytes}
+      value={checkpoint.value}
+      read={read}
+      label={label}
+      emptyLabel="This checkpoint stored no value."
+      copyLabel={`the ${checkpoint.name} interim result`}
+      maxHeight={maxHeight}
+    />
   );
 }
 function plannedStepDescription(

@@ -1113,7 +1113,7 @@ export function describeTaskResult(input: {
 /** Derive drawer evidence from the real nullable PostgreSQL projection. */
 export function readTaskResultEvidence(input: {
   state: string;
-  outcome: { state: string; result: unknown; error: unknown } | null;
+  outcome: { state: string; result: unknown; error: unknown; resultOmitted?: boolean } | null;
   runtimeError: unknown;
   currentError: unknown;
   blockedByPersistentFailure: boolean;
@@ -1122,7 +1122,10 @@ export function readTaskResultEvidence(input: {
     input.outcome?.state === "succeeded" ? input.outcome.result : input.outcome?.error;
   const pendingValue = input.runtimeError ?? input.currentError;
   const value = input.outcome !== null ? terminalValue : pendingValue;
-  const hasValue = value !== null && value !== undefined;
+  // A result the drawer withheld arrives as null, and describing it as nothing stored would be
+  // false: the value exists and its size is reported beside it.
+  const withheld = input.outcome?.state === "succeeded" && input.outcome.resultOmitted === true;
+  const hasValue = withheld || (value !== null && value !== undefined);
   const description = describeTaskResult({
     state: input.state,
     hasOutcome: input.outcome !== null,

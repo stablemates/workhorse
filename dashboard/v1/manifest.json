@@ -109,6 +109,9 @@
     "checkpointValue": {
       "mutation": false
     },
+    "taskValue": {
+      "mutation": false
+    },
     "humanWaits": {
       "mutation": false
     },

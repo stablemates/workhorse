@@ -870,6 +870,35 @@
         "$ref": "#/$defs/DashboardCheckpointValue"
       }
     },
+    "taskValue": {
+      "path": "/rpc/dashboard/taskValue",
+      "mutation": false,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "payload",
+              "result"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ]
+      },
+      "output": {
+        "$ref": "#/$defs/DashboardTaskValue"
+      }
+    },
     "humanWaits": {
       "path": "/rpc/dashboard/humanWaits",
       "mutation": false,
@@ -6356,6 +6385,12 @@
           "type": "boolean"
         },
         "payload": {},
+        "payloadBytes": {
+          "type": "number"
+        },
+        "payloadOmitted": {
+          "type": "boolean"
+        },
         "progress": {
           "anyOf": [
             {
@@ -6557,6 +6592,12 @@
                       "type": "string"
                     },
                     "result": {},
+                    "resultBytes": {
+                      "type": "number"
+                    },
+                    "resultOmitted": {
+                      "type": "boolean"
+                    },
                     "error": {}
                   },
                   "required": [
@@ -6564,6 +6605,8 @@
                     "attempt",
                     "finishedAt",
                     "result",
+                    "resultBytes",
+                    "resultOmitted",
                     "error"
                   ]
                 }
@@ -6861,6 +6904,8 @@
         "signalWait",
         "canSignal",
         "payload",
+        "payloadBytes",
+        "payloadOmitted",
         "progress",
         "durability",
         "current",
@@ -7223,6 +7268,30 @@
         "humanWait"
       ],
       "additionalProperties": {}
+    },
+    "DashboardTaskValue": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "payload",
+            "result"
+          ]
+        },
+        "value": {},
+        "valueBytes": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "value",
+        "valueBytes"
+      ]
     },
     "DashboardTasksCursorPage": {
       "type": "object",
