@@ -21,6 +21,7 @@ import {
   dashboardRedriveBatchDefault,
   dashboardRedriveBatchMax,
   dashboardTaskFilters,
+  dashboardTaskValueKinds,
   dashboardTaskPriorityMax,
   dashboardTaskSorts,
 } from "../wire.js";
@@ -34,7 +35,7 @@ import type {
   DashboardWorkerController,
   DashboardSettingsController,
 } from "./types.js";
-import type { DashboardDatabase } from "./sql.js";
+import { DashboardReadTimeoutError, type DashboardDatabase } from "./sql.js";
 import {
   type DashboardQueueHealthReader,
   readDashboardActivity,
@@ -43,6 +44,7 @@ import {
   readDashboardEvents,
   readDashboardEventDetail,
   readDashboardTaskDetail,
+  readDashboardTaskValue,
   readDashboardHumanWaits,
   readDashboardQueues,
   readDashboardSystem,
@@ -77,7 +79,34 @@ interface DashboardProcedureMeta {
   mutation?: boolean;
 }
 
-const procedure = os.$context<DashboardRpcContext>().$meta<DashboardProcedureMeta>({});
+/**
+ * Answer a read PostgreSQL cancelled for running past its bound with a typed error.
+ *
+ * Without this the operator's page waits on a connection nobody is coming back to. A dashboard read
+ * is a bounded projection, so one that hits the bound reports a database under strain rather than a
+ * question that deserved the time; TIMEOUT names exactly that for the browser and for a log reader.
+ */
+const boundedRead = os
+  .$context<DashboardRpcContext>()
+  .$meta<DashboardProcedureMeta>({})
+  .middleware(async ({ next }) => {
+    try {
+      return await next();
+    } catch (error) {
+      if (error instanceof DashboardReadTimeoutError) {
+        throw new ORPCError("TIMEOUT", {
+          message: "This read exceeded its time bound",
+          cause: error,
+        });
+      }
+      throw error;
+    }
+  });
+
+const procedure = os
+  .$context<DashboardRpcContext>()
+  .$meta<DashboardProcedureMeta>({})
+  .use(boundedRead);
 const mutationProcedure = procedure.meta({ mutation: true });
 
 const auditSchema = z.object({
@@ -99,6 +128,7 @@ const cancellationAuditSchema = z.object({
 
 const taskDetailInput = z.object({ id: z.uuid() });
 const checkpointValueInput = z.object({ id: z.uuid(), name: z.string().trim().min(1).max(200) });
+const taskValueInput = z.object({ id: z.uuid(), kind: z.enum(dashboardTaskValueKinds) });
 const eventDetailInput = z.object({
   id: z
     .string()
@@ -528,6 +558,18 @@ export const dashboardRouter = {
       const checkpoint = await readDashboardCheckpointValue(context.database, input.id, input.name);
       if (!checkpoint) throw new ORPCError("NOT_FOUND", { message: "Checkpoint not found" });
       return checkpoint;
+    }),
+    /**
+     * One task's whole stored payload or result, read on its own.
+     *
+     * Task detail reports the size of a value too large to carry inline and withholds it, so a
+     * megabyte payload is transferred when an operator asks to see it rather than every time they
+     * open the task.
+     */
+    taskValue: procedure.input(taskValueInput).handler(async ({ context, input }) => {
+      const value = await readDashboardTaskValue(context.database, input.id, input.kind);
+      if (!value) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
+      return value;
     }),
     humanWaits: procedure.handler(({ context }) =>
       readDashboardHumanWaits(

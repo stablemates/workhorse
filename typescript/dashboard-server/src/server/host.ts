@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { readFile as readFileAsync } from "node:fs/promises";
 import { join } from "node:path";
+import { promisify } from "node:util";
+import { brotliCompress, constants, gzip } from "node:zlib";
 import { SeverityNumber, logs } from "@opentelemetry/api-logs";
 import { BodyLimitPlugin, RPCHandler } from "@orpc/server/fetch";
 import type { DashboardSingleAdminOptions } from "@stablemates/workhorse-dashboard-contract";
@@ -12,8 +14,8 @@ import { createSingleAdminAuthentication } from "./authentication.js";
 import { renderDashboardHtml } from "./html.js";
 import { dashboardRouter, isDashboardMutation } from "./router.js";
 import { createDashboardQueueHealthReader, type DashboardQueueHealthReader } from "./read-model.js";
-import { dashboardDatabase } from "./sql.js";
-import { createStaticAssetCache } from "./static-assets.js";
+import { DASHBOARD_STATEMENT_TIMEOUT_MS, dashboardDatabase } from "./sql.js";
+import { createStaticAssetCache, negotiateAssetEncoding } from "./static-assets.js";
 import type {
   DashboardDurabilityProjector,
   DashboardOperator,
@@ -66,6 +68,14 @@ export interface DashboardHostOptions {
   projectDurability?: DashboardDurabilityProjector;
   /** Omit persisted worker stack traces from task-detail RPC responses. */
   redactErrorStacks?: boolean;
+  /**
+   * How long one dashboard read may run before PostgreSQL cancels it and the RPC answers TIMEOUT.
+   *
+   * Defaults to `DASHBOARD_STATEMENT_TIMEOUT_MS`. Raise it for a database whose honest answers
+   * genuinely take longer; the bound exists so that a read nobody is waiting for stops occupying a
+   * connection of the embedding application's pool.
+   */
+  statementTimeoutMs?: number;
   auditActor?: string;
   /** Trusted host-owned ES modules loaded before the dashboard browser entry. */
   browserModules?: readonly string[];
@@ -129,6 +139,8 @@ export interface DashboardWorkspaceOptions {
   projectDurability?: DashboardDurabilityProjector;
   /** Override task-detail stack redaction for this workspace. */
   redactErrorStacks?: boolean;
+  /** Override the read bound for this workspace. See `DashboardHostOptions.statementTimeoutMs`. */
+  statementTimeoutMs?: number;
 }
 
 /** Identity established by the embedded application's server-side authorization boundary. */
@@ -190,6 +202,57 @@ const SLOW_RPC_REQUEST_MS = 1_000;
  * database caps at 64 KiB, plus its audit fields. Twice that leaves room for JSON escaping.
  */
 const MAX_RPC_BODY_BYTES = 128 * 1024;
+
+/**
+ * Below this an RPC body is no smaller once its framing is counted.
+ *
+ * Most dashboard answers are far above it: a task listing or a task detail document is tens of
+ * kilobytes of highly repetitive JSON, which is what makes compressing it worth a few milliseconds.
+ */
+const RPC_COMPRESSION_THRESHOLD_BYTES = 1_024;
+
+/**
+ * Speed over ratio, because an RPC body is compressed once per request and never cached.
+ *
+ * The packaged assets are the opposite case and use the slow, thorough settings: they are
+ * compressed once for the life of the process and served from memory afterwards.
+ */
+const brotliRpcAsync = promisify(brotliCompress);
+const gzipRpcAsync = promisify(gzip);
+
+const compressRpcBody: Record<"br" | "gzip", (body: Buffer) => Promise<Buffer>> = {
+  br: (body) => brotliRpcAsync(body, { params: { [constants.BROTLI_PARAM_QUALITY]: 4 } }),
+  gzip: (body) => gzipRpcAsync(body, { level: 6 }),
+};
+
+/**
+ * Compress one RPC response to what the caller accepts.
+ *
+ * The dashboard is a guest in the embedder's server, so it cannot assume a proxy in front of it
+ * compresses; SM-754 made the same argument for the packaged assets. Only a complete JSON body is
+ * compressed. An event stream is left alone, because buffering one to compress it would hold back
+ * the events it exists to deliver as they happen.
+ */
+async function compressRpcResponse(response: Response, request: Request): Promise<Response> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (response.headers.has("content-encoding") || !contentType.startsWith("application/json")) {
+    return response;
+  }
+  const encoding = negotiateAssetEncoding(request.headers.get("accept-encoding"));
+  const headers = new Headers(response.headers);
+  headers.append("vary", "accept-encoding");
+  if (encoding === "identity" || !response.body) {
+    return new Response(response.body, { status: response.status, headers });
+  }
+  const body = Buffer.from(await response.arrayBuffer());
+  if (body.byteLength < RPC_COMPRESSION_THRESHOLD_BYTES) {
+    return new Response(new Uint8Array(body), { status: response.status, headers });
+  }
+  const compressed = await compressRpcBody[encoding](body);
+  headers.set("content-encoding", encoding);
+  headers.set("content-length", String(compressed.byteLength));
+  return new Response(new Uint8Array(compressed), { status: response.status, headers });
+}
 
 function payloadTooLarge(): Response {
   return Response.json(
@@ -344,7 +407,10 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
     name: string | null,
     workspace: DashboardWorkspaceOptions,
   ): HostWorkspace => {
-    const database = dashboardDatabase(workspace.database);
+    const database = dashboardDatabase(
+      workspace.database,
+      workspace.statementTimeoutMs ?? options.statementTimeoutMs ?? DASHBOARD_STATEMENT_TIMEOUT_MS,
+    );
     const admin = new Admin(workspace.database);
     return {
       name,
@@ -541,10 +607,9 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
             readQueueHealth: workspace.readQueueHealth,
           },
         });
-        if (response) {
-          logRpcRequest(procedure, performance.now() - startedAt, response.status, workspace.name);
-        }
-        return response ?? null;
+        if (!response) return null;
+        logRpcRequest(procedure, performance.now() - startedAt, response.status, workspace.name);
+        return compressRpcResponse(response, request);
       }
 
       if (pathname.startsWith(`${basePath}/assets/`)) {

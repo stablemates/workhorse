@@ -1155,7 +1155,17 @@ export interface DashboardTaskDetail {
   /** The actionable signal boundary which currently owns this task's suspension. */
   signalWait: DashboardSignalWaitSummary | null;
   canSignal: boolean;
+  /**
+   * The redacted payload, or null when it is larger than task detail carries inline.
+   *
+   * A payload may hold a megabyte, which no drawer renders and every open would then transfer.
+   * `payloadOmitted` says which of the two a null is, and `taskValue` returns the whole value when
+   * an operator asks for it.
+   */
   payload: unknown;
+  /** Size of the redacted payload in bytes, whether or not it is carried here. */
+  payloadBytes: number;
+  payloadOmitted: boolean;
   progress: {
     value: unknown;
     revision: string;
@@ -1195,7 +1205,16 @@ export interface DashboardTaskDetail {
       state: string;
       attempt: number;
       finishedAt: string;
+      /**
+       * The redacted result, or null when it is larger than task detail carries inline.
+       *
+       * `resultOmitted` says which of the two a null is, under the same bound the payload and a
+       * checkpoint value carry. `taskValue` returns the whole value.
+       */
       result: unknown;
+      /** Size of the redacted result in bytes, whether or not it is carried here. */
+      resultBytes: number;
+      resultOmitted: boolean;
       error: unknown;
     } | null;
     error: unknown;
@@ -1276,6 +1295,23 @@ export interface DashboardTaskDetail {
     waits: boolean;
     events: boolean;
   };
+}
+
+/** Which of a task's two stored values `taskValue` reads. */
+export const dashboardTaskValueKinds = ["payload", "result"] as const;
+export type DashboardTaskValueKind = (typeof dashboardTaskValueKinds)[number];
+
+/**
+ * One task's whole stored payload or result, read on its own because task detail withheld it.
+ *
+ * `value` is null for a result a task has not produced yet, which `valueBytes` of zero reports the
+ * same way task detail does. Both are redacted exactly as task detail redacts them.
+ */
+export interface DashboardTaskValue {
+  id: string;
+  kind: DashboardTaskValueKind;
+  value: unknown;
+  valueBytes: number;
 }
 
 /** One saved checkpoint value, read on its own because task detail withheld it. */

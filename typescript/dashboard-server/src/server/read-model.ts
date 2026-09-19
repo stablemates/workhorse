@@ -12,6 +12,8 @@ import {
   DashboardEventsPage,
   DashboardEventsWindow,
   DashboardTaskDetail,
+  DashboardTaskValue,
+  DashboardTaskValueKind,
   DashboardHumanWaitPage,
   DashboardQueuesPage,
   DashboardSystemPage,
@@ -337,6 +339,25 @@ export async function readDashboardCheckpointValue(
     SELECT workhorse.dashboard_checkpoint_value_v1(${input}::jsonb) AS result
   `);
   return expectOneRow(rows, "the dashboard checkpoint value procedure").result;
+}
+
+/**
+ * Read one task's whole stored payload or result.
+ *
+ * Task detail withholds either one when it is larger than it carries inline and reports its size,
+ * so an operator who opens that one value asks for it here rather than receiving a megabyte on
+ * every task they open.
+ */
+export async function readDashboardTaskValue(
+  database: DashboardDatabase,
+  id: string,
+  kind: DashboardTaskValueKind,
+): Promise<DashboardTaskValue | null> {
+  const input = JSON.stringify({ id, kind });
+  const rows = await database.execute<{ result: DashboardTaskValue | null }>(sql`
+    SELECT workhorse.dashboard_task_value_v1(${input}::jsonb) AS result
+  `);
+  return expectOneRow(rows, "the dashboard task value procedure").result;
 }
 
 function redactErrorStack(error: unknown): unknown {
