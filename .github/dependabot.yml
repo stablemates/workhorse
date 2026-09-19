@@ -1,0 +1,71 @@
+# Keeps the pinned dependencies current.
+#
+# Every action in .github/workflows is pinned to a commit SHA, which is what stops a moved tag from
+# changing what a release job executes. A SHA never moves on its own, so without this file the
+# workflows would quietly age into unpatched versions. Dependabot reads the `# vX.Y.Z` comment
+# beside each SHA, opens a pull request that moves both, and CI decides whether it merges.
+#
+# Updates are grouped so one week produces a few reviewable pull requests rather than thirty.
+# Majors stay ungrouped: they change behavior and deserve their own review.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # The pnpm workspace root. One entry covers every workspace package, because pnpm-lock.yaml at the
+  # root is the single lockfile CI installs from.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    groups:
+      npm-development:
+        dependency-type: development
+        update-types: [minor, patch]
+      npm-production:
+        dependency-type: production
+        update-types: [minor, patch]
+
+  # `uv`, not `pip`: the Python half locks with uv.lock, and the pip ecosystem would edit
+  # pyproject.toml without updating that lockfile. CI runs under UV_LOCKED, so such a pull request
+  # would fail rather than merge.
+  - package-ecosystem: uv
+    directory: /python
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      python:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: gomod
+    directory: /go
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      go:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # The base images in Dockerfile, Dockerfile.dashboard and Dockerfile.site. The published image is
+  # built from these, so a base image that stops receiving patches is a deployment concern.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
