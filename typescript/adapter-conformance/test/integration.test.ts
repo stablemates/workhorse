@@ -312,6 +312,8 @@ describe.each(providers)("$name provider lifecycle", (provider) => {
 
     const worker = resources.adapter
       .createWorker({
+        // These single-connection lifecycle fixtures have no room for a dedicated heartbeat.
+        sharedHeartbeats: true,
         workerId: `${provider.name}-lifecycle-worker`,
         pollMs: 25,
         registryIntervalMs: 0,

@@ -21,8 +21,8 @@ pnpm add @stablemates/workhorse-kysely kysely pg
 ```
 
 Pass the database to `createKyselyAdapter`. Kysely's `PostgresDialect` already holds a
-node-postgres pool, so if the same process runs workers, pass that pool as `notificationPool` —
-workers then reserve a connection for `LISTEN/NOTIFY` and pick up new tasks immediately.
+node-postgres pool but keeps it private. If the same process runs workers, pass that pool as
+`pool`. Workers take their heartbeat connection and their `LISTEN/NOTIFY` connection from it.
 
 ```ts
 import { createKyselyAdapter } from "@stablemates/workhorse-kysely";
@@ -36,7 +36,7 @@ interface AppDatabase {
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const database = new Kysely<AppDatabase>({ dialect: new PostgresDialect({ pool }) });
 const workhorse = createKyselyAdapter(database, {
-  notificationPool: pool,
+  pool,
   close: () => database.destroy(),
 });
 ```
@@ -73,8 +73,8 @@ enqueues that stand alone.
 
 The adapter does not destroy a caller-owned database unless `close` is configured. Add that hook
 only when the adapter owns the database, because `adapter.close` may run during process shutdown or
-failed startup. Without `notificationPool`, workers use bounded polling and keep the same durable
-behavior — tasks still run, just on the polling cadence.
+failed startup. Without `pool`, a worker refuses to start unless you set `sharedHeartbeats`. It
+then sends heartbeats through Kysely's queries and dispatches by bounded polling.
 
 Database execution failures become `KyselyQueryError`, which retains the statement, original cause,
 and PostgreSQL error code. Typed Workhorse conflicts — idempotency, checkpoint, and wait errors —

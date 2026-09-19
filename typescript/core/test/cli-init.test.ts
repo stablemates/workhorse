@@ -138,7 +138,7 @@ describe("workhorse init", () => {
     expect(config).not.toContain('from "pg"');
   });
 
-  it("scaffolds ORM workers with explicit notification pools", () => {
+  it("scaffolds ORM workers with the pool their dedicated connections come from", () => {
     const base = {
       framework: "none",
       typescript: true,
@@ -149,11 +149,17 @@ describe("workhorse init", () => {
     const kysely = renderWorkerConfig({ ...base, orm: "kysely" });
 
     expect(prisma).toContain("createPrismaAdapter");
-    expect(prisma).toContain("notificationPool: pool");
+    expect(prisma).toMatch(/createPrismaAdapter\(database, \{[^}]*\n\s+pool,\n/);
     expect(typeorm).toContain("createTypeOrmAdapter");
     expect(typeorm).toContain("await database.initialize()");
+    // TypeORM's own pool lends the worker its connections, so the template creates no second pool.
+    expect(typeorm).not.toContain("new Pool(");
+    expect(typeorm).not.toMatch(/\bPool\b.*from "@stablemates\/workhorse"/);
     expect(kysely).toContain("createKyselyAdapter");
     expect(kysely).toContain("new PostgresDialect({ pool })");
+    expect(kysely).toMatch(/createKyselyAdapter\(database, \{[^}]*\n\s+pool,\n/);
+    for (const config of [prisma, typeorm, kysely])
+      expect(config).not.toContain("notificationPool");
   });
 
   it("prints a framework-appropriate dashboard mount", () => {

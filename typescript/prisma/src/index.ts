@@ -2,7 +2,7 @@ import {
   createProviderAdapter,
   createProviderQueryable,
   QueryError,
-  type AdapterNotificationPool,
+  type AdapterConnectionPoolSource,
   type ProviderAdapterOptions,
   type Queryable,
   type WorkhorseAdapter,
@@ -26,13 +26,13 @@ export class PrismaQueryError extends QueryError {
 /** Convert a Prisma client or transaction into Workhorse's minimal database protocol. */
 export function prismaQueryable(
   executor: PrismaExecutor,
-  notificationPool?: AdapterNotificationPool,
+  connectionPool?: AdapterConnectionPoolSource,
 ): Queryable {
   return createProviderQueryable({
     execute: (statement, values) =>
       executor.$queryRawUnsafe<QueryResultRow[]>(statement, ...values),
     wrapError: (statement, cause) => new PrismaQueryError(statement, cause),
-    notificationPool,
+    connectionPool,
   });
 }
 

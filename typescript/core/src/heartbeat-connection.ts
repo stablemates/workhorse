@@ -1,3 +1,4 @@
+import { connectionPoolOf, type ConnectionPool } from "./connection-pool.js";
 import type { Queryable } from "./types.js";
 
 /**
@@ -6,35 +7,34 @@ import type { Queryable } from "./types.js";
  */
 const MINIMUM_RESERVING_CAPACITY = 3;
 
-type ReservableDatabase = Queryable & {
-  connect: () => Promise<unknown>;
-  notificationConnectionCapacity?: number;
-  notificationConnectionIdentity?: object;
-  options?: { max?: number };
-};
-
 interface ReservedClient extends Queryable {
   release(error?: Error | boolean): void;
 }
 
 /**
- * Whether a worker can hold one pooled connection for its heartbeats.
+ * Why a worker cannot hold one pooled connection for its heartbeats, or undefined when it can.
  *
  * The capacity must be known: a single node-postgres `Client` also has `connect()`, but it cannot
  * lend out a second session.
  */
-export function canReserveHeartbeatConnection(database: Queryable): database is ReservableDatabase {
-  const candidate = database as Partial<ReservableDatabase>;
-  const capacity = candidate.notificationConnectionCapacity ?? candidate.options?.max;
-  return (
-    typeof candidate.connect === "function" &&
-    capacity !== undefined &&
-    capacity >= MINIMUM_RESERVING_CAPACITY
-  );
+export function heartbeatReservationProblem(database: Queryable): string | undefined {
+  const pool = connectionPoolOf(database);
+  if (pool === undefined) return "the queue's database has no connect() and no attached pool";
+  const capacity = pool.options?.max;
+  if (capacity === undefined) return "the pool's size is unknown";
+  if (capacity < MINIMUM_RESERVING_CAPACITY) {
+    return `the pool allows ${capacity} connection${capacity === 1 ? "" : "s"} and needs at least ${MINIMUM_RESERVING_CAPACITY}`;
+  }
+  return undefined;
 }
 
-async function connectClient(database: ReservableDatabase): Promise<ReservedClient> {
-  const client = await database.connect();
+/** Whether a worker can hold one pooled connection for its heartbeats. */
+export function canReserveHeartbeatConnection(database: Queryable): boolean {
+  return heartbeatReservationProblem(database) === undefined;
+}
+
+async function connectClient(pool: ConnectionPool): Promise<ReservedClient> {
+  const client = await pool.connect();
   if (
     typeof client !== "object" ||
     client === null ||
@@ -59,7 +59,7 @@ export class ReservedConnection {
   private readonly rounds = new Set<Promise<unknown>>();
   private closed = false;
 
-  constructor(private readonly database: ReservableDatabase) {}
+  constructor(private readonly pool: ConnectionPool) {}
 
   /** Take the connection now, ahead of any handler that could exhaust the pool. */
   reserve(): void {
@@ -92,7 +92,7 @@ export class ReservedConnection {
       return Promise.reject(new Error("The reserved heartbeat connection is closed"));
     }
     if (this.client === undefined) {
-      const pending = connectClient(this.database);
+      const pending = connectClient(this.pool);
       this.client = pending;
       pending.catch(() => {
         if (this.client === pending) this.client = undefined;
@@ -159,11 +159,12 @@ const sharedConnections = new WeakMap<
  * connection for heartbeats however many workers run on it. The last holder to close returns it.
  */
 export function holdHeartbeatConnection(database: Queryable): HeartbeatConnectionLease | undefined {
-  if (!canReserveHeartbeatConnection(database)) return undefined;
-  const identity = database.notificationConnectionIdentity ?? database;
+  const pool = connectionPoolOf(database);
+  if (pool === undefined || heartbeatReservationProblem(database) !== undefined) return undefined;
+  const identity = pool;
   let shared = sharedConnections.get(identity);
   if (shared === undefined) {
-    shared = { connection: new ReservedConnection(database), holders: 0 };
+    shared = { connection: new ReservedConnection(pool), holders: 0 };
     sharedConnections.set(identity, shared);
   }
   const held = shared;

@@ -1,5 +1,6 @@
 import type { QueryResult, QueryResultRow } from "pg";
 import { Admin } from "./admin.js";
+import { attachPool } from "./connection-pool.js";
 import { databaseErrorCode, WorkhorseError } from "./errors.js";
 import { Queue } from "./queue.js";
 import type { Queryable, QueueOptions } from "./types.js";
@@ -64,23 +65,34 @@ export function createWorkhorseAdapter<TTransaction = Queryable>(
 }
 
 /**
- * A node-postgres pool an ORM adapter hands over for dedicated connections only.
+ * A node-postgres pool a worker takes its dedicated connections from.
  *
  * Most ORMs cannot lend out a dedicated session. A wake hint needs one that stays open, and workers
  * keep one for heartbeats so busy handlers cannot starve lease renewal. Ordinary queue operations
  * never use this pool. Its identity lets Workhorse share one of each connection per pool.
  */
-export interface AdapterNotificationPool extends Queryable {
+export interface AdapterConnectionPool extends Queryable {
   connect(): Promise<unknown>;
   options?: { max?: number };
 }
+
+/**
+ * A pool, or a function that finds one when a worker first needs it. TypeORM creates its pool when
+ * the data source initializes, so its adapter resolves the pool lazily. Whatever the function
+ * returns counts as a pool only if it has `connect()`.
+ */
+export type AdapterConnectionPoolSource = AdapterConnectionPool | (() => unknown);
 
 /** The options every ORM adapter accepts, whatever the ORM. */
 export interface ProviderAdapterOptions {
   defaultQueue?: string;
   queueOptions?: QueueOptions;
-  /** Optional node-postgres pool used only for the LISTEN and heartbeat connections. */
-  notificationPool?: AdapterNotificationPool;
+  /**
+   * The node-postgres pool workers take their dedicated listener and heartbeat connections from.
+   * An adapter that finds its ORM's own pool omits this option. Otherwise a worker needs it unless
+   * it sets `sharedHeartbeats`.
+   */
+  pool?: AdapterConnectionPool;
   /**
    * Optional provider cleanup. A caller-owned database stays open by default, because an adapter
    * that closes a connection it did not create takes the application's database with it.
@@ -125,21 +137,18 @@ export function rowsToQueryResult<TRow extends QueryResultRow>(
 }
 
 /**
- * Lend a notification pool to a queryable, so dispatch can wait on a wake hint.
+ * Lend a pool to a queryable, so a worker on it can take dedicated connections.
  *
- * Attaching is what makes notification-assisted dispatch available; without it a worker falls
- * back to jittered polling, which is slower but equally correct. The pool object itself is the
- * sharing identity, so two queryables built from one pool share a single listener.
+ * A worker needs the pool for its heartbeat connection, and refuses to start without one unless
+ * `sharedHeartbeats` is set. The listener comes from the same pool; without it the worker polls.
+ * The pool object itself is the sharing identity, so queryables built from one pool share one
+ * listener and one heartbeat connection.
  */
-export function attachNotificationPool(queryable: Queryable, pool: AdapterNotificationPool): void {
-  const target = queryable as Queryable & {
-    connect?: () => Promise<unknown>;
-    notificationConnectionCapacity?: number;
-    notificationConnectionIdentity?: object;
-  };
-  target.connect = () => pool.connect();
-  target.notificationConnectionCapacity = pool.options?.max;
-  target.notificationConnectionIdentity = pool;
+export function attachConnectionPool(
+  queryable: Queryable,
+  pool: AdapterConnectionPoolSource,
+): void {
+  attachPool(queryable, pool);
 }
 
 export interface ProviderQueryableOptions<TRow extends QueryResultRow> {
@@ -147,7 +156,7 @@ export interface ProviderQueryableOptions<TRow extends QueryResultRow> {
   execute: (statement: string, values: readonly unknown[]) => Promise<readonly TRow[]>;
   /** Wrap a failure in the provider's own error type, which should extend {@link QueryError}. */
   wrapError: (statement: string, cause: unknown) => Error;
-  notificationPool?: AdapterNotificationPool;
+  connectionPool?: AdapterConnectionPoolSource;
 }
 
 /**
@@ -180,19 +189,21 @@ export function createProviderQueryable<TRow extends QueryResultRow = QueryResul
     },
   };
 
-  if (options.notificationPool) attachNotificationPool(queryable, options.notificationPool);
+  if (options.connectionPool) attachConnectionPool(queryable, options.connectionPool);
   return queryable;
 }
 
 export interface ProviderAdapterDefinition<TExecutor> extends ProviderAdapterOptions {
   /** The database, client, or data source the application owns. */
   database: TExecutor;
+  /** The pool the adapter finds in its ORM. It takes precedence over the `pool` option. */
+  connectionPool?: AdapterConnectionPoolSource;
   /**
-   * Convert one executor into a queryable. It is called for the database with the notification
-   * pool, and again per transaction without one: a transaction is a borrowed session that ends,
-   * and a listener taken from it would end with it.
+   * Convert one executor into a queryable. It is called for the database with the connection pool,
+   * and again per transaction without one: a transaction is a borrowed session that ends, and a
+   * connection taken from it would end with it.
    */
-  toQueryable: (executor: TExecutor, notificationPool?: AdapterNotificationPool) => Queryable;
+  toQueryable: (executor: TExecutor, connectionPool?: AdapterConnectionPoolSource) => Queryable;
 }
 
 /**
@@ -205,10 +216,10 @@ export interface ProviderAdapterDefinition<TExecutor> extends ProviderAdapterOpt
 export function createProviderAdapter<TExecutor, TTransaction extends TExecutor = TExecutor>(
   definition: ProviderAdapterDefinition<TExecutor>,
 ): WorkhorseAdapter<TTransaction> {
-  const { database, toQueryable, notificationPool, ...adapterOptions } = definition;
+  const { database, toQueryable, connectionPool, pool, ...adapterOptions } = definition;
   return createWorkhorseAdapter<TTransaction>({
     ...adapterOptions,
-    database: toQueryable(database, notificationPool),
+    database: toQueryable(database, connectionPool ?? pool),
     adaptTransaction: (transaction) => toQueryable(transaction),
   });
 }

@@ -1109,10 +1109,11 @@ describe("checkpoints progress waits", () => {
     };
     const countingQueue = new Queue(countingDatabase);
     const id = await countingQueue.enqueue("ordinary-handler", { value: 42 });
-    const worker = new Worker(countingQueue, { workerId: "ordinary-worker" }).handle<
-      { value: number },
-      { value: number }
-    >("ordinary-handler", ({ value }) => ({ value }));
+    // The counting wrapper has no pool to lend a heartbeat connection from.
+    const worker = new Worker(countingQueue, {
+      workerId: "ordinary-worker",
+      sharedHeartbeats: true,
+    }).handle<{ value: number }, { value: number }>("ordinary-handler", ({ value }) => ({ value }));
 
     expect(await worker.runOnce()).toBe(true);
     await expect(admin.getTask(id)).resolves.toMatchObject({
@@ -1132,18 +1133,18 @@ describe("checkpoints progress waits", () => {
     };
     const countingQueue = new Queue(countingDatabase);
     await countingQueue.enqueue("durability-reads", {});
-    const worker = new Worker(countingQueue, { workerId: "durability-read-worker" }).handle(
-      "durability-reads",
-      async (_payload, context) => {
-        await Promise.all([
-          context.getCheckpoint("first"),
-          context.getCheckpoint("second"),
-          context.getWait("first"),
-          context.getWait("second"),
-        ]);
-        return null;
-      },
-    );
+    const worker = new Worker(countingQueue, {
+      workerId: "durability-read-worker",
+      sharedHeartbeats: true,
+    }).handle("durability-reads", async (_payload, context) => {
+      await Promise.all([
+        context.getCheckpoint("first"),
+        context.getCheckpoint("second"),
+        context.getWait("first"),
+        context.getWait("second"),
+      ]);
+      return null;
+    });
 
     expect(await worker.runOnce()).toBe(true);
     expect(durabilityQueries.filter((query) => query.includes("task_checkpoint"))).toHaveLength(1);

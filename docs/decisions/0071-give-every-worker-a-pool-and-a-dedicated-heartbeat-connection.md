@@ -2,7 +2,10 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-18
-- **Related:** SM-808, SM-825, SM-804, [ADR 0070](0070-publish-the-verified-sqlalchemy-transaction-accessor.md)
+- **Related:** SM-808, SM-825, SM-804, SM-827,
+  [ADR 0070](0070-publish-the-verified-sqlalchemy-transaction-accessor.md)
+- **Amended:** 2026-09-19 (SM-827): Kysely and Prisma take the pool as an adapter option, not as a
+  `createWorker` argument.
 
 ## Context
 
@@ -108,13 +111,18 @@ handler threads.
 
 ### `notificationPool` is removed
 
-Only workers use the dedicated connections, so the adapter option goes away:
+The option named only the listener, and two adapters no longer need it:
 
 - Drizzle keeps finding its pool through `$client`.
 - TypeORM finds its pool through `dataSource.driver.master`, the node-postgres `Pool` its
   `PostgresDriver` creates. An integration test pins that accessor, as ADR 0070 pins SQLAlchemy's.
 - Kysely keeps its pool in a private field, and Prisma's engine has no node-postgres pool. Both
-  pass one to the worker: `createWorker({ pool })`.
+  take one through the adapter option `pool`.
+
+The first draft of this decision passed that pool to `createWorker({ pool })` instead. A
+`defineWorkerProcess` configuration builds its pool inside `adapter()` and closes it through the
+adapter's `close` hook. It passes static worker options to `createWorker`, so the pool could reach
+the worker only from module scope. The adapter owns the pool's lifetime, so the adapter takes it.
 
 The internal `notificationConnectionIdentity` and `notificationConnectionCapacity` fields are
 replaced by one internal reference to the pool. The pool's identity and `options.max` supply both
@@ -127,7 +135,7 @@ message. The risk can no longer be present without the operator knowing.
 
 The TypeScript quickstart, Drizzle, TypeORM, and Go examples do not change. Python setups change
 from a connection to a pool, and `psycopg_pool` becomes a dependency of the Python worker. Kysely
-and Prisma workers need a node-postgres pool passed to `createWorker`.
+and Prisma adapters need a node-postgres pool passed as `pool`.
 
 The Python worker gains parallel statements. A pool sized for `concurrency` lets handlers
 checkpoint while others run, which one serialized connection could not do.
@@ -147,5 +155,7 @@ connection must either grow the pool or set the opt-out. The per-SDK tickets car
   connection info omits the password.
 - **Keep per-connection Python factories and make them mandatory.** Rejected: each dedicated
   connection needs its own argument, and the Python worker would stay serialized on one connection.
-- **Rename `notificationPool` instead of removing it.** Rejected: the pool is a worker concern, and
-  two of the four adapters can find it without any option.
+- **Rename `notificationPool` on every adapter.** Rejected: Drizzle and TypeORM find their pool
+  without any option, so only Kysely and Prisma take one.
+- **Pass the pool to `createWorker({ pool })`.** Rejected in the amendment: a worker process
+  configuration could then reach the pool only from module scope.

@@ -241,8 +241,8 @@ Two consequences matter operationally. Wake hints are dead wherever a notificati
 the listener — PgBouncer in transaction mode accepts `LISTEN` then releases the server connection,
 and PgCat buffers a notification until the client sends another query — while
 `Queue.supportsTaskNotifications()` and the subscription's `isListening()` still report capability.
-Dispatch runs entirely on the fallback poll, which is correct but slower; point an adapter's
-`notificationPool` at a session-pooled PgBouncer or direct pool to restore hints. And every leaked
+Dispatch runs entirely on the fallback poll, which is correct but slower; give the worker a pool
+that reaches a session-pooled PgBouncer or PostgreSQL directly to restore hints. And every leaked
 session grant or `SET` lands on a pooled backend that outlives the client that created it, so a
 transaction-mode pool must never serve a code path that leaves session state behind.
 

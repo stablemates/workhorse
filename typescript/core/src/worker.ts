@@ -55,6 +55,7 @@ import {
   workerCheckpointsRead,
   workerCompletionPrepare,
   workerHeartbeatReservation,
+  workerHeartbeatReservationProblem,
   workerProgressRead,
   workerWaitsRead,
 } from "./worker-internal.js";
@@ -335,6 +336,15 @@ export interface WorkerOptions {
   /** Local heartbeat interval. It must remain shorter than leaseMs. */
   heartbeatMs?: number;
   /**
+   * Send heartbeats through the queue's shared pool instead of a dedicated connection.
+   *
+   * By default a worker on a Workhorse `Queue` reserves one heartbeat connection from its pool, so
+   * handlers that hold every other connection cannot starve lease renewal. It refuses to start when
+   * the pool cannot lend one. Set this only for a pool too small to spare the connection, or a
+   * database with no pool; heartbeats then wait behind other statements.
+   */
+  sharedHeartbeats?: boolean;
+  /**
    * Idle fallback polling delay. `run()` defaults to five seconds with notification support and
    * 250 milliseconds without it; `runOnce()` retains the 250-millisecond compatibility default.
    */
@@ -492,6 +502,7 @@ export class Worker {
   // The reserved heartbeat connection, taken on first use. A queue that cannot lend one heartbeats
   // through its shared pool.
   private reservedHeartbeatChannel(): WorkerHeartbeatChannel | undefined {
+    if (this.options.sharedHeartbeats === true) return undefined;
     if (this.heartbeatChannel !== undefined) return this.heartbeatChannel;
     const reservation = (this.queue as Partial<WorkerHeartbeatReservation>)[
       workerHeartbeatReservation
@@ -628,6 +639,19 @@ export class Worker {
       throw new Error("registryIntervalMs must be 0 or at least 100");
     if (this.scheduleCatchupLimit < 1 || this.scheduleCatchupLimit > 10_000)
       throw new Error("scheduleCatchupLimit must be between 1 and 10000");
+    if (options.sharedHeartbeats !== true) {
+      // A custom WorkerQueueApi chooses its own transport, so only a Workhorse Queue is checked.
+      const problem = (queue as Partial<WorkerHeartbeatReservation>)[
+        workerHeartbeatReservationProblem
+      ]?.call(queue);
+      if (problem !== undefined) {
+        throw new Error(
+          `Worker cannot reserve a dedicated heartbeat connection: ${problem}. Give the queue a ` +
+            "pool of at least 3 connections, or set sharedHeartbeats: true to send heartbeats " +
+            "through the shared pool.",
+        );
+      }
+    }
   }
 
   handle<TPayload extends Json = Json, TResult extends Json = Json>(
@@ -1449,6 +1473,14 @@ export class Worker {
           );
           if (subscription) notificationSubscriptions.push(subscription);
         }
+      }
+      // Polling stays correct without a listener, so the worker runs on, but it says so once.
+      if (notificationSubscriptions.length === 0) {
+        logWarn(
+          "workhorse.worker.polling_only",
+          "Worker has no notification listener and dispatches by polling",
+          { ...this.workerQueueAttributes, "workhorse.worker.id": this.workerId },
+        );
       }
 
       const maintenance = this.maintenanceLoop(shouldStop, signal).catch(fail);

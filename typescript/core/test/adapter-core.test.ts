@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  attachNotificationPool,
+  attachConnectionPool,
   createProviderAdapter,
   createProviderQueryable,
   QueryError,
   rowsToQueryResult,
   WorkhorseError,
-  type AdapterNotificationPool,
+  type AdapterConnectionPool,
 } from "../src/index.js";
+import { connectionPoolOf } from "../src/connection-pool.js";
 import type { Queryable } from "../src/types.js";
 
 // The four ORM packages each held their own copy of this behavior, and the copies had drifted —
@@ -23,12 +24,12 @@ function driverError(code: string, detail?: string): Error {
   });
 }
 
-function notificationPool(max?: number): AdapterNotificationPool {
+function connectionPool(max?: number): AdapterConnectionPool {
   return {
     query: vi.fn<() => Promise<never>>(),
     connect: vi.fn<() => Promise<unknown>>().mockResolvedValue({}),
     ...(max === undefined ? {} : { options: { max } }),
-  } as unknown as AdapterNotificationPool;
+  } as unknown as AdapterConnectionPool;
 }
 
 describe("QueryError", () => {
@@ -87,29 +88,23 @@ describe("rowsToQueryResult", () => {
   });
 });
 
-describe("attachNotificationPool", () => {
-  it("lends the pool's connection, capacity, and identity", async () => {
-    const pool = notificationPool(7);
+describe("attachConnectionPool", () => {
+  it("lends the pool a worker takes dedicated connections from", () => {
+    const pool = connectionPool(7);
     const queryable: Queryable = { query: vi.fn<() => Promise<never>>() };
-    attachNotificationPool(queryable, pool);
+    attachConnectionPool(queryable, pool);
 
-    const attached = queryable as Queryable & {
-      connect: () => Promise<unknown>;
-      notificationConnectionCapacity?: number;
-      notificationConnectionIdentity?: object;
-    };
-    await attached.connect();
-    expect(pool.connect).toHaveBeenCalledOnce();
-    expect(attached.notificationConnectionCapacity).toBe(7);
-    expect(attached.notificationConnectionIdentity).toBe(pool);
+    expect(connectionPoolOf(queryable)).toBe(pool);
   });
 
-  it("reports unknown capacity when the pool states no maximum", () => {
+  it("resolves a lazy pool each time a worker looks it up", () => {
+    let pool: AdapterConnectionPool | undefined;
     const queryable: Queryable = { query: vi.fn<() => Promise<never>>() };
-    attachNotificationPool(queryable, notificationPool());
-    expect(
-      (queryable as { notificationConnectionCapacity?: number }).notificationConnectionCapacity,
-    ).toBe(undefined);
+    attachConnectionPool(queryable, () => pool);
+
+    expect(connectionPoolOf(queryable)).toBe(undefined);
+    pool = connectionPool(4);
+    expect(connectionPoolOf(queryable)).toBe(pool);
   });
 });
 
@@ -170,18 +165,16 @@ describe("createProviderQueryable", () => {
     await expect(queryable.query("SELECT 1")).rejects.toBeInstanceOf(QueryError);
   });
 
-  it("attaches a notification pool when one is offered", () => {
-    const pool = notificationPool(3);
+  it("attaches a connection pool when one is offered", () => {
+    const pool = connectionPool(3);
     const queryable = createProviderQueryable({ execute: () => Promise.resolve([]), wrapError });
-    const listening = createProviderQueryable({
+    const pooled = createProviderQueryable({
       execute: () => Promise.resolve([]),
       wrapError,
-      notificationPool: pool,
+      connectionPool: pool,
     });
-    expect((queryable as { connect?: unknown }).connect).toBe(undefined);
-    expect(
-      (listening as { notificationConnectionIdentity?: object }).notificationConnectionIdentity,
-    ).toBe(pool);
+    expect(connectionPoolOf(queryable)).toBe(undefined);
+    expect(connectionPoolOf(pooled)).toBe(pool);
   });
 });
 
@@ -191,27 +184,27 @@ describe("createProviderAdapter", () => {
   }
 
   function build(options: { close?: () => void } = {}) {
-    const seen: { executor: FakeExecutor; pool: AdapterNotificationPool | undefined }[] = [];
-    const pool = notificationPool(5);
+    const seen: { executor: FakeExecutor; pool: unknown }[] = [];
+    const pool = connectionPool(5);
     const adapter = createProviderAdapter<FakeExecutor>({
       database: { name: "database" },
-      toQueryable: (executor, notification) => {
-        seen.push({ executor, pool: notification });
+      toQueryable: (executor, lent) => {
+        seen.push({ executor, pool: lent });
         const queryable = createProviderQueryable({
           execute: () => Promise.resolve([]),
           wrapError: (statement, cause) => new QueryError("Fake", statement, cause),
-          ...(notification ? { notificationPool: notification } : {}),
+          ...(lent ? { connectionPool: lent } : {}),
         });
         return queryable;
       },
-      notificationPool: pool,
+      connectionPool: pool,
       defaultQueue: "reports",
       ...options,
     });
     return { adapter, seen, pool };
   }
 
-  it("builds the database queryable with the notification pool and honors the default queue", () => {
+  it("builds the database queryable with the connection pool and honors the default queue", () => {
     const { adapter, seen, pool } = build();
     expect(seen).toEqual([{ executor: { name: "database" }, pool }]);
     expect(adapter.queue.defaultQueue).toBe("reports");

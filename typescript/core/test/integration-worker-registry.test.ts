@@ -607,6 +607,7 @@ describe("worker registry", () => {
       });
     });
     const worker = new Worker(shared, {
+      sharedHeartbeats: true,
       workerId: "slow-heartbeat-worker",
       concurrency: 2,
       heartbeatMs: 10,
@@ -1346,6 +1347,7 @@ describe("worker registry", () => {
     const handled: string[] = [];
     const claim = vi.spyOn(pollingQueue, "claimMany");
     const worker = new Worker(pollingQueue, {
+      sharedHeartbeats: true,
       workerId: "notification-fallback",
       pollMs: 100,
       registryIntervalMs: 0,
@@ -1382,7 +1384,9 @@ describe("worker registry", () => {
       return [];
     });
     const random = vi.spyOn(Math, "random").mockReturnValue(0.5);
+    // The stalled-connect wrapper states no pool size, so it cannot lend a heartbeat connection.
     const worker = new Worker(pendingQueue, {
+      sharedHeartbeats: true,
       workerId: "notification-pending-listener",
       pollMs: 100,
       registryIntervalMs: 0,
@@ -1421,6 +1425,7 @@ describe("worker registry", () => {
     const pendingQueue = new Queue(pendingListenerDatabase);
     const claim = vi.spyOn(pendingQueue, "claimMany");
     const worker = new Worker(pendingQueue, {
+      sharedHeartbeats: true,
       workerId: "notification-pending-listen",
       pollMs: 100,
       registryIntervalMs: 0,

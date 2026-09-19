@@ -869,9 +869,10 @@ Web frameworks do not participate in worker lifecycle. See
 
 `@stablemates/workhorse-drizzle`, `@stablemates/workhorse-prisma`, `@stablemates/workhorse-typeorm`, and `@stablemates/workhorse-kysely` convert
 provider database and transaction objects into `Queryable`. `createDrizzleAdapter` discovers the
-retained node-postgres client through `$client`. `createPrismaAdapter`, `createTypeOrmAdapter`, and
-`createKyselyAdapter` accept `notificationPool`; Kysely callers can pass the pool used by
-`PostgresDialect`. Each adapter exposes `queue` and `admin`, while `forTransaction` and
+retained node-postgres pool through `$client`. `createTypeOrmAdapter` discovers it as
+`dataSource.driver.master`, which TypeORM's `PostgresDriver` creates on `initialize()`; the adapter
+looks it up when a worker is constructed. `createPrismaAdapter` and `createKyselyAdapter` accept the
+option `pool`; Kysely callers can pass the pool used by `PostgresDialect`. Each adapter exposes `queue` and `admin`, while `forTransaction` and
 `adminForTransaction` bind the corresponding client to a caller-owned transaction. Neither method
 commits, rolls back, disconnects, or destroys that transaction. Each adapter closes
 resources only through its configured `close` callback, and `WorkhorseAdapter.close()` invokes that
@@ -896,7 +897,7 @@ alphanumeric codes, and copies the discovered code to its wrapper.
 ### What an adapter must guarantee
 
 `typescript/core/src/adapter.ts` owns the shared implementation of every guarantee below, exported from
-`@stablemates/workhorse` as `QueryError`, `rowsToQueryResult`, `attachNotificationPool`,
+`@stablemates/workhorse` as `QueryError`, `rowsToQueryResult`, `attachConnectionPool`,
 `createProviderQueryable`, `createProviderAdapter`, and `createWorkhorseAdapter`. An adapter that
 uses them supplies only how its ORM runs a statement; an adapter that does not still owes the same
 guarantees.
@@ -922,12 +923,13 @@ guarantees.
    rethrown as-is rather than nested again. A `RangeError` states that the statement itself was
    malformed — a placeholder with no matching value — which is the caller's error rather than the
    database's.
-5. **Notification capability.** Optional. An adapter that can lend a dedicated session sets
-   `connect()`, `notificationConnectionCapacity`, and `notificationConnectionIdentity` on the
-   queryable, which `attachNotificationPool` does from a node-postgres pool's `connect()` and
-   `options.max`. The pool object is the sharing identity, so queryables built from one pool share
-   one listener. Transaction queryables never carry the capability, because that session ends.
-   Without it, workers fall back to bounded polling.
+5. **Connection pool.** An adapter lends workers a node-postgres pool through
+   `attachConnectionPool`, which stores the pool, or a function that finds it, on the queryable
+   under an internal symbol. A value counts as a pool only if it has `connect()`; `options.max`
+   gives its capacity. The pool object is the sharing identity, so queryables built from one pool
+   share one listener and one heartbeat connection. Transaction queryables never carry a pool,
+   because that session ends. Without a pool, a worker refuses to start unless `sharedHeartbeats`
+   is set, and then dispatches by bounded polling.
 6. **Resource ownership.** An adapter closes nothing it did not create. `WorkhorseAdapter.close()`
    invokes the configured `close` callback at most once, however many times it is called.
 
@@ -944,8 +946,9 @@ pool mode as a separate lane to prove the boundary.
   the subscription reports listening while the `Worker.run()` fallback poll carries dispatch.
   PgCat fails differently: it relays a buffered notification only with the client's next query
   result, so an idle `LISTEN`ing worker hears nothing in either pool mode. Restoring wake hints
-  takes a listener connection that reaches PostgreSQL without those poolers — the adapters'
-  `notificationPool`, or a `Queue` whose queryable has no `connect()` so it stays polling-only.
+  takes a worker pool that reaches PostgreSQL without those poolers, such as the Prisma or Kysely
+  adapter's `pool`. The alternative is a `Queue` whose queryable has no `connect()`. It stays
+  polling-only, and its workers need `sharedHeartbeats`.
 - Session advisory locks (`pg_advisory_lock`, `pg_advisory_unlock`, `pg_try_advisory_lock`) pin to
   whichever server session ran them and outlive the client checkout, so under transaction pooling
   a second client can acquire a held key and grants leak onto pooled backends. Every Workhorse
@@ -2293,13 +2296,15 @@ so the watchdog is what bounds how long a handler outlives its lease. Python and
 yet keep this watchdog.
 
 TypeScript workers send heartbeat rounds on one reserved pooled connection, so handlers that hold
-every other connection cannot starve lease renewal. `holdHeartbeatConnection` offers the
-reservation only when the queryable has `connect()` and a known capacity
-(`notificationConnectionCapacity`, else `options.max`) of at least 3. That leaves room for the
-notification listener and one claim. A smaller or unknown pool heartbeats through the shared
-queryable as before. Every worker on one pool shares the reservation, keyed like the listener by
-`notificationConnectionIdentity`, else the queryable itself. The last holder to close it returns
-the client to the pool. `Worker.run()` takes a hold before its first maintenance pass and keeps it
+every other connection cannot starve lease renewal. The pool is the queryable's attached pool, else
+the queryable itself when it has `connect()`, as a node-postgres `Pool` does. The reservation needs
+a known capacity (`options.max`) of at least 3, which leaves room for the notification listener and
+one claim. When a `Queue` cannot lend it, the `Worker` constructor throws. The message names the
+reason (no pool, unknown size, or the size found) and the opt-out. `WorkerOptions.sharedHeartbeats`
+skips the reservation and sends rounds through the queue's queryable. A custom `WorkerQueueApi`
+that is not a `Queue` is not checked, because it chooses its own transport. Every worker on one pool
+shares the reservation, keyed like the listener by the pool object. The last holder to close it
+returns the client to the pool. `Worker.run()` takes a hold before its first maintenance pass and keeps it
 until the run ends. `runOnce()` takes one when the first attempt registers its lease, before the
 handler starts, and closes it with the last lease. Each round on the reservation is bounded by
 `heartbeatMs`. A round that exceeds the bound, or whose statement fails, releases the client with an
@@ -3036,8 +3041,11 @@ Info event names are `workhorse.tasks.promoted`, `workhorse.leases.recovered`,
 `workhorse.retention_policy.synchronized` and `workhorse.maintenance_policy.synchronized` record
 successful configuration changes at info.
 
-The warning event name is `workhorse.handler.signal_swallowed`. It carries bounded task and worker
+The warning event names are `workhorse.handler.signal_swallowed` and
+`workhorse.worker.polling_only`. `workhorse.handler.signal_swallowed` carries bounded task and worker
 identity plus `workhorse.handler.outcome`. It never carries the swallowed value or error.
+`workhorse.worker.polling_only` carries `workhorse.worker.id` and `workhorse.worker.queues`. A
+`Worker.run()` that starts without a notification subscription emits it once.
 
 The internal `logDebug`, `logInfo`, and `logWarn` functions accept the closed `WorkhorseLogEvent` union. They
 set `eventName`, `severityNumber`, `severityText`, and a stable text body. Task records may use
@@ -3495,13 +3503,11 @@ interactive stdin and stdout is refused with exit 1.
   `Queue.subscribeToTaskNotifications()` returns a `TaskNotificationSubscription`; its `close()`
   removes that worker and closes the hub after the final subscriber. A node-postgres pool therefore
   reserves one shared connection for `LISTEN workhorse_tasks` regardless of the number of subscribing
-  `Queue` or `Worker` objects. The Drizzle adapter forwards its node-postgres `$client.connect()`
-  capability, uses `$client` as `notificationConnectionIdentity`, and reads capacity from
-  `$client.options.max`. The Prisma, TypeORM, and Kysely adapters forward `connect()` from their
-  optional `notificationPool`, use that pool as `notificationConnectionIdentity`, and read capacity
-  from `notificationPool.options.max`. Without those capabilities, an adapter remains polling-only.
-  The same capability lends the TypeScript workers on that pool their shared heartbeat connection
-  when that capacity is at least 3.
+  `Queue` or `Worker` objects. The hub takes its connection from the queryable's pool: Drizzle's
+  `$client`, TypeORM's `driver.master`, or the `pool` option of the Prisma and Kysely adapters. The
+  hub is keyed by that pool object, and its capacity is `options.max`. Without a pool, the queryable
+  remains polling-only. When `Worker.run()` starts with no subscription, it logs
+  `workhorse.worker.polling_only` at warn once.
   The capability check sees the pool's shape, not its pooling mode: a transaction-mode pooler
   accepts `LISTEN` without ever delivering a notification, so capability stays reported while the
   fallback poll does the work (see [Connection poolers](#connection-poolers)).

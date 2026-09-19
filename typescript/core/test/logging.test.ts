@@ -105,7 +105,9 @@ describe("structured logging", () => {
         throw new Error(`Unexpected query: ${sql}`);
       },
     } as unknown as Queryable;
+    // The fake database has no pool to lend a heartbeat connection from.
     const worker = new Worker(new Queue(database, "mail"), {
+      sharedHeartbeats: true,
       workerId: "worker-registration-log",
       queues: ["mail", "billing"],
       pollMs: 1_000,

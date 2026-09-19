@@ -216,6 +216,7 @@ describe("OpenTelemetry", () => {
       }),
     );
     const worker = new Worker(new Queue(database, "mail"), {
+      sharedHeartbeats: true,
       workerId: "worker-a",
       registryIntervalMs: 0,
     });
@@ -355,6 +356,7 @@ describe("OpenTelemetry", () => {
       }),
     );
     const worker = new Worker(new Queue(database, "mail"), {
+      sharedHeartbeats: true,
       workerId: "worker-redaction",
       registryIntervalMs: 0,
     }).handle("mail.send", async () => {

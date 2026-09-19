@@ -162,7 +162,7 @@ describe("createWorkhorseAdapter", () => {
       close,
     });
 
-    const worker = adapter.createWorker({ workerId: "adapter-test" });
+    const worker = adapter.createWorker({ workerId: "adapter-test", sharedHeartbeats: true });
     expect(worker).toBeDefined();
 
     await Promise.all([adapter.close(), adapter.close()]);
@@ -175,7 +175,7 @@ describe("createWorkhorseAdapter", () => {
       adaptTransaction: (transaction: Queryable) => transaction,
     });
 
-    const worker = adapter.createWorker();
+    const worker = adapter.createWorker({ sharedHeartbeats: true });
 
     expect(worker.concurrency).toBe(1);
     expect(worker.runtimeState()).toEqual({
@@ -199,7 +199,7 @@ describe("createWorkhorseAdapter", () => {
         adaptTransaction: (transaction: Queryable) => transaction,
       });
 
-      expect(() => adapter.createWorker({ concurrency })).toThrow(
+      expect(() => adapter.createWorker({ concurrency, sharedHeartbeats: true })).toThrow(
         "concurrency must be a safe integer between 1 and 100",
       );
     },
@@ -211,6 +211,8 @@ describe("createWorkhorseAdapter", () => {
       adaptTransaction: (transaction: Queryable) => transaction,
     });
 
-    expect(adapter.createWorker({ concurrency }).runtimeState()).toMatchObject({ concurrency });
+    expect(
+      adapter.createWorker({ concurrency, sharedHeartbeats: true }).runtimeState(),
+    ).toMatchObject({ concurrency });
   });
 });

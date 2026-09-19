@@ -56,12 +56,13 @@ If the callback throws, Prisma rolls back both writes. Nothing outside the trans
 half-committed pair. The adapter's default queue remains outside that transaction — use it for
 enqueues that stand alone.
 
-## Enable notification-assisted workers
+## Give workers a pool
 
-Prisma does not expose a stable node-postgres pool. Supply a separate caller-owned pool as
-`notificationPool` when workers should reserve a connection for `LISTEN/NOTIFY` and pick up new
-tasks immediately. Without it, workers use bounded polling and keep the same durable behavior — tasks
-still run, just on the polling cadence.
+Prisma's engine has no node-postgres pool. A process that runs workers passes a separate
+caller-owned pool as `pool`. Workers take their heartbeat connection and their `LISTEN/NOTIFY`
+connection from it, so busy handlers cannot starve lease renewal. Without it, a worker refuses to
+start unless you set `sharedHeartbeats`. It then sends heartbeats through Prisma and dispatches by
+bounded polling.
 
 Database execution failures become `PrismaQueryError`, which retains the statement, original cause,
 and nested PostgreSQL code when Prisma provides one. Typed Workhorse conflicts — idempotency,

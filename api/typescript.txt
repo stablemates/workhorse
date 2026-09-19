@@ -10,7 +10,8 @@
 
 ### @stablemates/workhorse .
 
-interface AdapterNotificationPool
+interface AdapterConnectionPool
+type AdapterConnectionPoolSource
 class Admin
 interface AdminAudit
 interface BatchExecutionRecord
@@ -293,7 +294,7 @@ interface WorkhorseTelemetryProvider
 interface WorkhorseTelemetrySpan
 function assertSchemaCompatible
 function assertSupportedPostgres
-function attachNotificationPool
+function attachConnectionPool
 function contractSchema
 function createProviderAdapter
 function createProviderQueryable
@@ -765,12 +766,14 @@ function typeOrmQueryable
 
 ## Declarations
 
-interface AdapterNotificationPool extends Queryable {
+interface AdapterConnectionPool extends Queryable {
   connect(): Promise<unknown>;
   options?: {
     max?: number;
   };
 }
+
+type AdapterConnectionPoolSource = AdapterConnectionPool | (() => unknown);
 
 class Admin {
   readonly defaultQueue: string;
@@ -2779,12 +2782,12 @@ interface DependencyLineageRecord {
 
 type DependencyTerminalPolicy = "release" | "cancel" | "fail";
 
-interface DrizzleAdapterOptions extends Omit<ProviderAdapterOptions, "notificationPool"> {
+interface DrizzleAdapterOptions extends Omit<ProviderAdapterOptions, "pool"> {
 }
 
 interface DrizzleExecutor {
   execute(query: SQL): PromiseLike<unknown>;
-  readonly $client?: AdapterNotificationPool;
+  readonly $client?: AdapterConnectionPool;
 }
 
 class DrizzleQueryError extends QueryError {
@@ -3289,19 +3292,25 @@ class ProgressRateLimitError extends WorkhorseError {
 interface ProviderAdapterDefinition<TExecutor> extends ProviderAdapterOptions {
   /** The database, client, or data source the application owns. */
   database: TExecutor;
+  /** The pool the adapter finds in its ORM. It takes precedence over the `pool` option. */
+  connectionPool?: AdapterConnectionPoolSource;
   /**
-  * Convert one executor into a queryable. It is called for the database with the notification
-  * pool, and again per transaction without one: a transaction is a borrowed session that ends,
-  * and a listener taken from it would end with it.
+  * Convert one executor into a queryable. It is called for the database with the connection pool,
+  * and again per transaction without one: a transaction is a borrowed session that ends, and a
+  * connection taken from it would end with it.
   */
-  toQueryable: (executor: TExecutor, notificationPool?: AdapterNotificationPool) => Queryable;
+  toQueryable: (executor: TExecutor, connectionPool?: AdapterConnectionPoolSource) => Queryable;
 }
 
 interface ProviderAdapterOptions {
   defaultQueue?: string;
   queueOptions?: QueueOptions;
-  /** Optional node-postgres pool used only for the LISTEN and heartbeat connections. */
-  notificationPool?: AdapterNotificationPool;
+  /**
+  * The node-postgres pool workers take their dedicated listener and heartbeat connections from.
+  * An adapter that finds its ORM's own pool omits this option. Otherwise a worker needs it unless
+  * it sets `sharedHeartbeats`.
+  */
+  pool?: AdapterConnectionPool;
   /**
   * Optional provider cleanup. A caller-owned database stays open by default, because an adapter
   * that closes a connection it did not create takes the application's database with it.
@@ -3314,7 +3323,7 @@ interface ProviderQueryableOptions<TRow extends QueryResultRow> {
   execute: (statement: string, values: readonly unknown[]) => Promise<readonly TRow[]>;
   /** Wrap a failure in the provider's own error type, which should extend {@link QueryError}. */
   wrapError: (statement: string, cause: unknown) => Error;
-  notificationPool?: AdapterNotificationPool;
+  connectionPool?: AdapterConnectionPoolSource;
 }
 
 interface PurgeIdempotencyConflictDetails {
@@ -3476,6 +3485,7 @@ class Queue {
   createChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(parent: ClaimedTask, workerId: string, children: readonly ChildTaskRequest[]): Promise<CreateChildrenResult<TResult>>;
   complete<TResult extends Json>(task: ClaimedTask, workerId: string, result: TResult): Promise<boolean>;
   [workerCompletionPrepare](task: ClaimedTask, workerId: string, result: Json): Promise<() => Promise<boolean>>;
+  [workerHeartbeatReservationProblem](): string | undefined;
   [workerHeartbeatReservation](): WorkerHeartbeatChannel | undefined;
   /** Seed immutable JSON Schema contracts and the application-selected current versions. */
   syncContracts(): Promise<void>;
@@ -4514,7 +4524,7 @@ interface TraceContext {
   tracestate?: string;
 }
 
-interface TypeOrmAdapterOptions extends ProviderAdapterOptions {
+interface TypeOrmAdapterOptions extends Omit<ProviderAdapterOptions, "pool"> {
 }
 
 interface TypeOrmExecutor {
@@ -4651,6 +4661,15 @@ interface WorkerOptions {
   leaseMs?: number;
   /** Local heartbeat interval. It must remain shorter than leaseMs. */
   heartbeatMs?: number;
+  /**
+  * Send heartbeats through the queue's shared pool instead of a dedicated connection.
+  *
+  * By default a worker on a Workhorse `Queue` reserves one heartbeat connection from its pool, so
+  * handlers that hold every other connection cannot starve lease renewal. It refuses to start when
+  * the pool cannot lend one. Set this only for a pool too small to spare the connection, or a
+  * database with no pool; heartbeats then wait behind other statements.
+  */
+  sharedHeartbeats?: boolean;
   /**
   * Idle fallback polling delay. `run()` defaults to five seconds with notification support and
   * 250 milliseconds without it; `runOnce()` retains the 250-millisecond compatibility default.
@@ -4872,7 +4891,7 @@ class WorkhorseError extends Error {
   constructor(message: string, options?: ErrorOptions);
 }
 
-type WorkhorseLogEvent = "workhorse.handler.batch_dispatched" | "workhorse.handler.batch_evidence_failed" | "workhorse.handler.finished" | "workhorse.handler.registered" | "workhorse.handler.signal_swallowed" | "workhorse.handler.started" | "workhorse.task.cancellation_acknowledged" | "workhorse.task.cancellation_processed" | "workhorse.task.checkpoint_saved" | "workhorse.task.child_processed" | "workhorse.task.debounce_rejected" | "workhorse.task.debounced" | "workhorse.task.claimed" | "workhorse.task.completed" | "workhorse.task.completion_rejected" | "workhorse.task.enqueue_replayed" | "workhorse.task.enqueued" | "workhorse.task.throttled" | "workhorse.task.execution_finished" | "workhorse.task.failure_processed" | "workhorse.task.heartbeat_accepted" | "workhorse.task.heartbeat_rejected" | "workhorse.task.ownership_expired" | "workhorse.task.progress_updated" | "workhorse.task.redrive_processed" | "workhorse.task.run_now_requested" | "workhorse.task.signal_processed" | "workhorse.task.human_wait_processed" | "workhorse.task.wait_processed" | "workhorse.tasks.promoted" | "workhorse.tasks.redrive_processed" | "workhorse.leases.recovered" | "workhorse.cold_export_policy.synchronized" | "workhorse.maintenance.completed" | "workhorse.maintenance_policy.synchronized" | "workhorse.queue.paused" | "workhorse.queue.purged" | "workhorse.queue.resumed" | "workhorse.retention_policy.synchronized" | "workhorse.schedule.fire_replayed" | "workhorse.schedule.fired" | "workhorse.schedules.synchronized" | "workhorse.worker.deregistered" | "workhorse.worker.paused" | "workhorse.worker.registered" | "workhorse.worker.registration_failed" | "workhorse.worker.resumed" | "workhorse.worker.started" | "workhorse.worker.stop_requested" | "workhorse.worker.stopped" | "workhorse.worker_registry.pruned";
+type WorkhorseLogEvent = "workhorse.handler.batch_dispatched" | "workhorse.handler.batch_evidence_failed" | "workhorse.handler.finished" | "workhorse.handler.registered" | "workhorse.handler.signal_swallowed" | "workhorse.handler.started" | "workhorse.task.cancellation_acknowledged" | "workhorse.task.cancellation_processed" | "workhorse.task.checkpoint_saved" | "workhorse.task.child_processed" | "workhorse.task.debounce_rejected" | "workhorse.task.debounced" | "workhorse.task.claimed" | "workhorse.task.completed" | "workhorse.task.completion_rejected" | "workhorse.task.enqueue_replayed" | "workhorse.task.enqueued" | "workhorse.task.throttled" | "workhorse.task.execution_finished" | "workhorse.task.failure_processed" | "workhorse.task.heartbeat_accepted" | "workhorse.task.heartbeat_rejected" | "workhorse.task.ownership_expired" | "workhorse.task.progress_updated" | "workhorse.task.redrive_processed" | "workhorse.task.run_now_requested" | "workhorse.task.signal_processed" | "workhorse.task.human_wait_processed" | "workhorse.task.wait_processed" | "workhorse.tasks.promoted" | "workhorse.tasks.redrive_processed" | "workhorse.leases.recovered" | "workhorse.cold_export_policy.synchronized" | "workhorse.maintenance.completed" | "workhorse.maintenance_policy.synchronized" | "workhorse.queue.paused" | "workhorse.queue.purged" | "workhorse.queue.resumed" | "workhorse.retention_policy.synchronized" | "workhorse.schedule.fire_replayed" | "workhorse.schedule.fired" | "workhorse.schedules.synchronized" | "workhorse.worker.deregistered" | "workhorse.worker.paused" | "workhorse.worker.polling_only" | "workhorse.worker.registered" | "workhorse.worker.registration_failed" | "workhorse.worker.resumed" | "workhorse.worker.started" | "workhorse.worker.stop_requested" | "workhorse.worker.stopped" | "workhorse.worker_registry.pruned";
 
 class WorkhorseMetricsObserver {
   constructor(database: Queryable, options?: {
@@ -4916,7 +4935,7 @@ function assertSchemaCompatible(database: Queryable): Promise<void>;
 
 function assertSupportedPostgres(database: Queryable): Promise<void>;
 
-function attachNotificationPool(queryable: Queryable, pool: AdapterNotificationPool): void;
+function attachConnectionPool(queryable: Queryable, pool: AdapterConnectionPoolSource): void;
 
 function cancelOutcomeTone(status: DashboardCancelStatus): DashboardResultTone;
 
@@ -5535,7 +5554,7 @@ function describeTaskResult(input: {
   blockedByPersistentFailure: boolean;
 }): TaskResultDescription;
 
-function drizzleQueryable(executor: DrizzleExecutor, notificationPool?: AdapterNotificationPool): Queryable;
+function drizzleQueryable(executor: DrizzleExecutor, connectionPool?: AdapterConnectionPoolSource): Queryable;
 
 function expectOneRow<TRow>(result: {
   readonly rows: readonly TRow[];
@@ -5579,7 +5598,7 @@ function isMissingDatabaseRelationError(error: unknown): boolean;
 
 function isTerminalTaskState(state: string): boolean;
 
-function kyselyQueryable(executor: KyselyExecutor, notificationPool?: AdapterNotificationPool): Queryable;
+function kyselyQueryable(executor: KyselyExecutor, connectionPool?: AdapterConnectionPoolSource): Queryable;
 
 function migrateSchema(database: Queryable, options?: MigrateSchemaOptions): Promise<MigrateSchemaResult>;
 
@@ -5600,7 +5619,7 @@ function parseTaskLocation(search: string | URLSearchParams, defaults?: {
   group?: TaskActivityGroup;
 }): TaskLocationState;
 
-function prismaQueryable(executor: PrismaExecutor, notificationPool?: AdapterNotificationPool): Queryable;
+function prismaQueryable(executor: PrismaExecutor, connectionPool?: AdapterConnectionPoolSource): Queryable;
 
 function readDashboardIdempotencyEvidence(event: {
   type: string;
@@ -5664,6 +5683,6 @@ const taskPageSizes: readonly [25, 50, 100];
 
 function taskRowActionGroups(task: TaskActionTarget, capabilities?: TaskRowActionCapabilities): TaskRowActionGroup[];
 
-function typeOrmQueryable(executor: TypeOrmExecutor, notificationPool?: AdapterNotificationPool): Queryable;
+function typeOrmQueryable(executor: TypeOrmExecutor, connectionPool?: AdapterConnectionPoolSource): Queryable;
 
 function useWorkhorseTheme(): ThemeContextValue;
