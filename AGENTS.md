@@ -5,20 +5,21 @@ Instructions for coding agents and contributors.
 ## Work from Linear
 
 All repository work lives in Linear's `stablemates` workspace, under the `SM` team identifier
-and the `workhorse` project. Linear is authoritative for priorities, blockers, and completion.
+and the `Workhorse Development` project. Linear is authoritative for priorities, blockers, and
+completion.
 Use the connected Linear tools or the hosted workspace at `https://linear.app/stablemates`.
-Scope every issue search and creation to this workspace, team, and project; the `SM` team can
-contain other projects.
+Scope every issue search and creation to this workspace, team, and `Workhorse Development` project;
+the `SM` team can contain other projects.
 
 If a request names an exact `SM-*` issue, that issue is the target. If a request names an outcome,
-search open issues in `workhorse` for one that owns it. If none matches, create an issue with
+search open issues in `Workhorse Development` for one that owns it. If none matches, create an issue with
 checkable acceptance criteria. When asked for the next piece of work, select the highest-priority,
 oldest, unblocked Todo issue without an active owner.
 
 Before changing tracked files:
 
 1. Read the target issue, its comments, and linked dependencies. Verify that it belongs to
-   `stablemates`, the `SM` team, and the `workhorse` project.
+   `stablemates`, the `SM` team, and the `Workhorse Development` project.
 2. Establish ownership through the issue's assignee and move it to In Progress. Re-read the issue
    before starting; if another contributor owns the work, choose another eligible issue or report
    the conflict. Assignment is coordination, not an atomic lease.
