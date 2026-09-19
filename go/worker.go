@@ -506,6 +506,9 @@ func (worker *Worker) Run(ctx context.Context) error {
 				if ctx.Err() == nil {
 					firstError = err
 				}
+				// A claim that returned no task ends the run too. Otherwise a queue that
+				// fails every claim would poll on forever without surfacing its error.
+				stopping = true
 			}
 			if len(tasks) == 0 {
 				consecutiveEmptyClaims++
@@ -531,8 +534,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 					executionResults <- err
 				}(task)
 			}
-			if err != nil {
-				stopping = true
+			if stopping {
 				break
 			}
 		}
