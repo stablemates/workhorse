@@ -74,7 +74,7 @@
     "@vitejs/plugin-react": "^4.7.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "react-grab": "^0.1.50",
+    "react-grab": "^0.2.0",
     "typescript": "^5.8.3",
     "vite": "^7.1.7",
     "vitest": "^4.1.11"

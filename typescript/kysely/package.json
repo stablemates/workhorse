@@ -38,7 +38,7 @@
   "devDependencies": {
     "@stablemates/workhorse": "workspace:*",
     "@types/pg": "^8.15.5",
-    "kysely": "0.29.5",
+    "kysely": "0.29.6",
     "pg": "^8.16.3"
   },
   "peerDependencies": {
