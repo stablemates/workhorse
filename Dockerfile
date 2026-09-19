@@ -29,7 +29,7 @@ RUN uv export \
       --requirement /tmp/requirements.txt
 COPY python/src/workhorse/ /opt/workhorse-python/workhorse/
 
-FROM node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf AS build
+FROM node:25-alpine@sha256:bdf2cca6fe3dabd014ea60163eca3f0f7015fbd5c7ee1b0e9ccb4ced6eb02ef4 AS build
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -52,7 +52,7 @@ RUN pnpm install --frozen-lockfile
 RUN pnpm build:runtime && pnpm --filter @stablemates/workhorse-demo build
 RUN pnpm --filter @stablemates/workhorse-demo deploy --prod --legacy /opt/workhorse-demo
 
-FROM node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf AS runtime
+FROM node:25-alpine@sha256:bdf2cca6fe3dabd014ea60163eca3f0f7015fbd5c7ee1b0e9ccb4ced6eb02ef4 AS runtime
 
 ENV NODE_ENV=production
 ENV PORT=3000
