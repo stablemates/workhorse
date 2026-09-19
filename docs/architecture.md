@@ -19,11 +19,12 @@ SQL protocol versions (currently 1) independently of that history; `readProtocol
 and returns null when that table is absent. `migrateSchema` delegates ordered execution to the internal
 `applySchemaMigrationPlan` function. Its `SchemaMigrationPlan` has `baselineVersion`,
 `currentVersion`, `steps`, and `readStep` fields. Each `SchemaMigrationStep` has `fromVersion`,
-`toVersion`, `file`, `description`, `kind`, and `retiresProtocolVersions` fields. `kind` is
-`additive` or `contract`; `retiresProtocolVersions` is required on a contract step and forbidden on
-an additive one. Every migration file opens with a
+`toVersion`, `file`, `description`, `kind`, `execution`, and `retiresProtocolVersions` fields.
+`kind` is `additive` or `contract`; `retiresProtocolVersions` is required on a contract step and
+forbidden on an additive one. `execution` is `transactional` or `nontransactional` and defaults to
+`transactional` when absent. Every migration file opens with a
 `-- workhorse-migration: {"kind": ...}` declaration that the runner requires to agree with its
-`SCHEMA_MIGRATIONS` entry.
+`SCHEMA_MIGRATIONS` entry on both `kind` and `execution`.
 
 `isMissingDatabaseRelationError` unwraps database errors through `databaseErrorCode` and returns
 true only for PostgreSQL SQLSTATE `3F000` (invalid schema name) or `42P01` (undefined table).
@@ -32,10 +33,21 @@ The plan runner wraps every step file in one transactional script: `BEGIN`, the
 `pg_advisory_xact_lock(hashtext('workhorse:schema-migration'))` lock, a guard raising unless
 exactly one `workhorse.schema_version` row equals `fromVersion`, the step body, the bookkeeping
 that advances `workhorse.schema_version` and inserts the `workhorse.schema_migration` row, then
-`COMMIT`. A body containing `BEGIN`, `COMMIT`, `ROLLBACK`, or `START TRANSACTION` is rejected
-before execution. A step that fails while a concurrent migrator committed the same step is treated
-as that migrator's success; any other failure rolls back atomically and reports
-`Workhorse migration <file> failed and was rolled back`.
+`COMMIT`. A body containing `BEGIN`, `COMMIT`, `ROLLBACK`, `START TRANSACTION`, a statement-ending
+`END` or `ABORT`, or `PREPARE TRANSACTION` is rejected before execution. A step that fails while a
+concurrent migrator committed the same step is treated as that migrator's success; any other
+failure rolls back atomically and reports `Workhorse migration <file> failed and was rolled back`.
+Before reading the version back, the runner issues `ROLLBACK`, which ends the aborted transaction a
+failed step leaves behind when the caller passed a single `Client` rather than a `Pool`.
+
+A step declaring `execution: "nontransactional"` runs outside that script. `splitSqlStatements`
+divides its body at semicolons outside strings, quoted identifiers, comments, and dollar-quoted
+bodies, and the runner sends the guard, then each statement, then the bookkeeping as separate
+queries, so `CREATE INDEX CONCURRENTLY` reaches PostgreSQL outside a transaction block. The guard
+is repeated inside the bookkeeping transaction behind the advisory lock. Nothing rolls back: a
+failure leaves the earlier statements applied at the starting version and reports
+`Workhorse migration <file> failed part-way and rolled nothing back`. `lock_timeout` is not set for
+such a step.
 
 Versions below 43, versions above 47, gaps, and mixed version rows fail without running a migration.
 `typescript/core/test/schema-migrations.test.ts` migrates every frozen artifact under

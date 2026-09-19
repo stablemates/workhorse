@@ -26,9 +26,12 @@ Every schema change ships as an ordered, immutable step:
 1. Add `sql/migrations/<NNNN>-<slug>.sql`. Its first line declares the step's kind, for example
    `-- workhorse-migration: {"kind":"additive"}`; a contract step writes
    `-- workhorse-migration: {"kind":"contract","retiresProtocolVersions":[<vN>]}`. The rest of the
-   file is only the schema change body. The runtime supplies the transaction, the advisory lock,
-   the starting-version validation, and the version bookkeeping; a body that contains its own
-   `BEGIN`, `COMMIT`, `ROLLBACK`, or `START TRANSACTION` is rejected before execution.
+   file is only the schema change body. A step that must run outside a transaction adds
+   `"execution":"nontransactional"` to the same declaration; see
+   [Non-transactional steps](#non-transactional-steps). The runtime supplies the transaction, the
+   advisory lock, the starting-version validation, and the version bookkeeping; a body that
+   contains its own `BEGIN`, `COMMIT`, `ROLLBACK`, `START TRANSACTION`, statement-ending `END` or
+   `ABORT`, or `PREPARE TRANSACTION` is rejected before execution.
 2. Apply the same change to `sql/schema/current.sql`, increment `WORKHORSE_SCHEMA_VERSION`, and add
    the step to `SCHEMA_MIGRATIONS` in `typescript/core/src/schema.ts` with its description and
    kind. The file's declaration and the entry must agree, and the runner refuses a step whose two
@@ -97,9 +100,98 @@ When a step fails because a concurrent migrator already committed the same step,
 re-reads the version and continues; that outcome is indistinguishable from its own success. Any
 other failure surfaces as `Workhorse migration <file> failed and was rolled back`.
 
-Migrations are transactional only. PostgreSQL statements that refuse to run inside a transaction
-block, such as `CREATE INDEX CONCURRENTLY`, have no step class yet; one is defined when a released
-change first needs it, together with its resume semantics.
+### Non-transactional steps
+
+A few PostgreSQL statements refuse to run inside a transaction block. `CREATE INDEX CONCURRENTLY`
+is the one this project needs: an ordinary `CREATE INDEX` holds `SHARE` on its table until the
+step commits, so every write to that table waits for the whole build, while the concurrent form
+takes `SHARE UPDATE EXCLUSIVE` and lets writes through.
+
+A step opts into that by declaring `execution` in both places its kind is declared:
+
+```
+-- workhorse-migration: {"kind":"additive","execution":"nontransactional"}
+```
+
+and `execution: "nontransactional"` on its `SCHEMA_MIGRATIONS` entry. The runner refuses a step
+whose two declarations disagree, exactly as it does for `kind`. Omitting `execution` means
+`transactional`, which is what every step before this class was and what a step should be unless a
+statement in it cannot be.
+
+Such a step buys availability with atomicity, and the resume semantics follow from that:
+
+1. The starting-version guard runs first, so a database at the wrong version is never touched. It
+   cannot be held across the body, because the body runs outside the transaction that would hold
+   it.
+2. The runner sends each statement of the body on its own, outside any transaction. `lock_timeout`
+   is not set, because the statements this class exists for take a lock that does not block writes.
+3. Bookkeeping runs last, in its own transaction, behind the advisory lock and behind a repeat of
+   the guard. A peer migrator that got there first wins the step; this one fails the guard, and the
+   runner accepts that outcome as the peer's success.
+
+So a failure part-way leaves the earlier statements applied while the schema stays at the starting
+version, and the rerun reapplies the body from the beginning. **Every statement in a
+non-transactional body must therefore be idempotent**: write `CREATE INDEX CONCURRENTLY IF NOT
+EXISTS` rather than `CREATE INDEX CONCURRENTLY`. The runner reports this shape distinctly, as
+`failed part-way and rolled nothing back`, so it is never mistaken for an atomic rollback.
+
+One leftover needs an operator's hand. A failed `CREATE INDEX CONCURRENTLY` leaves an invalid
+index behind, and `IF NOT EXISTS` on the rerun sees that name taken and skips the build, so the
+index stays invalid forever. Before rerunning a failed non-transactional step, list them and drop
+what it left:
+
+```sql
+SELECT indexrelid::regclass AS index
+FROM pg_index
+WHERE NOT indisvalid AND indrelid::regclass::text LIKE 'workhorse.%';
+```
+
+```sql
+DROP INDEX CONCURRENTLY IF EXISTS workhorse.<index>;
+```
+
+### Shipped migrations that block writes
+
+Two released steps build indexes non-concurrently, from before this class existed. Released
+migrations are never edited ([ADR 0034](decisions/0034-reset-the-pre-release-schema-baseline.md)),
+so each is described here with what an operator can do ahead of it.
+
+**`0006-bounded-dashboard-reads.sql` builds `attempt_history_worker_idx` on every partition of
+`workhorse.attempt_history`.** This is the expensive one: history is the largest relation in the
+schema, and the step holds `SHARE` on every partition at once until it commits. It also has a
+complete concurrent pre-step, because `worker_id` exists in the baseline, so the index can be built
+before the migration runs. Build the parent index on the parent alone, which is instant because the
+parent holds no rows, then build and attach each partition's index concurrently:
+
+```sql
+CREATE INDEX IF NOT EXISTS attempt_history_worker_idx
+  ON ONLY workhorse.attempt_history (worker_id);
+```
+
+```sql
+SELECT format(
+         'CREATE INDEX CONCURRENTLY IF NOT EXISTS %I ON workhorse.%I (worker_id);',
+         partition.relname || '_worker_idx', partition.relname)
+       || format(
+         ' ALTER INDEX workhorse.attempt_history_worker_idx ATTACH PARTITION workhorse.%I;',
+         partition.relname || '_worker_idx')
+FROM pg_inherits
+JOIN pg_class partition ON partition.oid = pg_inherits.inhrelid
+WHERE pg_inherits.inhparent = 'workhorse.attempt_history'::regclass;
+```
+
+Run each statement that query returns, one at a time and outside a transaction. The parent index
+becomes valid once every partition index is attached, and the migration's own
+`CREATE INDEX IF NOT EXISTS` then finds the name taken and does nothing. Partitions created between
+the pre-step and the migration inherit the parent index as they are created, so they need nothing.
+
+**`0003-named-budgets.sql` builds three partial indexes on `workhorse.task_runtime`.** This one has
+no pre-step. All three are predicated on `budget_name`, and the same step adds that column, so the
+indexes cannot exist before it runs. The cost is bounded rather than proportional to the index:
+every row's `budget_name` is null at that moment, so all three predicates match nothing and no
+index entries are written. What the step still pays is three scans of `task_runtime` under `SHARE`,
+during which writes to that table wait. Run it when the ready and active backlog is small, and rely
+on the migration lock timeout to fail the step rather than stall the queue if it cannot get in.
 
 `workhorse.schema_migration` records the installed migration history. `workhorse.protocol_version`
 independently records which SQL protocol versions the installed schema serves, so a protocol
