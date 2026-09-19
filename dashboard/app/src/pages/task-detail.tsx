@@ -11,7 +11,7 @@ import {
   DrawerSection,
   TaskCheckpoints,
   TaskProgress,
-  JsonValue,
+  TaskStoredValue,
   MetaRow,
   TaskOutcome,
 } from "../components/task-detail-overview.js";
@@ -177,9 +177,13 @@ function TaskDetailContent({
       </Box>
       <BatchExecutions task={task} taskLinkHref={taskLinkHref} onOpenTask={onOpenTask} />
       <DrawerSection id="task-input-heading" title="Input">
-        <JsonValue
-          label="Stored payload"
+        <TaskStoredValue
+          taskId={task.identity.id}
+          kind="payload"
+          omitted={task.payloadOmitted}
+          valueBytes={task.payloadBytes}
           value={task.payload}
+          label="Stored payload"
           emptyLabel="This task was enqueued without input."
           copyLabel="the task input"
         />
