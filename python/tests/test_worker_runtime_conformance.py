@@ -324,6 +324,7 @@ def execute_expiration_fixture(
         worker_id=f"python-{fixture['id']}",
         lease_ms=fixture["leaseMs"],
         heartbeat_ms=fixture["heartbeatMs"],
+        shared_heartbeats=True,
     ).handle(fixture["taskType"], handler)
     original_rows = worker._executor.rows
 
@@ -465,6 +466,7 @@ def execute_heartbeat_fixture(
         worker_id=f"python-{fixture['id']}",
         lease_ms=fixture["leaseMs"],
         heartbeat_ms=fixture["heartbeatMs"],
+        shared_heartbeats=True,
     ).handle(fixture["taskType"], handler)
     original_rows = worker._executor.rows
 
