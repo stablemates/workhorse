@@ -4,6 +4,17 @@ import { createDatabaseTestHarness } from "./support/db.js";
 const database = createDatabaseTestHarness(import.meta.url);
 const seededTasks = 500;
 
+function subplansRemoved(value: unknown): number {
+  if (Array.isArray(value)) return value.reduce((total, item) => total + subplansRemoved(item), 0);
+  if (value === null || typeof value !== "object") return 0;
+  return Object.entries(value).reduce(
+    (total, [key, item]) =>
+      total +
+      (key === "Subplans Removed" && typeof item === "number" ? item : subplansRemoved(item)),
+    0,
+  );
+}
+
 describe("dashboard procedure plans", () => {
   beforeAll(async () => {
     await database.setup();
@@ -57,7 +68,12 @@ describe("dashboard procedure plans", () => {
          FROM pg_proc routine
          JOIN pg_namespace namespace ON namespace.oid = routine.pronamespace
         WHERE namespace.nspname = 'workhorse'
-          AND routine.proname IN ('dashboard_activity_v1', 'dashboard_events_v1')
+          AND routine.proname IN (
+            'dashboard_activity_v1',
+            'dashboard_events_v1',
+            'dashboard_tasks_cursor_v1',
+            'dashboard_tasks_v1'
+          )
         ORDER BY routine.proname`,
     );
 
@@ -67,7 +83,66 @@ describe("dashboard procedure plans", () => {
         proconfig: ["jit=off", "enable_sort=off"],
       },
       { proname: "dashboard_events_v1", proconfig: ["jit=off"] },
+      { proname: "dashboard_tasks_cursor_v1", proconfig: ["jit=off"] },
+      { proname: "dashboard_tasks_v1", proconfig: ["jit=off"] },
     ]);
+  });
+
+  it("bounds the task history lookup and tag facet source", async () => {
+    const result = await database.pool.query<{ proname: string; definition: string }>(
+      `SELECT routine.proname, pg_get_functiondef(routine.oid) AS definition
+         FROM pg_proc routine
+         JOIN pg_namespace namespace ON namespace.oid = routine.pronamespace
+        WHERE namespace.nspname = 'workhorse'
+          AND routine.proname IN (
+            'dashboard_task_facets_v1',
+            'dashboard_tasks_cursor_v1',
+            'dashboard_tasks_v1'
+          )
+        ORDER BY routine.proname`,
+    );
+
+    const definitions = Object.fromEntries(
+      result.rows.map(({ proname, definition }) => [proname, definition]),
+    );
+    expect(definitions.dashboard_tasks_v1).toContain("event.occurred_at >= j.created_at");
+    expect(definitions.dashboard_tasks_v1).toContain("event.occurred_at <= statement_timestamp()");
+    expect(definitions.dashboard_tasks_cursor_v1).toContain("event.occurred_at >= j.created_at");
+    expect(definitions.dashboard_tasks_cursor_v1).toContain(
+      "event.occurred_at <= statement_timestamp()",
+    );
+    expect(definitions.dashboard_task_facets_v1).toMatch(
+      /ORDER BY created_at DESC, id DESC\s+LIMIT 10000/,
+    );
+    expect(definitions.dashboard_task_facets_v1).toMatch(
+      /CROSS JOIN LATERAL unnest\(tag_tasks\.tags\)[\s\S]+LIMIT 1000/,
+    );
+  });
+
+  it("prunes prepared history partitions from first-page event lookups", async () => {
+    const result = await database.pool.query<{ "QUERY PLAN": unknown }>(
+      `EXPLAIN (ANALYZE, FORMAT JSON)
+       SELECT task.id, enqueued.details
+         FROM (
+           SELECT task.id, task.created_at
+             FROM workhorse.task
+             JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
+            ORDER BY outcome.updated_at DESC, outcome.task_id DESC
+            LIMIT 25
+         ) task
+         LEFT JOIN LATERAL (
+           SELECT event.details
+             FROM workhorse.task_event event
+            WHERE event.task_id = task.id
+              AND event.event_type = 'enqueued'
+              AND event.occurred_at >= task.created_at
+              AND event.occurred_at <= statement_timestamp()
+            ORDER BY event.occurred_at, event.event_id
+            LIMIT 1
+         ) enqueued ON true`,
+    );
+
+    expect(subplansRemoved(result.rows[0]?.["QUERY PLAN"])).toBeGreaterThan(0);
   });
 
   it("enriches only the requested task page", async () => {
