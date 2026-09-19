@@ -92,8 +92,10 @@ export async function readDashboardSettings(
   database: DashboardDatabase,
   writable: boolean,
   settingsController: boolean,
+  readQueueHealth?: DashboardQueueHealthReader,
 ): Promise<DashboardSettingsPage> {
-  const input = JSON.stringify({ writable, settingsController });
+  const health = await readQueueHealth?.();
+  const input = JSON.stringify({ writable, settingsController, health });
   const rows = await database.execute<{ result: DashboardSettingsPage }>(sql`
     SELECT workhorse.dashboard_settings_v1(${input}::jsonb) AS result
   `);
@@ -112,9 +114,12 @@ export async function readDashboardTaskCounts(
 /** Queue management rows keep hot live-state counts exact and estimate cold outcomes at scale. */
 export async function readDashboardQueues(
   database: DashboardDatabase,
+  readQueueHealth?: DashboardQueueHealthReader,
 ): Promise<DashboardQueuesPage> {
+  const health = await readQueueHealth?.();
+  const input = JSON.stringify({ health });
   const result = await database.execute<{ result: DashboardQueuesPage }>(sql`
-    SELECT workhorse.dashboard_queues_v1('{}'::jsonb) AS result
+    SELECT workhorse.dashboard_queues_v1(${input}::jsonb) AS result
   `);
   return expectOneRow(result, "the dashboard queues procedure").result;
 }
@@ -270,8 +275,10 @@ export async function readDashboardCron(
 export async function readDashboardSystem(
   database: DashboardDatabase,
   window: DashboardSystemWindow = "1h",
+  readQueueHealth?: DashboardQueueHealthReader,
 ): Promise<DashboardSystemPage> {
-  const input = JSON.stringify({ window });
+  const health = await readQueueHealth?.();
+  const input = JSON.stringify({ window, health });
   const rows = await database.execute<{ result: DashboardSystemPage }>(sql`
     SELECT workhorse.dashboard_system_v1(${input}::jsonb) AS result
   `);
