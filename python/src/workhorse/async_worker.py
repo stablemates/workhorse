@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import random
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from contextlib import suppress
 from typing import Any, Literal, Protocol, TypeVar, cast
 
@@ -12,8 +12,8 @@ from ._drivers import (
     AsyncpgPool as _AsyncpgPool,
     AsyncPsycopgExecutor as _AsyncPsycopgExecutor,
     AsyncPsycopgPool as _AsyncPsycopgPool,
-    PooledAsyncPsycopgExecutor as _PooledAsyncPsycopgExecutor,
     PooledAsyncpgExecutor as _PooledAsyncpgExecutor,
+    PooledAsyncPsycopgExecutor as _PooledAsyncPsycopgExecutor,
 )
 from ._statements import DriverStatement as _DriverStatement
 from .types import (
@@ -388,21 +388,24 @@ class AsyncWorker:
     def _open_heartbeat_executor(self) -> tuple[_AsyncExecutorBridge, Callable[[], None]]:
         """Reserve one pool connection for heartbeat rounds."""
         loop = self._require_loop()
-        async def acquire() -> tuple[Any, Callable[[], Awaitable[None]]]:
+
+        async def acquire() -> tuple[Any, Callable[[], Coroutine[Any, Any, None]]]:
             if self._driver == "psycopg":
-                context = self._pool.connection()
+                psycopg_pool = cast(_AsyncPsycopgPool, self._pool)
+                context = psycopg_pool.connection()
                 connection = await context.__aenter__()
 
-                async def close() -> None:
+                async def close_psycopg() -> None:
                     await context.__aexit__(None, None, None)
 
-                return connection, close
-            connection = await self._pool.acquire()
+                return connection, close_psycopg
+            asyncpg_pool = cast(_AsyncpgPool, self._pool)
+            connection = await asyncpg_pool.acquire()
 
-            async def close() -> None:
-                await self._pool.release(connection)
+            async def close_asyncpg() -> None:
+                await asyncpg_pool.release(connection)
 
-            return connection, close
+            return connection, close_asyncpg
 
         connection, close_async = asyncio.run_coroutine_threadsafe(acquire(), loop).result()
 
@@ -413,9 +416,7 @@ class AsyncWorker:
             if getattr(connection, "autocommit", False) is not True:
                 close()
                 raise ValueError("Heartbeat connection must be in autocommit mode")
-            executor: _AsyncRowExecutor = _AsyncPsycopgExecutor(
-                connection
-            )
+            executor: _AsyncRowExecutor = _AsyncPsycopgExecutor(connection)
         else:
             executor = _AsyncpgExecutor(connection)
         bridge = _AsyncExecutorBridge(executor)
@@ -434,10 +435,12 @@ class AsyncWorker:
             context: Any | None = None
             try:
                 if self._driver == "psycopg":
-                    context = self._pool.connection()
+                    psycopg_pool = cast(_AsyncPsycopgPool, self._pool)
+                    context = psycopg_pool.connection()
                     connection = await context.__aenter__()
                 else:
-                    connection = await self._pool.acquire()
+                    asyncpg_pool = cast(_AsyncpgPool, self._pool)
+                    connection = await asyncpg_pool.acquire()
                 if self._driver == "psycopg":
                     await self._listen_psycopg(connection, stop)
                 else:
@@ -454,9 +457,9 @@ class AsyncWorker:
                 if connection is not None:
                     try:
                         if self._driver == "psycopg":
-                            await context.__aexit__(None, None, None)
+                            await cast(Any, context).__aexit__(None, None, None)
                         else:
-                            await self._pool.release(connection)
+                            await cast(_AsyncpgPool, self._pool).release(connection)
                     except BaseException as error:
                         if self._on_notification_error is not None:
                             self._on_notification_error(error)

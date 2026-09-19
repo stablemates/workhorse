@@ -50,13 +50,15 @@ class AsyncpgConnection(Protocol):
 
 
 class PsycopgPool(Protocol):
-    max_size: int
+    @property
+    def max_size(self) -> int: ...
 
     def connection(self) -> Any: ...
 
 
 class AsyncPsycopgPool(Protocol):
-    max_size: int
+    @property
+    def max_size(self) -> int: ...
 
     def connection(self) -> Any: ...
 

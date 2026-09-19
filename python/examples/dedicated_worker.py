@@ -7,6 +7,7 @@ from threading import Timer
 from typing import Any
 
 import psycopg
+from psycopg_pool import ConnectionPool
 
 from workhorse import HandlerContext, Json, Queue, Worker, run_worker_process
 
@@ -22,11 +23,14 @@ def complete(payload: Any, _context: HandlerContext) -> dict[str, Json]:
     return {"payload": payload}
 
 
-with psycopg.connect(database_url, autocommit=True) as worker_connection:
-    worker = Worker(worker_connection, poll_ms=10).handle("packed.consumer", complete)
+with ConnectionPool(
+    database_url, min_size=3, max_size=3, kwargs={"autocommit": True}
+) as worker_pool:
+    worker = Worker(worker_pool, poll_ms=10).handle("packed.consumer", complete)
     run_worker_process(worker, shutdown_timeout_ms=1_000)
-    outcome = worker_connection.execute(
-        "SELECT state, result FROM workhorse.task_outcome WHERE task_id = %s",
-        (task_id,),
-    ).fetchone()
+    with worker_pool.connection() as connection:
+        outcome = connection.execute(
+            "SELECT state, result FROM workhorse.task_outcome WHERE task_id = %s",
+            (task_id,),
+        ).fetchone()
     assert outcome == ("succeeded", {"payload": {"installed": True}})

@@ -3,9 +3,11 @@ from __future__ import annotations
 import sys
 from collections.abc import Callable
 from time import monotonic, sleep
+from typing import Any
 from uuid import uuid4
 
 import psycopg
+from psycopg_pool import ConnectionPool
 
 from workhorse import ChildTaskRequest, EnqueueOptions, HandlerContext, Json, Queue, Worker
 
@@ -77,16 +79,20 @@ def run(database_url: str) -> None:
         }
 
     with (
-        psycopg.connect(database_url, autocommit=True) as parent_connection,
-        psycopg.connect(database_url, autocommit=True) as child_connection,
+        ConnectionPool(
+            database_url, min_size=3, max_size=3, kwargs={"autocommit": True}
+        ) as parent_pool,
+        ConnectionPool(
+            database_url, min_size=5, max_size=5, kwargs={"autocommit": True}
+        ) as child_pool,
     ):
         parent_worker = Worker(
-            parent_connection,
+            parent_pool,
             queue=parent_queue,
             worker_id=f"python-example-parent-{suffix}",
         ).handle(task_type, process_order)
         child_worker = Worker(
-            child_connection,
+            child_pool,
             queue=child_queue,
             worker_id=f"python-example-child-{suffix}",
             concurrency=2,
@@ -96,14 +102,15 @@ def run(database_url: str) -> None:
         )
 
         def signal_waiting() -> bool:
-            return (
-                parent_connection.execute(
-                    "SELECT 1 FROM workhorse.task_signal_wait "
-                    "WHERE task_id = %s AND signal_name = 'approval' AND payload IS NULL",
-                    (task_id,),
-                ).fetchone()
-                is not None
-            )
+            with parent_pool.connection() as connection:
+                return (
+                    connection.execute(
+                        "SELECT 1 FROM workhorse.task_signal_wait "
+                        "WHERE task_id = %s AND signal_name = 'approval' AND payload IS NULL",
+                        (task_id,),
+                    ).fetchone()
+                    is not None
+                )
 
         run_until(signal_waiting, parent_worker, child_worker)
 
@@ -120,14 +127,15 @@ def run(database_url: str) -> None:
             assert signal.status == "delivered"
 
             def human_waiting() -> bool:
-                return (
-                    parent_connection.execute(
-                        "SELECT 1 FROM workhorse.task_human_wait "
-                        "WHERE task_id = %s AND token_name = 'review' AND completed_at IS NULL",
-                        (task_id,),
-                    ).fetchone()
-                    is not None
-                )
+                with parent_pool.connection() as connection:
+                    return (
+                        connection.execute(
+                            "SELECT 1 FROM workhorse.task_human_wait "
+                            "WHERE task_id = %s AND token_name = 'review' AND completed_at IS NULL",
+                            (task_id,),
+                        ).fetchone()
+                        is not None
+                    )
 
             run_until(human_waiting, parent_worker)
             decision = delivery.complete_human_wait(
@@ -141,18 +149,10 @@ def run(database_url: str) -> None:
             assert decision.status == "completed"
 
         run_until(
-            lambda: (
-                parent_connection.execute(
-                    "SELECT 1 FROM workhorse.task_outcome WHERE task_id = %s", (task_id,)
-                ).fetchone()
-                is not None
-            ),
+            lambda: outcome_for(parent_pool, task_id) is not None,
             parent_worker,
         )
-        outcome = parent_connection.execute(
-            "SELECT state, current_attempt, result FROM workhorse.task_outcome WHERE task_id = %s",
-            (task_id,),
-        ).fetchone()
+        outcome = outcome_for(parent_pool, task_id)
         assert outcome is not None
         assert outcome[0:2] == ("succeeded", 2)
         assert outcome[2]["approval"] == {"approved": True}
@@ -160,6 +160,14 @@ def run(database_url: str) -> None:
             "invoice": {"completed": "invoice"},
             "receipt": {"completed": "receipt"},
         }
+
+
+def outcome_for(pool: ConnectionPool, task_id: str) -> Any:
+    with pool.connection() as connection:
+        return connection.execute(
+            "SELECT state, current_attempt, result FROM workhorse.task_outcome WHERE task_id = %s",
+            (task_id,),
+        ).fetchone()
 
 
 if __name__ == "__main__":

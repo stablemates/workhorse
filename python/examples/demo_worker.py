@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 from uuid import uuid4
 
-import psycopg
+from psycopg_pool import ConnectionPool
 
 from workhorse import HandlerContext, Json, Worker, run_worker_process
 
@@ -48,10 +48,15 @@ def worker_id() -> str:
 
 def main() -> None:
     poll_ms = int(os.environ.get("WORKHORSE_WORKER_POLL_MS", DEFAULT_POLL_MS))
-    with psycopg.connect(database_url(), autocommit=True) as connection:
+    with ConnectionPool(
+        database_url(),
+        min_size=WORKER_CONCURRENCY + 3,
+        max_size=WORKER_CONCURRENCY + 3,
+        kwargs={"autocommit": True},
+    ) as pool:
         worker = (
             Worker(
-                connection,
+                pool,
                 queues=(PYTHON_QUEUE, SHARED_QUEUE),
                 worker_id=worker_id(),
                 concurrency=WORKER_CONCURRENCY,
