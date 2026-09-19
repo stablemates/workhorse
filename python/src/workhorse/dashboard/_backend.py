@@ -76,6 +76,7 @@ class DashboardBackend:
             "eventDetail": self.event_detail,
             "taskDetail": self.task_detail,
             "checkpointValue": self.checkpoint_value,
+            "taskValue": self.task_value,
             "settings": self.settings,
             "system": self.system,
             "previewRetentionPolicy": self.preview_retention_policy,
@@ -245,6 +246,20 @@ class DashboardBackend:
         )[0]["result"]
         if value is None:
             raise DashboardRPCError(404, "NOT_FOUND", "Checkpoint not found")
+        return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
+
+    def task_value(self, input: object, _actor: str) -> object:
+        """Read one task's whole payload or result.
+
+        Task detail withholds either one when it is larger than it carries inline and reports its
+        size, so an operator opens that one value here.
+        """
+        value = self._rows(
+            "SELECT workhorse.dashboard_task_value_v1(%s::jsonb) AS result",
+            (json.dumps(input),),
+        )[0]["result"]
+        if value is None:
+            raise DashboardRPCError(404, "NOT_FOUND", "Task not found")
         return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
     def settings(self, _input: object, _actor: str) -> object:
