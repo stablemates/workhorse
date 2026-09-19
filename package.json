@@ -146,7 +146,7 @@
     "@opentelemetry/core": "2.10.0",
     "@opentelemetry/sdk-metrics": "2.10.0",
     "@opentelemetry/sdk-trace-base": "2.10.0",
-    "@types/node": "^24.1.0",
+    "@types/node": "^26.6.1",
     "@types/pg": "^8.15.5",
     "@vitest/coverage-v8": "4.1.11",
     "knip": "6.32.2",

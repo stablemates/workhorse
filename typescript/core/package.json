@@ -55,7 +55,7 @@
     "@opentelemetry/api-logs": "0.221.0",
     "@stablemates/workhorse-dashboard": "workspace:*",
     "@stablemates/workhorse-otel": "workspace:*",
-    "@types/node": "^24.1.0",
+    "@types/node": "^26.6.1",
     "typescript": "^5.8.3"
   },
   "peerDependencies": {
