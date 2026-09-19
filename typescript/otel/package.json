@@ -39,7 +39,7 @@
   },
   "devDependencies": {
     "@opentelemetry/api": "1.9.1",
-    "@opentelemetry/api-logs": "0.221.0",
+    "@opentelemetry/api-logs": "0.222.0",
     "@stablemates/workhorse": "workspace:*",
     "typescript": "^5.8.3"
   },
