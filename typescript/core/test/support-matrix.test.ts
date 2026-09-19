@@ -540,17 +540,36 @@ describe("continuous integration", () => {
 
   it("installs the non-Node toolchains before static and release checks", async () => {
     const ci = await read(".github/workflows/ci.yml");
-    expect(ci).toContain("actions/setup-go@v7");
+    // Actions are pinned to a commit SHA with the version in a trailing comment, so the version
+    // an assertion names lives in that comment rather than in a tag.
+    expect(ci).toMatch(/actions\/setup-go@[0-9a-f]{40} # v7\./);
     expect(ci).toContain("go-version-file: go/go.mod");
-    expect(ci).toContain("astral-sh/setup-uv@v9.0.0");
+    expect(ci).toMatch(/astral-sh\/setup-uv@[0-9a-f]{40} # v9\.0\.0/);
 
     const npmRelease = await read(".github/workflows/release.yml");
     expect(npmRelease).not.toContain("actions/setup-go");
     expect(npmRelease).not.toContain("astral-sh/setup-uv");
 
     const pythonRelease = await read(".github/workflows/release-python.yml");
-    expect(pythonRelease).toContain("astral-sh/setup-uv@v9.0.0");
+    expect(pythonRelease).toMatch(/astral-sh\/setup-uv@[0-9a-f]{40} # v9\.0\.0/);
     expect(pythonRelease).not.toContain("actions/setup-go");
+  });
+
+  // A tag is a pointer its owner can move, so a workflow that names one lets whoever controls that
+  // tag decide what runs against the release credentials. Only a commit SHA fixes that. The
+  // trailing version comment is what Dependabot reads to propose the next SHA, so a pin without
+  // one stops receiving updates and is as much a failure as no pin at all.
+  it("pins every workflow action to a commit SHA carrying its version", async () => {
+    const workflows = ["benchmark", "ci", "release", "release-python"];
+    for (const name of workflows) {
+      const workflow = await read(`.github/workflows/${name}.yml`);
+      const references = [...workflow.matchAll(/uses: (\S+)(.*)$/gm)];
+      expect(references.length).toBeGreaterThan(0);
+      for (const [, reference, trailer] of references) {
+        expect(`${name}.yml: ${reference}`).toMatch(/@[0-9a-f]{40}$/);
+        expect(`${name}.yml: ${reference}${trailer}`).toMatch(/ # v\d/);
+      }
+    }
   });
 
   it("installs a PostgreSQL client that matches the release service", async () => {
