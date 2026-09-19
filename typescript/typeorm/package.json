@@ -39,7 +39,7 @@
     "@stablemates/workhorse": "workspace:*",
     "@types/pg": "^8.15.5",
     "pg": "^8.16.3",
-    "typeorm": "0.3.31"
+    "typeorm": "1.1.1"
   },
   "peerDependencies": {
     "@stablemates/workhorse": ">=0.2.0 <0.3.0",
