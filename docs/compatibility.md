@@ -626,11 +626,13 @@ those commits.
    bundle against the runner environment and rejects anything it reads as `self-hosted`, which is
    how it classifies a Depot runner, so the publish task runs GitHub-hosted. That is the only task in
    the repository that does.
-5. The protected `npm` environment requires approval. `scripts/publish-npm.ts` then verifies the
-   credential and every target version against the registry before it writes anything, and
-   publishes each package with `npm publish --provenance`. `@stablemates/workhorse` goes first
-   because the other packages declare it as a peer. A failure partway through prints the ledger
-   described in [Recovering a partially published release](#recovering-a-partially-published-release).
+5. The protected `npm` environment requires approval. `scripts/publish-npm.ts` then confirms that
+   this runner can authenticate at all, and checks every target version against the registry,
+   before it writes anything. It publishes each package with `npm publish --provenance`, which
+   exchanges the job's OIDC identity for the credential that write uses. `@stablemates/workhorse`
+   goes first because the other packages declare it as a peer. A failure partway through prints the
+   ledger described in
+   [Recovering a partially published release](#recovering-a-partially-published-release).
 
 **Provenance.** Every published tarball carries an npm provenance attestation linking it to this
 repository, the commit it was built from, and the workflow that built it. Verify a downloaded
@@ -660,21 +662,21 @@ administrator bypass.
 
 ### Publication credentials
 
-The three registries authenticate three different ways, and only one of them holds a credential that
-can expire.
+None of the three registries holds a credential this repository stores, and none of them holds one
+that can expire.
 
-npm publication uses the `NPM_TOKEN` secret. Only the `npm` environment in
-`.github/workflows/release.yml` can read it. It is a granular automation token with read-write
-access to the `@stablemates` scope, and the repository maintainers own it. npm gives such a token an
-expiry date, and an expired token stops every release. So a maintainer records that date on the
-`npm` environment and rotates the token before it arrives. Rotation is also the response to any
-exposure, under the rules in [`SECURITY.md`](../SECURITY.md).
+npm publication uses trusted publishing. `npm publish` exchanges the publish job's GitHub Actions
+OIDC identity for a short-lived registry credential, and npm mints it only for the trusted publisher
+each package names: this repository and `.github/workflows/release.yml`. Those two names are the
+credential. Renaming the workflow file or the repository breaks publication until a maintainer
+updates every `@stablemates/workhorse*` package on npmjs.com, so a maintainer who changes one of
+them updates npm in the same change. The exchange needs npm 11.5.1 or later, which is why the
+publish job runs Node 24.
 
-An expired token used to fail in the worst possible place. npm answers an unauthorized write to a
-scoped package with `404 Not Found`, so the task blamed a missing package rather than a dead
-credential, and it had already signed a public provenance attestation by then.
-`scripts/publish-npm.ts` now asks the registry who the token is, and which `@stablemates` packages
-it may write, before it publishes anything. A refused credential fails the task by name.
+That exchange happens inside `npm publish`, so nothing before it can prove the credential works.
+`scripts/publish-npm.ts` checks the two conditions the exchange needs instead: the runner's npm
+version, and the OIDC identity GitHub offers only to a job holding `id-token: write`. Both are
+readable before the first write, and each failure names what to fix.
 
 PyPI publication stores no credential. The `pypi` environment mints a short-lived token through
 trusted publishing, and PyPI issues that token only for this repository, this workflow file, and
