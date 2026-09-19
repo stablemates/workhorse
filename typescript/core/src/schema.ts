@@ -134,6 +134,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "bin dashboard activity once",
     kind: "additive",
   },
+  {
+    fromVersion: 14,
+    toVersion: 15,
+    file: "0015-cached-health-dashboard-reads.sql",
+    description: "cached health dashboard reads",
+    kind: "additive",
+  },
 ];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {

@@ -476,11 +476,17 @@ export const dashboardRouter = {
     cron: procedure.handler(({ context }) =>
       readDashboardCron(context.database, context.maintenanceLoops),
     ),
-    queues: procedure.handler(({ context }) => readDashboardQueues(context.database)),
+    queues: procedure.handler(({ context }) =>
+      readDashboardQueues(context.database, context.readQueueHealth),
+    ),
     system: procedure
       .input(systemInput)
       .handler(({ context, input }) =>
-        readDashboardSystem(context.database, input.window as DashboardSystemWindow),
+        readDashboardSystem(
+          context.database,
+          input.window as DashboardSystemWindow,
+          context.readQueueHealth,
+        ),
       ),
     workers: procedure.handler(({ context }) => {
       const canManageWorkers =
@@ -492,6 +498,7 @@ export const dashboardRouter = {
         context.database,
         context.operator.mode === "writable",
         Boolean(context.settingsController),
+        context.readQueueHealth,
       ),
     ),
     previewRetentionPolicy: procedure
