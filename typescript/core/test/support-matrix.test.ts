@@ -540,18 +540,18 @@ describe("continuous integration", () => {
 
   it("installs the non-Node toolchains before static and release checks", async () => {
     const ci = await read(".github/workflows/ci.yml");
-    // Actions are pinned to a commit SHA with the version in a trailing comment, so the version
-    // an assertion names lives in that comment rather than in a tag.
-    expect(ci).toMatch(/actions\/setup-go@[0-9a-f]{40} # v7\./);
+    // Which action installs each toolchain is the claim here. Its version is Dependabot's to
+    // move, and the pinning test below proves the pin itself, so neither belongs in this one.
+    expect(ci).toMatch(/actions\/setup-go@[0-9a-f]{40}/);
     expect(ci).toContain("go-version-file: go/go.mod");
-    expect(ci).toMatch(/astral-sh\/setup-uv@[0-9a-f]{40} # v9\.0\.0/);
+    expect(ci).toMatch(/astral-sh\/setup-uv@[0-9a-f]{40}/);
 
     const npmRelease = await read(".github/workflows/release.yml");
     expect(npmRelease).not.toContain("actions/setup-go");
     expect(npmRelease).not.toContain("astral-sh/setup-uv");
 
     const pythonRelease = await read(".github/workflows/release-python.yml");
-    expect(pythonRelease).toMatch(/astral-sh\/setup-uv@[0-9a-f]{40} # v9\.0\.0/);
+    expect(pythonRelease).toMatch(/astral-sh\/setup-uv@[0-9a-f]{40}/);
     expect(pythonRelease).not.toContain("actions/setup-go");
   });
 
