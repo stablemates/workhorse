@@ -68,7 +68,7 @@
   "devDependencies": {
     "@orpc/client": "^1.14.8",
     "@stablemates/workhorse": "workspace:*",
-    "@types/node": "^24.1.0",
+    "@types/node": "^26.6.1",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^4.7.0",
