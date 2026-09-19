@@ -58,10 +58,10 @@
   },
   "dependencies": {
     "@opentelemetry/api-logs": "0.222.0",
-    "@orpc/client": "^1.15.1",
-    "@orpc/server": "^1.15.1",
+    "@orpc/client": "1.15.1",
+    "@orpc/server": "1.15.1",
     "@stablemates/workhorse-dashboard-contract": "workspace:*",
-    "zod": "^4.6.5"
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@stablemates/workhorse": "workspace:*",
