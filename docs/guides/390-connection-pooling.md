@@ -44,7 +44,7 @@ top of the listener and whatever handlers take. If the pool cannot spare it, or 
 worker refuses to start and says why. Set `sharedHeartbeats` to send heartbeats through the shared
 pool instead, and accept that busy handlers can then delay renewal. The heartbeat connection runs
 only self-contained statements, so it works behind a transaction-mode pooler. Go workers still heartbeat through the
-shared pool. A Python worker opens its own heartbeat connection only when you pass it a
+pool; set `SharedHeartbeats` only when a small pool cannot reserve it. A Python worker opens its own heartbeat connection only when you pass it a
 `heartbeat_connection_factory`.
 
 ## What is unsafe?

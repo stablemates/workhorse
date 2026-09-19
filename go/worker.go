@@ -171,6 +171,8 @@ type WorkerOptions struct {
 	ScheduleCatchupLimit int
 	ShutdownGracePeriod  time.Duration
 	PollingOnly          bool
+	// SharedHeartbeats opts out of the dedicated heartbeat connection reservation.
+	SharedHeartbeats     bool
 	Logger               *slog.Logger
 	OnRegistrationError  func(error)
 }
@@ -210,6 +212,8 @@ type Worker struct {
 	heartbeatMembers     map[*heartbeatMember]struct{}
 	heartbeatWake        chan struct{}
 	heartbeatRunning     bool
+	heartbeatConn        *pgxpool.Conn
+	sharedHeartbeats     bool
 }
 
 type heartbeatMember struct {
@@ -217,6 +221,7 @@ type heartbeatMember struct {
 	task          ClaimedTask
 	cancelHandler context.CancelCauseFunc
 	result        chan ownershipResult
+	renewed       chan struct{}
 }
 
 // deliver hands the first ownership result to the supervising goroutine without blocking. The
@@ -242,6 +247,9 @@ func (lease fencedLease) parameters() []any {
 func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 	if pool == nil {
 		return nil, errors.New(nilWorkerPoolMessage)
+	}
+	if pool.Config().MaxConns < 3 && !options.SharedHeartbeats {
+		return nil, fmt.Errorf("worker cannot reserve a dedicated heartbeat connection: MaxConns is %d; need at least 3 (set SharedHeartbeats to opt out)", pool.Config().MaxConns)
 	}
 	if options.Queue != emptyString && len(options.Queues) > 0 {
 		return nil, errors.New(workerQueueOptionsMessage)
@@ -377,6 +385,7 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		contracts:            newContractCache(),
 		heartbeatMembers:     make(map[*heartbeatMember]struct{}),
 		heartbeatWake:        make(chan struct{}, 1),
+		sharedHeartbeats:     options.SharedHeartbeats,
 	}, nil
 }
 
@@ -402,6 +411,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 		return err
 	}
 	defer releaseRun()
+	defer worker.releaseHeartbeatConnection()
 	if err := worker.compatibility.Assert(ctx); err != nil {
 		return err
 	}
@@ -488,13 +498,14 @@ func (worker *Worker) Run(ctx context.Context) error {
 			if stopping {
 				break
 			}
-			tasks, err := worker.claimNextMany(ctx, executor, freeSlots)
+			// A claim may commit tasks before a later queue fails. The claim must
+			// finish even when the run context is cancelled, and every task it
+			// returned still needs to be executed before the error is surfaced.
+			tasks, err := worker.claimNextMany(context.WithoutCancel(ctx), executor, freeSlots)
 			if err != nil {
 				if ctx.Err() == nil {
 					firstError = err
 				}
-				stopping = true
-				break
 			}
 			if len(tasks) == 0 {
 				consecutiveEmptyClaims++
@@ -519,6 +530,10 @@ func (worker *Worker) Run(ctx context.Context) error {
 					worker.activeSlots.Add(-1)
 					executionResults <- err
 				}(task)
+			}
+			if err != nil {
+				stopping = true
+				break
 			}
 		}
 		if stopping {
@@ -596,6 +611,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 
 // RunOnce claims and processes at most one task.
 func (worker *Worker) RunOnce(ctx context.Context) (bool, error) {
+	defer worker.releaseHeartbeatConnection()
 	releaseRun, err := worker.acquireRun(ctx)
 	if err != nil {
 		return false, err
@@ -836,25 +852,30 @@ func (worker *Worker) fireDueSchedules(ctx context.Context, executor Executor, n
 }
 
 func (worker *Worker) runOnce(ctx context.Context, executor Executor) (bool, error) {
-	task, err := worker.claimNext(ctx, executor)
-	if err != nil || task == nil {
-		return false, err
+	task, claimErr := worker.claimNext(context.WithoutCancel(ctx), executor)
+	if task == nil {
+		return false, claimErr
 	}
 	handler := worker.handlers[task.Type]
+	var err error
 	if handler == nil {
 		err = fmt.Errorf(missingWorkerHandlerFormat, task.Type)
+		err = worker.fail(ctx, executor, *task, err)
 	} else {
-		return true, worker.execute(ctx, executor, *task, handler)
+		err = worker.execute(ctx, executor, *task, handler)
 	}
-	return true, worker.fail(ctx, executor, *task, err)
+	if err != nil {
+		return true, err
+	}
+	return true, claimErr
 }
 
 func (worker *Worker) claimNext(ctx context.Context, executor Executor) (*ClaimedTask, error) {
 	tasks, err := worker.claimNextMany(ctx, executor, 1)
-	if err != nil || len(tasks) == 0 {
+	if len(tasks) == 0 {
 		return nil, err
 	}
-	return &tasks[0], nil
+	return &tasks[0], err
 }
 
 // claimNextMany fills up to limit slots from the configured queues in round-robin order.
@@ -875,7 +896,7 @@ func (worker *Worker) claimNextMany(ctx context.Context, executor Executor, limi
 			int(worker.leaseDuration/time.Millisecond),
 		)
 		if err != nil {
-			return nil, err
+			return tasks, err
 		}
 		claimResult := telemetryEmptyValue
 		if len(rows) > 0 {
@@ -897,7 +918,7 @@ func (worker *Worker) claimNextMany(ctx context.Context, executor Executor, limi
 		for _, row := range rows {
 			task, err := claimedTask(row, queue)
 			if err != nil {
-				return nil, err
+				return tasks, err
 			}
 			logWorkerEvent(
 				ctx,
@@ -1108,6 +1129,7 @@ func (worker *Worker) superviseOwnership(
 	done := make(chan ownershipResult, 1)
 	member := &heartbeatMember{
 		ctx: ctx, task: task, cancelHandler: cancelHandler, result: make(chan ownershipResult, 1),
+		renewed: make(chan struct{}, 1),
 	}
 	worker.registerHeartbeat(member)
 	go func() {
@@ -1131,6 +1153,10 @@ func (worker *Worker) superviseOwnership(
 			case result := <-member.result:
 				done <- result
 				return
+			case <-member.renewed:
+				if expirationTimer != nil {
+					resetTimer(expirationTimer, worker.leaseDuration)
+				}
 			case <-expiration:
 				cancelHandler(expirationCause)
 				// Leave the heartbeat batch first: expireOwnership can retry for a while, and this
@@ -1149,6 +1175,16 @@ func (worker *Worker) superviseOwnership(
 			close(stop)
 		}
 	}, done
+}
+
+func (worker *Worker) releaseHeartbeatConnection() {
+	worker.heartbeatMu.Lock()
+	connection := worker.heartbeatConn
+	worker.heartbeatConn = nil
+	worker.heartbeatMu.Unlock()
+	if connection != nil {
+		connection.Release()
+	}
 }
 
 func (worker *Worker) registerHeartbeat(member *heartbeatMember) {
@@ -1232,14 +1268,39 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
 		worker.deliverHeartbeatError(members, err)
 		return
 	}
-	rows, err := NewPGXExecutor(worker.pool).Query(
-		context.WithoutCancel(members[0].ctx),
-		protocolStatementRegistry[heartbeatManyStatementName],
-		worker.workerID,
-		string(payload),
-	)
+	queryContext, cancel := context.WithTimeout(context.WithoutCancel(members[0].ctx), worker.heartbeatInterval)
+	defer cancel()
+	var rows []Row
+	if worker.sharedHeartbeats {
+		rows, err = NewPGXExecutor(worker.pool).Query(queryContext, protocolStatementRegistry[heartbeatManyStatementName], worker.workerID, string(payload))
+	} else {
+		worker.heartbeatMu.Lock()
+		connection := worker.heartbeatConn
+		worker.heartbeatMu.Unlock()
+		if connection == nil {
+			connection, err = worker.pool.Acquire(queryContext)
+			if err == nil {
+				worker.heartbeatMu.Lock()
+				worker.heartbeatConn = connection
+				worker.heartbeatMu.Unlock()
+			}
+		}
+		if err == nil {
+			rows, err = NewPGXExecutor(connection.Conn()).Query(queryContext, protocolStatementRegistry[heartbeatManyStatementName], worker.workerID, string(payload))
+		}
+	}
 	if err != nil {
-		worker.deliverHeartbeatError(members, err)
+		if !worker.sharedHeartbeats {
+			worker.heartbeatMu.Lock()
+			connection := worker.heartbeatConn
+			worker.heartbeatConn = nil
+			worker.heartbeatMu.Unlock()
+			if connection != nil {
+				_ = connection.Conn().Close(context.Background())
+				connection.Release()
+			}
+		}
+		worker.logger.Warn("heartbeat round failed; retrying", "error", err)
 		return
 	}
 	statuses := make(map[string]ownershipStatus, len(rows))
@@ -1261,6 +1322,7 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
 			status = workerOwnershipStale
 		}
 		if status == workerOwnershipAccepted {
+			select { case member.renewed <- struct{}{}: default: }
 			continue
 		}
 		member.cancelHandler(ownershipCause(member.task, status))
@@ -1270,13 +1332,7 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
 }
 
 func (worker *Worker) deliverHeartbeatError(members []*heartbeatMember, err error) {
-	registered := worker.registeredHeartbeats(members)
-	for _, member := range members {
-		if registered[member] {
-			member.cancelHandler(err)
-			member.deliver(ownershipResult{err: err})
-		}
-	}
+	worker.logger.Warn("heartbeat round failed; retrying", "error", err)
 }
 
 func (worker *Worker) recordRejectedHeartbeat(

@@ -559,7 +559,7 @@ land and joins the drain. Active handlers retain a context without the caller's 
 cancellation for a forced drain to finish. The SDK installs no process signal handlers;
 applications can pass a context from `signal.NotifyContext` for `SIGINT` and `SIGTERM`.
 
-While handlers run, one worker heartbeat goroutine serializes `heartbeat_many_v1` calls on the pool.
+While handlers run, one worker heartbeat goroutine serializes `heartbeat_many_v1` calls on a dedicated connection shared by workers on the pool. Each round has a heartbeat-interval timeout; failed rounds destroy the connection and retry without cancelling handlers. A local watchdog cancels a handler after one lease without an accepted renewal.
 Each call includes every active task's ID, fence token, and lease duration. Heartbeat batches never
 overlap.
 The earlier of `deadline_at` and `attempt_timeout_at` cancels the handler context. The supervisor
@@ -2310,7 +2310,7 @@ handler starts, and closes it with the last lease. Each round on the reservation
 `heartbeatMs`. A round that exceeds the bound, or whose statement fails, releases the client with an
 error. node-postgres then destroys the connection rather than pooling it, which is the client-side
 cancel, and the next round connects a new one. No session `SET` is involved, so the reservation is
-safe under transaction pooling. Go workers still heartbeat through the shared pool. A Python worker
+safe under transaction pooling. Go workers use the pool's dedicated heartbeat connection unless `WorkerOptions.SharedHeartbeats` opts out. A Python worker
 uses its own heartbeat connection only when given `heartbeat_connection_factory`.
 
 ### Cancellation
