@@ -2305,7 +2305,8 @@ handler starts, and closes it with the last lease. Each round on the reservation
 `heartbeatMs`. A round that exceeds the bound, or whose statement fails, releases the client with an
 error. node-postgres then destroys the connection rather than pooling it, which is the client-side
 cancel, and the next round connects a new one. No session `SET` is involved, so the reservation is
-safe under transaction pooling. Python and Go workers still heartbeat through the shared pool.
+safe under transaction pooling. Go workers still heartbeat through the shared pool. A Python worker
+uses its own heartbeat connection only when given `heartbeat_connection_factory`.
 
 ### Cancellation
 

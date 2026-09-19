@@ -175,11 +175,18 @@ describe("supported version constants", () => {
   });
 
   it("keeps local toolchains on the declared support floor", async () => {
-    const [manifest, miseSource] = await Promise.all([readSupportManifest(), read("mise.toml")]);
+    const [manifest, miseSource, rootPackage] = await Promise.all([
+      readSupportManifest(),
+      read("mise.toml"),
+      readManifest("package.json"),
+    ]);
     const mise = parseToml(miseSource) as { tools: Record<string, string> };
+    const devDependencies = rootPackage.devDependencies as Record<string, string>;
 
     expect(mise.tools).toEqual({
       go: manifest.toolchains.go,
+      // mise bootstraps the hook runner before pnpm install, so it pins the same release.
+      lefthook: devDependencies.lefthook!.replace(/^\^/, ""),
       node: manifest.toolchains.node,
       pnpm: manifest.toolchains.pnpm,
       python: manifest.support.python.minimum,
