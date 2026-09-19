@@ -146,4 +146,40 @@ describe("dashboard human waits health input", () => {
       capped: true,
     });
   });
+
+  it("does not recompute health when system, queues, and settings receive a document", async () => {
+    const connection = await pool.connect();
+    try {
+      await connection.query("BEGIN");
+      const health = await connection.query<{ document: unknown }>(
+        "SELECT workhorse.queue_health_v1() AS document",
+      );
+      await connection.query(`
+        CREATE OR REPLACE FUNCTION workhorse.queue_health_v1(
+          p_rejected_since timestamptz DEFAULT clock_timestamp() - interval '1 day'
+        ) RETURNS jsonb
+        LANGUAGE plpgsql
+        VOLATILE
+        SET jit = off
+        AS $function$
+        BEGIN
+          RAISE EXCEPTION 'queue_health_v1 must not be called';
+        END;
+        $function$
+      `);
+      const input = JSON.stringify({ health: health.rows[0]?.document });
+
+      await expect(
+        connection.query(
+          `SELECT workhorse.dashboard_queues_v1($1::jsonb) AS queues,
+                  workhorse.dashboard_settings_v1($1::jsonb) AS settings,
+                  workhorse.dashboard_system_v1($1::jsonb) AS system`,
+          [input],
+        ),
+      ).resolves.toMatchObject({ rowCount: 1 });
+    } finally {
+      await connection.query("ROLLBACK");
+      connection.release();
+    }
+  });
 });

@@ -1083,6 +1083,7 @@
         "expires_at": "timestamptz",
         "fence_token": "bigint",
         "heartbeat_at": "timestamptz",
+        "priority": "integer",
         "queue_name": "text",
         "ready_at": "timestamptz",
         "run_at": "timestamptz",
