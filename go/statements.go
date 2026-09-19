@@ -411,6 +411,7 @@ const (
 	workerMetricCreationErrorFormat    = "create worker metrics: %w"
 	workerHeartbeatCapacityErrorFormat = "worker cannot reserve a dedicated heartbeat connection: MaxConns is %d; need at least 3 (set SharedHeartbeats to opt out)"
 	heartbeatRoundFailedLogMessage     = "heartbeat round failed; retrying"
+	heartbeatConnectionClosedMessage   = "the reserved heartbeat connection is released"
 	errorLogField                      = "error"
 
 	queueNameAttribute             = "workhorse.queue.name"
@@ -439,6 +440,7 @@ const (
 	taskCompletedEvent             = "workhorse.task.completed"
 	taskFailureProcessedEvent      = "workhorse.task.failure_processed"
 	heartbeatRejectedEvent         = "workhorse.task.heartbeat_rejected"
+	leaseWatchdogEvent             = "workhorse.task.lease_expired"
 	leasesRecoveredEvent           = "workhorse.leases.recovered"
 	batchDispatchedEvent           = "workhorse.handler.batch_dispatched"
 	taskClaimedLogMessage          = "Task claimed"
@@ -448,6 +450,7 @@ const (
 	taskCompletedLogMessage        = "Task completed"
 	taskFailureProcessedLogMessage = "Task attempt failure processed"
 	heartbeatRejectedLogMessage    = "Task heartbeat rejected"
+	leaseWatchdogLogMessage        = "No heartbeat was accepted within the task lease"
 	leasesRecoveredLogMessage      = "Expired leases recovered"
 	batchDispatchedLogMessage      = "Batch handler dispatched"
 	handlerFailedSpanStatusMessage = "handler failed"
