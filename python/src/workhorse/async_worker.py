@@ -3,7 +3,12 @@ from __future__ import annotations
 import asyncio
 import random
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
+from concurrent.futures import Future
 from contextlib import suppress
+from functools import partial
+from itertools import count
+from queue import Empty, SimpleQueue
+from threading import Lock, Thread
 from typing import Any, Literal, Protocol, TypeVar, cast
 
 from ._compatibility import AsyncRowExecutor as _AsyncRowExecutor
@@ -43,11 +48,82 @@ _AsyncNotificationConnectionFactory = Callable[[], Awaitable[Any]]
 _CHANNEL = "workhorse_tasks"
 _RECONNECT_INITIAL_SECONDS = 0.1
 _RECONNECT_MAX_SECONDS = 5.0
+_BRIDGE_IDLE_SECONDS = 5.0
 _T = TypeVar("_T")
+
+_BridgeCall = tuple["Future[Any]", Callable[[], Any]]
 
 
 async def _await_value[T](value: Awaitable[T]) -> T:
     return await value
+
+
+class _BridgeThreads:
+    """Run blocking context calls on threads that grow with the calls in flight.
+
+    A context call blocks its thread until the event loop resolves the awaited
+    operation, and that operation may make another context call. A fixed-size pool
+    deadlocks once every thread waits on an operation that needs a free thread, so
+    this pool starts a thread whenever no idle thread can take the call. Idle
+    threads retire, so a worker keeps only the threads its handlers still need.
+    """
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._calls: SimpleQueue[_BridgeCall | None] = SimpleQueue()
+        self._idle = 0
+        self._numbers = count()
+        self._closed = False
+
+    def run(self, operation: Callable[[], _T]) -> Future[_T]:
+        """Schedule the operation and return the future that carries its outcome."""
+        call: Future[_T] = Future()
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("AsyncWorker context calls require an active run call")
+            if self._idle == 0:
+                Thread(
+                    target=self._work,
+                    name=f"workhorse-async-bridge-{next(self._numbers)}",
+                    daemon=True,
+                ).start()
+            else:
+                self._idle -= 1
+            self._calls.put((call, operation))
+        return call
+
+    def close(self) -> None:
+        """Refuse further calls and retire every idle thread."""
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            for _ in range(self._idle):
+                self._calls.put(None)
+            self._idle = 0
+
+    def _work(self) -> None:
+        while True:
+            try:
+                call = self._calls.get(timeout=_BRIDGE_IDLE_SECONDS)
+            except Empty:
+                with self._lock:
+                    if not self._calls.empty():
+                        continue
+                    self._idle -= 1
+                    return
+            if call is None:
+                return
+            pending, operation = call
+            if pending.set_running_or_notify_cancel():
+                try:
+                    pending.set_result(operation())
+                except BaseException as error:
+                    pending.set_exception(error)
+            with self._lock:
+                if self._closed:
+                    return
+                self._idle += 1
 
 
 class _AsyncExecutorBridge:
@@ -90,29 +166,44 @@ class _CheckpointContext(Protocol):
 
 
 class _AsyncCheckpointAdapter:
-    def __init__(self, context: _CheckpointContext, loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(
+        self,
+        context: _CheckpointContext,
+        loop: asyncio.AbstractEventLoop,
+        threads: _BridgeThreads,
+    ) -> None:
         self._checkpoint_context = context
         self._loop = loop
+        self._threads = threads
+
+    async def _call(self, operation: Callable[..., _T], /, *arguments: Any) -> _T:
+        """Await a synchronous context call without holding an event loop thread."""
+        return await asyncio.wrap_future(self._threads.run(partial(operation, *arguments)))
 
     async def get_checkpoint(self, name: str) -> TaskCheckpoint | None:
-        return await asyncio.to_thread(self._checkpoint_context.get_checkpoint, name)
+        return await self._call(self._checkpoint_context.get_checkpoint, name)
 
     async def checkpoint(self, name: str, operation: Callable[[], Awaitable[Json]]) -> Json:
         def invoke_operation() -> Json:
             return asyncio.run_coroutine_threadsafe(_await_value(operation()), self._loop).result()
 
-        return await asyncio.to_thread(self._checkpoint_context.checkpoint, name, invoke_operation)
+        return await self._call(self._checkpoint_context.checkpoint, name, invoke_operation)
 
     async def get_progress(self) -> TaskProgress | None:
-        return await asyncio.to_thread(self._checkpoint_context.get_progress)
+        return await self._call(self._checkpoint_context.get_progress)
 
     async def set_progress(self, value: Json) -> TaskProgress:
-        return await asyncio.to_thread(self._checkpoint_context.set_progress, value)
+        return await self._call(self._checkpoint_context.set_progress, value)
 
 
 class _AsyncContextAdapter(_AsyncCheckpointAdapter):
-    def __init__(self, context: HandlerContext, loop: asyncio.AbstractEventLoop) -> None:
-        super().__init__(context, loop)
+    def __init__(
+        self,
+        context: HandlerContext,
+        loop: asyncio.AbstractEventLoop,
+        threads: _BridgeThreads,
+    ) -> None:
+        super().__init__(context, loop, threads)
         self._context = context
 
     def context(self) -> AsyncHandlerContext:
@@ -134,35 +225,40 @@ class _AsyncContextAdapter(_AsyncCheckpointAdapter):
         )
 
     async def get_wait(self, name: str) -> TaskWait | None:
-        return await asyncio.to_thread(self._context.get_wait, name)
+        return await self._call(self._context.get_wait, name)
 
     async def sleep(self, name: str, duration_ms: int) -> None:
-        await asyncio.to_thread(self._context.sleep, name, duration_ms)
+        await self._call(self._context.sleep, name, duration_ms)
 
     async def sleep_until(self, name: str, wake_at: Any) -> None:
-        await asyncio.to_thread(self._context.sleep_until, name, wake_at)
+        await self._call(self._context.sleep_until, name, wake_at)
 
     async def wait_for_signal(self, name: str, timeout_ms: int | None) -> Json:
-        return await asyncio.to_thread(self._context.wait_for_signal, name, timeout_ms=timeout_ms)
+        return await self._call(partial(self._context.wait_for_signal, name, timeout_ms=timeout_ms))
 
     async def wait_for_human(self, name: str, context: Json, timeout_ms: int | None) -> Json:
-        return await asyncio.to_thread(
-            self._context.wait_for_human, name, context, timeout_ms=timeout_ms
+        return await self._call(
+            partial(self._context.wait_for_human, name, context, timeout_ms=timeout_ms)
         )
 
     async def run_child(self, name: str, type: str, payload: Json, options: EnqueueOptions) -> Json:
-        return await asyncio.to_thread(self._context.run_child, name, type, payload, options)
+        return await self._call(self._context.run_child, name, type, payload, options)
 
     async def run_children(self, children: Sequence[ChildTaskRequest]) -> dict[str, ChildOutcome]:
-        return await asyncio.to_thread(self._context.run_children, children)
+        return await self._call(self._context.run_children, children)
 
     async def run_children_all(self, children: Sequence[ChildTaskRequest]) -> dict[str, Json]:
-        return await asyncio.to_thread(self._context.run_children_all, children)
+        return await self._call(self._context.run_children_all, children)
 
 
 class _AsyncBatchContextAdapter(_AsyncCheckpointAdapter):
-    def __init__(self, item: BatchHandlerItem, loop: asyncio.AbstractEventLoop) -> None:
-        super().__init__(item.context, loop)
+    def __init__(
+        self,
+        item: BatchHandlerItem,
+        loop: asyncio.AbstractEventLoop,
+        threads: _BridgeThreads,
+    ) -> None:
+        super().__init__(item.context, loop, threads)
         self._context = item.context
         self.item = AsyncBatchHandlerItem(
             item.payload,
@@ -198,6 +294,7 @@ class AsyncWorker:
         self._on_notification_error = on_notification_error
         self._loop: asyncio.AbstractEventLoop | None = None
         self._running = False
+        self._threads = _BridgeThreads()
         self._heartbeat_connection_factory = None
         self._inner = Worker(
             cast(Any, pool),
@@ -310,7 +407,7 @@ class AsyncWorker:
     def handle(self, type: str, handler: AsyncHandler) -> AsyncWorker:
         def invoke(payload: Any, context: HandlerContext) -> Json:
             loop = self._require_loop()
-            async_context = _AsyncContextAdapter(context, loop).context()
+            async_context = _AsyncContextAdapter(context, loop, self._threads).context()
             return asyncio.run_coroutine_threadsafe(
                 _await_value(handler(payload, async_context)), loop
             ).result()
@@ -328,7 +425,9 @@ class AsyncWorker:
     ) -> AsyncWorker:
         def invoke(items: Sequence[BatchHandlerItem]) -> Sequence[BatchHandlerOutcome]:
             loop = self._require_loop()
-            async_items = tuple(_AsyncBatchContextAdapter(item, loop).item for item in items)
+            async_items = tuple(
+                _AsyncBatchContextAdapter(item, loop, self._threads).item for item in items
+            )
             return asyncio.run_coroutine_threadsafe(
                 _await_value(handler(async_items)), loop
             ).result()
@@ -341,6 +440,7 @@ class AsyncWorker:
         try:
             return await self._run_inner(self._inner.run_once)
         finally:
+            self._threads.close()
             self._running = False
 
     async def run(self) -> None:
@@ -354,6 +454,7 @@ class AsyncWorker:
             listener.cancel()
             with suppress(asyncio.CancelledError):
                 await listener
+            self._threads.close()
             self._running = False
 
     def pause(self) -> None:
@@ -374,10 +475,11 @@ class AsyncWorker:
         loop = asyncio.get_running_loop()
         self._running = True
         self._loop = loop
+        self._threads = _BridgeThreads()
         self._bridge.bind(loop)
 
     async def _run_inner(self, operation: Callable[[], _T]) -> _T:
-        run = asyncio.create_task(asyncio.to_thread(operation))
+        run = asyncio.wrap_future(self._threads.run(operation))
         try:
             return await asyncio.shield(run)
         except asyncio.CancelledError:

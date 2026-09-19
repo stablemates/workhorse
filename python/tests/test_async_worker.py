@@ -2,11 +2,15 @@ from __future__ import annotations
 # ruff: noqa
 
 import asyncio
+import threading
+import time
 from collections.abc import Sequence
+from contextlib import suppress
 from typing import Any
 
 import asyncpg
 import psycopg
+import psycopg_pool
 import pytest
 from eventual_conditions import eventually_async
 
@@ -18,6 +22,7 @@ from workhorse import (
     EnqueueOptions,
     Queue,
 )
+from workhorse.async_worker import _BridgeThreads
 
 
 def enqueue(database_url: str, type: str, payload: object, *, queue: str = "default") -> str:
@@ -211,3 +216,103 @@ async def test_async_worker_notifications_wake_continuous_dispatch_and_stop_drai
         worker.stop()
         await run
         await query_connection.close()
+
+
+@pytest.mark.asyncio
+async def test_async_worker_completes_checkpointing_tasks_at_high_concurrency(
+    database_url: str,
+) -> None:
+    """Checkpoint bridging must not starve on the event loop's default thread pool."""
+    concurrency = 64
+    queue = "async-checkpoint-storm"
+    task_ids = [
+        enqueue(database_url, "async.checkpoint.storm", {"index": index}, queue=queue)
+        for index in range(concurrency)
+    ]
+    pool = psycopg_pool.AsyncConnectionPool(
+        database_url, min_size=4, max_size=8, kwargs={"autocommit": True}, open=False
+    )
+    await pool.open(wait=True)
+    # The observer uses its own connection so a starved thread pool cannot hide the failure.
+    observer = await psycopg.AsyncConnection.connect(database_url, autocommit=True)
+    try:
+
+        async def handler(payload: Any, context: AsyncHandlerContext) -> dict[str, object]:
+            async def first() -> dict[str, int]:
+                await asyncio.sleep(0.01)
+                return {"index": int(payload["index"])}
+
+            prepared = await context.checkpoint("prepare", first)
+
+            async def second() -> dict[str, object]:
+                progress = await context.set_progress({"phase": "working"})
+                return {"revision": progress.revision}
+
+            finished = await context.checkpoint("finish", second)
+            return {"prepared": prepared, "finished": finished}
+
+        worker = AsyncWorker.from_psycopg(
+            pool,
+            queue=queue,
+            worker_id="python-async-checkpoint-storm",
+            concurrency=concurrency,
+            poll_ms=50,
+        ).handle("async.checkpoint.storm", handler)
+
+        run = asyncio.create_task(worker.run())
+        try:
+
+            async def settled() -> bool:
+                cursor = await observer.execute(
+                    "SELECT count(*) FROM workhorse.task_outcome "
+                    "WHERE task_id = ANY(%s) AND state = 'succeeded'",
+                    (task_ids,),
+                )
+                row = await cursor.fetchone()
+                assert row is not None
+                return int(row[0]) == concurrency
+
+            await eventually_async(
+                settled, "checkpointing tasks never settled at concurrency 64", timeout_s=60
+            )
+            worker.stop()
+            await asyncio.wait_for(run, timeout=30)
+        finally:
+            worker.stop()
+            run.cancel()
+            with suppress(asyncio.CancelledError, TimeoutError):
+                await asyncio.wait_for(asyncio.shield(run), timeout=15)
+    finally:
+        await observer.close()
+        await pool.close()
+
+
+def test_bridge_threads_add_a_thread_for_every_call_that_blocks() -> None:
+    """Nested context calls each hold a thread, so the pool must not cap them."""
+
+    def live() -> int:
+        return sum(
+            1
+            for thread in threading.enumerate()
+            if thread.name.startswith("workhorse-async-bridge")
+        )
+
+    threads = _BridgeThreads()
+    release = threading.Event()
+    blocked = [threads.run(release.wait) for _ in range(48)]
+    try:
+        deadline = time.monotonic() + 10
+        while live() < 48:
+            assert time.monotonic() < deadline, f"only {live()} of 48 calls got a thread"
+            time.sleep(0.01)
+        release.set()
+        assert [call.result(10) for call in blocked] == [True] * 48
+        # Idle threads take later calls, so a settled pool stops growing.
+        for _ in range(100):
+            assert threads.run(lambda: 7).result(10) == 7
+        assert live() == 48
+    finally:
+        release.set()
+        threads.close()
+    with pytest.raises(RuntimeError):
+        threads.run(lambda: 1)
