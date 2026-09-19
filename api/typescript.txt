@@ -4108,6 +4108,8 @@ type SchemaContractOutcome = {
   readonly workers: readonly LiveProtocolWorker[];
 };
 
+type SchemaMigrationExecution = "transactional" | "nontransactional";
+
 type SchemaMigrationKind = "additive" | "contract";
 
 interface SchemaMigrationStep {
@@ -4116,6 +4118,11 @@ interface SchemaMigrationStep {
   file: string;
   description: string;
   readonly kind: SchemaMigrationKind;
+  /**
+  * How the step runs. Absent means `transactional`, so every step that predates the class reads
+  * and behaves exactly as it did.
+  */
+  readonly execution?: SchemaMigrationExecution;
   /**
   * The client protocol versions a contract step stops serving.
   *

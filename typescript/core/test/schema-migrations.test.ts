@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { verifySqlProtocolFixtures } from "../../../scripts/verify-sql-protocol.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -44,6 +44,9 @@ const lockDatabase = createDatabaseTestHarness(new URL("?lock", import.meta.url)
 const contractDatabase = createDatabaseTestHarness(new URL("?contract", import.meta.url).href, {
   schemaProvisioning: "install",
 });
+const concurrentDatabase = createDatabaseTestHarness(new URL("?concurrent", import.meta.url).href, {
+  schemaProvisioning: "install",
+});
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const executeFile = promisify(execFile);
 
@@ -78,6 +81,34 @@ async function dumpNormalizedSchema(databaseUrl: string): Promise<string> {
     .join("\n");
 }
 
+/** The index the non-transactional step tests build and drop again. */
+const probeIndex = "task_runtime_concurrent_probe_idx";
+const concurrentBody = `-- workhorse-migration: {"kind":"additive","execution":"nontransactional"}
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ${probeIndex}
+  ON workhorse.task_runtime (queue_name, task_id);`;
+
+/** One step at the installed version, carrying the body and execution a test wants to exercise. */
+function probeStep(
+  body: string,
+  execution?: "transactional" | "nontransactional",
+): Parameters<typeof applySchemaMigrationPlan>[1] {
+  return {
+    baselineVersion: WORKHORSE_SCHEMA_BASELINE_VERSION,
+    currentVersion: WORKHORSE_SCHEMA_VERSION + 1,
+    steps: [
+      {
+        fromVersion: WORKHORSE_SCHEMA_VERSION,
+        toVersion: WORKHORSE_SCHEMA_VERSION + 1,
+        file: "probe.sql",
+        description: "concurrent probe",
+        kind: "additive" as const,
+        ...(execution === undefined ? {} : { execution }),
+      },
+    ],
+    readStep: () => Promise.resolve(body),
+  };
+}
+
 describe("schema migrations", () => {
   beforeAll(async () => {
     await Promise.all([
@@ -87,6 +118,7 @@ describe("schema migrations", () => {
       releaseDatabase.setup(),
       lockDatabase.setup(),
       contractDatabase.setup(),
+      concurrentDatabase.setup(),
     ]);
     await Promise.all([
       fixtureDatabase.pool.query("DROP SCHEMA workhorse CASCADE"),
@@ -108,6 +140,7 @@ describe("schema migrations", () => {
       releaseDatabase.teardown(),
       lockDatabase.teardown(),
       contractDatabase.teardown(),
+      concurrentDatabase.teardown(),
     ]);
   });
 
@@ -373,6 +406,14 @@ describe("schema migrations", () => {
       if (declared.kind !== step.kind) {
         offenders.push(
           `${file}: declares "${declared.kind}" but SCHEMA_MIGRATIONS says "${step.kind}"`,
+        );
+        continue;
+      }
+      const declaredExecution = declared.execution ?? "transactional";
+      const recordedExecution = step.execution ?? "transactional";
+      if (declaredExecution !== recordedExecution) {
+        offenders.push(
+          `${file}: declares "${declaredExecution}" execution but SCHEMA_MIGRATIONS says "${recordedExecution}"`,
         );
         continue;
       }
@@ -793,6 +834,140 @@ describe("schema migrations", () => {
       await expect(applySchemaMigrationPlan(contractDatabase.pool, mislabeled)).rejects.toThrow(
         'declares "contract" but SCHEMA_MIGRATIONS says "additive"',
       );
+    });
+  });
+
+  // A non-transactional step exists for the statements PostgreSQL refuses to run inside a
+  // transaction block. It runs against the installed schema, on real tables, because the point is
+  // what the lock does to a table that carries rows rather than what the runner believes.
+  describe("non-transactional steps", () => {
+    afterEach(async () => {
+      await concurrentDatabase.pool.query(`DROP INDEX IF EXISTS workhorse.${probeIndex}`);
+      await concurrentDatabase.pool.query("DROP TABLE IF EXISTS workhorse.concurrent_probe");
+      await concurrentDatabase.pool.query(
+        `DELETE FROM workhorse.schema_migration WHERE version > ${WORKHORSE_SCHEMA_VERSION}`,
+      );
+      await concurrentDatabase.pool.query(
+        `UPDATE workhorse.schema_version SET version = ${WORKHORSE_SCHEMA_VERSION}`,
+      );
+    });
+
+    it("runs CREATE INDEX CONCURRENTLY and records the step", async () => {
+      await applySchemaMigrationPlan(
+        concurrentDatabase.pool,
+        probeStep(concurrentBody, "nontransactional"),
+        WORKHORSE_SCHEMA_VERSION,
+      );
+
+      // An index that exists but is invalid is what a half-finished concurrent build leaves, so
+      // validity is the assertion rather than existence.
+      const index = await concurrentDatabase.pool.query<{ valid: boolean }>(
+        `SELECT indisvalid AS valid FROM pg_index
+          WHERE indexrelid = 'workhorse.${probeIndex}'::regclass`,
+      );
+      expect(index.rows).toEqual([{ valid: true }]);
+
+      const recorded = await concurrentDatabase.pool.query<{
+        version: number;
+        description: string;
+      }>(
+        `SELECT version, description FROM workhorse.schema_migration
+          WHERE version = ${WORKHORSE_SCHEMA_VERSION + 1}`,
+      );
+      expect(recorded.rows).toEqual([
+        { version: WORKHORSE_SCHEMA_VERSION + 1, description: "concurrent probe" },
+      ]);
+      const version = await concurrentDatabase.pool.query<{ version: number }>(
+        "SELECT version FROM workhorse.schema_version",
+      );
+      expect(version.rows).toEqual([{ version: WORKHORSE_SCHEMA_VERSION + 1 }]);
+    });
+
+    it("cannot run the same body as a transactional step", async () => {
+      // This is why the class exists: inside the runner's transaction PostgreSQL refuses the
+      // statement outright, so an availability-preserving index build had no way to ship.
+      await expect(
+        applySchemaMigrationPlan(
+          concurrentDatabase.pool,
+          probeStep(concurrentBody.replace(',"execution":"nontransactional"', "")),
+          WORKHORSE_SCHEMA_VERSION,
+        ),
+      ).rejects.toThrow("failed and was rolled back");
+
+      const index = await concurrentDatabase.pool.query(
+        `SELECT to_regclass('workhorse.${probeIndex}') AS present`,
+      );
+      expect(index.rows).toEqual([{ present: null }]);
+    });
+
+    it("leaves the statements it already ran behind, and says so", async () => {
+      await expect(
+        applySchemaMigrationPlan(
+          concurrentDatabase.pool,
+          probeStep(
+            `-- workhorse-migration: {"kind":"additive","execution":"nontransactional"}
+CREATE TABLE IF NOT EXISTS workhorse.concurrent_probe (id integer);
+SELECT 1 / 0;`,
+            "nontransactional",
+          ),
+          WORKHORSE_SCHEMA_VERSION,
+        ),
+      ).rejects.toThrow("failed part-way and rolled nothing back");
+
+      const state = await concurrentDatabase.pool.query<{ version: number; kept: string | null }>(
+        `SELECT version, to_regclass('workhorse.concurrent_probe')::text AS kept
+           FROM workhorse.schema_version`,
+      );
+      expect(state.rows).toEqual([{ version: WORKHORSE_SCHEMA_VERSION, kept: "concurrent_probe" }]);
+    });
+
+    it("refuses a body whose execution disagrees with its SCHEMA_MIGRATIONS entry", async () => {
+      await expect(
+        applySchemaMigrationPlan(
+          concurrentDatabase.pool,
+          probeStep(concurrentBody),
+          WORKHORSE_SCHEMA_VERSION,
+        ),
+      ).rejects.toThrow(
+        'declares "nontransactional" execution but SCHEMA_MIGRATIONS says "transactional"',
+      );
+    });
+
+    it.each([
+      ["END", "END;"],
+      ["END TRANSACTION", "END TRANSACTION;"],
+      ["ABORT", "ABORT;"],
+      ["PREPARE TRANSACTION", "PREPARE TRANSACTION 'x';"],
+    ])("rejects a body that manages the transaction with %s", async (unused, statement) => {
+      await expect(
+        applySchemaMigrationPlan(
+          concurrentDatabase.pool,
+          probeStep(`-- workhorse-migration: {"kind":"additive"}\n${statement}\nSELECT 1;`),
+          WORKHORSE_SCHEMA_VERSION,
+        ),
+      ).rejects.toThrow("must not contain transaction control statements");
+    });
+
+    it("leaves a plpgsql body that ends its own blocks alone", async () => {
+      // END closes a plpgsql block as well as a transaction, and the widened check must not read
+      // the one as the other.
+      await applySchemaMigrationPlan(
+        concurrentDatabase.pool,
+        probeStep(`-- workhorse-migration: {"kind":"additive"}
+CREATE OR REPLACE FUNCTION workhorse.concurrent_probe_v1() RETURNS integer
+LANGUAGE plpgsql AS $body$
+BEGIN
+  RETURN 1;
+END
+$body$;
+DROP FUNCTION workhorse.concurrent_probe_v1();`),
+        WORKHORSE_SCHEMA_VERSION,
+      );
+
+      const version = await concurrentDatabase.pool.query<{ version: number }>(
+        "SELECT version FROM workhorse.schema_version",
+      );
+      expect(version.rows).toEqual([{ version: WORKHORSE_SCHEMA_VERSION + 1 }]);
     });
   });
 
