@@ -38,14 +38,13 @@ is held without delivering anything, which is budget spent on both the client po
 pooler's client cap.
 
 Heartbeats need headroom of their own. If handlers hold every pooled connection, a heartbeat queued
-behind them never runs, and every lease lapses at once. TypeScript workers therefore keep one
-dedicated heartbeat connection per pool, shared the way the listener is. Budget that connection on
-top of the listener and whatever handlers take. If the pool cannot spare it, or states no size, the
-worker refuses to start and says why. Set `sharedHeartbeats` to send heartbeats through the shared
-pool instead, and accept that busy handlers can then delay renewal. The heartbeat connection runs
-only self-contained statements, so it works behind a transaction-mode pooler. Go workers still heartbeat through the
-pool; set `SharedHeartbeats` only when a small pool cannot reserve it. Python workers take their
-dedicated heartbeat connection from the supplied pool.
+behind them never runs, and every lease lapses at once. Every worker therefore keeps one dedicated
+heartbeat connection per pool, shared the way the listener is. Budget that connection on top of the
+listener and whatever handlers take. If the pool cannot spare it, or states no size, the worker
+refuses to start and says why. Set `sharedHeartbeats` to send heartbeats through the shared pool
+instead, and accept that busy handlers can then delay renewal. The heartbeat connection runs only
+self-contained statements, so it works behind a transaction-mode pooler. Go names that opt-out
+`SharedHeartbeats`, and Python names it `shared_heartbeats`.
 
 ## What is unsafe?
 

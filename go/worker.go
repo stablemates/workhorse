@@ -150,6 +150,9 @@ type ClaimedTask struct {
 	AttemptTimeout     *time.Time
 	FenceToken         int64
 	LeaseExpiresAt     time.Time
+	// claimSentAt is when this worker sent the claim request. The lease watchdog measures from it,
+	// so a claim that took a long time to answer shortens the watchdog instead of overrunning it.
+	claimSentAt time.Time
 }
 
 // Handler processes one claimed payload with fenced durable operations outside a transaction.
@@ -212,7 +215,7 @@ type Worker struct {
 	heartbeatMembers     map[*heartbeatMember]struct{}
 	heartbeatWake        chan struct{}
 	heartbeatRunning     bool
-	heartbeatConn        *pgxpool.Conn
+	heartbeatLease       *heartbeatConnectionLease
 	sharedHeartbeats     bool
 }
 
@@ -221,7 +224,16 @@ type heartbeatMember struct {
 	task          ClaimedTask
 	cancelHandler context.CancelCauseFunc
 	result        chan ownershipResult
-	renewed       chan struct{}
+	renewed       chan time.Time
+}
+
+// renew reports an accepted renewal to the supervising goroutine without blocking. The reported
+// instant is when the round's request was sent, which is when the granted lease started.
+func (member *heartbeatMember) renew(sentAt time.Time) {
+	select {
+	case member.renewed <- sentAt:
+	default:
+	}
 }
 
 // deliver hands the first ownership result to the supervising goroutine without blocking. The
@@ -411,6 +423,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 		return err
 	}
 	defer releaseRun()
+	worker.holdHeartbeats(ctx)
 	defer worker.releaseHeartbeatConnection()
 	if err := worker.compatibility.Assert(ctx); err != nil {
 		return err
@@ -611,6 +624,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 
 // RunOnce claims and processes at most one task.
 func (worker *Worker) RunOnce(ctx context.Context) (bool, error) {
+	worker.holdHeartbeats(ctx)
 	defer worker.releaseHeartbeatConnection()
 	releaseRun, err := worker.acquireRun(ctx)
 	if err != nil {
@@ -920,6 +934,7 @@ func (worker *Worker) claimNextMany(ctx context.Context, executor Executor, limi
 			if err != nil {
 				return tasks, err
 			}
+			task.claimSentAt = startedAt
 			logWorkerEvent(
 				ctx,
 				worker.logger,
@@ -1129,7 +1144,7 @@ func (worker *Worker) superviseOwnership(
 	done := make(chan ownershipResult, 1)
 	member := &heartbeatMember{
 		ctx: ctx, task: task, cancelHandler: cancelHandler, result: make(chan ownershipResult, 1),
-		renewed: make(chan struct{}, 1),
+		renewed: make(chan time.Time, 1),
 	}
 	worker.registerHeartbeat(member)
 	go func() {
@@ -1138,6 +1153,11 @@ func (worker *Worker) superviseOwnership(
 		if expirationTimer != nil {
 			defer expirationTimer.Stop()
 		}
+		// The lease watchdog ends this attempt once its last accepted renewal is a full lease old.
+		// A heartbeat that never answers cannot report the loss, and by then a peer may own the
+		// task, so the worker stops the handler on its own clock rather than on an answer.
+		watchdog := time.NewTimer(worker.leaseFrom(task.claimSentAt))
+		defer watchdog.Stop()
 		for {
 			var expiration <-chan time.Time
 			if expirationTimer != nil {
@@ -1153,10 +1173,13 @@ func (worker *Worker) superviseOwnership(
 			case result := <-member.result:
 				done <- result
 				return
-			case <-member.renewed:
-				if expirationTimer != nil {
-					resetTimer(expirationTimer, worker.leaseDuration)
-				}
+			case sentAt := <-member.renewed:
+				resetTimer(watchdog, worker.leaseFrom(sentAt))
+			case <-watchdog.C:
+				cancelHandler(&LeaseLostError{TaskID: task.ID})
+				worker.recordLeaseWatchdog(ctx, task)
+				done <- ownershipResult{status: workerOwnershipStale}
+				return
 			case <-expiration:
 				cancelHandler(expirationCause)
 				// Leave the heartbeat batch first: expireOwnership can retry for a while, and this
@@ -1177,13 +1200,46 @@ func (worker *Worker) superviseOwnership(
 	}, done
 }
 
+// leaseFrom reports how long one lease granted at sentAt still has to run. A task claimed before
+// this worker started measuring, such as one a caller built itself, gets a whole lease.
+func (worker *Worker) leaseFrom(sentAt time.Time) time.Duration {
+	if sentAt.IsZero() {
+		return worker.leaseDuration
+	}
+	return max(time.Millisecond, time.Until(sentAt.Add(worker.leaseDuration)))
+}
+
+func (worker *Worker) recordLeaseWatchdog(ctx context.Context, task ClaimedTask) {
+	logWorkerEvent(
+		ctx, worker.logger, slog.LevelWarn, leaseWatchdogEvent, leaseWatchdogLogMessage,
+		func() []any { return taskLogAttributes(task, worker.workerID) },
+	)
+}
+
+// holdHeartbeats takes this worker's share of the heartbeat connection its pool lends, ahead of any
+// handler that could exhaust the pool. A worker that opted out of the reservation heartbeats
+// through the shared pool and holds nothing.
+func (worker *Worker) holdHeartbeats(ctx context.Context) {
+	if worker.sharedHeartbeats {
+		return
+	}
+	worker.heartbeatMu.Lock()
+	lease := worker.heartbeatLease
+	if lease == nil {
+		lease = holdHeartbeatConnection(worker.pool)
+		worker.heartbeatLease = lease
+	}
+	worker.heartbeatMu.Unlock()
+	lease.reserve(ctx, worker.heartbeatInterval)
+}
+
 func (worker *Worker) releaseHeartbeatConnection() {
 	worker.heartbeatMu.Lock()
-	connection := worker.heartbeatConn
-	worker.heartbeatConn = nil
+	lease := worker.heartbeatLease
+	worker.heartbeatLease = nil
 	worker.heartbeatMu.Unlock()
-	if connection != nil {
-		connection.Release()
+	if lease != nil {
+		lease.release()
 	}
 }
 
@@ -1268,38 +1324,33 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
 		worker.deliverHeartbeatError(members, err)
 		return
 	}
-	queryContext, cancel := context.WithTimeout(context.WithoutCancel(members[0].ctx), worker.heartbeatInterval)
-	defer cancel()
+	roundContext := context.WithoutCancel(members[0].ctx)
+	worker.heartbeatMu.Lock()
+	reserved := worker.heartbeatLease
+	worker.heartbeatMu.Unlock()
 	var rows []Row
-	if worker.sharedHeartbeats {
-		rows, err = NewPGXExecutor(worker.pool).Query(queryContext, protocolStatementRegistry[heartbeatManyStatementName], worker.workerID, string(payload))
+	// The round is bounded by the heartbeat interval, so a statement that stalls cannot hold the
+	// batch past the next round. Every attempt keeps running: its own watchdog decides when a
+	// renewal is too old to trust.
+	sentAt := time.Now()
+	round := func(ctx context.Context, executor Executor) error {
+		var roundError error
+		rows, roundError = executor.Query(
+			ctx,
+			protocolStatementRegistry[heartbeatManyStatementName],
+			worker.workerID,
+			string(payload),
+		)
+		return roundError
+	}
+	if reserved == nil {
+		queryContext, cancel := context.WithTimeout(roundContext, worker.heartbeatInterval)
+		err = round(queryContext, NewPGXExecutor(worker.pool))
+		cancel()
 	} else {
-		worker.heartbeatMu.Lock()
-		connection := worker.heartbeatConn
-		worker.heartbeatMu.Unlock()
-		if connection == nil {
-			connection, err = worker.pool.Acquire(queryContext)
-			if err == nil {
-				worker.heartbeatMu.Lock()
-				worker.heartbeatConn = connection
-				worker.heartbeatMu.Unlock()
-			}
-		}
-		if err == nil {
-			rows, err = NewPGXExecutor(connection.Conn()).Query(queryContext, protocolStatementRegistry[heartbeatManyStatementName], worker.workerID, string(payload))
-		}
+		err = reserved.run(roundContext, worker.heartbeatInterval, round)
 	}
 	if err != nil {
-		if !worker.sharedHeartbeats {
-			worker.heartbeatMu.Lock()
-			connection := worker.heartbeatConn
-			worker.heartbeatConn = nil
-			worker.heartbeatMu.Unlock()
-			if connection != nil {
-				_ = connection.Conn().Close(context.Background())
-				connection.Release()
-			}
-		}
 		worker.logger.Warn(heartbeatRoundFailedLogMessage, errorLogField, err)
 		return
 	}
@@ -1322,10 +1373,7 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
 			status = workerOwnershipStale
 		}
 		if status == workerOwnershipAccepted {
-			select {
-			case member.renewed <- struct{}{}:
-			default:
-			}
+			member.renew(sentAt)
 			continue
 		}
 		member.cancelHandler(ownershipCause(member.task, status))
