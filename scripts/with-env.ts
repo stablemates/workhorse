@@ -20,6 +20,9 @@
  * worktree has when a tool copied `.env` in without running `pnpm worktree:setup` — is refused
  * outright. Two such worktrees running database-scope tests at once reset each other mid-suite.
  *
+ * The wrapper also refuses a command whose tool does not identify itself, because a substituted
+ * tool reports a pass without doing the work. See `verify-toolchain.ts`.
+ *
  * Usage: tsx scripts/with-env.ts <command> [...arguments]
  */
 import { spawn } from "node:child_process";
@@ -30,6 +33,7 @@ import {
   localDatabasePurposes,
 } from "../typescript/core/src/local-database.js";
 import { readEnvironment } from "./environment-file.js";
+import { gofmtTool, readPins, toolsNamedBy, verifyTools } from "./verify-toolchain.js";
 import {
   describeUnscopedDatabases,
   linkedWorktreeId,
@@ -59,6 +63,20 @@ if (worktreeId !== undefined) {
     console.error(describeUnscopedDatabases(worktreeId, checkoutRoot, unscoped));
     process.exit(2);
   }
+}
+
+// A substituted tool turns a check into a false pass, so the tool this wrapper is about to start
+// has to identify itself before it starts. Only identity is asserted here, not agreement with the
+// `mise.toml` pin: CI runs the support matrix through this wrapper, and those Node, Python and Go
+// versions differ from the pins deliberately. `pnpm check` and the `pre-push` hook assert the pins.
+const pins = await readPins(checkoutRoot);
+const toolRefusals = await verifyTools(
+  toolsNamedBy(command, commandArguments, new Set([...pins.keys(), gofmtTool])),
+  { mode: "identity", pins, checkoutRoot },
+);
+if (toolRefusals.length > 0) {
+  console.error(toolRefusals.join("\n\n"));
+  process.exit(2);
 }
 
 const environment: NodeJS.ProcessEnv = { ...process.env };

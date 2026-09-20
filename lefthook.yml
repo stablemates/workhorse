@@ -84,6 +84,13 @@ pre-commit:
       glob: "sql/**"
       run: mise exec -- pnpm test:schema
 
+pre-push:
+  jobs:
+    # The last stop before work leaves the machine. A checkout whose installed versions have
+    # drifted from `mise.toml` fails here rather than in CI.
+    - name: verify the pinned toolchain
+      run: mise exec -- pnpm toolchain:verify
+
 post-checkout:
   jobs:
     - name: install dependencies the checkout needs

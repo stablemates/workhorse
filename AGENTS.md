@@ -114,6 +114,17 @@ that times out leaves the scratch database behind, and each schema change retire
 `pnpm db:sweep` lists those leftovers and `pnpm db:sweep --yes` drops them. The sweep skips every
 database a checkout owns and every database a session still holds open.
 
+## Never substitute a pinned tool
+
+When a command reports that `pnpm`, `uv`, `go` or `gofmt` is not found, the toolchain is missing
+from the PATH. Put the `mise` shims on the PATH or run the command through `mise exec --`. Never
+write a stand-in for a pinned tool. A stand-in that exits 0 turns a check into a false pass, and a
+false pass is worse than a failure because a failure stops the work.
+
+Repository commands refuse a tool that does not answer as itself, and `pnpm check` and the
+`pre-push` hook also refuse a version that disagrees with its `mise.toml` pin. No environment
+variable turns either refusal off. `pnpm toolchain:verify` reports the state of the current PATH.
+
 ## Building before testing
 
 `pnpm test` does not build the dashboard browser bundle. Anything that serves
