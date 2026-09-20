@@ -2200,7 +2200,7 @@ it refills the queue bucket from PostgreSQL time and returns null when no queue 
 
 Priority dispatch has no aging or fair-share control. A sustained stream of higher-priority ready work can starve lower-priority rows in the same queue.
 
-When the queue's first 100 ready rows name budgets, `claim_v1` also takes one exclusive advisory lock per budget name, in name order, before reading the clock. It checks each candidate with `budget_admission_v1`, so a saturated budget is passed over inside the same 100-row window. Claims of unrelated budgets do not serialize. A queue with no budget-named ready work takes no budget lock and keeps the one-row fast path. See [`budget`](#budget-and-budget_bucket).
+When the queue's first 100 ready rows name budgets, `claim_v1` also takes one exclusive advisory lock per budget name, in name order, before reading the clock. It checks each candidate with `budget_admission_v1`, so a saturated budget is passed over inside the same 100-row window. Claims of unrelated budgets do not serialize. A queue with no budget-named ready work takes no budget lock and keeps the one-row fast path. A claim that passes over a saturated budget locks no ready row. See [`budget`](#budget-and-budget_bucket).
 
 If concurrency-key or rate-key limits apply, `claim_v1` inspects at most the first 100 ready rows by
 priority descending, FIFO sequence, and task identity. It selects the earliest candidate whose queue-scoped key has concurrency capacity and
@@ -2209,6 +2209,17 @@ without an unbounded prefix scan. The transaction consumes queue and key tokens 
 runtime update selects a candidate. Competing worker processes serialize on the rate-policy row, so
 one durable token admits one start even when claims overlap. Returning null after exhausting the
 window enters the Worker's normal bounded empty-claim wait instead of a claim loop.
+
+That window reads without locking. `claim_one_v1` takes a row lock, with `FOR UPDATE SKIP LOCKED`,
+only on the candidate it admits, so a claim that admits nothing leaves every row it read lockable by
+another claim. The admission decision cannot go stale between the read and the lock, because every
+rule that passes over a row holds a lock until the claim transaction ends: `max_active_per_key`
+holds the `concurrency_policy` row, a per-key rate cap holds the `rate_limit_policy` row, and a
+budget holds `workhorse:budget:<budget_name>`. The one-row fast path locks the first ready row it
+can take, and refuses that row when it names a budget the claim never locked, because reading past
+it has no bound. `pnpm benchmark:saturated-claim` measures a claim on a queue whose keys are all
+saturated: it writes no row lock and one WAL record, where the window lock wrote 100 row locks and
+101 WAL records.
 
 One runtime update changes the selected row to active and installs worker, global fence, acquisition, heartbeat, and expiry data. The same transaction appends the claim event before returning identity, payload, normalized `retryPolicy`, contract version, result limit, and error-redaction flag. No transaction remains open while user code runs. `Queue.claim` uses `claim_v1`. `claim_many_v1(queue, worker, limit, lease_ms)` accepts a limit from 1 through 100. It invokes the same transition, `claim_one_v1`, repeatedly inside one database call until it reaches the limit or a claim returns no row. Only the first claim of the batch waits for a budget lock.
 

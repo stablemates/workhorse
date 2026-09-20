@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import { SQL_STATEMENTS } from "../src/queue/sql-catalogue.generated.js";
 import { raceBudgetAdmission } from "./support/budget-race.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
@@ -87,6 +88,44 @@ describe("named budgets", () => {
       leaseMs: 30_000,
     });
     expect(outcome).toEqual({ holderClaims: 1, lateClaims: 0, active: 1 });
+  });
+
+  it("locks no ready row when the window's budget is saturated", async () => {
+    const budget = `budget-locks-${randomUUID()}`;
+    const queueName = `budget-locks-queue-${randomUUID()}`;
+    await queue.syncBudgets("budget-test", [{ name: budget, maxActive: 1 }]);
+    await queue.enqueue("budgeted", { ordinal: 1 }, { queue: queueName, budget });
+    await queue.enqueue("budgeted", { ordinal: 2 }, { queue: queueName, budget });
+    await expect(queue.claim("budget-lock-worker-a", { queue: queueName })).resolves.not.toBeNull();
+
+    // The refused claim holds its transaction open, so a second session sees every lock it took.
+    const claimer = await pool.connect();
+    try {
+      await claimer.query("BEGIN");
+      const claimed = await claimer.query(SQL_STATEMENTS["claim_v1"], [
+        queueName,
+        "budget-lock-worker-b",
+        30_000,
+      ]);
+      expect(claimed.rowCount).toBe(0);
+      const locked = await pool.query<{ locked: number }>(
+        `SELECT (
+           SELECT count(*) FROM workhorse.task_runtime runtime
+            WHERE runtime.queue_name = $1 AND runtime.state = 'ready'
+         ) - (
+           SELECT count(*) FROM (
+             SELECT 1 FROM workhorse.task_runtime runtime
+              WHERE runtime.queue_name = $1 AND runtime.state = 'ready'
+              FOR UPDATE SKIP LOCKED
+           ) lockable
+         ) AS locked`,
+        [queueName],
+      );
+      expect(Number(locked.rows[0]!.locked)).toBe(0);
+    } finally {
+      await claimer.query("ROLLBACK").catch(() => undefined);
+      claimer.release();
+    }
   });
 
   it("admits freely when a task names a budget nobody synchronized", async () => {

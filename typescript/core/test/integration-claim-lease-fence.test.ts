@@ -1373,6 +1373,60 @@ describe("claim lease fence", () => {
     await expect(queue.claim("key-worker-c", { queue: queueName })).resolves.toBeNull();
   });
 
+  it("locks no ready row when every key in the window is saturated", async () => {
+    const queueName = `concurrency-key-locks-${randomUUID()}`;
+    await queue.syncConcurrencyPolicies("test", [
+      { queue: queueName, maxActive: 10, maxActivePerKey: 1 },
+    ]);
+    for (const key of ["a", "a", "b", "b"]) {
+      await queue.enqueue("keyed", {}, { queue: queueName, concurrencyKey: key });
+    }
+    await expect(queue.claim("lock-worker-a", { queue: queueName })).resolves.not.toBeNull();
+    await expect(queue.claim("lock-worker-b", { queue: queueName })).resolves.not.toBeNull();
+
+    // The claim holds its transaction open, so a second session sees every row lock it took.
+    const claimer = await pool.connect();
+    try {
+      await claimer.query("BEGIN");
+      const claimed = await claimer.query(SQL_STATEMENTS["claim_v1"], [
+        queueName,
+        "lock-worker-c",
+        30_000,
+      ]);
+      expect(claimed.rowCount).toBe(0);
+      await expect(lockedReadyRows(queueName)).resolves.toBe(0);
+    } finally {
+      await claimer.query("ROLLBACK").catch(() => undefined);
+      claimer.release();
+    }
+  });
+
+  it("locks only the row an admitting claim takes", async () => {
+    const queueName = `concurrency-key-one-lock-${randomUUID()}`;
+    await queue.syncConcurrencyPolicies("test", [
+      { queue: queueName, maxActive: 10, maxActivePerKey: 1 },
+    ]);
+    for (const key of ["a", "a", "b", "b"]) {
+      await queue.enqueue("keyed", {}, { queue: queueName, concurrencyKey: key });
+    }
+    await expect(queue.claim("one-lock-worker-a", { queue: queueName })).resolves.not.toBeNull();
+
+    const claimer = await pool.connect();
+    try {
+      await claimer.query("BEGIN");
+      const claimed = await claimer.query(SQL_STATEMENTS["claim_v1"], [
+        queueName,
+        "one-lock-worker-b",
+        30_000,
+      ]);
+      expect(claimed.rowCount).toBe(1);
+      await expect(lockedReadyRows(queueName)).resolves.toBe(1);
+    } finally {
+      await claimer.query("ROLLBACK").catch(() => undefined);
+      claimer.release();
+    }
+  });
+
   it("restores dispatch capacity at lease expiry without promising mutual exclusion", async () => {
     const queueName = `concurrency-expiry-${randomUUID()}`;
     await queue.syncConcurrencyPolicies("test", [{ queue: queueName, maxActive: 1 }]);
@@ -1810,3 +1864,21 @@ describe("claim lease fence", () => {
     }
   });
 });
+
+/** Ready rows of one queue that another session cannot lock, counted from a third connection. */
+async function lockedReadyRows(queueName: string): Promise<number> {
+  const result = await pool.query<{ locked: number }>(
+    `SELECT (
+       SELECT count(*) FROM workhorse.task_runtime runtime
+        WHERE runtime.queue_name = $1 AND runtime.state = 'ready'
+     ) - (
+       SELECT count(*) FROM (
+         SELECT 1 FROM workhorse.task_runtime runtime
+          WHERE runtime.queue_name = $1 AND runtime.state = 'ready'
+          FOR UPDATE SKIP LOCKED
+       ) lockable
+     ) AS locked`,
+    [queueName],
+  );
+  return Number(result.rows[0]!.locked);
+}
