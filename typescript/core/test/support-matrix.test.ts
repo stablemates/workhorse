@@ -582,6 +582,28 @@ describe("continuous integration", () => {
     }
   });
 
+  // Mantine ships one version across its packages, so a lone `@mantine/core` bump cannot build.
+  // The `mantine` group exists to carry them together. Dependabot assigns a dependency to the most
+  // specific group that matches it, so the broader npm groups claim every `@mantine/*` package
+  // unless they exclude it, and this group silently stops existing. Nothing in a passing CI run
+  // reports that, so the exclusions are asserted here instead.
+  it("keeps the Mantine group reachable in the Dependabot configuration", async () => {
+    const dependabot = await read(".github/dependabot.yml");
+    const groups = ["npm-development", "npm-production"];
+
+    expect(dependabot).toMatch(/ {6}mantine:\n {8}patterns: \["@mantine\/\*"\]/);
+    for (const group of groups) {
+      const heading = `      ${group}:\n`;
+      const start = dependabot.indexOf(heading);
+      expect(start).toBeGreaterThan(-1);
+      const rules = dependabot.slice(start + heading.length);
+      const next = rules.search(/^ {0,6}\S/m);
+      expect(`${group} rules: ${next === -1 ? rules : rules.slice(0, next)}`).toContain(
+        'exclude-patterns: ["@mantine/*"]',
+      );
+    }
+  });
+
   it("installs a PostgreSQL client that matches the release service", async () => {
     const npmRelease = await read(".github/workflows/release.yml");
     expect(npmRelease).toContain("image: postgres:18-alpine");
