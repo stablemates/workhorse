@@ -188,6 +188,7 @@ interface RedriveLineageRecord
 interface RedriveRequest
 interface RedriveResult
 type RedriveStatus
+type ReleaseOwnedStatus
 interface RetentionCategoryValues
 interface RetentionPolicy
 interface RetentionPolicyDefinition
@@ -3141,7 +3142,7 @@ interface LiveProtocolWorker {
 
 const MAXIMUM_PROTOCOL_VERSION = 4;
 
-const MAXIMUM_SCHEMA_VERSION = 17;
+const MAXIMUM_SCHEMA_VERSION = 18;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -3513,6 +3514,8 @@ class Queue {
   heartbeat(task: ClaimedTask, workerId: string, leaseMs?: number): Promise<boolean>;
   heartbeatStatus(task: ClaimedTask, workerId: string, leaseMs?: number): Promise<HeartbeatStatus>;
   expireOwned(task: ClaimedTask, workerId: string): Promise<ExpireOwnedStatus>;
+  /** Give an owned task back to its queue with its attempt intact. */
+  releaseOwned(task: ClaimedTask, workerId: string): Promise<ReleaseOwnedStatus>;
   acknowledgeCancel(task: ClaimedTask, workerId: string): Promise<boolean>;
   [workerCheckpointsRead]<TValue extends Json = Json>(taskId: string): Promise<TaskCheckpoint<TValue>[]>;
   saveCheckpoint<TValue extends Json>(task: ClaimedTask, workerId: string, name: string, value: TValue): Promise<TaskCheckpoint<TValue>>;
@@ -3907,6 +3910,8 @@ interface RedriveSelection {
 }
 
 type RedriveStatus = "redriven" | "replayed" | "eligible" | "not_found" | "not_failed";
+
+type ReleaseOwnedStatus = "released" | "cancel_requested" | "deadline_exceeded" | "timeout_exceeded" | "not_due" | "stale";
 
 interface RenderDashboardHtmlOptions {
   runtime: DashboardRuntimeConfig;
@@ -4588,7 +4593,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 1;
 
-const WORKHORSE_SCHEMA_VERSION = 17;
+const WORKHORSE_SCHEMA_VERSION = 18;
 
 const WORKHORSE_VERSION = "0.2.1";
 
@@ -4831,6 +4836,7 @@ interface WorkerQueueApi {
   heartbeatStatus(task: ClaimedTask, workerId: string, leaseMs?: number): Promise<HeartbeatStatus>;
   heartbeatMany?(tasks: readonly ClaimedTask[], workerId: string, leaseMs?: number): Promise<Map<string, HeartbeatStatus>>;
   expireOwned(task: ClaimedTask, workerId: string): Promise<ExpireOwnedStatus>;
+  releaseOwned(task: ClaimedTask, workerId: string): Promise<ReleaseOwnedStatus>;
   acknowledgeCancel(task: ClaimedTask, workerId: string): Promise<boolean>;
   listCheckpoints(taskId: string): Promise<TaskCheckpoint[]>;
   saveCheckpoint<TValue extends Json>(task: ClaimedTask, workerId: string, name: string, value: TValue): Promise<TaskCheckpoint<TValue>>;
@@ -4942,7 +4948,7 @@ class WorkhorseError extends Error {
   constructor(message: string, options?: ErrorOptions);
 }
 
-type WorkhorseLogEvent = "workhorse.handler.batch_dispatched" | "workhorse.handler.batch_evidence_failed" | "workhorse.handler.finished" | "workhorse.handler.registered" | "workhorse.handler.signal_swallowed" | "workhorse.handler.started" | "workhorse.task.cancellation_acknowledged" | "workhorse.task.cancellation_processed" | "workhorse.task.checkpoint_saved" | "workhorse.task.child_processed" | "workhorse.task.debounce_rejected" | "workhorse.task.debounced" | "workhorse.task.claimed" | "workhorse.task.completed" | "workhorse.task.completion_rejected" | "workhorse.task.enqueue_replayed" | "workhorse.task.enqueued" | "workhorse.task.throttled" | "workhorse.task.execution_finished" | "workhorse.task.failure_processed" | "workhorse.task.heartbeat_accepted" | "workhorse.task.heartbeat_rejected" | "workhorse.task.ownership_expired" | "workhorse.task.progress_updated" | "workhorse.task.redrive_processed" | "workhorse.task.run_now_requested" | "workhorse.task.signal_processed" | "workhorse.task.human_wait_processed" | "workhorse.task.wait_processed" | "workhorse.tasks.promoted" | "workhorse.tasks.redrive_processed" | "workhorse.leases.recovered" | "workhorse.cold_export_policy.synchronized" | "workhorse.maintenance.completed" | "workhorse.maintenance_policy.synchronized" | "workhorse.queue.paused" | "workhorse.queue.purged" | "workhorse.queue.resumed" | "workhorse.retention_policy.synchronized" | "workhorse.schedule.fire_replayed" | "workhorse.schedule.fired" | "workhorse.schedules.synchronized" | "workhorse.worker.deregistered" | "workhorse.worker.paused" | "workhorse.worker.polling_only" | "workhorse.worker.registered" | "workhorse.worker.registration_failed" | "workhorse.worker.resumed" | "workhorse.worker.started" | "workhorse.worker.stop_requested" | "workhorse.worker.stopped" | "workhorse.worker_registry.pruned";
+type WorkhorseLogEvent = "workhorse.handler.batch_dispatched" | "workhorse.handler.batch_evidence_failed" | "workhorse.handler.finished" | "workhorse.handler.missing" | "workhorse.handler.registered" | "workhorse.handler.signal_swallowed" | "workhorse.handler.started" | "workhorse.task.cancellation_acknowledged" | "workhorse.task.cancellation_processed" | "workhorse.task.checkpoint_saved" | "workhorse.task.child_processed" | "workhorse.task.debounce_rejected" | "workhorse.task.debounced" | "workhorse.task.claimed" | "workhorse.task.completed" | "workhorse.task.completion_rejected" | "workhorse.task.enqueue_replayed" | "workhorse.task.enqueued" | "workhorse.task.throttled" | "workhorse.task.execution_finished" | "workhorse.task.failure_processed" | "workhorse.task.heartbeat_accepted" | "workhorse.task.heartbeat_rejected" | "workhorse.task.ownership_expired" | "workhorse.task.progress_updated" | "workhorse.task.redrive_processed" | "workhorse.task.release_processed" | "workhorse.task.run_now_requested" | "workhorse.task.signal_processed" | "workhorse.task.human_wait_processed" | "workhorse.task.wait_processed" | "workhorse.tasks.promoted" | "workhorse.tasks.redrive_processed" | "workhorse.leases.recovered" | "workhorse.cold_export_policy.synchronized" | "workhorse.maintenance.completed" | "workhorse.maintenance_policy.synchronized" | "workhorse.queue.paused" | "workhorse.queue.purged" | "workhorse.queue.resumed" | "workhorse.retention_policy.synchronized" | "workhorse.schedule.fire_replayed" | "workhorse.schedule.fired" | "workhorse.schedules.synchronized" | "workhorse.worker.deregistered" | "workhorse.worker.paused" | "workhorse.worker.polling_only" | "workhorse.worker.registered" | "workhorse.worker.registration_failed" | "workhorse.worker.resumed" | "workhorse.worker.started" | "workhorse.worker.stop_requested" | "workhorse.worker.stopped" | "workhorse.worker_registry.pruned";
 
 class WorkhorseMetricsObserver {
   constructor(database: Queryable, options?: {
@@ -5186,6 +5192,7 @@ const dashboardRouter: {
         failed: "failed";
         canceled: "canceled";
         cancel_requested: "cancel_requested";
+        released: "released";
         redriven: "redriven";
         debounced: "debounced";
         debounce_rejected: "debounce_rejected";
@@ -5552,7 +5559,7 @@ const dashboardRuntimeConfigSchema: z.ZodObject<{
   workspace: z.ZodNullable<z.ZodString>;
 }, z.core.$strict>;
 
-const dashboardTaskEventTypes: readonly ["enqueued", "debounced", "debounce_rejected", "throttled", "claimed", "batch_dispatched", "batch_failed", "succeeded", "failed", "retry_scheduled", "canceled", "cancel_requested", "promoted", "lease_expired", "deadline_exceeded", "execution_timed_out", "redriven", "redrive_created", "checkpoint_saved", "progress_updated", "wait_scheduled", "wait_elapsed", "wait_replayed", "signal_waiting", "signal_received", "signal_replayed", "signal_rejected", "dependency_blocked", "dependency_released", "dependency_failed", "dependency_canceled", "child_created", "child_joined", "children_created", "children_joined", "parent_linked", "human_wait_created", "human_wait_completed", "human_wait_replayed", "human_wait_rejected"];
+const dashboardTaskEventTypes: readonly ["enqueued", "debounced", "debounce_rejected", "throttled", "claimed", "batch_dispatched", "batch_failed", "succeeded", "failed", "retry_scheduled", "canceled", "cancel_requested", "promoted", "lease_expired", "released", "deadline_exceeded", "execution_timed_out", "redriven", "redrive_created", "checkpoint_saved", "progress_updated", "wait_scheduled", "wait_elapsed", "wait_replayed", "signal_waiting", "signal_received", "signal_replayed", "signal_rejected", "dependency_blocked", "dependency_released", "dependency_failed", "dependency_canceled", "child_created", "child_joined", "children_created", "children_joined", "parent_linked", "human_wait_created", "human_wait_completed", "human_wait_replayed", "human_wait_rejected"];
 
 const dashboardTaskFilters: readonly ["all", "blocked", "waiting", "scheduled", "retried", "queued", "running", "completed", "discarded", "canceled"];
 

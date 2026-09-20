@@ -126,6 +126,7 @@ workhorse.recovery.skipped
 workhorse.redrive.dry_run
 workhorse.redrive.status
 workhorse.redrive.target_task_id
+workhorse.release.status
 workhorse.retry.outcome
 workhorse.schedule.count
 workhorse.schedule.definition_count

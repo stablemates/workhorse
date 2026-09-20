@@ -738,6 +738,7 @@
             "promoted",
             "redrive_created",
             "redriven",
+            "released",
             "retry",
             "retry_scheduled",
             "signal_received",

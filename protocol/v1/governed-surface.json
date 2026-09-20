@@ -520,6 +520,10 @@
       ],
       "returns": "boolean"
     },
+    "release_owned_v1": {
+      "arguments": ["uuid", "text", "bigint"],
+      "returns": "text"
+    },
     "retain_history_v1": {
       "arguments": ["boolean?", "timestamptz?"],
       "returns": "table",
