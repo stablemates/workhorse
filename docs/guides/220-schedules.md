@@ -91,6 +91,12 @@ becomes a no-op.
   return, the definition's catch-up policy decides whether Workhorse skips, coalesces, or replays
   missed occurrences.
 - **Firing waits for the next maintenance tick.** This is not a real-time scheduler.
+- **PostgreSQL decides what time it is.** Worker clocks drift apart, so Workhorse asks the database
+  for the evaluation instant. A worker running ahead fires nothing early, and a worker running
+  behind moves no schedule backwards.
+- **An occurrence another transaction holds is deferred, not skipped.** Workhorse leaves that
+  occurrence and everything after it to the next tick. So a manual fire that rolls back loses
+  nothing: the next tick creates the task the abandoned one didn't.
 - **Store the intended IANA timezone** on each definition. UTC avoids clock changes. If local clocks
   skip a scheduled time, Workhorse fires after the clock advances. If clocks repeat a time,
   Workhorse fires its first occurrence only. If several fields land on one instant, Workhorse

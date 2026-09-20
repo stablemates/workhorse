@@ -810,7 +810,7 @@ func (worker *Worker) runMaintenance(ctx context.Context) error {
 		}
 	}
 	if len(worker.scheduleNamespaces) > 0 {
-		if err := worker.fireDueSchedules(ctx, executor, time.Now()); err != nil {
+		if err := worker.fireDueSchedules(ctx, executor); err != nil {
 			return err
 		}
 	}
@@ -868,12 +868,14 @@ func (worker *Worker) recordRecovery(ctx context.Context, row Row) {
 	}
 }
 
-func (worker *Worker) fireDueSchedules(ctx context.Context, executor Executor, now time.Time) error {
+// A nil evaluation instant asks the database for its own clock, so schedules, budgets, and rate
+// limits all advance on one clock rather than on this process's.
+func (worker *Worker) fireDueSchedules(ctx context.Context, executor Executor) error {
 	_, err := executor.Query(
 		ctx,
 		internalStatementRegistry[fireDueSchedulesStatementName],
 		worker.scheduleNamespaces,
-		now,
+		nil,
 		worker.scheduleCatchupLimit,
 		worker.maintenanceInterval.Milliseconds(),
 	)

@@ -1967,7 +1967,17 @@ and `now - evaluation_window_ms`. `latest` selects the newest occurrence after t
 position. `all` selects ordered occurrences after the durable position and advances only through
 the bounded result when the pass reaches its limit. The worker supplies its
 `maintenanceIntervalMs`, `maintenance_interval_ms`, or `MaintenanceInterval` as the evaluation
-window. `fire_schedule_v1` repeats both state checks under the definition row lock.
+window. A null `now` means `clock_timestamp()`, and every SDK passes null, so schedule evaluation
+reads the same clock budgets and rate limits read. `fire_schedule_v1` repeats both state checks
+under the definition row lock.
+
+`fire_schedule_v1` answers a null task id for an occurrence another transaction holds and for one
+already fired, so `fire_due_schedules_v2` takes that occurrence's advisory lock itself before it
+fires. A busy lock ends the pass for that definition: the function reports no row for the
+occurrence, evaluates nothing after it, and leaves `last_evaluated_at` at the last occurrence it did
+evaluate. A pass that defers before its first occurrence writes no row at all, so it never waits on
+the definition row lock the holding transaction owns. The holder either commits the occurrence or
+rolls back and leaves it for the next pass.
 
 TypeScript `ScheduleDefinition.catchupPolicy`, Python `ScheduleDefinition.catchup_policy`, and Go
 `ScheduleDefinition.CatchupPolicy` default to `skip`. TypeScript `scheduleCatchupLimit`, Python

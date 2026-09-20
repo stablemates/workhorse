@@ -2,9 +2,9 @@
   "formatVersion": 1,
   "protocolVersion": 4,
   "schema": {
-    "installedVersion": 18,
+    "installedVersion": 19,
     "minimumVersion": 1,
-    "maximumVersion": 18,
+    "maximumVersion": 19,
     "baselineVersion": 1
   },
   "supportedClientProtocol": {

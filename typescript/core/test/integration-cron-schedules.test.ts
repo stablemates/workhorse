@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { Queue, Worker, type Queryable } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
@@ -35,7 +36,7 @@ class ScheduleEvaluationQueue extends Queue {
 
   override async fireDueSchedules(
     namespaces: readonly string[],
-    _now: Date,
+    _now: Date | null,
     catchupLimit: number,
     evaluationWindowMs: number,
   ): Promise<void> {
@@ -466,6 +467,113 @@ describe("cron schedules", () => {
         )
       ).rows[0]?.count,
     ).toBe(0);
+  });
+
+  it("enqueues the occurrence a rolled-back manual fire held", async () => {
+    await queue.syncSchedules("busy-occurrence", [
+      {
+        name: "minutely",
+        schedule: "0 * * * * *",
+        task: { type: "cron-busy", payload: null },
+      },
+    ]);
+    await pool.query(
+      `UPDATE workhorse.schedule_definition
+          SET last_evaluated_at = '2026-09-14T10:00:30Z'
+        WHERE namespace = 'busy-occurrence'`,
+    );
+    const [schedule] = await queue.schedules(["busy-occurrence"]);
+
+    const holder = await pool.connect();
+    try {
+      await holder.query("BEGIN");
+      const held = await holder.query<{ task_id: string | null }>(
+        "SELECT workhorse.fire_schedule_v1($1::text, $2::text, $3::bigint, $4::timestamptz) AS task_id",
+        ["busy-occurrence", schedule!.name, schedule!.revision.toString(), "2026-09-14T10:01:00Z"],
+      );
+      expect(held.rows[0]?.task_id).not.toBeNull();
+
+      // The manual fire abandons the occurrence while the tick evaluates it, which is the shape
+      // that lost it: the tick saw a null task id and moved the position past the occurrence.
+      const tick = queue.fireDueSchedules(
+        ["busy-occurrence"],
+        new Date("2026-09-14T10:01:30Z"),
+        100,
+        120_000,
+      );
+      await sleep(200);
+      await holder.query("ROLLBACK");
+      await tick;
+    } finally {
+      holder.release();
+    }
+
+    expect(
+      (
+        await pool.query<{ last_evaluated_at: Date }>(
+          `SELECT last_evaluated_at FROM workhorse.schedule_definition
+            WHERE namespace = 'busy-occurrence'`,
+        )
+      ).rows[0]?.last_evaluated_at.toISOString(),
+    ).toBe("2026-09-14T10:00:30.000Z");
+
+    expect(
+      (
+        await pool.query<{ count: number }>(
+          `SELECT count(*)::integer AS count FROM workhorse.schedule_occurrence
+            WHERE namespace = 'busy-occurrence'`,
+        )
+      ).rows[0]?.count,
+    ).toBe(0);
+
+    await queue.fireDueSchedules(
+      ["busy-occurrence"],
+      new Date("2026-09-14T10:01:30Z"),
+      100,
+      120_000,
+    );
+
+    const recovered = await pool.query<{ occurrence_at: Date; task_id: string | null }>(
+      `SELECT occurrence_at, task_id FROM workhorse.schedule_occurrence
+        WHERE namespace = 'busy-occurrence'`,
+    );
+    expect(recovered.rows.map((row) => row.occurrence_at.toISOString())).toEqual([
+      "2026-09-14T10:01:00.000Z",
+    ]);
+    expect(recovered.rows[0]?.task_id).not.toBeNull();
+    expect(await admin.getTask(recovered.rows[0]!.task_id!)).toMatchObject({ state: "ready" });
+  });
+
+  it("evaluates on the database clock when the caller supplies no instant", async () => {
+    await queue.syncSchedules("database-clock", [
+      {
+        name: "secondly",
+        schedule: "* * * * * *",
+        task: { type: "cron-database-clock", payload: null },
+      },
+    ]);
+    await pool.query(
+      `UPDATE workhorse.schedule_definition
+          SET last_evaluated_at = clock_timestamp() - interval '10 seconds'
+        WHERE namespace = 'database-clock'`,
+    );
+
+    await queue.fireDueSchedules(["database-clock"], null, 100, 60_000);
+
+    const fired = await pool.query<{ count: number; latest: Date }>(
+      `SELECT count(*)::integer AS count, max(occurrence_at) AS latest
+         FROM workhorse.schedule_occurrence
+        WHERE namespace = 'database-clock'`,
+    );
+    expect(fired.rows[0]!.count).toBeGreaterThan(0);
+    expect(fired.rows[0]!.latest.getTime()).toBeGreaterThan(Date.now() - 60_000);
+
+    const position = await pool.query<{ advanced: boolean }>(
+      `SELECT last_evaluated_at > clock_timestamp() - interval '10 seconds' AS advanced
+         FROM workhorse.schedule_definition
+        WHERE namespace = 'database-clock'`,
+    );
+    expect(position.rows[0]?.advanced).toBe(true);
   });
 
   it("treats adjacent recurring occurrences as distinct coordinated work", async () => {

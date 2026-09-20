@@ -1554,7 +1554,7 @@ class Worker:
             _STATEMENTS.fire_due_schedules,
             (
                 list(self.schedule_namespaces),
-                now,
+                None,
                 self.schedule_catchup_limit,
                 self.maintenance_interval_ms,
             ),

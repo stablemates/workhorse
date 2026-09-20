@@ -117,7 +117,7 @@ export class CronSchedulesModule extends QueueModule {
 
   async fireDueSchedules(
     namespaces: readonly string[],
-    now: Date,
+    now: Date | null,
     catchupLimit: number,
     evaluationWindowMs: number,
   ): Promise<void> {
@@ -129,7 +129,7 @@ export class CronSchedulesModule extends QueueModule {
       task_id: string | null;
     }>(SQL_STATEMENTS["fire_due_schedules_v2"], [
       namespaces,
-      now.toISOString(),
+      now === null ? null : now.toISOString(),
       catchupLimit,
       evaluationWindowMs,
     ]);

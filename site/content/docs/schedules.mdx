@@ -132,6 +132,11 @@ on change. PostgreSQL reads that revision while evaluating the namespace, then r
 revision when it reserves the occurrence. If a deployment changes or disables the definition
 between those operations, the fire becomes a no-op.
 
+Evaluation runs on PostgreSQL's clock rather than each worker's, so a worker whose clock drifts
+neither fires early nor moves a schedule's position backwards. When another transaction already
+holds an occurrence, Workhorse defers that occurrence and everything after it to the next tick
+instead of stepping over it, so a manual fire that rolls back loses no occurrence.
+
 If the whole fleet is down, nothing fires. Workhorse skips missed occurrences by default when
 workers return. Set `catchupPolicy` to `latest` when one current task can replace the missed work,
 or to `all` when every occurrence must create a task. The worker's catch-up limit bounds each

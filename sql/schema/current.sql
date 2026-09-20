@@ -4330,13 +4330,15 @@ DECLARE
   v_evaluation_start timestamptz;
   v_last_evaluated_at timestamptz;
   v_evaluated_count integer;
+  v_deferred boolean;
+  v_next_evaluated_at timestamptz;
   v_locked_namespaces text[] := '{}';
   v_skipped_namespaces text[] := '{}';
 BEGIN
   IF p_namespaces IS NULL OR array_position(p_namespaces, '') IS NOT NULL THEN
     RAISE EXCEPTION 'schedule namespaces must contain non-empty names';
   END IF;
-  IF p_now IS NULL THEN RAISE EXCEPTION 'schedule evaluation time is required'; END IF;
+  p_now := COALESCE(p_now, clock_timestamp());
   IF p_catchup_limit NOT BETWEEN 1 AND 10000 THEN
     RAISE EXCEPTION 'schedule catch-up limit must be between 1 and 10000';
   END IF;
@@ -4386,6 +4388,7 @@ BEGIN
     END IF;
     v_evaluated_count := 0;
     v_last_evaluated_at := NULL;
+    v_deferred := false;
 
     FOR v_occurrence IN
       SELECT evaluated.occurrence_at
@@ -4400,6 +4403,19 @@ BEGIN
         ) evaluated
        WHERE evaluated.occurrence_at > v_evaluation_start
     LOOP
+      -- Another transaction holds this occurrence. It may still roll back, so this pass neither
+      -- reports the occurrence nor evaluates anything after it, and the durable position below
+      -- stays behind it. `fire_schedule_v1` takes the same lock again, which a transaction that
+      -- already holds it always wins.
+      IF NOT pg_try_advisory_xact_lock(hashtextextended(
+        'workhorse:schedule:' || v_definition.namespace || ':' ||
+        v_definition.schedule_name || ':' ||
+        extract(epoch FROM date_trunc('second', v_occurrence))::bigint,
+        0
+      )) THEN
+        v_deferred := true;
+        EXIT;
+      END IF;
       v_evaluated_count := v_evaluated_count + 1;
       v_last_evaluated_at := v_occurrence;
       namespace := v_definition.namespace;
@@ -4414,17 +4430,24 @@ BEGIN
       RETURN NEXT;
     END LOOP;
 
-    UPDATE workhorse.schedule_definition definition
-       SET last_evaluated_at = CASE
-         WHEN v_definition.catchup_policy = 'all'
-           AND v_evaluated_count = p_catchup_limit
-           AND v_last_evaluated_at IS NOT NULL
-         THEN v_last_evaluated_at
-         ELSE p_now
-       END
-     WHERE definition.namespace = v_definition.namespace
-       AND definition.schedule_name = v_definition.schedule_name
-       AND definition.revision = v_definition.revision;
+    v_next_evaluated_at := CASE
+      WHEN v_deferred THEN v_last_evaluated_at
+      WHEN v_definition.catchup_policy = 'all'
+        AND v_evaluated_count = p_catchup_limit
+        AND v_last_evaluated_at IS NOT NULL
+      THEN v_last_evaluated_at
+      ELSE p_now
+    END;
+    -- A pass deferred before its first occurrence leaves the position alone, so it never waits on
+    -- the row lock the transaction holding that occurrence already owns.
+    IF v_next_evaluated_at IS DISTINCT FROM v_definition.last_evaluated_at
+      AND v_next_evaluated_at IS NOT NULL THEN
+      UPDATE workhorse.schedule_definition definition
+         SET last_evaluated_at = v_next_evaluated_at
+       WHERE definition.namespace = v_definition.namespace
+         AND definition.schedule_name = v_definition.schedule_name
+         AND definition.revision = v_definition.revision;
+    END IF;
   END LOOP;
 END;
 $$;
@@ -15561,10 +15584,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (15, 'cached health dashboard reads'),
   (16, 'bounded dashboard task reads'),
   (17, 'bounded dashboard task values'),
-  (18, 'release a task without a handler')
+  (18, 'release a task without a handler'),
+  (19, 'never skip a busy schedule occurrence')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (18) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (19) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
