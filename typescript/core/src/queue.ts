@@ -543,7 +543,7 @@ export class Queue {
 
   async fireDueSchedules(
     namespaces: readonly string[],
-    now: Date,
+    now: Date | null,
     catchupLimit: number,
     evaluationWindowMs: number,
   ): Promise<void> {

@@ -299,7 +299,7 @@ export interface WorkerQueueApi {
   ): Promise<string | null>;
   fireDueSchedules(
     namespaces: readonly string[],
-    now: Date,
+    now: Date | null,
     catchupLimit: number,
     evaluationWindowMs: number,
   ): Promise<void>;
@@ -1391,7 +1391,7 @@ export class Worker {
       if (this.scheduleNamespaces.length > 0) {
         await this.queue.fireDueSchedules(
           this.scheduleNamespaces,
-          new Date(),
+          null,
           this.scheduleCatchupLimit,
           this.maintenanceIntervalMs,
         );

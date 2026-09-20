@@ -3142,7 +3142,7 @@ interface LiveProtocolWorker {
 
 const MAXIMUM_PROTOCOL_VERSION = 4;
 
-const MAXIMUM_SCHEMA_VERSION = 18;
+const MAXIMUM_SCHEMA_VERSION = 19;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -3501,7 +3501,7 @@ class Queue {
   }): Promise<void>;
   schedules(namespaces: readonly string[]): Promise<StoredSchedule[]>;
   fireSchedule(namespace: string, name: string, revision: bigint, occurrenceAt: Date): Promise<string | null>;
-  fireDueSchedules(namespaces: readonly string[], now: Date, catchupLimit: number, evaluationWindowMs: number): Promise<void>;
+  fireDueSchedules(namespaces: readonly string[], now: Date | null, catchupLimit: number, evaluationWindowMs: number): Promise<void>;
   cancel(taskId: string, request?: CancellationRequest): Promise<CancelResult>;
   claim<TPayload extends Json = Json>(workerId: string, options?: {
     queue?: string;
@@ -4593,7 +4593,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 1;
 
-const WORKHORSE_SCHEMA_VERSION = 18;
+const WORKHORSE_SCHEMA_VERSION = 19;
 
 const WORKHORSE_VERSION = "0.2.1";
 
@@ -4860,7 +4860,7 @@ interface WorkerQueueApi {
   }): Promise<MaintenancePhaseResult[]>;
   schedules(namespaces: readonly string[]): Promise<StoredSchedule[]>;
   fireSchedule(namespace: string, name: string, revision: bigint, occurrenceAt: Date): Promise<string | null>;
-  fireDueSchedules(namespaces: readonly string[], now: Date, catchupLimit: number, evaluationWindowMs: number): Promise<void>;
+  fireDueSchedules(namespaces: readonly string[], now: Date | null, catchupLimit: number, evaluationWindowMs: number): Promise<void>;
   registerWorker(registration: WorkerRegistration): Promise<{
     paused: boolean;
   }>;

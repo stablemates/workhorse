@@ -162,6 +162,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "release a task without a handler",
     kind: "additive",
   },
+  {
+    fromVersion: 18,
+    toVersion: 19,
+    file: "0019-never-skip-a-busy-schedule-occurrence.sql",
+    description: "never skip a busy schedule occurrence",
+    kind: "additive",
+  },
 ];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {
