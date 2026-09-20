@@ -524,13 +524,15 @@ describe("continuous integration", () => {
     expect(workflow).toContain("needs: build");
     expect(workflow).toContain("environment: pypi");
     expect(workflow).toContain("id-token: write");
-    const attest = "astral-sh/attest-action@f589a42a7efb6fe400b4f400de60b4bc90390027 # v0.0.6";
+    // That an attestation covers the distributions before they publish is the claim here. The
+    // action's version is Dependabot's to move, and the pinning test below proves the pin itself.
+    const attest = workflow.match(/astral-sh\/attest-action@[0-9a-f]{40}/);
     const publish = "uv publish --trusted-publishing always python/dist/*";
-    expect(workflow).toContain(attest);
+    expect(attest).not.toBeNull();
     expect(workflow).toContain("paths: python/dist/*");
     expect(workflow).toContain(publish);
     expect(workflow).not.toContain("python/dist/*.whl python/dist/*.tar.gz");
-    expect(workflow.indexOf(attest)).toBeLessThan(workflow.indexOf(publish));
+    expect(attest!.index).toBeLessThan(workflow.indexOf(publish));
   });
 
   it("creates Go module tags only after the release check and full repository gate", async () => {
