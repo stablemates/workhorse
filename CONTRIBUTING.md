@@ -30,6 +30,12 @@ mise exec -- pnpm test:unit
 When Git creates a linked worktree, the `post-checkout` hook installs dependencies and runs
 `pnpm worktree:setup` through `mise`. That setup provisions databases owned by the worktree.
 
+Repository commands refuse to run on a tool that does not answer as itself, because a check that
+runs on a substituted tool reports a pass without doing the work. `pnpm check` and the `pre-push`
+hook additionally refuse a version that disagrees with its `mise.toml` pin. Nothing turns either
+refusal off; it names the `mise` command that repairs the toolchain instead. Run
+`pnpm toolchain:verify` to see the state of your own PATH.
+
 ## Generative tooling
 
 You may use an assistant to draft a patch. You still review every line before you
