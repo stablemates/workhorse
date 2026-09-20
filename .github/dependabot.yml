@@ -75,9 +75,10 @@ updates:
       day: monday
     open-pull-requests-limit: 5
     # Both base images carry a version this repository decides elsewhere. The Go line is a
-    # supported runtime recorded in support.json, and the uv line matches mise.toml; tests hold
-    # the Dockerfiles to both. Dependabot reads neither file, so a version bump here is always
-    # wrong by default and arrives every week until someone closes it.
+    # supported runtime recorded in support.json. The uv line is a pinned image that
+    # typescript/demo/src/multilang-workers.test.ts names, and moving it is a decision about the
+    # Python toolchain. Tests hold the Dockerfiles to both. Dependabot reads neither test, so a
+    # version bump here is always wrong by default and arrives every week until someone closes it.
     #
     # Only the version is ignored. A digest update on the same version still opens, which is the
     # base image's own security patches, and `ignore` never applies to security updates.
