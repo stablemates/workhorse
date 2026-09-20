@@ -8,14 +8,42 @@
         "sql": "SELECT jsonb_build_object('ordinal', ordinal, 'taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
         "parameters": [
           [
-            { "queue": "protocol-batch", "type": "protocol.first", "payload": { "index": 1 } },
-            { "queue": "protocol-batch", "type": "protocol.first", "payload": { "index": 2 } }
+            {
+              "queue": "protocol-batch",
+              "type": "protocol.first",
+              "payload": {
+                "index": 1
+              }
+            },
+            {
+              "queue": "protocol-batch",
+              "type": "protocol.first",
+              "payload": {
+                "index": 2
+              }
+            }
           ]
         ],
         "expect": {
           "rows": [
-            { "value": { "taskId": { "$type": "uuid" }, "ordinal": 1, "outcome": "accepted" } },
-            { "value": { "taskId": { "$type": "uuid" }, "ordinal": 2, "outcome": "accepted" } }
+            {
+              "value": {
+                "taskId": {
+                  "$type": "uuid"
+                },
+                "ordinal": 1,
+                "outcome": "accepted"
+              }
+            },
+            {
+              "value": {
+                "taskId": {
+                  "$type": "uuid"
+                },
+                "ordinal": 2,
+                "outcome": "accepted"
+              }
+            }
           ]
         },
         "capture": {
@@ -33,19 +61,31 @@
             {
               "value": {
                 "attempt": 1,
-                "fenceToken": { "$type": "integer" },
-                "taskId": { "$ref": "successfulTask" },
+                "fenceToken": {
+                  "$type": "integer"
+                },
+                "taskId": {
+                  "$ref": "successfulTask"
+                },
                 "taskType": "protocol.first",
-                "payload": { "index": 1 }
+                "payload": {
+                  "index": 1
+                }
               }
             },
             {
               "value": {
                 "attempt": 1,
-                "fenceToken": { "$type": "integer" },
-                "taskId": { "$ref": "batchPeerTask" },
+                "fenceToken": {
+                  "$type": "integer"
+                },
+                "taskId": {
+                  "$ref": "batchPeerTask"
+                },
                 "taskType": "protocol.first",
-                "payload": { "index": 2 }
+                "payload": {
+                  "index": 2
+                }
               }
             }
           ]
@@ -60,36 +100,86 @@
         "sql": "SELECT workhorse.record_batch_dispatch_v1($1::uuid, ARRAY(SELECT jsonb_array_elements_text($2::jsonb)::uuid), ARRAY(SELECT jsonb_array_elements_text($3::jsonb)::integer), ARRAY(SELECT jsonb_array_elements_text($4::jsonb)::bigint), $5::text) AS recorded",
         "parameters": [
           "11111111-1111-4111-8111-111111111111",
-          [{ "$ref": "successfulTask" }, { "$ref": "batchPeerTask" }],
+          [
+            {
+              "$ref": "successfulTask"
+            },
+            {
+              "$ref": "batchPeerTask"
+            }
+          ],
           [1, 1],
-          [{ "$ref": "successfulFence" }, { "$ref": "batchPeerFence" }],
+          [
+            {
+              "$ref": "successfulFence"
+            },
+            {
+              "$ref": "batchPeerFence"
+            }
+          ],
           "protocol-success"
         ],
-        "expect": { "rows": [{ "recorded": 2 }] }
+        "expect": {
+          "rows": [
+            {
+              "recorded": 2
+            }
+          ]
+        }
       },
       {
         "id": "record-batch-failure",
         "sql": "SELECT workhorse.record_batch_failure_v1($1::uuid, ARRAY(SELECT jsonb_array_elements_text($2::jsonb)::uuid), ARRAY(SELECT jsonb_array_elements_text($3::jsonb)::integer), ARRAY(SELECT jsonb_array_elements_text($4::jsonb)::bigint), $5::text) AS recorded",
         "parameters": [
           "11111111-1111-4111-8111-111111111111",
-          [{ "$ref": "successfulTask" }, { "$ref": "batchPeerTask" }],
+          [
+            {
+              "$ref": "successfulTask"
+            },
+            {
+              "$ref": "batchPeerTask"
+            }
+          ],
           [1, 1],
-          [{ "$ref": "successfulFence" }, { "$ref": "batchPeerFence" }],
+          [
+            {
+              "$ref": "successfulFence"
+            },
+            {
+              "$ref": "batchPeerFence"
+            }
+          ],
           "protocol-success"
         ],
-        "expect": { "rows": [{ "recorded": 2 }] }
+        "expect": {
+          "rows": [
+            {
+              "recorded": 2
+            }
+          ]
+        }
       },
       {
         "id": "heartbeat",
         "covers": ["heartbeat"],
         "sql": "SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status",
         "parameters": [
-          { "$ref": "successfulTask" },
+          {
+            "$ref": "successfulTask"
+          },
           "protocol-success",
-          { "$ref": "successfulFence" },
+          {
+            "$ref": "successfulFence"
+          },
           30000
         ],
-        "expect": { "rows": [{ "status": "accepted" }] }
+        "expect": {
+          "rows": [
+            {
+              "status": "accepted"
+            }
+          ]
+        }
       },
       {
         "id": "heartbeat-many",
@@ -98,14 +188,25 @@
           "protocol-success",
           [
             {
-              "taskId": { "$ref": "successfulTask" },
-              "fenceToken": { "$ref": "successfulFence" },
+              "taskId": {
+                "$ref": "successfulTask"
+              },
+              "fenceToken": {
+                "$ref": "successfulFence"
+              },
               "leaseMs": 30000
             }
           ]
         ],
         "expect": {
-          "rows": [{ "task_id": { "$ref": "successfulTask" }, "status": "accepted" }]
+          "rows": [
+            {
+              "task_id": {
+                "$ref": "successfulTask"
+              },
+              "status": "accepted"
+            }
+          ]
         }
       },
       {
@@ -113,20 +214,30 @@
         "covers": ["checkpoint"],
         "sql": "SELECT jsonb_build_object('status', status, 'value', checkpoint_value, 'attempt', attempt, 'fenceToken', fence_token, 'workerId', worker_id) AS value FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
         "parameters": [
-          { "$ref": "successfulTask" },
+          {
+            "$ref": "successfulTask"
+          },
           "protocol-success",
-          { "$ref": "successfulFence" },
+          {
+            "$ref": "successfulFence"
+          },
           "prepared",
-          { "answer": 42 }
+          {
+            "answer": 42
+          }
         ],
         "expect": {
           "rows": [
             {
               "value": {
                 "attempt": 1,
-                "fenceToken": { "$ref": "successfulFence" },
+                "fenceToken": {
+                  "$ref": "successfulFence"
+                },
                 "status": "saved",
-                "value": { "answer": 42 },
+                "value": {
+                  "answer": 42
+                },
                 "workerId": "protocol-success"
               }
             }
@@ -137,20 +248,30 @@
         "id": "update-progress",
         "sql": "SELECT jsonb_build_object('status', status, 'value', progress_value, 'revision', revision, 'attempt', attempt, 'fenceToken', fence_token, 'workerId', worker_id) AS value FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)",
         "parameters": [
-          { "$ref": "successfulTask" },
+          {
+            "$ref": "successfulTask"
+          },
           "protocol-success",
-          { "$ref": "successfulFence" },
-          { "percent": 50 }
+          {
+            "$ref": "successfulFence"
+          },
+          {
+            "percent": 50
+          }
         ],
         "expect": {
           "rows": [
             {
               "value": {
                 "attempt": 1,
-                "fenceToken": { "$ref": "successfulFence" },
+                "fenceToken": {
+                  "$ref": "successfulFence"
+                },
                 "revision": 1,
                 "status": "updated",
-                "value": { "percent": 50 },
+                "value": {
+                  "percent": 50
+                },
                 "workerId": "protocol-success"
               }
             }
@@ -162,19 +283,45 @@
         "covers": ["completion"],
         "sql": "SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted",
         "parameters": [
-          { "$ref": "successfulTask" },
+          {
+            "$ref": "successfulTask"
+          },
           "protocol-success",
-          { "$ref": "successfulFence" },
-          { "ok": true }
+          {
+            "$ref": "successfulFence"
+          },
+          {
+            "ok": true
+          }
         ],
-        "expect": { "rows": [{ "accepted": true }] }
+        "expect": {
+          "rows": [
+            {
+              "accepted": true
+            }
+          ]
+        }
       },
       {
         "id": "completed-transition",
         "sql": "SELECT jsonb_build_object('state', state, 'result', workhorse.dashboard_task_result_v1(task_id), 'attempt', current_attempt) AS value FROM workhorse.dashboard_task_outcome_v1 WHERE task_id = $1::uuid",
-        "parameters": [{ "$ref": "successfulTask" }],
+        "parameters": [
+          {
+            "$ref": "successfulTask"
+          }
+        ],
         "expect": {
-          "rows": [{ "value": { "attempt": 1, "result": { "ok": true }, "state": "succeeded" } }]
+          "rows": [
+            {
+              "value": {
+                "attempt": 1,
+                "result": {
+                  "ok": true
+                },
+                "state": "succeeded"
+              }
+            }
+          ]
         }
       }
     ]
@@ -185,57 +332,135 @@
       {
         "id": "enqueue",
         "sql": "SELECT jsonb_build_object('taskId', workhorse.enqueue_v1($1, $2, $3::jsonb, clock_timestamp(), $4)) AS value",
-        "parameters": ["protocol-retry", "protocol.retry", { "attempt": 1 }, 2],
-        "expect": { "rows": [{ "value": { "taskId": { "$type": "uuid" } } }] },
-        "capture": { "retryTask": "0.value.taskId" }
+        "parameters": [
+          "protocol-retry",
+          "protocol.retry",
+          {
+            "attempt": 1
+          },
+          2
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$type": "uuid"
+                }
+              }
+            }
+          ]
+        },
+        "capture": {
+          "retryTask": "0.value.taskId"
+        }
       },
       {
         "id": "claim-first",
         "sql": "SELECT jsonb_build_object('attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1, $2, 30000)",
         "parameters": ["protocol-retry", "protocol-retry-worker"],
-        "expect": { "rows": [{ "value": { "attempt": 1, "fenceToken": { "$type": "integer" } } }] },
-        "capture": { "retryFenceOne": "0.value.fenceToken" }
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "attempt": 1,
+                "fenceToken": {
+                  "$type": "integer"
+                }
+              }
+            }
+          ]
+        },
+        "capture": {
+          "retryFenceOne": "0.value.fenceToken"
+        }
       },
       {
         "id": "fail-for-retry",
         "covers": ["failure", "retry"],
         "sql": "SELECT workhorse.fail_v1($1::uuid, $2, $3::bigint, $4::jsonb, 0) AS state",
         "parameters": [
-          { "$ref": "retryTask" },
+          {
+            "$ref": "retryTask"
+          },
           "protocol-retry-worker",
-          { "$ref": "retryFenceOne" },
-          { "name": "TransientError", "message": "try again" }
+          {
+            "$ref": "retryFenceOne"
+          },
+          {
+            "name": "TransientError",
+            "message": "try again"
+          }
         ],
-        "expect": { "rows": [{ "state": "ready" }] }
+        "expect": {
+          "rows": [
+            {
+              "state": "ready"
+            }
+          ]
+        }
       },
       {
         "id": "claim-second",
         "sql": "SELECT jsonb_build_object('attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1, $2, 30000)",
         "parameters": ["protocol-retry", "protocol-retry-worker"],
-        "expect": { "rows": [{ "value": { "attempt": 2, "fenceToken": { "$type": "integer" } } }] },
-        "capture": { "retryFenceTwo": "0.value.fenceToken" }
-      },
-      {
-        "id": "terminal-failure",
-        "sql": "SELECT workhorse.fail_v1($1::uuid, $2, $3::bigint, $4::jsonb, 0) AS state",
-        "parameters": [
-          { "$ref": "retryTask" },
-          "protocol-retry-worker",
-          { "$ref": "retryFenceTwo" },
-          { "name": "PermanentError", "message": "stop" }
-        ],
-        "expect": { "rows": [{ "state": "failed" }] }
-      },
-      {
-        "id": "failed-transition",
-        "sql": "SELECT jsonb_build_object('state', state, 'attempt', current_attempt, 'error', error) AS value FROM workhorse.dashboard_task_outcome_v1 WHERE task_id = $1::uuid",
-        "parameters": [{ "$ref": "retryTask" }],
         "expect": {
           "rows": [
             {
               "value": {
                 "attempt": 2,
-                "error": { "message": "stop", "name": "PermanentError" },
+                "fenceToken": {
+                  "$type": "integer"
+                }
+              }
+            }
+          ]
+        },
+        "capture": {
+          "retryFenceTwo": "0.value.fenceToken"
+        }
+      },
+      {
+        "id": "terminal-failure",
+        "sql": "SELECT workhorse.fail_v1($1::uuid, $2, $3::bigint, $4::jsonb, 0) AS state",
+        "parameters": [
+          {
+            "$ref": "retryTask"
+          },
+          "protocol-retry-worker",
+          {
+            "$ref": "retryFenceTwo"
+          },
+          {
+            "name": "PermanentError",
+            "message": "stop"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "state": "failed"
+            }
+          ]
+        }
+      },
+      {
+        "id": "failed-transition",
+        "sql": "SELECT jsonb_build_object('state', state, 'attempt', current_attempt, 'error', error) AS value FROM workhorse.dashboard_task_outcome_v1 WHERE task_id = $1::uuid",
+        "parameters": [
+          {
+            "$ref": "retryTask"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "attempt": 2,
+                "error": {
+                  "message": "stop",
+                  "name": "PermanentError"
+                },
                 "state": "failed"
               }
             }
@@ -262,53 +487,127 @@
           ]
         ],
         "expect": {
-          "rows": [{ "value": { "taskId": { "$type": "uuid" }, "outcome": "accepted" } }]
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$type": "uuid"
+                },
+                "outcome": "accepted"
+              }
+            }
+          ]
         },
-        "capture": { "timeoutTask": "0.value.taskId" }
+        "capture": {
+          "timeoutTask": "0.value.taskId"
+        }
       },
       {
         "id": "claim-timeout",
         "sql": "SELECT jsonb_build_object('fenceToken', fence_token) AS value FROM workhorse.claim_v1($1, $2, 30000)",
         "parameters": ["protocol-expiration", "protocol-timeout-worker"],
-        "expect": { "rows": [{ "value": { "fenceToken": { "$type": "integer" } } }] },
-        "capture": { "timeoutFence": "0.value.fenceToken" }
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "fenceToken": {
+                  "$type": "integer"
+                }
+              }
+            }
+          ]
+        },
+        "capture": {
+          "timeoutFence": "0.value.fenceToken"
+        }
       },
       {
         "id": "expire-owned-timeout",
         "sql": "WITH slept AS MATERIALIZED (SELECT pg_sleep(0.15)) SELECT jsonb_build_object('status', status, 'retryState', retry_state) AS value FROM slept CROSS JOIN LATERAL workhorse.expire_owned_telemetry_v1($1::uuid, $2::text, $3::bigint)",
         "parameters": [
-          { "$ref": "timeoutTask" },
+          {
+            "$ref": "timeoutTask"
+          },
           "protocol-timeout-worker",
-          { "$ref": "timeoutFence" }
+          {
+            "$ref": "timeoutFence"
+          }
         ],
         "expect": {
-          "rows": [{ "value": { "retryState": "ready", "status": "timeout_exceeded" } }]
+          "rows": [
+            {
+              "value": {
+                "retryState": "ready",
+                "status": "timeout_exceeded"
+              }
+            }
+          ]
         }
       },
       {
         "id": "enqueue-recovery",
         "sql": "SELECT jsonb_build_object('taskId', workhorse.enqueue_v1($1, $2, '{}'::jsonb, clock_timestamp(), $3)) AS value",
         "parameters": ["protocol-recovery", "protocol.recovery", 2],
-        "expect": { "rows": [{ "value": { "taskId": { "$type": "uuid" } } }] },
-        "capture": { "recoveryTask": "0.value.taskId" }
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$type": "uuid"
+                }
+              }
+            }
+          ]
+        },
+        "capture": {
+          "recoveryTask": "0.value.taskId"
+        }
       },
       {
         "id": "claim-recovery",
         "sql": "SELECT jsonb_build_object('fenceToken', fence_token) AS value FROM workhorse.claim_v1($1, $2, 100)",
         "parameters": ["protocol-recovery", "protocol-recovery-worker"],
-        "expect": { "rows": [{ "value": { "fenceToken": { "$type": "integer" } } }] }
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "fenceToken": {
+                  "$type": "integer"
+                }
+              }
+            }
+          ]
+        }
       },
       {
         "id": "make-lease-expired",
         "sql": "UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE task_id = $1::uuid RETURNING state",
-        "parameters": [{ "$ref": "recoveryTask" }],
-        "expect": { "rows": [{ "state": "active" }] }
+        "parameters": [
+          {
+            "$ref": "recoveryTask"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "state": "active"
+            }
+          ]
+        }
       },
       {
         "id": "recover-expired",
         "sql": "SELECT rows_affected, expired_leases, retried FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)",
         "parameters": [100, 0],
-        "expect": { "rows": [{ "expired_leases": 1, "retried": 1, "rows_affected": 1 }] }
+        "expect": {
+          "rows": [
+            {
+              "expired_leases": 1,
+              "retried": 1,
+              "rows_affected": 1
+            }
+          ]
+        }
       }
     ]
   },
@@ -321,16 +620,34 @@
         "parameters": ["protocol-cancel", "protocol.cancel", "protocol-cancel-worker"],
         "expect": {
           "rows": [
-            { "value": { "fenceToken": { "$type": "integer" }, "taskId": { "$type": "uuid" } } }
+            {
+              "value": {
+                "fenceToken": {
+                  "$type": "integer"
+                },
+                "taskId": {
+                  "$type": "uuid"
+                }
+              }
+            }
           ]
         },
-        "capture": { "cancelTask": "0.value.taskId", "cancelFence": "0.value.fenceToken" }
+        "capture": {
+          "cancelTask": "0.value.taskId",
+          "cancelFence": "0.value.fenceToken"
+        }
       },
       {
         "id": "cancel",
         "covers": ["cancellation"],
         "sql": "SELECT jsonb_build_object('status', status, 'state', state, 'requestedBy', requested_by, 'reason', reason) AS value FROM workhorse.cancel_v1($1::uuid, $2, $3)",
-        "parameters": [{ "$ref": "cancelTask" }, "protocol-operator", "fixture"],
+        "parameters": [
+          {
+            "$ref": "cancelTask"
+          },
+          "protocol-operator",
+          "fixture"
+        ],
         "expect": {
           "rows": [
             {
@@ -348,16 +665,30 @@
         "id": "acknowledge",
         "sql": "SELECT workhorse.acknowledge_cancel_v1($1::uuid, $2::text, $3::bigint) AS accepted",
         "parameters": [
-          { "$ref": "cancelTask" },
+          {
+            "$ref": "cancelTask"
+          },
           "protocol-cancel-worker",
-          { "$ref": "cancelFence" }
+          {
+            "$ref": "cancelFence"
+          }
         ],
-        "expect": { "rows": [{ "accepted": true }] }
+        "expect": {
+          "rows": [
+            {
+              "accepted": true
+            }
+          ]
+        }
       },
       {
         "id": "canceled-transition",
         "sql": "SELECT jsonb_build_object('state', state, 'attempt', current_attempt, 'requestedBy', error->>'requested_by', 'reason', error->>'reason') AS value FROM workhorse.dashboard_task_outcome_v1 WHERE task_id = $1::uuid",
-        "parameters": [{ "$ref": "cancelTask" }],
+        "parameters": [
+          {
+            "$ref": "cancelTask"
+          }
+        ],
         "expect": {
           "rows": [
             {
@@ -382,19 +713,35 @@
         "parameters": ["protocol-timer", "protocol.timer", "protocol-timer-worker"],
         "expect": {
           "rows": [
-            { "value": { "fenceToken": { "$type": "integer" }, "taskId": { "$type": "uuid" } } }
+            {
+              "value": {
+                "fenceToken": {
+                  "$type": "integer"
+                },
+                "taskId": {
+                  "$type": "uuid"
+                }
+              }
+            }
           ]
         },
-        "capture": { "timerTask": "0.value.taskId", "timerFence": "0.value.fenceToken" }
+        "capture": {
+          "timerTask": "0.value.taskId",
+          "timerFence": "0.value.fenceToken"
+        }
       },
       {
         "id": "schedule",
         "covers": ["timer-wait"],
         "sql": "SELECT jsonb_build_object('status', status, 'name', wait_name, 'mode', mode, 'durationMs', duration_ms, 'attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.schedule_wait_v1($1::uuid, $2, $3::bigint, $4, $5::bigint, NULL)",
         "parameters": [
-          { "$ref": "timerTask" },
+          {
+            "$ref": "timerTask"
+          },
           "protocol-timer-worker",
-          { "$ref": "timerFence" },
+          {
+            "$ref": "timerFence"
+          },
           "pause",
           60000
         ],
@@ -404,7 +751,9 @@
               "value": {
                 "attempt": 1,
                 "durationMs": 60000,
-                "fenceToken": { "$ref": "timerFence" },
+                "fenceToken": {
+                  "$ref": "timerFence"
+                },
                 "mode": "relative",
                 "name": "pause",
                 "status": "scheduled"
@@ -416,8 +765,21 @@
       {
         "id": "scheduled-transition",
         "sql": "SELECT jsonb_build_object('state', state, 'waitName', wait_name) AS value FROM workhorse.dashboard_task_runtime_v1 WHERE task_id = $1::uuid",
-        "parameters": [{ "$ref": "timerTask" }],
-        "expect": { "rows": [{ "value": { "state": "scheduled", "waitName": "pause" } }] }
+        "parameters": [
+          {
+            "$ref": "timerTask"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "state": "scheduled",
+                "waitName": "pause"
+              }
+            }
+          ]
+        }
       }
     ]
   },
@@ -433,7 +795,9 @@
             {
               "queue": "protocol-coalesce",
               "type": "protocol.debounce",
-              "payload": { "version": 1 },
+              "payload": {
+                "version": 1
+              },
               "debounce": {
                 "scope": "protocol",
                 "key": "debounce",
@@ -444,9 +808,20 @@
           ]
         ],
         "expect": {
-          "rows": [{ "value": { "taskId": { "$type": "uuid" }, "outcome": "accepted" } }]
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$type": "uuid"
+                },
+                "outcome": "accepted"
+              }
+            }
+          ]
         },
-        "capture": { "debounceTask": "0.value.taskId" }
+        "capture": {
+          "debounceTask": "0.value.taskId"
+        }
       },
       {
         "id": "debounce-replaced",
@@ -456,7 +831,9 @@
             {
               "queue": "protocol-coalesce",
               "type": "protocol.debounce",
-              "payload": { "version": 2 },
+              "payload": {
+                "version": 2
+              },
               "debounce": {
                 "scope": "protocol",
                 "key": "debounce",
@@ -467,7 +844,16 @@
           ]
         ],
         "expect": {
-          "rows": [{ "value": { "taskId": { "$ref": "debounceTask" }, "outcome": "replaced" } }]
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$ref": "debounceTask"
+                },
+                "outcome": "replaced"
+              }
+            }
+          ]
         }
       },
       {
@@ -478,30 +864,9 @@
             {
               "queue": "protocol-coalesce",
               "type": "protocol.debounce-refusal",
-              "payload": { "version": 1 },
-              "debounce": {
-                "scope": "protocol",
-                "key": "debounce-refusal",
-                "windowMs": 1,
-                "schedule": "reset"
-              }
-            }
-          ]
-        ],
-        "expect": {
-          "rows": [{ "value": { "taskId": { "$type": "uuid" }, "outcome": "accepted" } }]
-        },
-        "capture": { "debounceRefusalTask": "0.value.taskId" }
-      },
-      {
-        "id": "debounce-refusal-reason",
-        "sql": "WITH paused AS MATERIALIZED (SELECT pg_sleep(0.01)) SELECT jsonb_build_object('taskId', result.task_id, 'outcome', result.outcome, 'reason', result.reason) AS value FROM paused CROSS JOIN LATERAL workhorse.enqueue_many_v1($1::jsonb) result",
-        "parameters": [
-          [
-            {
-              "queue": "protocol-coalesce",
-              "type": "protocol.debounce-refusal",
-              "payload": { "version": 2 },
+              "payload": {
+                "version": 1
+              },
               "debounce": {
                 "scope": "protocol",
                 "key": "debounce-refusal",
@@ -515,7 +880,45 @@
           "rows": [
             {
               "value": {
-                "taskId": { "$ref": "debounceRefusalTask" },
+                "taskId": {
+                  "$type": "uuid"
+                },
+                "outcome": "accepted"
+              }
+            }
+          ]
+        },
+        "capture": {
+          "debounceRefusalTask": "0.value.taskId"
+        }
+      },
+      {
+        "id": "debounce-refusal-reason",
+        "sql": "WITH paused AS MATERIALIZED (SELECT pg_sleep(0.01)) SELECT jsonb_build_object('taskId', result.task_id, 'outcome', result.outcome, 'reason', result.reason) AS value FROM paused CROSS JOIN LATERAL workhorse.enqueue_many_v1($1::jsonb) result",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-coalesce",
+              "type": "protocol.debounce-refusal",
+              "payload": {
+                "version": 2
+              },
+              "debounce": {
+                "scope": "protocol",
+                "key": "debounce-refusal",
+                "windowMs": 1,
+                "schedule": "reset"
+              }
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$ref": "debounceRefusalTask"
+                },
                 "outcome": "non_replaceable",
                 "reason": "window_elapsed_pending"
               }
@@ -531,15 +934,32 @@
             {
               "queue": "protocol-coalesce",
               "type": "protocol.throttle",
-              "payload": { "version": 1 },
-              "throttle": { "scope": "protocol", "key": "throttle", "windowMs": 60000 }
+              "payload": {
+                "version": 1
+              },
+              "throttle": {
+                "scope": "protocol",
+                "key": "throttle",
+                "windowMs": 60000
+              }
             }
           ]
         ],
         "expect": {
-          "rows": [{ "value": { "taskId": { "$type": "uuid" }, "outcome": "accepted" } }]
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$type": "uuid"
+                },
+                "outcome": "accepted"
+              }
+            }
+          ]
         },
-        "capture": { "throttleTask": "0.value.taskId" }
+        "capture": {
+          "throttleTask": "0.value.taskId"
+        }
       },
       {
         "id": "throttle-coalesced",
@@ -549,13 +969,28 @@
             {
               "queue": "protocol-coalesce",
               "type": "protocol.throttle",
-              "payload": { "version": 1 },
-              "throttle": { "scope": "protocol", "key": "throttle", "windowMs": 60000 }
+              "payload": {
+                "version": 1
+              },
+              "throttle": {
+                "scope": "protocol",
+                "key": "throttle",
+                "windowMs": 60000
+              }
             }
           ]
         ],
         "expect": {
-          "rows": [{ "value": { "taskId": { "$ref": "throttleTask" }, "outcome": "coalesced" } }]
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$ref": "throttleTask"
+                },
+                "outcome": "coalesced"
+              }
+            }
+          ]
         }
       },
       {
@@ -566,15 +1001,32 @@
             {
               "queue": "protocol-errors",
               "type": "protocol.error",
-              "payload": { "version": 1 },
-              "idempotency": { "scope": "protocol", "key": "protocol-conflict", "ttlMs": 60000 }
+              "payload": {
+                "version": 1
+              },
+              "idempotency": {
+                "scope": "protocol",
+                "key": "protocol-conflict",
+                "ttlMs": 60000
+              }
             }
           ]
         ],
         "expect": {
-          "rows": [{ "value": { "taskId": { "$type": "uuid" }, "outcome": "accepted" } }]
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$type": "uuid"
+                },
+                "outcome": "accepted"
+              }
+            }
+          ]
         },
-        "capture": { "conflictTask": "0.value.taskId" }
+        "capture": {
+          "conflictTask": "0.value.taskId"
+        }
       },
       {
         "id": "idempotency-conflict",
@@ -584,8 +1036,14 @@
             {
               "queue": "protocol-errors",
               "type": "protocol.error",
-              "payload": { "version": 2 },
-              "idempotency": { "scope": "protocol", "key": "protocol-conflict", "ttlMs": 60000 }
+              "payload": {
+                "version": 2
+              },
+              "idempotency": {
+                "scope": "protocol",
+                "key": "protocol-conflict",
+                "ttlMs": 60000
+              }
             }
           ]
         ],
@@ -594,10 +1052,12 @@
           "message": "enqueue idempotency conflict with a retained request",
           "detail": {
             "conflictingFields": ["payload"],
-            "existingTaskId": { "$ref": "conflictTask" },
+            "existingTaskId": {
+              "$ref": "conflictTask"
+            },
             "keyDigest": "b0fd606eefe8",
             "keyLength": 17,
-            "keyPreview": "protocol…lict",
+            "keyPreview": "protocol\u2026lict",
             "ordinal": 1,
             "rejectedRequestDigest": "d5fdb44699fa0aec5063a464465be8690df99a41cfe56f19fde6f15cab76a9df",
             "scope": "protocol",
@@ -614,8 +1074,20 @@
         "id": "enqueue-prerequisite",
         "sql": "SELECT jsonb_build_object('taskId', workhorse.enqueue_v1($1, $2, '{}'::jsonb)) AS value",
         "parameters": ["protocol-dependency", "protocol.prerequisite"],
-        "expect": { "rows": [{ "value": { "taskId": { "$type": "uuid" } } }] },
-        "capture": { "prerequisiteTask": "0.value.taskId" }
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$type": "uuid"
+                }
+              }
+            }
+          ]
+        },
+        "capture": {
+          "prerequisiteTask": "0.value.taskId"
+        }
       },
       {
         "id": "enqueue-dependent",
@@ -627,32 +1099,75 @@
               "queue": "protocol-dependency",
               "type": "protocol.dependent",
               "payload": {},
-              "prerequisiteTaskId": { "$ref": "prerequisiteTask" }
+              "prerequisiteTaskId": {
+                "$ref": "prerequisiteTask"
+              }
             }
           ]
         ],
         "expect": {
-          "rows": [{ "value": { "taskId": { "$type": "uuid" }, "outcome": "accepted" } }]
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$type": "uuid"
+                },
+                "outcome": "accepted"
+              }
+            }
+          ]
         },
-        "capture": { "dependentTask": "0.value.taskId" }
+        "capture": {
+          "dependentTask": "0.value.taskId"
+        }
       },
       {
         "id": "blocked-transition",
         "sql": "SELECT jsonb_build_object('state', state) AS value FROM workhorse.dashboard_task_runtime_v1 WHERE task_id = $1::uuid",
-        "parameters": [{ "$ref": "dependentTask" }],
-        "expect": { "rows": [{ "value": { "state": "blocked" } }] }
+        "parameters": [
+          {
+            "$ref": "dependentTask"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "state": "blocked"
+              }
+            }
+          ]
+        }
       },
       {
         "id": "complete-prerequisite",
         "sql": "WITH claimed AS (SELECT * FROM workhorse.claim_v1($1, $2, 30000)) SELECT workhorse.complete_v1(task_id, $2, fence_token, '{}'::jsonb) AS accepted FROM claimed",
         "parameters": ["protocol-dependency", "protocol-dependency-worker"],
-        "expect": { "rows": [{ "accepted": true }] }
+        "expect": {
+          "rows": [
+            {
+              "accepted": true
+            }
+          ]
+        }
       },
       {
         "id": "released-transition",
         "sql": "SELECT jsonb_build_object('state', state) AS value FROM workhorse.dashboard_task_runtime_v1 WHERE task_id = $1::uuid",
-        "parameters": [{ "$ref": "dependentTask" }],
-        "expect": { "rows": [{ "value": { "state": "ready" } }] }
+        "parameters": [
+          {
+            "$ref": "dependentTask"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "state": "ready"
+              }
+            }
+          ]
+        }
       }
     ]
   },
@@ -665,26 +1180,44 @@
         "parameters": ["protocol-parent", "protocol.parent", "protocol-parent-worker"],
         "expect": {
           "rows": [
-            { "value": { "fenceToken": { "$type": "integer" }, "taskId": { "$type": "uuid" } } }
+            {
+              "value": {
+                "fenceToken": {
+                  "$type": "integer"
+                },
+                "taskId": {
+                  "$type": "uuid"
+                }
+              }
+            }
           ]
         },
-        "capture": { "parentTask": "0.value.taskId", "parentFence": "0.value.fenceToken" }
+        "capture": {
+          "parentTask": "0.value.taskId",
+          "parentFence": "0.value.fenceToken"
+        }
       },
       {
         "id": "create-child",
         "covers": ["children"],
         "sql": "SELECT jsonb_build_object('status', status, 'children', children) AS value FROM workhorse.create_children_v1($1::uuid, $2, $3::bigint, $4::jsonb, $5::text)",
         "parameters": [
-          { "$ref": "parentTask" },
+          {
+            "$ref": "parentTask"
+          },
           "protocol-parent-worker",
-          { "$ref": "parentFence" },
+          {
+            "$ref": "parentFence"
+          },
           [
             {
               "name": "accepted",
               "request": {
                 "queue": "protocol-child-success",
                 "type": "protocol.child",
-                "payload": { "value": 7 }
+                "payload": {
+                  "value": 7
+                }
               }
             },
             {
@@ -713,22 +1246,34 @@
               "value": {
                 "children": [
                   {
-                    "childTaskId": { "$type": "uuid" },
-                    "createdAt": { "$type": "timestamp" },
+                    "childTaskId": {
+                      "$type": "uuid"
+                    },
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
                     "joinedAt": null,
                     "name": "accepted",
                     "type": "protocol.child"
                   },
                   {
-                    "childTaskId": { "$type": "uuid" },
-                    "createdAt": { "$type": "timestamp" },
+                    "childTaskId": {
+                      "$type": "uuid"
+                    },
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
                     "joinedAt": null,
                     "name": "rejected",
                     "type": "protocol.child"
                   },
                   {
-                    "childTaskId": { "$type": "uuid" },
-                    "createdAt": { "$type": "timestamp" },
+                    "childTaskId": {
+                      "$type": "uuid"
+                    },
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
                     "joinedAt": null,
                     "name": "skipped",
                     "type": "protocol.child"
@@ -748,8 +1293,20 @@
       {
         "id": "complete-child",
         "sql": "WITH claimed AS (SELECT * FROM workhorse.claim_v1($1, $2, 30000)) SELECT workhorse.complete_v1(task_id, $2, fence_token, $3::jsonb) AS accepted FROM claimed",
-        "parameters": ["protocol-child-success", "protocol-child-worker", { "value": 7 }],
-        "expect": { "rows": [{ "accepted": true }] }
+        "parameters": [
+          "protocol-child-success",
+          "protocol-child-worker",
+          {
+            "value": 7
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "accepted": true
+            }
+          ]
+        }
       },
       {
         "id": "fail-child",
@@ -757,21 +1314,53 @@
         "parameters": [
           "protocol-child-failure",
           "protocol-child-worker",
-          { "name": "Error", "message": "rejected" }
+          {
+            "name": "Error",
+            "message": "rejected"
+          }
         ],
-        "expect": { "rows": [{ "state": "failed" }] }
+        "expect": {
+          "rows": [
+            {
+              "state": "failed"
+            }
+          ]
+        }
       },
       {
         "id": "cancel-child",
         "sql": "SELECT status FROM workhorse.cancel_v1($1::uuid, $2, NULL)",
-        "parameters": [{ "$ref": "canceledChildTask" }, "protocol-fixture"],
-        "expect": { "rows": [{ "status": "canceled" }] }
+        "parameters": [
+          {
+            "$ref": "canceledChildTask"
+          },
+          "protocol-fixture"
+        ],
+        "expect": {
+          "rows": [
+            {
+              "status": "canceled"
+            }
+          ]
+        }
       },
       {
         "id": "parent-released",
         "sql": "SELECT jsonb_build_object('state', state) AS value FROM workhorse.dashboard_task_runtime_v1 WHERE task_id = $1::uuid",
-        "parameters": [{ "$ref": "parentTask" }],
-        "expect": { "rows": [{ "value": { "state": "ready" } }] }
+        "parameters": [
+          {
+            "$ref": "parentTask"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "state": "ready"
+              }
+            }
+          ]
+        }
       },
       {
         "id": "claim-released-parent",
@@ -780,26 +1369,41 @@
         "expect": {
           "rows": [
             {
-              "value": { "fenceToken": { "$type": "integer" }, "taskId": { "$ref": "parentTask" } }
+              "value": {
+                "fenceToken": {
+                  "$type": "integer"
+                },
+                "taskId": {
+                  "$ref": "parentTask"
+                }
+              }
             }
           ]
         },
-        "capture": { "resumedParentFence": "0.value.fenceToken" }
+        "capture": {
+          "resumedParentFence": "0.value.fenceToken"
+        }
       },
       {
         "id": "join-settled-child",
         "sql": "SELECT jsonb_build_object('status', status, 'children', children) AS value FROM workhorse.create_children_v1($1::uuid, $2, $3::bigint, $4::jsonb, $5::text)",
         "parameters": [
-          { "$ref": "parentTask" },
+          {
+            "$ref": "parentTask"
+          },
           "protocol-parent-worker",
-          { "$ref": "resumedParentFence" },
+          {
+            "$ref": "resumedParentFence"
+          },
           [
             {
               "name": "accepted",
               "request": {
                 "queue": "protocol-child-success",
                 "type": "protocol.child",
-                "payload": { "value": 7 }
+                "payload": {
+                  "value": 7
+                }
               }
             },
             {
@@ -828,28 +1432,54 @@
               "value": {
                 "children": [
                   {
-                    "childTaskId": { "$ref": "childTask" },
-                    "createdAt": { "$type": "timestamp" },
-                    "joinedAt": { "$type": "timestamp" },
+                    "childTaskId": {
+                      "$ref": "childTask"
+                    },
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "joinedAt": {
+                      "$type": "timestamp"
+                    },
                     "name": "accepted",
-                    "outcome": { "status": "succeeded", "result": { "value": 7 } },
-                    "type": "protocol.child"
-                  },
-                  {
-                    "childTaskId": { "$ref": "failedChildTask" },
-                    "createdAt": { "$type": "timestamp" },
-                    "joinedAt": { "$type": "timestamp" },
-                    "name": "rejected",
                     "outcome": {
-                      "status": "failed",
-                      "error": { "name": "Error", "message": "rejected" }
+                      "status": "succeeded",
+                      "result": {
+                        "value": 7
+                      }
                     },
                     "type": "protocol.child"
                   },
                   {
-                    "childTaskId": { "$ref": "canceledChildTask" },
-                    "createdAt": { "$type": "timestamp" },
-                    "joinedAt": { "$type": "timestamp" },
+                    "childTaskId": {
+                      "$ref": "failedChildTask"
+                    },
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "joinedAt": {
+                      "$type": "timestamp"
+                    },
+                    "name": "rejected",
+                    "outcome": {
+                      "status": "failed",
+                      "error": {
+                        "name": "Error",
+                        "message": "rejected"
+                      }
+                    },
+                    "type": "protocol.child"
+                  },
+                  {
+                    "childTaskId": {
+                      "$ref": "canceledChildTask"
+                    },
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "joinedAt": {
+                      "$type": "timestamp"
+                    },
                     "name": "skipped",
                     "outcome": {
                       "status": "canceled",
@@ -857,7 +1487,9 @@
                         "name": "CancellationRequested",
                         "message": "task cancellation was requested",
                         "requested_by": "protocol-fixture",
-                        "requested_at": { "$type": "timestamp" },
+                        "requested_at": {
+                          "$type": "timestamp"
+                        },
                         "reason": null
                       }
                     },
@@ -876,7 +1508,16 @@
         "parameters": ["protocol-empty-parent", "protocol.empty-parent", "protocol-empty-worker"],
         "expect": {
           "rows": [
-            { "value": { "fenceToken": { "$type": "integer" }, "taskId": { "$type": "uuid" } } }
+            {
+              "value": {
+                "fenceToken": {
+                  "$type": "integer"
+                },
+                "taskId": {
+                  "$type": "uuid"
+                }
+              }
+            }
           ]
         },
         "capture": {
@@ -888,12 +1529,24 @@
         "id": "join-empty-set",
         "sql": "SELECT jsonb_build_object('status', status, 'children', children, 'results', results) AS value FROM workhorse.create_children_v1($1::uuid, $2, $3::bigint, '[]'::jsonb, 'settled')",
         "parameters": [
-          { "$ref": "emptyParentTask" },
+          {
+            "$ref": "emptyParentTask"
+          },
           "protocol-empty-worker",
-          { "$ref": "emptyParentFence" }
+          {
+            "$ref": "emptyParentFence"
+          }
         ],
         "expect": {
-          "rows": [{ "value": { "status": "completed", "children": [], "results": {} } }]
+          "rows": [
+            {
+              "value": {
+                "status": "completed",
+                "children": [],
+                "results": {}
+              }
+            }
+          ]
         }
       },
       {
@@ -906,7 +1559,16 @@
         ],
         "expect": {
           "rows": [
-            { "value": { "fenceToken": { "$type": "integer" }, "taskId": { "$type": "uuid" } } }
+            {
+              "value": {
+                "fenceToken": {
+                  "$type": "integer"
+                },
+                "taskId": {
+                  "$type": "uuid"
+                }
+              }
+            }
           ]
         },
         "capture": {
@@ -918,9 +1580,13 @@
         "id": "create-all-success-child",
         "sql": "SELECT jsonb_build_object('status', status, 'children', children) AS value FROM workhorse.create_children_v1($1::uuid, $2, $3::bigint, $4::jsonb, 'all_success')",
         "parameters": [
-          { "$ref": "allSuccessParentTask" },
+          {
+            "$ref": "allSuccessParentTask"
+          },
           "protocol-all-success-worker",
-          { "$ref": "allSuccessParentFence" },
+          {
+            "$ref": "allSuccessParentFence"
+          },
           [
             {
               "name": "rejected",
@@ -940,8 +1606,12 @@
                 "status": "created",
                 "children": [
                   {
-                    "childTaskId": { "$type": "uuid" },
-                    "createdAt": { "$type": "timestamp" },
+                    "childTaskId": {
+                      "$type": "uuid"
+                    },
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
                     "joinedAt": null,
                     "name": "rejected",
                     "type": "protocol.all-success-child"
@@ -958,15 +1628,34 @@
         "parameters": [
           "protocol-all-success-child",
           "protocol-all-success-child-worker",
-          { "name": "Error", "message": "rejected" }
+          {
+            "name": "Error",
+            "message": "rejected"
+          }
         ],
-        "expect": { "rows": [{ "state": "failed" }] }
+        "expect": {
+          "rows": [
+            {
+              "state": "failed"
+            }
+          ]
+        }
       },
       {
         "id": "all-success-parent-failed",
         "sql": "SELECT state FROM workhorse.task_outcome WHERE task_id = $1::uuid",
-        "parameters": [{ "$ref": "allSuccessParentTask" }],
-        "expect": { "rows": [{ "state": "failed" }] }
+        "parameters": [
+          {
+            "$ref": "allSuccessParentTask"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "state": "failed"
+            }
+          ]
+        }
       },
       {
         "id": "enqueue-and-claim-single-parent",
@@ -978,7 +1667,16 @@
         ],
         "expect": {
           "rows": [
-            { "value": { "fenceToken": { "$type": "integer" }, "taskId": { "$type": "uuid" } } }
+            {
+              "value": {
+                "fenceToken": {
+                  "$type": "integer"
+                },
+                "taskId": {
+                  "$type": "uuid"
+                }
+              }
+            }
           ]
         },
         "capture": {
@@ -990,21 +1688,29 @@
         "id": "create-single-child",
         "sql": "SELECT jsonb_build_object('status', status, 'childTaskId', child_task_id, 'childType', child_type, 'result', result) AS value FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
         "parameters": [
-          { "$ref": "singleParentTask" },
+          {
+            "$ref": "singleParentTask"
+          },
           "protocol-single-parent-worker",
-          { "$ref": "singleParentFence" },
+          {
+            "$ref": "singleParentFence"
+          },
           "only",
           {
             "queue": "protocol-single-child",
             "type": "protocol.single-child",
-            "payload": { "value": 8 }
+            "payload": {
+              "value": 8
+            }
           }
         ],
         "expect": {
           "rows": [
             {
               "value": {
-                "childTaskId": { "$type": "uuid" },
+                "childTaskId": {
+                  "$type": "uuid"
+                },
                 "childType": "protocol.single-child",
                 "result": null,
                 "status": "created"
@@ -1012,19 +1718,45 @@
             }
           ]
         },
-        "capture": { "singleChildTask": "0.value.childTaskId" }
+        "capture": {
+          "singleChildTask": "0.value.childTaskId"
+        }
       },
       {
         "id": "complete-single-child",
         "sql": "WITH claimed AS (SELECT * FROM workhorse.claim_v1($1, $2, 30000)) SELECT workhorse.complete_v1(task_id, $2, fence_token, $3::jsonb) AS accepted FROM claimed",
-        "parameters": ["protocol-single-child", "protocol-single-child-worker", { "value": 8 }],
-        "expect": { "rows": [{ "accepted": true }] }
+        "parameters": [
+          "protocol-single-child",
+          "protocol-single-child-worker",
+          {
+            "value": 8
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "accepted": true
+            }
+          ]
+        }
       },
       {
         "id": "single-parent-released",
         "sql": "SELECT jsonb_build_object('state', state) AS value FROM workhorse.dashboard_task_runtime_v1 WHERE task_id = $1::uuid",
-        "parameters": [{ "$ref": "singleParentTask" }],
-        "expect": { "rows": [{ "value": { "state": "ready" } }] }
+        "parameters": [
+          {
+            "$ref": "singleParentTask"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "state": "ready"
+              }
+            }
+          ]
+        }
       }
     ]
   },
@@ -1037,34 +1769,65 @@
         "parameters": ["protocol-signal", "protocol.signal", "protocol-signal-worker"],
         "expect": {
           "rows": [
-            { "value": { "fenceToken": { "$type": "integer" }, "taskId": { "$type": "uuid" } } }
+            {
+              "value": {
+                "fenceToken": {
+                  "$type": "integer"
+                },
+                "taskId": {
+                  "$type": "uuid"
+                }
+              }
+            }
           ]
         },
-        "capture": { "signalTask": "0.value.taskId", "signalFence": "0.value.fenceToken" }
+        "capture": {
+          "signalTask": "0.value.taskId",
+          "signalFence": "0.value.fenceToken"
+        }
       },
       {
         "id": "wait",
         "covers": ["signals"],
         "sql": "SELECT jsonb_build_object('status', status, 'payload', payload) AS value FROM workhorse.wait_for_signal_v1($1::uuid, $2, $3::bigint, $4, $5::bigint)",
         "parameters": [
-          { "$ref": "signalTask" },
+          {
+            "$ref": "signalTask"
+          },
           "protocol-signal-worker",
-          { "$ref": "signalFence" },
+          {
+            "$ref": "signalFence"
+          },
           "approval",
           null
         ],
-        "expect": { "rows": [{ "value": { "payload": null, "status": "waiting" } }] }
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "payload": null,
+                "status": "waiting"
+              }
+            }
+          ]
+        }
       },
       {
         "id": "list-waits",
         "sql": "SELECT jsonb_build_object('taskId', task_id, 'queue', queue_name, 'taskType', task_type, 'name', signal_name, 'attempt', attempt) AS value FROM workhorse.dashboard_signal_wait_v1 WHERE task_id = $1::uuid",
-        "parameters": [{ "$ref": "signalTask" }],
+        "parameters": [
+          {
+            "$ref": "signalTask"
+          }
+        ],
         "expect": {
           "rows": [
             {
               "value": {
                 "attempt": 1,
-                "taskId": { "$type": "uuid" },
+                "taskId": {
+                  "$type": "uuid"
+                },
                 "taskType": "protocol.signal",
                 "name": "approval",
                 "queue": "protocol-signal"
@@ -1077,9 +1840,13 @@
         "id": "send",
         "sql": "SELECT jsonb_build_object('status', status, 'payload', payload, 'requestedBy', delivered_by) AS value FROM workhorse.send_signal_v1($1::uuid, $2, $3::jsonb, $4, $5)",
         "parameters": [
-          { "$ref": "signalTask" },
+          {
+            "$ref": "signalTask"
+          },
           "approval",
-          { "approved": true },
+          {
+            "approved": true
+          },
           "signal-request",
           "protocol-service"
         ],
@@ -1087,7 +1854,9 @@
           "rows": [
             {
               "value": {
-                "payload": { "approved": true },
+                "payload": {
+                  "approved": true
+                },
                 "requestedBy": "protocol-service",
                 "status": "delivered"
               }
@@ -1098,8 +1867,20 @@
       {
         "id": "ready-transition",
         "sql": "SELECT jsonb_build_object('state', state) AS value FROM workhorse.dashboard_task_runtime_v1 WHERE task_id = $1::uuid",
-        "parameters": [{ "$ref": "signalTask" }],
-        "expect": { "rows": [{ "value": { "state": "ready" } }] }
+        "parameters": [
+          {
+            "$ref": "signalTask"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "state": "ready"
+              }
+            }
+          ]
+        }
       }
     ]
   },
@@ -1110,7 +1891,16 @@
         "id": "database-owned-snapshot",
         "sql": "SELECT jsonb_build_object('schemaVersion', snapshot->'schema_version', 'promotionLagMs', snapshot->'budgets'->'promotionLagMs') AS value FROM (SELECT workhorse.queue_health_v1($1::timestamptz) AS snapshot) health",
         "parameters": ["2000-01-01T00:00:00.000Z"],
-        "expect": { "rows": [{ "value": { "promotionLagMs": 10000, "schemaVersion": 17 } }] }
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "promotionLagMs": 10000,
+                "schemaVersion": 18
+              }
+            }
+          ]
+        }
       }
     ]
   },
@@ -1123,36 +1913,71 @@
         "parameters": ["protocol-human", "protocol.human", "protocol-human-worker"],
         "expect": {
           "rows": [
-            { "value": { "fenceToken": { "$type": "integer" }, "taskId": { "$type": "uuid" } } }
+            {
+              "value": {
+                "fenceToken": {
+                  "$type": "integer"
+                },
+                "taskId": {
+                  "$type": "uuid"
+                }
+              }
+            }
           ]
         },
-        "capture": { "humanTask": "0.value.taskId", "humanFence": "0.value.fenceToken" }
+        "capture": {
+          "humanTask": "0.value.taskId",
+          "humanFence": "0.value.fenceToken"
+        }
       },
       {
         "id": "wait",
         "covers": ["human-tokens"],
         "sql": "SELECT jsonb_build_object('status', status, 'result', result) AS value FROM workhorse.wait_for_human_v1($1::uuid, $2, $3::bigint, $4, $5::jsonb, $6::bigint)",
         "parameters": [
-          { "$ref": "humanTask" },
+          {
+            "$ref": "humanTask"
+          },
           "protocol-human-worker",
-          { "$ref": "humanFence" },
+          {
+            "$ref": "humanFence"
+          },
           "review",
-          { "question": "Ship?" },
+          {
+            "question": "Ship?"
+          },
           null
         ],
-        "expect": { "rows": [{ "value": { "result": null, "status": "waiting" } }] }
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "result": null,
+                "status": "waiting"
+              }
+            }
+          ]
+        }
       },
       {
         "id": "list-waits",
         "sql": "SELECT jsonb_build_object('taskId', task_id, 'queue', queue_name, 'taskType', task_type, 'name', token_name, 'context', context, 'attempt', attempt) AS value FROM workhorse.dashboard_human_wait_v1 WHERE task_id = $1::uuid",
-        "parameters": [{ "$ref": "humanTask" }],
+        "parameters": [
+          {
+            "$ref": "humanTask"
+          }
+        ],
         "expect": {
           "rows": [
             {
               "value": {
                 "attempt": 1,
-                "context": { "question": "Ship?" },
-                "taskId": { "$type": "uuid" },
+                "context": {
+                  "question": "Ship?"
+                },
+                "taskId": {
+                  "$type": "uuid"
+                },
                 "taskType": "protocol.human",
                 "name": "review",
                 "queue": "protocol-human"
@@ -1165,9 +1990,13 @@
         "id": "complete",
         "sql": "SELECT jsonb_build_object('status', status, 'result', result, 'completedBy', completed_by) AS value FROM workhorse.complete_human_wait_v1($1::uuid, $2, $3::jsonb, $4, $5)",
         "parameters": [
-          { "$ref": "humanTask" },
+          {
+            "$ref": "humanTask"
+          },
           "review",
-          { "approved": true },
+          {
+            "approved": true
+          },
           "human-request",
           "protocol-operator"
         ],
@@ -1176,7 +2005,9 @@
             {
               "value": {
                 "completedBy": "protocol-operator",
-                "result": { "approved": true },
+                "result": {
+                  "approved": true
+                },
                 "status": "completed"
               }
             }
@@ -1186,8 +2017,20 @@
       {
         "id": "ready-transition",
         "sql": "SELECT jsonb_build_object('state', state) AS value FROM workhorse.dashboard_task_runtime_v1 WHERE task_id = $1::uuid",
-        "parameters": [{ "$ref": "humanTask" }],
-        "expect": { "rows": [{ "value": { "state": "ready" } }] }
+        "parameters": [
+          {
+            "$ref": "humanTask"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "state": "ready"
+              }
+            }
+          ]
+        }
       }
     ]
   },
@@ -1207,9 +2050,15 @@
                   "payloadSchema": {
                     "type": "object",
                     "required": ["message"],
-                    "properties": { "message": { "type": "string" } }
+                    "properties": {
+                      "message": {
+                        "type": "string"
+                      }
+                    }
                   },
-                  "resultSchema": { "type": "boolean" },
+                  "resultSchema": {
+                    "type": "boolean"
+                  },
                   "maxPayloadBytes": 2048,
                   "maxResultBytes": 1024,
                   "sensitivePayloadKeys": ["token"],
@@ -1219,7 +2068,13 @@
             }
           ]
         ],
-        "expect": { "rows": [{ "synced": "" }] }
+        "expect": {
+          "rows": [
+            {
+              "synced": ""
+            }
+          ]
+        }
       },
       {
         "id": "read-current-contract-definition",
@@ -1236,11 +2091,17 @@
                 "resultRedactKeys": [],
                 "schema": {
                   "payload": {
-                    "properties": { "message": { "type": "string" } },
+                    "properties": {
+                      "message": {
+                        "type": "string"
+                      }
+                    },
                     "required": ["message"],
                     "type": "object"
                   },
-                  "result": { "type": "boolean" }
+                  "result": {
+                    "type": "boolean"
+                  }
                 },
                 "source": "application",
                 "version": "v1"
@@ -1259,10 +2120,22 @@
         "sql": "SELECT count(*)::integer AS count FROM workhorse.sync_concurrency_policies_v1($1::text, $2::jsonb, $3::boolean)",
         "parameters": [
           "protocol-batch-admission",
-          [{ "queue": "protocol-batch-admission", "maxActive": 3, "maxActivePerKey": 1 }],
+          [
+            {
+              "queue": "protocol-batch-admission",
+              "maxActive": 3,
+              "maxActivePerKey": 1
+            }
+          ],
           true
         ],
-        "expect": { "rows": [{ "count": 1 }] }
+        "expect": {
+          "rows": [
+            {
+              "count": 1
+            }
+          ]
+        }
       },
       {
         "id": "enqueue-priority-and-key-candidates",
@@ -1272,34 +2145,48 @@
             {
               "queue": "protocol-batch-admission",
               "type": "protocol.admission",
-              "payload": { "key": "c" },
+              "payload": {
+                "key": "c"
+              },
               "concurrencyKey": "c",
               "priority": 0
             },
             {
               "queue": "protocol-batch-admission",
               "type": "protocol.admission",
-              "payload": { "key": "a1" },
+              "payload": {
+                "key": "a1"
+              },
               "concurrencyKey": "a",
               "priority": 100
             },
             {
               "queue": "protocol-batch-admission",
               "type": "protocol.admission",
-              "payload": { "key": "a2" },
+              "payload": {
+                "key": "a2"
+              },
               "concurrencyKey": "a",
               "priority": 90
             },
             {
               "queue": "protocol-batch-admission",
               "type": "protocol.admission",
-              "payload": { "key": "b" },
+              "payload": {
+                "key": "b"
+              },
               "concurrencyKey": "b",
               "priority": 80
             }
           ]
         ],
-        "expect": { "rows": [{ "count": 4 }] }
+        "expect": {
+          "rows": [
+            {
+              "count": 4
+            }
+          ]
+        }
       },
       {
         "id": "claim-in-priority-order-with-per-key-admission",
@@ -1307,9 +2194,24 @@
         "parameters": ["protocol-batch-admission", "protocol-admission-worker", 3, 30000],
         "expect": {
           "rows": [
-            { "priority": 100, "payload": { "key": "a1" } },
-            { "priority": 80, "payload": { "key": "b" } },
-            { "priority": 0, "payload": { "key": "c" } }
+            {
+              "priority": 100,
+              "payload": {
+                "key": "a1"
+              }
+            },
+            {
+              "priority": 80,
+              "payload": {
+                "key": "b"
+              }
+            },
+            {
+              "priority": 0,
+              "payload": {
+                "key": "c"
+              }
+            }
           ]
         }
       }
@@ -1325,16 +2227,230 @@
         "parameters": ["2030-01-02T04:00:00.000Z"],
         "expect": {
           "rows": [
-            { "phase": "stat_rollup" },
-            { "phase": "stat_retention" },
-            { "phase": "history_partitions" },
-            { "phase": "event_retention" },
-            { "phase": "attempt_retention" },
-            { "phase": "schedule_occurrences" },
-            { "phase": "enqueue_idempotency" },
-            { "phase": "released_dependencies" },
-            { "phase": "terminal_tasks" },
-            { "phase": "worker_registry" }
+            {
+              "phase": "stat_rollup"
+            },
+            {
+              "phase": "stat_retention"
+            },
+            {
+              "phase": "history_partitions"
+            },
+            {
+              "phase": "event_retention"
+            },
+            {
+              "phase": "attempt_retention"
+            },
+            {
+              "phase": "schedule_occurrences"
+            },
+            {
+              "phase": "enqueue_idempotency"
+            },
+            {
+              "phase": "released_dependencies"
+            },
+            {
+              "phase": "terminal_tasks"
+            },
+            {
+              "phase": "worker_registry"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "unknown-type-release",
+    "steps": [
+      {
+        "id": "enqueue",
+        "sql": "SELECT jsonb_build_object('taskId', workhorse.enqueue_v1($1, $2, $3::jsonb, clock_timestamp(), $4)) AS value",
+        "parameters": [
+          "protocol-release",
+          "protocol.unhandled",
+          {
+            "index": 1
+          },
+          1
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$type": "uuid"
+                }
+              }
+            }
+          ]
+        },
+        "capture": {
+          "releaseTask": "0.value.taskId"
+        }
+      },
+      {
+        "id": "claim",
+        "sql": "SELECT jsonb_build_object('attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1, $2, 30000)",
+        "parameters": ["protocol-release", "protocol-release-worker"],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "attempt": 1,
+                "fenceToken": {
+                  "$type": "integer"
+                }
+              }
+            }
+          ]
+        },
+        "capture": {
+          "releaseFence": "0.value.fenceToken"
+        }
+      },
+      {
+        "id": "refuse-stale-release",
+        "covers": ["unknown-type-release"],
+        "sql": "SELECT workhorse.release_owned_v1($1::uuid, $2, $3::bigint) AS status",
+        "parameters": [
+          {
+            "$ref": "releaseTask"
+          },
+          "protocol-release-other-worker",
+          {
+            "$ref": "releaseFence"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "status": "stale"
+            }
+          ]
+        }
+      },
+      {
+        "id": "release",
+        "covers": ["unknown-type-release"],
+        "sql": "SELECT workhorse.release_owned_v1($1::uuid, $2, $3::bigint) AS status",
+        "parameters": [
+          {
+            "$ref": "releaseTask"
+          },
+          "protocol-release-worker",
+          {
+            "$ref": "releaseFence"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "status": "released"
+            }
+          ]
+        }
+      },
+      {
+        "id": "ready-with-attempt-intact",
+        "sql": "SELECT jsonb_build_object('state', state, 'attempt', current_attempt, 'workerId', worker_id) AS value FROM workhorse.dashboard_task_runtime_v1 WHERE task_id = $1::uuid",
+        "parameters": [
+          {
+            "$ref": "releaseTask"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "state": "ready",
+                "attempt": 1,
+                "workerId": null
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "no-attempt-was-closed",
+        "sql": "SELECT count(*)::integer AS attempts FROM workhorse.attempt_history WHERE task_id = $1::uuid",
+        "parameters": [
+          {
+            "$ref": "releaseTask"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "attempts": 0
+            }
+          ]
+        }
+      },
+      {
+        "id": "claim-after-release",
+        "sql": "SELECT jsonb_build_object('attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1, $2, 30000)",
+        "parameters": ["protocol-release", "protocol-release-handler-worker"],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "attempt": 1,
+                "fenceToken": {
+                  "$type": "integer"
+                }
+              }
+            }
+          ]
+        },
+        "capture": {
+          "releaseSecondFence": "0.value.fenceToken"
+        }
+      },
+      {
+        "id": "complete-after-release",
+        "sql": "SELECT workhorse.complete_v1($1::uuid, $2, $3::bigint, $4::jsonb) AS accepted",
+        "parameters": [
+          {
+            "$ref": "releaseTask"
+          },
+          "protocol-release-handler-worker",
+          {
+            "$ref": "releaseSecondFence"
+          },
+          {
+            "ran": true
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "accepted": true
+            }
+          ]
+        }
+      },
+      {
+        "id": "succeeded-transition",
+        "sql": "SELECT jsonb_build_object('state', state, 'attempt', current_attempt, 'result', workhorse.dashboard_task_result_v1(task_id)) AS value FROM workhorse.dashboard_task_outcome_v1 WHERE task_id = $1::uuid",
+        "parameters": [
+          {
+            "$ref": "releaseTask"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "state": "succeeded",
+                "attempt": 1,
+                "result": {
+                  "ran": true
+                }
+              }
+            }
           ]
         }
       }

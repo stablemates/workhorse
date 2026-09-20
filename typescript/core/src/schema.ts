@@ -155,6 +155,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "bounded dashboard task values",
     kind: "additive",
   },
+  {
+    fromVersion: 17,
+    toVersion: 18,
+    file: "0018-release-a-task-without-a-handler.sql",
+    description: "release a task without a handler",
+    kind: "additive",
+  },
 ];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {

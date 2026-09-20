@@ -472,6 +472,7 @@ describe("schema installation", () => {
       { version: 15, description: "cached health dashboard reads" },
       { version: 16, description: "bounded dashboard task reads" },
       { version: 17, description: "bounded dashboard task values" },
+      { version: 18, description: "release a task without a handler" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

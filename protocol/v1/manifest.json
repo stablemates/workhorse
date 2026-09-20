@@ -2,9 +2,9 @@
   "formatVersion": 1,
   "protocolVersion": 4,
   "schema": {
-    "installedVersion": 17,
+    "installedVersion": 18,
     "minimumVersion": 1,
-    "maximumVersion": 17,
+    "maximumVersion": 18,
     "baselineVersion": 1
   },
   "supportedClientProtocol": {
@@ -48,7 +48,8 @@
     "signals",
     "human-tokens",
     "retention-maintenance",
-    "enqueue-trace-propagation"
+    "enqueue-trace-propagation",
+    "unknown-type-release"
   ],
   "contractSchemaProfile": {
     "dialect": "https://json-schema.org/draft/2020-12/schema",
@@ -148,6 +149,11 @@
       "name": "fail_v1",
       "arity": 5,
       "contract": "SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state"
+    },
+    {
+      "name": "release_owned_v1",
+      "arity": 3,
+      "contract": "SELECT workhorse.release_owned_v1($1::uuid, $2::text, $3::bigint) AS status"
     },
     {
       "name": "cancel_v1",
@@ -310,6 +316,13 @@
       "pythonBinding": "fail",
       "arity": 5,
       "contract": "SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state",
+      "catalogues": ["protocol"]
+    },
+    {
+      "name": "release_owned_v1",
+      "pythonBinding": "release_owned",
+      "arity": 3,
+      "contract": "SELECT workhorse.release_owned_v1($1::uuid, $2::text, $3::bigint) AS status",
       "catalogues": ["protocol"]
     },
     {
