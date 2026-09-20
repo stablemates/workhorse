@@ -75,6 +75,18 @@ participate in the worker registry.
 Python's `handle_batch` follows the same grouping contract described in
 [Batch handlers](/docs/batch-handlers).
 
+## Tasks this worker cannot run
+
+A claim does not filter by task type, so a worker can be handed a task whose type it has no handler
+for. That is normal during a deploy that replaces workers one at a time, where the new release
+enqueues a type the old release has never heard of.
+
+The worker hands that claim straight back under its own fence. Workhorse returns the task to its
+queue and leaves the attempt count alone, so a worker that does have the handler still gets every
+attempt the task was allowed. Failing it instead would spend an attempt on a worker that never ran
+anything. A pass that only handed claims back counts as an empty one, so a type no deployed worker
+handles is re-checked on the polling cadence rather than continuously.
+
 ## Waiting without constant polling
 
 An idle worker listens for committed wake hints and receives only notifications for its configured

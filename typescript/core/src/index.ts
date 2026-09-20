@@ -226,6 +226,7 @@ export type {
   EnqueueRequest,
   EnqueueResult,
   ExpireOwnedStatus,
+  ReleaseOwnedStatus,
   TaskCheckpoint,
   TaskContractVersion,
   TaskTypeContracts,

@@ -10,7 +10,7 @@ PROTOCOL_VERSION = 4
 MINIMUM_PROTOCOL_VERSION = 1
 MAXIMUM_PROTOCOL_VERSION = 4
 MINIMUM_SCHEMA_VERSION = 1
-MAXIMUM_SCHEMA_VERSION = 17
+MAXIMUM_SCHEMA_VERSION = 18
 DEFAULT_VALUE_MAX_BYTES = 1048576
 MAX_BATCH_SIZE = 1000
 
@@ -82,6 +82,10 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
     "fail_v1": (
         "SELECT workhorse.fail_v1(%s::uuid, %s::text, %s::bigint, %s::jsonb, %s::integer) AS state",
         "SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state",
+    ),
+    "release_owned_v1": (
+        "SELECT workhorse.release_owned_v1(%s::uuid, %s::text, %s::bigint) AS status",
+        "SELECT workhorse.release_owned_v1($1::uuid, $2::text, $3::bigint) AS status",
     ),
     "fire_due_schedules_v2": (
         "SELECT namespace, schedule_name, occurrence_at, task_id\n  FROM workhorse.fire_due_schedules_v2(%s::text[], %s::timestamptz, %s::integer, %s::bigint)",
@@ -528,6 +532,7 @@ class StatementRegistry:
     enqueue_many: DriverStatement
     expire_owned: DriverStatement
     fail: DriverStatement
+    release_owned: DriverStatement
     fire_due_schedules: DriverStatement
     get_contract: DriverStatement
     heartbeat_many: DriverStatement
@@ -569,6 +574,7 @@ STATEMENTS = StatementRegistry(
     enqueue_many=_statement("enqueue_many_v1"),
     expire_owned=_statement("expire_owned_telemetry_v1"),
     fail=_statement("fail_v1"),
+    release_owned=_statement("release_owned_v1"),
     fire_due_schedules=_statement("fire_due_schedules_v2"),
     get_contract=_statement("get_contract_definition_v1"),
     heartbeat_many=_statement("heartbeat_many_v1"),

@@ -202,6 +202,7 @@ const (
 	handlerOutcomeDeadlineExceeded handlerOutcome = workerFailureDeadline
 	handlerOutcomeFailed           handlerOutcome = workerFailureFailed
 	handlerOutcomeLeaseLost        handlerOutcome = telemetryLeaseLostValue
+	handlerOutcomeReleased         handlerOutcome = telemetryReleasedValue
 	handlerOutcomeRetry            handlerOutcome = telemetryRetryValue
 	handlerOutcomeSucceeded        handlerOutcome = telemetrySucceededValue
 	handlerOutcomeSuspended        handlerOutcome = telemetrySuspendedValue

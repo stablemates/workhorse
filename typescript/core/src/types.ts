@@ -435,6 +435,20 @@ export type ExpireOwnedStatus =
   | "timeout_exceeded"
   | "stale";
 
+/**
+ * Verdict on a fenced release: giving an owned task back to its queue with the attempt intact.
+ *
+ * `released` is the accepted outcome. The other values name the boundary the database settled
+ * instead, so a worker reads them exactly as it reads a rejected failure.
+ */
+export type ReleaseOwnedStatus =
+  | "released"
+  | "cancel_requested"
+  | "deadline_exceeded"
+  | "timeout_exceeded"
+  | "not_due"
+  | "stale";
+
 /** Safe lifecycle metadata returned by {@link Queue.cancel}; payloads and worker ownership are omitted. */
 export interface CancelResult {
   status: CancelStatus;

@@ -317,6 +317,75 @@ describe("claim lease fence", () => {
     expect(terminalRows.rows[0]).toEqual({ events: 1, attempts: 1 });
   });
 
+  // A rolling deployment runs old and new workers side by side, and a claim carries no task-type
+  // filter. The old worker must hand a task of the new release's type back untouched: failing it
+  // would spend the attempt, and a task allowed one attempt would be dead-lettered without ever
+  // running.
+  it("releases a task of an unregistered type with its attempt intact", async () => {
+    const queueName = `unknown-type-${randomUUID()}`;
+    const id = await queue.enqueue(
+      "released.only-new-workers-handle-this",
+      { index: 1 },
+      {
+        queue: queueName,
+        maxAttempts: 1,
+      },
+    );
+
+    const oldRelease = new Worker(queue, {
+      workerId: "release-old-worker",
+      queue: queueName,
+      leaseMs: 5_000,
+      registryIntervalMs: 0,
+    }).handle("released.some-other-type", async () => null);
+    expect(await oldRelease.runOnce()).toBe(true);
+    // The pass handed its claim back, so it made no progress and waits the poll interval like an
+    // empty one. Without that, the worker would claim and release the same task in a hot loop.
+    expect(await oldRelease.runOnce()).toBe(false);
+
+    expect(await admin.getTask(id)).toMatchObject({ state: "ready", currentAttempt: 1 });
+    const afterRelease = await pool.query<{ attempts: number; releases: number }>(
+      `SELECT
+        (SELECT count(*)::integer FROM workhorse.attempt_history WHERE task_id = $1) AS attempts,
+        (SELECT count(*)::integer FROM workhorse.task_event
+          WHERE task_id = $1 AND event_type = 'released') AS releases`,
+      [id],
+    );
+    expect(afterRelease.rows[0]).toEqual({ attempts: 0, releases: 1 });
+
+    const handled: Array<{ index: number }> = [];
+    const newRelease = new Worker(queue, {
+      workerId: "release-new-worker",
+      queue: queueName,
+      leaseMs: 5_000,
+      registryIntervalMs: 0,
+    }).handle("released.only-new-workers-handle-this", async (payload: { index: number }) => {
+      handled.push(payload);
+      return { ran: true };
+    });
+    expect(await newRelease.runOnce()).toBe(true);
+
+    expect(handled).toEqual([{ index: 1 }]);
+    expect(await admin.getTask(id)).toMatchObject({ state: "succeeded", currentAttempt: 1 });
+  });
+
+  it("refuses a release from a worker whose fence is stale", async () => {
+    const queueName = `stale-release-${randomUUID()}`;
+    const id = await queue.enqueue("stale-release", null, { queue: queueName });
+    const claimed = await queue.claim("stale-release-owner", { queue: queueName, leaseMs: 5_000 });
+    expect(claimed).not.toBeNull();
+
+    const stale = { ...claimed!, fenceToken: claimed!.fenceToken + 1n };
+    expect(await queue.releaseOwned(stale, "stale-release-owner")).toBe("stale");
+    expect(await queue.releaseOwned(claimed!, "another-worker")).toBe("stale");
+    expect(await admin.getTask(id)).toMatchObject({ state: "active" });
+
+    expect(await queue.releaseOwned(claimed!, "stale-release-owner")).toBe("released");
+    expect(await admin.getTask(id)).toMatchObject({ state: "ready", currentAttempt: 1 });
+    // The lease is gone, so the same call cannot release the task a second owner may already hold.
+    expect(await queue.releaseOwned(claimed!, "stale-release-owner")).toBe("stale");
+  });
+
   it("delivers CancellationRequestedError and acknowledges cooperative handler settlement", async () => {
     const started = deferred();
     const aborted = deferred<unknown>();

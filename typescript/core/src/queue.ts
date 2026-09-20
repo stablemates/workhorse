@@ -23,6 +23,7 @@ import type {
   EnqueueRequest,
   EnqueueResult,
   ExpireOwnedStatus,
+  ReleaseOwnedStatus,
   TaskCheckpoint,
   TaskProgress,
   TaskWait,
@@ -606,6 +607,11 @@ export class Queue {
 
   async expireOwned(task: ClaimedTask, workerId: string): Promise<ExpireOwnedStatus> {
     return this.modules.claimLeaseFence.expireOwned(task, workerId);
+  }
+
+  /** Give an owned task back to its queue with its attempt intact. */
+  async releaseOwned(task: ClaimedTask, workerId: string): Promise<ReleaseOwnedStatus> {
+    return this.modules.claimLeaseFence.releaseOwned(task, workerId);
   }
 
   async acknowledgeCancel(task: ClaimedTask, workerId: string): Promise<boolean> {

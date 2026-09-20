@@ -830,6 +830,7 @@ describe("SQL protocol conformance fixtures", () => {
         "signals",
         "human-tokens",
         "retention-maintenance",
+        "unknown-type-release",
       ]),
     );
     expect(fixtures.compatibility).toContainEqual(

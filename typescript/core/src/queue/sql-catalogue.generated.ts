@@ -3,9 +3,9 @@ export const PROTOCOL_VERSION = 4;
 export const MINIMUM_PROTOCOL_VERSION = 1;
 export const MAXIMUM_PROTOCOL_VERSION = 4;
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 1;
-export const WORKHORSE_SCHEMA_VERSION = 17;
+export const WORKHORSE_SCHEMA_VERSION = 18;
 export const MINIMUM_SCHEMA_VERSION = 1;
-export const MAXIMUM_SCHEMA_VERSION = 17;
+export const MAXIMUM_SCHEMA_VERSION = 18;
 export const DEFAULT_TASK_VALUE_MAX_BYTES = 1048576;
 export const MAX_ENQUEUE_BATCH_SIZE = 1000;
 
@@ -36,6 +36,7 @@ export const SQL_STATEMENTS = {
     "SELECT * FROM workhorse.expire_owned_telemetry_v1($1::uuid, $2::text, $3::bigint)",
   fail_v1:
     "SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state",
+  release_owned_v1: "SELECT workhorse.release_owned_v1($1::uuid, $2::text, $3::bigint) AS status",
   fire_due_schedules_v2:
     "SELECT namespace, schedule_name, occurrence_at, task_id\n  FROM workhorse.fire_due_schedules_v2($1::text[], $2::timestamptz, $3::integer, $4::bigint)",
   get_checkpoint:

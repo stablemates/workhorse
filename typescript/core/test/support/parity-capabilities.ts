@@ -247,6 +247,12 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
     go: { file: "worker_test.go", pattern: "Concurrency" },
   },
   {
+    capability: "Unhandled task type released to its queue",
+    typescript: { file: "integration-claim-lease-fence.test.ts", pattern: "unregistered type" },
+    python: { file: "test_worker.py", pattern: "unregistered_type" },
+    go: { file: "worker_test.go", pattern: "UnregisteredType" },
+  },
+  {
     capability: "Heartbeats, lease recovery, fenced ownership",
     typescript: { file: "integration-claim-lease-fence.test.ts", pattern: "fence" },
     python: { file: "test_worker.py", pattern: "fence" },

@@ -544,7 +544,7 @@ leases. The claim path issues no separate `promote_v1`. If the tick lock is avai
 it also evaluates every configured schedule namespace before claiming. It then
 checks configured queues in round-robin order until one `claim_many_v1(..., 1, ...)` succeeds or every queue is empty.
 It executes at most one matching handler outside a transaction. It calls `complete_v1` or `fail_v1`
-under the returned fence.
+under the returned fence, or `release_owned_v1` when no handler is registered for the claimed type.
 
 `Worker.Run` fills free semaphore slots with `claim_many_v1`. Each successful claim starts
 one handler goroutine. The queue cursor advances after every claim attempt, so a busy queue cannot
@@ -2380,6 +2380,22 @@ emit the same recovery span and counters.
 `expire_owned_telemetry_v1` wraps prompt timeout settlement by a live worker. It returns the exact
 next state, so `Queue.expireOwned` emits a retry span and increments the retry counter only when
 PostgreSQL starts another attempt.
+
+`release_owned_v1(task, worker, fence)` returns an owned task to its queue without consuming
+`current_attempt`. A claim carries no task-type filter, so a worker can hold a task whose type it
+has no handler for; the attempt belongs to the worker that reaches the handler. It locks the
+matching unexpired active generation, answers `cancel_requested` when one is pending, and delegates
+to `expire_owned_v1` when `deadline_at` or `attempt_timeout_at` has already passed, so a release
+never hides a boundary the database was about to record. Otherwise it sets the row to `ready` with a
+new `sequence`, clears `worker_id`, `fence_token`, `acquired_at`, `heartbeat_at`, `expires_at`,
+`wait_name`, `attempt_timeout_at`, and `error`, adds the elapsed lease to `execution_used_ms` the
+way `schedule_wait_v1` does, notifies `workhorse_tasks`, and appends a `released` event carrying
+`worker_id` and `fence_token`. It writes no `attempt_history` row, because the attempt is not
+closed. A worker whose fence PostgreSQL no longer recognizes receives `stale`.
+
+Each SDK releases a task of an unregistered type through it and records the `released` handler
+outcome. A pass whose claims were all unrunnable counts as empty for the poll backoff, so a task no
+deployed worker handles is re-claimed on the poll cadence rather than in a loop.
 
 ### Terminal transitions
 

@@ -41,6 +41,7 @@ import type {
   CreateChildResult,
   CreateChildrenResult,
   ExpireOwnedStatus,
+  ReleaseOwnedStatus,
   TaskCheckpoint,
   TaskProgress,
   TaskWait,
@@ -220,6 +221,7 @@ export interface WorkerQueueApi {
     leaseMs?: number,
   ): Promise<Map<string, HeartbeatStatus>>;
   expireOwned(task: ClaimedTask, workerId: string): Promise<ExpireOwnedStatus>;
+  releaseOwned(task: ClaimedTask, workerId: string): Promise<ReleaseOwnedStatus>;
   acknowledgeCancel(task: ClaimedTask, workerId: string): Promise<boolean>;
   listCheckpoints(taskId: string): Promise<TaskCheckpoint[]>;
   saveCheckpoint<TValue extends Json>(
@@ -1007,8 +1009,10 @@ export class Worker {
     let claimError: unknown;
     let claimFailed = false;
     const freeSlots = this.concurrency - this.activeSlots;
+    let ranAHandler = false;
     if (!shouldStop() && !this.paused && freeSlots > 0) {
       const claim = await this.claimNextMany(freeSlots);
+      ranAHandler = claim.claimed.some((task) => this.handlers.has(task.type));
       executions.push(...claim.claimed.map((task) => this.startExecution(task)));
       if ("error" in claim) {
         claimError = claim.error;
@@ -1017,7 +1021,9 @@ export class Worker {
     }
 
     const claimed = executions.length > 0;
-    this.previousPassWorked = claimed;
+    // A pass that only handed its claims back made no progress, so it waits the poll interval like
+    // an empty one. Skipping that wait would spin on a task no worker in this release can run.
+    this.previousPassWorked = ranAHandler;
     const settlements = await Promise.all(executions);
     const firstFailure = settlements.find(
       (settlement): settlement is PromiseRejectedResult => settlement.status === "rejected",
@@ -1105,15 +1111,21 @@ export class Worker {
         await this.inject("afterClaim", task);
         const handler = this.handlers.get(task.type);
         if (!handler) {
-          const error = new Error(`No handler registered for ${task.type}`);
-          span.recordException(error);
-          span.setStatus("error");
-          const failed = await this.queue.fail(task, this.workerId, error);
-          span.setAttribute("workhorse.handler.outcome", failed);
-          if (failed === "cancel_requested") {
+          // A claim carries no task-type filter, so this worker can hold a task it cannot run.
+          // The attempt belongs to whichever worker reaches the handler, so the claim goes back
+          // to the queue intact rather than being failed. During a rolling deployment that is
+          // what keeps a release's new task types from being retried away by the old one.
+          logWarn("workhorse.handler.missing", "No handler registered for the claimed task type", {
+            ...taskSpanAttributes(task),
+            "workhorse.queue.name": task.queue,
+            "workhorse.worker.id": this.workerId,
+          });
+          const released = await this.queue.releaseOwned(task, this.workerId);
+          span.setAttribute("workhorse.handler.outcome", released);
+          if (released === "cancel_requested") {
             attempt.markCancellationRequested();
             await attempt.acknowledgeCancellation();
-          } else attempt.recordFailure(failed);
+          } else attempt.recordRelease(released);
           return;
         }
         await this.inject("beforeHandler", task);

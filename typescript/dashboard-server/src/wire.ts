@@ -878,6 +878,7 @@ export const dashboardTaskEventTypes = [
   "cancel_requested",
   "promoted",
   "lease_expired",
+  "released",
   "deadline_exceeded",
   "execution_timed_out",
   "redriven",

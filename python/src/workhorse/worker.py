@@ -150,6 +150,7 @@ _AttemptOutcome = Literal[
     "failed",
     "retry",
     "lease_expired",
+    "released",
     "deadline_exceeded",
     "attempt_timeout",
     "cancelled",
@@ -1393,8 +1394,15 @@ class Worker:
                     if not rows:
                         empty_attempts += 1
                         continue
-                    empty_attempts = 0
-                    consecutive_empty_claims = 0
+                    # A sweep that claimed only task types this worker cannot run made no
+                    # progress: every one of them goes straight back to its queue. Counting it as
+                    # empty ends the fill and backs off, instead of spinning on a task no worker in
+                    # this release can run.
+                    if any(task.type in self._handlers for task in claimed_tasks):
+                        empty_attempts = 0
+                        consecutive_empty_claims = 0
+                    else:
+                        empty_attempts += 1
                     claimed_any = True
                     for task in claimed_tasks:
                         _emit_log(
@@ -1811,13 +1819,9 @@ class Worker:
     ) -> None:
         handler = self._handlers.get(task.type)
         if handler is None:
-            error = RuntimeError(f"No handler registered for {task.type}")
-            failure_outcome, failure_state = self._settle_failure(task, error)
-            span_outcome["value"] = failure_state
-            span_errors.append(
-                _REDACTED_ERROR_NAME if task.redact_error_details else type(error).__name__
-            )
-            arbiter.submit(failure_outcome)
+            release_outcome, release_status = self._release_owned_task(task)
+            span_outcome["value"] = release_status
+            arbiter.submit(release_outcome)
             return
         heartbeat_stop = Event()
         heartbeat_error: list[BaseException] = []
@@ -1995,6 +1999,54 @@ class Worker:
             },
         )
         return accepted
+
+    def _release_owned_task(self, task: ClaimedTask) -> tuple[_AttemptOutcome, str]:
+        """Give back a claim whose task type this worker has no handler for.
+
+        A claim carries no task-type filter, so a worker can hold a task it cannot run. The attempt
+        belongs to whichever worker reaches the handler, so PostgreSQL returns the task to its queue
+        with its attempt untouched rather than charging this worker's refusal to it. During a
+        rolling deployment that is what keeps the old release from retrying away the new one's task
+        types.
+        """
+        attributes = {
+            **_task_span_attributes(task),
+            "workhorse.queue.name": task.queue,
+            "workhorse.worker.id": self.worker_id,
+        }
+        _emit_log(
+            "WARN",
+            "workhorse.handler.missing",
+            "No handler registered for the claimed task type",
+            attributes,
+        )
+        status = _require_lifecycle_row(
+            self._executor.rows(
+                _STATEMENTS.release_owned,
+                (task.id, self.worker_id, task.fence_token),
+            )
+        )["status"]
+        status_text = str(status)
+        _emit_log(
+            "INFO",
+            "workhorse.task.release_processed",
+            "Owned task release processed",
+            {**attributes, "workhorse.release.status": status_text},
+        )
+        if status_text == "released":
+            return "released", status_text
+        # A boundary the database already passed cannot come back, so not_due never answers a
+        # release; treating it as lease loss keeps this total without inventing a fifth outcome.
+        outcome = _outcome_for_status(status, neutral=frozenset({"not_due"}))
+        if outcome is None:
+            return "lease_expired", status_text
+        if outcome == "cancelled":
+            if not self._acknowledge_cancel(task):
+                raise StaleLeaseError(task.id)
+            return "cancelled", status_text
+        if outcome == "lease_expired":
+            raise StaleLeaseError(task.id)
+        return outcome, status_text
 
     def _settle_failure(self, task: ClaimedTask, error: Exception) -> tuple[_AttemptOutcome, str]:
         envelope = _error_envelope(error, task.redact_error_details)
@@ -2199,6 +2251,7 @@ _TELEMETRY_OUTCOMES: dict[_AttemptOutcome | None, _TaskExecutionOutcome] = {
     "failed": "failed",
     "retry": "retry",
     "lease_expired": "lease_lost",
+    "released": "released",
     "deadline_exceeded": "deadline_exceeded",
     "attempt_timeout": "timeout",
     "cancelled": "canceled",

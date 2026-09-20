@@ -733,6 +733,7 @@ export const boundaryEventPresentation: Record<string, { label: string; color: s
   cancel_requested: { label: "Cancellation requested", color: taskStatusColors.canceled },
   promoted: { label: "Promoted", color: taskStatusColors.ready },
   lease_expired: { label: "Lease expired", color: taskStatusColors.failed },
+  released: { label: "Released", color: taskStatusColors.ready },
   deadline_exceeded: { label: "Deadline exceeded", color: taskStatusColors.failed },
   execution_timed_out: { label: "Execution timed out", color: taskStatusColors.failed },
   redriven: { label: "Redriven", color: "orange" },
