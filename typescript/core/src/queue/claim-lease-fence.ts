@@ -82,6 +82,8 @@ class FencedLease {
 
 const REDACTED_ERROR_MESSAGE = "Task handler failed; details redacted";
 const REDACTED_ERROR_NAME = "RedactedTaskError";
+/** The name recorded when a handler throws a value that is not an Error. */
+const NON_ERROR_NAME = "NonErrorThrown";
 
 export function errorForTelemetry(error: unknown, redactDetails: boolean): Error | string {
   if (!redactDetails) return error instanceof Error ? error : String(error);
@@ -90,13 +92,16 @@ export function errorForTelemetry(error: unknown, redactDetails: boolean): Error
   return redacted;
 }
 
-function errorEnvelope(error: unknown, redactDetails = false): Json {
+export function errorEnvelope(error: unknown, redactDetails = false): Json {
   // Persist a bounded JSON representation instead of relying on Error's non-enumerable fields.
+  // A redacted envelope carries the two fields `redact_error_details_v1` writes, so redacting here
+  // produces exactly what PostgreSQL would have produced. Every other envelope carries all three
+  // fields, with a null stack when the thrown value supplies none.
   if (redactDetails) return { name: REDACTED_ERROR_NAME, message: REDACTED_ERROR_MESSAGE };
   if (error instanceof Error) {
     return { name: error.name, message: error.message, stack: error.stack ?? null };
   }
-  return { name: "NonErrorThrown", message: String(error) };
+  return { name: NON_ERROR_NAME, message: String(error), stack: null };
 }
 
 export function recordRecoveryTelemetry(

@@ -468,3 +468,233 @@ export const PARITY_TABLES: readonly (readonly ParityRow[])[] = [
   PARITY_WORKER_ROWS,
   PARITY_OPERATOR_ROWS,
 ];
+
+/**
+ * A runtime default, with the source line that sets it.
+ *
+ * A capability cell answers whether a language can do something. A default cell answers what it
+ * does when the caller says nothing, which is the value an operator actually runs. Pinning the
+ * source keeps the published number from outliving the constant behind it.
+ */
+interface ParityDefaultCell {
+  /** The value column, byte for byte as `docs/parity.md` writes it. */
+  value: string;
+  /** A source file, relative to the repository root. */
+  file: string;
+  /** Text that must appear in that file, proving the value is still the one in force. */
+  pattern: string;
+}
+
+export interface ParityDefaultRow {
+  /** The setting column, byte for byte as `docs/parity.md` writes it. */
+  setting: string;
+  typescript: ParityDefaultCell | { absent: string };
+  python: ParityDefaultCell | { absent: string };
+  go: ParityDefaultCell | { absent: string };
+}
+
+/**
+ * The worker runtime defaults, for the generated table in `docs/parity.md`.
+ *
+ * Three runtimes that agree on every capability can still behave differently out of the box, and a
+ * reader comparing them has no way to see that from the capability tables. Every divergence below
+ * is deliberate and recorded rather than discovered during an incident.
+ */
+export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
+  {
+    setting: "Worker concurrency",
+    typescript: {
+      value: "1",
+      file: "typescript/core/src/worker.ts",
+      pattern: "options.concurrency ?? 1",
+    },
+    python: {
+      value: "1",
+      file: "python/src/workhorse/worker.py",
+      pattern: "concurrency: int = 1",
+    },
+    go: { value: "1", file: "go/worker.go", pattern: "concurrency = 1" },
+  },
+  {
+    setting: "Lease duration",
+    typescript: {
+      value: "30000 ms",
+      file: "typescript/core/src/worker.ts",
+      pattern: "options.leaseMs ?? 30_000",
+    },
+    python: {
+      value: "30000 ms",
+      file: "python/src/workhorse/worker.py",
+      pattern: "lease_ms: int = 30_000",
+    },
+    go: {
+      value: "30000 ms",
+      file: "go/worker.go",
+      pattern: "defaultWorkerLease         = 30 * time.Second",
+    },
+  },
+  {
+    setting: "Heartbeat interval",
+    typescript: {
+      value: "Lease duration / 3",
+      file: "typescript/core/src/worker.ts",
+      pattern: "Math.max(100, Math.floor(this.leaseMs / 3))",
+    },
+    python: {
+      value: "Lease duration / 3",
+      file: "python/src/workhorse/worker.py",
+      pattern: "max(100, lease_ms // 3)",
+    },
+    go: { value: "Lease duration / 3", file: "go/worker.go", pattern: "leaseDuration / 3" },
+  },
+  {
+    setting: "Claim poll interval",
+    typescript: {
+      value: "250 ms",
+      file: "typescript/core/src/worker.ts",
+      pattern: "DEFAULT_POLL_MS = 250",
+    },
+    python: {
+      value: "250 ms",
+      file: "python/src/workhorse/worker.py",
+      pattern: "poll_ms if poll_ms is not None else 250",
+    },
+    go: {
+      value: "1000 ms",
+      file: "go/worker.go",
+      pattern: "defaultWorkerPollInterval  = time.Second",
+    },
+  },
+  {
+    setting: "Claim poll interval while listening",
+    typescript: {
+      value: "5000 ms",
+      file: "typescript/core/src/worker.ts",
+      pattern: "DEFAULT_NOTIFICATION_FALLBACK_POLL_MS = 5_000",
+    },
+    python: {
+      value: "5000 ms",
+      file: "python/src/workhorse/worker.py",
+      pattern: "poll_ms if poll_ms is not None else 5_000",
+    },
+    go: {
+      value: "1000 ms",
+      file: "go/worker.go",
+      pattern: "defaultWorkerPollInterval  = time.Second",
+    },
+  },
+  {
+    setting: "Empty-claim backoff ceiling",
+    typescript: {
+      value: "5000 ms",
+      file: "typescript/core/src/worker.ts",
+      pattern: "MAX_EMPTY_POLL_MS = 5_000",
+    },
+    python: {
+      value: "5000 ms",
+      file: "python/src/workhorse/worker.py",
+      pattern: "_MAX_EMPTY_POLL_MS = 5_000",
+    },
+    go: {
+      value: "5000 ms",
+      file: "go/worker.go",
+      pattern: "maximumEmptyPollInterval   = 5 * time.Second",
+    },
+  },
+  {
+    setting: "Maintenance tick interval",
+    typescript: {
+      value: "1000 ms",
+      file: "typescript/core/src/worker.ts",
+      pattern: "options.maintenanceIntervalMs ?? 1_000",
+    },
+    python: {
+      value: "1000 ms",
+      file: "python/src/workhorse/worker.py",
+      pattern: "maintenance_interval_ms: int = 1_000",
+    },
+    go: {
+      value: "1000 ms",
+      file: "go/worker.go",
+      pattern: "defaultMaintenanceInterval = time.Second",
+    },
+  },
+  {
+    setting: "Maintenance routine offer interval",
+    typescript: {
+      value: "60000 ms",
+      file: "typescript/core/src/worker.ts",
+      pattern: "options.maintenanceRoutinePollMs ?? 60_000",
+    },
+    python: {
+      value: "1000 ms (the tick interval)",
+      file: "python/src/workhorse/worker.py",
+      pattern: "maintenance_interval_ms: int = 1_000",
+    },
+    go: {
+      value: "1000 ms (the tick interval)",
+      file: "go/worker.go",
+      pattern: "defaultMaintenanceInterval = time.Second",
+    },
+  },
+  {
+    setting: "Worker registry interval",
+    typescript: {
+      value: "5000 ms",
+      file: "typescript/core/src/worker.ts",
+      pattern: "options.registryIntervalMs ?? 5_000",
+    },
+    python: {
+      value: "5000 ms",
+      file: "python/src/workhorse/worker.py",
+      pattern: "registry_interval_ms: int = 5_000",
+    },
+    go: {
+      value: "5000 ms",
+      file: "go/worker.go",
+      pattern: "defaultRegistryInterval    = 5 * time.Second",
+    },
+  },
+  {
+    setting: "Schedule catch-up limit",
+    typescript: {
+      value: "100",
+      file: "typescript/core/src/worker.ts",
+      pattern: "options.scheduleCatchupLimit ?? 100",
+    },
+    python: {
+      value: "100",
+      file: "python/src/workhorse/worker.py",
+      pattern: "schedule_catchup_limit: int = 100",
+    },
+    go: { value: "100", file: "go/worker.go", pattern: "scheduleCatchupLimit = 100" },
+  },
+  {
+    setting: "Shutdown grace, then",
+    typescript: {
+      value: "25000 ms, then exit the process",
+      file: "typescript/core/src/worker-process.ts",
+      pattern: "DEFAULT_SHUTDOWN_TIMEOUT_MS = 25_000",
+    },
+    python: {
+      value: "25000 ms, then exit the process",
+      file: "python/src/workhorse/worker_process.py",
+      pattern: "_DEFAULT_SHUTDOWN_TIMEOUT_MS = 25_000",
+    },
+    go: {
+      value: "30000 ms, then cancel handlers",
+      file: "go/worker.go",
+      pattern: "defaultShutdownGracePeriod = 30 * time.Second",
+    },
+  },
+  {
+    setting: "Handler retry delay override",
+    typescript: {
+      value: "`retryDelayMs`, unset",
+      file: "typescript/core/src/worker.ts",
+      pattern: "retryDelayMs",
+    },
+    python: { absent: "No worker-side retry override; the persisted policy chooses every delay." },
+    go: { absent: "No worker-side retry override; the persisted policy chooses every delay." },
+  },
+];

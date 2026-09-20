@@ -2,11 +2,13 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  PARITY_DEFAULT_ROWS,
   PARITY_TABLES,
   PARITY_TEST_ROOTS,
   PRODUCT_PARITY_ROWS,
   PRODUCT_PARITY_TEST_ROOTS,
   type ParityCell,
+  type ParityDefaultRow,
   type ParityLanguage,
   type ParityRow,
   type ProductParityTarget,
@@ -88,6 +90,23 @@ async function expectEvidence(root: string, evidence: ParityCell): Promise<void>
       true,
     );
   }
+}
+
+/**
+ * Report whether a default cell is still sourced and still published.
+ *
+ * An Absent cell is sourced by its recorded reason and published as the word Absent, so both kinds
+ * of cell answer the same two questions and the caller asserts once.
+ */
+async function describeDefault(
+  cell: ParityDefaultRow[ParityLanguage],
+): Promise<{ sourced: boolean; published: boolean }> {
+  if ("absent" in cell) {
+    return { sourced: cell.absent.trim().length > 0, published: true };
+  }
+  const file = path.join(repository, cell.file);
+  const contents = (await exists(file)) ? await readFile(file, "utf8") : "";
+  return { sourced: contents.includes(cell.pattern), published: markdown.includes(cell.value) };
 }
 
 function unexplainedAbsent(cells: readonly ParityCell[]): ParityCell[] {
@@ -172,6 +191,28 @@ describe("parity matrix", () => {
 
   it("records a reason for every Absent product cell", () => {
     expect(unexplainedAbsent(productCells.map(({ row, target }) => row[target]))).toEqual([]);
+  });
+
+  it("lists the runtime defaults from the registry, in the same order", () => {
+    const defaultsTable = markdown.match(
+      /\|\s*Setting\s*\|\s*TypeScript\s*\|\s*Python\s*\|\s*Go\s*\|[\s\S]*?(?=\n\n)/,
+    )?.[0];
+    expect(defaultsTable).toBeDefined();
+    const settings = defaultsTable
+      ?.split("\n")
+      .slice(2)
+      .map((line) => line.split("|")[1]?.trim());
+    expect(settings).toEqual(PARITY_DEFAULT_ROWS.map((row) => row.setting));
+  });
+
+  it.each(
+    PARITY_DEFAULT_ROWS.flatMap((row) =>
+      languages.map((language) => [row.setting, language, row[language]] as const),
+    ),
+  )("%s / %s publishes the value its source still sets", async (_setting, _language, cell) => {
+    // A default cell names the line that sets it. A value cannot outlive its constant, and an
+    // Absent cell has to say why the language has no such setting.
+    expect(await describeDefault(cell)).toEqual({ sourced: true, published: true });
   });
 
   it("links the Linear Issue behind every Planned cell", () => {

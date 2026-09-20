@@ -143,6 +143,7 @@ const (
 	rowRecordedField                     = "recorded"
 	errorNameField                       = "name"
 	errorMessageField                    = "message"
+	errorStackField                      = "stack"
 	invalidHealthRowCountMessage         = "workhorse.queue_health_v1 returned %d rows; expected one"
 	invalidHealthJSONMessage             = "workhorse.queue_health_v1 returned %T; expected JSON"
 	decodeHealthJSONMessage              = "decode workhorse.queue_health_v1: %w"

@@ -147,6 +147,10 @@ _SDK_LANGUAGE = "python"
 
 _REDACTED_ERROR_NAME = "RedactedTaskError"
 _REDACTED_ERROR_MESSAGE = "Task handler failed; details redacted"
+
+# The ceiling the empty-claim backoff doubles toward. An idle worker waits at most this long before
+# it claims again, so a task enqueued into a quiet queue is never delayed past it.
+_MAX_EMPTY_POLL_MS = 5_000
 _AttemptOutcome = Literal[
     "completed",
     "failed",
@@ -1688,7 +1692,7 @@ class Worker:
             self._notification_poll_ms
             if listening
             else min(
-                5_000,
+                _MAX_EMPTY_POLL_MS,
                 self.poll_ms * 2 ** max(0, consecutive_empty_claims - 1),
             )
         )

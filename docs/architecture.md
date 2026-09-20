@@ -100,6 +100,36 @@ whole step, so an executor that only counts empty polls fails on every run inste
 load. The TypeScript suite
 runs every fixture through `Worker`; Python and Go runtimes must run the same fixtures.
 
+`protocol/v1/failures.json` pins the JSON error envelope a worker passes to `fail_v1`. An
+unredacted envelope carries exactly `name`, `message`, and `stack`; `stack` is a string or null. A
+redacted envelope carries exactly `name` and `message`, holding `RedactedTaskError` and
+`Task handler failed; details redacted`, which is what `redact_error_details_v1` writes, so an
+envelope a worker redacts locally cannot differ in shape from one PostgreSQL redacts.
+
+Each language resolves `name` from its own error, and never from its type system. TypeScript reads
+`Error.name`, and records `NonErrorThrown` with a null stack for a thrown non-`Error`. Python reads
+`type(error).__name__` and always renders a stack through `traceback.format_exception`. Go has no
+name on an error, so `handlerErrorName` takes the first of: the result of `ErrorName()` on any error
+in the chain that implements `ErrorNamer`, the declared name of an exported concrete error type, or
+`Error`. `handlerErrorStack` reads `ErrorStack()` from any error in the chain that implements
+`ErrorStacker`, and records null otherwise. `errors.As` walks the chain, so a wrapped error still
+names and stacks the failure it reports. Both interface lookups ignore an empty string.
+
+An error that names nothing is the one value the three cannot share, because each language's base
+error type names itself: TypeScript and Go record `Error` and Python records `Exception`.
+`failures.json` pins that per language rather than leaving it to drift. `HandlerPanicError` carries
+the stack captured where `callHandler` or `callBatchHandler` recovered the panic, so a Go panic
+records the same three fields as a TypeScript or Python exception.
+
+JSON numbers are the other place the three runtimes differ. PostgreSQL stores a `jsonb` number at
+full precision. Python decodes a JSON integer as an unbounded `int`. TypeScript and Go decode it as
+an IEEE-754 double, so an integer beyond 2^53 - 1 in magnitude arrives rounded and no error is
+raised. Go's `decodeContractJSON` is the exception: contract validation decodes with
+`json.Number`, because a schema bound must be checked against the stored value rather than against
+a double. Workhorse does not reject a value past that bound, because PostgreSQL accepts it and one
+language reads it correctly; `docs/parity.md` records the bound and tells a caller to send a larger
+identifier as a string.
+
 `protocol/v1/requests.json` maps public enqueue inputs to exact PostgreSQL JSON. TypeScript
 `Queue.enqueueMany`, Python `Queue.enqueue_with_result`, and Go `Queue.EnqueueWithResult` run every
 mapping. `protocol/v1/schedules.json` maps recurring definitions to exact PostgreSQL JSON.
@@ -472,6 +502,7 @@ backoff. `AsyncWorker` closes the listener connection but never closes its query
 
 Handler failures pass a JSON error envelope to `fail_v1` with a null retry override, so PostgreSQL
 selects `ready`, `scheduled`, or `failed` from the persisted attempt budget and retry policy.
+`_error_envelope` builds that envelope in the shape `protocol/v1/failures.json` pins.
 
 Python `run_worker_process(worker, *, shutdown_timeout_ms, force_exit)` installs `SIGINT` and
 `SIGTERM` handlers around `Worker.run()`. Each handler writes its signal number to a nonblocking
@@ -596,9 +627,11 @@ retry timing and attempt exhaustion. A `stale` heartbeat, a rejected completion,
 failure ends that attempt with the `lease_lost` handler outcome. `Run` and `RunOnce` keep
 dispatching, because lease recovery already owns the task. An expiration that PostgreSQL still
 reports as `not_due` after the clock-skew budget ends the same way and logs a warning.
-`callHandler` recovers a panic and converts it to `handler for <type> panicked: <value>`. The worker
-passes that error through the same `fail_v1` path, waits for the ownership supervisor, and keeps the
-dispatch loop alive.
+`handlerErrorEnvelope` builds that envelope in the shape `protocol/v1/failures.json` pins.
+`callHandler` recovers a panic into a `HandlerPanicError` whose message is
+`handler for <type> panicked: <value>` and whose `ErrorStack()` returns the stack captured at
+recovery. The worker passes that error through the same `fail_v1` path, waits for the ownership
+supervisor, and keeps the dispatch loop alive.
 
 The Go SDK installs no process handlers. Applications pass a context from `signal.NotifyContext` to
 `Worker.Run`. Cancellation stops claims and begins the configured drain. `go/worker_process_test.go`

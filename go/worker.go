@@ -11,10 +11,12 @@ import (
 	pseudorand "math/rand/v2"
 	"os"
 	"reflect"
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel/attribute"
@@ -1145,7 +1147,7 @@ func callHandler(
 ) (result any, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf(workerHandlerPanicFormat, taskType, recovered)
+			err = newHandlerPanicError(workerHandlerPanicFormat, taskType, recovered)
 		}
 	}()
 	return handler(ctx, payload, durability)
@@ -1895,15 +1897,116 @@ func int64Value(value any) (int64, bool) {
 	}
 }
 
+// ErrorNamer lets a handler error choose the name its failure envelope records.
+//
+// An operator groups failures by that name, so the name has to describe the failure rather than
+// the value that carries it. Go attaches no name to an error, so a worker that published the
+// concrete type would file every errors.New value under *errors.errorString and split one failure
+// mode across buckets that mean nothing. Implement this interface to name a failure explicitly.
+type ErrorNamer interface {
+	error
+
+	// ErrorName returns the name the envelope records. An empty name is ignored.
+	ErrorName() string
+}
+
+// ErrorStacker lets a handler error attach a stack to its failure envelope.
+//
+// Go captures no stack when it creates an error, so an envelope carries one only when the error
+// supplies it. A worker records a null stack otherwise.
+type ErrorStacker interface {
+	error
+
+	// ErrorStack returns the stack the envelope records. An empty stack is ignored.
+	ErrorStack() string
+}
+
+// HandlerPanicError reports a handler or batch handler that panicked.
+//
+// It carries the stack captured where the panic was recovered, so the envelope of a Go panic holds
+// the same three fields as the envelope of a TypeScript or Python exception.
+type HandlerPanicError struct {
+	// TaskType is the task type whose handler panicked.
+	TaskType string
+	// Value is the value passed to panic.
+	Value any
+	// Stack is the stack captured at recovery.
+	Stack string
+
+	message string
+}
+
+func (err *HandlerPanicError) Error() string { return err.message }
+
+// ErrorStack returns the stack captured where the panic was recovered.
+func (err *HandlerPanicError) ErrorStack() string { return err.Stack }
+
+func newHandlerPanicError(format string, taskType string, recovered any) *HandlerPanicError {
+	return &HandlerPanicError{
+		TaskType: taskType,
+		Value:    recovered,
+		Stack:    string(debug.Stack()),
+		message:  fmt.Sprintf(format, taskType, recovered),
+	}
+}
+
+// handlerErrorName resolves the name a failure envelope records for a handler error.
+//
+// An error that names itself through ErrorNamer wins, because only the error knows which failure
+// it reports. An exported concrete type names itself next, which keeps a declared error type
+// legible without asking every declaration to implement an interface. Everything else, including
+// every errors.New and fmt.Errorf value, is the generic error TypeScript and Python also call
+// "Error".
+func handlerErrorName(err error) string {
+	var namer ErrorNamer
+	if errors.As(err, &namer) && namer.ErrorName() != emptyString {
+		return namer.ErrorName()
+	}
+	if name := exportedErrorTypeName(err); name != emptyString {
+		return name
+	}
+	return genericHandlerErrorName
+}
+
+// exportedErrorTypeName returns the declared name of an exported error type, or the empty string.
+func exportedErrorTypeName(err error) string {
+	value := reflect.TypeOf(err)
+	for value != nil && value.Kind() == reflect.Pointer {
+		value = value.Elem()
+	}
+	if value == nil {
+		return emptyString
+	}
+	name := value.Name()
+	if name == emptyString || !unicode.IsUpper([]rune(name)[0]) {
+		return emptyString
+	}
+	return name
+}
+
+// handlerErrorStack returns the stack an error supplies, or nil when it supplies none.
+func handlerErrorStack(err error) any {
+	var stacker ErrorStacker
+	if errors.As(err, &stacker) && stacker.ErrorStack() != emptyString {
+		return stacker.ErrorStack()
+	}
+	return nil
+}
+
+// handlerErrorEnvelope renders the failure envelope PostgreSQL stores for a handler error.
+//
+// A redacted envelope carries the two fields redact_error_details_v1 writes, so a worker that
+// redacts locally produces exactly what PostgreSQL would have produced. Every other envelope
+// carries the name, the message, and a stack that is null when the error supplies none.
 func handlerErrorEnvelope(err error, redact bool) map[string]any {
 	if redact {
 		return map[string]any{errorNameField: redactedHandlerErrorNameValue, errorMessageField: redactedHandlerErrorTextValue}
 	}
-	name := genericHandlerErrorName
-	if value := reflect.TypeOf(err); value != nil {
-		name = value.String()
+	return map[string]any{
+		errorNameField:    handlerErrorName(err),
+		errorMessageField: err.Error(),
+		errorStackField:   handlerErrorStack(err),
 	}
-	return map[string]any{errorNameField: name, errorMessageField: err.Error()}
 }
 
 // workerHostname resolves the process hostname once per worker; registration reports it on
