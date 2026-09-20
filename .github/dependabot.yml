@@ -82,11 +82,18 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
-    # Both base images carry a version this repository decides elsewhere. The Go line is a
+    # Three base images carry a version this repository decides elsewhere. The Go line is a
     # supported runtime recorded in support.json. The uv line is a pinned image that
     # typescript/demo/src/multilang-workers.test.ts names, and moving it is a decision about the
-    # Python toolchain. Tests hold the Dockerfiles to both. Dependabot reads neither test, so a
-    # version bump here is always wrong by default and arrives every week until someone closes it.
+    # Python toolchain. The Node line is the toolchain support.json and mise.toml pin, and adopting
+    # a new major is a decision that carries the tested matrix with it. Tests hold the Dockerfiles
+    # to all three. Dependabot reads none of them, so a version bump here is always wrong by
+    # default and arrives every week until someone closes it.
+    #
+    # Node ignores the major alone. A 24.x release still opens, because that is the same supported
+    # major with its own fixes, and only the major is the decision. The bump this entry exists for
+    # moved every image to Node 25, which removed corepack, and the site image build then stopped
+    # at `corepack enable`.
     #
     # Only the version is ignored. A digest update on the same version still opens, which is the
     # base image's own security patches, and `ignore` never applies to security updates.
@@ -101,3 +108,6 @@ updates:
           - version-update:semver-major
           - version-update:semver-minor
           - version-update:semver-patch
+      - dependency-name: node
+        update-types:
+          - version-update:semver-major
