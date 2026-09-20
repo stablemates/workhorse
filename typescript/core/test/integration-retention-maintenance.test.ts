@@ -1813,6 +1813,77 @@ describe("retention maintenance", () => {
     ).toEqual({ event_exists: true, attempt_exists: true });
   });
 
+  it("stages a history day in pg_temp even when the search path names a writable schema first", async () => {
+    const day = "2017-07-07";
+    const suffix = "20170707";
+    const occurredAt = `${day}T06:00:00Z`;
+    await pool.query("SELECT workhorse.retire_history_day_v1($1)", [day]);
+    const identity = await pool.query<{ id: string }>(
+      `INSERT INTO workhorse.task(queue_name, task_type, payload, max_attempts, created_at)
+       VALUES ('default', 'pg-temp-staging', '{}'::jsonb, 1, $1) RETURNING id`,
+      [occurredAt],
+    );
+    const taskId = identity.rows[0]!.id;
+    await pool.query(
+      `INSERT INTO workhorse.task_event(task_id, event_type, occurred_at) VALUES ($1, 'staged', $2)`,
+      [taskId, occurredAt],
+    );
+    await pool.query(
+      `INSERT INTO workhorse.attempt_history(
+         task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, occurred_at
+       ) VALUES ($1, 1, 1, 'pg-temp-worker', 'succeeded', $2, $2, $2)`,
+      [taskId, occurredAt],
+    );
+
+    const planting = await pool.connect();
+    try {
+      await planting.query("CREATE SCHEMA planted_staging");
+      // The names the function gives its staging tables, with the same shape, in a schema the
+      // session searches before pg_temp. An unqualified reference finds these instead.
+      await planting.query(
+        `CREATE TABLE planted_staging.workhorse_task_event_${suffix}
+           (LIKE workhorse.task_event INCLUDING DEFAULTS)`,
+      );
+      await planting.query(
+        `CREATE TABLE planted_staging.workhorse_attempt_history_${suffix}
+           (LIKE workhorse.attempt_history INCLUDING DEFAULTS)`,
+      );
+      await planting.query(
+        `INSERT INTO planted_staging.workhorse_task_event_${suffix}(task_id, event_type, occurred_at)
+         VALUES ($1, 'planted', $2)`,
+        [taskId, occurredAt],
+      );
+      await planting.query(
+        `INSERT INTO planted_staging.workhorse_attempt_history_${suffix}(
+           task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, occurred_at
+         ) VALUES ($1, 2, 2, 'planted-worker', 'failed', $2, $2, $2)`,
+        [taskId, occurredAt],
+      );
+      await planting.query("SET search_path TO planted_staging, pg_temp, public");
+
+      await planting.query("SELECT workhorse.create_history_day_v1($1)", [day]);
+
+      // The planted tables survive, so maintenance dropped its own staging tables rather than
+      // theirs, and the new partitions hold the rows that were really in the default partitions.
+      await expect(
+        planting.query(
+          `SELECT (SELECT count(*)::integer FROM planted_staging.workhorse_task_event_${suffix}) AS planted_events,
+                  (SELECT count(*)::integer FROM planted_staging.workhorse_attempt_history_${suffix}) AS planted_attempts`,
+        ),
+      ).resolves.toMatchObject({ rows: [{ planted_events: 1, planted_attempts: 1 }] });
+      await expect(
+        pool.query(
+          `SELECT (SELECT array_agg(event_type) FROM workhorse.task_event_${suffix}) AS events,
+                  (SELECT array_agg(worker_id) FROM workhorse.attempt_history_${suffix}) AS attempts`,
+        ),
+      ).resolves.toMatchObject({ rows: [{ events: ["staged"], attempts: ["pg-temp-worker"] }] });
+    } finally {
+      await planting.query("RESET search_path").catch(() => undefined);
+      await planting.query("DROP SCHEMA IF EXISTS planted_staging CASCADE").catch(() => undefined);
+      planting.release();
+    }
+  });
+
   it("uses one UTC advisory lock key for daily retirement in every session timezone", async () => {
     const day = "2014-03-03";
     await pool.query("SELECT workhorse.create_history_day_v1($1)", [day]);

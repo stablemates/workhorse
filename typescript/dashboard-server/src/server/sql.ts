@@ -12,15 +12,26 @@ export interface DashboardSql {
   readonly values: readonly unknown[];
 }
 
+/**
+ * The mark the tag puts on the fragments it builds, and the only thing it splices as SQL on.
+ *
+ * A structural test would accept any object carrying `text` and `values`, so a procedure input that
+ * admitted a free-form object could reach a read as a value and be spliced rather than bound. This
+ * symbol is module-private and unregistered, so nothing outside this file can produce a value that
+ * carries it, and everything else the tag receives becomes a bind parameter.
+ */
+const FRAGMENT = Symbol("workhorse.dashboard-server.sql");
+
+interface BrandedSql extends DashboardSql {
+  readonly [FRAGMENT]: true;
+}
+
+function brand(text: string, values: readonly unknown[]): BrandedSql {
+  return { [FRAGMENT]: true, text, values };
+}
+
 function isDashboardSql(value: unknown): value is DashboardSql {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "text" in value &&
-    typeof value.text === "string" &&
-    "values" in value &&
-    Array.isArray(value.values)
-  );
+  return typeof value === "object" && value !== null && FRAGMENT in value;
 }
 
 function appendFragment(parts: string[], values: unknown[], fragment: DashboardSql): void {
@@ -49,7 +60,7 @@ export const sql: DashboardSqlTag = Object.assign(
         parts.push(`$${values.length}`);
       }
     }
-    return { text: parts.join(""), values };
+    return brand(parts.join(""), values);
   },
   {
     join(fragments: readonly DashboardSql[], separator: DashboardSql): DashboardSql {
@@ -59,7 +70,7 @@ export const sql: DashboardSqlTag = Object.assign(
         if (index > 0) appendFragment(parts, values, separator);
         appendFragment(parts, values, fragment);
       }
-      return { text: parts.join(""), values };
+      return brand(parts.join(""), values);
     },
   },
 );

@@ -11511,30 +11511,30 @@ BEGIN
   LOCK TABLE workhorse.task_event_default IN ACCESS EXCLUSIVE MODE;
   IF NOT v_event_exists THEN
     EXECUTE format(
-      'CREATE TEMP TABLE %I ON COMMIT DROP AS SELECT * FROM workhorse.task_event_default WHERE occurred_at >= %L AND occurred_at < %L',
+      'CREATE TEMP TABLE pg_temp.%I ON COMMIT DROP AS SELECT * FROM workhorse.task_event_default WHERE occurred_at >= %L AND occurred_at < %L',
       v_event_staging, v_start, v_end);
     DELETE FROM workhorse.task_event_default WHERE occurred_at >= v_start AND occurred_at < v_end;
     EXECUTE format(
       'CREATE TABLE workhorse.%I PARTITION OF workhorse.task_event FOR VALUES FROM (%L) TO (%L)',
       v_event_partition, v_start, v_end);
     EXECUTE format(
-      'INSERT INTO workhorse.%I (event_id, task_id, attempt, event_type, details, occurred_at) SELECT event_id, task_id, attempt, event_type, details, occurred_at FROM %I',
+      'INSERT INTO workhorse.%I (event_id, task_id, attempt, event_type, details, occurred_at) SELECT event_id, task_id, attempt, event_type, details, occurred_at FROM pg_temp.%I',
       v_event_partition, v_event_staging);
-    EXECUTE format('DROP TABLE %I', v_event_staging);
+    EXECUTE format('DROP TABLE pg_temp.%I', v_event_staging);
   END IF;
 
   IF NOT v_attempt_exists THEN
     EXECUTE format(
-      'CREATE TEMP TABLE %I ON COMMIT DROP AS SELECT * FROM workhorse.attempt_history_default WHERE occurred_at >= %L AND occurred_at < %L',
+      'CREATE TEMP TABLE pg_temp.%I ON COMMIT DROP AS SELECT * FROM workhorse.attempt_history_default WHERE occurred_at >= %L AND occurred_at < %L',
       v_attempt_staging, v_start, v_end);
     DELETE FROM workhorse.attempt_history_default WHERE occurred_at >= v_start AND occurred_at < v_end;
     EXECUTE format(
       'CREATE TABLE workhorse.%I PARTITION OF workhorse.attempt_history FOR VALUES FROM (%L) TO (%L)',
       v_attempt_partition, v_start, v_end);
     EXECUTE format(
-      'INSERT INTO workhorse.%I (attempt_id, task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at, error, occurred_at) SELECT attempt_id, task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at, error, occurred_at FROM %I',
+      'INSERT INTO workhorse.%I (attempt_id, task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at, error, occurred_at) SELECT attempt_id, task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at, error, occurred_at FROM pg_temp.%I',
       v_attempt_partition, v_attempt_staging);
-    EXECUTE format('DROP TABLE %I', v_attempt_staging);
+    EXECUTE format('DROP TABLE pg_temp.%I', v_attempt_staging);
   END IF;
 END;
 $$;
@@ -15638,10 +15638,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (18, 'release a task without a handler'),
   (19, 'never skip a busy schedule occurrence'),
   (20, 'enqueue skips the dependency block'),
-  (21, 'a claim locks only the row it takes')
+  (21, 'a claim locks only the row it takes'),
+  (22, 'history staging through pg_temp')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (21) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (22) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

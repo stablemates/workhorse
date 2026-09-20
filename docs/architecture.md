@@ -1802,7 +1802,8 @@ Event and attempt retention are independent phases inside `retain_history_v1`. E
 before task events, so this shared parent-lock order prevents paired partition DDL from deadlocking a
 transition between its two history inserts. Creation then locks `attempt_history_default` before
 `task_event_default`, stages matching fallback rows, attaches each missing partition, and restores the
-staged rows.
+staged rows. Every reference to a staging table names `pg_temp`, so a caller whose `search_path`
+searches a writable schema first cannot substitute a table of its own for the staged rows.
 
 `task_event.task_id` and `attempt_history.task_id` reference `task.id` with `ON DELETE CASCADE`. PostgreSQL validates history attribution, so history inserts need no row trigger. `prune_terminal_tasks_v1` excludes identities with retained history, while direct identity deletion cascades history and dropping a history partition removes its rows independently. A global retained-through watermark advances only after both history categories are completely cleared before their cutoffs. `prune_terminal_storage_v1` may delete a terminal identity only behind that watermark. The internal `purge_queue_internal_v1` explicitly deletes associated history before deleting queued identities. The public four-argument `purge_queue_v1` adds the `Admin` contract. `queue_purge_request` stores the request hash, safe preview, 12-character digest, character length, actor, reason, fingerprint, original deleted count, and request time. An exact replay returns that count without deleting newer tasks. A material replay raises SQLSTATE `P1006`, which `Admin` maps to `PurgeIdempotencyConflictError`. Direct application SQL that deletes package-owned `task` rows is unsupported because it can bypass these guards.
 
