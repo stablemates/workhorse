@@ -51,9 +51,15 @@ export function formatExact(value: string | null | undefined): string {
     timeZoneName: "short",
   }).format(new Date(value));
 }
-export function formatRelative(value: string | null | undefined): string {
+/**
+ * How long ago something happened, phrased for a table cell.
+ *
+ * The instant to measure from is a parameter so a caller that must decide whether this label
+ * changed can ask for both answers rather than render twice to find out.
+ */
+export function formatRelative(value: string | null | undefined, now = Date.now()): string {
   if (!value) return "never";
-  const deltaMs = Date.now() - new Date(value).getTime();
+  const deltaMs = now - new Date(value).getTime();
   const future = deltaMs < 0;
   const seconds = Math.round(Math.abs(deltaMs) / 1_000);
   const phrase =

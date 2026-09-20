@@ -9,7 +9,13 @@ describe("sidebar task counts", () => {
     expect(controllerSource).not.toContain('if (location.route !== "/tasks") void loadTaskCounts');
     expect(controllerSource.match(/void loadTaskCounts\([^;]*\);/g)).toEqual([
       "void loadTaskCounts();",
-      "void loadTaskCounts({ background: true });",
     ]);
+    expect(controllerSource).toContain("prepareTaskCounts({ background: true })");
+  });
+
+  it("settles the page and the counts of one poll in a single commit", () => {
+    expect(controllerSource).toMatch(
+      /await Promise\.all\(\[\s*preparePageLoad\(\{ background: true \}\),\s*prepareTaskCounts\(\{ background: true \}\),\s*\]\);\s*applyPage\(\);\s*applyCounts\(\);/,
+    );
   });
 });

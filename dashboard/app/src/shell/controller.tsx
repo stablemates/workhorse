@@ -67,6 +67,7 @@ import {
   taskHref,
   useDashboardClient,
 } from "../core.js";
+import { readyLoadState, readyTaskCounts } from "../render-identity.js";
 import { subscribeTimeZone } from "../preferences.js";
 import type { DemoTaskOptions } from "../pages/tasks.js";
 import { seekDashboardTaskPage } from "../task-page-seek.js";
@@ -92,6 +93,9 @@ const WorkersPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import("../pages/settings/index.js").then((module) => ({ default: module.SettingsPage })),
 );
+
+/** What a load that decided to write nothing hands back. */
+const applyNothing = () => undefined;
 
 export const refreshStorageKey = "workhorse-auto-refresh";
 export function readStoredRefreshInterval(): DashboardRefreshIntervalValue {
@@ -285,11 +289,18 @@ export function useDashboardController(
   const eventsRef = useRef(eventsQuery);
   eventsRef.current = eventsQuery;
 
-  const loadPage = useCallback(
-    async ({ background = false }: { background?: boolean } = {}) => {
-      if (shouldDiscardBackgroundRefresh(background)) return;
+  /**
+   * Fetch one page and hand back what applying its answer would do.
+   *
+   * The work is split from the state it writes so that a poll can settle the page and the
+   * navigation counts in one commit. Applying is a plain call, so the caller decides when the
+   * screen changes; nothing is written until it makes that call.
+   */
+  const preparePageLoad = useCallback(
+    async ({ background = false }: { background?: boolean } = {}): Promise<() => void> => {
+      if (shouldDiscardBackgroundRefresh(background)) return applyNothing;
       const key = JSON.stringify([route, listingKey, systemWindow, eventsKey]);
-      if (background && refreshRequests.has(key)) return;
+      if (background && refreshRequests.has(key)) return applyNothing;
       const activeRequest = ++requestId.current;
       // The answer is judged against the listing that asked for it. While a pager click is in
       // flight the page on screen is still the one the operator left, and its own first-page
@@ -371,36 +382,43 @@ export function useDashboardController(
           },
           !background,
         );
-        if (activeRequest === requestId.current) {
-          if (!shouldDiscardBackgroundRefresh(background)) {
-            setLoadState({ status: "ready", data, error: null });
-            /**
-             * Release a cursor this answer proved spent.
-             *
-             * Left in the URL, an anchor the first page no longer needs hands out a link that
-             * reloads into a window mid-list as soon as the rows above it change, and it holds
-             * auto refresh paused on a list that is following new work again. Replacing rather
-             * than pushing keeps Back pointing at wherever the operator came from.
-             */
-            if (
-              data.route === "/tasks" &&
-              "previousCursor" in data.value &&
-              taskCursorSpent(requestedListing, data.value)
-            ) {
-              replace(taskListingHeadHref(requestedListing));
-            }
+        return () => {
+          if (activeRequest !== requestId.current) return;
+          if (shouldDiscardBackgroundRefresh(background)) return;
+          /**
+           * Keep the state object when the answer repeats what is on screen.
+           *
+           * A poll that found no change used to hand the shell a fresh object graph, and every
+           * row below it rendered again to draw the same pixels. Comparing structurally means
+           * `setState` bails out instead, so an unchanged poll commits nothing.
+           */
+          setLoadState((current) => readyLoadState(current, data));
+          /**
+           * Release a cursor this answer proved spent.
+           *
+           * Left in the URL, an anchor the first page no longer needs hands out a link that
+           * reloads into a window mid-list as soon as the rows above it change, and it holds
+           * auto refresh paused on a list that is following new work again. Replacing rather
+           * than pushing keeps Back pointing at wherever the operator came from.
+           */
+          if (
+            data.route === "/tasks" &&
+            "previousCursor" in data.value &&
+            taskCursorSpent(requestedListing, data.value)
+          ) {
+            replace(taskListingHeadHref(requestedListing));
           }
-        }
+        };
       } catch (cause) {
-        if (activeRequest === requestId.current) {
-          if (!shouldDiscardBackgroundRefresh(background)) {
-            setLoadState((current) => ({
-              status: "error",
-              data: current.data,
-              error: cause instanceof Error ? cause.message : "Workhorse could not load this page",
-            }));
-          }
-        }
+        return () => {
+          if (activeRequest !== requestId.current) return;
+          if (shouldDiscardBackgroundRefresh(background)) return;
+          setLoadState((current) => ({
+            status: "error",
+            data: current.data,
+            error: cause instanceof Error ? cause.message : "Workhorse could not load this page",
+          }));
+        };
       }
       // `listingKey` is the dependency the task listing actually has; the values themselves are
       // read from a ref so that a re-render for an unrelated reason cannot send a stale request.
@@ -417,18 +435,52 @@ export function useDashboardController(
     ],
   );
 
-  const loadTaskCounts = useCallback(
-    async ({ background = false }: { background?: boolean } = {}) => {
-      if (shouldDiscardBackgroundRefresh(background)) return;
+  const loadPage = useCallback(
+    async (options: { background?: boolean } = {}) => {
+      (await preparePageLoad(options))();
+    },
+    [preparePageLoad],
+  );
+
+  const prepareTaskCounts = useCallback(
+    async ({ background = false }: { background?: boolean } = {}): Promise<() => void> => {
+      if (shouldDiscardBackgroundRefresh(background)) return applyNothing;
       try {
         const counts = await refreshRequests.run("taskCounts", () => client.taskCounts());
-        if (!shouldDiscardBackgroundRefresh(background)) setTaskCounts(counts);
+        return () => {
+          if (shouldDiscardBackgroundRefresh(background)) return;
+          setTaskCounts((current) => readyTaskCounts(current, counts));
+        };
       } catch {
         // The active page owns the connection state; keep the last navigation counts on failure.
+        return applyNothing;
       }
     },
     [client, shouldDiscardBackgroundRefresh, refreshRequests],
   );
+
+  const loadTaskCounts = useCallback(
+    async (options: { background?: boolean } = {}) => {
+      (await prepareTaskCounts(options))();
+    },
+    [prepareTaskCounts],
+  );
+
+  /**
+   * Settle one poll: the page and the navigation counts land together.
+   *
+   * The two requests go out at the same moment, so the poll waits for the slower of them rather
+   * than for their sum. Applying both answers in one continuation means React commits once, where
+   * writing each answer as it arrived rendered the whole shell twice per tick.
+   */
+  const refreshEverything = useCallback(async () => {
+    const [applyPage, applyCounts] = await Promise.all([
+      preparePageLoad({ background: true }),
+      prepareTaskCounts({ background: true }),
+    ]);
+    applyPage();
+    applyCounts();
+  }, [preparePageLoad, prepareTaskCounts]);
 
   const toggleSchedule = useCallback(
     async (namespace: string, name: string, paused: boolean) => {
@@ -849,10 +901,9 @@ export function useDashboardController(
   useEffect(() => {
     pollingClock.setRefresh(() => {
       if (route === "/tasks") setActivityPollTick((tick) => tick + 1);
-      void loadPage({ background: true });
-      void loadTaskCounts({ background: true });
+      void refreshEverything();
     });
-  }, [loadPage, loadTaskCounts, pollingClock, route]);
+  }, [pollingClock, refreshEverything, route]);
   useEffect(() => {
     pollingClock.reset(dashboardRefreshIntervalMs(refreshInterval), autoRefreshPausedRef.current);
   }, [location.route, pollingClock, refreshInterval, refreshScheduleResetKey]);

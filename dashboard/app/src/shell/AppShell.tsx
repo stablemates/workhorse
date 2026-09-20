@@ -40,7 +40,15 @@ import {
   useDashboardWindowActivityRefreshBlocker,
 } from "../refresh-blockers.js";
 import { useMediaQuery } from "@mantine/hooks";
-import { useCallback, useLayoutEffect, useRef, type MouseEvent } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+} from "react";
 import { dashboardRefreshIntervalMs, dashboardRefreshIntervals } from "../refresh-policy.js";
 import {
   taskDrawerCloseOnEscape,
@@ -61,7 +69,29 @@ import {
   taskHref,
 } from "../core.js";
 import { EventDetails } from "../components/event-details.js";
-import { TaskDetailDrawer } from "../pages/task-detail.js";
+
+/**
+ * The task drawer, fetched the first time an operator opens one.
+ *
+ * It is the largest view in the dashboard and nothing shows it until a task is picked, so the
+ * first paint of the listing should not wait for it. Once fetched it stays mounted, because a
+ * drawer that unmounted on close would cut its own closing animation.
+ */
+const TaskDetailDrawer = lazy(() =>
+  import("../pages/task-detail.js").then((module) => ({ default: module.TaskDetailDrawer })),
+);
+
+/**
+ * Reports the moment the drawer's chunk has arrived and its panel is in the document.
+ *
+ * The shell moves focus into the drawer when a task opens, and on the first open the panel is
+ * still being fetched when that would run. This commits with the drawer, so the shell can place
+ * focus once there is something to place it in.
+ */
+function TaskDrawerPresence({ onPresent }: { onPresent: () => void }) {
+  useLayoutEffect(onPresent, [onPresent]);
+  return null;
+}
 
 /**
  * Header control that switches between the host's workspaces. Renders nothing with one.
@@ -174,6 +204,17 @@ export function DashboardContent({
     eventDetailError,
     closeEventDetail,
   } = controller;
+  /**
+   * Whether this session has ever asked for a task drawer.
+   *
+   * It latches rather than following the selection, so the drawer's chunk is fetched once and the
+   * panel stays mounted to animate itself closed. A deep link that names a task arrives with the
+   * selection already set, so it mounts in the same render rather than one paint later.
+   */
+  const [taskDrawerRequested, setTaskDrawerRequested] = useState(false);
+  if (selectedTaskId !== null && !taskDrawerRequested) setTaskDrawerRequested(true);
+  const [taskDrawerPresent, setTaskDrawerPresent] = useState(false);
+  const markTaskDrawerPresent = useCallback(() => setTaskDrawerPresent(true), []);
   const refreshProgressDuration = dashboardRefreshIntervalMs(refreshInterval);
   const taskDetailDrawerProps = {
     ...taskDrawerViewportProps(narrowDetailDrawer),
@@ -184,6 +225,9 @@ export function DashboardContent({
     closeOnEscape: taskDrawerCloseOnEscape(dropdownOpened),
   };
   useLayoutEffect(() => {
+    // On the first open the panel is still being fetched. Leave the transition unconsumed so
+    // this runs again with something to focus rather than skipping the move entirely.
+    if (selectedTaskId !== null && !taskDrawerPresent) return;
     const focusChange = taskDrawerFocusChange(previousTaskDrawerId.current, selectedTaskId);
     previousTaskDrawerId.current = selectedTaskId;
     if (focusChange === "none") return;
@@ -206,7 +250,7 @@ export function DashboardContent({
       taskDrawerReturnTarget.current = activeElement;
     }
     document.getElementById("task-detail-drawer-close")?.focus();
-  }, [selectedTaskId]);
+  }, [selectedTaskId, taskDrawerPresent]);
   const lineageTaskHref = useCallback(
     (id: string) => mountedHref(basePath, taskHref({ ...location, taskId: id })),
     [basePath, location],
@@ -533,12 +577,17 @@ export function DashboardContent({
       <AppShell.Main className="dashboard-main">
         <Box w="100%">{content}</Box>
       </AppShell.Main>
-      <TaskDetailDrawer
-        auditActor={auditActor}
-        controller={controller}
-        drawerProps={taskDetailDrawerProps}
-        taskLinkHref={lineageTaskHref}
-      />
+      {taskDrawerRequested ? (
+        <Suspense fallback={null}>
+          <TaskDrawerPresence onPresent={markTaskDrawerPresent} />
+          <TaskDetailDrawer
+            auditActor={auditActor}
+            controller={controller}
+            drawerProps={taskDetailDrawerProps}
+            taskLinkHref={lineageTaskHref}
+          />
+        </Suspense>
+      ) : null}
       <Drawer
         id="event-detail-drawer"
         opened={selectedEventId !== null}

@@ -7,6 +7,7 @@ const taskList = readFileSync(new URL("./components/task-list.tsx", import.meta.
 const activityChart = readFileSync(new URL("./charts/activity.tsx", import.meta.url), "utf8");
 const tasksPage = readFileSync(new URL("./pages/tasks.tsx", import.meta.url), "utf8");
 const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+const appShell = readFileSync(new URL("./shell/AppShell.tsx", import.meta.url), "utf8");
 
 describe("dashboard bundle boundaries", () => {
   it("keeps route pages and the activity chart behind dynamic imports", () => {
@@ -15,12 +16,21 @@ describe("dashboard bundle boundaries", () => {
     expect(activityChart).toContain('from "@mantine/charts"');
   });
 
+  it("fetches the task drawer only once an operator opens one", () => {
+    expect(appShell).not.toContain('import { TaskDetailDrawer } from "../pages/task-detail.js"');
+    expect(appShell).toMatch(/lazy\(\(\) =>\s*import\("\.\.\/pages\/task-detail\.js"\)/);
+    // Mounted on first request and kept, so closing the drawer still animates.
+    expect(appShell).toContain(
+      "if (selectedTaskId !== null && !taskDrawerRequested) setTaskDrawerRequested(true);",
+    );
+  });
+
   it("lets the controller polling clock own activity refreshes", () => {
     expect(activityChart).not.toContain("setInterval");
     expect(activityChart).toContain("refreshKey");
     expect(controller).toContain("setActivityPollTick((tick) => tick + 1)");
     expect(controller).toMatch(
-      /setActivityPollTick\(\(tick\) => tick \+ 1\);\s*void loadPage\(\{ background: true \}\);/,
+      /setActivityPollTick\(\(tick\) => tick \+ 1\);\s*void refreshEverything\(\);/,
     );
     expect(tasksPage).toContain("refreshKey={activityPollTick}");
     expect(tasksPage).not.toContain("refreshKey={data}");
