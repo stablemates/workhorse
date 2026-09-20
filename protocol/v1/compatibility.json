@@ -16,7 +16,7 @@
   },
   {
     "id": "served-protocol-undeclared",
-    "installedSchemaVersion": 1,
+    "installedSchemaVersion": 18,
     "clientProtocolVersion": 4,
     "servedProtocolVersions": [],
     "compatible": true,
@@ -33,12 +33,31 @@
   },
   {
     "id": "schema-too-old",
-    "installedSchemaVersion": 0,
+    "installedSchemaVersion": 16,
     "clientProtocolVersion": 4,
-    "servedProtocolVersions": [4],
+    "servedProtocolVersions": [1, 2, 3, 4],
     "compatible": false,
     "refusalCode": "schema-too-old",
-    "refusal": "Refuse every mutation until the database is migrated."
+    "refusal": "Refuse every mutation until the database is migrated: the release calls functions a schema below its minimum does not carry."
+  },
+  {
+    "id": "schema-below-the-dashboard-reads",
+    "installedSchemaVersion": 5,
+    "clientProtocolVersion": 4,
+    "servedProtocolVersions": [1, 2, 3, 4],
+    "compatible": false,
+    "refusalCode": "schema-too-old",
+    "refusal": "Refuse every mutation because the release's dashboard reads functions schema 5 does not carry.",
+    "note": "Schema 4 and schema 5 declare protocol 4 and pass every protocol test, so only the schema floor refuses them. Without it the process starts and fails later with SQLSTATE 42883."
+  },
+  {
+    "id": "schema-below-the-statement-catalogues",
+    "installedSchemaVersion": 4,
+    "clientProtocolVersion": 4,
+    "servedProtocolVersions": [1, 2, 3, 4],
+    "compatible": false,
+    "refusalCode": "schema-too-old",
+    "refusal": "Refuse every mutation because the release's statement catalogues call functions schema 4 does not carry."
   },
   {
     "id": "schema-no-longer-serves-client",
@@ -51,7 +70,7 @@
   },
   {
     "id": "client-protocol-too-old",
-    "installedSchemaVersion": 1,
+    "installedSchemaVersion": 18,
     "clientProtocolVersion": 0,
     "servedProtocolVersions": [1],
     "compatible": false,
@@ -60,7 +79,7 @@
   },
   {
     "id": "client-protocol-too-new",
-    "installedSchemaVersion": 1,
+    "installedSchemaVersion": 18,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [1, 2, 3, 4],
     "compatible": false,

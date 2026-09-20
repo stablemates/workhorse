@@ -644,6 +644,10 @@ in `typescript/core/package.json` while `install.schema` names none, and no file
 `workhorse` binary through `npx` without `--package`, a form `npx` resolves to an unrelated package
 outside a project that already depends on `@stablemates/workhorse`.
 
+`MINIMUM_SCHEMA_VERSION` carries `protocol/v1/manifest.json`'s `schema.minimumVersion`, which is
+derived rather than authored: it is the newest schema version that introduced an object this release
+calls. `docs/schema-lifecycle.md` states how it is derived and what enforces it.
+
 TypeScript `PROTOCOL_VERSION` is 1. `schemaCompatibilityRefusal(state, clientProtocolVersion)` in
 `typescript/core/src/schema.ts` applies the tests in the order `protocol/v1/compatibility.json`
 fixes, and returns a `SchemaCompatibilityRefusal` carrying a `code` and a `message`, or null.

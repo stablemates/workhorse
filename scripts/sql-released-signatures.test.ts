@@ -22,7 +22,12 @@ LANGUAGE sql AS $$ SELECT NULL::uuid, NULL::bigint $$;`,
 };
 
 function migration(body: string, version = 2): SignatureSource {
-  return { kind: "migration", version, file: `sql/migrations/000${version}-probe.sql`, source: body };
+  return {
+    kind: "migration",
+    version,
+    file: `sql/migrations/000${version}-probe.sql`,
+    source: body,
+  };
 }
 
 describe("released function signatures", () => {

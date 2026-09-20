@@ -308,7 +308,20 @@ schema version, the installed protocol versions, and PostgreSQL support at any p
 
 A client accepts an installed schema at or above its own minimum and applies no upper bound of its
 own, because the additive rule guarantees that a newer schema still carries every function an older
-release calls. The bound closes only when the installed schema stops serving the client's protocol,
+release calls.
+
+That minimum is derived rather than authored. `scripts/sql-schema-floor.ts` reads `sql/releases/`
+and `sql/migrations/` in schema-version order for the version that introduced each `workhorse.`
+function, table, and view. It then reads every name the three generated statement catalogues and the
+three dashboard read models write into SQL. `scripts/sql-schema-floor.test.ts` requires
+`protocol/v1/manifest.json`'s `schema.minimumVersion` to cover the newest of those introductions. It
+also requires the floor to stay at or below `schema.installedVersion`, so a release always accepts
+its own clean installation. The floor rises when a release starts calling something new. A release
+that runs below its floor would fail on the call itself, so the compatibility check refuses the
+schema first. Because the pipeline migrates before any process from the new release starts, that
+refusal never reaches a rolling deployment.
+
+The bound closes only when the installed schema stops serving the client's protocol,
 which is one deliberate step and not a version number: a major release still adds, and the operator
 narrows the schema later with `workhorse schema contract`. Until that step runs, a client from the
 previous major keeps working against a schema in the new major line.

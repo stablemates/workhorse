@@ -3,7 +3,7 @@
   "protocolVersion": 4,
   "schema": {
     "installedVersion": 21,
-    "minimumVersion": 1,
+    "minimumVersion": 18,
     "maximumVersion": 21,
     "baselineVersion": 1
   },

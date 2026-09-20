@@ -536,7 +536,11 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
 
 - **The runtime declares a floor; the database declares the ceiling.** A runtime accepts the single
   row in `workhorse.schema_version` when it is at or above `MINIMUM_SCHEMA_VERSION`, and applies no
-  upper bound of its own. A schema that is merely newer still carries every function the runtime
+  upper bound of its own. That floor is the version that introduced the newest schema object the
+  release calls, across its statement catalogues and the dashboard host it ships, so a schema the
+  release would fail on is refused at startup rather than on the first call. A release raises the
+  floor when it starts calling something newer, which is why the deployment pipeline migrates
+  before any process from the new release starts. A schema that is merely newer still carries every function the runtime
   calls, because inside a major line a migration only adds, so refusing it would make every rolling
   deployment an outage. The ceiling is `workhorse.protocol_version`, where the installed schema
   lists the client protocols it still answers; a contract step drops the ones it stops serving, and

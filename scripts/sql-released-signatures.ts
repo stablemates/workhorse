@@ -69,7 +69,7 @@ function keyOf(definition: FunctionDefinition): string {
  * changing one, and the released-artifact rehearsal already proves the two agree.
  */
 export function findSignatureDrift(sources: readonly SignatureSource[]): SignatureDrift[] {
-  const ordered = [...sources].sort(
+  const ordered = sources.toSorted(
     (left, right) =>
       left.version - right.version ||
       (left.kind === "migration" ? 0 : 1) - (right.kind === "migration" ? 0 : 1) ||

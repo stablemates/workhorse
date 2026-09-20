@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { schemaCompatibilityRefusal } from "../src/schema.js";
+import { MINIMUM_SCHEMA_VERSION, schemaCompatibilityRefusal } from "../src/schema.js";
 import type { SchemaCompatibilityCode } from "../src/index.js";
 
 const repository = path.resolve(import.meta.dirname, "../../..");
@@ -85,7 +85,10 @@ describe("schema compatibility refusals", () => {
       message: expect.stringContaining("below the minimum"),
     });
     expect(
-      schemaCompatibilityRefusal({ schemaVersion: 5, servedProtocolVersions: [2] }, 1),
+      schemaCompatibilityRefusal(
+        { schemaVersion: MINIMUM_SCHEMA_VERSION, servedProtocolVersions: [2] },
+        1,
+      ),
     ).toMatchObject({
       code: "schema-too-new",
       message: expect.stringContaining("no longer serves protocol 1"),
