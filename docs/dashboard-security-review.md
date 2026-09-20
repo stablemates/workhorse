@@ -79,9 +79,11 @@ Confirm every statement the server issues binds its values.
 - Confirm no call site interpolates a value into `sql` as text. The tag in
   `typescript/dashboard-server/src/server/sql.ts` splices only a nested `DashboardSql` fragment,
   and treats any other value as a bind parameter.
-- Confirm no procedure input that admits an arbitrary object reaches the `sql` tag as a parameter.
-  The tag identifies a fragment structurally, by `text` and `values`, so an object that carries
-  those two keys would be spliced as SQL rather than bound.
+- Confirm the tag still identifies a fragment by the module-private `FRAGMENT` symbol it brands its
+  own results with, rather than by the `text` and `values` keys. A structural test would splice any
+  object that carries those two keys, so a procedure input admitting an arbitrary object would
+  become statement text. `sql.test.ts` asserts that a plain `{ text, values }` object is bound,
+  both as a parameter and nested inside `sql.join`.
 
 **Re-walk when** a read stops using a versioned function, when the `sql` tag changes, or when a
 procedure input gains a free-form object that a read consumes.
