@@ -5488,37 +5488,47 @@ BEGIN
         THEN NULLIF(v_request->>'prerequisiteTaskId', '')::uuid
       ELSE NULL
     END;
-    IF cardinality(v_prerequisite_task_ids) <> (
-      SELECT count(DISTINCT prerequisite_id) FROM unnest(v_prerequisite_task_ids) prerequisite_id
-    ) THEN
-      RAISE EXCEPTION 'dependency prerequisiteTaskIds must be unique';
+    -- Most requests carry no prerequisite. The prerequisite lock, the existence check and both
+    -- outcome scans answer nothing for an empty set, so a request without prerequisites states
+    -- their answers directly and reaches the task insert without touching dependency relations.
+    IF cardinality(v_prerequisite_task_ids) > 0 THEN
+      IF cardinality(v_prerequisite_task_ids) <> (
+        SELECT count(DISTINCT prerequisite_id) FROM unnest(v_prerequisite_task_ids) prerequisite_id
+      ) THEN
+        RAISE EXCEPTION 'dependency prerequisiteTaskIds must be unique';
+      END IF;
+      PERFORM 1 FROM workhorse.task prerequisite
+       WHERE prerequisite.id = ANY(v_prerequisite_task_ids)
+       ORDER BY prerequisite.id FOR UPDATE;
+      GET DIAGNOSTICS v_pending_prerequisites = ROW_COUNT;
+      IF v_pending_prerequisites <> cardinality(v_prerequisite_task_ids) THEN
+        RAISE EXCEPTION 'prerequisite task does not exist';
+      END IF;
+      SELECT count(*)::integer INTO v_pending_prerequisites
+        FROM unnest(v_prerequisite_task_ids) prerequisite_id
+        LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = prerequisite_id
+       WHERE outcome.task_id IS NULL;
+      SELECT outcome.task_id, outcome.state, action.policy_action
+        INTO v_terminal_prerequisite_id, v_terminal_prerequisite_state, v_terminal_action
+        FROM workhorse.task_outcome outcome
+        CROSS JOIN LATERAL (
+          SELECT CASE outcome.state
+            WHEN 'succeeded' THEN v_on_success
+            WHEN 'failed' THEN v_on_failure
+            WHEN 'canceled' THEN v_on_cancellation
+            ELSE 'release'
+          END AS policy_action
+        ) action
+       WHERE outcome.task_id = ANY(v_prerequisite_task_ids)
+         AND action.policy_action IN ('fail', 'cancel')
+       ORDER BY CASE action.policy_action WHEN 'fail' THEN 0 ELSE 1 END, outcome.task_id
+       LIMIT 1;
+    ELSE
+      v_pending_prerequisites := 0;
+      v_terminal_prerequisite_id := NULL;
+      v_terminal_prerequisite_state := NULL;
+      v_terminal_action := NULL;
     END IF;
-    PERFORM 1 FROM workhorse.task prerequisite
-     WHERE prerequisite.id = ANY(v_prerequisite_task_ids)
-     ORDER BY prerequisite.id FOR UPDATE;
-    GET DIAGNOSTICS v_pending_prerequisites = ROW_COUNT;
-    IF v_pending_prerequisites <> cardinality(v_prerequisite_task_ids) THEN
-      RAISE EXCEPTION 'prerequisite task does not exist';
-    END IF;
-    SELECT count(*)::integer INTO v_pending_prerequisites
-      FROM unnest(v_prerequisite_task_ids) prerequisite_id
-      LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = prerequisite_id
-     WHERE outcome.task_id IS NULL;
-    SELECT outcome.task_id, outcome.state, action.policy_action
-      INTO v_terminal_prerequisite_id, v_terminal_prerequisite_state, v_terminal_action
-      FROM workhorse.task_outcome outcome
-      CROSS JOIN LATERAL (
-        SELECT CASE outcome.state
-          WHEN 'succeeded' THEN v_on_success
-          WHEN 'failed' THEN v_on_failure
-          WHEN 'canceled' THEN v_on_cancellation
-          ELSE 'release'
-        END AS policy_action
-      ) action
-     WHERE outcome.task_id = ANY(v_prerequisite_task_ids)
-       AND action.policy_action IN ('fail', 'cancel')
-     ORDER BY CASE action.policy_action WHEN 'fail' THEN 0 ELSE 1 END, outcome.task_id
-     LIMIT 1;
     v_state := CASE
       WHEN v_terminal_action IS NOT NULL THEN 'blocked'
       WHEN v_pending_prerequisites > 0 THEN 'blocked'
@@ -5676,50 +5686,55 @@ BEGIN
         CASE WHEN v_state = 'ready' THEN nextval('workhorse.ready_sequence_seq') END,
         v_deadline_at, v_budget_name
       );
-      WITH prerequisites AS MATERIALIZED (
-        SELECT input.prerequisite_task_id, outcome.state,
-               outcome.state IS NOT NULL AND (
-                 (outcome.state = 'succeeded' AND v_on_success = 'release')
-                 OR (outcome.state = 'failed' AND v_on_failure = 'release')
-                 OR (outcome.state = 'canceled' AND v_on_cancellation = 'release')
-               ) AS releases_immediately
-          FROM unnest(v_prerequisite_task_ids) input(prerequisite_task_id)
-          LEFT JOIN workhorse.task_outcome outcome
-            ON outcome.task_id = input.prerequisite_task_id
-      ), inserted_edges AS (
-        INSERT INTO workhorse.task_dependency(
-          dependent_task_id, prerequisite_task_id, on_success, on_failure, on_cancellation,
-          created_at, released_at, resolution
+      -- A request without prerequisites has no edge to write and no dependent to resolve. Running
+      -- the insert anyway would fire the statement trigger on `task_dependency`, and that trigger
+      -- walks the dependency graph recursively for a transition that cannot have occurred.
+      IF cardinality(v_prerequisite_task_ids) > 0 THEN
+        WITH prerequisites AS MATERIALIZED (
+          SELECT input.prerequisite_task_id, outcome.state,
+                 outcome.state IS NOT NULL AND (
+                   (outcome.state = 'succeeded' AND v_on_success = 'release')
+                   OR (outcome.state = 'failed' AND v_on_failure = 'release')
+                   OR (outcome.state = 'canceled' AND v_on_cancellation = 'release')
+                 ) AS releases_immediately
+            FROM unnest(v_prerequisite_task_ids) input(prerequisite_task_id)
+            LEFT JOIN workhorse.task_outcome outcome
+              ON outcome.task_id = input.prerequisite_task_id
+        ), inserted_edges AS (
+          INSERT INTO workhorse.task_dependency(
+            dependent_task_id, prerequisite_task_id, on_success, on_failure, on_cancellation,
+            created_at, released_at, resolution
+          )
+          SELECT task_id, prerequisites.prerequisite_task_id,
+                 v_on_success, v_on_failure, v_on_cancellation, v_now,
+                 CASE WHEN prerequisites.releases_immediately THEN v_now END,
+                 CASE WHEN prerequisites.releases_immediately THEN 'release' END
+            FROM prerequisites
+          RETURNING prerequisite_task_id, released_at
         )
-        SELECT task_id, prerequisites.prerequisite_task_id,
-               v_on_success, v_on_failure, v_on_cancellation, v_now,
-               CASE WHEN prerequisites.releases_immediately THEN v_now END,
-               CASE WHEN prerequisites.releases_immediately THEN 'release' END
-          FROM prerequisites
-        RETURNING prerequisite_task_id, released_at
-      )
-      INSERT INTO workhorse.task_event(task_id, event_type, details)
-      SELECT task_id,
-             CASE WHEN inserted_edges.released_at IS NOT NULL
-               THEN 'dependency_released' ELSE 'dependency_blocked' END,
-             jsonb_build_object(
-               'prerequisite_task_id', inserted_edges.prerequisite_task_id,
-               'state', v_state,
-               'reason', CASE
-                 WHEN NOT prerequisites.releases_immediately THEN 'prerequisite_pending'
-                 WHEN prerequisites.state = 'succeeded' THEN 'prerequisite_already_succeeded'
-                 ELSE 'prerequisite_terminal_policy'
-               END
-             )
-        FROM inserted_edges
-        JOIN prerequisites USING (prerequisite_task_id);
-      FOR v_terminal IN
-        SELECT outcome.task_id, outcome.state FROM workhorse.task_outcome outcome
-         WHERE outcome.task_id = ANY(v_prerequisite_task_ids)
-         ORDER BY outcome.task_id
-      LOOP
-        PERFORM workhorse.resolve_dependents_v1(v_terminal.task_id, v_terminal.state);
-      END LOOP;
+        INSERT INTO workhorse.task_event(task_id, event_type, details)
+        SELECT task_id,
+               CASE WHEN inserted_edges.released_at IS NOT NULL
+                 THEN 'dependency_released' ELSE 'dependency_blocked' END,
+               jsonb_build_object(
+                 'prerequisite_task_id', inserted_edges.prerequisite_task_id,
+                 'state', v_state,
+                 'reason', CASE
+                   WHEN NOT prerequisites.releases_immediately THEN 'prerequisite_pending'
+                   WHEN prerequisites.state = 'succeeded' THEN 'prerequisite_already_succeeded'
+                   ELSE 'prerequisite_terminal_policy'
+                 END
+               )
+          FROM inserted_edges
+          JOIN prerequisites USING (prerequisite_task_id);
+        FOR v_terminal IN
+          SELECT outcome.task_id, outcome.state FROM workhorse.task_outcome outcome
+           WHERE outcome.task_id = ANY(v_prerequisite_task_ids)
+           ORDER BY outcome.task_id
+        LOOP
+          PERFORM workhorse.resolve_dependents_v1(v_terminal.task_id, v_terminal.state);
+        END LOOP;
+      END IF;
       INSERT INTO workhorse.task_event(task_id, event_type, details)
         VALUES (
           task_id,
@@ -15585,10 +15600,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (16, 'bounded dashboard task reads'),
   (17, 'bounded dashboard task values'),
   (18, 'release a task without a handler'),
-  (19, 'never skip a busy schedule occurrence')
+  (19, 'never skip a busy schedule occurrence'),
+  (20, 'enqueue skips the dependency block')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (19) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (20) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
