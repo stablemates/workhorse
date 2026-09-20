@@ -1,9 +1,27 @@
 import { createRequire } from "node:module";
+import { availableParallelism } from "node:os";
 import { fileURLToPath } from "node:url";
 import { defaultServerConditions } from "vite";
 import { defineConfig } from "vitest/config";
 
 const require = createRequire(import.meta.url);
+
+/**
+ * Workers to run test files in, floored so the count never collapses to one.
+ *
+ * Vitest sizes its pool at `availableParallelism() - 1`. On a two-core runner that is a single
+ * worker, and the suite then runs every file in sequence no matter what this file says about
+ * parallelism. The floor holds the count up when the core count is small; a developer machine
+ * keeps its own larger count.
+ *
+ * The floor stays below the lane's core count on purpose. These files wait on PostgreSQL round
+ * trips rather than on the CPU, so extra workers do shorten the run, but they also spawn the
+ * admin CLI and the Go and Python conformance fixtures as child processes, and they drive a
+ * PostgreSQL that wants a core of its own. Starving those turns this suite's timing assertions
+ * into flakes rather than failures.
+ */
+const workerFloor = 3;
+const maxWorkers = Math.max(availableParallelism() - 1, workerFloor);
 
 export const databaseTestFiles = [
   "scripts/*-integration.test.ts",
@@ -56,6 +74,9 @@ export default defineConfig({
     // schema-installed database across its cases.
     // Vitest 4 no longer excludes dist by default; compiled output must not be collected twice.
     exclude: ["**/node_modules/**", "**/.git/**", "**/dist/**"],
+    // Stated rather than inferred: the default derives from the core count, so a two-core runner
+    // silently serializes the whole suite while the note above still claims parallelism. SM-835.
+    maxWorkers,
     testTimeout: 20_000,
     hookTimeout: 20_000,
     sequence: { concurrent: false },
