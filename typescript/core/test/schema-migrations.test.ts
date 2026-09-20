@@ -5,6 +5,11 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { verifySqlProtocolFixtures } from "../../../scripts/verify-sql-protocol.js";
+import {
+  findSignatureDrift,
+  formatSignatureDrift,
+  readSignatureSources,
+} from "../../../scripts/sql-released-signatures.js";
 import { randomUUID } from "node:crypto";
 import {
   migrateSchema,
@@ -427,6 +432,15 @@ describe("schema migrations", () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it("ships no migration that redefines a released function's signature", async () => {
+    // The check above reads the statements a migration writes; this one reads what they define. A
+    // `CREATE OR REPLACE FUNCTION` is how a released defect is fixed, so a replaced body is
+    // allowed, while a replaced argument list or returned column set breaks the caller that bound
+    // to it. `scripts/sql-released-signatures.test.ts` covers the shapes this must reject.
+    const drift = findSignatureDrift(await readSignatureSources(repository));
+    expect(drift.map((finding) => formatSignatureDrift(finding))).toEqual([]);
   });
 
   it("migrates every released schema version to a clean-installation schema and keeps its rows", async () => {
