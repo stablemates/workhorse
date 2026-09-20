@@ -37,6 +37,55 @@ function dashboardDefinitionName(symbolName: string): string {
     : `${dashboardDefinitionPrefix}${symbolName}`;
 }
 
+/**
+ * Where one property symbol is written, or undefined when the checker synthesized it.
+ *
+ * The file name is absolute. Every file the spec program reads lives under the checkout root, so
+ * two names share that prefix and compare on the path below it, which is the same in every
+ * checkout of the repository.
+ */
+function declarationSite(symbol: ts.Symbol): { file: string; offset: number } | undefined {
+  const declaration = symbol.declarations?.[0] ?? symbol.valueDeclaration;
+  if (!declaration) return undefined;
+  return { file: declaration.getSourceFile().fileName, offset: declaration.pos };
+}
+
+/**
+ * The properties of one type, in an order no unrelated type can move.
+ *
+ * `getPropertiesOfType` returns properties in the checker's type-creation order. A mapped type
+ * iterates its key union, and the checker interns a string literal union in type-id order, so
+ * whichever module first creates a given literal decides where that key lands. The wire model
+ * reaches such a type through `DashboardTasksCursorPage`, which extends
+ * `Omit<DashboardTasksPage, "total" | "hasMore">`. Declaring an unrelated `{ tasks: ... }` in core
+ * therefore moved `tasks` in the generated spec, and rewrote the Go and Python bindings, for a
+ * type the dashboard never reads.
+ *
+ * Sorting by declaration site pins the emitted order to the source instead. A property sorts by
+ * the file and offset it is written at, which is declaration order within one interface, and a
+ * base type's members ahead of the ones added beside it. A mapped property keeps the declaration
+ * it was derived from, so `Omit` preserves the order of the type it narrows. A property the
+ * checker synthesized without a declaration sorts last, by name; `Record<Filter, number>` has no
+ * source order to preserve, so its keys come out alphabetically.
+ *
+ * Exported so a test can pin the rule to a program the checker orders differently.
+ */
+export function propertiesInDeclarationOrder(checker: ts.TypeChecker, type: ts.Type): ts.Symbol[] {
+  const properties = [...checker.getPropertiesOfType(type)];
+  // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+  return properties.sort((left, right) => {
+    const a = declarationSite(left);
+    const b = declarationSite(right);
+    if (a && b) {
+      if (a.file !== b.file) return a.file < b.file ? -1 : 1;
+      if (a.offset !== b.offset) return a.offset - b.offset;
+    } else if (a || b) {
+      return a ? -1 : 1;
+    }
+    return left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
+  });
+}
+
 class ResponseSchemaBuilder {
   private readonly definitions = new Map<string, JsonSchema>();
   private readonly nameByType = new Map<ts.Type, string>();
@@ -48,7 +97,7 @@ class ResponseSchemaBuilder {
 
   build(responsesType: ts.Type): ResponseSchemas {
     const responses: Record<string, JsonSchema | null> = {};
-    for (const procedure of this.checker.getPropertiesOfType(responsesType)) {
+    for (const procedure of propertiesInDeclarationOrder(this.checker, responsesType)) {
       const type = this.checker.getTypeOfSymbolAtLocation(procedure, this.location);
       responses[procedure.name] =
         type.flags & (ts.TypeFlags.Void | ts.TypeFlags.Undefined)
@@ -176,7 +225,7 @@ class ResponseSchemaBuilder {
     }
     const properties: Record<string, JsonSchema> = {};
     const required: string[] = [];
-    for (const property of this.checker.getPropertiesOfType(type)) {
+    for (const property of propertiesInDeclarationOrder(this.checker, type)) {
       const declared = this.checker.getTypeOfSymbolAtLocation(property, this.location);
       const optional =
         (property.flags & ts.SymbolFlags.Optional) !== 0 ||
