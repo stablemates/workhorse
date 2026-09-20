@@ -27,6 +27,11 @@ import { startDemoMetricsObserver } from "./telemetry.js";
 import { demoLogger } from "./logger.js";
 import { prepareApplicationSchema } from "./schema-preparation.js";
 import { DEMO_AUDIT_RETENTION_INTERVAL_MS, pruneDemoAudit } from "./audit-retention.js";
+import {
+  DEMO_OPERATOR_RECONCILE_INTERVAL_MS,
+  reconcileDemoOperatorDefaults,
+  reconciliationRestoredAnything,
+} from "./operator-reconciler.js";
 import { DemoOperatorRateLimiter } from "./operator-rate-limit.js";
 import {
   DEMO_REQUEST_TIMEOUT_MS,
@@ -106,6 +111,38 @@ const auditRetentionTimer = setInterval(() => {
   });
 }, DEMO_AUDIT_RETENTION_INTERVAL_MS);
 auditRetentionTimer.unref();
+
+// The operator surface is unauthenticated, so a pause or a retention override left behind by one
+// visitor would greet every later one. A pass at startup and one on a fixed interval restore the
+// defaults, so a deploy does not hand a restarted process someone else's paused fleet.
+async function restoreOperatorDefaults(): Promise<void> {
+  try {
+    const reconciliation = await reconcileDemoOperatorDefaults(pool);
+    if (!reconciliationRestoredAnything(reconciliation)) return;
+    demoLogger.info(
+      "workhorse.demo.operator_defaults_restored",
+      "Restored the demo's default operator state",
+      {
+        "workhorse.demo.resumed_workers": reconciliation.resumedWorkers,
+        "workhorse.demo.resumed_queues": reconciliation.resumedQueues,
+        "workhorse.demo.resumed_schedules": reconciliation.resumedSchedules,
+        "workhorse.demo.reverted_retention_settings": reconciliation.revertedRetentionSettings,
+        "workhorse.demo.reverted_maintenance_settings": reconciliation.revertedMaintenanceSettings,
+      },
+    );
+  } catch (error: unknown) {
+    demoLogger.error(
+      "workhorse.demo.operator_reconcile_failed",
+      "Demo operator reconciliation pass failed",
+      error,
+    );
+  }
+}
+await restoreOperatorDefaults();
+const operatorReconcileTimer = setInterval(() => {
+  void restoreOperatorDefaults();
+}, DEMO_OPERATOR_RECONCILE_INTERVAL_MS);
+operatorReconcileTimer.unref();
 if (stagingPool && stagingDatabase) {
   await prepareApplicationSchema(mode, {
     assertCompatible: () => assertSchemaCompatible(stagingPool),
@@ -261,6 +298,7 @@ async function shutdown(signal: string): Promise<void> {
   });
   metricsObserver?.stop();
   clearInterval(auditRetentionTimer);
+  clearInterval(operatorReconcileTimer);
   await new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });

@@ -147,17 +147,32 @@ const GOOGLE_ANALYTICS_TAG = `<script async src="https://www.googletagmanager.co
   gtag('config', 'G-9NC8FKZPVB');
 </script>`;
 
-const DEMO_CONTENT_SECURITY_POLICY = [
-  "default-src 'self'",
-  "base-uri 'self'",
-  "frame-ancestors 'none'",
-  "object-src 'none'",
-  "script-src 'self' 'unsafe-inline' https://www.googletagmanager.com",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: https://*.google-analytics.com https://www.google-analytics.com",
-  "font-src 'self'",
-  "connect-src 'self' ws: wss: https://*.google-analytics.com https://www.google-analytics.com",
-].join("; ");
+/**
+ * Build the demo's Content-Security-Policy for one delivery mode.
+ *
+ * Only Vite's hot-reload client opens a WebSocket, and only development serves it. A deployment
+ * that ships the packaged bundle therefore needs no `ws:` or `wss:` source, and carrying one
+ * would let injected script reach any host over either scheme.
+ */
+export function demoContentSecurityPolicy(mode: "development" | "production"): string {
+  const connect = [
+    "'self'",
+    ...(mode === "development" ? ["ws:", "wss:"] : []),
+    "https://*.google-analytics.com",
+    "https://www.google-analytics.com",
+  ].join(" ");
+  return [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+    "object-src 'none'",
+    "script-src 'self' 'unsafe-inline' https://www.googletagmanager.com",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: https://*.google-analytics.com https://www.google-analytics.com",
+    "font-src 'self'",
+    `connect-src ${connect}`,
+  ].join("; ");
+}
 
 async function addGoogleAnalytics(response: Response): Promise<Response> {
   if (!response.headers.get("content-type")?.startsWith("text/html")) return response;
@@ -1362,6 +1377,11 @@ export function createDemoApplication(
   const publicOrigin = options.publicOrigin
     ? normalizeDashboardPublicOrigin(options.publicOrigin)
     : undefined;
+  // The development entry point is the only caller that supplies `dev`, and it is the only mode
+  // that serves Vite's hot-reload WebSocket, so it alone widens `connect-src`.
+  const contentSecurityPolicy = demoContentSecurityPolicy(
+    options.dev ? "development" : "production",
+  );
   const localControllers = createLocalOperatorControllers(database);
   // Worker pause state is durable and fleet-wide; it survives restarts and reaches remote workers.
   const workerController = options.workerController ?? localControllers.workerController;
@@ -1381,7 +1401,7 @@ export function createDemoApplication(
 
   app.use("*", async (context, next) => {
     await next();
-    context.res.headers.set("Content-Security-Policy", DEMO_CONTENT_SECURITY_POLICY);
+    context.res.headers.set("Content-Security-Policy", contentSecurityPolicy);
     context.res.headers.set("X-Content-Type-Options", "nosniff");
     context.res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
     context.res.headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");

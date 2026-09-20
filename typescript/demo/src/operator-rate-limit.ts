@@ -27,15 +27,28 @@ export function demoClientAddress(request: RateLimitedRequest): string {
   return forwardedAddress || request.socket.remoteAddress || "unknown";
 }
 
+/**
+ * Name the RPC procedure a request path dispatches, the way the dashboard host names it.
+ *
+ * The host slices its workspace prefix off the path, drops empty segments, and joins the rest
+ * with dots. Dropping empty segments is what makes a trailing slash and a doubled slash reach the
+ * same procedure, so the classifier has to drop them too or it under-reports mutations. This
+ * function has no prefix to slice, so it treats the last `rpc` segment as the boundary: the demo's
+ * workspace prefixes are `/`, `/production`, and `/staging`, and none of them contains one.
+ */
+function demoRpcProcedure(pathname: string): string {
+  const segments = pathname.split("/").filter(Boolean);
+  const boundary = segments.lastIndexOf("rpc");
+  if (boundary === -1) return "";
+  return segments.slice(boundary + 1).join(".");
+}
+
 export function isDemoOperatorMutation(
   request: Pick<RateLimitedRequest, "method" | "url">,
 ): boolean {
   if (request.method !== "POST" || !request.url) return false;
   const pathname = new URL(request.url, "http://demo.invalid").pathname;
-  const segments = pathname.split("/");
-  return (
-    segments.at(-2) === "dashboard" && isDashboardMutation(`dashboard.${segments.at(-1) ?? ""}`)
-  );
+  return isDashboardMutation(demoRpcProcedure(pathname));
 }
 
 /** A process-local token bucket for the public demo's operator RPC surface. */
