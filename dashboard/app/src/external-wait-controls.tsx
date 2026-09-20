@@ -96,7 +96,10 @@ export function HumanDecisionControls({
           </Group>
         </Alert>
       ) : null}
-      <Accordion variant="contained">
+      {/* Mantine 9 hides a collapsed panel with React `Activity`, which renders nothing on the
+          server. The dashboard serves its first paint as server-rendered HTML, so hide the panel
+          with CSS instead and keep the custom-result form in that HTML. */}
+      <Accordion variant="contained" keepMountedMode="display-none">
         <Accordion.Item value="custom-result">
           <Accordion.Control>Provide a custom JSON result</Accordion.Control>
           <Accordion.Panel>

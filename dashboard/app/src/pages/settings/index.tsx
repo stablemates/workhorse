@@ -369,7 +369,10 @@ export function SettingsPage({
               />
             </Grid.Col>
           </Grid>
-          <Accordion variant="contained">
+          {/* Mantine 9 hides a collapsed panel with React `Activity`, which renders nothing on the
+              server. The dashboard serves its first paint as server-rendered HTML, so hide the
+              panel with CSS instead and keep the advanced cadences in that HTML. */}
+          <Accordion variant="contained" keepMountedMode="display-none">
             <Accordion.Item value="advanced-maintenance">
               <Accordion.Control>
                 <Text fw={600} size="sm">
