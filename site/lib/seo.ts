@@ -71,8 +71,17 @@ export function postHead(post: PageMetadata & { readonly date: string }) {
   return articleHead(post, { schemaType: "BlogPosting", published: post.date });
 }
 
-/** The head of `/blog`: its canonical link, description, and the feed. */
-export function blogIndexHead() {
+/**
+ * The head of `/blog`: its canonical link, description, and the feed.
+ *
+ * TanStack Start prerenders every static route, so the page ships even with no
+ * posts, and a crawler that finds it then indexes an empty list. `hasPosts`
+ * decides the two tags that depend on there being something to read. The feed
+ * link is conditional for a second reason: `scripts/gen-docs-index.ts` writes
+ * `/blog/feed.xml` only when a post exists, so announcing it unconditionally
+ * points a crawler at a 404.
+ */
+export function blogIndexHead(hasPosts: boolean) {
   const canonical = `${siteConfig.url}/blog`;
   const title = `Blog — ${siteConfig.name}`;
   const description = `Long-form writing about ${siteConfig.name}, ${siteConfig.description.replace(/^A /, "a ").replace(/\.$/, "")}.`;
@@ -81,6 +90,7 @@ export function blogIndexHead() {
     meta: [
       { title },
       { name: "description", content: description },
+      ...(hasPosts ? [] : [{ name: "robots", content: "noindex" }]),
       { property: "og:url", content: canonical },
       { property: "og:title", content: title },
       { property: "og:description", content: description },
@@ -89,7 +99,9 @@ export function blogIndexHead() {
     ],
     links: [
       { rel: "canonical", href: canonical },
-      { rel: "alternate", type: "application/rss+xml", href: `${canonical}/feed.xml` },
+      ...(hasPosts
+        ? [{ rel: "alternate", type: "application/rss+xml", href: `${canonical}/feed.xml` }]
+        : []),
     ],
   };
 }

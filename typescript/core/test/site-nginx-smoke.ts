@@ -193,6 +193,10 @@ interface Vector {
   type: string;
   /** `true` for `Vary: Accept` exactly, `false` for no `Vary` header at all. */
   vary: boolean;
+  /** The expected `X-Robots-Tag`, or `false` for no such header at all. */
+  robots?: string | false;
+  /** The expected `Location`, for a redirect. */
+  location?: string;
   cacheControl?: string;
   token?: string;
   /** The twin's path; the negotiated body must equal it byte for byte. */
@@ -219,6 +223,9 @@ const chrome =
   "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7";
 const rejectsMarkdown = "text/markdown;q=0, text/html";
 
+// A canonical page URL carries no X-Robots-Tag in either representation. The
+// header belongs to the twin's own `.md` URL, and putting it here instead would
+// ask a search engine not to index the page the twin stands for.
 function twinVectors(path: string, twin: string): Vector[] {
   return [
     ...[markdownOnly, markdownFirst, openCode].map((accept) => ({
@@ -227,6 +234,7 @@ function twinVectors(path: string, twin: string): Vector[] {
       status: 200,
       type: "text/markdown; charset=utf-8",
       vary: true,
+      robots: false as const,
       twin,
     })),
     ...[undefined, "*/*", chrome, rejectsMarkdown].map((accept) => ({
@@ -235,6 +243,7 @@ function twinVectors(path: string, twin: string): Vector[] {
       status: 200,
       type: "text/html",
       vary: true,
+      robots: false as const,
       token: "<!DOCTYPE html>",
     })),
   ];
@@ -245,7 +254,6 @@ const vectors: Vector[] = [
   ...twinVectors("/", "/index.md"),
   ...twinVectors("/docs", "/docs.md"),
   ...twinVectors("/docs/quickstart", "/docs/quickstart.md"),
-  ...twinVectors("/docs/quickstart/", "/docs/quickstart.md"),
 ];
 if (await exists(resolve(webRoot, "about.md"))) {
   vectors.push(...twinVectors("/about", "/about.md"));
@@ -296,14 +304,25 @@ vectors.push(
   },
   { path: "/nope", accept: "*/*", status: 404, type: "text/html", vary: true },
   // ADR 0064 renamed two documentation slugs; the old URLs redirect permanently.
+  // Every Location is a path: `absolute_redirect off` keeps nginx from rebuilding
+  // it as an http:// URL from the Host, which behind the edge would bounce a
+  // reader off HTTPS and back for a second redirect.
   {
     path: "/docs/job-dependencies",
     accept: undefined,
     status: 301,
     type: "text/html",
     vary: false,
+    location: "/docs/task-dependencies",
   },
-  { path: "/docs/child-jobs", accept: undefined, status: 301, type: "text/html", vary: false },
+  {
+    path: "/docs/child-jobs",
+    accept: undefined,
+    status: 301,
+    type: "text/html",
+    vary: false,
+    location: "/docs/child-tasks",
+  },
   {
     path: "/nope",
     accept: markdownOnly,
@@ -338,13 +357,54 @@ vectors.push(
     json: notFoundJson,
   },
   { path: "/api/search", accept: undefined, status: 200, type: "application/json", vary: false },
+  // One page, one URL: a trailing slash is a permanent redirect to the
+  // canonical path, and the query string survives it.
+  {
+    path: "/docs/quickstart/",
+    accept: undefined,
+    status: 301,
+    type: "text/html",
+    vary: false,
+    location: "/docs/quickstart",
+  },
+  {
+    path: "/docs/quickstart/",
+    accept: markdownOnly,
+    status: 301,
+    type: "text/html",
+    vary: false,
+    location: "/docs/quickstart",
+  },
+  {
+    path: "/docs/?q=1",
+    accept: undefined,
+    status: 301,
+    type: "text/html",
+    vary: false,
+    location: "/docs?q=1",
+  },
+  // The root is exempt: its trailing slash is the canonical form, and the
+  // twinVectors("/") rows above prove it still answers 200.
+  //
+  // A browser asks for /favicon.ico whatever the page's icon link says.
+  {
+    path: "/favicon.ico",
+    accept: undefined,
+    status: 301,
+    type: "text/html",
+    vary: false,
+    location: "/icon.png",
+  },
   // A file named with its extension is one representation: no negotiation, no Vary.
+  // A twin and the agent indexes restate a page a search engine already has, so
+  // they answer noindex while staying crawlable for the agent that wants them.
   {
     path: "/docs/quickstart.md",
     accept: markdownOnly,
     status: 200,
     type: "text/markdown; charset=utf-8",
     vary: false,
+    robots: "noindex",
   },
   {
     path: "/docs/quickstart.md",
@@ -352,13 +412,48 @@ vectors.push(
     status: 200,
     type: "text/markdown; charset=utf-8",
     vary: false,
+    robots: "noindex",
   },
-  { path: "/llms.txt", accept: markdownOnly, status: 200, type: "text/plain", vary: false },
-  { path: "/sitemap.xml", accept: markdownOnly, status: 200, type: "text/xml", vary: false },
+  {
+    path: "/docs.md",
+    accept: undefined,
+    status: 200,
+    type: "text/markdown; charset=utf-8",
+    vary: false,
+    robots: "noindex",
+  },
+  {
+    path: "/llms.txt",
+    accept: markdownOnly,
+    status: 200,
+    type: "text/plain",
+    vary: false,
+    robots: "noindex",
+  },
+  {
+    path: "/llms-full.txt",
+    accept: undefined,
+    status: 200,
+    type: "text/plain",
+    vary: false,
+    robots: "noindex",
+  },
+  // The sitemap is not a twin: a crawler must read it, and noindex on it would
+  // be a contradiction.
+  {
+    path: "/sitemap.xml",
+    accept: markdownOnly,
+    status: 200,
+    type: "text/xml",
+    vary: false,
+    robots: false,
+  },
+  { path: "/robots.txt", accept: undefined, status: 200, type: "text/plain", vary: false },
   { path: "/up", accept: markdownOnly, status: 200, type: "text/plain", vary: false, token: "ok" },
-  // The visible 404 page is an ordinary page; the bodies error_page serves
-  // are internal, so a direct request gets a 404 rather than an indexable 200.
-  { path: "/not-found", accept: undefined, status: 200, type: "text/html", vary: true },
+  // The bodies error_page serves are internal, so a direct request gets a 404
+  // rather than an indexable 200. /not-found is the same page under the URL the
+  // prerenderer emits, and it answers the same way.
+  { path: "/not-found", accept: undefined, status: 404, type: "text/html", vary: true },
   { path: "/404.md", accept: undefined, status: 404, type: "text/html", vary: true },
   {
     path: "/404.md",
@@ -441,6 +536,17 @@ try {
     for (const [header, value] of Object.entries(baselineHeaders)) {
       const sent = response.headers[header];
       if (sent !== value) problems.push(`${header} ${String(sent)}, expected ${value}`);
+    }
+    const robots = response.headers["x-robots-tag"];
+    if (vector.robots === false && robots !== undefined) {
+      problems.push(`X-Robots-Tag ${String(robots)}, expected no such header`);
+    }
+    if (typeof vector.robots === "string" && robots !== vector.robots) {
+      problems.push(`X-Robots-Tag ${String(robots)}, expected ${vector.robots}`);
+    }
+    const location = response.headers.location;
+    if (vector.location !== undefined && location !== vector.location) {
+      problems.push(`Location ${String(location)}, expected ${vector.location}`);
     }
     const text = response.body.toString("utf8");
     if (vector.token !== undefined && !text.includes(vector.token)) {

@@ -524,23 +524,31 @@ await writeFile(
 
 const base = siteConfig.url;
 
+/**
+ * The sitemap: every page URL, and a `lastmod` for the pages that have a real
+ * one. `changefreq` and `priority` are absent because Google reads neither, and
+ * a field nobody reads is a field that drifts.
+ *
+ * Only a post carries `lastmod`, from the `date` its frontmatter already
+ * states. A documentation page declares no such date, and the image build
+ * excludes `.git`, so the only timestamp available there is the build's own.
+ * Publishing that would tell a crawler every page changed on every deploy,
+ * which is worse than saying nothing: Google distrusts a `lastmod` it catches
+ * moving without the content.
+ */
+const postDates = new Map(posts.map((post) => [post.url, post.date]));
+
 await writeFile(
   new URL("../public/sitemap.xml", import.meta.url),
   `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 ${routes
-  .map(
-    (route) =>
-      `  <url><loc>${base}${route}</loc><changefreq>weekly</changefreq><priority>${
-        route === "/"
-          ? 1
-          : route === "/docs"
-            ? 0.9
-            : sitePages.some((page) => page.url === route)
-              ? 0.5
-              : 0.7
-      }</priority></url>`,
-  )
+  .map((route) => {
+    const lastmod = postDates.get(route);
+    return `  <url><loc>${base}${route}</loc>${
+      lastmod === undefined ? "" : `<lastmod>${lastmod}</lastmod>`
+    }</url>`;
+  })
   .join("\n")}
 </urlset>
 `,
@@ -745,7 +753,9 @@ await writeFile(new URL("../public/llms-full.txt", import.meta.url), llmsFull);
 
 // The search index is derived data. Crawling it wastes budget. Markdown twins
 // are not derived: they are the same content in a form an agent can read, so
-// they stay crawlable.
+// they stay crawlable. `site/nginx.conf` answers a twin with `X-Robots-Tag:
+// noindex`, which keeps a search engine from indexing the page twice without
+// taking the file away from the agent a Disallow would also stop.
 //
 // A crawler that reads this file may be an agent rather than a search engine,
 // and `robots.txt` is the one file it is guaranteed to fetch. The comment names
@@ -758,7 +768,6 @@ await writeFile(
 User-agent: *
 Allow: /
 Disallow: /api/
-Host: ${base}
 Sitemap: ${base}/sitemap.xml
 `,
 );
