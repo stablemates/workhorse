@@ -150,6 +150,15 @@ const TEST_OBSERVABLE_TASK_MS = TEST_REGISTRY_INTERVAL_MS * 10;
 const TEST_CONTROL_WINDOW_TASK_MS = TEST_REGISTRY_INTERVAL_MS * 50;
 
 /**
+ * Budget for a wait that cannot resolve until a running handler returns.
+ *
+ * The long-running demo handler sleeps without a signal, so cancelling its task does not shorten
+ * it: the task reaches `canceled` only once the attempt it is already serving finishes. A wait on
+ * that outcome has to outlast the handler itself, not a poll interval.
+ */
+const TEST_UNCANCELLABLE_HANDLER_WAIT_MS = TEST_CONTROL_WINDOW_TASK_MS * 3;
+
+/**
  * Applications created by the current test, stopped before the next one truncates.
  *
  * Worker registration is durable, so a worker still running from a previous test would re-register
@@ -481,14 +490,28 @@ async function enqueueDemoTest(
 /**
  * Poll a read model until it satisfies a predicate. The demo has no synchronous hook into worker
  * slot transitions, so the tests bound the wait instead of sleeping for a fixed guessed duration.
+ *
+ * A poll count alone bounds nothing a test can rely on. Each pass costs the fixed sleep plus a
+ * read whose latency moves with load, so the same count covers several seconds on a loaded runner
+ * and a fraction of one on an idle machine. That is fine for a wait on a state change the demo
+ * makes within a poll interval, which is what almost every caller wants.
+ *
+ * A caller waiting on work of a known duration needs `minimumBudgetMs` as well, because no count
+ * can promise to outlast that work. The wait then ends when both bounds are spent.
  */
 async function waitFor<T>(
   read: () => Promise<T>,
   matches: (value: T) => boolean,
   attempts = 200,
+  minimumBudgetMs = 0,
 ): Promise<T> {
+  const deadline = Date.now() + minimumBudgetMs;
   let latest = await read();
-  for (let attempt = 0; attempt < attempts && !matches(latest); attempt += 1) {
+  for (
+    let attempt = 0;
+    (attempt < attempts || Date.now() < deadline) && !matches(latest);
+    attempt += 1
+  ) {
     await sleep(5);
     latest = await read();
   }
@@ -4317,6 +4340,7 @@ describe("Workhorse demo", () => {
         () => client.dashboard.taskDetail({ id: enqueued.taskId }),
         (detail) => detail.identity.state === "canceled",
         600,
+        TEST_UNCANCELLABLE_HANDLER_WAIT_MS,
       );
 
       const system = await client.dashboard.system({ window: "1h" });
