@@ -47,7 +47,7 @@ import { createDemoWorkerDefinition } from "../../src/worker-definition.js";
  * A scratch database per file also lets the pieces of this suite run in parallel: two files sharing
  * one database would truncate each other's rows.
  */
-export const hasDashboardBrowserBundle = existsSync(
+const hasDashboardBrowserBundle = existsSync(
   new URL("../../../dashboard-server/dist/app/index.html", import.meta.url),
 );
 export const dashboardBrowserTest = hasDashboardBrowserBundle ? it : it.skip;
@@ -60,7 +60,7 @@ export const workspaceDashboardTestName =
  * Slot use and operator pause both travel through the durable worker registry, so these tests need
  * a refresh cadence far shorter than the work they observe.
  */
-export const TEST_REGISTRY_INTERVAL_MS = 100;
+const TEST_REGISTRY_INTERVAL_MS = 100;
 
 /**
  * The identity shape a worker generates for itself: `<hostname>-<pid>-<8 hex>`.
@@ -95,7 +95,7 @@ export const TEST_CONTROL_WINDOW_TASK_MS = TEST_REGISTRY_INTERVAL_MS * 50;
  */
 export const TEST_UNCANCELLABLE_HANDLER_WAIT_MS = TEST_CONTROL_WINDOW_TASK_MS * 3;
 
-export function dashboardClient(
+function dashboardClient(
   app: ReturnType<typeof createDemoApplication>["app"],
   rpcPath = "/rpc",
   origins: { browser: string; upstream: string } = {
@@ -131,7 +131,7 @@ export function dashboardClient(
  * A caller waiting on work of a known duration needs `minimumBudgetMs` as well, because no count
  * can promise to outlast that work. The wait then ends when both bounds are spent.
  */
-export async function waitFor<T>(
+async function waitFor<T>(
   read: () => Promise<T>,
   matches: (value: T) => boolean,
   attempts = 200,
@@ -151,7 +151,7 @@ export async function waitFor<T>(
   return latest;
 }
 
-export async function waitForWorker(
+async function waitForWorker(
   client: RouterClient<DashboardRouter>,
   workerId: string,
   matches: (worker: DashboardWorkerRow) => boolean,
@@ -172,7 +172,7 @@ export async function waitForWorker(
  * The demo does not name its workers, exactly as a real deployment usually does not, so tests have
  * to discover the fleet from the registry rather than assume an identity.
  */
-export async function waitForRegisteredWorker(
+async function waitForRegisteredWorker(
   client: RouterClient<DashboardRouter>,
 ): Promise<DashboardWorkerRow> {
   const page = await waitFor(
@@ -186,7 +186,7 @@ export async function waitForRegisteredWorker(
   return defaultQueueWorker!;
 }
 
-export function showcaseTestPayload(
+function showcaseTestPayload(
   family: DemoFeatureFamily,
   scenario: string,
   behavior: DemoFeatureBehavior,
@@ -212,7 +212,7 @@ export function showcaseTestPayload(
   };
 }
 
-export const waitForTaskState = (admin: Admin, taskId: string, state: string) =>
+const waitForTaskState = (admin: Admin, taskId: string, state: string) =>
   waitFor(
     async () => (await admin.getTask(taskId))?.state,
     (value) => value === state,
