@@ -2,8 +2,10 @@
 
 ## Current policy
 
-Schema version 1 is the migration baseline and schema version 20 is current. `sql/schema/current.sql` is the tracked source and
-`sql/schema.sql` is a build artifact for published packages. `sql/releases/0001.sql` contains the baseline clean-install artifact.
+Schema version 1 is the migration baseline and schema version 21 is current. `sql/schema/current.sql` is the tracked source and
+`sql/schema.sql` is a build artifact for published packages. `sql/releases/` holds the frozen
+clean-install artifact of every published release: `0001.sql` is the 0.1.5 baseline, `0006.sql` is
+0.2.0, and `0009.sql` is 0.2.1.
 `sql/migrations/` holds the ordered steps that carry a baseline installation forward to the current
 version; each new schema version adds one more step there.
 
