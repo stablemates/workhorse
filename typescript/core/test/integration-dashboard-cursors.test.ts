@@ -50,6 +50,37 @@ describe("dashboard cursor pages", () => {
     });
   }
 
+  // 80 rows divide evenly into pages of 20, so the fourth page ends exactly on the last row. A
+  // walk that offers another cursor there hands the reader an empty page, and a walk that stops
+  // one page early loses twenty rows.
+  it("ends a cursor walk on the page that lands on the last row", async () => {
+    const pageSize = 20;
+    const ids: string[] = [];
+    let cursor: DashboardTasksCursorPage["nextCursor"] = null;
+    let pages = 0;
+    do {
+      const current: DashboardTasksCursorPage = await page({ pageSize, cursor });
+      pages += 1;
+      expect(current.tasks).toHaveLength(pageSize);
+      ids.push(...current.tasks.map((task) => task.id));
+      cursor = current.nextCursor;
+    } while (cursor && pages < 5);
+
+    expect(pages).toBe(4);
+    expect(cursor).toBeNull();
+    expect(new Set(ids).size).toBe(80);
+  });
+
+  it("reports no further page when an offset page ends on the last row", async () => {
+    const result = await database.pool.query<{
+      result: { total: number; page: number; hasMore: boolean; tasks: unknown[] };
+    }>("SELECT workhorse.dashboard_tasks_v1($1::jsonb) AS result", [
+      JSON.stringify({ queue: "cursor", pageSize: 20, page: 4 }),
+    ]);
+    expect(result.rows[0]!.result).toMatchObject({ total: 80, page: 4, hasMore: false });
+    expect(result.rows[0]!.result.tasks).toHaveLength(20);
+  });
+
   it("counts the entire selection only when requested, including on later pages", async () => {
     const first = await page();
     const second = await page({ cursor: first.nextCursor, count: "exact" });
