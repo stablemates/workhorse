@@ -66,5 +66,7 @@ Operational capabilities are demonstrated through their own surfaces rather than
 The catalog is declared in `typescript/demo/src/feature-showcase.ts`. Seed orchestration lives in
 `typescript/demo/src/app.ts`, the handlers in `typescript/demo/src/handlers.ts`, and the shared
 contract options in `typescript/demo/src/contracts.ts`.
-`typescript/demo/test/app.integration.test.ts` verifies the three-per-family invariant, schedule
-sync, idempotent startup, redrive artifacts, and dashboard discoverability.
+`typescript/demo/test/app-surface.integration.test.ts` verifies the three-per-family invariant,
+schedule sync, idempotent startup, redrive artifacts, and dashboard discoverability. It is one of
+the `typescript/demo/test/*.integration.test.ts` pieces that share
+`typescript/demo/test/support/demo-integration.ts`.
