@@ -197,6 +197,64 @@ describe("task dependencies", () => {
     }
   });
 
+  it("runs no dependency statement when a request declares no prerequisites", async () => {
+    // An AFTER INSERT statement trigger fires even for an insert which writes no row, so it
+    // observes exactly what the guard removes: the statement itself, and with it the recursive
+    // validator the shipped statement trigger runs.
+    const client = await pool.connect();
+    const firedStatements = async () =>
+      Number(
+        (await client.query<{ fired: string }>("SELECT count(*)::text AS fired FROM pg_temp.probe"))
+          .rows[0]!.fired,
+      );
+    try {
+      await client.query("BEGIN");
+      await client.query("CREATE TEMP TABLE probe(observed_at timestamptz)");
+      await client.query(
+        `CREATE FUNCTION pg_temp.record_dependency_statement() RETURNS trigger
+         LANGUAGE plpgsql AS $probe$
+         BEGIN INSERT INTO pg_temp.probe VALUES (clock_timestamp()); RETURN NULL; END
+         $probe$`,
+      );
+      await client.query(
+        `CREATE TRIGGER probe_dependency_statement AFTER INSERT ON workhorse.task_dependency
+         FOR EACH STATEMENT EXECUTE FUNCTION pg_temp.record_dependency_statement()`,
+      );
+
+      const independentId = await queue.enqueue("dependency-free", null, {}, client);
+      expect(await firedStatements()).toBe(0);
+      const written = await client.query<{ edges: string; events: string }>(
+        `SELECT (SELECT count(*)::text FROM workhorse.task_dependency
+                  WHERE dependent_task_id = $1) AS edges,
+                (SELECT count(*)::text FROM workhorse.task_event
+                  WHERE task_id = $1
+                    AND event_type IN ('dependency_blocked', 'dependency_released')) AS events`,
+        [independentId],
+      );
+      expect(written.rows[0]).toEqual({ edges: "0", events: "0" });
+
+      // The same trigger proves the guard is a cardinality check rather than a removal: a request
+      // which declares a prerequisite still runs the statement.
+      await queue.enqueue(
+        "dependency-bearing",
+        null,
+        {
+          dependencies: {
+            prerequisiteTaskIds: [independentId],
+            onSuccess: "release",
+            onFailure: "fail",
+            onCancellation: "cancel",
+          },
+        },
+        client,
+      );
+      expect(await firedStatements()).toBe(1);
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
+  });
+
   it("releases fan-in only after every prerequisite succeeds", async () => {
     const firstId = await queue.enqueue("fan-in-first", null);
     const secondId = await queue.enqueue("fan-in-second", null);

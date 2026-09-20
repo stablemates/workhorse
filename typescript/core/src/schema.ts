@@ -169,6 +169,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "never skip a busy schedule occurrence",
     kind: "additive",
   },
+  {
+    fromVersion: 19,
+    toVersion: 20,
+    file: "0020-enqueue-skips-the-dependency-block.sql",
+    description: "enqueue skips the dependency block",
+    kind: "additive",
+  },
 ];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {
