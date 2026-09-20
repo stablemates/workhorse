@@ -1094,6 +1094,92 @@ describe("task dependencies", () => {
     await expect(admin.getTask(acceptedId)).resolves.toMatchObject({ state: "blocked" });
   });
 
+  it("releases a blocked dependent's own edges when cancellation settles it", async () => {
+    const prerequisiteId = await queue.enqueue("abandoned-prerequisite", null);
+    const dependentId = await queue.enqueue("abandoned-dependent", null, {
+      dependencies: {
+        prerequisiteTaskIds: [prerequisiteId],
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+    await expect(admin.getTask(dependentId)).resolves.toMatchObject({ state: "blocked" });
+
+    await expect(queue.cancel(dependentId)).resolves.toMatchObject({ status: "canceled" });
+
+    await expect(admin.getDependencyLineage(dependentId)).resolves.toEqual({
+      records: [
+        expect.objectContaining({
+          dependentTaskId: dependentId,
+          prerequisiteTaskId: prerequisiteId,
+          releasedAt: expect.any(Date),
+          resolution: "release",
+        }),
+      ],
+      truncated: false,
+    });
+    await expect(admin.getTask(prerequisiteId)).resolves.toMatchObject({ state: "ready" });
+    await expect(queue.health()).resolves.toMatchObject({
+      dependencies: { pendingEdges: 0 },
+    });
+  });
+
+  it("stops a canceled dependent from pinning its prerequisite against retention", async () => {
+    const prerequisiteId = await queue.enqueue("unpinned-prerequisite", null);
+    const dependentId = await queue.enqueue("unpinned-dependent", null, {
+      prerequisiteTaskId: prerequisiteId,
+    });
+    await expect(queue.cancel(dependentId)).resolves.toMatchObject({ status: "canceled" });
+    const prerequisite = await queue.claim("unpinned-prerequisite-worker");
+    expect(prerequisite?.id).toBe(prerequisiteId);
+    expect(await queue.complete(prerequisite!, "unpinned-prerequisite-worker", null)).toBe(true);
+
+    await pool.query("DELETE FROM workhorse.task_event WHERE task_id = ANY($1::uuid[])", [
+      [prerequisiteId, dependentId],
+    ]);
+    await pool.query("DELETE FROM workhorse.attempt_history WHERE task_id = ANY($1::uuid[])", [
+      [prerequisiteId, dependentId],
+    ]);
+    await pool.query(
+      `UPDATE workhorse.task SET created_at = clock_timestamp() - interval '40 days'
+        WHERE id = $1`,
+      [prerequisiteId],
+    );
+    await pool.query(
+      `UPDATE workhorse.task_outcome
+          SET finished_at = clock_timestamp() - interval '40 days',
+              history_through_at = clock_timestamp() - interval '40 days'
+        WHERE task_id = $1`,
+      [prerequisiteId],
+    );
+    await queue.syncRetentionPolicy({
+      ...defaultRetentionPolicy,
+      taskIdentityRetentionDays: 30,
+      terminalOutcomeRetentionDays: 30,
+      taskEventRetentionDays: 30,
+      attemptHistoryRetentionDays: 30,
+      scheduleOccurrenceRetentionDays: 30,
+    });
+    await queue.retainHistory({ force: true });
+
+    const phases = await queue.pruneTerminalStorage({ force: true });
+    expect(phases).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "released_dependencies",
+          rowsAffected: 1,
+          error: null,
+        }),
+        expect.objectContaining({ phase: "terminal_tasks", rowsAffected: 1, error: null }),
+      ]),
+    );
+    await expect(admin.getTask(prerequisiteId)).resolves.toBeNull();
+    await expect(queue.health()).resolves.toMatchObject({
+      dependencies: { retentionPruneStarved: false },
+    });
+  });
+
   it("compacts released edges before pruning an older prerequisite", async () => {
     const prerequisiteId = await queue.enqueue("retained-prerequisite", null);
     const dependentId = await queue.enqueue("retained-dependent", null, {

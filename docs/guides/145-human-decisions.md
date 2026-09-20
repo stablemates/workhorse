@@ -61,9 +61,13 @@ competing completion returns the accepted winner without overwriting its audit e
 
 ## PostgreSQL closes an unanswered decision
 
-PostgreSQL applies a finite [timeout](140-deadlines-and-timeouts.md), and a caller can choose a
-shorter one. An earlier task deadline wins. Timeout fails the task because replay cannot continue
-without a result. [Cancellation](120-cancellation.md) also closes the decision, so late completion
+A decision nobody answers still closes. When the handler names no `timeoutMs`, Workhorse applies
+its longest supported wait instead. Pass `timeoutMs` to choose a shorter one. An earlier task
+[deadline](140-deadlines-and-timeouts.md) wins over either.
+
+The closing boundary becomes the task's deadline. Workhorse then fails the task and starts no
+further attempt, because replay cannot continue without a result. Choose a `timeoutMs` your
+operators can meet. The default is long enough that a decision can sit past the point it mattered. [Cancellation](120-cancellation.md) also closes the decision, so late completion
 returns `stale`. The token row follows the parent task's safe [retention](330-retention.md).
 
 ## Next

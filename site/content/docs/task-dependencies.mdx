@@ -65,7 +65,8 @@ PostgreSQL bounds direct edges and downstream settlement work. A cycle or an ove
 Producers declare edges with `EnqueueOptions.dependencies`. PostgreSQL stores blocked work in
 `task_runtime` until its `runAt` gate and prerequisites allow a `dependency_released` transition.
 `Queue.cancel` can settle that graph, while `Queue.health()` reports `Blocked` work through the
-public `Queue` client.
+public `Queue` client. Cancelling a blocked dependent releases its own edges on the way out, so an
+abandoned dependent stops holding its prerequisites against retention.
 
 ## Next
 

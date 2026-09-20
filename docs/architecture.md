@@ -1296,7 +1296,7 @@ The stored canonical fingerprint covers queue, concurrency key, priority, type, 
 
 ### `task_dependency`
 
-At most 100 prerequisite edges may enter one dependent task, and at most 100 dependent edges may leave one prerequisite task. The primary key is `(dependent_task_id, prerequisite_task_id)`. `dependent_task_id` cascades when that task identity is removed. `prerequisite_task_id` restricts deletion, so retention cannot strand blocked work. `on_success`, `on_failure`, and `on_cancellation` each contain `release`, `cancel`, or `fail`. `created_at` records acceptance. Nullable `released_at` records when the prerequisite outcome resolved, and `resolution` records the selected action. `workhorse.prune_released_dependencies_v1(p_limit integer)` deletes at most 100,000 released edges whose dependent has a terminal outcome. It orders candidates by `released_at`, `dependent_task_id`, and `prerequisite_task_id`, then locks them with `FOR UPDATE SKIP LOCKED`. `task_dependency_released_retention_idx` supports that bounded selection. Removing the edge lets the prerequisite and dependent follow their own identity windows; retained dependency lineage is not a separate retention category.
+At most 100 prerequisite edges may enter one dependent task, and at most 100 dependent edges may leave one prerequisite task. The primary key is `(dependent_task_id, prerequisite_task_id)`. `dependent_task_id` cascades when that task identity is removed. `prerequisite_task_id` restricts deletion, so retention cannot strand blocked work. `on_success`, `on_failure`, and `on_cancellation` each contain `release`, `cancel`, or `fail`. `created_at` records acceptance. Nullable `released_at` records when the edge stopped controlling dispatch, and `resolution` records the selected action. `workhorse.prune_released_dependencies_v1(p_limit integer)` deletes at most 100,000 released edges whose dependent has a terminal outcome. It orders candidates by `released_at`, `dependent_task_id`, and `prerequisite_task_id`, then locks them with `FOR UPDATE SKIP LOCKED`. `task_dependency_released_retention_idx` supports that bounded selection. Removing the edge lets the prerequisite and dependent follow their own identity windows; retained dependency lineage is not a separate retention category.
 
 Each prerequisite may reach at most 100 distinct dependents through unresolved edges. The bound
 includes direct and transitive descendants. PostgreSQL checks every affected ancestor while the
@@ -1304,7 +1304,7 @@ touched-component advisory locks keep the pending graph stable.
 
 `EnqueueOptions.dependencies` accepts 1 through 100 unique stable identities plus success, failure, and cancellation policies. `EnqueueOptions.prerequisiteTaskId` remains a deprecated success-oriented shorthand. The TypeScript union rejects both fields on one request. `enqueue_batch_v1` keeps runtime validation for direct SQL and untyped JavaScript callers. It sorts and locks every prerequisite identity inside the caller's transaction. A request which declares no prerequisite runs none of that: `enqueue_batch_v1` guards the prerequisite lock, both outcome scans, the `task_dependency` insert, and dependent resolution on a prerequisite count above zero, so no statement reaches `task_dependency` and its statement trigger never fires. A live prerequisite creates a `blocked` runtime plus `dependency_blocked`. Each terminal prerequisite resolves its edge according to policy. After every edge resolves, `fail` precedes `cancel`, which precedes `release`.
 
-`resolve_task_outcome_dependencies_v1` runs after every `task_outcome` insert and calls `resolve_dependents_v1`. That function locks at most 100 direct dependents in identity order and records each edge's `released_at` plus `resolution`. The dependent stays blocked until every edge resolves. It then chooses `fail`, `cancel`, or `release` by fixed precedence. Release moves the blocked runtime to ready or scheduled, appends one `dependency_released`, and notifies a queue that gained ready work. `dependency_released.details.reason` is `prerequisite_succeeded` after success. It is `prerequisite_failed_policy` when `on_failure` selects `release`. It is `prerequisite_canceled_policy` when `on_cancellation` selects `release`. The enqueue-time terminal short circuit uses `prerequisite_already_succeeded` after success. It uses `prerequisite_terminal_policy` after a failure or cancellation policy release. Failure or cancellation removes the runtime and inserts a synthetic terminal outcome with `DependencyFailed` or `DependencyCanceled`. The outcome trigger applies the same policy recursively to downstream tasks. One outcome transaction can recurse through at most 100 unresolved descendants. It can invoke at most 101 resolver calls. Those calls can inspect at most 10,100 direct pending-edge slots. Runtime locks serialize concurrent prerequisite outcomes at the one state transition, so evidence, FIFO allocation, and notification happen once.
+`resolve_task_outcome_dependencies_v1` runs after every `task_outcome` insert. It first calls `workhorse.release_own_dependencies_v1(task_id)`, which sets `released_at` and a `release` resolution on every still-pending edge that enters the terminal task, and returns the number of edges it released. A task settled while it was still blocked would otherwise leave those edges pending forever, and a pending edge is neither a prune candidate nor a removable `prerequisite_task_id`, so it held its prerequisite identity against retention until the dependent identity was purged. Cancellation and deadline materialization are the paths that reach it; a dependent released into dispatch has no pending edge left, so the statement matches nothing on the ordinary path. The resolution is `release` because no prerequisite outcome selected an action: the dependent was already terminal, so the edge changes nothing about it. The trigger then calls `resolve_dependents_v1`. That function locks at most 100 direct dependents in identity order and records each edge's `released_at` plus `resolution`. The dependent stays blocked until every edge resolves. It then chooses `fail`, `cancel`, or `release` by fixed precedence. Release moves the blocked runtime to ready or scheduled, appends one `dependency_released`, and notifies a queue that gained ready work. `dependency_released.details.reason` is `prerequisite_succeeded` after success. It is `prerequisite_failed_policy` when `on_failure` selects `release`. It is `prerequisite_canceled_policy` when `on_cancellation` selects `release`. The enqueue-time terminal short circuit uses `prerequisite_already_succeeded` after success. It uses `prerequisite_terminal_policy` after a failure or cancellation policy release. Failure or cancellation removes the runtime and inserts a synthetic terminal outcome with `DependencyFailed` or `DependencyCanceled`. The outcome trigger applies the same policy recursively to downstream tasks. One outcome transaction can recurse through at most 100 unresolved descendants. It can invoke at most 101 resolver calls. Those calls can inspect at most 10,100 direct pending-edge slots. Runtime locks serialize concurrent prerequisite outcomes at the one state transition, so evidence, FIFO allocation, and notification happen once.
 
 `reject_self_task_dependency_v1` rejects a direct self-edge before the table check and returns SQLSTATE `P1003`. After each insert statement, `validate_task_dependencies_v1` uses the statement transition table to validate all inserted edges together. It finds every pre-existing weakly connected component touched by either endpoint. It locks each task identity in those components in UUID order. Inserts into disconnected components do not share a lock. Inserts which join or mutate the same component serialize before validation. Per-task component locks remain stable when a concurrent transaction merges two components.
 
@@ -1545,7 +1545,11 @@ dispatch state.
 
 `HandlerContext.waitForSignal(name, { timeoutMs })` suspends and later returns the retained payload
 after handler replay. `MAX_EXTERNAL_WAIT_TIMEOUT_MS` is 604,800,000, and `timeoutMs` accepts an
-integer from 1 through that bound.
+integer from 1 through that bound. A declaration which omits `timeoutMs` uses that same bound as
+its default, so an unanswered boundary closes 604,800,000 milliseconds after its declaration. The
+stored `task_signal_wait.timeout_at` is the earlier of that instant and the accepted task deadline,
+and `wait_for_signal_v1` writes it to `task_runtime.deadline_at`. Expiry is therefore the deadline
+path: the task finishes failed and starts no further attempt.
 `Queue.sendSignal` is the application-owned delivery surface. The dashboard procedure
 `dashboard.signalTask` derives `requestedBy` from its authenticated server principal before it
 calls the same queue operation. `signal_waiting`, `signal_received`, `signal_replayed`, and
@@ -1607,7 +1611,8 @@ key returns `already_completed`. Early and stale requests return bounded statuse
 dispatch state.
 
 `HandlerContext.waitForHuman(name, context, { timeoutMs })` suspends and returns the retained result
-after replay. `timeoutMs` has the same optional range and terminal failure outcome as a signal wait.
+after replay. `timeoutMs` has the same optional range, 604,800,000-millisecond default, task
+deadline interaction, and terminal failure outcome as a signal wait.
 `Queue.completeHumanWait` is the application completion surface. `CompleteHumanWaitRequest` uses
 `requestedBy` for caller attribution. `HumanWaitCompletionResult.payload` contains the accepted
 decision, matching signal delivery vocabulary. Its `completedBy` reports the actor whose completion
@@ -2165,7 +2170,9 @@ Suspension aborts the handler's cooperative signal and exits through private wor
 
 `wait_for_signal_v1` takes an advisory lock scoped to task identity and signal name, then locks and
 revalidates the active runtime generation. Its nullable `p_timeout_ms` selects a shorter boundary
-than the default or accepted task deadline. It inserts `task_signal_wait`, clears ownership, and
+than the default or accepted task deadline; omitting it defaults to `MAX_EXTERNAL_WAIT_TIMEOUT_MS`,
+so the effective boundary is `LEAST(deadline_at, declaration + COALESCE(p_timeout_ms, 604800000)
+milliseconds)`. It inserts `task_signal_wait`, clears ownership, and
 parks runtime outside the ready and active indexes. The worker uses the same private suspension
 control path as a timer wait, so no failure, completion, or attempt-history row is written.
 
@@ -2189,7 +2196,8 @@ exports `workhorse.wait.pending`, `workhorse.wait.overdue`, and
 
 `wait_for_human_v1` serializes on the stable task and token name, validates the active fence, stores
 bounded decision context and the effective optional `p_timeout_ms`, and parks the runtime without
-closing the logical attempt. A replay must provide equal JSON context.
+closing the logical attempt. It computes that boundary exactly as `wait_for_signal_v1` does,
+including the `MAX_EXTERNAL_WAIT_TIMEOUT_MS` default when the caller omits `p_timeout_ms`. A replay must provide equal JSON context.
 `complete_human_wait_v1` serializes competing operator results, retains
 the first accepted completion, moves the runtime to ready, and notifies workers in the same
 transaction. The handler restarts from entry and receives that retained result at the named wait.
