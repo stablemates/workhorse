@@ -2318,16 +2318,17 @@ without waiting for its fallback poll.
 
 `heartbeat_many_v1(p_worker_id, p_leases jsonb)` accepts one through 100 `{ taskId, fenceToken, leaseMs }` entries. One `UPDATE ... FROM` renews every matching generation and returns `(ordinal, task_id, status)` in input order, with missing or mismatched generations reported as `stale`. TypeScript, Python, and Go workers keep one non-overlapping heartbeat timer per worker and send every active lease through this function. Per-task deadline timers and abort signals remain independent.
 
-A TypeScript heartbeat round that throws leaves every task running, and the next round retries. The
-round's result says nothing about ownership, so the worker never aborts or fails a task for it. Each
-`TaskAttempt` instead keeps a local lease watchdog. The watchdog measures from the moment the claim
-request left, and every `accepted` heartbeat moves it to the moment that round's request left. Both
-moments precede the database's renewal, so the local window never outlasts the stored `expires_at`.
-Once `leaseMs` passes without a newer accepted renewal, the watchdog submits `lease_expired`, stops
-the heartbeat, and aborts the handler's signal. Settlement then records `lease_lost` without calling
-`fail_v1`. A heartbeat call that never settles blocks later rounds, because rounds do not overlap,
-so the watchdog is what bounds how long a handler outlives its lease. Python and Go workers do not
-yet keep this watchdog.
+A heartbeat round that throws leaves every task running in all three SDKs, and the next round
+retries. The round's result says nothing about ownership, so the worker never aborts or fails a task
+for it. Each attempt instead keeps a local lease watchdog: `TaskAttempt` in TypeScript, the
+per-attempt expiration thread in Python, and the attempt's watchdog timer in Go. The watchdog
+measures from the moment the claim request left, and every `accepted` heartbeat moves it to the
+moment that round's request left. Both moments precede the database's renewal, so the local window
+never outlasts the stored `expires_at`. Once one lease passes without a newer accepted renewal, the
+watchdog submits `lease_expired`, stops the heartbeat, and aborts the handler's signal, token, or
+context. Settlement then records `lease_lost` without calling `fail_v1`. A heartbeat call that never
+settles blocks later rounds, because rounds do not overlap, so the watchdog is what bounds how long
+a handler outlives its lease.
 
 TypeScript workers send heartbeat rounds on one reserved pooled connection, so handlers that hold
 every other connection cannot starve lease renewal. The pool is the queryable's attached pool, else

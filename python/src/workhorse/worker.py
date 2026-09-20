@@ -134,6 +134,8 @@ def _batch_member_order(member: _PendingBatchMember) -> tuple[int, int]:
 class _HeartbeatMember:
     task: ClaimedTask
     deliver_status: Callable[[object], bool]
+    # Moves the attempt's lease watchdog to the moment the accepting round's request was sent.
+    renew: Callable[[float], None]
     cancellation: CancellationToken
     errors: list[BaseException]
     parent_context: object
@@ -897,11 +899,12 @@ class Worker:
         self,
         task: ClaimedTask,
         deliver_status: Callable[[object], bool],
+        renew: Callable[[float], None],
         cancellation: CancellationToken,
         errors: list[BaseException],
         parent_context: object,
     ) -> Callable[[], None]:
-        member = _HeartbeatMember(task, deliver_status, cancellation, errors, parent_context)
+        member = _HeartbeatMember(task, deliver_status, renew, cancellation, errors, parent_context)
         with self._heartbeat_lock:
             self._heartbeat_members[task.id] = member
             if self._heartbeat_thread is None or not self._heartbeat_thread.is_alive():
@@ -931,18 +934,25 @@ class Worker:
                 if not members:
                     self._heartbeat_thread = None
                     return
+            leases = [
+                {
+                    "taskId": task.id,
+                    "fenceToken": str(task.fence_token),
+                    "leaseMs": self.lease_ms,
+                }
+                for task in (member.task for member in members)
+            ]
+            sent_at = monotonic()
             try:
-                leases = [
-                    {
-                        "taskId": task.id,
-                        "fenceToken": str(task.fence_token),
-                        "leaseMs": self.lease_ms,
-                    }
-                    for task in (member.task for member in members)
-                ]
                 rows = self._heartbeat_rows(
                     (self.worker_id, json.dumps(leases, separators=(",", ":")))
                 )
+            except Exception:
+                # A failed round proves nothing about ownership, so every task keeps running and
+                # the next round retries. Each attempt's lease watchdog ends it once its last
+                # accepted renewal is a full lease old.
+                continue
+            try:
                 statuses = {str(row["task_id"]): row["status"] for row in rows}
                 for member in members:
                     task = member.task
@@ -951,6 +961,7 @@ class Worker:
                             continue
                     status = statuses.get(task.id, "stale")
                     if status == "accepted":
+                        member.renew(sent_at)
                         _emit_log(
                             "DEBUG",
                             "workhorse.task.heartbeat_accepted",
@@ -1415,7 +1426,7 @@ class Worker:
                                 "workhorse.worker.id": self.worker_id,
                             },
                         )
-                        self._start_claimed_task(task)
+                        self._start_claimed_task(task, claim_started_at)
 
                 state = self._dispatch_state()
                 if state == "stopping":
@@ -1709,10 +1720,10 @@ class Worker:
         listener.start()
         return listener
 
-    def _start_claimed_task(self, task: ClaimedTask) -> None:
+    def _start_claimed_task(self, task: ClaimedTask, claim_sent_at: float) -> None:
         thread = Thread(
             target=self._run_claimed_task,
-            args=(task,),
+            args=(task, claim_sent_at),
             name=f"workhorse-handler-{task.id}",
         )
         with self._state_lock:
@@ -1728,9 +1739,9 @@ class Worker:
         with self._state_lock:
             return self._dispatch_order.get(task.id, self._dispatch_sequence)
 
-    def _run_claimed_task(self, task: ClaimedTask) -> None:
+    def _run_claimed_task(self, task: ClaimedTask, claim_sent_at: float) -> None:
         try:
-            self._execute_claimed_task(task)
+            self._execute_claimed_task(task, claim_sent_at)
         except StaleLeaseError:
             # A lost lease ends this attempt only. Lease recovery already owns the task, and the
             # execution log records the lease_lost outcome, so the worker keeps claiming.
@@ -1754,7 +1765,7 @@ class Worker:
             for thread in active:
                 thread.join()
 
-    def _execute_claimed_task(self, task: ClaimedTask) -> None:
+    def _execute_claimed_task(self, task: ClaimedTask, claim_sent_at: float) -> None:
         arbiter = _AttemptOutcomeArbiter()
         span_outcome = {"value": "unknown"}
         span_errors: list[str] = []
@@ -1773,7 +1784,9 @@ class Worker:
                 {**attributes, "workhorse.worker.id": self.worker_id},
             )
             try:
-                self._execute_claimed_task_within_span(task, arbiter, span_outcome, span_errors)
+                self._execute_claimed_task_within_span(
+                    task, claim_sent_at, arbiter, span_outcome, span_errors
+                )
             except BaseException as error:
                 _record_span_error(handler_span, error.__class__.__name__)
                 raise
@@ -1813,6 +1826,7 @@ class Worker:
     def _execute_claimed_task_within_span(
         self,
         task: ClaimedTask,
+        claim_sent_at: float,
         arbiter: _AttemptOutcomeArbiter,
         span_outcome: dict[str, str],
         span_errors: list[str],
@@ -1843,13 +1857,40 @@ class Worker:
                 cancellation._cancel(StaleLeaseError(task.id))
             return True
 
+        # The lease watchdog ends this attempt once its last accepted renewal is a full lease old.
+        # By then a peer may own the task, so the handler must stop even though no round rejected
+        # it. It measures from when a request left, so a slow answer shortens the watchdog instead
+        # of overrunning the lease PostgreSQL granted.
+        renewal_lock = Lock()
+        renewed_at = claim_sent_at
+
+        def renew_lease(sent_at: float) -> None:
+            nonlocal renewed_at
+            with renewal_lock:
+                renewed_at = max(renewed_at, sent_at)
+
+        def lease_deadline() -> float:
+            with renewal_lock:
+                return renewed_at + self.lease_ms / 1000
+
+        def expire_lease_locally() -> None:
+            arbiter.submit("lease_expired")
+            unregister_heartbeat()
+            cancellation._cancel(StaleLeaseError(task.id))
+
         def watch_expiration() -> None:
             expiration_at = _earliest_expiration(task)
             expiration_retry_at: float | None = None
             while True:
                 expiration_delay = _expiration_delay(expiration_at, expiration_retry_at)
-                if expiration_delay is None:
-                    heartbeat_stop.wait()
+                lease_delay = lease_deadline() - monotonic()
+                if expiration_delay is None or lease_delay < expiration_delay:
+                    if lease_delay > 0:
+                        if heartbeat_stop.wait(lease_delay):
+                            return
+                        # An accepted round may have moved the deadline while this thread waited.
+                        continue
+                    expire_lease_locally()
                     return
                 wait_seconds = max(0.0, expiration_delay)
                 if heartbeat_stop.wait(wait_seconds):
@@ -1867,7 +1908,7 @@ class Worker:
                     return
 
         unregister_heartbeat = self._register_heartbeat(
-            task, deliver_status, cancellation, heartbeat_error, handler_parent_context
+            task, deliver_status, renew_lease, cancellation, heartbeat_error, handler_parent_context
         )
         expiration_thread = Thread(target=watch_expiration, name=f"workhorse-expiration-{task.id}")
         expiration_thread.start()
