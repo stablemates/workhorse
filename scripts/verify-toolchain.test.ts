@@ -243,7 +243,7 @@ describe("the tools a repository command starts", () => {
   });
 
   it("reads an executable name without its directory", () => {
-    expect(executableName("/home/anton/.local/share/mise/shims/gofmt")).toBe("gofmt");
+    expect(executableName("/usr/local/share/mise/shims/gofmt")).toBe("gofmt");
   });
 });
 
