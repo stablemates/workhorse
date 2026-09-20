@@ -1,7 +1,7 @@
 # Language feature parity
 
 This is the authoritative per-language support matrix for the Workhorse SDKs, anchored to schema
-version 16. It owns one question: which language can use which capability today. What each
+version 18. It owns one question: which language can use which capability today. What each
 capability does, and its exact limits, stay owned by [docs/features.md](features.md); this
 document never restates them.
 
@@ -63,6 +63,7 @@ telemetry, and graceful shutdown.
 | -------------------------------------------- | ---------- | --------- | --------- |
 | Claiming and handler execution               | Supported  | Supported | Supported |
 | Bounded worker concurrency                   | Supported  | Supported | Supported |
+| Unhandled task type released to its queue    | Supported  | Supported | Supported |
 | Heartbeats, lease recovery, fenced ownership | Supported  | Supported | Supported |
 | Cooperative cancellation delivery            | Supported  | Supported | Supported |
 | Notification-assisted dispatch with polling  | Supported  | Supported | Supported |

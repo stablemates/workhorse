@@ -53,6 +53,24 @@ const worker = new Worker(queue, {
 Use `queue` for one name or `queues` for several. If you omit both, the worker uses the queue
 client's default. A batch callback still receives tasks from only one queue at a time.
 
+## Tasks this worker cannot run
+
+A claim does not filter by task type. A worker can therefore be handed a task whose type it has no
+handler for. That is normal during a deploy that replaces workers one at a time: the new release
+enqueues a type the old release has never heard of.
+
+The worker hands that claim straight back. Workhorse returns the task to its queue and leaves the
+attempt count alone, so a worker that does have the handler still gets every attempt the task was
+allowed. Failing it instead would spend an attempt on a worker that never ran anything, and a task
+allowed a single attempt would be dead-lettered without ever running.
+
+The hand-back is fenced like every other owned write. A worker whose lease PostgreSQL no longer
+recognizes cannot return a task another worker is already running.
+
+A pass that only handed claims back counts as an empty one. The worker then waits before asking
+again, so a type no deployed worker handles is re-checked on the polling cadence rather than
+continuously.
+
 ## Waiting without constant polling
 
 An idle worker listens for `workhorse_tasks`, so a committed enqueue can wake it immediately.
