@@ -201,6 +201,65 @@ export interface BudgetAdmissionRaceRuntimeFixture extends RuntimeFixtureBase {
   expectedActive: number;
 }
 
+/** A worker that handles no registered type for a claimed task hands it back, attempt intact. */
+export interface MissingHandlerRuntimeFixture extends RuntimeFixtureBase {
+  kind: "missing-handler";
+  registeredTaskType: string;
+  leaseMs: number;
+  releaseTimeoutMs: number;
+  expectedAfterRelease: ExpectedRuntimeState;
+  expectedAttempts: number;
+  /** A worker that keeps claiming the released task releases it again, so this is a lower bound. */
+  expectedMinimumReleaseEvents: number;
+  expectedAfterHandled: ExpectedRuntimeState;
+}
+
+/** Every JSON value a payload may carry reaches the handler and returns as the result unchanged. */
+export interface JsonRoundTripRuntimeFixture extends RuntimeFixtureBase {
+  kind: "json-round-trip";
+  payload: JsonValue;
+  expectedState: ExpectedRuntimeState;
+  expectedAttemptOutcome: TaskAttemptOutcome;
+}
+
+/**
+ * Replaces one installed function with a body that raises, so a runner can fail a call the SDK
+ * makes without reaching into that SDK. The runner restores `function` from its own definition
+ * afterwards. A `counterSequence` counts the raised calls, because a sequence survives the
+ * rollback the exception causes.
+ */
+export interface RuntimeFunctionInjection {
+  function: string;
+  header: string;
+  errorCode: string;
+  message: string;
+  counterSequence?: string;
+}
+
+/**
+ * A heartbeat round that fails proves nothing about ownership, so the attempt keeps running and a
+ * later round renews the lease.
+ */
+export interface HeartbeatFailureRuntimeFixture extends RuntimeFixtureBase {
+  kind: "heartbeat-failure";
+  leaseMs: number;
+  heartbeatMs: number;
+  injection: RuntimeFunctionInjection;
+  expectedMinimumFailedRounds: number;
+  renewalTimeoutMs: number;
+  expectedCancellations: number;
+  expectedState: ExpectedRuntimeState;
+  expectedAttemptOutcome: TaskAttemptOutcome;
+}
+
+/** tick_v1 reports a failing phase as data, so one failing phase stops no worker in the fleet. */
+export interface MaintenancePhaseErrorRuntimeFixture extends RuntimeFixtureBase {
+  kind: "maintenance-phase-error";
+  injection: RuntimeFunctionInjection;
+  expectedPhase: string;
+  expectedState: ExpectedRuntimeState;
+}
+
 export type RuntimeFixture =
   | BatchRuntimeFixture
   | SuspensionReplayRuntimeFixture
@@ -211,7 +270,11 @@ export type RuntimeFixture =
   | PollCadenceRuntimeFixture
   | GracefulDrainRuntimeFixture
   | TracePropagationRuntimeFixture
-  | BudgetAdmissionRaceRuntimeFixture;
+  | BudgetAdmissionRaceRuntimeFixture
+  | MissingHandlerRuntimeFixture
+  | JsonRoundTripRuntimeFixture
+  | HeartbeatFailureRuntimeFixture
+  | MaintenancePhaseErrorRuntimeFixture;
 
 export interface RequestFixture {
   id: string;

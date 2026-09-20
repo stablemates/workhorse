@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"sort"
 	"strings"
@@ -72,6 +73,10 @@ func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 		"graceful-drain":           executeWorkerGracefulDrainFixture,
 		"trace-propagation":        executeWorkerTracePropagationFixture,
 		"budget-admission-race":    executeBudgetAdmissionRaceFixture,
+		"missing-handler":          executeWorkerMissingHandlerFixture,
+		"json-round-trip":          executeWorkerJSONRoundTripFixture,
+		"heartbeat-failure":        executeWorkerHeartbeatFailureFixture,
+		"maintenance-phase-error":  executeWorkerMaintenancePhaseErrorFixture,
 	}
 	coverage := make(map[string]struct{}, len(manifest.RuntimeCoverage))
 	for _, fixture := range fixtures {
@@ -628,4 +633,361 @@ func waitForBudgetRace(t *testing.T, message string, predicate func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal(message)
+}
+
+// withInjectedFunctionFailure replaces one installed function with a raising body for the duration
+// of observe, and restores the definition the database reports afterwards.
+func withInjectedFunctionFailure(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	injection workerFixtureInjection,
+	observe func(failedCalls func() int),
+) {
+	t.Helper()
+	var original string
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT pg_get_functiondef($1::regprocedure)",
+		injection.Function,
+	).Scan(&original); err != nil {
+		t.Fatal(err)
+	}
+	count := ""
+	if injection.CounterSequence != "" {
+		if _, err := pool.Exec(
+			ctx,
+			fmt.Sprintf("CREATE SEQUENCE %s MINVALUE 0 START 0", injection.CounterSequence),
+		); err != nil {
+			t.Fatal(err)
+		}
+		// The exception rolls the call back, so only a sequence carries the count out of it.
+		count = fmt.Sprintf("PERFORM nextval('%s');", injection.CounterSequence)
+	}
+	if _, err := pool.Exec(ctx, fmt.Sprintf(
+		`CREATE OR REPLACE FUNCTION %s LANGUAGE plpgsql AS $injected$
+		 BEGIN
+		   %s
+		   RAISE EXCEPTION '%s' USING ERRCODE = '%s';
+		 END;
+		 $injected$`,
+		injection.Header, count, injection.Message, injection.ErrorCode,
+	)); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := pool.Exec(context.WithoutCancel(ctx), original); err != nil {
+			t.Error(err)
+		}
+		if injection.CounterSequence != "" {
+			if _, err := pool.Exec(
+				context.WithoutCancel(ctx),
+				fmt.Sprintf("DROP SEQUENCE IF EXISTS %s", injection.CounterSequence),
+			); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	observe(func() int {
+		if injection.CounterSequence == "" {
+			return 0
+		}
+		var calls int
+		if err := pool.QueryRow(
+			ctx,
+			fmt.Sprintf("SELECT last_value::integer FROM %s", injection.CounterSequence),
+		).Scan(&calls); err != nil {
+			t.Fatal(err)
+		}
+		return calls
+	})
+}
+
+// decodeFixtureJSON re-reads a fixture value with the standard decoder, so numbers arrive as the
+// float64 an SDK payload carries rather than the json.Number the fixture reader keeps.
+func decodeFixtureJSON(t *testing.T, value any) any {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	return decoded
+}
+
+func releaseEvidenceFor(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	taskID string,
+) (attempts int, releases int) {
+	t.Helper()
+	if err := pool.QueryRow(ctx, `SELECT
+		(SELECT count(*)::integer FROM workhorse.attempt_history WHERE task_id = $1::uuid),
+		(SELECT count(*)::integer FROM workhorse.task_event
+		   WHERE task_id = $1::uuid AND event_type = 'released')`, taskID).
+		Scan(&attempts, &releases); err != nil {
+		t.Fatal(err)
+	}
+	return attempts, releases
+}
+
+func executeWorkerMissingHandlerFixture(t *testing.T, fixture workerRuntimeFixture) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-missing-handler")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "runtime-" + fixture.ID
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	taskID, err := queue.Enqueue(ctx, fixture.TaskType, map[string]any{"index": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	older, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-" + fixture.ID + "-older",
+		LeaseDuration: time.Duration(fixture.LeaseMS) * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	older.Handle(fixture.RegisteredTaskType, func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+		return nil, nil
+	})
+	runContext, stop := context.WithCancel(ctx)
+	runResult := make(chan error, 1)
+	go func() { runResult <- older.Run(runContext) }()
+	deadline := time.Now().Add(time.Duration(fixture.ReleaseTimeoutMS) * time.Millisecond)
+	for {
+		_, releases := releaseEvidenceFor(t, ctx, pool, taskID)
+		if releases > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			stop()
+			<-runResult
+			t.Fatal("the worker released no claim it had no handler for")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	stop()
+	if err := <-runResult; err != nil {
+		t.Fatal(err)
+	}
+	assertWorkerFixtureTaskState(t, ctx, pool, taskID, fixture.ExpectedAfterRelease)
+
+	attempts, releases := releaseEvidenceFor(t, ctx, pool, taskID)
+	// The refusal belongs to no attempt, so the task keeps the attempt it was enqueued with.
+	if attempts != fixture.ExpectedAttempts || releases < fixture.ExpectedMinimumReleaseEvents {
+		t.Fatalf("released task carried attempts=%d releases=%d", attempts, releases)
+	}
+
+	newer, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-" + fixture.ID + "-newer",
+		LeaseDuration: time.Duration(fixture.LeaseMS) * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled := make(chan any, 1)
+	newer.Handle(fixture.TaskType, func(_ context.Context, payload any, _ *workhorse.HandlerContext) (any, error) {
+		handled <- payload
+		return nil, nil
+	})
+	if processed, err := newer.RunOnce(ctx); err != nil || !processed {
+		t.Fatalf("the registered worker did not handle the released task: processed=%t err=%v", processed, err)
+	}
+	if received := <-handled; !reflect.DeepEqual(received, map[string]any{"index": float64(1)}) {
+		t.Fatalf("unexpected payload %#v", received)
+	}
+	assertWorkerFixtureTaskState(t, ctx, pool, taskID, fixture.ExpectedAfterHandled)
+}
+
+func executeWorkerJSONRoundTripFixture(t *testing.T, fixture workerRuntimeFixture) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-json-round-trip")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	// The fixture reader keeps numbers as json.Number, and the SDK hands the handler float64, so
+	// the expectation is normalized through the same decoding the SDK uses.
+	payload := decodeFixtureJSON(t, fixture.Payload)
+	queueName := "runtime-" + fixture.ID
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	taskID, err := queue.Enqueue(ctx, fixture.TaskType, fixture.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-" + fixture.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	received := make(chan any, 1)
+	worker.Handle(fixture.TaskType, func(_ context.Context, payload any, _ *workhorse.HandlerContext) (any, error) {
+		received <- payload
+		return payload, nil
+	})
+	if processed, err := worker.RunOnce(ctx); err != nil || !processed {
+		t.Fatalf("worker did not process the round-trip task: processed=%t err=%v", processed, err)
+	}
+	if handled := <-received; !reflect.DeepEqual(handled, payload) {
+		t.Fatalf("the handler received %#v, expected %#v", handled, payload)
+	}
+
+	var storedPayload, storedResult []byte
+	if err := pool.QueryRow(ctx, `SELECT task.payload, outcome.result
+		FROM workhorse.task task
+		JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
+		WHERE task.id = $1::uuid`, taskID).Scan(&storedPayload, &storedResult); err != nil {
+		t.Fatal(err)
+	}
+	for label, stored := range map[string][]byte{"payload": storedPayload, "result": storedResult} {
+		var decoded any
+		if err := json.Unmarshal(stored, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(decoded, payload) {
+			t.Fatalf("the stored %s is %#v, expected %#v", label, decoded, payload)
+		}
+	}
+	assertWorkerFixtureTaskState(t, ctx, pool, taskID, fixture.ExpectedState)
+	assertWorkerFixtureAttemptOutcomes(t, ctx, pool, taskID, []string{fixture.ExpectedAttemptOutcome})
+}
+
+func executeWorkerHeartbeatFailureFixture(t *testing.T, fixture workerRuntimeFixture) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-heartbeat-failure")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	observer := observeDatabase(t, ctx, databaseURL)
+
+	queueName := "runtime-" + fixture.ID
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	taskID, err := queue.Enqueue(ctx, fixture.TaskType, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-" + fixture.ID,
+		LeaseDuration:     time.Duration(fixture.LeaseMS) * time.Millisecond,
+		HeartbeatInterval: time.Duration(fixture.HeartbeatMS) * time.Millisecond,
+		PollInterval:      5 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	cancellations := make(chan struct{}, 1)
+	worker.Handle(fixture.TaskType, func(handlerContext context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
+		close(started)
+		<-release
+		if handlerContext.Err() != nil {
+			cancellations <- struct{}{}
+		}
+		return nil, nil
+	})
+	workerResult := make(chan error, 1)
+	go func() {
+		processed, err := worker.RunOnce(ctx)
+		if err == nil && !processed {
+			err = errors.New("the worker did not process the heartbeat-failure task")
+		}
+		workerResult <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the worker did not start the handler")
+	}
+	within := time.Duration(fixture.RenewalTimeoutMS) * time.Millisecond
+	renewed := waitForLeaseRenewal(t, ctx, observer, taskID, leaseExpiry(t, ctx, observer, taskID), within)
+
+	withInjectedFunctionFailure(t, ctx, pool, fixture.Injection, func(failedCalls func() int) {
+		deadline := time.Now().Add(within)
+		for failedCalls() < fixture.ExpectedMinimumFailedRounds {
+			if time.Now().After(deadline) {
+				t.Fatalf("only %d heartbeat rounds failed", failedCalls())
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		renewed = leaseExpiry(t, ctx, observer, taskID)
+	})
+	// Once the rounds answer again the lease renews, so the failures cost the attempt nothing.
+	waitForLeaseRenewal(t, ctx, observer, taskID, renewed, within)
+
+	close(release)
+	if err := <-workerResult; err != nil {
+		t.Fatal(err)
+	}
+	if len(cancellations) != fixture.ExpectedCancellations {
+		t.Fatalf("a failed heartbeat round cancelled %d handlers", len(cancellations))
+	}
+	assertWorkerFixtureTaskState(t, ctx, pool, taskID, fixture.ExpectedState)
+	assertWorkerFixtureAttemptOutcomes(t, ctx, pool, taskID, []string{fixture.ExpectedAttemptOutcome})
+}
+
+func executeWorkerMaintenancePhaseErrorFixture(t *testing.T, fixture workerRuntimeFixture) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-maintenance-phase-error")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "runtime-" + fixture.ID
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	var logs lockedBuffer
+	// tick_v1 catches a phase failure and returns it as data, so a raising promote_v1 models a
+	// lock timeout inside the promote phase.
+	withInjectedFunctionFailure(t, ctx, pool, fixture.Injection, func(func() int) {
+		var phase string
+		var phaseError []byte
+		if err := pool.QueryRow(ctx, `SELECT phase, error FROM workhorse.tick_v1()
+			WHERE phase = $1`, fixture.ExpectedPhase).Scan(&phase, &phaseError); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(phaseError), fixture.Injection.Message) {
+			t.Fatalf("the %s phase reported %s", phase, string(phaseError))
+		}
+
+		taskID, err := queue.Enqueue(ctx, fixture.TaskType, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+			Queue: queueName, WorkerID: "go-" + fixture.ID,
+			MaintenanceInterval: 100 * time.Millisecond,
+			Logger:              slog.New(slog.NewTextHandler(&logs, nil)),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		worker.Handle(fixture.TaskType, func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+			return nil, nil
+		})
+		// The failing phase runs on this pass, and the pass still claims and settles the task.
+		if processed, err := worker.RunOnce(ctx); err != nil || !processed {
+			t.Fatalf("a maintenance phase error stopped the pass: processed=%t err=%v", processed, err)
+		}
+		if !strings.Contains(logs.String(), fixture.Injection.Message) {
+			t.Fatalf("the worker logged no phase failure: %s", logs.String())
+		}
+		assertWorkerFixtureTaskState(t, ctx, pool, taskID, fixture.ExpectedState)
+	})
 }

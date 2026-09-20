@@ -72,7 +72,11 @@
     "empty-claim-backoff",
     "graceful-drain",
     "enqueue-trace-propagation",
-    "budget-admission-serialization"
+    "budget-admission-serialization",
+    "missing-handler-release",
+    "json-value-round-trip",
+    "heartbeat-failure-tolerance",
+    "maintenance-phase-resilience"
   ],
   "functions": [
     {

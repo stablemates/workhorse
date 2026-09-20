@@ -36,9 +36,14 @@ import type {
   ExpirationRuntimeFixture,
   GracefulDrainRuntimeFixture,
   HeartbeatCadenceRuntimeFixture,
+  HeartbeatFailureRuntimeFixture,
+  JsonRoundTripRuntimeFixture,
   JsonValue,
   LeaseLossRuntimeFixture,
+  MaintenancePhaseErrorRuntimeFixture,
+  MissingHandlerRuntimeFixture,
   PollCadenceRuntimeFixture,
+  RuntimeFunctionInjection,
   RuntimeWriteOperation,
   SuspensionReplayRuntimeFixture,
   TracePropagationRuntimeFixture,
@@ -662,6 +667,261 @@ async function executeGracefulDrainRuntimeFixture(
   }
 }
 
+async function releaseEvidence(
+  database: Queryable,
+  taskId: string,
+): Promise<{ attempts: number; releases: number }> {
+  const evidence = await database.query<{ attempts: number; releases: number }>(
+    `SELECT
+      (SELECT count(*)::integer FROM workhorse.attempt_history WHERE task_id = $1) AS attempts,
+      (SELECT count(*)::integer FROM workhorse.task_event
+        WHERE task_id = $1 AND event_type = 'released') AS releases`,
+    [taskId],
+  );
+  return evidence.rows[0]!;
+}
+
+async function executeMissingHandlerRuntimeFixture(
+  queue: Queue,
+  admin: Admin,
+  database: Queryable,
+  fixture: MissingHandlerRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  const id = await queue.enqueue(fixture.taskType, { index: 1 }, { queue: queueName });
+  const older = new Worker(queue, {
+    workerId: `runtime-${fixture.id}-older`,
+    queue: queueName,
+    leaseMs: fixture.leaseMs,
+    registryIntervalMs: 0,
+  }).handle(fixture.registeredTaskType, async () => null);
+
+  const running = older.run();
+  try {
+    const deadline = Date.now() + fixture.releaseTimeoutMs;
+    while ((await releaseEvidence(database, id)).releases === 0) {
+      if (Date.now() >= deadline) throw new Error(`${fixture.id} released no claim`);
+      await sleep(5);
+    }
+  } finally {
+    older.stop();
+    await running;
+  }
+  await expect(admin.getTask(id)).resolves.toMatchObject({
+    state: fixture.expectedAfterRelease.state,
+    currentAttempt: fixture.expectedAfterRelease.attempt,
+  });
+  const evidence = await releaseEvidence(database, id);
+  // The refusal belongs to no attempt, so the task keeps the attempt it was enqueued with.
+  expect(evidence.attempts).toBe(fixture.expectedAttempts);
+  expect(evidence.releases).toBeGreaterThanOrEqual(fixture.expectedMinimumReleaseEvents);
+
+  const handled: unknown[] = [];
+  const newer = new Worker(queue, {
+    workerId: `runtime-${fixture.id}-newer`,
+    queue: queueName,
+    leaseMs: fixture.leaseMs,
+    registryIntervalMs: 0,
+  }).handle(fixture.taskType, async (payload) => {
+    handled.push(payload);
+    return null;
+  });
+  await expect(newer.runOnce()).resolves.toBe(true);
+  expect(handled).toEqual([{ index: 1 }]);
+  await expect(admin.getTask(id)).resolves.toMatchObject({
+    state: fixture.expectedAfterHandled.state,
+    currentAttempt: fixture.expectedAfterHandled.attempt,
+  });
+}
+
+async function executeJsonRoundTripRuntimeFixture(
+  queue: Queue,
+  admin: Admin,
+  database: Queryable,
+  fixture: JsonRoundTripRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  const id = await queue.enqueue(fixture.taskType, fixture.payload as Json, { queue: queueName });
+  const received: unknown[] = [];
+  const worker = new Worker(queue, {
+    workerId: `runtime-${fixture.id}`,
+    queue: queueName,
+    registryIntervalMs: 0,
+  }).handle(fixture.taskType, async (payload) => {
+    received.push(payload);
+    return payload as Json;
+  });
+
+  await expect(worker.runOnce()).resolves.toBe(true);
+  expect(received).toEqual([fixture.payload]);
+  await expect(admin.getTask(id)).resolves.toMatchObject({
+    state: fixture.expectedState.state,
+    currentAttempt: fixture.expectedState.attempt,
+    payload: fixture.payload,
+    result: fixture.payload,
+  });
+  await expectAttemptOutcome(database, id, fixture.expectedAttemptOutcome);
+}
+
+/**
+ * Replaces one installed function with a raising body for the duration of `observe`, and restores
+ * the definition the database reports afterwards, whatever `observe` does.
+ */
+async function withInjectedFunctionFailure<T>(
+  database: Queryable,
+  injection: RuntimeFunctionInjection,
+  observe: (failedCalls: () => Promise<number>) => Promise<T>,
+): Promise<T> {
+  const definition = await database.query<{ source: string }>(
+    "SELECT pg_get_functiondef($1::regprocedure) AS source",
+    [injection.function],
+  );
+  const original = definition.rows[0]!.source;
+  const sequence = injection.counterSequence;
+  if (sequence) await database.query(`CREATE SEQUENCE ${sequence} MINVALUE 0 START 0`);
+  // The exception rolls the call back, so only a sequence can carry the count out of it.
+  const count = sequence ? `PERFORM nextval('${sequence}');` : "";
+  await database.query(
+    `CREATE OR REPLACE FUNCTION ${injection.header} LANGUAGE plpgsql AS $injected$
+       BEGIN
+         ${count}
+         RAISE EXCEPTION '${injection.message}' USING ERRCODE = '${injection.errorCode}';
+       END;
+       $injected$`,
+  );
+  try {
+    return await observe(async () => {
+      if (!sequence) return 0;
+      const counted = await database.query<{ calls: string }>(
+        `SELECT last_value::text AS calls FROM ${sequence}`,
+      );
+      return Number(counted.rows[0]!.calls);
+    });
+  } finally {
+    await database.query(original);
+    if (sequence) await database.query(`DROP SEQUENCE IF EXISTS ${sequence}`);
+  }
+}
+
+async function leaseExpiry(database: Queryable, taskId: string): Promise<Date> {
+  const runtime = await database.query<{ expires_at: Date }>(
+    "SELECT expires_at FROM workhorse.task_runtime WHERE task_id = $1",
+    [taskId],
+  );
+  return runtime.rows[0]!.expires_at;
+}
+
+async function executeHeartbeatFailureRuntimeFixture(
+  queue: Queue,
+  admin: Admin,
+  database: Queryable,
+  fixture: HeartbeatFailureRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  const id = await queue.enqueue(fixture.taskType, {}, { queue: queueName });
+  const started = deferred();
+  const release = deferred();
+  let cancellations = 0;
+  const worker = new Worker(queue, {
+    workerId: `runtime-${fixture.id}`,
+    queue: queueName,
+    leaseMs: fixture.leaseMs,
+    heartbeatMs: fixture.heartbeatMs,
+    registryIntervalMs: 0,
+  }).handle(fixture.taskType, async (_payload, context) => {
+    started.resolve();
+    await release.promise;
+    if (context.signal.aborted) cancellations += 1;
+    return null;
+  });
+
+  const execution = worker.runOnce();
+  let failedRounds = 0;
+  try {
+    await started.promise;
+    const claimed = await leaseExpiry(database, id);
+    await waitForRenewal(database, id, claimed, fixture.renewalTimeoutMs);
+
+    const afterFailures = await withInjectedFunctionFailure(
+      database,
+      fixture.injection,
+      async (failedCalls) => {
+        const deadline = Date.now() + fixture.renewalTimeoutMs;
+        while ((failedRounds = await failedCalls()) < fixture.expectedMinimumFailedRounds) {
+          if (Date.now() >= deadline)
+            throw new Error(`${fixture.id} saw ${failedRounds} failed heartbeat rounds`);
+          await sleep(5);
+        }
+        return leaseExpiry(database, id);
+      },
+    );
+    // Once the rounds answer again the lease renews, so the failures cost the attempt nothing.
+    await waitForRenewal(database, id, afterFailures, fixture.renewalTimeoutMs);
+  } finally {
+    release.resolve();
+  }
+  await expect(execution).resolves.toBe(true);
+
+  expect(failedRounds).toBeGreaterThanOrEqual(fixture.expectedMinimumFailedRounds);
+  expect(cancellations).toBe(fixture.expectedCancellations);
+  await expect(admin.getTask(id)).resolves.toMatchObject({
+    state: fixture.expectedState.state,
+    currentAttempt: fixture.expectedState.attempt,
+  });
+  await expectAttemptOutcome(database, id, fixture.expectedAttemptOutcome);
+}
+
+async function waitForRenewal(
+  database: Queryable,
+  taskId: string,
+  after: Date,
+  timeoutMs: number,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if ((await leaseExpiry(database, taskId)).getTime() > after.getTime()) return;
+    if (Date.now() >= deadline) throw new Error(`no lease renewal for ${taskId}`);
+    await sleep(5);
+  }
+}
+
+async function executeMaintenancePhaseErrorRuntimeFixture(
+  queue: RuntimeQueue,
+  admin: Admin,
+  database: Queryable,
+  fixture: MaintenancePhaseErrorRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  // tick_v1 catches a phase failure and returns it as data, so a raising promote_v1 models a lock
+  // timeout inside the promote phase.
+  await withInjectedFunctionFailure(database, fixture.injection, async () => {
+    const phases = await queue.tick();
+    const failing = phases.find((phase) => phase.phase === fixture.expectedPhase);
+    expect(failing?.error).toMatchObject({ message: fixture.injection.message });
+
+    const id = await queue.enqueue(fixture.taskType, {}, { queue: queueName });
+    const telemetry: string[] = [];
+    const worker = new Worker(queue, {
+      workerId: `runtime-${fixture.id}`,
+      queue: queueName,
+      maintenanceIntervalMs: 100,
+      registryIntervalMs: 0,
+      onMaintenance: (observed) => {
+        if (observed.phase === fixture.expectedPhase && observed.error !== null)
+          telemetry.push(observed.phase);
+      },
+    }).handle(fixture.taskType, async () => null);
+
+    // The failing phase runs on this pass, and the pass still claims and settles the task.
+    await expect(worker.runOnce()).resolves.toBe(true);
+    expect(telemetry).toEqual([fixture.expectedPhase]);
+    await expect(admin.getTask(id)).resolves.toMatchObject({
+      state: fixture.expectedState.state,
+      currentAttempt: fixture.expectedState.attempt,
+    });
+  });
+}
+
 async function executeBudgetAdmissionRaceRuntimeFixture(
   queue: Queue,
   pool: Pool,
@@ -950,6 +1210,28 @@ describe("SQL protocol conformance fixtures", () => {
             break;
           case "budget-admission-race":
             await executeBudgetAdmissionRaceRuntimeFixture(queue, runtimeDatabase.pool, fixture);
+            break;
+          case "missing-handler":
+            await executeMissingHandlerRuntimeFixture(queue, admin, runtimeDatabase.pool, fixture);
+            break;
+          case "json-round-trip":
+            await executeJsonRoundTripRuntimeFixture(queue, admin, runtimeDatabase.pool, fixture);
+            break;
+          case "heartbeat-failure":
+            await executeHeartbeatFailureRuntimeFixture(
+              queue,
+              admin,
+              runtimeDatabase.pool,
+              fixture,
+            );
+            break;
+          case "maintenance-phase-error":
+            await executeMaintenancePhaseErrorRuntimeFixture(
+              queue,
+              admin,
+              runtimeDatabase.pool,
+              fixture,
+            );
         }
       }
       expect(coverage).toEqual(new Set(fixtures.manifest.runtimeCoverage));
