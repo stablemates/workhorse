@@ -32,14 +32,22 @@ updates:
       # Mantine requires one version across its packages, so a lone `@mantine/core` bump cannot
       # build. This group carries every update type, majors included, for that reason. The two
       # groups below deliberately do not, because an ungrouped major is easier to review alone.
+      #
+      # Dependabot puts a dependency in the most specific group that matches it, not the first one
+      # declared. A group naming a `dependency-type` and `update-types` is more specific than one
+      # naming only `patterns`, so `npm-production` claimed every `@mantine/*` package and this
+      # group stayed empty. A Mantine major then matched no group and arrived alone. The two
+      # exclusions below are what keep this group reachable; removing either one disables it.
       mantine:
         patterns: ["@mantine/*"]
       npm-development:
         dependency-type: development
         update-types: [minor, patch]
+        exclude-patterns: ["@mantine/*"]
       npm-production:
         dependency-type: production
         update-types: [minor, patch]
+        exclude-patterns: ["@mantine/*"]
 
   # `uv`, not `pip`: the Python half locks with uv.lock, and the pip ecosystem would edit
   # pyproject.toml without updating that lockfile. CI runs under UV_LOCKED, so such a pull request
