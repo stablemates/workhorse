@@ -197,6 +197,29 @@ describe("supported version constants", () => {
     ).toBe(true);
   });
 
+  it("builds every container image on the Node major the toolchains pin", async () => {
+    const containers = ["Dockerfile", "Dockerfile.dashboard", "Dockerfile.site"];
+    const manifest = await readSupportManifest();
+    // Node 25 removed corepack from the distribution, and all three images reach pnpm through it.
+    // A base image ahead of this pin therefore fails the image build at `corepack enable`, which
+    // no repository check runs. Dependabot reads support.json no more than it reads mise.toml, so
+    // this test is what refuses a Node major the repository has not adopted.
+    const majors = await Promise.all(
+      containers.map(async (name) => [
+        name,
+        [
+          ...new Set(
+            [...(await read(name)).matchAll(/^FROM node:(\d+)-alpine/gm)].map((match) => match[1]!),
+          ),
+        ],
+      ]),
+    );
+
+    expect(Object.fromEntries(majors)).toEqual(
+      Object.fromEntries(containers.map((name) => [name, [manifest.toolchains.node]])),
+    );
+  });
+
   it("matches the Go and Python package manifests", async () => {
     const [manifest, goMod, pythonSource] = await Promise.all([
       readSupportManifest(),

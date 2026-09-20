@@ -1,4 +1,4 @@
-FROM node:25-alpine AS build
+FROM node:24-alpine AS build
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -28,7 +28,7 @@ RUN mkdir /artifacts \
   && pnpm --silent --dir typescript/dashboard pack --pack-destination /artifacts \
   && mv /artifacts/stablemates-workhorse-dashboard-[0-9]*.tgz /artifacts/workhorse-dashboard.tgz
 
-FROM node:25-alpine AS production-dependencies
+FROM node:24-alpine AS production-dependencies
 
 WORKDIR /opt/workhorse
 COPY --from=build /artifacts/ /artifacts/
@@ -38,7 +38,7 @@ RUN npm install --omit=dev --ignore-scripts \
   /artifacts/workhorse-dashboard-server.tgz \
   /artifacts/workhorse-dashboard.tgz
 
-FROM node:25-alpine AS runtime
+FROM node:24-alpine AS runtime
 
 ENV NODE_ENV=production
 WORKDIR /opt/workhorse
