@@ -140,6 +140,10 @@ type DashboardEnqueueTestResult struct {
 }
 
 type DashboardEventDetail struct {
+	StartedAt    *string            `json:"startedAt"`
+	ClaimedAt    *string            `json:"claimedAt"`
+	FinishedAt   *string            `json:"finishedAt"`
+	Error        any                `json:"error"`
 	ID           string             `json:"id"`
 	Kind         DashboardEventKind `json:"kind"`
 	RecordID     string             `json:"recordId"`
@@ -154,10 +158,6 @@ type DashboardEventDetail struct {
 	FenceToken   *string            `json:"fenceToken"`
 	DurationMs   *float64           `json:"durationMs"`
 	ErrorMessage *string            `json:"errorMessage"`
-	StartedAt    *string            `json:"startedAt"`
-	ClaimedAt    *string            `json:"claimedAt"`
-	FinishedAt   *string            `json:"finishedAt"`
-	Error        any                `json:"error"`
 }
 
 type DashboardEventKind string
@@ -758,16 +758,16 @@ type DashboardSystemStorage struct {
 type DashboardSystemWindow string
 
 type DashboardTaskCounts struct {
-	All       float64 `json:"all"`
-	Blocked   float64 `json:"blocked"`
 	Canceled  float64 `json:"canceled"`
-	Completed float64 `json:"completed"`
-	Discarded float64 `json:"discarded"`
-	Queued    float64 `json:"queued"`
-	Retried   float64 `json:"retried"`
-	Running   float64 `json:"running"`
+	Blocked   float64 `json:"blocked"`
 	Scheduled float64 `json:"scheduled"`
+	Completed float64 `json:"completed"`
+	All       float64 `json:"all"`
 	Waiting   float64 `json:"waiting"`
+	Running   float64 `json:"running"`
+	Retried   float64 `json:"retried"`
+	Queued    float64 `json:"queued"`
+	Discarded float64 `json:"discarded"`
 }
 
 type DashboardTaskCursor struct {
@@ -1000,23 +1000,23 @@ type DashboardTaskValue struct {
 }
 
 type DashboardTasksCursorPage struct {
-	CapturedAt           string               `json:"capturedAt"`
-	CanCompleteHumanWait bool                 `json:"canCompleteHumanWait"`
-	Filter               string               `json:"filter"`
-	Queue                *string              `json:"queue"`
-	Worker               *string              `json:"worker"`
-	TaskType             *string              `json:"taskType"`
-	Priority             *float64             `json:"priority"`
-	Sort                 string               `json:"sort"`
-	Tags                 []string             `json:"tags"`
-	Search               *string              `json:"search"`
-	Page                 float64              `json:"page"`
-	PageSize             float64              `json:"pageSize"`
-	Count                string               `json:"count"`
-	Tasks                []DashboardTaskRow   `json:"tasks"`
 	Total                *float64             `json:"total"`
 	NextCursor           *DashboardTaskCursor `json:"nextCursor"`
 	PreviousCursor       *DashboardTaskCursor `json:"previousCursor"`
+	Queue                *string              `json:"queue"`
+	Priority             *float64             `json:"priority"`
+	Tags                 []string             `json:"tags"`
+	Sort                 string               `json:"sort"`
+	Filter               string               `json:"filter"`
+	Search               *string              `json:"search"`
+	TaskType             *string              `json:"taskType"`
+	CapturedAt           string               `json:"capturedAt"`
+	Count                string               `json:"count"`
+	Worker               *string              `json:"worker"`
+	CanCompleteHumanWait bool                 `json:"canCompleteHumanWait"`
+	Page                 float64              `json:"page"`
+	PageSize             float64              `json:"pageSize"`
+	Tasks                []DashboardTaskRow   `json:"tasks"`
 }
 
 type DashboardTasksPage struct {
