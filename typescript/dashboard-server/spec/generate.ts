@@ -68,6 +68,31 @@ interface ProcedureEntry {
   output: unknown;
 }
 
+/**
+ * Spell a nullable schema as an `anyOf` union, whichever shape zod emitted.
+ *
+ * JSON Schema admits two spellings for "a string or null": a `type` array, and an `anyOf` of two
+ * branches. zod has emitted both across releases, and the response schemas emit only `anyOf`. A
+ * bare zod upgrade would otherwise rewrite the committed artifacts and widen the generated Go and
+ * Python fields to `any`, because `generate-bindings.ts` reads nullability from `anyOf` alone.
+ * Normalizing here keeps the published contract answerable to the router rather than to zod's
+ * current spelling.
+ */
+function normalizeNullableUnions(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalizeNullableUnions);
+  if (value === null || typeof value !== "object") return value;
+  const schema = Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, child]) => [
+      key,
+      normalizeNullableUnions(child),
+    ]),
+  );
+  const { type, ...rest } = schema;
+  if (!Array.isArray(type) || type.length !== 2 || !type.includes("null")) return schema;
+  const named = type.find((member) => member !== "null");
+  return { ...rest, anyOf: [{ type: named }, { type: "null" }] };
+}
+
 function routerProcedures(): Map<string, { mutation: boolean; input: unknown }> {
   const procedures = new Map<string, { mutation: boolean; input: unknown }>();
   for (const [name, candidate] of Object.entries(dashboardRouter.dashboard)) {
@@ -101,7 +126,9 @@ export function composeDashboardSpec(): Record<string, string> {
       path: `/rpc/dashboard/${name}`,
       mutation: procedure.mutation,
       input: procedure.input
-        ? z.toJSONSchema(procedure.input as z.ZodType, { target: "draft-2020-12", io: "input" })
+        ? (normalizeNullableUnions(
+            z.toJSONSchema(procedure.input as z.ZodType, { target: "draft-2020-12", io: "input" }),
+          ) as Record<string, unknown>)
         : null,
       output: responses[name],
     };
@@ -144,10 +171,12 @@ export function composeDashboardSpec(): Record<string, string> {
     html: {
       runtimeConfigPlaceholder: DASHBOARD_RUNTIME_CONFIG_PLACEHOLDER,
       browserModulesPlaceholder: DASHBOARD_BROWSER_MODULES_PLACEHOLDER,
-      runtimeConfig: z.toJSONSchema(dashboardRuntimeConfigSchema, {
-        target: "draft-2020-12",
-        io: "output",
-      }),
+      runtimeConfig: normalizeNullableUnions(
+        z.toJSONSchema(dashboardRuntimeConfigSchema, {
+          target: "draft-2020-12",
+          io: "output",
+        }),
+      ),
     },
     $defs: definitions,
   };
