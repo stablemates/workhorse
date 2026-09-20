@@ -7424,6 +7424,13 @@ $$;
 -- that share budgets cannot deadlock. A claim that already holds budget locks from an earlier claim
 -- in the same transaction passes p_wait_for_budgets = false: it takes only the locks it can get
 -- without waiting and leaves rows naming any other budget for a later claim.
+-- A claim that can pass over a row reads its window without locking and locks only the candidate it
+-- takes (SM-801), so a claim that admits nothing writes no row lock. The admission decision cannot
+-- go stale between that read and the lock: max_active_per_key holds the concurrency policy row,
+-- a per-key rate cap holds the rate-limit policy row, and a budget holds its advisory lock, each
+-- until this transaction ends. A queue with no policy, no per-key rate cap, and no budget lock
+-- keeps the one-row fast path, which locks the first ready row it can take. That row holds the line
+-- when it names a budget this claim never locked, because reading past it has no bound.
 CREATE OR REPLACE FUNCTION workhorse.claim_one_v1(
   p_queue_name text,
   p_worker_id text,
@@ -7447,6 +7454,8 @@ DECLARE
   v_active integer;
   v_budget_name text;
   v_budget_names text[] := '{}';
+  v_task_id uuid;
+  v_candidate_budget text;
   v_fence bigint;
   v_now timestamptz;
   v_expires timestamptz;
@@ -7535,9 +7544,13 @@ BEGIN
   IF NOT v_rate_status.allowed THEN RETURN; END IF;
 
   v_fence := nextval('workhorse.fence_token_seq');
-  WITH ready_window AS MATERIALIZED (
-    SELECT runtime.task_id, runtime.concurrency_key, runtime.budget_name, runtime.priority,
-           runtime.sequence
+  IF v_policy.queue_name IS NULL AND v_rate_policy.per_key_limit IS NULL
+     AND cardinality(v_budget_names) = 0 THEN
+    -- No admission rule passes over a row here, so the first ready row this claim can lock is the
+    -- row it takes. SKIP LOCKED walks past rows other claims already hold. A row whose budget
+    -- committed after this claim sampled its budget names holds the line rather than being passed
+    -- over, because reading past it has no bound.
+    SELECT runtime.task_id, runtime.budget_name INTO v_task_id, v_candidate_budget
       FROM workhorse.task_runtime runtime
       JOIN workhorse.task task ON task.id = runtime.task_id
      WHERE runtime.state = 'ready' AND runtime.queue_name = p_queue_name
@@ -7550,40 +7563,63 @@ BEGIN
        )
      ORDER BY runtime.priority DESC, runtime.sequence, runtime.task_id
      FOR UPDATE OF runtime SKIP LOCKED
-     LIMIT CASE
-       WHEN v_policy.queue_name IS NULL AND v_rate_policy.per_key_limit IS NULL
-         AND cardinality(v_budget_names) = 0 THEN 1
-       ELSE 100
-     END
-  ), candidate AS (
-    SELECT ready.task_id
-      FROM ready_window ready
-      CROSS JOIN LATERAL workhorse.rate_limit_bucket_v1(
-        p_queue_name, 'key', ready.concurrency_key, v_rate_policy.per_key_limit,
-        v_rate_policy.per_key_interval_ms, v_rate_policy.per_key_burst, v_now, false
-      ) keyed_rate
-     WHERE (
-       v_policy.queue_name IS NULL
-       OR v_policy.max_active_per_key IS NULL
-       OR ready.concurrency_key IS NULL
-       OR (
-          SELECT count(*)
-            FROM workhorse.task_runtime active
-           WHERE active.state = 'active'
-             AND active.queue_name = p_queue_name
-             AND active.concurrency_key = ready.concurrency_key
-             AND active.expires_at > v_now
-        ) < v_policy.max_active_per_key
-     ) AND keyed_rate.allowed
-       AND CASE
-         WHEN ready.budget_name IS NULL THEN true
-         WHEN ready.budget_name = ANY(v_budget_names)
-           THEN workhorse.budget_admission_v1(ready.budget_name, v_now)
-         ELSE false
-       END
-     ORDER BY ready.priority DESC, ready.sequence, ready.task_id
-     LIMIT 1
-  )
+     LIMIT 1;
+    IF v_candidate_budget IS NOT NULL THEN RETURN; END IF;
+  ELSE
+    -- An admission rule can pass over a row, so the window reads without locking and only the
+    -- chosen candidate is locked. A claim that admits nothing leaves every sampled row unlocked.
+    WITH ready_window AS MATERIALIZED (
+      SELECT runtime.task_id, runtime.concurrency_key, runtime.budget_name, runtime.priority,
+             runtime.sequence
+        FROM workhorse.task_runtime runtime
+        JOIN workhorse.task task ON task.id = runtime.task_id
+       WHERE runtime.state = 'ready' AND runtime.queue_name = p_queue_name
+         AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
+         AND (task.execution_timeout_ms IS NULL
+           OR runtime.execution_used_ms < task.execution_timeout_ms)
+         AND NOT EXISTS (
+           SELECT 1 FROM workhorse.queue_control control
+            WHERE control.queue_name = p_queue_name AND control.paused
+         )
+       ORDER BY runtime.priority DESC, runtime.sequence, runtime.task_id
+       LIMIT 100
+    ), admissible AS (
+      SELECT ready.task_id, ready.priority, ready.sequence
+        FROM ready_window ready
+        CROSS JOIN LATERAL workhorse.rate_limit_bucket_v1(
+          p_queue_name, 'key', ready.concurrency_key, v_rate_policy.per_key_limit,
+          v_rate_policy.per_key_interval_ms, v_rate_policy.per_key_burst, v_now, false
+        ) keyed_rate
+       WHERE (
+         v_policy.queue_name IS NULL
+         OR v_policy.max_active_per_key IS NULL
+         OR ready.concurrency_key IS NULL
+         OR (
+            SELECT count(*)
+              FROM workhorse.task_runtime active
+             WHERE active.state = 'active'
+               AND active.queue_name = p_queue_name
+               AND active.concurrency_key = ready.concurrency_key
+               AND active.expires_at > v_now
+          ) < v_policy.max_active_per_key
+       ) AND keyed_rate.allowed
+         AND CASE
+           WHEN ready.budget_name IS NULL THEN true
+           WHEN ready.budget_name = ANY(v_budget_names)
+             THEN workhorse.budget_admission_v1(ready.budget_name, v_now)
+           ELSE false
+         END
+    )
+    SELECT runtime.task_id INTO v_task_id
+      FROM admissible
+      JOIN workhorse.task_runtime runtime ON runtime.task_id = admissible.task_id
+     WHERE runtime.state = 'ready'
+     ORDER BY admissible.priority DESC, admissible.sequence, admissible.task_id
+     FOR UPDATE OF runtime SKIP LOCKED
+     LIMIT 1;
+  END IF;
+  IF v_task_id IS NULL THEN RETURN; END IF;
+
   UPDATE workhorse.task_runtime runtime
      SET state = 'active', fence_token = v_fence, worker_id = p_worker_id,
          acquired_at = v_now, heartbeat_at = v_now, expires_at = v_expires,
@@ -7595,8 +7631,8 @@ BEGIN
              (task.execution_timeout_ms - runtime.execution_used_ms)::double precision / 1000.0)
          END,
          error = NULL, updated_at = v_now
-    FROM candidate, workhorse.task task
-   WHERE runtime.task_id = candidate.task_id AND runtime.state = 'ready' AND task.id = runtime.task_id
+    FROM workhorse.task task
+   WHERE runtime.task_id = v_task_id AND runtime.state = 'ready' AND task.id = runtime.task_id
      AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
   RETURNING runtime.* INTO v_runtime;
   IF NOT FOUND THEN RETURN; END IF;
@@ -15601,10 +15637,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (17, 'bounded dashboard task values'),
   (18, 'release a task without a handler'),
   (19, 'never skip a busy schedule occurrence'),
-  (20, 'enqueue skips the dependency block')
+  (20, 'enqueue skips the dependency block'),
+  (21, 'a claim locks only the row it takes')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (20) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (21) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

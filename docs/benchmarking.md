@@ -4,6 +4,8 @@ This runbook explains how to execute Workhorse's benchmark suite, preserve repro
 
 ## Recorded evidence
 
+- [2026-09-20 saturated claim analysis](benchmarks/2026-09-20-saturated-claim-analysis.md): row locks, WAL records, and latency of a claim on a queue whose keys are all at capacity, before and after the claim locked only the candidate it admits.
+- [`results/2026-09-20-saturated-claim.json`](benchmarks/results/2026-09-20-saturated-claim.json): refused and admitting claim series on the schema that locks only the candidate.
 - [2026-09-16 tenant cardinality analysis](benchmarks/2026-09-16-tenant-cardinality-analysis.md): claim admission, tag filter, budget, and health cost from 100 through 100,000 tenants on one queue, interpreted in [ADR 0069](decisions/0069-isolate-tenants-by-database-and-carry-tenant-identity-as-task-metadata.md).
 - [`results/2026-09-16-tenant-cardinality.json`](benchmarks/results/2026-09-16-tenant-cardinality.json): keyed and budgeted profile artifact with plan node types and relation sizes per rung.
 - [`results/2026-08-24-dashboard-read-surface.json`](benchmarks/results/2026-08-24-dashboard-read-surface.json): loaded dashboard plans plus WH-388 task and queue request comparisons with statement counts and latency percentiles.

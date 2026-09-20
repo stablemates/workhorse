@@ -176,6 +176,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "enqueue skips the dependency block",
     kind: "additive",
   },
+  {
+    fromVersion: 20,
+    toVersion: 21,
+    file: "0021-a-claim-locks-only-the-row-it-takes.sql",
+    description: "a claim locks only the row it takes",
+    kind: "additive",
+  },
 ];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {

@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 21,
+  "options": {
+    "keys": 40,
+    "readyPerKey": 4,
+    "maxActivePerKey": 1,
+    "samples": 60,
+    "warmupSamples": 2,
+    "install": true
+  },
+  "load": {
+    "readyRows": 160,
+    "activeRows": 40,
+    "loadMs": 10.97618399999999
+  },
+  "saturated": {
+    "admittedClaims": 0,
+    "rowLocks": {
+      "count": 60,
+      "min": 0,
+      "max": 0,
+      "mean": 0,
+      "sampleStandardDeviation": 0,
+      "confidenceInterval95": {
+        "confidenceLevel": 0.95,
+        "lower": 0,
+        "upper": 0,
+        "marginOfError": 0
+      }
+    },
+    "walRecords": {
+      "count": 60,
+      "min": 1,
+      "max": 2,
+      "mean": 1.0166666666666666,
+      "sampleStandardDeviation": 0.12909944487358066,
+      "confidenceInterval95": {
+        "confidenceLevel": 0.95,
+        "lower": 0.9833333333333333,
+        "upper": 1.05,
+        "marginOfError": 0.03333333333333336
+      }
+    },
+    "walBytes": {
+      "count": 60,
+      "min": 54,
+      "max": 153,
+      "mean": 55.65,
+      "sampleStandardDeviation": 12.780845042484472,
+      "confidenceInterval95": {
+        "confidenceLevel": 0.95,
+        "lower": 52.35,
+        "upper": 58.949999999999996,
+        "marginOfError": 3.299999999999999
+      }
+    },
+    "elapsedMs": {
+      "count": 60,
+      "min": 0.32202499999999645,
+      "max": 0.8670180000000016,
+      "mean": 0.3819384666666617,
+      "sampleStandardDeviation": 0.07697987258477691,
+      "confidenceInterval95": {
+        "confidenceLevel": 0.95,
+        "lower": 0.36206234903239437,
+        "upper": 0.40181458430092903,
+        "marginOfError": 0.019876117634267325
+      }
+    }
+  },
+  "admitting": {
+    "admittedClaims": 60,
+    "rowLocks": {
+      "count": 60,
+      "min": 1,
+      "max": 1,
+      "mean": 1,
+      "sampleStandardDeviation": 0,
+      "confidenceInterval95": {
+        "confidenceLevel": 0.95,
+        "lower": 1,
+        "upper": 1,
+        "marginOfError": 0
+      }
+    },
+    "walRecords": {
+      "count": 60,
+      "min": 12,
+      "max": 13,
+      "mean": 12.083333333333334,
+      "sampleStandardDeviation": 0.2787178067853023,
+      "confidenceInterval95": {
+        "confidenceLevel": 0.95,
+        "lower": 12.011368705068605,
+        "upper": 12.155297961598063,
+        "marginOfError": 0.07196462826472882
+      }
+    },
+    "walBytes": {
+      "count": 60,
+      "min": 1107,
+      "max": 9348,
+      "mean": 1255.1,
+      "sampleStandardDeviation": 1063.4839404172606,
+      "confidenceInterval95": {
+        "confidenceLevel": 0.95,
+        "lower": 980.5096273203271,
+        "upper": 1529.6903726796727,
+        "marginOfError": 274.5903726796727
+      }
+    },
+    "elapsedMs": {
+      "count": 60,
+      "min": 0.4979460000000131,
+      "max": 1.4218000000000188,
+      "mean": 0.5920096000000001,
+      "sampleStandardDeviation": 0.15340124121823573,
+      "confidenceInterval95": {
+        "confidenceLevel": 0.95,
+        "lower": 0.5524015698316153,
+        "upper": 0.631617630168385,
+        "marginOfError": 0.03960803016838491
+      }
+    }
+  }
+}
