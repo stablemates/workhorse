@@ -17,11 +17,18 @@ import { type PublishedPackage, publishedPackages, repositoryRoot } from "./pack
  *
  * Two properties follow from that, and they are what this file is.
  *
- * **Nothing irreversible runs before the reversible checks pass.** The credential is verified
- * against the registry, and every target version is checked for absence, before the first
+ * **Nothing irreversible runs before the reversible checks pass.** The publisher's ability to
+ * authenticate is confirmed, and every target version is checked for absence, before the first
  * `npm publish`. The release this was written for spent its first action on a real publish, met
  * `E404 Not Found - PUT`, and stopped. npm reports an authorization failure as a missing package,
- * so the log named the package while the expired token went unnamed.
+ * so the log named the package while the dead credential went unnamed.
+ *
+ * Publication authenticates through npm trusted publishing. `npm publish` exchanges the job's
+ * GitHub Actions OIDC identity for a short-lived registry credential, and the repository holds no
+ * npm token, so nothing else can authenticate the write. That credential does not exist until the
+ * irreversible command mints it, so the preflight cannot verify it against the registry. It checks
+ * the two conditions the exchange needs instead, and both are knowable in advance: npm performs the
+ * exchange only from 11.5.1, and GitHub offers an identity only to a job that asked for one.
  *
  * **A failure says what the registry now holds.** The loop keeps a ledger and prints it on the way
  * out, naming every package that published and every one that did not, with versions. A maintainer
@@ -37,31 +44,19 @@ import { type PublishedPackage, publishedPackages, repositoryRoot } from "./pack
 /** Where the build job's tarballs are downloaded, relative to the repository root. */
 const tarballDirectory = "dist-tarballs";
 
-/** The credential the workflow passes as `NODE_AUTH_TOKEN`, named in every failure it causes. */
-const credentialName = "NPM_TOKEN";
+/** The first npm that exchanges a CI identity for a registry credential. */
+const oidcFloor = "11.5.1";
+
+/** Where the publish job that holds the release identity is written down. */
+const workflowReference = ".github/workflows/release.yml";
 
 /** Where a maintainer goes when the registry already holds part of this version. */
 const recoveryReference = "docs/compatibility.md, “Recovering a partially published release”";
 
-/** Whether the registry accepted the credential, and who it says the credential is. */
-export type Credential =
-  | { readonly accepted: true; readonly username: string }
-  | { readonly accepted: false; readonly detail: string };
-
-/**
- * What the registry disclosed about one scope's package permissions.
- *
- * The three cases are not three shades of failure. `listed` is an answer to act on: the registry
- * named the packages this credential may write, so anything absent from it is a package the
- * credential cannot publish. `refused` is the credential failing again, one call later. `undisclosed`
- * is the registry declining to answer at all, which some token types produce for a credential that
- * publishes perfectly well — so it is reported and does not block. Blocking a release on a question
- * the registry would not answer trades a rare catastrophe for a frequent one.
- */
-export type ScopeAccess =
-  | { readonly kind: "listed"; readonly permissions: Readonly<Record<string, string>> }
-  | { readonly kind: "refused"; readonly detail: string }
-  | { readonly kind: "undisclosed"; readonly detail: string };
+/** Whether the surrounding job can hand npm an identity to exchange, and why it cannot. */
+export type OidcIdentity =
+  | { readonly offered: true }
+  | { readonly offered: false; readonly detail: string };
 
 /**
  * Versions the registry serves for a package, or `undefined` when it has never been published.
@@ -88,19 +83,23 @@ export interface PublishLedger {
   readonly pending: readonly PublishedPackage[];
 }
 
-/** The scope in a package name, for example `@stablemates`, or undefined when it has none. */
-export function packageScope(name: string): string | undefined {
-  return /^(@[^/]+)\//.exec(name)?.[1];
+/** The three numbers a released version leads with, or nothing when it leads with something else. */
+function releaseNumbers(value: string): number[] {
+  return (/^(\d+)\.(\d+)\.(\d+)/.exec(value.trim())?.slice(1) ?? []).map(Number);
 }
 
-/** Every scope the published packages live in, in first-seen order. */
-export function publishedScopes(packages: readonly PublishedPackage[]): readonly string[] {
-  const scopes: string[] = [];
-  for (const entry of packages) {
-    const scope = packageScope(entry.name);
-    if (scope && !scopes.includes(scope)) scopes.push(scope);
+/**
+ * Whether a released version is at least a minimum, over the three numbers npm and Node release
+ * under. A version the pattern does not recognise is not a version this comparison can act on.
+ */
+export function meetsMinimum(version: string, minimum: string): boolean {
+  const parsed = releaseNumbers(version);
+  if (parsed.length === 0) return false;
+  for (const [index, bound] of releaseNumbers(minimum).entries()) {
+    const part = parsed[index] ?? 0;
+    if (part !== bound) return part > bound;
   }
-  return scopes;
+  return true;
 }
 
 function describeVersion(entry: PublishedPackage): string {
@@ -110,56 +109,45 @@ function describeVersion(entry: PublishedPackage): string {
 /**
  * Every reason not to publish, gathered before anything is written.
  *
- * The version check is the half that recognises a partial release. Reporting nine conflicts one by
+ * The target-version check is what recognises a partial release. Reporting nine conflicts one by
  * one would leave the reader to notice that four packages are present and five are not; one problem
  * that names both sides says what actually happened and where the recovery is written down.
  */
 export function findPreflightProblems(
   packages: readonly PublishedPackage[],
-  credential: Credential,
-  access: ReadonlyMap<string, ScopeAccess>,
+  npmVersion: string | undefined,
+  oidc: OidcIdentity,
   published: RegistryVersions,
 ): readonly PreflightProblem[] {
   const problems: PreflightProblem[] = [];
-  if (!credential.accepted) {
+  if (npmVersion === undefined) {
     problems.push({
-      headline: `The registry refused the ${credentialName} credential`,
+      headline: "npm did not report a version",
       detail: [
-        `npm whoami: ${credential.detail || "no output"}`,
-        `Nothing was published. Rotate ${credentialName} in the npm environment, then re-run the`,
-        "release workflow for this tag.",
+        `This release authenticates through OIDC, and only npm ${oidcFloor} and later performs that`,
+        "exchange. An npm the preflight cannot run is an npm that cannot publish either.",
+      ],
+    });
+  } else if (!meetsMinimum(npmVersion, oidcFloor)) {
+    problems.push({
+      headline: `npm ${npmVersion} cannot exchange an OIDC identity`,
+      detail: [
+        "npm publish mints this release's credential from the job's OIDC identity, and npm added",
+        `that exchange in ${oidcFloor}. The workflow passes no token, so an older npm reaches the`,
+        "registry as nobody.",
+        `Raise node-version in the publish job of ${workflowReference}; Node 24 ships npm 11.`,
       ],
     });
   }
-  for (const [scope, answer] of access) {
-    if (answer.kind !== "refused") continue;
+  if (!oidc.offered) {
     problems.push({
-      headline: `${credentialName} cannot read the ${scope} scope`,
+      headline: "No OIDC identity is available to publish with",
       detail: [
-        `npm access list packages ${scope}: ${answer.detail || "no output"}`,
-        `The credential authenticates but the registry will not disclose ${scope} to it, so it`,
-        `cannot be trusted to publish into it. Rotate ${credentialName} and re-run.`,
-      ],
-    });
-  }
-  for (const entry of packages) {
-    const scope = packageScope(entry.name);
-    const answer = scope ? access.get(scope) : undefined;
-    if (answer?.kind !== "listed") continue;
-    // A package the registry knows about and did not list is a package this credential may not
-    // write. A package that has never been published cannot appear in any listing, so its absence
-    // says nothing.
-    const permission = answer.permissions[entry.name];
-    if (permission === "read-write") continue;
-    if (permission === undefined && published.get(entry.name) === undefined) continue;
-    problems.push({
-      headline:
-        permission === undefined
-          ? `${credentialName} may not publish ${entry.name}`
-          : `${credentialName} has ${permission} access to ${entry.name}`,
-      detail: [
-        `npm access list packages ${scope ?? ""} names ${String(Object.keys(answer.permissions).length)} package(s) this credential may reach.`,
-        `Grant it read-write on ${entry.name}, or rotate ${credentialName} for one that has it.`,
+        oidc.detail,
+        "npm publish exchanges that identity for a short-lived registry credential, which is the",
+        "only credential this release has. The repository holds no npm token.",
+        `Publish from the publish job in ${workflowReference}. It runs GitHub-hosted and holds`,
+        "id-token: write.",
       ],
     });
   }
@@ -266,19 +254,6 @@ async function npmCapture(args: readonly string[]): Promise<CommandResult> {
 }
 
 /**
- * npm error codes that mean the registry rejected the credential rather than the request.
- *
- * `E404` is deliberately not here. npm answers an unauthorized write to a scoped package with a
- * 404 so the registry does not disclose that the package exists, which is exactly the ambiguity
- * this preflight exists to resolve — on a read, a 404 really is absence.
- */
-const credentialRefusals = ["E401", "E403", "ENEEDAUTH", "EAUTHUNKNOWN", "EOTP"];
-
-function refusesCredential(output: string): boolean {
-  return credentialRefusals.some((code) => output.includes(code));
-}
-
-/**
  * npm's diagnostics as one line, minus what it says on every run.
  *
  * A failure message is only useful if the reader can see the reason in it. npm surrounds that
@@ -296,36 +271,36 @@ export function condenseDiagnostics(output: string): string {
     .join("; ");
 }
 
-/** Ask the registry who the credential is. An expired or malformed token fails here and nowhere else. */
-export async function readCredential(): Promise<Credential> {
-  const result = await npmCapture(["whoami"]);
-  if (result.exitCode === 0 && result.stdout.trim()) {
-    return { accepted: true, username: result.stdout.trim() };
-  }
-  return { accepted: false, detail: condenseDiagnostics(result.stderr || result.stdout) };
+/** The npm that will do the publishing, or undefined when it could not be asked. */
+export async function readNpmVersion(): Promise<string | undefined> {
+  const result = await npmCapture(["--version"]);
+  if (result.exitCode !== 0) return undefined;
+  return result.stdout.trim() || undefined;
 }
 
-/** Ask the registry which packages in a scope the credential may write. */
-export async function readScopeAccess(scope: string): Promise<ScopeAccess> {
-  const result = await npmCapture(["access", "list", "packages", scope, "--json"]);
-  if (result.exitCode === 0) {
-    try {
-      const parsed = JSON.parse(result.stdout) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return { kind: "listed", permissions: parsed as Record<string, string> };
-      }
-    } catch {
-      // Fall through: an unparseable answer is an answer the preflight cannot act on.
-    }
-    return { kind: "undisclosed", detail: "the registry returned no package permissions" };
+/**
+ * Whether the surrounding job can hand npm an identity to exchange.
+ *
+ * GitHub sets the two `ACTIONS_ID_TOKEN_REQUEST_*` variables for every step of a job that asked for
+ * `id-token: write`, and for no other job. npm reads them, so their absence is the whole failure.
+ * `npm publish` treats a missing identity as a reason to carry on unauthenticated, one package at a
+ * time, until the registry refuses a write this file cannot undo.
+ */
+export function readOidcIdentity(env: Readonly<Record<string, string | undefined>>): OidcIdentity {
+  if (!env.GITHUB_ACTIONS) {
+    return {
+      offered: false,
+      detail: "npm exchanges an OIDC identity only in CI, and this is not a GitHub Actions run.",
+    };
   }
-  const detail = condenseDiagnostics(result.stderr || result.stdout);
-  return refusesCredential(detail)
-    ? { kind: "refused", detail }
-    : {
-        kind: "undisclosed",
-        detail: detail || `npm access exited with ${String(result.exitCode)}`,
-      };
+  if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
+    return {
+      offered: false,
+      detail:
+        "GitHub gave this job no token endpoint. It withholds one from every job that did not ask for id-token: write.",
+    };
+  }
+  return { offered: true };
 }
 
 /** The versions `npm view` reports, normalised from the string it prints for a single version. */
@@ -353,12 +328,13 @@ export async function readPublishedVersions(name: string): Promise<readonly stri
 /**
  * Everything the preflight needs, then the decision.
  *
- * The version reads do not need the credential, so they run whichever way `npm whoami` went and a
- * dead token still reports a partial release. The access reads do need it, and asking a refused
- * credential a second question only restates the first answer.
+ * Nothing here authenticates. `npm view` reads the registry anonymously, and the two publisher
+ * checks read this process and its environment, so a job that could never have published still
+ * reports a partial release it has to recover from.
  */
 export async function preflight(packages: readonly PublishedPackage[]): Promise<void> {
-  const credential = await readCredential();
+  const npmVersion = await readNpmVersion();
+  const oidc = readOidcIdentity(process.env);
   const published = new Map<string, readonly string[] | undefined>(
     await Promise.all(
       packages.map(
@@ -370,22 +346,11 @@ export async function preflight(packages: readonly PublishedPackage[]): Promise<
       ),
     ),
   );
-  const access = new Map<string, ScopeAccess>();
-  if (credential.accepted) {
-    for (const scope of publishedScopes(packages)) access.set(scope, await readScopeAccess(scope));
-  }
-  const problems = findPreflightProblems(packages, credential, access, published);
+  const problems = findPreflightProblems(packages, npmVersion, oidc, published);
   if (problems.length > 0) throw new Error(describeProblems(problems));
-  for (const [scope, answer] of access) {
-    if (answer.kind !== "undisclosed") continue;
-    process.stdout.write(
-      `Note: the registry did not disclose ${scope} package permissions (${answer.detail}). ` +
-        `${credentialName} authenticated, and per-package write access was not verified.\n`,
-    );
-  }
   process.stdout.write(
-    `Preflight passed: ${credential.accepted ? credential.username : "unknown"} may publish ` +
-      `${String(packages.length)} package(s), and none is on the registry at ` +
+    `Preflight passed: npm ${npmVersion ?? ""} will publish ${String(packages.length)} package(s) ` +
+      `with this job's OIDC identity, and none is on the registry at ` +
       `${packages[0]?.version ?? ""}.\n`,
   );
 }

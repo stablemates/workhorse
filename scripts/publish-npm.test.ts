@@ -1,15 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { PublishedPackage } from "./packages.js";
 import {
-  type Credential,
-  type ScopeAccess,
+  type OidcIdentity,
   condenseDiagnostics,
   describeLedger,
   describeProblems,
   findPreflightProblems,
-  packageScope,
+  meetsMinimum,
   parseVersions,
-  publishedScopes,
+  readOidcIdentity,
 } from "./publish-npm.js";
 
 function published(name: string, version = "0.1.0"): PublishedPackage {
@@ -28,19 +27,9 @@ const core = published("@stablemates/workhorse");
 const dashboard = published("@stablemates/workhorse-dashboard");
 const packages = [core, dashboard];
 
-const accepted: Credential = { accepted: true, username: "stablemates-release" };
-
-function listed(...names: readonly string[]): ReadonlyMap<string, ScopeAccess> {
-  return new Map([
-    [
-      "@stablemates",
-      {
-        kind: "listed",
-        permissions: Object.fromEntries(names.map((name) => [name, "read-write"])),
-      } satisfies ScopeAccess,
-    ],
-  ]);
-}
+/** The npm the publish job runs, and an identity for it to exchange. */
+const publisher = "11.5.1";
+const offered: OidcIdentity = { offered: true };
 
 /** Neither package has ever been published, which is the state before a first release. */
 const unpublished = new Map([
@@ -54,79 +43,77 @@ const atBeta = new Map<string, readonly string[] | undefined>([
   [dashboard.name, ["0.1.0-beta.2"]],
 ]);
 
-describe("packageScope", () => {
-  it("reads the scope from a scoped name and finds none in a bare one", () => {
-    expect(packageScope("@stablemates/workhorse-dashboard")).toBe("@stablemates");
-    expect(packageScope("workhorse")).toBeUndefined();
+describe("meetsMinimum", () => {
+  it("compares the three numbers npm releases under", () => {
+    expect(meetsMinimum("11.5.1", "11.5.1")).toBe(true);
+    expect(meetsMinimum("11.19.0", "11.5.1")).toBe(true);
+    expect(meetsMinimum("12.0.0", "11.5.1")).toBe(true);
+    expect(meetsMinimum("11.5.0", "11.5.1")).toBe(false);
+    expect(meetsMinimum("10.9.8", "11.5.1")).toBe(false);
   });
 
-  it("lists each scope once, in the order the packages publish", () => {
-    expect(publishedScopes(packages)).toEqual(["@stablemates"]);
+  it("refuses a version it cannot read rather than guess at it", () => {
+    expect(meetsMinimum("", "11.5.1")).toBe(false);
+    expect(meetsMinimum("next", "11.5.1")).toBe(false);
+  });
+});
+
+describe("readOidcIdentity", () => {
+  it("takes the two variables GitHub sets for a job that asked for id-token: write", () => {
+    const identity = readOidcIdentity({
+      GITHUB_ACTIONS: "true",
+      ACTIONS_ID_TOKEN_REQUEST_URL: "https://token.actions.githubusercontent.com/...",
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: "request-token",
+    });
+    expect(identity).toEqual({ offered: true });
+  });
+
+  it("names the missing permission when the job runs without a token endpoint", () => {
+    const identity = readOidcIdentity({ GITHUB_ACTIONS: "true" });
+    expect(identity.offered).toBe(false);
+    expect(identity.offered === false && identity.detail).toContain("id-token: write");
+  });
+
+  it("names the run itself when npm has no CI to exchange an identity with", () => {
+    const identity = readOidcIdentity({});
+    expect(identity.offered).toBe(false);
+    expect(identity.offered === false && identity.detail).toContain("GitHub Actions");
   });
 });
 
 describe("findPreflightProblems", () => {
-  it("passes a credential with write access and no target version on the registry", () => {
-    const problems = findPreflightProblems(
-      packages,
-      accepted,
-      listed(core.name, dashboard.name),
-      atBeta,
-    );
-    expect(problems).toEqual([]);
+  it("passes an OIDC publisher with no target version on the registry", () => {
+    expect(findPreflightProblems(packages, publisher, offered, atBeta)).toEqual([]);
+    expect(findPreflightProblems(packages, publisher, offered, unpublished)).toEqual([]);
   });
 
-  it("names the credential rather than the package when the registry refuses the token", () => {
-    const credential: Credential = { accepted: false, detail: "npm error code E401" };
-    const problems = findPreflightProblems(packages, credential, new Map(), atBeta);
+  it("refuses an npm too old to exchange an identity, and says where to raise it", () => {
+    const problems = findPreflightProblems(packages, "10.9.8", offered, atBeta);
     expect(problems).toHaveLength(1);
-    expect(problems[0]?.headline).toBe("The registry refused the NPM_TOKEN credential");
-    expect(describeProblems(problems)).toContain("Rotate NPM_TOKEN in the npm environment");
+    expect(problems[0]?.headline).toBe("npm 10.9.8 cannot exchange an OIDC identity");
+    const message = describeProblems(problems);
+    expect(message).toContain("that exchange in 11.5.1");
+    expect(message).toContain("Raise node-version in the publish job");
   });
 
-  it("refuses a credential the registry will not let read the scope", () => {
-    const access = new Map<string, ScopeAccess>([
-      ["@stablemates", { kind: "refused", detail: "npm error code E403" }],
-    ]);
-    const problems = findPreflightProblems(packages, accepted, access, atBeta);
+  it("refuses an npm it could not ask for a version", () => {
+    const problems = findPreflightProblems(packages, undefined, offered, atBeta);
     expect(problems).toHaveLength(1);
-    expect(problems[0]?.headline).toBe("NPM_TOKEN cannot read the @stablemates scope");
+    expect(problems[0]?.headline).toBe("npm did not report a version");
   });
 
-  it("refuses a credential the scope listing omits for a package that exists", () => {
-    const problems = findPreflightProblems(packages, accepted, listed(core.name), atBeta);
+  it("refuses a run with no identity to publish with, and says what publication uses", () => {
+    const oidc: OidcIdentity = {
+      offered: false,
+      detail: "npm exchanges an OIDC identity only in CI.",
+    };
+    const problems = findPreflightProblems(packages, publisher, oidc, atBeta);
     expect(problems).toHaveLength(1);
-    expect(problems[0]?.headline).toBe(
-      "NPM_TOKEN may not publish @stablemates/workhorse-dashboard",
-    );
-  });
-
-  it("refuses read-only access to a package", () => {
-    const access = new Map<string, ScopeAccess>([
-      [
-        "@stablemates",
-        {
-          kind: "listed",
-          permissions: { [core.name]: "read-write", [dashboard.name]: "read-only" },
-        },
-      ],
-    ]);
-    const problems = findPreflightProblems(packages, accepted, access, atBeta);
-    expect(problems).toHaveLength(1);
-    expect(problems[0]?.headline).toBe(
-      "NPM_TOKEN has read-only access to @stablemates/workhorse-dashboard",
-    );
-  });
-
-  it("lets a package that has never been published through an omission it cannot avoid", () => {
-    expect(findPreflightProblems(packages, accepted, listed(), unpublished)).toEqual([]);
-  });
-
-  it("acts on nothing when the registry declines to disclose the scope", () => {
-    const access = new Map<string, ScopeAccess>([
-      ["@stablemates", { kind: "undisclosed", detail: "npm error code E404" }],
-    ]);
-    expect(findPreflightProblems(packages, accepted, access, atBeta)).toEqual([]);
+    expect(problems[0]?.headline).toBe("No OIDC identity is available to publish with");
+    const message = describeProblems(problems);
+    expect(message).toContain("npm publish exchanges that identity");
+    expect(message).toContain("The repository holds no npm token.");
+    expect(message).toContain(".github/workflows/release.yml");
   });
 
   it("reports a partial release as one problem naming both sides", () => {
@@ -134,12 +121,7 @@ describe("findPreflightProblems", () => {
       [core.name, ["0.1.0-beta.2", "0.1.0"]],
       [dashboard.name, ["0.1.0-beta.2"]],
     ]);
-    const problems = findPreflightProblems(
-      packages,
-      accepted,
-      listed(core.name, dashboard.name),
-      partial,
-    );
+    const problems = findPreflightProblems(packages, publisher, offered, partial);
     expect(problems).toHaveLength(1);
     expect(problems[0]?.headline).toBe("The registry already holds 1 of 2 packages at 0.1.0");
     const message = describeProblems(problems);
@@ -153,12 +135,7 @@ describe("findPreflightProblems", () => {
       [core.name, ["0.1.0"]],
       [dashboard.name, ["0.1.0"]],
     ]);
-    const problems = findPreflightProblems(
-      packages,
-      accepted,
-      listed(core.name, dashboard.name),
-      complete,
-    );
+    const problems = findPreflightProblems(packages, publisher, offered, complete);
     expect(problems).toHaveLength(1);
     expect(problems[0]?.headline).toBe("Every package is already published at 0.1.0");
     expect(describeProblems(problems)).not.toContain("Not on the registry");

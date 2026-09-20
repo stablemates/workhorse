@@ -482,14 +482,22 @@ describe("continuous integration", () => {
     expect(workflow).toContain("actions/download-artifact");
     expect(workflow).toContain("id-token: write");
     // The publish step is a script rather than a loop, because npm publication cannot be rolled
-    // back: the credential and every target version are checked before the first write, and a
-    // failure partway through names what reached the registry.
+    // back: this runner's ability to authenticate and every target version are checked before the
+    // first write, and a failure partway through names what reached the registry.
     expect(workflow).toContain("run: pnpm npm:publish");
     const publish = await read("scripts/publish-npm.ts");
     expect(scripts["npm:publish"]).toContain("scripts/publish-npm.ts");
     expect(publish).toContain('"publish", "--provenance", "--access", "public", tarball');
     expect(publish).toContain("await preflight(packages)");
     expect(publish).toContain("describeLedger(ledger)");
+    // npm publication holds no secret. It authenticates by exchanging the job's OIDC identity,
+    // which npm performs from 11.5.1 and Node 22 does not ship. A token in this workflow would be
+    // readable by everything the step runs, and there is no longer one to read.
+    expect(workflow).not.toContain("NODE_AUTH_TOKEN:");
+    expect(workflow).not.toContain("secrets.");
+    expect(publish).toContain("readOidcIdentity(process.env)");
+    expect(publish).not.toContain('"whoami"');
+    expect(publish).not.toContain('"access", "list", "packages"');
   });
 
   it("publishes Python distributions from a checked, versioned tag", async () => {

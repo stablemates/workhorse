@@ -87,23 +87,33 @@ jobs:
       # No `cache: pnpm`. This job holds the publication identity, so it installs only what the
       # lockfile pins from the registry. A restored cache is a writable artifact from an earlier
       # run, and this is the one job where nothing but the lockfile should decide what executes.
+      #
+      # Node 24 for npm 11: npm exchanges this job's OIDC identity for a registry credential only
+      # from 11.5.1, and Node 22 ships npm 10. No `registry-url`, because that option exists to
+      # write a `NODE_AUTH_TOKEN` placeholder into `.npmrc` and this job has no token to put there.
+      # npm leaves an unset placeholder in place as a literal, which would turn a failed exchange
+      # into an unauthorized write the registry answers with `E404`. Without it npm says it is not
+      # logged in. registry.npmjs.org is npm's default, so nothing else changes.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
+          node-version: 24
       - run: pnpm install --frozen-lockfile
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: tarballs
           path: dist-tarballs
 
-      # Verifies NPM_TOKEN and every target version against the registry before the first write,
-      # then publishes @stablemates/workhorse ahead of the adapters that declare it as a peer. A
-      # failure partway through reports which packages reached the registry; npm publication cannot
-      # be rolled back, so that ledger is the only record of what recovery has to work around.
-      - name: Preflight the credential, then publish with provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Publication carries no secret. `npm publish` exchanges this job's OIDC identity for a
+      # short-lived registry credential, which npm mints only for the trusted publisher npmjs.com
+      # names for each package: this repository and this workflow file. Renaming either stops
+      # publication until a maintainer updates npmjs.com, the way renaming `release-python.yml`
+      # stops PyPI publication.
+      #
+      # The preflight checks this runner and every target version before the first write, then
+      # publishes @stablemates/workhorse ahead of the adapters that declare it as a peer. A failure
+      # partway through reports which packages reached the registry; npm publication cannot be
+      # rolled back, so that ledger is the only record of what recovery has to work around.
+      - name: Preflight the publisher, then publish with provenance
         run: pnpm npm:publish
 
   # The schema tool ships only on npm, so a Python or Go developer without a Node.js toolchain has
