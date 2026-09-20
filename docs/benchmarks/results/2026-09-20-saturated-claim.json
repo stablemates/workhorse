@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 18,
+  "schemaVersion": 21,
   "options": {
     "keys": 40,
     "readyPerKey": 4,
@@ -11,7 +11,7 @@
   "load": {
     "readyRows": 160,
     "activeRows": 40,
-    "loadMs": 12.662441000000001
+    "loadMs": 10.97618399999999
   },
   "saturated": {
     "admittedClaims": 0,
@@ -56,15 +56,15 @@
     },
     "elapsedMs": {
       "count": 60,
-      "min": 0.3599570000000085,
-      "max": 1.2685749999999985,
-      "mean": 0.4898872333333325,
-      "sampleStandardDeviation": 0.16341707736915786,
+      "min": 0.32202499999999645,
+      "max": 0.8670180000000016,
+      "mean": 0.3819384666666617,
+      "sampleStandardDeviation": 0.07697987258477691,
       "confidenceInterval95": {
         "confidenceLevel": 0.95,
-        "lower": 0.44769312539089,
-        "upper": 0.532081341275775,
-        "marginOfError": 0.04219410794244249
+        "lower": 0.36206234903239437,
+        "upper": 0.40181458430092903,
+        "marginOfError": 0.019876117634267325
       }
     }
   },
@@ -85,41 +85,41 @@
     },
     "walRecords": {
       "count": 60,
-      "min": 11,
+      "min": 12,
       "max": 13,
-      "mean": 12,
-      "sampleStandardDeviation": 0.3682298471593293,
+      "mean": 12.083333333333334,
+      "sampleStandardDeviation": 0.2787178067853023,
       "confidenceInterval95": {
         "confidenceLevel": 0.95,
-        "lower": 11.904923462291695,
-        "upper": 12.095076537708305,
-        "marginOfError": 0.09507653770830567
+        "lower": 12.011368705068605,
+        "upper": 12.155297961598063,
+        "marginOfError": 0.07196462826472882
       }
     },
     "walBytes": {
       "count": 60,
-      "min": 1055,
-      "max": 9406,
-      "mean": 1304.7,
-      "sampleStandardDeviation": 1064.9859599615652,
+      "min": 1107,
+      "max": 9348,
+      "mean": 1255.1,
+      "sampleStandardDeviation": 1063.4839404172606,
       "confidenceInterval95": {
         "confidenceLevel": 0.95,
-        "lower": 1029.7218075416095,
-        "upper": 1579.6781924583906,
-        "marginOfError": 274.9781924583907
+        "lower": 980.5096273203271,
+        "upper": 1529.6903726796727,
+        "marginOfError": 274.5903726796727
       }
     },
     "elapsedMs": {
       "count": 60,
-      "min": 0.5619859999999903,
-      "max": 1.695336999999995,
-      "mean": 0.6891904333333362,
-      "sampleStandardDeviation": 0.18435094338275987,
+      "min": 0.4979460000000131,
+      "max": 1.4218000000000188,
+      "mean": 0.5920096000000001,
+      "sampleStandardDeviation": 0.15340124121823573,
       "confidenceInterval95": {
         "confidenceLevel": 0.95,
-        "lower": 0.6415912244280658,
-        "upper": 0.7367896422386065,
-        "marginOfError": 0.047599208905270356
+        "lower": 0.5524015698316153,
+        "upper": 0.631617630168385,
+        "marginOfError": 0.03960803016838491
       }
     }
   }

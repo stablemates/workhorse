@@ -3,8 +3,8 @@
 A claim on a queue whose keys were all at capacity admitted nothing and still locked 100 ready rows,
 writing 101 WAL records and 5.5 KB of WAL. Locking only the candidate the claim admits removed both:
 the same claim now locks no row and writes one WAL record of 54 bytes. A claim that does admit a
-task dropped from 100 row locks to 1, and from 111 WAL records to 12. Claim latency did not change
-in either series.
+task dropped from 100 row locks to 1, and from 111 WAL records to 12. The refused claim also came
+back a little sooner, by about 0.05 ms; an admitting claim took the same time as before.
 
 The repetition is what made the waste matter. Every completion on such a queue notifies every
 worker, so the refused claim runs once per worker per completion while the keys stay saturated.
@@ -27,27 +27,29 @@ does not: it advances for the whole cluster. Node instrumentation inflates its o
 latency came from the plain call. PostgreSQL 18.6 ran the benchmark database of one checkout.
 
 Before and after ran back to back on the same database, twice, by installing the schema of each
-version in turn: version 17 for the window lock and version 18 for the candidate lock. The complete
-machine-readable result of version 18 is
+version in turn: version 20 for the window lock and version 21 for the candidate lock. The complete
+machine-readable result of version 21 is
 [`2026-09-20-saturated-claim.json`](results/2026-09-20-saturated-claim.json).
 
 ## Results
 
-| Series                 | Measure      | Window lock (v17) | Candidate lock (v18) |
+| Series                 | Measure      | Window lock (v20) | Candidate lock (v21) |
 | ---------------------- | ------------ | ----------------: | -------------------: |
 | Saturated, admits none | Row locks    |               100 |                    0 |
 |                        | WAL records  |               101 |                    1 |
-|                        | WAL bytes    |             5,455 |                   54 |
-|                        | Latency mean |           0.54 ms |              0.52 ms |
+|                        | WAL bytes    |             5,454 |                   54 |
+|                        | Latency mean |           0.45 ms |              0.39 ms |
 | Admits a task          | Row locks    |               100 |                    1 |
 |                        | WAL records  |               111 |                   12 |
-|                        | WAL bytes    |             6,401 |                1,055 |
-|                        | Latency mean |           0.67 ms |              0.71 ms |
+|                        | WAL bytes    |             6,453 |                1,107 |
+|                        | Latency mean |           0.58 ms |              0.58 ms |
 
 Row locks and WAL records held their values on every sample of every run. WAL bytes report the
 minimum, because a full-page image after a checkpoint adds up to 8 KB to whichever sample touches a
-page first. Latency reports the mean of two runs per version; the two versions overlapped on every
-run, so the measurement separates neither.
+page first. Latency reports the mean of two runs per version. The refused claim was faster on both
+runs of the candidate lock, though the 95 percent intervals of the two versions still touch, so
+treat the direction as established and the size as approximate. The admitting series did not
+separate the versions at all.
 
 The twelve WAL records of an admitting claim are the work of the claim itself: the lock on the
 candidate, the runtime update, the claim event, and their index entries. The one record of a refused
