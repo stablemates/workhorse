@@ -2974,7 +2974,10 @@ states the policy an embedder copies.
 
 `Dockerfile.dashboard` builds the core, dashboard contract, dashboard server, and shared dashboard
 application tarballs, then installs those release-shaped artifacts with production dependencies
-into a Node 24 Alpine image.
+into a Node 24 Alpine image pinned by digest. The dependencies come from `pnpm deploy --prod`, one
+deploy per packed package that declares any, so every version is the one `pnpm-lock.yaml` records
+rather than whatever a range resolved to on the day of the build. The four packages themselves are
+unpacked from the tarballs over the workspace links those deploys leave behind.
 The image runs as the `node` user, exposes port 3000, binds `0.0.0.0`, and starts the read-only
 dashboard command. Its startup contract requires `DATABASE_URL` or `WORKHORSE_DATABASE_URL`, both
 single-admin credential values, and an HTTPS `WORKHORSE_DASHBOARD_PUBLIC_ORIGIN`. The packed test

@@ -1,7 +1,20 @@
 .git
+
+# Every Dockerfile copies the whole context into its build stage, so anything a
+# checkout holds locally reaches an image layer unless it is named here. A
+# worktree's `.env` names its own databases, an agent directory carries session
+# state, and a log directory carries whatever a local run recorded.
 .env
 **/.env
+.env.*
+**/.env.*
+!.env.example
+!**/.env.example
 **/secrets.env
+.claude
+**/.claude
+logs
+**/logs
 node_modules
 **/node_modules
 .pnpm-home

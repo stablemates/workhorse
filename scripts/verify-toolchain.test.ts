@@ -247,6 +247,39 @@ describe("the tools a repository command starts", () => {
   });
 });
 
+describe("the container pnpm pin", () => {
+  // Each Dockerfile writes the pnpm version out rather than reading `packageManager`, and corepack
+  // prepares whatever version it is told. Nothing else holds the copies together: a pnpm bump that
+  // misses a Dockerfile builds an image with a different resolver than every other command here
+  // uses. support-matrix.test.ts holds the same files to the Node major.
+  it("names the version mise.toml and packageManager pin in every Dockerfile", async () => {
+    const [pins, manifest, ...dockerfiles] = await Promise.all([
+      readPins(repositoryRoot),
+      readFile(join(repositoryRoot, "package.json"), "utf8"),
+      ...["Dockerfile", "Dockerfile.site", "Dockerfile.dashboard"].map(
+        async (file) => [file, await readFile(join(repositoryRoot, file), "utf8")] as const,
+      ),
+    ]);
+    const pinned = pins.get("pnpm");
+
+    expect(pinned).toBeDefined();
+    expect((JSON.parse(manifest) as { packageManager: string }).packageManager).toBe(
+      `pnpm@${pinned}`,
+    );
+    // Named by file, so a Dockerfile that prepares pnpm twice or not at all says which one it was.
+    const prepared = dockerfiles.map(
+      ([file, source]) =>
+        `${file}: ${(source.match(/corepack prepare pnpm@\S+/g) ?? []).join(", ")}`,
+    );
+
+    expect(prepared).toEqual([
+      `Dockerfile: corepack prepare pnpm@${pinned}`,
+      `Dockerfile.site: corepack prepare pnpm@${pinned}`,
+      `Dockerfile.dashboard: corepack prepare pnpm@${pinned}`,
+    ]);
+  });
+});
+
 describe("the CI uv pin", () => {
   it("names the version mise.toml pins", async () => {
     const [pins, workflow] = await Promise.all([

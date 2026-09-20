@@ -201,6 +201,16 @@ interface Vector {
   json?: (body: unknown) => boolean;
 }
 
+// The baseline security headers every response carries, whatever its status or representation.
+// nginx replaces the inherited set in any location that calls add_header at all, so a location that
+// adds Vary or Cache-Control and forgets to repeat these sends none of them. That is the failure
+// this table catches: it is checked against every vector rather than named by one.
+const baselineHeaders: Record<string, string> = {
+  "x-content-type-options": "nosniff",
+  "content-security-policy": "frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
+  "referrer-policy": "strict-origin-when-cross-origin",
+};
+
 const markdownOnly = "text/markdown";
 const markdownFirst = "text/markdown, text/html, */*";
 const openCode =
@@ -427,6 +437,10 @@ try {
     }
     if (vector.cacheControl !== undefined && cacheControl !== vector.cacheControl) {
       problems.push(`Cache-Control ${String(cacheControl)}, expected ${vector.cacheControl}`);
+    }
+    for (const [header, value] of Object.entries(baselineHeaders)) {
+      const sent = response.headers[header];
+      if (sent !== value) problems.push(`${header} ${String(sent)}, expected ${value}`);
     }
     const text = response.body.toString("utf8");
     if (vector.token !== undefined && !text.includes(vector.token)) {
