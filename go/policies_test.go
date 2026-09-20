@@ -236,7 +236,7 @@ func TestPolicySynchronizationRefusesIncompatibleSchemaBeforeMutation(t *testing
 	// The installed schema declares that it serves a later protocol only, so it has crossed a major
 	// boundary and no longer answers this client. A newer schema version alone is not a refusal.
 	executor := &queueExecutor{responses: [][]workhorse.Row{{
-		{"kind": "schema", "version": int64(5)},
+		{"kind": "schema", "version": int64(testSchemaVersion)},
 		{"kind": "protocol", "version": int64(workhorse.ProtocolVersion + 1)},
 	}}}
 	queue := workhorse.NewQueue(executor, "default")
