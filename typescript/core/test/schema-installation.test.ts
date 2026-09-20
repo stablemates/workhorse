@@ -476,6 +476,7 @@ describe("schema installation", () => {
       { version: 19, description: "never skip a busy schedule occurrence" },
       { version: 20, description: "enqueue skips the dependency block" },
       { version: 21, description: "a claim locks only the row it takes" },
+      { version: 22, description: "history staging through pg_temp" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

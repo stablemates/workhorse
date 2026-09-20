@@ -183,6 +183,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "a claim locks only the row it takes",
     kind: "additive",
   },
+  {
+    fromVersion: 21,
+    toVersion: 22,
+    file: "0022-history-staging-through-pg-temp.sql",
+    description: "history staging through pg_temp",
+    kind: "additive",
+  },
 ];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {
