@@ -22,10 +22,14 @@ concurrency:
 
 env:
   PNPM_HOME: ${{ github.workspace }}/.pnpm-home
-  # Every runner here has 8 GB, but V8 sizes each heap at 4288 MB whatever the machine has, so two
-  # Node processes can promise more memory than the runner owns. A runner that runs out of memory
-  # dies without uploading a log, which is how the packed lane failed unseen for eleven nights.
-  # The largest single process measured across these lanes is the site build at 1.6 GB. See SM-775.
+  # V8 sizes each heap at 4288 MB whatever the machine has, so two Node processes can promise more
+  # memory than the runner owns. A runner that runs out of memory dies without uploading a log,
+  # which is how the packed lane failed unseen for eleven nights. The largest single process
+  # measured across these lanes is the site build at 1.6 GB. See SM-775.
+  #
+  # The cap has to hold for the widest lane, not the average one: every runner here has 8 GB except
+  # the TypeScript lane's four-core runner, which has 16 GB and spends it on three test workers.
+  # Three heaps at this cap fit that runner, and two fit every other one. See SM-835.
   NODE_OPTIONS: --max-old-space-size=2048
   # `uv run` and `uv sync` resolve and rewrite uv.lock when pyproject.toml has moved past it, so a
   # pull request could change a Python dependency and still pass while the committed lockfile named
@@ -122,7 +126,11 @@ jobs:
     name: TypeScript (node ${{ matrix.node }}, postgres ${{ matrix.postgres }})
     needs: plan
     if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
-    runs-on: depot-ubuntu-24.04
+    # Four cores rather than the two every other job takes. This lane carries the dashboard server,
+    # the demo application, the CLI, the adapter suites and the pooling conformance lane, so it runs
+    # five times the tests of the Go or Python lane. It also shares its cores with the PostgreSQL
+    # service container those tests drive. See SM-835.
+    runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 30
     strategy:
       fail-fast: false
