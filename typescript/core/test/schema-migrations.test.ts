@@ -55,6 +55,21 @@ const concurrentDatabase = createDatabaseTestHarness(new URL("?concurrent", impo
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const executeFile = promisify(execFile);
 
+/**
+ * Projects a JSON value onto its shape: every key with the type of its value, and an array onto
+ * the shape of its first element. Generated identifiers and clocks then fall out of a comparison.
+ */
+function jsonShape(value: unknown): unknown {
+  if (Array.isArray(value)) return value.length === 0 ? [] : [jsonShape(value[0])];
+  if (value === null || typeof value !== "object") return value === null ? null : typeof value;
+  return Object.fromEntries(
+    Object.entries(value)
+      // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => [key, jsonShape(entry)]),
+  );
+}
+
 async function dumpNormalizedSchema(databaseUrl: string): Promise<string> {
   const dumpArguments = [
     "--schema-only",
@@ -542,6 +557,59 @@ describe("schema migrations", () => {
         ),
       );
     }
+  });
+
+  // A dump proves the migrated functions are defined identically. It says nothing about what they
+  // answer on rows a migration rewrote, and an operator read is where a rewritten column shows up
+  // as a missing key or a changed type. So both schemas are seeded the same way and the shape of
+  // every read is compared, rather than its values, which carry generated identifiers and clocks.
+  it("answers the operator reads with the same shape on a migrated schema as on a clean one", async () => {
+    const reads = [
+      "dashboard_tasks_v1",
+      "dashboard_tasks_cursor_v1",
+      "dashboard_activity_v1",
+      "dashboard_events_v1",
+      "dashboard_task_counts_v1",
+      "dashboard_task_facets_v1",
+      "dashboard_workers_v1",
+      "dashboard_system_v1",
+    ];
+
+    async function readShapes(): Promise<Record<string, unknown>> {
+      const shapes: Record<string, unknown> = {};
+      for (const read of reads) {
+        const answer = await releaseDatabase.pool.query<{ result: unknown }>(
+          `SELECT workhorse.${read}('{}'::jsonb) AS result`,
+        );
+        shapes[read] = jsonShape(answer.rows[0]!.result);
+      }
+      return shapes;
+    }
+
+    // The newest artifact seeds everything a clean installation seeds, so the two databases differ
+    // only in how they reached the current schema.
+    const newest = (await readdir(path.join(repository, "sql", "releases")))
+      .filter((file) => file.endsWith(".sql"))
+      // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+      .sort()
+      .at(-1)!;
+    await releaseDatabase.pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
+    await releaseDatabase.pool.query(
+      await readFile(path.join(repository, "sql", "releases", newest), "utf8"),
+    );
+    await seedReleasedSchema(releaseDatabase.pool);
+    await migrateSchema(releaseDatabase.pool);
+    const migrated = await readShapes();
+
+    await releaseDatabase.pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
+    await releaseDatabase.pool.query(
+      await readFile(path.join(repository, "sql", "schema", "current.sql"), "utf8"),
+    );
+    await seedReleasedSchema(releaseDatabase.pool);
+
+    expect(migrated).toEqual(await readShapes());
+    // A read that answered nothing on both schemas would pass the comparison holding nothing.
+    expect(Object.values(migrated).filter((shape) => shape === null)).toEqual([]);
   });
 
   // The fleet read is the evidence `workhorse schema contract` gates on, and the columns behind it
