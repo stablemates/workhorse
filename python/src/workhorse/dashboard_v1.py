@@ -157,6 +157,10 @@ class DashboardEnqueueTestResult(TypedDict, total=False):
 
 
 class DashboardEventDetail(TypedDict, total=False):
+    startedAt: Required[str | None]
+    claimedAt: Required[str | None]
+    finishedAt: Required[str | None]
+    error: Required[object]
     id: Required[str]
     kind: Required[DashboardEventKind]
     recordId: Required[str]
@@ -171,10 +175,6 @@ class DashboardEventDetail(TypedDict, total=False):
     fenceToken: Required[str | None]
     durationMs: Required[float | None]
     errorMessage: Required[str | None]
-    startedAt: Required[str | None]
-    claimedAt: Required[str | None]
-    finishedAt: Required[str | None]
-    error: Required[object]
 
 
 type DashboardEventKind = Literal["attempt", "event"]
@@ -899,16 +899,16 @@ type DashboardSystemWindow = Literal["15m", "1h", "24h"]
 
 
 class DashboardTaskCounts(TypedDict, total=False):
-    all: Required[float]
-    blocked: Required[float]
     canceled: Required[float]
-    completed: Required[float]
-    discarded: Required[float]
-    queued: Required[float]
-    retried: Required[float]
-    running: Required[float]
+    blocked: Required[float]
     scheduled: Required[float]
+    completed: Required[float]
+    all: Required[float]
     waiting: Required[float]
+    running: Required[float]
+    retried: Required[float]
+    queued: Required[float]
+    discarded: Required[float]
 
 
 class DashboardTaskCursor(TypedDict, total=False):
@@ -1219,23 +1219,23 @@ class DashboardTaskValue(TypedDict, total=False):
 
 
 class DashboardTasksCursorPage(TypedDict, total=False):
-    capturedAt: Required[str]
-    canCompleteHumanWait: Required[bool]
-    filter: Required[Literal["all", "blocked", "canceled", "completed", "discarded", "queued", "retried", "running", "scheduled", "waiting"]]
-    queue: Required[str | None]
-    worker: Required[str | None]
-    taskType: Required[str | None]
-    priority: Required[float | None]
-    sort: Required[Literal["priority", "updated"]]
-    tags: Required[list[str]]
-    search: Required[str | None]
-    page: Required[float]
-    pageSize: Required[float]
-    count: Required[Literal["exact", "none"]]
-    tasks: Required[list[DashboardTaskRow]]
     total: Required[float | None]
     nextCursor: Required[DashboardTaskCursor | None]
     previousCursor: Required[DashboardTaskCursor | None]
+    queue: Required[str | None]
+    priority: Required[float | None]
+    tags: Required[list[str]]
+    sort: Required[Literal["priority", "updated"]]
+    filter: Required[Literal["all", "blocked", "canceled", "completed", "discarded", "queued", "retried", "running", "scheduled", "waiting"]]
+    search: Required[str | None]
+    taskType: Required[str | None]
+    capturedAt: Required[str]
+    count: Required[Literal["exact", "none"]]
+    worker: Required[str | None]
+    canCompleteHumanWait: Required[bool]
+    page: Required[float]
+    pageSize: Required[float]
+    tasks: Required[list[DashboardTaskRow]]
 
 
 class DashboardTasksPage(TypedDict, total=False):

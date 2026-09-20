@@ -48,6 +48,32 @@ updates:
         dependency-type: production
         update-types: [minor, patch]
         exclude-patterns: ["@mantine/*"]
+    # Two majors cannot be taken yet, and each one arrives every Monday and fails the same way.
+    #
+    # TypeScript 7 is the native port, and its package carries no JavaScript compiler API. Eight
+    # tracked files import that API, including the generators for the dashboard/v1 response schemas
+    # and the SQL catalogues, so neither governed artifact can be produced at all. This is a fact
+    # about the package rather than a preference, and SM-841 revisits it when the API ships.
+    #
+    # Prisma 7 rejects `url` in a datasource block, which is what typescript/prisma generates from.
+    # The adapter source needs only `$queryRawUnsafe` and would survive the move; the published peer
+    # claim `@prisma/client >=6 <7` is what does not. SM-840 holds that decision, and this entry
+    # only stops the weekly reminder — it does not make the decision. The CLI and the client are
+    # named separately because they arrive as separate pull requests, and each fails against the
+    # other's major: #164 moved the CLI alone, #153 moved the client alone.
+    #
+    # Only the major is ignored, so a 6.x Prisma or a 5.x TypeScript still opens. `ignore` never
+    # applies to security updates.
+    ignore:
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
+      - dependency-name: prisma
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "@prisma/client"
+        update-types:
+          - version-update:semver-major
 
   # `uv`, not `pip`: the Python half locks with uv.lock, and the pip ecosystem would edit
   # pyproject.toml without updating that lockfile. CI runs under UV_LOCKED, so such a pull request
