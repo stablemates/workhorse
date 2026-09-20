@@ -74,11 +74,17 @@ describe("Workhorse demo", () => {
       );
       expect(paused).toMatchObject({ paused: true, activeSlots: 3, concurrency: 3 });
 
+      // Each of these six handlers sleeps for a control window, and the fleet has nine slots, so
+      // the wait blocks on one window of work whose duration the test chose. A poll count cannot
+      // promise to outlast that, however large: it buys a duration only at an assumed read
+      // latency, and this file's latency moves with what else the lane is running. The wall-clock
+      // floor is what bounds the wait; the count still ends it early on an idle machine.
       for (const { taskId } of enqueued) {
         const detail = await waitFor(
           () => client.dashboard.taskDetail({ id: taskId }),
           (value) => value.identity.state === "succeeded",
           2_000,
+          TEST_CONTROL_WINDOW_TASK_MS * 3,
         );
         expect(detail.identity.state).toBe("succeeded");
       }
