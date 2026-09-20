@@ -225,6 +225,22 @@ after sixty seconds is closed. The three admissions that create tasks — `enque
 `redriveTask`, and `redriveDeadLetters` — additionally refuse once fifty tasks are ready or running,
 so a flood of distinct clients cannot pile work on the demo fleet faster than it drains.
 
+Those guards classify a request by the procedure the dashboard host would dispatch it to, not by
+the literal path, so a trailing slash or a doubled slash cannot carry a mutation past them.
+
+An operator mutation on the demo is durable, and every later visitor would otherwise inherit it. A
+reconciliation pass in the server process restores the defaults at startup and every fifteen
+minutes after that: it resumes
+paused workers, paused queues, and paused schedules, and it reverts retention and maintenance
+settings an operator overrode back to the values the application ships. Provenance decides what to
+revert, so the pass never disturbs a value the application set. It writes nothing when nothing
+drifted. A visitor therefore sees a control take effect and sees the demo repair itself within that
+interval. The database role needs the same write access the writable demo already requires.
+
+The server sends a `Content-Security-Policy` on every response. The production policy grants no
+`ws:` or `wss:` source, because only Vite's hot-reload client opens a WebSocket and only the
+development entry point serves it. A proxy must not add either source back.
+
 Because the demo is unauthenticated by design, the edge in front of it must carry controls of its
 own. The concrete rules live in the private operations repository; this list is the contract they
 must satisfy:
