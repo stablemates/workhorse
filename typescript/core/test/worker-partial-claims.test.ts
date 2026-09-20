@@ -54,6 +54,7 @@ function partiallyFailingQueue(mode: "claimMany" | "claim") {
     },
     fail: unsupportedWorkerQueueOperation,
     expireOwned: unsupportedWorkerQueueOperation,
+    releaseOwned: unsupportedWorkerQueueOperation,
     tick: async () => [],
     runMaintenance: async () => [],
   } as unknown as WorkerQueueApi;

@@ -12,7 +12,12 @@ import {
   type TaskExecutionOutcome,
 } from "./telemetry.js";
 import { setUnrefTimeoutAt } from "./timers.js";
-import type { ClaimedTask, ExpireOwnedStatus, HeartbeatStatus } from "./types.js";
+import type {
+  ClaimedTask,
+  ExpireOwnedStatus,
+  HeartbeatStatus,
+  ReleaseOwnedStatus,
+} from "./types.js";
 
 const DURABLE_WAIT_SUSPENSION = Symbol("workhorse.durableWaitSuspension");
 const CHILD_TASK_SUSPENSION = Symbol("workhorse.childTaskSuspension");
@@ -24,6 +29,7 @@ type AttemptOutcome =
   | "deadline_exceeded"
   | "attempt_timeout"
   | "lease_expired"
+  | "released"
   | "suspended_for_wait"
   | "suspended_for_child";
 
@@ -211,6 +217,26 @@ export class TaskAttempt {
     } else if (state === "timeout_exceeded") {
       if (this.arbiter.submit("attempt_timeout")) this.recordExecution("timeout");
     } else if (state === "stale") {
+      if (this.arbiter.submit("lease_expired")) this.recordExecution("lease_lost");
+    }
+  }
+
+  /**
+   * Records the verdict of a fenced release: a claim handed back with its attempt intact.
+   *
+   * A refused release names the boundary PostgreSQL settled instead, so this reads the same
+   * vocabulary {@link recordFailure} does and the attempt still ends with one truthful outcome.
+   */
+  recordRelease(status: Exclude<ReleaseOwnedStatus, "cancel_requested">): void {
+    if (status === "released") {
+      if (this.arbiter.submit("released")) this.recordExecution("released");
+    } else if (status === "deadline_exceeded") {
+      if (this.arbiter.submit("deadline_exceeded")) this.recordExecution("deadline_exceeded");
+    } else if (status === "timeout_exceeded") {
+      if (this.arbiter.submit("attempt_timeout")) this.recordExecution("timeout");
+    } else {
+      // A boundary the database already passed cannot come back, so it never answers not_due to a
+      // release. Both remaining answers mean this worker no longer owns what it is handing back.
       if (this.arbiter.submit("lease_expired")) this.recordExecution("lease_lost");
     }
   }

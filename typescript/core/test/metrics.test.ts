@@ -53,6 +53,7 @@ const workerQueueDefaults: WorkerQueueApi = {
   recordBatchFailure: async () => undefined,
   heartbeatStatus: unsupportedWorkerQueueOperation,
   expireOwned: unsupportedWorkerQueueOperation,
+  releaseOwned: unsupportedWorkerQueueOperation,
   acknowledgeCancel: unsupportedWorkerQueueOperation,
   listCheckpoints: unsupportedWorkerQueueOperation,
   saveCheckpoint: unsupportedWorkerQueueOperation,
@@ -1055,7 +1056,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     ]);
   });
 
-  it("records a missing handler as the failure PostgreSQL selected", async () => {
+  it("records a missing handler as the release PostgreSQL accepted", async () => {
     const { Worker } = await import("../src/worker.js");
     const task: ClaimedTask = {
       id: "task-missing-handler",
@@ -1078,7 +1079,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     };
     const queue = workerQueue({
       claim: async () => task,
-      fail: async () => "failed",
+      releaseOwned: async () => "released",
     });
     const worker = new Worker(queue, {
       queue: "default",
@@ -1091,7 +1092,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     expect(metric("workhorse.handler.executions")?.dataPoints).toEqual([
       expect.objectContaining({
         attributes: {
-          "workhorse.handler.outcome": "failed",
+          "workhorse.handler.outcome": "released",
           "workhorse.task.type": "unknown.task",
           "workhorse.queue.name": "default",
         },

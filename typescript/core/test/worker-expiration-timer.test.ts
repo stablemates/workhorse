@@ -59,6 +59,7 @@ describe("worker expiration timer", () => {
         },
         fail: unsupportedWorkerQueueOperation,
         expireOwned: unsupportedWorkerQueueOperation,
+        releaseOwned: unsupportedWorkerQueueOperation,
         tick: async () => [],
         runMaintenance: async () => [],
       } as unknown as WorkerQueueApi;

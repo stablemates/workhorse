@@ -1609,3 +1609,88 @@ def test_durable_sleeps_do_not_retain_handler_frames(database_url: str) -> None:
     gc.collect()
     # A suspension that outlives its task keeps the handler frame, and every local in it, alive.
     assert sum(reference() is not None for reference in handler_locals) == 0
+
+
+# A rolling deployment runs old and new workers side by side, and a claim carries no task-type
+# filter. The worker without the handler must hand the task back untouched: failing it would spend
+# the attempt, and a task allowed one attempt would be dead-lettered without ever running.
+def test_worker_releases_a_task_of_an_unregistered_type_with_its_attempt_intact(
+    database_url: str,
+) -> None:
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as reader,
+    ):
+        task_id = Queue(enqueue_connection).enqueue(
+            "release.only_new_workers", {"index": 1}, EnqueueOptions(max_attempts=1)
+        )
+        enqueue_connection.commit()
+
+        old_release = Worker(worker_pool, worker_id="python-release-old").handle(
+            "release.some_other_type", lambda _payload, _context: None
+        )
+        assert old_release.run_once() is True
+
+        runtime = reader.execute(
+            "SELECT state, current_attempt, worker_id FROM workhorse.task_runtime"
+            " WHERE task_id = %s",
+            (task_id,),
+        ).fetchone()
+        assert runtime == ("ready", 1, None)
+        history = reader.execute(
+            "SELECT"
+            " (SELECT count(*) FROM workhorse.attempt_history WHERE task_id = %s),"
+            " (SELECT count(*) FROM workhorse.task_event"
+            "   WHERE task_id = %s AND event_type = 'released')",
+            (task_id, task_id),
+        ).fetchone()
+        assert history == (0, 1)
+
+        handled: list[object] = []
+
+        def run_it(payload: object, _context: HandlerContext) -> dict[str, bool]:
+            handled.append(payload)
+            return {"ran": True}
+
+        new_release = Worker(worker_pool, worker_id="python-release-new").handle(
+            "release.only_new_workers", run_it
+        )
+        assert new_release.run_once() is True
+
+        assert handled == [{"index": 1}]
+        outcome = reader.execute(
+            "SELECT state, current_attempt, result FROM workhorse.task_outcome WHERE task_id = %s",
+            (task_id,),
+        ).fetchone()
+        assert outcome == ("succeeded", 1, {"ran": True})
+
+
+# The release is a fenced owned transition: a worker whose generation PostgreSQL no longer
+# recognizes cannot return a task another owner may already be running.
+def test_release_owned_refuses_a_stale_fence(database_url: str) -> None:
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as reader,
+    ):
+        task_id = Queue(enqueue_connection).enqueue("release.fence", {})
+        enqueue_connection.commit()
+
+        claimed = reader.execute(
+            "SELECT fence_token FROM workhorse.claim_v1(%s::text, %s::text, 30000)",
+            ("default", "python-release-fence-owner"),
+        ).fetchone()
+        assert claimed is not None
+        fence = claimed[0]
+
+        def release(worker_id: str, token: int) -> object:
+            row = reader.execute(
+                "SELECT workhorse.release_owned_v1(%s::uuid, %s::text, %s::bigint)",
+                (task_id, worker_id, token),
+            ).fetchone()
+            assert row is not None
+            return row[0]
+
+        assert release("python-release-fence-owner", fence + 1) == "stale"
+        assert release("python-release-fence-other", fence) == "stale"
+        assert release("python-release-fence-owner", fence) == "released"
+        assert release("python-release-fence-owner", fence) == "stale"

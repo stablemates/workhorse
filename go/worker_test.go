@@ -2445,3 +2445,149 @@ func TestWorkerClaimPathLeavesPromotionToTheMaintenanceTick(t *testing.T) {
 		t.Fatalf("expected one claim for the first queue, recorded %d", claims)
 	}
 }
+
+// A rolling deployment runs old and new workers side by side, and a claim carries no task-type
+// filter. The worker without the handler must hand the task back untouched: failing it would spend
+// the attempt, and a task allowed one attempt would be dead-lettered without ever running. The
+// release is fenced, so a worker that no longer owns the generation is refused.
+func TestWorkerReleasesATaskOfAnUnregisteredTypeWithItsAttemptIntact(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-release")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-worker-release")
+	taskID, err := queue.Enqueue(ctx, "delivery.only-new-workers", nil, workhorse.EnqueueOptions{
+		MaxAttempts: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	oldRelease, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: "go-worker-release", WorkerID: "go-worker-release-old", LeaseDuration: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldRelease.Handle("delivery.some-other-type", func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+		t.Error("the old release must not run a task type it does not handle")
+		return nil, nil
+	})
+	processed, err := oldRelease.RunOnce(ctx)
+	if err != nil || !processed {
+		t.Fatalf("release pass: processed=%t err=%v", processed, err)
+	}
+
+	var state string
+	var attempt int
+	var workerID *string
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT state, current_attempt, worker_id FROM workhorse.task_runtime WHERE task_id = $1::uuid",
+		taskID,
+	).Scan(&state, &attempt, &workerID); err != nil {
+		t.Fatal(err)
+	}
+	if state != "ready" || attempt != 1 || workerID != nil {
+		t.Fatalf("the release did not return the claim intact: state=%s attempt=%d worker=%v", state, attempt, workerID)
+	}
+	var closedAttempts, releases int
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT
+		   (SELECT count(*)::integer FROM workhorse.attempt_history WHERE task_id = $1::uuid),
+		   (SELECT count(*)::integer FROM workhorse.task_event
+		     WHERE task_id = $1::uuid AND event_type = 'released')`,
+		taskID,
+	).Scan(&closedAttempts, &releases); err != nil {
+		t.Fatal(err)
+	}
+	if closedAttempts != 0 || releases != 1 {
+		t.Fatalf("unexpected history: attempts=%d releases=%d", closedAttempts, releases)
+	}
+
+	newRelease, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: "go-worker-release", WorkerID: "go-worker-release-new", LeaseDuration: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocations := 0
+	newRelease.Handle("delivery.only-new-workers", func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+		invocations++
+		return map[string]any{"ran": true}, nil
+	})
+	processed, err = newRelease.RunOnce(ctx)
+	if err != nil || !processed {
+		t.Fatalf("handler pass: processed=%t err=%v", processed, err)
+	}
+	if invocations != 1 {
+		t.Fatalf("expected one handler invocation, received %d", invocations)
+	}
+	var outcome string
+	var finalAttempt int
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT state, current_attempt FROM workhorse.task_outcome WHERE task_id = $1::uuid",
+		taskID,
+	).Scan(&outcome, &finalAttempt); err != nil {
+		t.Fatal(err)
+	}
+	if outcome != "succeeded" || finalAttempt != 1 {
+		t.Fatalf("unexpected final outcome: state=%s attempt=%d", outcome, finalAttempt)
+	}
+}
+
+// The release is a fenced owned transition: a worker whose generation PostgreSQL no longer
+// recognizes cannot return a task another owner may already be running.
+func TestReleaseOwnedRefusesAStaleFence(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "release-fence")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-release-fence")
+	taskID, err := queue.Enqueue(ctx, "release.fence", nil, workhorse.EnqueueOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fence int64
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT fence_token FROM workhorse.claim_v1($1::text, $2::text, 30000)",
+		"go-release-fence", "release-fence-owner",
+	).Scan(&fence); err != nil {
+		t.Fatal(err)
+	}
+
+	release := func(worker string, token int64) string {
+		var status string
+		if err := pool.QueryRow(
+			ctx,
+			"SELECT workhorse.release_owned_v1($1::uuid, $2::text, $3::bigint) AS status",
+			taskID, worker, token,
+		).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		return status
+	}
+	if status := release("release-fence-owner", fence+1); status != "stale" {
+		t.Fatalf("a stale fence was accepted: %s", status)
+	}
+	if status := release("another-worker", fence); status != "stale" {
+		t.Fatalf("a foreign worker was accepted: %s", status)
+	}
+	if status := release("release-fence-owner", fence); status != "released" {
+		t.Fatalf("the owner's release was refused: %s", status)
+	}
+	if status := release("release-fence-owner", fence); status != "stale" {
+		t.Fatalf("a released lease was accepted twice: %s", status)
+	}
+}

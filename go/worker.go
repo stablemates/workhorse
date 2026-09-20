@@ -527,8 +527,22 @@ func (worker *Worker) Run(ctx context.Context) error {
 				consecutiveEmptyClaims++
 				break
 			}
-			claimedInPass = true
-			consecutiveEmptyClaims = 0
+			// A pass that claimed only task types this worker cannot run made no progress:
+			// every one of them goes straight back to its queue. Counting it as empty backs
+			// off instead of spinning on a task no worker in this release can run.
+			runnable := false
+			for _, task := range tasks {
+				if worker.handlers[task.Type] != nil {
+					runnable = true
+					break
+				}
+			}
+			if runnable {
+				claimedInPass = true
+				consecutiveEmptyClaims = 0
+			} else {
+				consecutiveEmptyClaims++
+			}
 			for _, task := range tasks {
 				worker.handlerSlots <- struct{}{}
 				active++
@@ -537,8 +551,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 					handler := worker.handlers[claimed.Type]
 					var err error
 					if handler == nil {
-						err = fmt.Errorf(missingWorkerHandlerFormat, claimed.Type)
-						err = worker.fail(executionContext, executor, claimed, err)
+						err = worker.release(executionContext, executor, claimed)
 					} else {
 						err = worker.execute(executionContext, executor, claimed, handler)
 					}
@@ -875,8 +888,7 @@ func (worker *Worker) runOnce(ctx context.Context, executor Executor) (bool, err
 	handler := worker.handlers[task.Type]
 	var err error
 	if handler == nil {
-		err = fmt.Errorf(missingWorkerHandlerFormat, task.Type)
-		err = worker.fail(ctx, executor, *task, err)
+		err = worker.release(ctx, executor, *task)
 	} else {
 		err = worker.execute(ctx, executor, *task, handler)
 	}
@@ -1650,6 +1662,77 @@ func (worker *Worker) validateResultContract(
 	}
 	if err := validator.Validate(result); err != nil {
 		return &TaskContractValidationError{TaskType: task.Type, Version: version, Kind: contractResultKind}
+	}
+	return nil
+}
+
+// release gives back a claim whose task type this worker has no handler for.
+//
+// A claim carries no task-type filter, so a worker can hold a task it cannot run. The attempt
+// belongs to whichever worker reaches the handler, so PostgreSQL returns the task to its queue with
+// current_attempt untouched instead of charging this worker's refusal to it. During a rolling
+// deployment that is what keeps the old release from retrying away the new release's task types.
+func (worker *Worker) release(ctx context.Context, executor Executor, task ClaimedTask) error {
+	startedAt := time.Now()
+	logWorkerEvent(
+		ctx,
+		worker.logger,
+		slog.LevelWarn,
+		handlerMissingEvent,
+		handlerMissingLogMessage,
+		func() []any { return taskLogAttributes(task, worker.workerID) },
+	)
+	lease := worker.fencedLease(task)
+	rows, err := executor.Query(
+		ctx,
+		protocolStatementRegistry[releaseOwnedStatementName],
+		lease.parameters()...,
+	)
+	if err != nil {
+		return err
+	}
+	if len(rows) != 1 {
+		return errors.New(invalidReleaseResultMessage)
+	}
+	status, ok := rows[0][rowStatusField].(string)
+	if !ok {
+		return errors.New(invalidReleaseResultMessage)
+	}
+	outcome := handlerOutcomeLeaseLost
+	switch status {
+	case workerReleaseReleased:
+		outcome = handlerOutcomeReleased
+	case workerFailureCancelRequested:
+		outcome = handlerOutcomeCanceled
+	case workerFailureDeadline:
+		outcome = handlerOutcomeDeadlineExceeded
+	case workerFailureTimeout:
+		outcome = handlerOutcomeTimeout
+	case workerFailureStale, workerReleaseNotDue:
+	default:
+		return fmt.Errorf(rejectedReleaseStatusFormat, status)
+	}
+	worker.metrics.recordHandler(ctx, task, outcome, time.Since(startedAt))
+	logWorkerEvent(
+		ctx,
+		worker.logger,
+		slog.LevelInfo,
+		taskReleaseProcessedEvent,
+		taskReleaseProcessedLogMessage,
+		func() []any {
+			return append(taskLogAttributes(task, worker.workerID), slog.String(releaseStatusAttribute, status))
+		},
+	)
+	switch status {
+	case workerFailureCancelRequested:
+		return worker.acknowledgeCancellation(ctx, executor, task)
+	case workerFailureStale:
+		return worker.reconcileRejectedSettlement(
+			ctx,
+			executor,
+			task,
+			&StaleLeaseError{TaskID: task.ID},
+		)
 	}
 	return nil
 }

@@ -19,6 +19,7 @@ import type {
   ExpireOwnedStatus,
   HeartbeatStatus,
   Json,
+  ReleaseOwnedStatus,
   RetryPolicy,
   TraceContext,
 } from "../types.js";
@@ -378,6 +379,28 @@ export class ClaimLeaseFenceModule extends QueueModule {
       "workhorse.worker.id": workerId,
     });
     return expiration.status;
+  }
+
+  /**
+   * Give an owned task back to its queue without consuming its attempt.
+   *
+   * A claim carries no task-type filter, so a worker can hold a task it cannot run. Failing that
+   * claim would charge the attempt to a worker that never reached the handler, which during a
+   * rolling deployment dead-letters every task type the new release introduced.
+   */
+  async releaseOwned(task: ClaimedTask, workerId: string): Promise<ReleaseOwnedStatus> {
+    const lease = FencedLease.from(task, workerId);
+    const result = await this.context.database.query<{ status: ReleaseOwnedStatus }>(
+      SQL_STATEMENTS["release_owned_v1"],
+      lease.sqlParameters,
+    );
+    const status = expectOneRow(result, "workhorse.release_owned_v1").status;
+    logInfo("workhorse.task.release_processed", "Owned task release processed", {
+      ...taskSpanAttributes(task),
+      "workhorse.release.status": status,
+      "workhorse.worker.id": workerId,
+    });
+    return status;
   }
 
   async acknowledgeCancel(task: ClaimedTask, workerId: string): Promise<boolean> {
