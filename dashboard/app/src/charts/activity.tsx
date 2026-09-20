@@ -171,7 +171,9 @@ export default function TasksActivityChart({
         tickLine="y"
         withYAxis
         withTooltip
-        barProps={{ radius: 2 }}
+        // Each poll re-reads this chart's series, and an animated redraw would replay every bar
+        // from zero on data the operator was already reading.
+        barProps={{ radius: 2, isAnimationActive: false }}
         yAxisProps={{ allowDecimals: false, width: 36 }}
         xAxisProps={{ interval: "preserveStartEnd", minTickGap: 24 }}
       />

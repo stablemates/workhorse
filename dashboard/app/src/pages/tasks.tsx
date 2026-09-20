@@ -31,7 +31,6 @@ import {
 } from "../presentation.js";
 import { notifyFailure, notifyRedriveBatch } from "../notifications.js";
 import {
-  Badge,
   Box,
   Button,
   Center,
@@ -59,27 +58,10 @@ import {
   PlayCircle,
   XCircle,
 } from "@phosphor-icons/react";
-import { TaskOpenButton } from "../task-table-ui.js";
-import { TaskTableId } from "../components/task-table-id.js";
 import { DemoTaskKind, DurableDemoScenario, taskHref, useDashboardClient } from "../core.js";
-import {
-  DurableProgressBadge,
-  TaskListingFilters,
-  TaskName,
-  TaskEnqueueBadge,
-  TaskRowActions,
-  TaskSortSelect,
-  TaskTags,
-  TaskStatusIndicators,
-  taskDuration,
-  useTaskFacets,
-} from "../components/task-list.js";
-import {
-  currentTimeZoneValue,
-  formatExact,
-  formatRelative,
-  subscribeTimeZone,
-} from "../preferences.js";
+import { TaskListingFilters, TaskSortSelect, useTaskFacets } from "../components/task-list.js";
+import { TaskListRow } from "../components/task-row.js";
+import { currentTimeZoneValue, subscribeTimeZone } from "../preferences.js";
 
 const TasksActivityChart = lazy(() => import("../charts/activity.js"));
 
@@ -121,7 +103,13 @@ export const TasksPage = memo(function TasksPage({
 }) {
   const client = useDashboardClient();
   const [chartVisible, setChartVisible] = useState(readTaskChartVisibility);
-  useSyncExternalStore(subscribeTimeZone, currentTimeZoneValue, currentTimeZoneValue);
+  const timeZone = useSyncExternalStore(
+    subscribeTimeZone,
+    currentTimeZoneValue,
+    currentTimeZoneValue,
+  );
+  // Rows read one instant rather than the clock, so the whole page agrees on how old its work is.
+  const shownAt = Date.now();
   const [searchDraft, setSearchDraft] = useState<string | null>(null);
   // A filtered redrive walks a backlog one page at a time. The cursor is what the previous page
   // reported, so confirming again continues rather than redriving the same page a second time.
@@ -586,93 +574,28 @@ export const TasksPage = memo(function TasksPage({
                 </Table.Tr>
               ) : (
                 data.tasks.map((task) => (
-                  <Table.Tr
+                  <TaskListRow
                     key={task.id}
-                    onClick={() => inspectTask(task.id)}
-                    style={{ cursor: "pointer" }}
-                  >
-                    <Table.Td className="task-table__col--actions">
-                      <TaskRowActions
-                        task={task}
-                        eventsHref={taskEventsHref(task.id)}
-                        onAction={runRowAction}
-                        capabilities={{
-                          runNow: runTaskNow !== null,
-                          completeHumanWait: data.canCompleteHumanWait,
-                        }}
-                        pendingAction={
-                          cancelingTaskId === task.id
-                            ? "cancel"
-                            : completingHumanWaitTaskId === task.id
-                              ? "complete-human-wait"
-                              : redrivingTaskId === task.id
-                                ? "redrive"
-                                : runningNowTaskId === task.id
-                                  ? "run-now"
-                                  : null
-                        }
-                      />
-                    </Table.Td>
-                    <Table.Td className="task-table__col--id">
-                      <TaskTableId id={task.id} />
-                    </Table.Td>
-                    <Table.Td className="task-table__col--status">
-                      <TaskStatusIndicators task={task} />
-                    </Table.Td>
-                    <Table.Td className="task-table__col--queue">
-                      <Text size="sm" c="dimmed" title={task.queue}>
-                        {task.queue}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td className="task-table__col--task">
-                      <TaskOpenButton
-                        taskId={task.id}
-                        taskType={task.type}
-                        onOpen={() => inspectTask(task.id)}
-                      >
-                        <Group gap={4} wrap="nowrap" style={{ minWidth: 0 }}>
-                          <TaskName type={task.type} queue={task.queue} />
-                          <TaskEnqueueBadge task={task} />
-                          {task.priority > 0 ? (
-                            <Badge
-                              size="xs"
-                              variant="light"
-                              color="orange"
-                              tt="none"
-                              title={`Priority ${task.priority}; higher-priority ready tasks are claimed first.`}
-                            >
-                              P{task.priority}
-                            </Badge>
-                          ) : null}
-                        </Group>
-                      </TaskOpenButton>
-                    </Table.Td>
-                    <Table.Td className="task-table__col--tags">
-                      <TaskTags tags={task.tags} />
-                    </Table.Td>
-                    <Table.Td className="task-table__col--steps" ta="right">
-                      <DurableProgressBadge task={task} />
-                    </Table.Td>
-                    <Table.Td className="task-table__col--attempt" ta="right">
-                      <Text
-                        size="sm"
-                        c={task.attempt > 1 ? "yellow.8" : undefined}
-                        fw={task.attempt > 1 ? 600 : undefined}
-                      >
-                        {task.attempt}/{task.maxAttempts}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td className="task-table__col--duration" ta="left">
-                      <Text size="sm" c="dimmed">
-                        {taskDuration(task) ?? "—"}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td className="task-table__col--updated" ta="left">
-                      <Text size="sm" title={formatExact(task.updatedAt)} c="dimmed">
-                        {formatRelative(task.updatedAt)}
-                      </Text>
-                    </Table.Td>
-                  </Table.Tr>
+                    task={task}
+                    eventsHref={taskEventsHref(task.id)}
+                    onOpen={inspectTask}
+                    onAction={runRowAction}
+                    canRunNow={runTaskNow !== null}
+                    canCompleteHumanWait={data.canCompleteHumanWait}
+                    pendingAction={
+                      cancelingTaskId === task.id
+                        ? "cancel"
+                        : completingHumanWaitTaskId === task.id
+                          ? "complete-human-wait"
+                          : redrivingTaskId === task.id
+                            ? "redrive"
+                            : runningNowTaskId === task.id
+                              ? "run-now"
+                              : null
+                    }
+                    shownAt={shownAt}
+                    timeZone={timeZone}
+                  />
                 ))
               )}
             </Table.Tbody>
