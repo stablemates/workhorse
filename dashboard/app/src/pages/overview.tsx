@@ -172,7 +172,7 @@ export function SystemPage({
 
       {/* The measures lead the page beside the activity chart; tables get full rows below so
           their numeric columns never fight a sibling column for width. */}
-      <Grid gutter="xl">
+      <Grid gap="xl">
         <Grid.Col span={{ base: 12, lg: 4 }}>
           <SystemKpiList data={data} navigate={navigate} />
         </Grid.Col>
@@ -290,7 +290,7 @@ export function SystemPage({
       </Paper>
 
       {/* The retry outlook and the maintenance checks both answer "what happens next". */}
-      <Grid gutter="xl">
+      <Grid gap="xl">
         <Grid.Col span={{ base: 12, lg: 5 }}>
           <RetryStorm data={data} />
         </Grid.Col>
