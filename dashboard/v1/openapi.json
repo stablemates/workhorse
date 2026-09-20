@@ -7425,37 +7425,6 @@
       "DashboardEventDetail": {
         "type": "object",
         "properties": {
-          "startedAt": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "type": "string"
-              }
-            ]
-          },
-          "claimedAt": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "type": "string"
-              }
-            ]
-          },
-          "finishedAt": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "type": "string"
-              }
-            ]
-          },
-          "error": {},
           "id": {
             "type": "string"
           },
@@ -7544,13 +7513,40 @@
                 "type": "string"
               }
             ]
-          }
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "claimedAt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "finishedAt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "error": {}
         },
         "required": [
-          "startedAt",
-          "claimedAt",
-          "finishedAt",
-          "error",
           "id",
           "kind",
           "recordId",
@@ -7564,7 +7560,11 @@
           "workerId",
           "fenceToken",
           "durationMs",
-          "errorMessage"
+          "errorMessage",
+          "startedAt",
+          "claimedAt",
+          "finishedAt",
+          "error"
         ]
       },
       "DashboardEventKind": {
@@ -10525,48 +10525,48 @@
       "DashboardTaskCounts": {
         "type": "object",
         "properties": {
-          "canceled": {
+          "all": {
             "type": "number"
           },
           "blocked": {
             "type": "number"
           },
-          "scheduled": {
+          "canceled": {
             "type": "number"
           },
           "completed": {
             "type": "number"
           },
-          "all": {
-            "type": "number"
-          },
-          "waiting": {
-            "type": "number"
-          },
-          "running": {
-            "type": "number"
-          },
-          "retried": {
+          "discarded": {
             "type": "number"
           },
           "queued": {
             "type": "number"
           },
-          "discarded": {
+          "retried": {
+            "type": "number"
+          },
+          "running": {
+            "type": "number"
+          },
+          "scheduled": {
+            "type": "number"
+          },
+          "waiting": {
             "type": "number"
           }
         },
         "required": [
-          "canceled",
-          "blocked",
-          "scheduled",
-          "completed",
           "all",
-          "waiting",
-          "running",
-          "retried",
+          "blocked",
+          "canceled",
+          "completed",
+          "discarded",
           "queued",
-          "discarded"
+          "retried",
+          "running",
+          "scheduled",
+          "waiting"
         ]
       },
       "DashboardTaskCursor": {
@@ -11975,6 +11975,106 @@
       "DashboardTasksCursorPage": {
         "type": "object",
         "properties": {
+          "capturedAt": {
+            "type": "string"
+          },
+          "canCompleteHumanWait": {
+            "type": "boolean"
+          },
+          "filter": {
+            "enum": [
+              "all",
+              "blocked",
+              "canceled",
+              "completed",
+              "discarded",
+              "queued",
+              "retried",
+              "running",
+              "scheduled",
+              "waiting"
+            ]
+          },
+          "queue": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "worker": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "taskType": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "sort": {
+            "enum": [
+              "priority",
+              "updated"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "search": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "page": {
+            "type": "number"
+          },
+          "pageSize": {
+            "type": "number"
+          },
+          "count": {
+            "enum": [
+              "exact",
+              "none"
+            ]
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardTaskRow"
+            }
+          },
           "total": {
             "anyOf": [
               {
@@ -12004,126 +12104,26 @@
                 "type": "null"
               }
             ]
-          },
-          "queue": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "type": "string"
-              }
-            ]
-          },
-          "priority": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "type": "number"
-              }
-            ]
-          },
-          "tags": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "sort": {
-            "enum": [
-              "priority",
-              "updated"
-            ]
-          },
-          "filter": {
-            "enum": [
-              "all",
-              "blocked",
-              "canceled",
-              "completed",
-              "discarded",
-              "queued",
-              "retried",
-              "running",
-              "scheduled",
-              "waiting"
-            ]
-          },
-          "search": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "type": "string"
-              }
-            ]
-          },
-          "taskType": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "type": "string"
-              }
-            ]
-          },
-          "capturedAt": {
-            "type": "string"
-          },
-          "count": {
-            "enum": [
-              "exact",
-              "none"
-            ]
-          },
-          "worker": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "type": "string"
-              }
-            ]
-          },
-          "canCompleteHumanWait": {
-            "type": "boolean"
-          },
-          "page": {
-            "type": "number"
-          },
-          "pageSize": {
-            "type": "number"
-          },
-          "tasks": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/DashboardTaskRow"
-            }
           }
         },
         "required": [
-          "total",
-          "nextCursor",
-          "previousCursor",
-          "queue",
-          "priority",
-          "tags",
-          "sort",
-          "filter",
-          "search",
-          "taskType",
           "capturedAt",
-          "count",
-          "worker",
           "canCompleteHumanWait",
+          "filter",
+          "queue",
+          "worker",
+          "taskType",
+          "priority",
+          "sort",
+          "tags",
+          "search",
           "page",
           "pageSize",
-          "tasks"
+          "count",
+          "tasks",
+          "total",
+          "nextCursor",
+          "previousCursor"
         ]
       },
       "DashboardTasksPage": {
