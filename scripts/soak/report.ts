@@ -77,6 +77,16 @@ export interface GateCheck {
   met: boolean;
 }
 
+/** One `task_runtime` index across the window. Bytes, because a page size is a server setting. */
+export interface RuntimeIndexSeries {
+  name: string;
+  firstBytes: number;
+  lastBytes: number;
+  maximumBytes: number;
+  /** The last observation's size over the first one. Above one means the index grew. */
+  growth: number;
+}
+
 export interface SoakReport {
   generatedAt: string;
   observations: number;
@@ -111,6 +121,14 @@ export interface SoakReport {
     residual: number;
     backlogAtStart: number;
     backlogAtEnd: number;
+  };
+  runtimeStorage: {
+    indexes: RuntimeIndexSeries[];
+    heapBytes: { first: number; last: number; maximum: number };
+    /** Autovacuum passes over `task_runtime` between the first and the last observation. */
+    autovacuumPasses: number;
+    /** The storage parameters the last observation found on the table. */
+    reloptions: string[] | null;
   };
   kills: (KillRecovery & { clean: boolean })[];
   queueHealth: { start: unknown; end: unknown };
@@ -341,6 +359,40 @@ export function buildSoakReport(observations: SoakObservation[]): SoakReport {
     .map((observation) => observation.partitions.oldestSurvivingAgeDays)
     .filter((age): age is number => age !== null);
 
+  // An index is followed by name across the window. One added or dropped between two observations
+  // is still reported, from the observations that saw it, rather than dropped for being partial.
+  const indexNames = [
+    ...new Set(
+      observations.flatMap((observation) =>
+        observation.runtimeStorage.indexes.map((index) => index.name),
+      ),
+    ),
+  ].toSorted();
+  const runtimeIndexes = indexNames.map((name) => {
+    const sizes = observations
+      .map(
+        (observation) =>
+          observation.runtimeStorage.indexes.find((index) => index.name === name)?.bytes,
+      )
+      .filter((bytes): bytes is number => bytes !== undefined);
+    const firstBytes = sizes[0]!;
+    const lastBytes = sizes.at(-1)!;
+    return {
+      name,
+      firstBytes,
+      lastBytes,
+      maximumBytes: Math.max(...sizes),
+      growth: firstBytes === 0 ? 0 : lastBytes / firstBytes,
+    };
+  });
+  const heapSizes = observations.map((observation) => observation.runtimeStorage.heapBytes);
+  // A statistics reset would make the difference negative, and a negative count of passes is not a
+  // fact about vacuum. Zero says the same thing without asserting one.
+  const autovacuumPasses = Math.max(
+    0,
+    last.runtimeStorage.autovacuumCount - first.runtimeStorage.autovacuumCount,
+  );
+
   return {
     generatedAt,
     observations: observations.length,
@@ -374,11 +426,33 @@ export function buildSoakReport(observations: SoakObservation[]): SoakReport {
       backlogAtStart: liveBacklog(first),
       backlogAtEnd: liveBacklog(last),
     },
+    runtimeStorage: {
+      indexes: runtimeIndexes,
+      heapBytes: {
+        first: heapSizes[0]!,
+        last: heapSizes.at(-1)!,
+        maximum: Math.max(...heapSizes),
+      },
+      autovacuumPasses,
+      reloptions: last.runtimeStorage.reloptions,
+    },
     kills,
     queueHealth: { start: first.queueHealth, end: last.queueHealth },
     gate,
     met: gate.every((check) => check.met),
   };
+}
+
+/** Binary units, because an index is sized in 8 KiB pages and a decimal MB misreads that. */
+function humanBytes(value: number): string {
+  const units = ["B", "KiB", "MiB", "GiB"];
+  let scaled = value;
+  let unit = 0;
+  while (scaled >= 1024 && unit < units.length - 1) {
+    scaled /= 1024;
+    unit += 1;
+  }
+  return `${unit === 0 ? String(scaled) : scaled.toFixed(1)} ${units[unit]!}`;
 }
 
 function table(header: string[], rows: string[][]): string {
@@ -520,6 +594,35 @@ export function renderSoakReport(report: SoakReport): string {
     `${String(report.reconciliation.enqueued)} tasks were enqueued in the window and ${String(report.reconciliation.settled)} reached a terminal state, ` +
       `a residual of ${String(report.reconciliation.residual)}. The live backlog moved from ${String(report.reconciliation.backlogAtStart)} to ${String(report.reconciliation.backlogAtEnd)} tasks. ` +
       `Work that crosses either edge of the window is counted on one side only, so the residual is context rather than a verdict; the kill reconciliations below are the proof that no task was lost or run twice.\n`,
+  );
+
+  sections.push(`## Runtime storage\n`);
+  sections.push(
+    `\`task_runtime\` holds only live tasks, so its indexes are sized by churn rather than by backlog. ` +
+      `Autovacuum passed over the table ${plural(report.runtimeStorage.autovacuumPasses, "time")} inside the window, ` +
+      `and the table carried ${report.runtimeStorage.reloptions === null ? "no storage parameters" : `\`${report.runtimeStorage.reloptions.join(", ")}\``} at the last observation. ` +
+      `Vacuum returns index space for reuse and never returns it to the operating system, so an index that keeps climbing here is one \`REINDEX CONCURRENTLY\` reclaims.\n`,
+  );
+  sections.push(
+    table(
+      ["Index", "First", "Last", "Peak", "Growth"],
+      [
+        ...report.runtimeStorage.indexes.map((index) => [
+          index.name,
+          humanBytes(index.firstBytes),
+          humanBytes(index.lastBytes),
+          humanBytes(index.maximumBytes),
+          `${index.growth.toFixed(1)}x`,
+        ]),
+        [
+          "(heap)",
+          humanBytes(report.runtimeStorage.heapBytes.first),
+          humanBytes(report.runtimeStorage.heapBytes.last),
+          humanBytes(report.runtimeStorage.heapBytes.maximum),
+          "",
+        ],
+      ],
+    ),
   );
 
   sections.push(`## Ungraceful kills\n`);

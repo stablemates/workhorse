@@ -998,7 +998,16 @@ CREATE TABLE IF NOT EXISTS workhorse.task_runtime (
       AND acquired_at IS NOT NULL AND heartbeat_at IS NOT NULL AND expires_at IS NOT NULL
       AND fence_token > 0 AND wait_name IS NULL AND attempt_started_at IS NOT NULL)
   )
-) WITH (fillfactor = 70);
+-- fillfactor leaves room for the heartbeat and lifecycle updates this row takes. The two
+-- autovacuum settings bound how far vacuum falls behind the churn: this table holds only live
+-- tasks, so a scale factor that tracks the live row count sets the trigger by the backlog rather
+-- than by the work passing through it, and a throttled vacuum of a table this small buys nothing.
+-- Neither setting shrinks an index; docs/architecture.md records what does.
+) WITH (
+  fillfactor = 70,
+  autovacuum_vacuum_scale_factor = 0.01,
+  autovacuum_vacuum_cost_delay = 0
+);
 CREATE INDEX IF NOT EXISTS task_runtime_ready_idx
   ON workhorse.task_runtime (queue_name, priority DESC, sequence, task_id) WHERE state = 'ready';
 CREATE INDEX IF NOT EXISTS task_runtime_blocked_queue_idx
@@ -15662,10 +15671,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (20, 'enqueue skips the dependency block'),
   (21, 'a claim locks only the row it takes'),
   (22, 'history staging through pg_temp'),
-  (23, 'a canceled dependent releases its edges')
+  (23, 'a canceled dependent releases its edges'),
+  (24, 'task_runtime keeps its active indexes lean')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (23) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (24) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

@@ -1509,6 +1509,16 @@ Selective indexes keep unrelated states out of each access path:
 
 The table uses fillfactor 70 because heartbeat and lifecycle updates are intentional churn. State changes can still require index maintenance when rows enter or leave a partial index.
 
+The table also sets `autovacuum_vacuum_scale_factor` to 0.01 and `autovacuum_vacuum_cost_delay` to 0. The default scale factor is a fraction of the live row count, and `task_runtime` holds only live tasks, so a backlog of a few thousand rows would wait for hundreds of dead tuples and a backlog of half a million would wait for a hundred thousand. One percent makes the trigger track the churn rather than the backlog, and no cost delay lets a pass over a table this small finish in one uninterrupted run. Migration `0024-task-runtime-keeps-its-active-indexes-lean.sql` applies both to an installation that predates them.
+
+Those settings bound how far vacuum falls behind. They do not shrink an index, and measurement should not be read as saying they do. Both `state = 'ready'` indexes are keyed by a value that only increases, `sequence` for `task_runtime_ready_idx` and `ready_at` for `task_runtime_ready_age_idx`, so every insertion lands at the right edge while the pages a completion emptied are refilled slowly. Measured on PostgreSQL 18 with a backlog held at 2,000 tasks, claims grew `task_runtime_ready_idx` from 17 pages to a steady 559 under the server defaults and to a steady 693 with these two settings, each across four autovacuum passes; a full manual `VACUUM` afterwards returned no pages at all. `REINDEX CONCURRENTLY` is what reclaims that space, returning the index to 17 pages while claims continue:
+
+```sql
+REINDEX INDEX CONCURRENTLY workhorse.task_runtime_ready_idx;
+```
+
+An installation that runs continuously should reindex `task_runtime` on a period of its own choosing, sized from the growth its own series shows rather than from a number here. `pnpm soak:observe` records every `task_runtime` index size, the heap size, and the autovacuum counters in each observation, so a soak series shows whether the indexes settle or climb, and `pnpm soak:report` derives the per-index growth from that series.
+
 `concurrency_key` is null or a non-empty UTF-8 string through 256 bytes. `task` retains the accepted value, while `task_runtime` duplicates it for admission without joining lifetime identity. The key is queue-scoped. Keyless tasks consume only queue capacity.
 
 `task_runtime_active_queue_key_expiry_idx` contains only active rows and orders them by queue, concurrency key, and task identity. `claim_v1` reads heap-only `expires_at` while counting admission pressure. The concurrency policy bounds those candidates. Neither active partial index stores `expires_at`, so an accepted heartbeat can use a HOT update.

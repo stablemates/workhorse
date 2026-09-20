@@ -1896,7 +1896,7 @@
             {
               "value": {
                 "promotionLagMs": 10000,
-                "schemaVersion": 23
+                "schemaVersion": 24
               }
             }
           ]

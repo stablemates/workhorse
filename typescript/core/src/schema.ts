@@ -197,6 +197,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "a canceled dependent releases its edges",
     kind: "additive",
   },
+  {
+    fromVersion: 23,
+    toVersion: 24,
+    file: "0024-task-runtime-keeps-its-active-indexes-lean.sql",
+    description: "task_runtime keeps its active indexes lean",
+    kind: "additive",
+  },
 ];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {
