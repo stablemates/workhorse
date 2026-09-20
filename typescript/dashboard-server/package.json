@@ -65,7 +65,7 @@
   },
   "devDependencies": {
     "@stablemates/workhorse": "workspace:*",
-    "typescript": "^5.8.3"
+    "typescript": "^7.0.2"
   },
   "peerDependencies": {
     "@stablemates/workhorse": ">=0.2.0 <0.3.0"

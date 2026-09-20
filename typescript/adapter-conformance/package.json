@@ -17,7 +17,7 @@
     "magicast": "0.5.5",
     "pg": "^8.23.0",
     "typeorm": "1.1.1",
-    "typescript": "^5.8.3",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.11"
   },
   "engines": {

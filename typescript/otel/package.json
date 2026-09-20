@@ -41,7 +41,7 @@
     "@opentelemetry/api": "1.9.1",
     "@opentelemetry/api-logs": "0.222.0",
     "@stablemates/workhorse": "workspace:*",
-    "typescript": "^5.8.3"
+    "typescript": "^7.0.2"
   },
   "peerDependencies": {
     "@opentelemetry/api": ">=1.9.0 <2",
