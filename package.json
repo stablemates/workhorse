@@ -151,7 +151,7 @@
     "@types/node": "^26.6.1",
     "@types/pg": "^8.23.1",
     "@vitest/coverage-v8": "4.1.11",
-    "knip": "6.36.0",
+    "knip": "6.37.0",
     "lefthook": "^2.1.14",
     "oxfmt": "^0.68.0",
     "oxlint": "^1.83.0",
