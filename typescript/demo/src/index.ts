@@ -17,7 +17,6 @@ import {
   syncDemoSchedules,
 } from "./app.js";
 import { createDemoDatabase } from "./database.js";
-import { createDashboardDevServer } from "@stablemates/workhorse-dashboard/dev";
 import {
   demoDatabaseHostLabel,
   demoDatabaseNameLabel,
@@ -177,7 +176,14 @@ demoLogger.info(
 
 // Development compiles the dashboard from source in this process. Production serves the packaged
 // bundle. Both render the page through the same host, so only module delivery differs.
-const dashboardDev = mode === "development" ? await createDashboardDevServer() : undefined;
+//
+// The dev server comes from the dashboard facade, a development dependency, and brings Vite and the
+// React UI libraries with it. Importing it only here keeps all of that out of the production image,
+// which serves the prebuilt bundle from @stablemates/workhorse-dashboard-server.
+const dashboardDev =
+  mode === "development"
+    ? await (await import("@stablemates/workhorse-dashboard/dev")).createDashboardDevServer()
+    : undefined;
 
 // Optional dashboard authentication. When both credentials are configured, the demo serves the
 // packaged single-administrator login instead of its default open access.

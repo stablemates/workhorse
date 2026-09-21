@@ -21,7 +21,7 @@ import {
   installDemoSchema,
 } from "../../src/app.js";
 import type { CreateDemoApplicationOptions } from "../../src/app.js";
-import type { DashboardRouter } from "@stablemates/workhorse-dashboard/server";
+import type { DashboardRouter } from "@stablemates/workhorse-dashboard-server/server";
 import { DEMO_QUEUE_OPTIONS } from "../../src/contracts.js";
 import { durableDemoScenarios } from "../../src/durable-demo.js";
 import {
@@ -30,7 +30,7 @@ import {
   type DemoFeatureFamily,
   type DemoFeaturePayload,
 } from "../../src/feature-showcase.js";
-import type { DashboardWorkerRow } from "@stablemates/workhorse-dashboard/wire";
+import type { DashboardWorkerRow } from "@stablemates/workhorse-dashboard-server/wire";
 import { createDemoWorkerDefinition } from "../../src/worker-definition.js";
 
 /**

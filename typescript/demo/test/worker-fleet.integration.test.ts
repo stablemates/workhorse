@@ -5,7 +5,7 @@
  * in parallel; see ./support/demo-integration.ts for the harness they share.
  */
 import { describe, expect, it } from "vitest";
-import { dashboardDatabase } from "@stablemates/workhorse-dashboard/server";
+import { dashboardDatabase } from "@stablemates/workhorse-dashboard-server/server";
 import { readDashboardWorkers } from "../../dashboard-server/src/server/read-model.js";
 import { createLocalOperator, DEMO_WORKER_CONCURRENCY } from "../src/app.js";
 import {

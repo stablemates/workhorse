@@ -3,6 +3,12 @@
   "version": "0.2.1",
   "private": true,
   "description": "Interactive end-to-end demo of Workhorse",
+  "files": [
+    "dist",
+    "container-entrypoint.mjs",
+    "telemetry.cjs",
+    "file-log-exporter.cjs"
+  ],
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -25,7 +31,7 @@
     "@orpc/client": "1.15.1",
     "@orpc/server": "1.15.1",
     "@stablemates/workhorse": "workspace:*",
-    "@stablemates/workhorse-dashboard": "workspace:*",
+    "@stablemates/workhorse-dashboard-server": "workspace:*",
     "@stablemates/workhorse-drizzle": "workspace:*",
     "@stablemates/workhorse-otel": "workspace:*",
     "drizzle-orm": "^0.45.2",
@@ -33,6 +39,7 @@
     "pg": "^8.23.0"
   },
   "devDependencies": {
+    "@stablemates/workhorse-dashboard": "workspace:*",
     "@types/node": "^26.6.1",
     "@types/pg": "^8.23.1",
     "tsx": "^4.23.13",

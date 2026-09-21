@@ -1,4 +1,4 @@
-import { isDashboardMutation } from "@stablemates/workhorse-dashboard/server";
+import { isDashboardMutation } from "@stablemates/workhorse-dashboard-server/server";
 import { describe, expect, it } from "vitest";
 import {
   demoClientAddress,

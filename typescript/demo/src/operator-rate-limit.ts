@@ -1,4 +1,4 @@
-import { isDashboardMutation } from "@stablemates/workhorse-dashboard/server";
+import { isDashboardMutation } from "@stablemates/workhorse-dashboard-server/server";
 
 const DEMO_OPERATOR_RATE_LIMIT_PER_MINUTE = 12;
 const DEMO_OPERATOR_RATE_LIMIT_BURST = 5;
