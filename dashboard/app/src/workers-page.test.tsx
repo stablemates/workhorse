@@ -73,8 +73,7 @@ describe("workers page", () => {
     );
 
     expect(html).toContain('aria-label="Pause worker-1"');
-    expect(html).toContain("billing");
-    expect(html).toContain("Several workers can offer the same namespace safely");
+    expect(html).toContain('aria-label="worker-1 offers billing"');
     expect(html).toContain('aria-haspopup="dialog"');
     expect(html).toContain("deploy that replaces it clears the pause");
     expect(html).not.toContain('role="alert"');
@@ -83,14 +82,14 @@ describe("workers page", () => {
     expect(html).toContain("the instances they sunset");
   });
 
-  it("counts the schedule namespaces the compact column does not show", async () => {
+  it("keeps the full worker name and its schedule namespaces behind hover cards", async () => {
     const { WorkersPage } = await import("./dashboard.js");
     const data: DashboardWorkersPage = {
       capturedAt: "2026-08-16T12:00:00.000Z",
       canManageWorkers: false,
       workers: [
         {
-          id: "worker-1",
+          id: "billing-worker-on-a-host-with-a-very-long-generated-name-0001",
           queues: ["default"],
           scheduleNamespaces: ["billing", "reports", "digests"],
           hostname: "worker-host",
@@ -122,14 +121,69 @@ describe("workers page", () => {
       ),
     );
 
-    // The column shows one namespace and says how many it holds back.
-    expect(html).toContain("billing");
-    expect(html).toContain("+2");
-    // The full list stays reachable from the cell itself.
-    expect(html).toContain('title="billing, reports, digests"');
-    // The hour window reads without widening its column.
-    expect(html).toContain("Avg execution");
+    const id = "billing-worker-on-a-host-with-a-very-long-generated-name-0001";
+    // The name keeps its first and last part, and the full name stays in the cell's title.
+    expect(html).toContain("workers-table__name");
+    expect(html).toContain(`title="${id}"`);
+    expect(html).toContain(">billing-worke…e-0001<");
+    expect(html).not.toContain(`>${id}<`);
+    // The schedule namespaces leave the table for an icon whose name carries the whole list.
+    expect(html).not.toContain(">Schedules<");
+    expect(html).toContain(`aria-label="${id} offers billing, reports, digests"`);
+    // The hour window reads without widening its column, and the short label keeps its meaning.
+    expect(html).toContain(">Avg exec<");
+    expect(html).toContain('title="Average execution time over the last hour"');
     expect(html).not.toContain("Avg execution · 1h");
+  });
+
+  it("explains a paused worker from its badge", async () => {
+    const { WorkersPage } = await import("./dashboard.js");
+    const data: DashboardWorkersPage = {
+      capturedAt: "2026-08-16T12:00:00.000Z",
+      canManageWorkers: true,
+      workers: [
+        {
+          id: "worker-1",
+          queues: ["default"],
+          scheduleNamespaces: ["billing"],
+          hostname: "worker-host",
+          pid: 123,
+          activeTasks: 1,
+          concurrency: 4,
+          activeSlots: 1,
+          draining: false,
+          completedAttempts: 0,
+          failedAttempts: 0,
+          averageExecutionMs: null,
+          lastSeenAt: "2026-08-16T12:00:00.000Z",
+          startedAt: "2026-08-16T11:00:00.000Z",
+          registered: true,
+          lastHeartbeatAt: "2026-08-16T12:00:00.000Z",
+          paused: true,
+        },
+      ],
+    };
+    const html = renderToStaticMarkup(
+      createElement(
+        MantineProvider,
+        null,
+        createElement(WorkersPage, {
+          data,
+          togglingWorker: null,
+          setWorkerPaused: () => undefined,
+        }),
+      ),
+    );
+
+    // The badge sits on the identity's second line, before the SDK cell, and keeps its label whole.
+    expect(html).toContain("Paused</span>");
+    expect(html.indexOf("Paused</span>")).toBeLessThan(html.indexOf("unknown version"));
+    expect(html).toContain(
+      'aria-label="worker-1 is paused: it finishes active tasks and accepts no new ones"',
+    );
+    // The schedule icon comes before the badge on that line.
+    expect(html.indexOf("offers billing")).toBeLessThan(html.indexOf("Paused</span>"));
+    expect(html).toContain('aria-label="Resume worker-1"');
   });
 
   it("renders inert Claims cells for draining and offline workers", async () => {

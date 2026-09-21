@@ -17,6 +17,7 @@
 @import "@mantine/core/styles/Accordion.css";
 @import "@mantine/core/styles/Alert.css";
 @import "@mantine/core/styles/Text.css";
+@import "@mantine/core/styles/Anchor.css";
 @import "@mantine/core/styles/AppShell.css";
 @import "@mantine/core/styles/Combobox.css";
 @import "@mantine/core/styles/InlineInput.css";
@@ -29,6 +30,7 @@
 @import "@mantine/core/styles/Divider.css";
 @import "@mantine/core/styles/Drawer.css";
 @import "@mantine/core/styles/Grid.css";
+@import "@mantine/core/styles/List.css";
 @import "@mantine/core/styles/LoadingOverlay.css";
 @import "@mantine/core/styles/Menu.css";
 @import "@mantine/core/styles/Modal.css";
@@ -270,31 +272,59 @@ body {
 }
 
 .dashboard-table--queues :is(th, td):first-child,
-.dashboard-table--workers :is(th, td):first-child,
 .dashboard-table--schedules :is(th, td):first-child {
   min-width: 15rem;
   max-width: 22rem;
   overflow-wrap: anywhere;
 }
 
+/* A worker name truncates instead of wrapping, so the identity block sets the column's width and
+   the full name lives in its popover. */
+.dashboard-table--workers :is(th, td):first-child {
+  min-width: 8rem;
+}
+
+.workers-table__identity {
+  max-width: 10.5rem;
+}
+
+.workers-table__name {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .dashboard-table--queues :is(th, td):nth-child(2),
-.dashboard-table--workers :is(th, td):nth-child(5),
 .dashboard-table--schedules :is(th, td):nth-child(5) {
   min-width: 8rem;
 }
 
+/* Queues and Status on the workers table follow their widest value and never wrap it. */
 .dashboard-table--workers :is(th, td):nth-child(3),
+.dashboard-table--workers :is(th, td):nth-child(4) {
+  width: 1%;
+  white-space: nowrap;
+}
+
+/* A badge's label is a grid item with hidden overflow, so its minimum size is zero and a
+   shrink-to-fit cell collapses it to an ellipsis. A state name on this table always shows whole. */
+.dashboard-table--workers .mantine-Badge-root {
+  width: max-content;
+  max-width: none;
+  overflow: visible;
+}
+
+.dashboard-table--workers .mantine-Badge-label {
+  overflow: visible;
+  text-overflow: clip;
+}
+
 .dashboard-table--schedules :is(th, td):nth-child(3) {
   min-width: 12rem;
   max-width: 20rem;
   overflow-wrap: anywhere;
-}
-
-/* A worker usually offers one schedule namespace, so this column reserves room for a name rather
-   than for the list its neighbour carries. */
-.dashboard-table--workers :is(th, td):nth-child(4) {
-  min-width: 7rem;
-  max-width: 12rem;
 }
 
 /* Short counts leave the header deciding the column width, so a metric header wraps. */

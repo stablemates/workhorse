@@ -310,7 +310,7 @@ export function taskDuration(task: DashboardTaskRow): string | null {
   const elapsed = new Date(task.finishedAt).getTime() - new Date(task.createdAt).getTime();
   return elapsed >= 0 ? formatDuration(elapsed) : null;
 }
-export function PageHeader({ title, description }: { title: string; description: string }) {
+export function PageHeader({ title, description }: { title: string; description: ReactNode }) {
   return (
     <Box>
       <Title order={1}>{title}</Title>
