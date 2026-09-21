@@ -19,6 +19,26 @@ import { formatDuration, formatExact, formatRelative } from "../preferences.js";
 import { workerStatus } from "../presentation-policy.js";
 import { HelpButton } from "../components/help-button.js";
 
+/**
+ * A right-aligned metric header that may wrap.
+ *
+ * The counts under these columns are a few characters wide, so the header decides how much width
+ * the column takes. Wrapping the label and dropping the window onto its own line keeps both
+ * readable while the column follows one word instead of a whole phrase.
+ */
+function MetricHeader({ label, windowLabel }: { label: string; windowLabel?: string }) {
+  return (
+    <span className="dashboard-table__metric-header">
+      {label}
+      {windowLabel === undefined ? null : (
+        <Text c="dimmed" display="block" fw={500} fz={10} lh={1.3} span>
+          {windowLabel}
+        </Text>
+      )}
+    </span>
+  );
+}
+
 export function WorkersPage({
   data,
   togglingWorker,
@@ -48,7 +68,7 @@ export function WorkersPage({
               verticalSpacing={6}
               horizontalSpacing="md"
               className="dashboard-table dashboard-table--workers"
-              miw={1260}
+              miw={1080}
             >
               <Table.Thead>
                 <Table.Tr>
@@ -74,11 +94,21 @@ export function WorkersPage({
                   </Table.Th>
                   <Table.Th>Status</Table.Th>
                   <Table.Th>Claims</Table.Th>
-                  <Table.Th ta="right">Busy slots</Table.Th>
-                  <Table.Th ta="right">Active tasks</Table.Th>
-                  <Table.Th ta="right">Attempts · 1h</Table.Th>
-                  <Table.Th ta="right">Failures · 1h</Table.Th>
-                  <Table.Th ta="right">Avg execution · 1h</Table.Th>
+                  <Table.Th ta="right">
+                    <MetricHeader label="Busy slots" />
+                  </Table.Th>
+                  <Table.Th ta="right">
+                    <MetricHeader label="Active tasks" />
+                  </Table.Th>
+                  <Table.Th ta="right">
+                    <MetricHeader label="Attempts" windowLabel="1h" />
+                  </Table.Th>
+                  <Table.Th ta="right">
+                    <MetricHeader label="Failures" windowLabel="1h" />
+                  </Table.Th>
+                  <Table.Th ta="right">
+                    <MetricHeader label="Avg execution" windowLabel="1h" />
+                  </Table.Th>
                   <Table.Th>
                     <Group gap={4} wrap="nowrap">
                       <span>Started</span>
@@ -136,10 +166,32 @@ export function WorkersPage({
                       <Table.Td>
                         {worker.queues.length > 0 ? worker.queues.join(", ") : "—"}
                       </Table.Td>
-                      <Table.Td>
-                        {worker.scheduleNamespaces.length > 0
-                          ? worker.scheduleNamespaces.join(", ")
-                          : "—"}
+                      {/* Almost every worker offers one namespace, so the column shows the first
+                        one and counts the rest instead of reserving width for a list. The cell
+                        carries the whole list, which "+2" alone does not say. */}
+                      <Table.Td
+                        aria-label={
+                          worker.scheduleNamespaces.length === 0
+                            ? `${worker.id} offers no schedule namespace`
+                            : `${worker.id} offers ${worker.scheduleNamespaces.join(", ")}`
+                        }
+                      >
+                        {worker.scheduleNamespaces.length === 0 ? (
+                          <Text c="dimmed" size="sm">
+                            —
+                          </Text>
+                        ) : (
+                          <Group gap={4} title={worker.scheduleNamespaces.join(", ")} wrap="nowrap">
+                            <Text size="sm" style={{ minWidth: 0 }} truncate>
+                              {worker.scheduleNamespaces[0]}
+                            </Text>
+                            {worker.scheduleNamespaces.length > 1 ? (
+                              <Text c="dimmed" fz="xs">
+                                +{worker.scheduleNamespaces.length - 1}
+                              </Text>
+                            ) : null}
+                          </Group>
+                        )}
                       </Table.Td>
                       <Table.Td>
                         <Group gap={6} wrap="nowrap">
