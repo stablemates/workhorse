@@ -51,6 +51,11 @@ Code before the wait runs again, so wrap earlier effects in a checkpoint or make
 Go handlers can pass `ExternalWaitOptions` when the decision needs a shorter lifetime. Python
 handlers pass `timeout_ms` for the same boundary.
 
+A declaration that names no timeout gets Workhorse's longest supported wait as its default, so a
+decision nobody answers still closes rather than waiting forever. An earlier task deadline wins over
+either. The closing boundary fails the task and starts no further attempt, so name a timeout your
+operators can meet.
+
 ## Complete a decision
 
 The dashboard marks pending decisions in the `Waiting` task list. Its server replaces browser

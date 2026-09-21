@@ -190,6 +190,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "history staging through pg_temp",
     kind: "additive",
   },
+  {
+    fromVersion: 22,
+    toVersion: 23,
+    file: "0023-a-canceled-dependent-releases-its-edges.sql",
+    description: "a canceled dependent releases its edges",
+    kind: "additive",
+  },
 ];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {

@@ -93,7 +93,9 @@ terminal outcomes disagree, `fail` wins over `cancel`, which makes the result in
 order.
 
 You can cancel a blocked dependent through `Queue.cancel`. PostgreSQL removes its runtime without
-changing the prerequisite.
+changing the prerequisite. Workhorse also marks the dependent's own edges released, because a
+dependent that will never run is no longer waiting. The prerequisite keeps running. Its identity
+stops being held for a dependent that abandoned it.
 
 ## Operating dependencies
 

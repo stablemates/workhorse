@@ -1521,6 +1521,7 @@
       "reject_contract_definition_mutation_v1",
       "reject_self_task_dependency_v1",
       "release_dependents_v1",
+      "release_own_dependencies_v1",
       "resolve_cron_wall_clock_v1",
       "resolve_dependents_v1",
       "resolve_task_outcome_dependencies_v1",

@@ -14,6 +14,9 @@ A task that's [waiting on a timer](130-durable-waits.md) also settles on the spo
 it. One difference: if the wait began partway through an attempt, Workhorse closes that attempt as
 canceled, so the record keeps the work that had already started.
 
+A task held by [dependencies](160-task-dependencies.md) settles the same way, and its edges are
+released on the way out so they stop holding their prerequisites.
+
 ## If a handler is running right now
 
 Here `cancel_v1` cannot stop anything. So it does the only thing it can: it writes down that

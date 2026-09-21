@@ -9540,11 +9540,33 @@ AS $$
   SELECT workhorse.resolve_dependents_v1(p_prerequisite_task_id, 'succeeded');
 $$;
 
+-- A dependent that reaches a terminal outcome while it is still blocked leaves its own incoming
+-- edges pending, and a pending edge holds its prerequisite identity against retention. The edge
+-- resolves as `release` because no prerequisite outcome chose an action for it: the dependent was
+-- already terminal when the edge stopped controlling dispatch, so the resolution changes nothing
+-- about the dependent. Releasing here changes no dispatch state; it only makes the edge eligible
+-- for workhorse.prune_released_dependencies_v1.
+CREATE OR REPLACE FUNCTION workhorse.release_own_dependencies_v1(p_dependent_task_id uuid)
+RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE v_count integer;
+BEGIN
+  UPDATE workhorse.task_dependency dependency
+     SET released_at = clock_timestamp(), resolution = 'release'
+   WHERE dependency.dependent_task_id = p_dependent_task_id
+     AND dependency.released_at IS NULL;
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.resolve_task_outcome_dependencies_v1()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+  PERFORM workhorse.release_own_dependencies_v1(NEW.task_id);
   PERFORM workhorse.resolve_dependents_v1(NEW.task_id, NEW.state);
   RETURN NEW;
 END;
@@ -15639,10 +15661,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (19, 'never skip a busy schedule occurrence'),
   (20, 'enqueue skips the dependency block'),
   (21, 'a claim locks only the row it takes'),
-  (22, 'history staging through pg_temp')
+  (22, 'history staging through pg_temp'),
+  (23, 'a canceled dependent releases its edges')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (22) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (23) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
