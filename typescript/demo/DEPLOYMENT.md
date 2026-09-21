@@ -43,6 +43,12 @@ not from the machine. Concurrent compilers on a small build machine can then ask
 than it has. If a build genuinely needs more, raise `NODE_OPTIONS` at build time. Only the build
 stages set it, so neither published image carries the ceiling.
 
+Both builds keep the Go build and module caches in BuildKit cache mounts, which persist in the
+builder between image builds. The site build compiles every Go documentation example as a gate, and
+the demo build compiles its Go worker; with a warm cache, each recompiles only what changed. The
+caches never reach an image. Pruning the builder's cache, for example with `docker builder prune`,
+makes the next build of each image cold and slower, not different.
+
 The demo image installs Python runtime dependencies from the committed `python/uv.lock`. Update that
 lock with uv whenever `python/pyproject.toml` changes; the image build rejects a stale lock.
 
