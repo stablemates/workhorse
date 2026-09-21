@@ -386,9 +386,9 @@ importers:
       '@stablemates/workhorse':
         specifier: workspace:*
         version: link:../core
-      '@stablemates/workhorse-dashboard':
+      '@stablemates/workhorse-dashboard-server':
         specifier: workspace:*
-        version: link:../dashboard
+        version: link:../dashboard-server
       '@stablemates/workhorse-drizzle':
         specifier: workspace:*
         version: link:../drizzle
@@ -405,6 +405,9 @@ importers:
         specifier: ^8.23.0
         version: 8.23.0
     devDependencies:
+      '@stablemates/workhorse-dashboard':
+        specifier: workspace:*
+        version: link:../dashboard
       '@types/node':
         specifier: ^26.6.1
         version: 26.6.1

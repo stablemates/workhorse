@@ -7,7 +7,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { Queue } from "@stablemates/workhorse";
-import { readDashboardIdempotencyEvidence } from "@stablemates/workhorse-dashboard/wire";
+import { readDashboardIdempotencyEvidence } from "@stablemates/workhorse-dashboard-server/wire";
 import {
   createLocalOperator,
   createLocalScheduleController,

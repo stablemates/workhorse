@@ -46,6 +46,12 @@ stages set it, so neither published image carries the ceiling.
 The demo image installs Python runtime dependencies from the committed `python/uv.lock`. Update that
 lock with uv whenever `python/pyproject.toml` changes; the image build rejects a stale lock.
 
+The demo image carries only what the container runs. `pnpm deploy` copies the files that
+`files` in `typescript/demo/package.json` names, so a new file the container loads at runtime must
+be added there. The demo depends on `@stablemates/workhorse-dashboard-server`, which serves the
+prebuilt dashboard. The dashboard facade, with Vite and the React UI libraries, stays a development
+dependency, and the build removes development dependencies before `pnpm deploy`.
+
 The site image negotiates the representation of a page on the request's `Accept` header: a client
 that names `text/markdown` receives the page's Markdown twin, and every other client receives the
 HTML. Every negotiated response carries `Vary: Accept`, and a 404 answers in the representation the

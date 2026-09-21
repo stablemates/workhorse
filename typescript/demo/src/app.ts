@@ -7,7 +7,7 @@ import {
   normalizeDashboardPublicOrigin,
   type DashboardOperatorAction,
   type DashboardSingleAdminOptions,
-} from "@stablemates/workhorse-dashboard/server";
+} from "@stablemates/workhorse-dashboard-server/server";
 import { sql } from "drizzle-orm";
 import { Hono } from "hono";
 import {

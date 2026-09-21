@@ -50,6 +50,10 @@ WORKDIR /workhorse
 COPY . .
 RUN pnpm install --frozen-lockfile
 RUN pnpm build:runtime && pnpm --filter @stablemates/workhorse-demo build
+# `--prod` drops the demo's devDependencies but still lets them satisfy optional peers. The
+# dashboard facade is one, and core's optional peer on it would ship the facade with Vite and the
+# React UI libraries. The image serves the prebuilt bundle, so remove the devDependencies first.
+RUN cd typescript/demo && npm pkg delete devDependencies
 RUN pnpm --filter @stablemates/workhorse-demo deploy --prod --legacy /opt/workhorse-demo
 
 FROM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS runtime
