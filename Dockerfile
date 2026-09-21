@@ -51,8 +51,29 @@ ENV PNPM_CONFIG_MAX_SOCKETS=${BUILD_CONCURRENCY}
 ENV NODE_OPTIONS=--max-old-space-size=2048
 
 WORKDIR /workhorse
-COPY . .
+# Install from the manifests alone, so the layer survives any commit that changes no dependency.
+# Copying the whole checkout first reran the install on every commit (SM-858). Every workspace
+# package.json belongs in this list, which scripts/docker-install-layer.test.ts checks. The Prisma
+# schema is here because that package's `prepare` script runs `prisma generate` during install.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY dashboard/app/package.json dashboard/app/
+COPY site/package.json site/
+COPY typescript/adapter-conformance/package.json typescript/adapter-conformance/
+COPY typescript/core/package.json typescript/core/
+COPY typescript/dashboard-contract/package.json typescript/dashboard-contract/
+COPY typescript/dashboard-server/package.json typescript/dashboard-server/
+COPY typescript/dashboard/package.json typescript/dashboard/
+COPY typescript/demo/package.json typescript/demo/
+COPY typescript/drizzle/package.json typescript/drizzle/
+COPY typescript/kysely/package.json typescript/kysely/
+COPY typescript/otel/package.json typescript/otel/
+COPY typescript/prisma/package.json typescript/prisma/
+COPY typescript/typeorm/package.json typescript/typeorm/
+COPY typescript/prisma/prisma/schema.prisma typescript/prisma/prisma/
 RUN pnpm install --frozen-lockfile
+COPY . .
+# Links the sources the first install did not have. It downloads nothing.
+RUN pnpm install --frozen-lockfile --offline
 RUN pnpm build:runtime && pnpm --filter @stablemates/workhorse-demo build
 # `--prod` drops the demo's devDependencies but still lets them satisfy optional peers. The
 # dashboard facade is one, and core's optional peer on it would ship the facade with Vite and the
