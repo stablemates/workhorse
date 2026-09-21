@@ -1509,6 +1509,16 @@ Selective indexes keep unrelated states out of each access path:
 
 The table uses fillfactor 70 because heartbeat and lifecycle updates are intentional churn. State changes can still require index maintenance when rows enter or leave a partial index.
 
+Both `state = 'ready'` indexes are keyed by a value that only increases, `sequence` for `task_runtime_ready_idx` and `ready_at` for `task_runtime_ready_age_idx`. Every insertion lands at the right edge while the pages a completion emptied are refilled slowly, so the two indexes grow well past what their live rows need and then settle. Measured on PostgreSQL 18 with a backlog held at 2,000 tasks, 200,000 claims grew `task_runtime_ready_idx` from 17 pages to a steady 559 and `task_runtime_ready_age_idx` to 385, flat for the last 120,000 claims; a full manual `VACUUM` afterwards returned no pages. Vacuum returns index space for reuse and never to the operating system. Lowering `autovacuum_vacuum_scale_factor` to 0.01 and `autovacuum_vacuum_cost_delay` to 0 on the table did not change that outcome in a paired run at the same churn, because at that rate both arms crossed their trigger within seconds and `autovacuum_naptime` set the pace instead, so `task_runtime` carries only `fillfactor`.
+
+`REINDEX CONCURRENTLY` is what reclaims that space, returning the index to 17 pages while claims continue:
+
+```sql
+REINDEX INDEX CONCURRENTLY workhorse.task_runtime_ready_idx;
+```
+
+Workhorse schedules no reindex, and the measured growth is a bounded plateau rather than a leak, so an installation needs none by default. The open question is whether the plateau scales with the backlog. `pnpm soak:observe` records every `task_runtime` index size, the heap size, the autovacuum counters, and the table's storage parameters in each observation, and `pnpm soak:report` derives the per-index growth across the series. An operator who sees that series climb rather than settle has the statement above as the lever.
+
 `concurrency_key` is null or a non-empty UTF-8 string through 256 bytes. `task` retains the accepted value, while `task_runtime` duplicates it for admission without joining lifetime identity. The key is queue-scoped. Keyless tasks consume only queue capacity.
 
 `task_runtime_active_queue_key_expiry_idx` contains only active rows and orders them by queue, concurrency key, and task identity. `claim_v1` reads heap-only `expires_at` while counting admission pressure. The concurrency policy bounds those candidates. Neither active partial index stores `expires_at`, so an accepted heartbeat can use a HOT update.

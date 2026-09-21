@@ -10,7 +10,7 @@
  */
 
 /** Bumped when a field changes meaning. The report refuses a format it was not written against. */
-export const OBSERVATION_FORMAT = 1;
+export const OBSERVATION_FORMAT = 2;
 
 /** The two daily-partitioned history parents. */
 export const HISTORY_PARENTS = ["task_event", "attempt_history"] as const;
@@ -110,6 +110,39 @@ export interface KillRecovery {
   tasksSucceededMoreThanOnce: number;
 }
 
+/** One index on `task_runtime`, sized in bytes rather than pages so the block size cannot mislead. */
+export interface RuntimeIndex {
+  name: string;
+  bytes: number;
+}
+
+/**
+ * What `task_runtime` costs on disk, and what autovacuum has done about it.
+ *
+ * A soak is the only place this can be seen. `task_runtime` holds a live task and releases it at a
+ * terminal state, so its row count says nothing about the churn that passed through it, and a
+ * reinstalled database starts every index at one page. Only a series of snapshots of one
+ * never-reinstalled installation shows whether an index settles or climbs.
+ *
+ * The vacuum counters are recorded beside the sizes because they are the mechanism. An index that
+ * climbs while autovacuum never runs is a vacuum that is not keeping up; one that climbs while
+ * autovacuum runs constantly is something else. `reloptions` records the settings the installation
+ * actually carries, so a series taken under settings an operator changed by hand says so itself.
+ */
+export interface RuntimeStorageFacts {
+  /** Every index on `workhorse.task_runtime`, by name. */
+  indexes: RuntimeIndex[];
+  /** The table's own heap, excluding indexes and TOAST. */
+  heapBytes: number;
+  liveTuples: number;
+  deadTuples: number;
+  /** Autovacuum passes over this table since the statistics were last reset. */
+  autovacuumCount: number;
+  lastAutovacuumAt: string | null;
+  /** Storage parameters set on the table, verbatim, or null when it carries none. */
+  reloptions: string[] | null;
+}
+
 export interface SoakObservation {
   format: typeof OBSERVATION_FORMAT;
   /** The database's own clock, not the collector host's. */
@@ -122,6 +155,7 @@ export interface SoakObservation {
   throughput: ThroughputDay[];
   /** Live tasks by runtime state. Terminal work is counted by the statistics tier instead. */
   backlog: Record<string, number>;
+  runtimeStorage: RuntimeStorageFacts;
   workers: WorkerFacts[];
   /** The `workhorse.queue_health_v1()` document, verbatim. */
   queueHealth: unknown;

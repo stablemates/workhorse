@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { OBSERVATION_FORMAT } from "../../../scripts/soak/observation.js";
 import { collectSoakObservation, observationFileName } from "../../../scripts/soak/observe.js";
 import { buildSoakReport } from "../../../scripts/soak/report.js";
 import { WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
@@ -17,7 +18,7 @@ describe("soak observation collector", () => {
 
     // Every statement the collector issues runs inside a read-only transaction. Reaching this
     // assertion at all is the evidence: one write would have failed the whole collection.
-    expect(observation.format).toBe(1);
+    expect(observation.format).toBe(OBSERVATION_FORMAT);
     expect(observation.database.name).toMatch(/workhorse/);
     expect(Date.parse(observation.observedAt)).toBeGreaterThan(0);
     expect(observation.installation.schemaVersion).toBe(WORKHORSE_SCHEMA_VERSION);
@@ -26,6 +27,32 @@ describe("soak observation collector", () => {
       version: 1,
       description: "baseline",
     });
+  });
+
+  it("sizes every task_runtime index and records what autovacuum was told", async () => {
+    await queue.enqueue("soak-runtime-storage", {});
+
+    const observation = await collectSoakObservation(pool);
+    const storage = observation.runtimeStorage;
+
+    // Named rather than counted: a later migration that adds an index should show up here as a
+    // new series in the soak report, not as a silently different number.
+    const names = storage.indexes.map((index) => index.name);
+    expect(names).toContain("task_runtime_pkey");
+    expect(names).toContain("task_runtime_ready_idx");
+    expect(names).toContain("task_runtime_ready_age_idx");
+    // A partial index holding nothing occupies no file at all, so only the two an enqueued task
+    // enters are asserted to have a size. The rest are asserted to be sized, not to be non-empty.
+    const sized = new Map(storage.indexes.map((index) => [index.name, index.bytes]));
+    expect(sized.get("task_runtime_ready_idx")).toBeGreaterThan(0);
+    expect(sized.get("task_runtime_pkey")).toBeGreaterThan(0);
+    for (const index of storage.indexes) expect(index.bytes).toBeGreaterThanOrEqual(0);
+    expect(storage.heapBytes).toBeGreaterThan(0);
+
+    // A soak series is only readable against the settings the installation actually carried while
+    // it ran, so the observation records them verbatim rather than assuming the schema's.
+    expect(storage.reloptions).toEqual(["fillfactor=70"]);
+    expect(storage.autovacuumCount).toBeGreaterThanOrEqual(0);
   });
 
   it("sees the daily partitions the installation prepared ahead", async () => {

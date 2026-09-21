@@ -25,6 +25,7 @@ interface ObservationOverrides {
   retainedBefore?: string;
   throughput?: ThroughputDay[];
   killRecovery?: SoakObservation["killRecovery"];
+  runtimeStorage?: Partial<SoakObservation["runtimeStorage"]>;
 }
 
 function observation(observedAt: string, overrides: ObservationOverrides = {}): SoakObservation {
@@ -64,6 +65,19 @@ function observation(observedAt: string, overrides: ObservationOverrides = {}): 
     },
     throughput: overrides.throughput ?? [],
     backlog: { ready: 5, active: 2 },
+    runtimeStorage: {
+      indexes: [
+        { name: "task_runtime_ready_idx", bytes: 8192 },
+        { name: "task_runtime_pkey", bytes: 8192 },
+      ],
+      heapBytes: 16384,
+      liveTuples: 7,
+      deadTuples: 0,
+      autovacuumCount: 0,
+      lastAutovacuumAt: null,
+      reloptions: ["fillfactor=70"],
+      ...overrides.runtimeStorage,
+    },
     workers: [],
     queueHealth: { captured_at: observedAt, status: { level: "healthy", reasons: [] } },
     ...(overrides.killRecovery === undefined ? {} : { killRecovery: overrides.killRecovery }),
@@ -100,6 +114,64 @@ describe("soak report", () => {
 
     // 2025-12-31 precedes the window and 2026-01-04 is prepared rather than reached.
     expect(report.partitions.rolloverDays).toEqual(["2026-01-01", "2026-01-02", "2026-01-03"]);
+  });
+
+  it("follows each runtime index across the window", () => {
+    const report = buildSoakReport([
+      observation("2026-01-01T00:10:00.000Z", {
+        runtimeStorage: {
+          indexes: [
+            { name: "task_runtime_ready_idx", bytes: 139_264 },
+            { name: "task_runtime_pkey", bytes: 90_112 },
+          ],
+          heapBytes: 2_195_456,
+          autovacuumCount: 4,
+        },
+      }),
+      observation("2026-01-02T00:10:00.000Z", {
+        runtimeStorage: {
+          indexes: [
+            { name: "task_runtime_ready_idx", bytes: 4_554_752 },
+            { name: "task_runtime_pkey", bytes: 180_224 },
+          ],
+          heapBytes: 7_380_992,
+          autovacuumCount: 11,
+          reloptions: ["fillfactor=70", "autovacuum_vacuum_scale_factor=0.01"],
+        },
+      }),
+    ]);
+
+    expect(report.runtimeStorage.indexes.map((index) => index.name)).toEqual([
+      "task_runtime_pkey",
+      "task_runtime_ready_idx",
+    ]);
+    expect(report.runtimeStorage.indexes[0]).toMatchObject({
+      firstBytes: 90_112,
+      lastBytes: 180_224,
+      maximumBytes: 180_224,
+      growth: 2,
+    });
+    expect(report.runtimeStorage.indexes[1]).toMatchObject({
+      firstBytes: 139_264,
+      lastBytes: 4_554_752,
+      maximumBytes: 4_554_752,
+    });
+    expect(report.runtimeStorage.indexes[1]!.growth).toBeCloseTo(32.7, 1);
+    expect(report.runtimeStorage.autovacuumPasses).toBe(7);
+    expect(report.runtimeStorage.reloptions).toEqual([
+      "fillfactor=70",
+      "autovacuum_vacuum_scale_factor=0.01",
+    ]);
+    expect(renderSoakReport(report)).toContain("4.3 MiB");
+  });
+
+  it("reports no vacuum passes rather than a negative count after a statistics reset", () => {
+    const report = buildSoakReport([
+      observation("2026-01-01T00:10:00.000Z", { runtimeStorage: { autovacuumCount: 40 } }),
+      observation("2026-01-02T00:10:00.000Z", { runtimeStorage: { autovacuumCount: 2 } }),
+    ]);
+
+    expect(report.runtimeStorage.autovacuumPasses).toBe(0);
   });
 
   it("reads a dropped partition as a retention pass", () => {

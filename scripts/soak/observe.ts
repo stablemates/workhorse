@@ -25,6 +25,7 @@ import {
   type HistoryParent,
   type KillRecovery,
   OBSERVATION_FORMAT,
+  type RuntimeStorageFacts,
   type SoakObservation,
   type ThroughputDay,
 } from "./observation.js";
@@ -209,6 +210,55 @@ async function readRetention(client: PoolClient): Promise<SoakObservation["reten
 }
 
 /**
+ * What `task_runtime` costs on disk right now.
+ *
+ * Sizes come from `pg_relation_size`, which reads the file on disk rather than a statistic, so it
+ * is exact at the observed instant. The tuple counts and vacuum counters come from the cumulative
+ * statistics, which live outside the transaction snapshot; they describe the same table a moment
+ * either side of it, which is the resolution a daily series needs.
+ */
+async function readRuntimeStorage(client: PoolClient): Promise<RuntimeStorageFacts> {
+  const indexes = await client.query<{ name: string; bytes: string }>(
+    `SELECT index.relname AS name, pg_relation_size(index.oid)::text AS bytes
+       FROM pg_class runtime
+       JOIN pg_namespace namespace ON namespace.oid = runtime.relnamespace
+       JOIN pg_index link ON link.indrelid = runtime.oid
+       JOIN pg_class index ON index.oid = link.indexrelid
+      WHERE namespace.nspname = 'workhorse' AND runtime.relname = 'task_runtime'
+      ORDER BY index.relname`,
+  );
+  const table = await client.query<{
+    heap_bytes: string;
+    live_tuples: string;
+    dead_tuples: string;
+    autovacuum_count: string;
+    last_autovacuum: Date | null;
+    reloptions: string[] | null;
+  }>(
+    `SELECT pg_relation_size(runtime.oid)::text AS heap_bytes,
+            runtime.reloptions,
+            coalesce(stat.n_live_tup, 0)::text AS live_tuples,
+            coalesce(stat.n_dead_tup, 0)::text AS dead_tuples,
+            coalesce(stat.autovacuum_count, 0)::text AS autovacuum_count,
+            stat.last_autovacuum
+       FROM pg_class runtime
+       JOIN pg_namespace namespace ON namespace.oid = runtime.relnamespace
+       LEFT JOIN pg_stat_all_tables stat ON stat.relid = runtime.oid
+      WHERE namespace.nspname = 'workhorse' AND runtime.relname = 'task_runtime'`,
+  );
+  const row = table.rows[0]!;
+  return {
+    indexes: indexes.rows.map((index) => ({ name: index.name, bytes: count(index.bytes) })),
+    heapBytes: count(row.heap_bytes),
+    liveTuples: count(row.live_tuples),
+    deadTuples: count(row.dead_tuples),
+    autovacuumCount: count(row.autovacuum_count),
+    lastAutovacuumAt: instant(row.last_autovacuum),
+    reloptions: row.reloptions,
+  };
+}
+
+/**
  * Closed days of the daily statistics tier.
  *
  * Only days below `daily_rolled_up_through` are read. A closed day is immutable, so two
@@ -383,6 +433,7 @@ export async function collectSoakObservation(
       retention: await readRetention(client),
       throughput: await readThroughput(client),
       backlog: Object.fromEntries(backlog.rows.map((row) => [row.state, count(row.tasks)])),
+      runtimeStorage: await readRuntimeStorage(client),
       workers: workers.rows.map((row) => ({
         workerId: row.worker_id,
         hostname: row.hostname,
