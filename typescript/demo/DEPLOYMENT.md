@@ -205,6 +205,12 @@ The demo container is limited to one CPU, 1 GiB of memory, and 256 processes. Th
 limited to half a CPU, 256 MiB of memory, and 128 processes. Keep equivalent limits so traffic or a
 runaway process cannot consume the host's full capacity.
 
+The single CPU sets the container's start order. The entry point starts the server alone and starts
+the workers once the server answers `/up` itself. A health check therefore waits only for the
+server's startup, not for every process's startup at once. A server that exits first, or a shutdown
+that arrives first, starts no worker. The workers begin a few seconds after the server, while the
+previous container is still draining.
+
 That memory limit and the image's Node heap ceiling are one pair. `Dockerfile` sets
 `NODE_OPTIONS=--max-old-space-size=128` in its runtime stage. V8 sizes a heap from a fixed default
 rather than from the container, so an uncapped Node process here believes it may grow to 4288 MB.
