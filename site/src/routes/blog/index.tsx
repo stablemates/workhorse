@@ -7,11 +7,12 @@ import { blogIndexHead } from "@/lib/seo";
  * `/blog`: every post newest first with its title, date, and description.
  *
  * With zero posts the page still builds, because TanStack Start prerenders
- * every static route, but nothing links it and the sitemap does not list it,
- * so a reader only ever reaches it once there is something to read.
+ * every static route, and nothing links it and the sitemap does not list it, so
+ * no reader reaches it. A crawler does: Search Console found it on 2026-09-20.
+ * The head asks not to be indexed until there is something to read.
  */
 export const Route = createFileRoute("/blog/")({
-  head: () => blogIndexHead(),
+  head: () => blogIndexHead(posts.length > 0),
   component: BlogIndex,
 });
 

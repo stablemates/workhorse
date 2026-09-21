@@ -100,7 +100,9 @@ date: 2026-09-07
 - With zero posts the "Blog" link is absent from the header and the footer,
   and `/blog` is absent from the sitemap and the prerender list, so the
   section can live on `main` before the first post without an empty page
-  reaching a reader.
+  reaching a reader. TanStack Start still prerenders the route, and a crawler
+  found the page that way, so `lib/seo.ts` gives it `robots: noindex` and drops
+  its feed link until a post exists. Both return with the first post.
 - A post's code is not compiled by `scripts/check-language-examples.ts`. A
   post either reuses a snippet from `lib/landing-snippets.ts` or verifies its
   example against the source by hand, as the writing rules in the repository

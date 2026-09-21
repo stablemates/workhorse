@@ -204,16 +204,65 @@ describe("the origin's negotiation and Markdown type", () => {
   });
 
   // The 404 bodies are files in the web root. Without `internal`, a crawler
-  // that reaches /404.md gets a 200 page to index.
-  it("keeps the 404 bodies internal", async () => {
+  // that reaches /404.md gets a 200 page to index, and /not-found is the same
+  // page under the URL the prerenderer emits.
+  it("keeps the 404 bodies and both not-found URLs internal", async () => {
     const source = await config();
     const internalBlock = [...source.matchAll(/^  location ~ ([^{]+)\{([^}]*)\}/gm)].find((block) =>
       block[2]!.includes("internal;"),
     );
     expect(internalBlock).toBeDefined();
-    const pattern = internalBlock![1]!;
-    expect(pattern).toContain("404\\.(md|json)");
-    expect(pattern).toContain("not-found/index\\.html");
+    // The pattern is nginx's, so it is asserted by what it matches rather than
+    // by its text: a rewrite that still reads correctly can stop covering a URL.
+    const pattern = new RegExp(internalBlock![1]!.trim());
+    for (const uri of ["/404.md", "/404.json", "/not-found", "/not-found/index.html"]) {
+      expect(pattern.test(uri), `${uri} should be internal`).toBe(true);
+    }
+    for (const uri of ["/", "/docs/quickstart", "/docs/quickstart.md"]) {
+      expect(pattern.test(uri), `${uri} should not be internal`).toBe(false);
+    }
+  });
+
+  // A twin restates a page a search engine already has. noindex settles that
+  // without a Disallow, so the agent the twin exists for still reads it.
+  // `typescript/core/test/site-nginx-smoke.ts` proves the served header, but it
+  // needs an nginx the CI image does not carry, so the rule is asserted here.
+  it("answers a twin and the agent indexes with noindex, and a page without", async () => {
+    const source = await config();
+    const block = [...source.matchAll(/^  location ~ ([^{]+)\{([^}]*)\}/gm)].find((entry) =>
+      entry[2]!.includes("X-Robots-Tag"),
+    );
+    expect(block).toBeDefined();
+    expect(block![2]).toContain("add_header X-Robots-Tag noindex always;");
+    const pattern = new RegExp(block![1]!.trim());
+    for (const uri of ["/docs/quickstart.md", "/docs.md", "/about.md", "/llms.txt"]) {
+      expect(pattern.test(uri), `${uri} should answer noindex`).toBe(true);
+    }
+    // The canonical page must not, or the twin's noindex would deindex the page
+    // it stands for. Nor may the sitemap, which a crawler is meant to read.
+    for (const uri of ["/docs/quickstart", "/", "/sitemap.xml", "/robots.txt"]) {
+      expect(pattern.test(uri), `${uri} should not answer noindex`).toBe(false);
+    }
+  });
+
+  // One page, one URL. try_files accepts a path with or without a trailing
+  // slash, so the redirect is what keeps the second URL from answering 200.
+  it("redirects a trailing slash to the canonical path, and exempts the root", async () => {
+    const source = await config();
+    const block = /^  location ~ ([^{]+)\{\s*return 301 \$1\$is_args\$args;\s*\}/m.exec(source);
+    expect(block).toBeDefined();
+    const pattern = new RegExp(block![1]!.trim());
+    expect(pattern.test("/docs/quickstart/")).toBe(true);
+    expect(pattern.test("/docs/")).toBe(true);
+    expect(pattern.test("/"), "the root's trailing slash is its canonical form").toBe(false);
+    expect(pattern.test("/docs/quickstart")).toBe(false);
+  });
+
+  // nginx would otherwise rebuild each Location from the Host and the scheme
+  // the origin was served over, which is plain HTTP behind the edge. A reader
+  // on HTTPS would be sent to the http:// URL and bounced back.
+  it("sends every redirect as a path rather than an absolute URL", async () => {
+    expect(await config()).toMatch(/^\s*absolute_redirect off;$/m);
   });
 
   it("answers a Markdown-only client with 406 when a page has no twin", async () => {
