@@ -15,6 +15,87 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 `0.1.0` the schema upgrades in place: every release ships ordered, immutable migrations, and inside
 a major line a migration only adds. Breaking changes are always listed with upgrade steps.
 
+## 0.3.0 — 2026-09-21
+
+The npm packages, Python distribution, and Go module release from one source commit.
+
+Requires **schema v18**, Node.js **22** or newer, and PostgreSQL **15** or newer.
+
+**A 0.2.x database upgrades in place.** Run `workhorse schema migrate` from a deployment step before
+any process from this release starts. It applies migrations 0010 through 0023 and leaves the
+installation at schema version 23. Every step is additive: it replaces read and transition functions
+or adds one, and 0023 also releases the dependency edges a cancellation abandoned. No table changes,
+no database is dropped, and no data is lost.
+
+**A process from this release refuses a schema below version 18.** The compatibility gate's floor is
+now derived from the newest function the SDKs call, rather than held at 1 by hand. A lagging
+installation is refused at startup instead of failing on its first dashboard read, after the process
+has taken work. Migrating before any new process starts is what the deployment contract already
+asks for, so a pipeline that follows it sees no change.
+
+**0.1.x support is dropped.** The migration chain now starts at the 0.2.0 baseline, schema version 6
+([ADR 0073](docs/decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)). Workhorse
+0.2.1 is the last release that migrates a database below the baseline: reach the baseline with
+0.2.1, then upgrade to this release. The refusal names it. The 0.1.x line had no production
+installation, which is what made the chain prunable.
+
+- Give every worker a connection pool, and reserve one heartbeat connection from that pool. A worker
+  whose pool cannot lend one refuses to start, naming the capacity it found, the capacity it needs,
+  and the opt-out. `sharedHeartbeats` takes heartbeat rounds back to the shared pool, which is how a
+  single connection or a small pool runs
+  ([ADR 0071](docs/decisions/0071-give-every-worker-a-pool-and-a-dedicated-heartbeat-connection.md)).
+- Remove `notificationPool` from the Prisma, TypeORM, and Kysely adapters. TypeORM finds its pool
+  through `dataSource.driver.master`, and Prisma and Kysely take one through the adapter option
+  `pool`. Drizzle keeps finding its pool through `$client`.
+- Release a task whose type a worker has no handler for, instead of failing it. `release_owned_v1`
+  returns the claim to its queue with the attempt intact, appends a `released` event the dashboard
+  timeline labels, and charges the held lease to the execution-timeout budget. During a rolling
+  deployment the old release no longer spends the retry budget of a type only the new release runs.
+- Keep every task running through a heartbeat round that fails, and retry on the next beat. Each
+  attempt keeps its own lease watchdog: once one lease passes with no accepted renewal, the attempt
+  submits `lease_expired`, aborts its handler, and records `lease_lost` without failing the attempt.
+- Warn once when a worker starts without a listener. Polling is the correctness mechanism, so a
+  missing listener costs latency rather than correctness, but it is no longer silent.
+- Release a canceled dependent's incoming dependency edges. A dependent canceled while it was still
+  blocked used to hold its prerequisite's identity against retention, which queue health reported as
+  `retentionPruneStarved`.
+- Never skip a busy schedule occurrence. The firing pass takes each occurrence's advisory lock
+  itself and ends evaluation for that definition when another transaction holds it, so a manual fire
+  that rolled back no longer strands an occurrence. The pass also reads its evaluation instant from
+  the database clock rather than the caller's.
+- Keep expiration timers armed past 24.8 days.
+- Refuse a debounce replacement once a task has started.
+- Hold a per-budget lock during budget admission, so two claims cannot admit past one budget.
+- Compare promotion and recovery scans against one stable time.
+- Name `pg_temp` in every history-day staging reference. A caller's `search_path` can no longer
+  redirect maintenance to a table of the same name in a writable schema.
+- Lock only the row a claim takes. A claim on a queue whose keys are all saturated wrote a row lock
+  for each of the 100 rows it sampled; it now writes none, and an admitting claim writes one.
+- Skip the enqueue dependency block for a request that declares no prerequisite. Measured on 200
+  dependency-free tasks in one call, the median fell from 70.599 ms to 44.287 ms.
+- Give the three SDKs one failure envelope. An unredacted failure carries exactly name, message, and
+  stack, and a redacted one carries the two fields `redact_error_details_v1` writes. A thrown
+  non-Error now records a null stack rather than omitting the field.
+- Render the dashboard only when a poll changed something. An unchanged poll writes no state, a
+  changed one commits once rather than twice, each row compares the fields it draws, and the task
+  drawer is fetched the first time an operator opens one.
+- Bound every dashboard task read, serve the queue health snapshot from cache, bin activity once per
+  poll, and compress RPC answers. A withheld task value is shown by size until an operator asks for
+  it.
+- Tell sunsetting workers from replacements on the Workers page. A Started column carries an exact
+  timestamp on hover, and a draining or offline worker renders an inert Claims cell that says why
+  instead of a switch that controls nothing.
+- Refuse a dashboard request whose `Host` is not the dashboard's own address. Bound RPC bodies, hide
+  stacks off loopback, and return to the mount after login.
+- Order generated spec properties by declaration site. An unrelated declaration elsewhere in the
+  repository can no longer reorder the `dashboard/v1` schemas or the Go and Python bindings.
+- Document that a signal or human wait which omits its timeout expires after seven days, and that
+  the expiry is terminal.
+- Move the dashboard to Mantine 9 and pin zod 4.6.5. `taskFailures.rangeStart` and `rangeEnd` now
+  require seconds in their ISO datetime, which RFC 3339 requires and which every first-party caller
+  already sends.
+- Move every optional package's peer range on `@stablemates/workhorse` to `>=0.3.0 <0.4.0`.
+
 ## 0.2.1 — 2026-09-18
 
 The npm packages, Python distribution, and Go module release from one source commit.

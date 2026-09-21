@@ -4,8 +4,8 @@
 
 Schema version 6 is the migration baseline and schema version 23 is current. `sql/schema/current.sql` is the tracked source and
 `sql/schema.sql` is a build artifact for published packages. `sql/releases/` holds the frozen
-clean-install artifact of every supported published release: `0006.sql` is 0.2.0 and `0009.sql` is
-0.2.1.
+clean-install artifact of every supported published release: `0006.sql` is 0.2.0, `0009.sql` is
+0.2.1, and `0023.sql` is 0.3.0.
 `sql/migrations/` holds the ordered steps that carry a baseline installation forward to the current
 version; each new schema version adds one more step there.
 
