@@ -38,6 +38,47 @@ const packedDatabaseUrl = process.env.DATABASE_URL_TEST_PACKED;
 if (!packedDatabaseUrl) throw new Error("DATABASE_URL_TEST_PACKED is required");
 const configuredTarballs = process.env.WORKHORSE_NPM_TARBALLS;
 
+/**
+ * The range a workspace manifest declares for one dependency, from whichever section declares it.
+ */
+async function declaredRange(manifest: string, dependency: string): Promise<string> {
+  const sections = JSON.parse(await readFile(path.join(repository, manifest), "utf8")) as Record<
+    string,
+    Record<string, string> | undefined
+  >;
+  for (const section of ["dependencies", "devDependencies", "peerDependencies"]) {
+    const range = sections[section]?.[dependency];
+    if (typeof range === "string") return range;
+  }
+  throw new Error(`${manifest} declares no range for ${dependency}`);
+}
+
+/**
+ * Ranges the consumer shares with the repository, rather than pinned versions of its own.
+ *
+ * A packed package and the consumer have to agree on the libraries they exchange values and types
+ * through. The type smoke calls `drizzle({ client: pool })`, where `Pool` comes from the packed
+ * `@stablemates/workhorse` and `NodePgClient` comes from the consumer's own `drizzle-orm`, so that
+ * call typechecks only while both sides see one `@types/pg`. The dashboard smoke imports a packed
+ * component whose hooks need the React the dashboard declares. A pinned version here is a second
+ * place to remember: dependency bumps moved the repository's ranges, left these pins behind, and
+ * the skew broke both smokes. Declaring the manifests' own ranges makes one install resolve one
+ * copy of each package, so the two cannot drift apart again.
+ *
+ * These are not a `peerDependencies` floor. `@stablemates/workhorse` declares `pg` and `@types/pg`
+ * as dependencies rather than peers, and the floors its siblings do declare — `pg >=8.13 <9`,
+ * `drizzle-orm >=0.45.0 <1`, `react >=19 <20` — admit every range below.
+ */
+const shared = {
+  "drizzle-orm": await declaredRange("typescript/drizzle/package.json", "drizzle-orm"),
+  pg: await declaredRange("typescript/core/package.json", "pg"),
+  "@types/pg": await declaredRange("typescript/core/package.json", "@types/pg"),
+  react: await declaredRange("typescript/dashboard/package.json", "react"),
+  "react-dom": await declaredRange("typescript/dashboard/package.json", "react-dom"),
+  "@types/react": await declaredRange("dashboard/app/package.json", "@types/react"),
+  "@types/react-dom": await declaredRange("dashboard/app/package.json", "@types/react-dom"),
+};
+
 async function run(
   command: string,
   args: string[],
@@ -407,19 +448,19 @@ try {
           ...Object.fromEntries(
             published.map((entry) => [entry.name, `file:${path.join(tarballs, entry.tarball)}`]),
           ),
-          "drizzle-orm": "0.45.2",
+          "drizzle-orm": shared["drizzle-orm"],
           "@prisma/client": "6.19.3",
           prisma: "6.19.3",
           typeorm: "0.3.31",
           kysely: "0.29.5",
-          pg: "8.16.3",
+          pg: shared.pg,
           typescript: "5.8.3",
           "@types/node": "24.1.0",
-          "@types/pg": "8.15.5",
-          react: "19.1.1",
-          "react-dom": "19.1.1",
-          "@types/react": "19.1.10",
-          "@types/react-dom": "19.1.7",
+          "@types/pg": shared["@types/pg"],
+          react: shared.react,
+          "react-dom": shared["react-dom"],
+          "@types/react": shared["@types/react"],
+          "@types/react-dom": shared["@types/react-dom"],
           "@opentelemetry/api": "1.9.1",
           "@opentelemetry/api-logs": "0.221.0",
           "@opentelemetry/sdk-metrics": "2.10.0",
