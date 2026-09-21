@@ -1,4 +1,4 @@
-FROM node:24-alpine AS build
+FROM node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf AS build
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -28,17 +28,43 @@ RUN mkdir /artifacts \
   && pnpm --silent --dir typescript/dashboard pack --pack-destination /artifacts \
   && mv /artifacts/stablemates-workhorse-dashboard-[0-9]*.tgz /artifacts/workhorse-dashboard.tgz
 
-FROM node:24-alpine AS production-dependencies
+# The dependencies the four packed packages declare, resolved from the committed lockfile rather
+# than from the registry. Installing the tarballs directly would let npm pick whatever satisfies
+# `pg@^8.23.0` and every range below it on the day of the build, so the same commit would produce a
+# different tree tomorrow. `pnpm deploy` reads pnpm-lock.yaml instead, which pins every version.
+#
+# One deploy per package that has dependencies. A deploy puts that package's direct dependencies at
+# the root of its node_modules and everything below them under node_modules/.pnpm, so the three
+# roots merge into one tree in which every import a packed package makes resolves. Their overlap is
+# the same version from the same lockfile either way.
+RUN pnpm --filter @stablemates/workhorse deploy --prod --legacy /dependencies/core \
+  && pnpm --filter @stablemates/workhorse-dashboard-server deploy --prod --legacy /dependencies/dashboard-server \
+  && pnpm --filter @stablemates/workhorse-dashboard deploy --prod --legacy /dependencies/dashboard
+
+FROM node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf AS production-dependencies
 
 WORKDIR /opt/workhorse
+COPY --from=build /dependencies/core/node_modules/ ./node_modules/
+COPY --from=build /dependencies/dashboard-server/node_modules/ ./node_modules/
+COPY --from=build /dependencies/dashboard/node_modules/ ./node_modules/
 COPY --from=build /artifacts/ /artifacts/
-RUN npm install --omit=dev --ignore-scripts \
-  /artifacts/workhorse-core.tgz \
-  /artifacts/workhorse-dashboard-contract.tgz \
-  /artifacts/workhorse-dashboard-server.tgz \
-  /artifacts/workhorse-dashboard.tgz
 
-FROM node:24-alpine AS runtime
+# The four packages themselves come from the tarballs `npm publish` would upload, so the image runs
+# what a consumer would install. Each replaces the workspace link the deploy left behind.
+RUN set -eu \
+  && for entry in \
+       workhorse-core:workhorse \
+       workhorse-dashboard-contract:workhorse-dashboard-contract \
+       workhorse-dashboard-server:workhorse-dashboard-server \
+       workhorse-dashboard:workhorse-dashboard; do \
+    target="node_modules/@stablemates/${entry#*:}"; \
+    rm -rf "$target"; \
+    mkdir -p "$target"; \
+    tar -xzf "/artifacts/${entry%:*}.tgz" -C "$target" --strip-components=1; \
+  done \
+  && rm -rf /artifacts
+
+FROM node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf AS runtime
 
 ENV NODE_ENV=production
 WORKDIR /opt/workhorse

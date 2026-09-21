@@ -30,6 +30,14 @@ Both Dockerfiles pin every base image by its multi-platform manifest digest. Whe
 image, resolve the new tag to a digest and commit both values together. The tag documents the
 intended release; the digest prevents a registry-side tag change from altering a build.
 
+Both build stages prepare the pnpm version `packageManager` names. That version is written out in
+each Dockerfile as well, so it lives in three places: `package.json`, `mise.toml`, and the
+Dockerfiles. Move all of them together.
+
+Neither published image runs as root. The demo image runs as the `node` user. The site image builds
+on nginx-unprivileged, whose master process runs as UID 101 and listens on 8080; a deployment that
+publishes the site on 80 or 443 does that at the edge, not in the container.
+
 Both builds cap each Node process at a 2 GiB heap. V8 otherwise sizes a heap from a fixed default,
 not from the machine. Concurrent compilers on a small build machine can then ask for more memory
 than it has. If a build genuinely needs more, raise `NODE_OPTIONS` at build time. Only the build
@@ -44,6 +52,15 @@ HTML. Every negotiated response carries `Vary: Accept`, and a 404 answers in the
 client asked for. If a CDN or cache sits in front of the site, it must honour `Vary` and must not
 strip the header, or a browser can receive a cached twin. After a deploy that changes negotiation,
 the operator must purge that cache.
+
+The site origin sends three security headers on every response, including its errors, its redirects
+and its cached assets: `X-Content-Type-Options: nosniff`, a `Content-Security-Policy` that names
+`frame-ancestors 'none'`, `base-uri 'self'` and `object-src 'none'`, and
+`Referrer-Policy: strict-origin-when-cross-origin`. An edge or cache in front of the site must
+forward them unchanged. The policy restricts framing, the document base and plugin embedding only;
+it names no script or style source, so tightening it further is a change to the page bundle as well
+as to the header. Transport security belongs to whatever terminates TLS: the origin sets no
+`Strict-Transport-Security` header, so the edge must.
 
 The site nginx disables origin access logging because the public privacy notice says the origin
 keeps no access log. An operator must update that notice before enabling request logs anywhere in
