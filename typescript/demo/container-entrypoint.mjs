@@ -70,17 +70,14 @@ if (process.env.DATABASE_URL_SECONDARY) {
   });
 }
 
-const children = processes.map(({ name, command, arguments: arguments_, environment }) => ({
-  name,
-  child: spawn(command, arguments_, {
-    env: { ...process.env, ...environment },
-    stdio: "inherit",
-  }),
-}));
-
+const children = [];
 let stopping = false;
 let shutdownRequested = false;
 let forceKillTimer;
+let markStopped;
+const stopped = new Promise((resolve) => {
+  markStopped = resolve;
+});
 const shutdownGraceMs = Number(process.env.WORKHORSE_DEMO_SHUTDOWN_GRACE_MS ?? 30_000);
 if (!Number.isFinite(shutdownGraceMs) || shutdownGraceMs < 0) {
   throw new Error("WORKHORSE_DEMO_SHUTDOWN_GRACE_MS must be a non-negative number");
@@ -89,6 +86,7 @@ if (!Number.isFinite(shutdownGraceMs) || shutdownGraceMs < 0) {
 function stop(signal) {
   if (stopping) return;
   stopping = true;
+  markStopped();
   for (const { child } of children) {
     if (child.exitCode === null && child.signalCode === null) child.kill(signal);
   }
@@ -107,22 +105,55 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   });
 }
 
-const exitCodes = await Promise.all(
-  children.map(
-    ({ name, child }) =>
-      new Promise((resolve) => {
-        child.once("error", (error) => {
-          console.error(`Could not start the demo ${name}`, error);
-          stop("SIGTERM");
-          resolve(1);
-        });
-        child.once("exit", (code, signal) => {
-          if (!stopping) stop("SIGTERM");
-          resolve(code ?? (signal ? 1 : 0));
-        });
-      }),
-  ),
-);
+function launch({ name, command, arguments: arguments_, environment }) {
+  const child = spawn(command, arguments_, {
+    env: { ...process.env, ...environment },
+    stdio: "inherit",
+  });
+  const exited = new Promise((resolve) => {
+    child.once("error", (error) => {
+      console.error(`Could not start the demo ${name}`, error);
+      stop("SIGTERM");
+      resolve(1);
+    });
+    child.once("exit", (code, signal) => {
+      if (!stopping) stop("SIGTERM");
+      resolve(code ?? (signal ? 1 : 0));
+    });
+  });
+  children.push({ name, child, exited });
+}
+
+// The deploy waits for the server to answer `/up`, and the container has one CPU. Starting every
+// process at once made that check wait for the workers' startup as well: about four times as long
+// (SM-859). The server starts alone, and the workers start once it answers `/up` itself. A server
+// that exits first, or a shutdown that arrives first, starts no worker.
+const healthUrl = `http://127.0.0.1:${process.env.PORT ?? 3000}/up`;
+
+async function serverAnswers() {
+  for (;;) {
+    // stop() sets `stopping` from an exit or signal handler while this loop waits.
+    if (stopping) return false;
+    try {
+      const response = await fetch(healthUrl, { signal: AbortSignal.timeout(1_000) });
+      if (response.ok) return true;
+    } catch {
+      // Not listening yet.
+    }
+    const retry = new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
+    await Promise.race([retry, stopped]);
+  }
+}
+
+const [server, ...workers] = processes;
+launch(server);
+if (await serverAnswers()) {
+  for (const worker of workers) launch(worker);
+}
+
+const exitCodes = await Promise.all(children.map(({ exited }) => exited));
 
 if (forceKillTimer) clearTimeout(forceKillTimer);
 process.exitCode = shutdownRequested ? 0 : (exitCodes.find((code) => code !== 0) ?? 0);

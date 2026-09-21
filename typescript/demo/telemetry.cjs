@@ -3,13 +3,9 @@
 // OpenTelemetry must initialize before Hono, pg, or the worker runtime loads. Keeping this as a
 // CommonJS preload makes that ordering explicit for both the TypeScript watcher and compiled app.
 const { resolve } = require("node:path");
-const {
-  getNodeAutoInstrumentations,
-  getResourceDetectors,
-} = require("@opentelemetry/auto-instrumentations-node");
 const { OTLPLogExporter } = require("@opentelemetry/exporter-logs-otlp-http");
 const { BatchLogRecordProcessor } = require("@opentelemetry/sdk-logs");
-const { NodeSDK } = require("@opentelemetry/sdk-node");
+const { NodeSDK, resources } = require("@opentelemetry/sdk-node");
 const { registerOpenTelemetry } = require("@stablemates/workhorse-otel");
 const { RotatingFileLogExporter } = require("./file-log-exporter.cjs");
 
@@ -74,9 +70,28 @@ if (telemetryEnabled) {
   logRecordProcessors.push(new BatchLogRecordProcessor({ exporter: new OTLPLogExporter() }));
 }
 
+// The auto-instrumentations package loads every instrumentation it bundles, about a quarter of a
+// second of CPU per process, and each of the demo's Node processes pays it at startup (SM-859).
+// Production runs with telemetry off, so load it only when telemetry is on or a configured
+// resource detector needs it. The five local detectors come from the SDK, in the same order.
+const localResourceDetectors = new Map([
+  ["env", resources.envDetector],
+  ["host", resources.hostDetector],
+  ["os", resources.osDetector],
+  ["process", resources.processDetector],
+  ["serviceinstance", resources.serviceInstanceIdDetector],
+]);
+const configuredDetectors = process.env.OTEL_NODE_RESOURCE_DETECTORS.split(",");
+const autoInstrumentations =
+  telemetryEnabled || !configuredDetectors.every((name) => localResourceDetectors.has(name))
+    ? require("@opentelemetry/auto-instrumentations-node")
+    : undefined;
+
 const sdk = new NodeSDK({
-  instrumentations: telemetryEnabled ? [getNodeAutoInstrumentations()] : [],
-  resourceDetectors: getResourceDetectors(),
+  instrumentations: telemetryEnabled ? [autoInstrumentations.getNodeAutoInstrumentations()] : [],
+  resourceDetectors: autoInstrumentations
+    ? autoInstrumentations.getResourceDetectors()
+    : configuredDetectors.map((name) => localResourceDetectors.get(name)),
   logRecordProcessors,
 });
 sdk.start();
