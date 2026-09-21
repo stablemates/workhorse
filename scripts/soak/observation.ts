@@ -127,7 +127,7 @@ export interface RuntimeIndex {
  * The vacuum counters are recorded beside the sizes because they are the mechanism. An index that
  * climbs while autovacuum never runs is a vacuum that is not keeping up; one that climbs while
  * autovacuum runs constantly is something else. `reloptions` records the settings the installation
- * actually carries, so a series spanning the migration that set them shows both sides of it.
+ * actually carries, so a series taken under settings an operator changed by hand says so itself.
  */
 export interface RuntimeStorageFacts {
   /** Every index on `workhorse.task_runtime`, by name. */

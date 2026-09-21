@@ -49,13 +49,9 @@ describe("soak observation collector", () => {
     for (const index of storage.indexes) expect(index.bytes).toBeGreaterThanOrEqual(0);
     expect(storage.heapBytes).toBeGreaterThan(0);
 
-    // The settings migration 0024 applies. A soak series is only readable against the settings the
-    // installation actually carried while it ran.
-    expect(storage.reloptions).toEqual([
-      "fillfactor=70",
-      "autovacuum_vacuum_scale_factor=0.01",
-      "autovacuum_vacuum_cost_delay=0",
-    ]);
+    // A soak series is only readable against the settings the installation actually carried while
+    // it ran, so the observation records them verbatim rather than assuming the schema's.
+    expect(storage.reloptions).toEqual(["fillfactor=70"]);
     expect(storage.autovacuumCount).toBeGreaterThanOrEqual(0);
   });
 
