@@ -2,9 +2,10 @@ from __future__ import annotations
 # ruff: noqa
 
 
+import asyncio
 import json
-from collections.abc import Callable, Mapping
-from contextlib import suppress
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from contextlib import AbstractContextManager, asynccontextmanager, contextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import Empty, SimpleQueue
@@ -13,12 +14,16 @@ from time import monotonic, sleep
 from typing import Any
 
 import psycopg
+import pytest
+from psycopg_pool import AsyncConnectionPool
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from workhorse import (
+    AsyncHandlerContext,
+    AsyncWorker,
     BudgetDefinition,
     ChildTaskRequest,
     EnqueueOptions,
@@ -36,16 +41,64 @@ from workhorse._drivers import SyncExecutor
 REPOSITORY = Path(__file__).parents[2]
 
 
-def test_python_worker_satisfies_every_shared_runtime_fixture(database_url: str) -> None:
+# Fixture kinds AsyncWorker drives through its own bridge. AsyncWorker wraps the same worker core,
+# so what the async flavour proves is that the bridge preserves the core's behavior: handler
+# invocation, the durable context, and the heartbeat executor it opens for itself. The remaining
+# kinds monkeypatch the sync worker's executor or drive raw sessions, so they pin SQL protocol
+# rather than bridge behavior, and the sync flavour owns them.
+ASYNC_RUNTIME_FIXTURE_KINDS = frozenset(
+    {
+        "cooperative-cancellation",
+        "graceful-drain",
+        "heartbeat-failure",
+        "json-round-trip",
+        "maintenance-phase-error",
+        "missing-handler",
+    }
+)
+SYNC_ONLY_RUNTIME_FIXTURE_KINDS = frozenset(
+    {
+        "batch",
+        "budget-admission-race",
+        "expiration",
+        "heartbeat-cadence",
+        "lease-loss",
+        "poll-cadence",
+        "suspension-replay",
+        "trace-propagation",
+    }
+)
+
+
+@pytest.mark.parametrize("worker_flavour", ["sync", "async"])
+def test_python_worker_satisfies_every_shared_runtime_fixture(
+    database_url: str, worker_flavour: str
+) -> None:
     manifest = read_json("protocol/v1/manifest.json")
     fixtures = read_json("protocol/v1/runtime.json")
+    kinds = {fixture["kind"] for fixture in fixtures}
+    # A new fixture kind belongs to one flavour or the other, deliberately.
+    assert kinds <= ASYNC_RUNTIME_FIXTURE_KINDS | SYNC_ONLY_RUNTIME_FIXTURE_KINDS
     coverage: set[str] = set()
 
     with psycopg.connect(database_url, autocommit=True) as connection:
         for fixture in fixtures:
-            execute_runtime_fixture(connection, fixture, database_url)
+            if worker_flavour == "async":
+                if fixture["kind"] not in ASYNC_RUNTIME_FIXTURE_KINDS:
+                    continue
+                asyncio.run(execute_async_runtime_fixture(connection, fixture, database_url))
+            else:
+                execute_runtime_fixture(connection, fixture, database_url)
             coverage.update(fixture["covers"])
 
+    if worker_flavour == "async":
+        assert coverage == {
+            capability
+            for fixture in fixtures
+            if fixture["kind"] in ASYNC_RUNTIME_FIXTURE_KINDS
+            for capability in fixture["covers"]
+        }
+        return
     assert coverage == set(manifest["runtimeCoverage"])
 
 
@@ -69,6 +122,10 @@ def execute_runtime_fixture(
         "budget-admission-race": lambda setup_connection, race_fixture: (
             execute_budget_admission_race_fixture(setup_connection, race_fixture, database_url)
         ),
+        "missing-handler": execute_missing_handler_fixture,
+        "json-round-trip": execute_json_round_trip_fixture,
+        "heartbeat-failure": execute_heartbeat_failure_fixture,
+        "maintenance-phase-error": execute_maintenance_phase_error_fixture,
     }
     assert fixture["kind"] in executors, f"Unsupported runtime fixture kind: {fixture['kind']}"
     executors[fixture["kind"]](connection, fixture)
@@ -767,6 +824,536 @@ def execute_budget_admission_race_fixture(
                     session.execute("ROLLBACK")
             if late_thread is not None:
                 late_thread.join(timeout=10)
+
+
+def injected_function_failure(
+    connection: psycopg.Connection[Any], injection: Mapping[str, Any]
+) -> AbstractContextManager[Callable[[], int]]:
+    """Replaces one installed function with a raising body, and restores it afterwards.
+
+    A runner can then fail a call the SDK makes without reaching into the SDK. The exception rolls
+    the call back, so only a sequence carries the count of raised calls out of it.
+    """
+
+    @contextmanager
+    def replaced() -> Iterator[Callable[[], int]]:
+        row = connection.execute(
+            "SELECT pg_get_functiondef(%s::regprocedure)", (injection["function"],)
+        ).fetchone()
+        assert row is not None
+        original = row[0]
+        sequence = injection.get("counterSequence")
+        count = ""
+        if sequence is not None:
+            connection.execute(f"CREATE SEQUENCE {sequence} MINVALUE 0 START 0")
+            count = f"PERFORM nextval('{sequence}');"
+        connection.execute(
+            f"""CREATE OR REPLACE FUNCTION {injection["header"]} LANGUAGE plpgsql AS $injected$
+                BEGIN
+                  {count}
+                  RAISE EXCEPTION '{injection["message"]}'
+                    USING ERRCODE = '{injection["errorCode"]}';
+                END;
+                $injected$"""
+        )
+
+        def failed_calls() -> int:
+            if sequence is None:
+                return 0
+            counted = connection.execute(f"SELECT last_value FROM {sequence}").fetchone()
+            assert counted is not None
+            return int(counted[0])
+
+        try:
+            yield failed_calls
+        finally:
+            connection.execute(original)
+            if sequence is not None:
+                connection.execute(f"DROP SEQUENCE IF EXISTS {sequence}")
+
+    return replaced()
+
+
+def release_evidence(connection: psycopg.Connection[Any], task_id: str) -> tuple[int, int]:
+    row = connection.execute(
+        "SELECT (SELECT count(*) FROM workhorse.attempt_history WHERE task_id = %s), "
+        "(SELECT count(*) FROM workhorse.task_event "
+        " WHERE task_id = %s AND event_type = 'released')",
+        (task_id, task_id),
+    ).fetchone()
+    assert row is not None
+    return int(row[0]), int(row[1])
+
+
+def execute_missing_handler_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> None:
+    queue_name = runtime_queue(fixture)
+    task_id = Queue(connection).enqueue(
+        fixture["taskType"], {"index": 1}, EnqueueOptions(queue=queue_name)
+    )
+    errors: list[BaseException] = []
+    older = Worker(
+        worker_pool,
+        queue=queue_name,
+        worker_id=f"python-{fixture['id']}-older",
+        lease_ms=fixture["leaseMs"],
+    ).handle(fixture["registeredTaskType"], lambda _payload, _context: None)
+    thread = run_in_thread(older.run, errors)
+    try:
+        wait_for(
+            lambda: release_evidence(connection, task_id)[1] > 0,
+            f"{fixture['id']} released no claim",
+        )
+    finally:
+        older.stop()
+        join(thread)
+    assert errors == []
+    assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedAfterRelease"]})
+    attempts, releases = release_evidence(connection, task_id)
+    # The refusal belongs to no attempt, so the task keeps the attempt it was enqueued with.
+    assert attempts == fixture["expectedAttempts"]
+    assert releases >= fixture["expectedMinimumReleaseEvents"]
+
+    handled: list[object] = []
+
+    def handler(payload: object, _context: HandlerContext) -> None:
+        handled.append(payload)
+
+    newer = Worker(
+        worker_pool,
+        queue=queue_name,
+        worker_id=f"python-{fixture['id']}-newer",
+        lease_ms=fixture["leaseMs"],
+    ).handle(fixture["taskType"], handler)
+    assert newer.run_once() is True
+    assert handled == [{"index": 1}]
+    assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedAfterHandled"]})
+
+
+def execute_json_round_trip_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> None:
+    queue_name = runtime_queue(fixture)
+    payload = fixture["payload"]
+    task_id = Queue(connection).enqueue(
+        fixture["taskType"], payload, EnqueueOptions(queue=queue_name)
+    )
+    received: list[object] = []
+
+    def handler(handled: object, _context: HandlerContext) -> object:
+        received.append(handled)
+        return handled
+
+    worker = Worker(worker_pool, queue=queue_name, worker_id=f"python-{fixture['id']}").handle(
+        fixture["taskType"], handler
+    )
+    assert worker.run_once() is True
+    assert received == [payload]
+    stored = connection.execute(
+        "SELECT task.payload, outcome.result FROM workhorse.task task "
+        "JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id WHERE task.id = %s",
+        (task_id,),
+    ).fetchone()
+    assert stored is not None
+    assert stored[0] == payload
+    assert stored[1] == payload
+    assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
+    assert_attempt_outcomes(connection, task_id, [fixture["expectedAttemptOutcome"]])
+
+
+def lease_expiry(connection: psycopg.Connection[Any], task_id: str) -> datetime:
+    row = connection.execute(
+        "SELECT expires_at FROM workhorse.task_runtime WHERE task_id = %s", (task_id,)
+    ).fetchone()
+    assert row is not None and row[0] is not None
+    return row[0]
+
+
+def wait_for_lease_renewal(
+    connection: psycopg.Connection[Any], task_id: str, previous: datetime, timeout_ms: int
+) -> datetime:
+    deadline = monotonic() + timeout_ms / 1000
+    while True:
+        expires_at = lease_expiry(connection, task_id)
+        if expires_at > previous:
+            return expires_at
+        assert monotonic() < deadline, f"lease was not renewed for {task_id}"
+        sleep(0.005)
+
+
+def execute_heartbeat_failure_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> None:
+    queue_name = runtime_queue(fixture)
+    task_id = Queue(connection).enqueue(fixture["taskType"], {}, EnqueueOptions(queue=queue_name))
+    started = Event()
+    release = Event()
+    cancellations: list[str] = []
+    errors: list[BaseException] = []
+
+    def handler(_payload: object, context: HandlerContext) -> None:
+        started.set()
+        assert release.wait(timeout=10)
+        if context.cancellation.cancelled:
+            cancellations.append(task_id)
+
+    worker = Worker(
+        worker_pool,
+        queue=queue_name,
+        worker_id=f"python-{fixture['id']}",
+        lease_ms=fixture["leaseMs"],
+        heartbeat_ms=fixture["heartbeatMs"],
+    ).handle(fixture["taskType"], handler)
+    results: list[bool] = []
+    thread = run_in_thread(lambda: results.append(worker.run_once()), errors)
+    timeout_ms = fixture["renewalTimeoutMs"]
+    try:
+        assert started.wait(timeout=5)
+        renewed = wait_for_lease_renewal(
+            connection, task_id, lease_expiry(connection, task_id), timeout_ms
+        )
+        with injected_function_failure(connection, fixture["injection"]) as failed_calls:
+            deadline = monotonic() + timeout_ms / 1000
+            while failed_calls() < fixture["expectedMinimumFailedRounds"]:
+                assert monotonic() < deadline, f"only {failed_calls()} heartbeat rounds failed"
+                sleep(0.005)
+            renewed = lease_expiry(connection, task_id)
+        # Once the rounds answer again the lease renews, so the failures cost the attempt nothing.
+        wait_for_lease_renewal(connection, task_id, renewed, timeout_ms)
+    finally:
+        release.set()
+    join(thread)
+    assert errors == []
+    assert results == [True]
+    assert len(cancellations) == fixture["expectedCancellations"]
+    assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
+    assert_attempt_outcomes(connection, task_id, [fixture["expectedAttemptOutcome"]])
+
+
+def execute_maintenance_phase_error_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> None:
+    queue_name = runtime_queue(fixture)
+    # tick_v1 catches a phase failure and returns it as data, so a raising promote_v1 models a lock
+    # timeout inside the promote phase.
+    with injected_function_failure(connection, fixture["injection"]):
+        phase = connection.execute(
+            "SELECT phase, error FROM workhorse.tick_v1() WHERE phase = %s",
+            (fixture["expectedPhase"],),
+        ).fetchone()
+        assert phase is not None
+        assert fixture["injection"]["message"] in json.dumps(phase[1])
+
+        task_id = Queue(connection).enqueue(
+            fixture["taskType"], {}, EnqueueOptions(queue=queue_name)
+        )
+        worker = Worker(
+            worker_pool,
+            queue=queue_name,
+            worker_id=f"python-{fixture['id']}",
+            maintenance_interval_ms=100,
+        ).handle(fixture["taskType"], lambda _payload, _context: None)
+        # The failing phase runs on this pass, and the pass still claims and settles the task.
+        assert worker.run_once() is True
+        assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
+
+
+async def execute_async_runtime_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any], database_url: str
+) -> None:
+    executors: dict[str, Any] = {
+        "cooperative-cancellation": execute_async_cancellation_fixture,
+        "graceful-drain": execute_async_graceful_drain_fixture,
+        "heartbeat-failure": execute_async_heartbeat_failure_fixture,
+        "json-round-trip": execute_async_json_round_trip_fixture,
+        "maintenance-phase-error": execute_async_maintenance_phase_error_fixture,
+        "missing-handler": execute_async_missing_handler_fixture,
+    }
+    await executors[fixture["kind"]](connection, fixture, database_url)
+
+
+@asynccontextmanager
+async def async_worker(
+    database_url: str, fixture: Mapping[str, Any], suffix: str = "", **options: Any
+) -> AsyncIterator[AsyncWorker]:
+    """Opens an AsyncWorker over its own psycopg pool, and closes both when the fixture ends."""
+    async with AsyncConnectionPool(
+        database_url, min_size=3, max_size=3, kwargs={"autocommit": True}
+    ) as pool:
+        yield AsyncWorker.from_psycopg(
+            pool,
+            queue=runtime_queue(fixture),
+            worker_id=f"python-async-{fixture['id']}{suffix}",
+            **options,
+        )
+
+
+async def read(
+    connection: psycopg.Connection[Any], statement: str, parameters: tuple[Any, ...]
+) -> Any:
+    """Reads through a thread, so a poll cannot stall the loop an async worker runs on."""
+    return await asyncio.to_thread(lambda: connection.execute(statement, parameters).fetchone())
+
+
+async def async_release_evidence(
+    connection: psycopg.Connection[Any], task_id: str
+) -> tuple[int, int]:
+    row = await read(
+        connection,
+        "SELECT (SELECT count(*) FROM workhorse.attempt_history WHERE task_id = %s), "
+        "(SELECT count(*) FROM workhorse.task_event "
+        " WHERE task_id = %s AND event_type = 'released')",
+        (task_id, task_id),
+    )
+    assert row is not None
+    return int(row[0]), int(row[1])
+
+
+async def wait_for_async(condition: Callable[[], Awaitable[bool]], message: str) -> None:
+    deadline = monotonic() + 10
+    while not await condition():
+        assert monotonic() < deadline, message
+        await asyncio.sleep(0.01)
+
+
+async def execute_async_json_round_trip_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any], database_url: str
+) -> None:
+    payload = fixture["payload"]
+    task_id = Queue(connection).enqueue(
+        fixture["taskType"], payload, EnqueueOptions(queue=runtime_queue(fixture))
+    )
+    received: list[object] = []
+
+    async def handler(handled: object, _context: AsyncHandlerContext) -> object:
+        received.append(handled)
+        return handled
+
+    async with async_worker(database_url, fixture) as worker:
+        worker.handle(fixture["taskType"], handler)
+        assert await worker.run_once() is True
+    assert received == [payload]
+    stored = connection.execute(
+        "SELECT task.payload, outcome.result FROM workhorse.task task "
+        "JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id WHERE task.id = %s",
+        (task_id,),
+    ).fetchone()
+    assert stored is not None
+    assert stored[0] == payload
+    assert stored[1] == payload
+    assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
+    assert_attempt_outcomes(connection, task_id, [fixture["expectedAttemptOutcome"]])
+
+
+async def execute_async_missing_handler_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any], database_url: str
+) -> None:
+    task_id = Queue(connection).enqueue(
+        fixture["taskType"], {"index": 1}, EnqueueOptions(queue=runtime_queue(fixture))
+    )
+
+    async def registered(_payload: object, _context: AsyncHandlerContext) -> None:
+        return None
+
+    async with async_worker(
+        database_url, fixture, suffix="-older", lease_ms=fixture["leaseMs"]
+    ) as older:
+        older.handle(fixture["registeredTaskType"], registered)
+        running = asyncio.create_task(older.run())
+        try:
+            await wait_for_async(
+                lambda: _released(connection, task_id),
+                f"{fixture['id']} released no claim",
+            )
+        finally:
+            older.stop()
+            await running
+    assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedAfterRelease"]})
+    attempts, releases = await async_release_evidence(connection, task_id)
+    # The refusal belongs to no attempt, so the task keeps the attempt it was enqueued with.
+    assert attempts == fixture["expectedAttempts"]
+    assert releases >= fixture["expectedMinimumReleaseEvents"]
+
+    handled: list[object] = []
+
+    async def handler(payload: object, _context: AsyncHandlerContext) -> None:
+        handled.append(payload)
+
+    async with async_worker(
+        database_url, fixture, suffix="-newer", lease_ms=fixture["leaseMs"]
+    ) as newer:
+        newer.handle(fixture["taskType"], handler)
+        assert await newer.run_once() is True
+    assert handled == [{"index": 1}]
+    assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedAfterHandled"]})
+
+
+async def _released(connection: psycopg.Connection[Any], task_id: str) -> bool:
+    return (await async_release_evidence(connection, task_id))[1] > 0
+
+
+async def execute_async_maintenance_phase_error_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any], database_url: str
+) -> None:
+    with injected_function_failure(connection, fixture["injection"]):
+        task_id = Queue(connection).enqueue(
+            fixture["taskType"], {}, EnqueueOptions(queue=runtime_queue(fixture))
+        )
+
+        async def handler(_payload: object, _context: AsyncHandlerContext) -> None:
+            return None
+
+        async with async_worker(database_url, fixture, maintenance_interval_ms=100) as worker:
+            worker.handle(fixture["taskType"], handler)
+            # The failing phase runs on this pass, and the pass still claims and settles the task.
+            assert await worker.run_once() is True
+        assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
+
+
+async def execute_async_cancellation_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any], database_url: str
+) -> None:
+    task_id = Queue(connection).enqueue(
+        fixture["taskType"], {}, EnqueueOptions(queue=runtime_queue(fixture))
+    )
+    started = asyncio.Event()
+    reasons: list[BaseException] = []
+
+    async def handler(_payload: object, context: AsyncHandlerContext) -> None:
+        started.set()
+        assert await context.cancellation.wait(timeout=10)
+        reasons.append(context.cancellation.reason)
+        raise context.cancellation.reason
+
+    async with async_worker(
+        database_url,
+        fixture,
+        lease_ms=fixture["leaseMs"],
+        heartbeat_ms=fixture["heartbeatMs"],
+    ) as worker:
+        worker.handle(fixture["taskType"], handler)
+        execution = asyncio.create_task(worker.run_once())
+        await asyncio.wait_for(started.wait(), timeout=10)
+        cancelled = await asyncio.to_thread(
+            lambda: Queue(connection).cancel(task_id, reason=fixture["cancelReason"])
+        )
+        assert cancelled.status == "cancel_requested"
+        assert await execution is True
+    assert [type(reason).__name__ for reason in reasons] == [fixture["expectedAbortReason"]]
+    assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
+    assert_attempt_outcomes(connection, task_id, [fixture["expectedAttemptOutcome"]])
+
+
+async def execute_async_graceful_drain_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any], database_url: str
+) -> None:
+    queue = Queue(connection)
+    task_ids = [
+        queue.enqueue(
+            fixture["taskType"],
+            {"sequence": sequence},
+            EnqueueOptions(queue=runtime_queue(fixture)),
+        )
+        for sequence in range(fixture["taskCount"])
+    ]
+    release_handlers = asyncio.Event()
+
+    async def handler(_payload: object, _context: AsyncHandlerContext) -> None:
+        await asyncio.wait_for(release_handlers.wait(), timeout=10)
+
+    async with async_worker(
+        database_url, fixture, concurrency=fixture["concurrency"], poll_ms=5_000
+    ) as worker:
+        worker.handle(fixture["taskType"], handler)
+        running = asyncio.create_task(worker.run())
+        await wait_for_async(
+            lambda: _slots_filled(worker, fixture["expectedActiveAtStop"]),
+            f"{fixture['id']} did not fill its active slots",
+        )
+        worker.stop()
+        await asyncio.sleep(fixture["settleCheckMs"] / 1000)
+        assert not running.done()
+        release_handlers.set()
+        await running
+        assert active_slots(worker._inner) == 0
+    states = [task_state(connection, task_id)["state"] for task_id in task_ids]
+    assert states.count("succeeded") == fixture["expectedSucceeded"]
+    assert states.count("ready") == fixture["expectedReady"]
+
+
+async def _slots_filled(worker: AsyncWorker, expected: int) -> bool:
+    return active_slots(worker._inner) == expected
+
+
+async def execute_async_heartbeat_failure_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any], database_url: str
+) -> None:
+    task_id = Queue(connection).enqueue(
+        fixture["taskType"], {}, EnqueueOptions(queue=runtime_queue(fixture))
+    )
+    started = asyncio.Event()
+    release = asyncio.Event()
+    cancellations: list[str] = []
+
+    async def handler(_payload: object, context: AsyncHandlerContext) -> None:
+        started.set()
+        await asyncio.wait_for(release.wait(), timeout=20)
+        if context.cancellation.cancelled:
+            cancellations.append(task_id)
+
+    timeout_ms = fixture["renewalTimeoutMs"]
+    async with async_worker(
+        database_url,
+        fixture,
+        lease_ms=fixture["leaseMs"],
+        heartbeat_ms=fixture["heartbeatMs"],
+    ) as worker:
+        worker.handle(fixture["taskType"], handler)
+        execution = asyncio.create_task(worker.run_once())
+        try:
+            await asyncio.wait_for(started.wait(), timeout=10)
+            renewed = await async_wait_for_lease_renewal(
+                connection, task_id, await async_lease_expiry(connection, task_id), timeout_ms
+            )
+            with injected_function_failure(connection, fixture["injection"]) as failed_calls:
+                await wait_for_async(
+                    lambda: asyncio.to_thread(
+                        lambda: failed_calls() >= fixture["expectedMinimumFailedRounds"]
+                    ),
+                    f"{fixture['id']} saw too few failed heartbeat rounds",
+                )
+                renewed = await async_lease_expiry(connection, task_id)
+            # Once the rounds answer again the lease renews, so the failures cost nothing.
+            await async_wait_for_lease_renewal(connection, task_id, renewed, timeout_ms)
+        finally:
+            release.set()
+        assert await execution is True
+    assert len(cancellations) == fixture["expectedCancellations"]
+    assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
+    assert_attempt_outcomes(connection, task_id, [fixture["expectedAttemptOutcome"]])
+
+
+async def async_lease_expiry(connection: psycopg.Connection[Any], task_id: str) -> datetime:
+    row = await read(
+        connection,
+        "SELECT expires_at FROM workhorse.task_runtime WHERE task_id = %s",
+        (task_id,),
+    )
+    assert row is not None and row[0] is not None
+    return row[0]
+
+
+async def async_wait_for_lease_renewal(
+    connection: psycopg.Connection[Any], task_id: str, previous: datetime, timeout_ms: int
+) -> datetime:
+    deadline = monotonic() + timeout_ms / 1000
+    while True:
+        expires_at = await async_lease_expiry(connection, task_id)
+        if expires_at > previous:
+            return expires_at
+        assert monotonic() < deadline, f"lease was not renewed for {task_id}"
+        await asyncio.sleep(0.005)
 
 
 def backend_pid(connection: psycopg.Connection[Any]) -> int:

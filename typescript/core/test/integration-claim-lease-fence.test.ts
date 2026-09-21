@@ -1261,12 +1261,22 @@ describe("claim lease fence", () => {
     const firstId = await queue.enqueue("limited", { ordinal: 1 }, { queue: queueName });
     const secondId = await queue.enqueue("limited", { ordinal: 2 }, { queue: queueName });
 
-    const first = await queue.claim("total-worker-a", { queue: queueName });
-    expect(first?.id).toBe(firstId);
-    await expect(queue.claim("total-worker-b", { queue: queueName })).resolves.toBeNull();
+    // Both claims leave at once on separate pooled connections, so the limit is enforced by the
+    // admission write rather than by the test's ordering.
+    const contested = await Promise.all(
+      ["total-worker-a", "total-worker-b"].map(async (workerId) => ({
+        workerId,
+        claim: await queue.claim(workerId, { queue: queueName }),
+      })),
+    );
+    const admitted = contested.filter((attempt) => attempt.claim !== null);
+    expect(admitted).toHaveLength(1);
+    expect(admitted[0]!.claim!.id).toBe(firstId);
 
-    await expect(queue.complete(first!, "total-worker-a", null)).resolves.toBe(true);
-    await expect(queue.claim("total-worker-b", { queue: queueName })).resolves.toMatchObject({
+    await expect(queue.complete(admitted[0]!.claim!, admitted[0]!.workerId, null)).resolves.toBe(
+      true,
+    );
+    await expect(queue.claim("total-worker-c", { queue: queueName })).resolves.toMatchObject({
       id: secondId,
     });
   });

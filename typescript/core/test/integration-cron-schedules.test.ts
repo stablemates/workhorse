@@ -438,6 +438,72 @@ describe("cron schedules", () => {
     ]);
   });
 
+  // The occurrence calculator has its own daylight-saving cases. This covers the firing path,
+  // which reads the calculator and then writes occurrences and tasks: a daily local time fires
+  // once per local day across both transitions, so neither the skipped hour nor the repeated one
+  // drops a day or fires one twice.
+  it.each([
+    {
+      transition: "spring forward",
+      schedule: "30 2 * * *",
+      lastEvaluatedAt: "2026-03-06T12:00:00Z",
+      now: "2026-03-10T12:00:00Z",
+      expected: [
+        "2026-03-07T07:30:00.000Z",
+        "2026-03-08T07:30:00.000Z",
+        "2026-03-09T06:30:00.000Z",
+        "2026-03-10T06:30:00.000Z",
+      ],
+    },
+    {
+      transition: "fall back",
+      schedule: "30 1 * * *",
+      lastEvaluatedAt: "2026-10-30T12:00:00Z",
+      now: "2026-11-03T12:00:00Z",
+      expected: [
+        "2026-10-31T05:30:00.000Z",
+        "2026-11-01T05:30:00.000Z",
+        "2026-11-02T06:30:00.000Z",
+        "2026-11-03T06:30:00.000Z",
+      ],
+    },
+  ])("fires one daily occurrence per local day across a $transition", async (transition) => {
+    const namespace = `dst-${randomUUID()}`;
+    await queue.syncSchedules(namespace, [
+      {
+        name: "nightly",
+        schedule: transition.schedule,
+        timezone: "America/New_York",
+        catchupPolicy: "all",
+        task: { type: "cron-dst", payload: null, queue: namespace },
+      },
+    ]);
+    await pool.query(
+      `UPDATE workhorse.schedule_definition SET last_evaluated_at = $2::timestamptz
+        WHERE namespace = $1`,
+      [namespace, transition.lastEvaluatedAt],
+    );
+
+    await queue.fireDueSchedules([namespace], new Date(transition.now), 100, 1_000);
+
+    // Each occurrence carries the task it enqueued, so a transition can neither drop a day's work
+    // nor enqueue one day twice.
+    const occurrences = await pool.query<{ occurrence_at: Date; task_id: string }>(
+      `SELECT occurrence.occurrence_at, occurrence.task_id
+         FROM workhorse.schedule_occurrence occurrence
+         JOIN workhorse.task_runtime runtime ON runtime.task_id = occurrence.task_id
+        WHERE occurrence.namespace = $1
+        ORDER BY occurrence.occurrence_at`,
+      [namespace],
+    );
+    expect(occurrences.rows.map((row) => row.occurrence_at.toISOString())).toEqual(
+      transition.expected,
+    );
+    expect(new Set(occurrences.rows.map((row) => row.task_id)).size).toBe(
+      transition.expected.length,
+    );
+  });
+
   it("advances a skip schedule when an operator resumes it", async () => {
     await queue.syncSchedules("resume-skip", [
       {

@@ -199,5 +199,75 @@
     "expectedHolderClaims": 1,
     "expectedLateClaims": 0,
     "expectedActive": 1
+  },
+  {
+    "id": "missing-handler-releases-the-task-with-its-attempt-intact",
+    "kind": "missing-handler",
+    "covers": ["missing-handler-release"],
+    "taskType": "protocol.missing-handler",
+    "registeredTaskType": "protocol.missing-handler-registered",
+    "leaseMs": 5000,
+    "releaseTimeoutMs": 5000,
+    "expectedAfterRelease": { "state": "ready", "attempt": 1 },
+    "expectedAttempts": 0,
+    "expectedMinimumReleaseEvents": 1,
+    "expectedAfterHandled": { "state": "succeeded", "attempt": 1 }
+  },
+  {
+    "id": "json-values-survive-the-payload-and-result-round-trip",
+    "kind": "json-round-trip",
+    "covers": ["json-value-round-trip"],
+    "taskType": "protocol.json-round-trip",
+    "payload": {
+      "unicode": "réservé 日本語 🐎",
+      "escapes": "quote \" backslash \\ newline \n tab \t",
+      "empty": "",
+      "emptyObject": {},
+      "emptyArray": [],
+      "nested": [{ "depth": 1 }, { "depth": 2, "inner": { "flag": false } }],
+      "null": null,
+      "true": true,
+      "false": false,
+      "zero": 0,
+      "negative": -17,
+      "fraction": 1.5,
+      "large": 9007199254740991
+    },
+    "expectedState": { "state": "succeeded", "attempt": 1 },
+    "expectedAttemptOutcome": "succeeded"
+  },
+  {
+    "id": "failed-heartbeat-rounds-keep-the-attempt-running",
+    "kind": "heartbeat-failure",
+    "covers": ["heartbeat-failure-tolerance"],
+    "taskType": "protocol.heartbeat-failure",
+    "leaseMs": 10000,
+    "heartbeatMs": 20,
+    "injection": {
+      "function": "workhorse.heartbeat_many_v1(text,jsonb)",
+      "header": "workhorse.heartbeat_many_v1(p_worker_id text, p_leases jsonb) RETURNS TABLE (ordinal bigint, task_id uuid, status text)",
+      "errorCode": "55P03",
+      "message": "injected heartbeat failure",
+      "counterSequence": "workhorse.protocol_injected_heartbeat_rounds"
+    },
+    "expectedMinimumFailedRounds": 2,
+    "renewalTimeoutMs": 5000,
+    "expectedCancellations": 0,
+    "expectedState": { "state": "succeeded", "attempt": 1 },
+    "expectedAttemptOutcome": "succeeded"
+  },
+  {
+    "id": "failing-maintenance-phase-leaves-the-worker-claiming",
+    "kind": "maintenance-phase-error",
+    "covers": ["maintenance-phase-resilience"],
+    "taskType": "protocol.maintenance-phase-error",
+    "injection": {
+      "function": "workhorse.promote_v1(integer)",
+      "header": "workhorse.promote_v1(p_limit integer DEFAULT 100) RETURNS integer",
+      "errorCode": "55P03",
+      "message": "injected promote failure"
+    },
+    "expectedPhase": "promote",
+    "expectedState": { "state": "succeeded", "attempt": 1 }
   }
 ]

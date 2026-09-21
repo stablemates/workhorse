@@ -73,6 +73,28 @@ type workerRuntimeFixture struct {
 	ExpectedHolderClaims                 int                               `json:"expectedHolderClaims"`
 	ExpectedLateClaims                   int                               `json:"expectedLateClaims"`
 	ExpectedActive                       int                               `json:"expectedActive"`
+	RegisteredTaskType                   string                            `json:"registeredTaskType"`
+	ReleaseTimeoutMS                     int                               `json:"releaseTimeoutMs"`
+	ExpectedAfterRelease                 workerFixtureTaskState            `json:"expectedAfterRelease"`
+	ExpectedAttempts                     int                               `json:"expectedAttempts"`
+	ExpectedMinimumReleaseEvents         int                               `json:"expectedMinimumReleaseEvents"`
+	ExpectedAfterHandled                 workerFixtureTaskState            `json:"expectedAfterHandled"`
+	Payload                              any                               `json:"payload"`
+	Injection                            workerFixtureInjection            `json:"injection"`
+	ExpectedMinimumFailedRounds          int                               `json:"expectedMinimumFailedRounds"`
+	RenewalTimeoutMS                     int                               `json:"renewalTimeoutMs"`
+	ExpectedCancellations                int                               `json:"expectedCancellations"`
+	ExpectedPhase                        string                            `json:"expectedPhase"`
+}
+
+// workerFixtureInjection replaces one installed function with a raising body, so a fixture can
+// fail a call the SDK makes without reaching into the SDK.
+type workerFixtureInjection struct {
+	Function        string `json:"function"`
+	Header          string `json:"header"`
+	ErrorCode       string `json:"errorCode"`
+	Message         string `json:"message"`
+	CounterSequence string `json:"counterSequence"`
 }
 
 type workerFixtureTaskState struct {
