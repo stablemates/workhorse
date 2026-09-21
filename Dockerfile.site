@@ -27,7 +27,16 @@ ENV NODE_OPTIONS=--max-old-space-size=2048
 WORKDIR /workhorse
 COPY . .
 RUN pnpm install --frozen-lockfile
-RUN pnpm build:core && pnpm docs:build
+
+# The docs build compiles every Go documentation example against the whole Workhorse Go module, a
+# deliberate deploy-time gate. A cold Go build cache made it the slowest step of the site build
+# (SM-854). The build and module caches persist in the builder between image builds; the gate still
+# runs, and it only reuses compiled packages whose inputs have not changed.
+ENV GOCACHE=/root/.cache/go-build
+ENV GOMODCACHE=/root/go/pkg/mod
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/root/go/pkg/mod \
+    pnpm build:core && pnpm docs:build
 
 # nginx-unprivileged is the nginx image with its master process moved off root: it runs as UID 101,
 # listens on 8080 rather than 80, and keeps its pid and temporary paths under /tmp. The site serves

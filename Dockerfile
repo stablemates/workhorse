@@ -4,7 +4,11 @@ WORKDIR /workhorse/go
 ARG BUILD_CONCURRENCY=4
 ENV GOMAXPROCS=${BUILD_CONCURRENCY}
 COPY go/ ./
-RUN CGO_ENABLED=0 go build -o /opt/workhorse-go-demo-worker ./examples/demo-worker
+# The build and module caches persist in the builder between image builds (SM-854). When go/
+# changes, only the packages it changed recompile. The binary is the same either way.
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    CGO_ENABLED=0 go build -o /opt/workhorse-go-demo-worker ./examples/demo-worker
 
 FROM ghcr.io/astral-sh/uv:0.12.17@sha256:10787c682e4184e4f290de1171fd4703dc63de99221f10fe1c99002ce7fa9acc AS uv
 
