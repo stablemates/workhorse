@@ -1425,13 +1425,14 @@ class Worker:
                     # A sweep that claimed only task types this worker cannot run made no
                     # progress: every one of them goes straight back to its queue. Counting it as
                     # empty ends the fill and backs off, instead of spinning on a task no worker in
-                    # this release can run.
+                    # this release can run. The pass reports no progress for the same reason, so a
+                    # caller looping run_once backs off too.
                     if any(task.type in self._handlers for task in claimed_tasks):
                         empty_attempts = 0
                         consecutive_empty_claims = 0
+                        claimed_any = True
                     else:
                         empty_attempts += 1
-                    claimed_any = True
                     for task in claimed_tasks:
                         _emit_log(
                             "DEBUG",

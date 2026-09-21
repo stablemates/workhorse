@@ -74,10 +74,10 @@ type workerRuntimeFixture struct {
 	ExpectedLateClaims                   int                               `json:"expectedLateClaims"`
 	ExpectedActive                       int                               `json:"expectedActive"`
 	RegisteredTaskType                   string                            `json:"registeredTaskType"`
-	ReleaseTimeoutMS                     int                               `json:"releaseTimeoutMs"`
 	ExpectedAfterRelease                 workerFixtureTaskState            `json:"expectedAfterRelease"`
 	ExpectedAttempts                     int                               `json:"expectedAttempts"`
-	ExpectedMinimumReleaseEvents         int                               `json:"expectedMinimumReleaseEvents"`
+	ExpectedReleaseEvents                int                               `json:"expectedReleaseEvents"`
+	ExpectedRunOutcomeAfterRelease       string                            `json:"expectedRunOutcomeAfterRelease"`
 	ExpectedAfterHandled                 workerFixtureTaskState            `json:"expectedAfterHandled"`
 	Payload                              any                               `json:"payload"`
 	Injection                            workerFixtureInjection            `json:"injection"`
@@ -2499,8 +2499,10 @@ func TestWorkerReleasesATaskOfAnUnregisteredTypeWithItsAttemptIntact(t *testing.
 		t.Error("the old release must not run a task type it does not handle")
 		return nil, nil
 	})
+	// A pass that only handed its claim back made no progress, so it reports none. A caller
+	// looping RunOnce, and Run's own fill loop, then back off instead of spinning on the task.
 	processed, err := oldRelease.RunOnce(ctx)
-	if err != nil || !processed {
+	if err != nil || processed {
 		t.Fatalf("release pass: processed=%t err=%v", processed, err)
 	}
 

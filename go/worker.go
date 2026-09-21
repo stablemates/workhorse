@@ -989,10 +989,14 @@ func (worker *Worker) runOnce(ctx context.Context, executor Executor) (bool, err
 	} else {
 		err = worker.execute(ctx, executor, *task, handler)
 	}
+	// A pass that only handed its claim back made no progress: the task returns to its queue
+	// untouched. Reporting it as processed would spin a caller's loop, and Run's own fill loop
+	// already counts such a pass as empty for the poll backoff.
+	processed := handler != nil
 	if err != nil {
-		return true, err
+		return processed, err
 	}
-	return true, claimErr
+	return processed, claimErr
 }
 
 func (worker *Worker) claimNext(ctx context.Context, executor Executor) (*ClaimedTask, error) {
