@@ -27,3 +27,22 @@ dist
 coverage
 **/coverage
 docs/benchmarks/results
+
+# Generated site outputs. Git ignores them because the site build writes each one, and the image
+# build runs that build again. A checkout keeps whatever an earlier local build wrote, including
+# twins of pages whose sources are gone, and `COPY . .` would publish them (SM-855).
+# site/scripts/image-context.test.ts keeps this list in step with .gitignore.
+**/.source
+site/public/robots.txt
+site/public/sitemap.xml
+site/public/llms.txt
+site/public/llms-full.txt
+site/public/docs.md
+site/public/docs
+site/public/blog
+site/public/404.md
+site/public/404.json
+site/public/openapi.json
+site/public/about.md
+site/public/contact.md
+site/public/privacy.md
