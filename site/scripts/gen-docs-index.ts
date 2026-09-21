@@ -297,9 +297,11 @@ if (!structure.some((group) => group.title === catalogGroup)) {
 }
 
 const entries = await readdir(contentDir, { withFileTypes: true });
+// Sorted, because `readdir` returns directory order, which differs between file systems.
 const slugs = entries
   .filter((entry) => entry.isFile() && entry.name.endsWith(".mdx"))
-  .map((entry) => entry.name.replace(/\.mdx$/, ""));
+  .map((entry) => entry.name.replace(/\.mdx$/, ""))
+  .toSorted();
 
 /**
  * The catalog as Markdown, for the twin and for `llms-full.txt`.
@@ -371,7 +373,10 @@ const pages = new Map<string, PageRecord>();
  * identical while the body they share is built once.
  */
 const markdownDocuments = new Map<string, string>();
-await Promise.all(
+// The reads run concurrently, but the maps fill afterwards in slug order. `docs-index.json` is
+// embedded in a client chunk, so filling them as each read finished reordered its keys and renamed
+// most hashed assets on every build (SM-856).
+const pageRecords = await Promise.all(
   slugs.map(async (slug) => {
     const source = await readFile(new URL(`${slug}.mdx`, contentDir), "utf8");
     const title = frontmatterValue(source, "title") ?? slug;
@@ -391,16 +396,20 @@ await Promise.all(
     if (body.includes("<ReleaseTable")) {
       throw new Error(`The Markdown twin for "${slug}" still contains the release table tag`);
     }
-    markdownDocuments.set(slug, `# ${title}\n\n> ${description}\n\n${mdxToMarkdown(body, slug)}`);
-    pages.set(slug, {
+    const page: PageRecord = {
       slug,
       url: slug === "index" ? "/docs" : `/docs/${slug}`,
       path: `${slug}.mdx`,
       title,
       description,
-    });
+    };
+    return { page, markdown: `# ${title}\n\n> ${description}\n\n${mdxToMarkdown(body, slug)}` };
   }),
 );
+for (const { page, markdown } of pageRecords) {
+  markdownDocuments.set(page.slug, markdown);
+  pages.set(page.slug, page);
+}
 
 const placed = new Set<string>();
 
