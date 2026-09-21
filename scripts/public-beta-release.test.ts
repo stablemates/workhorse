@@ -5,9 +5,9 @@ import { publishedPackages, repositoryRoot } from "./packages.js";
 import { compatibilityNotice, prose, publicBetaLabel } from "./public-beta-notice.js";
 
 /** The release this repository cuts next: one version on npm, PyPI, and Go from one commit. */
-const releaseVersion = "0.2.1";
-const releaseDate = "2026-09-18";
-const corePeerRange = ">=0.2.0 <0.3.0";
+const releaseVersion = "0.3.0";
+const releaseDate = "2026-09-21";
+const corePeerRange = ">=0.3.0 <0.4.0";
 
 /** The published beta. Its entries stay in the changelogs as history and must keep their facts. */
 const betaNpmVersion = "0.1.0-beta.2";
@@ -41,7 +41,7 @@ function changelogEntry(changelog: string, version: string, date: string): strin
   return next === -1 ? body : body.slice(0, next);
 }
 
-describe("the 0.2.1 release", () => {
+describe("the 0.3.0 release", () => {
   it("carries the plain version and peer range in every published manifest", async () => {
     for (const entry of await publishedPackages()) {
       const manifest = JSON.parse(await read(entry.manifest)) as {
@@ -89,10 +89,12 @@ describe("the 0.2.1 release", () => {
     for (const [relativePath, requirements] of floors) {
       const changelog = await read(relativePath);
       const entry = prose(changelogEntry(changelog, releaseVersion, releaseDate));
-      // A published entry states the baseline that release shipped with, and 0.2.1 shipped with
-      // schema v1. The constant has since moved to 6, because 0.3 prunes the chain to the 0.2.0
-      // baseline (ADR 0073), and following it here would rewrite what a published release said.
-      expect(entry).toContain("**schema v1**");
+      // An entry states the schema version that release refuses to run below, which is the
+      // compatibility gate's floor rather than the migration baseline. 0.2.1 stated v1 because
+      // both were 1 then; 0.3.0 states v18, the floor SM-812 derived from the newest statement
+      // the SDKs call. The number is written here rather than read from the manifest, because a
+      // published entry is immutable and a later release moving the floor must not rewrite it.
+      expect(entry).toContain("**schema v18**");
       expect(entry).toContain("from one source commit");
       for (const requirement of requirements) {
         expect(entry).toContain(requirement);

@@ -179,7 +179,7 @@ describe("published package manifests", () => {
       "workspace:*",
     );
     expect(coreManifest.peerDependencies?.["@stablemates/workhorse-dashboard"]).toBe(
-      ">=0.2.0 <0.3.0",
+      ">=0.3.0 <0.4.0",
     );
     expect(coreManifest.peerDependenciesMeta?.["@stablemates/workhorse-dashboard"]?.optional).toBe(
       true,
@@ -262,7 +262,7 @@ describe("published package manifests", () => {
       peerDependencies?: Record<string, string>;
     };
 
-    expect(dashboardManifest.peerDependencies?.["@stablemates/workhorse"]).toBe(">=0.2.0 <0.3.0");
+    expect(dashboardManifest.peerDependencies?.["@stablemates/workhorse"]).toBe(">=0.3.0 <0.4.0");
     expect(dashboardManifest.version).toBe(core.version);
   });
 

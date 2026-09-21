@@ -8,6 +8,72 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## 0.3.0 — 2026-09-21
+
+The npm packages, Python distribution, and Go module release from one source commit.
+
+Requires **schema v18** and Python **3.12** or newer.
+
+**A worker takes a connection pool, not a connection.** `Worker` takes a
+`psycopg_pool.ConnectionPool`, `AsyncWorker.from_psycopg` takes an `AsyncConnectionPool`, and
+`AsyncWorker.from_asyncpg` takes an `asyncpg.Pool`. The `heartbeat_connection_factory` and
+`notification_connection_factory` options are removed, because the worker now takes its dedicated
+connections from the pool
+([ADR 0071](../docs/decisions/0071-give-every-worker-a-pool-and-a-dedicated-heartbeat-connection.md)).
+Every other statement borrows a connection for that one statement and returns it, replacing the
+model in which one connection serialized every statement for up to 100 handler threads.
+
+The pool needs a known capacity of at least 3: the listener, the heartbeat connection, and one
+statement. A worker whose pool is smaller refuses to start and names the capacity it found, the
+capacity it needs, and the opt-out. `shared_heartbeats=True` takes heartbeat rounds back to the
+shared pool, which is how a small pool runs. `concurrency` does not raise the floor, but a pool of
+`concurrency + 3` lets the dispatcher and every handler run a statement at the same time.
+
+**A worker offers the slow maintenance routines once a minute, not on every tick.** A worker used to
+offer them on every one-second tick, sending sixty times the intended rate of `run_maintenance`
+calls. The cadence [ADR 0011](../docs/decisions/0011-daily-retention-and-split-maintenance.md)
+decided is restored, and the new `maintenance_routine_poll_ms` option gates it
+([ADR 0072](../docs/decisions/0072-converge-the-worker-runtime-defaults.md)).
+
+**A 0.2.x database upgrades in place.** Run `workhorse schema migrate` from a deployment step before
+any process from this release starts. It applies migrations 0010 through 0023 and leaves the
+installation at schema version 23. Every step is additive: it replaces read and transition functions
+or adds one, and 0023 also releases the dependency edges a cancellation abandoned. No table changes,
+no database is dropped, and no data is lost.
+
+**A process from this release refuses a schema below version 18.** The compatibility gate's floor is
+now derived from the newest function the SDKs call, rather than held at 1 by hand. A lagging
+installation is refused at startup instead of failing on its first dashboard read, after the process
+has taken work.
+
+**0.1.x support is dropped.** The migration chain now starts at the 0.2.0 baseline, schema version 6
+([ADR 0073](../docs/decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)). Workhorse
+0.2.1 is the last release that migrates a database below the baseline: reach the baseline with
+0.2.1, then upgrade to this release. The refusal names it.
+
+- Accept `retry_delay_ms` on the worker, as a whole number of milliseconds or a callable over the
+  attempt, and send it to `fail_v1`. A worker that sets nothing still leaves every delay to the
+  persisted retry policy.
+- Treat a failed heartbeat round as unknown until the lease lapses. A single round that threw used
+  to cancel every in-flight attempt and re-raise out of the handler. The round now retries on the
+  next beat, and each attempt keeps its own lease watchdog: once one lease passes with no accepted
+  renewal, the attempt submits `lease_expired`, aborts its handler, and records `lease_lost`.
+- Run `AsyncWorker` context calls on dedicated threads.
+- Raise a fresh suspension from a durable wait, and run handler cleanup in `finally`.
+- Release a task whose type the worker has no handler for, instead of failing it.
+  `release_owned_v1` returns the claim to its queue with the attempt intact and appends a `released`
+  event. During a rolling deployment the old release no longer spends the retry budget of a type
+  only the new release runs.
+- Count a sweep that only released a claim as no progress, so a caller looping `run_once` waits
+  instead of claiming and releasing the same task.
+- Cache the compatibility check and the contract definitions in the producer.
+- Never skip a busy schedule occurrence, and read the evaluation instant from the database clock.
+- Release a canceled dependent's incoming dependency edges, which used to hold a prerequisite's
+  identity against retention.
+- Lock only the row a claim takes, and skip the enqueue dependency block for a request that declares
+  no prerequisite.
+- Document the 2^53 integer bound that Python clears where TypeScript and Go do not.
+
 ## 0.2.1 — 2026-09-18
 
 The npm packages, Python distribution, and Go module release from one source commit.
