@@ -779,7 +779,9 @@ class Worker:
         lease_ms: int = 30_000,
         heartbeat_ms: int | None = None,
         maintenance_interval_ms: int = 1_000,
+        maintenance_routine_poll_ms: int = 60_000,
         registry_interval_ms: int = 5_000,
+        retry_delay_ms: int | Callable[[int, ClaimedTask], int | None] | None = None,
         schedule_namespaces: Sequence[str] = (),
         schedule_catchup_limit: int = 100,
         on_notification_error: Callable[[BaseException], None] | None = None,
@@ -848,6 +850,12 @@ class Worker:
         ):
             raise ValueError("maintenance_interval_ms must be an integer of at least 100")
         if (
+            isinstance(maintenance_routine_poll_ms, bool)
+            or not isinstance(maintenance_routine_poll_ms, int)
+            or maintenance_routine_poll_ms < 100
+        ):
+            raise ValueError("maintenance_routine_poll_ms must be an integer of at least 100")
+        if (
             isinstance(registry_interval_ms, bool)
             or not isinstance(registry_interval_ms, int)
             or (registry_interval_ms != 0 and registry_interval_ms < 100)
@@ -863,6 +871,11 @@ class Worker:
         if any(not isinstance(namespace, str) or not namespace for namespace in unique_namespaces):
             raise ValueError("schedule_namespaces must contain non-empty namespace names")
         self.maintenance_interval_ms = maintenance_interval_ms
+        # The tick bounds dispatch latency, so it runs every second. ADR 0011 puts the slow
+        # retention routines on their own cadence, because PostgreSQL decides which phase is due.
+        self.maintenance_routine_poll_ms = maintenance_routine_poll_ms
+        self._last_routine_offer_at = float("-inf")
+        self.retry_delay_ms = retry_delay_ms
         self.registry_interval_ms = registry_interval_ms
         self.schedule_namespaces = unique_namespaces
         self.schedule_catchup_limit = schedule_catchup_limit
@@ -1471,6 +1484,28 @@ class Worker:
             raise errors[0]
         return claimed_any
 
+    def _due_for_maintenance_routines(self, now_monotonic: float) -> bool:
+        """Report whether this pass offers the slow routines, and claim the offer when it does."""
+        if now_monotonic - self._last_routine_offer_at < self.maintenance_routine_poll_ms / 1000:
+            return False
+        self._last_routine_offer_at = now_monotonic
+        return True
+
+    def _retry_delay_override(self, task: ClaimedTask) -> int | None:
+        """Report the delay this attempt sends to fail_v1, in milliseconds.
+
+        A worker without the option, or a callable that declines, sends None and PostgreSQL
+        applies the persisted retry policy.
+        """
+        override = self.retry_delay_ms
+        if callable(override):
+            override = override(task.attempt, task)
+        if override is None:
+            return None
+        if isinstance(override, bool) or not isinstance(override, int) or override < 0:
+            raise ValueError("retry_delay_ms must be a whole number of milliseconds, or None")
+        return override
+
     def _run_maintenance_if_due(self) -> bool:
         now_monotonic = monotonic()
         if now_monotonic - self._last_maintenance_at < self.maintenance_interval_ms / 1000:
@@ -1543,8 +1578,10 @@ class Worker:
                         "Maintenance phase completed",
                         attributes,
                     )
-            slow_maintenance = self._executor.rows(
-                _STATEMENTS.run_maintenance, (datetime.now(UTC),)
+            slow_maintenance = (
+                self._executor.rows(_STATEMENTS.run_maintenance, (datetime.now(UTC),))
+                if self._due_for_maintenance_routines(now_monotonic)
+                else ()
             )
             for row in slow_maintenance:
                 phase = str(row["phase"])
@@ -1627,7 +1664,7 @@ class Worker:
                         self.heartbeat_ms,
                         self.poll_ms,
                         self.maintenance_interval_ms,
-                        self.maintenance_interval_ms,
+                        self.maintenance_routine_poll_ms,
                         self.registry_interval_ms,
                         active_slots,
                         draining,
@@ -2099,7 +2136,13 @@ class Worker:
             state = _require_lifecycle_row(
                 self._executor.rows(
                     _STATEMENTS.fail,
-                    (task.id, self.worker_id, task.fence_token, json.dumps(envelope), None),
+                    (
+                        task.id,
+                        self.worker_id,
+                        task.fence_token,
+                        json.dumps(envelope),
+                        self._retry_delay_override(task),
+                    ),
                 )
             )["state"]
             state_text = str(state)
