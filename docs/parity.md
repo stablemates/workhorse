@@ -82,6 +82,81 @@ telemetry, and graceful shutdown.
 
 <!-- END GENERATED PARITY WORKER -->
 
+## Worker runtime defaults
+
+A capability row answers whether a language can do something. It says nothing about what that
+language does when the caller configures nothing, and that is the behavior an operator actually
+runs. Three runtimes can agree on every row above and still drain, poll, and retry differently out
+of the box.
+
+The table below is the whole list. A default differs only where the host language forces it, which
+[ADR 0072](decisions/0072-converge-the-worker-runtime-defaults.md) records as the rule. One row
+differs today, and the reason follows the table.
+
+<!-- BEGIN GENERATED PARITY DEFAULTS -->
+
+| Setting                                 | TypeScript                      | Python                          | Go                                  |
+| --------------------------------------- | ------------------------------- | ------------------------------- | ----------------------------------- |
+| Worker concurrency                      | 1                               | 1                               | 1                                   |
+| Lease duration                          | 30000 ms                        | 30000 ms                        | 30000 ms                            |
+| Heartbeat interval                      | Lease duration / 3              | Lease duration / 3              | Lease duration / 3                  |
+| Claim poll interval (subscription live) | 5000 ms                         | 5000 ms                         | 5000 ms                             |
+| Claim poll interval (polling only)      | 250 ms                          | 250 ms                          | 250 ms                              |
+| Empty-claim backoff ceiling             | 5000 ms                         | 5000 ms                         | 5000 ms                             |
+| Maintenance tick interval               | 1000 ms                         | 1000 ms                         | 1000 ms                             |
+| Maintenance routine offer interval      | 60000 ms                        | 60000 ms                        | 60000 ms                            |
+| Worker registry interval                | 5000 ms                         | 5000 ms                         | 5000 ms                             |
+| Schedule catch-up limit                 | 100                             | 100                             | 100                                 |
+| Shutdown grace, then                    | 25000 ms, then exit the process | 25000 ms, then exit the process | 25000 ms, then abandon the handlers |
+| Handler retry delay override            | `retryDelayMs`, unset           | `retry_delay_ms`, unset         | `RetryDelay`, unset                 |
+
+<!-- END GENERATED PARITY DEFAULTS -->
+
+Two rows carry a condition the setting name alone cannot.
+
+- **Claim poll interval.** A worker claims on one of two schedules. While its `LISTEN` subscription
+  is live, a notification wakes it, so polling is only a fallback and the worker waits the ceiling
+  between empty claims. A worker that cannot subscribe, because a connection pooler forbids
+  `LISTEN` or the caller asked for polling only, starts at 250 ms and doubles toward that same
+  ceiling. Most deployments therefore never use the shorter interval.
+- **Maintenance routine offer interval.** All three tick maintenance every 1000 ms, which bounds
+  dispatch latency. The slower retention routines keep their own minute, because PostgreSQL owns
+  the global due decision and a faster offer only adds rejected calls.
+
+The shutdown deadline agrees at 25000 ms, and it sits under the 30 second termination grace a
+container platform gives a process by default. What follows that deadline cannot agree, and it is
+the one accepted exception.
+
+A TypeScript or Python worker owns a process, so its deadline ends that process. A Go `Worker` runs
+inside a caller's process, and a library that ends someone else's process is wrong. Its deadline
+cancels the handlers, gives them one short window to unwind, then stops renewing the leases of
+whatever still runs and returns `ErrShutdownIncomplete`. The caller decides whether to exit.
+
+PostgreSQL sees the same thing either way. An abandoned handler holds a lease no one renews, so
+`recover_expired_telemetry_v1` recovers its task exactly as it recovers the task of a process that
+exited at its own deadline. What differs is what the handler observes: a Go handler observes
+cancellation, where a TypeScript or Python handler observes termination.
+
+The retry delay override sends one attempt's delay to `fail_v1` in place of the persisted policy's
+choice. All three SDKs carry it and all three leave it unset, so the persisted retry policy chooses
+every delay until a caller says otherwise.
+
+## Integer semantics
+
+PostgreSQL stores a `jsonb` number at full precision, but the three SDKs do not read one the same
+way. Python decodes a JSON integer as a Python `int`, which is unbounded. TypeScript and Go decode
+it as an IEEE-754 double, which holds integers exactly only up to 2^53 - 1.
+
+So a payload, result, checkpoint, or progress value that carries an integer larger than
+9007199254740991 in magnitude is not portable. Enqueued from Python and handled in Python, it
+survives. Enqueued from Python and handled by a TypeScript or Go worker, it arrives rounded: the
+worker never sees the value the caller sent, and never reports an error.
+
+Workhorse does not reject such a value, because PostgreSQL accepts it and one language reads it
+correctly. Send an identifier beyond that bound as a string instead. Within the bound every SDK
+round-trips an integer exactly, and `typescript/core/test/json-integers.test.ts`,
+`python/tests/test_json_integers.py`, and `go/json_integers_test.go` hold each language to that.
+
 Linear owns the SDK roadmap, sequencing, blockers, and completion state in the `stablemates`
 workspace, `SM` team, and `workhorse` project. This document changes only
 when repository tests prove a capability has shipped or been withdrawn.

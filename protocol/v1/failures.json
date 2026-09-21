@@ -1,0 +1,53 @@
+{
+  "envelope": {
+    "fields": ["name", "message", "stack"],
+    "redactedFields": ["name", "message"],
+    "redacted": {
+      "name": "RedactedTaskError",
+      "message": "Task handler failed; details redacted"
+    },
+    "genericName": {
+      "typescript": "Error",
+      "python": "Exception",
+      "go": "Error"
+    },
+    "forbiddenNameCharacters": ["*", ".", "<", " "]
+  },
+  "fixtures": [
+    {
+      "id": "declared-name-and-stack",
+      "description": "An error that names itself and carries a stack records both.",
+      "error": { "declaresName": true, "declaresStack": true, "message": "card declined" },
+      "redactErrorDetails": false,
+      "envelope": { "name": "PaymentDeclined", "message": "card declined", "stack": "string" }
+    },
+    {
+      "id": "declared-name-without-stack",
+      "description": "A name survives whether or not the error supplies a stack.",
+      "error": { "declaresName": true, "declaresStack": false, "message": "card declined" },
+      "redactErrorDetails": false,
+      "envelope": {
+        "name": "PaymentDeclined",
+        "message": "card declined",
+        "stack": "stringOrNull"
+      }
+    },
+    {
+      "id": "undeclared-name",
+      "description": "An error that names nothing records its language's generic name, never a type-system artifact.",
+      "error": { "declaresName": false, "declaresStack": false, "message": "boom" },
+      "redactErrorDetails": false,
+      "envelope": { "name": "$generic", "message": "boom", "stack": "stringOrNull" }
+    },
+    {
+      "id": "redacted-details",
+      "description": "Local redaction produces exactly what redact_error_details_v1 would have produced.",
+      "error": { "declaresName": true, "declaresStack": true, "message": "card declined" },
+      "redactErrorDetails": true,
+      "envelope": {
+        "name": "RedactedTaskError",
+        "message": "Task handler failed; details redacted"
+      }
+    }
+  ]
+}

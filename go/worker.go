@@ -11,10 +11,12 @@ import (
 	pseudorand "math/rand/v2"
 	"os"
 	"reflect"
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel/attribute"
@@ -24,10 +26,15 @@ import (
 
 const (
 	defaultWorkerLease         = 30 * time.Second
-	defaultWorkerPollInterval  = time.Second
+	defaultWorkerPollInterval  = 250 * time.Millisecond
 	defaultMaintenanceInterval = time.Second
 	defaultRegistryInterval    = 5 * time.Second
-	defaultShutdownGracePeriod = 30 * time.Second
+	// ADR 0011 sets the routine offer at once a minute. PostgreSQL owns the global due decision,
+	// so the offer rate does not have to follow the tick rate.
+	defaultMaintenanceRoutineInterval = time.Minute
+	// The deadline sits under the 30 second termination grace a container platform gives a process
+	// by default, so the worker finishes its own shutdown before the platform sends SIGKILL.
+	defaultShutdownGracePeriod = 25 * time.Second
 	minimumWorkerLease         = 100 * time.Millisecond
 	maximumWorkerLease         = 24 * time.Hour
 	maximumWorkerConcurrency   = 100
@@ -37,6 +44,14 @@ const (
 	expirationRetryBudget      = time.Second
 	maximumEmptyPollInterval   = 5 * time.Second
 	notificationClaimDelay     = 50 * time.Millisecond
+	// How long a cancelled handler has to unwind before Run stops waiting for it. A handler that
+	// honours its context returns well inside this window, so abandonment reports a handler that
+	// ignored cancellation rather than one that was about to finish.
+	handlerUnwindPeriod = 250 * time.Millisecond
+	// A worker that subscribes to task notifications polls only as a fallback, so it waits the
+	// ceiling between empty claims. A worker that cannot subscribe starts at the shorter interval
+	// and backs off toward the same ceiling.
+	defaultNotificationPollInterval = maximumEmptyPollInterval
 )
 
 func workerPollDelay(base time.Duration, consecutiveEmpty int, backoff bool) time.Duration {
@@ -84,6 +99,13 @@ var ErrDeadlineExceeded = errors.New(deadlineExceededMessage)
 
 // ErrExecutionTimeout matches cancellation after an attempt consumes its execution budget.
 var ErrExecutionTimeout = errors.New(executionTimeoutMessage)
+
+// ErrShutdownIncomplete matches a Run that returned with handlers still executing. Run cancels
+// them at the shutdown grace period and stops renewing their leases, so PostgreSQL recovers their
+// tasks, but it does not wait for goroutines it no longer controls. Those goroutines may still use
+// the pool, so a caller that receives this error should end the process rather than close the pool
+// and continue.
+var ErrShutdownIncomplete = errors.New(shutdownIncompleteMessage)
 
 // StaleLeaseError identifies the task whose fenced settlement PostgreSQL rejected.
 type StaleLeaseError struct {
@@ -160,63 +182,75 @@ type Handler func(context.Context, any, *HandlerContext) (any, error)
 
 // WorkerOptions configures a bounded worker with notification-assisted polling.
 type WorkerOptions struct {
-	Queue                string
-	Queues               []string
-	WorkerID             string
-	Concurrency          int
-	LeaseDuration        time.Duration
-	HeartbeatInterval    time.Duration
-	PollInterval         time.Duration
-	MaintenanceInterval  time.Duration
-	RegistryInterval     time.Duration
-	DisableRegistry      bool
-	ScheduleNamespaces   []string
-	ScheduleCatchupLimit int
-	ShutdownGracePeriod  time.Duration
-	PollingOnly          bool
+	Queue               string
+	Queues              []string
+	WorkerID            string
+	Concurrency         int
+	LeaseDuration       time.Duration
+	HeartbeatInterval   time.Duration
+	PollInterval        time.Duration
+	MaintenanceInterval time.Duration
+	// MaintenanceRoutineInterval bounds how often this worker offers the slow retention routines
+	// to PostgreSQL. It defaults to one minute and never runs faster than MaintenanceInterval.
+	MaintenanceRoutineInterval time.Duration
+	RegistryInterval           time.Duration
+	DisableRegistry            bool
+	ScheduleNamespaces         []string
+	ScheduleCatchupLimit       int
+	ShutdownGracePeriod        time.Duration
+	PollingOnly                bool
 	// SharedHeartbeats opts out of the dedicated heartbeat connection reservation.
 	SharedHeartbeats    bool
 	Logger              *slog.Logger
 	OnRegistrationError func(error)
+	// RetryDelay overrides the delay the persisted retry policy would choose, for one failed
+	// attempt. It returns nil to leave the choice to the policy, which is what a worker without
+	// this option always does.
+	RetryDelay func(attempt int, task ClaimedTask) *time.Duration
 }
 
 // Worker claims and settles tasks through a caller-owned pool.
 type Worker struct {
-	pool                 *pgxpool.Pool
-	queues               []string
-	nextQueueIndex       int
-	workerID             string
-	concurrency          int
-	leaseDuration        time.Duration
-	heartbeatInterval    time.Duration
-	pollInterval         time.Duration
-	maintenanceInterval  time.Duration
-	registryInterval     time.Duration
-	registryEnabled      bool
-	hostname             string
-	instanceID           string
-	scheduleNamespaces   []string
-	scheduleCatchupLimit int
-	shutdownGracePeriod  time.Duration
-	pollingOnly          bool
-	logger               *slog.Logger
-	metrics              *workerMetrics
-	runPermit            chan struct{}
-	handlerSlots         chan struct{}
-	handlers             map[string]Handler
-	compatibility        *CachedCompatibilityCheck
-	onRegistrationError  func(error)
-	contracts            contractCache
-	activeSlots          atomic.Int64
-	draining             atomic.Bool
-	remotelyPaused       atomic.Bool
-	registered           atomic.Bool
-	heartbeatMu          sync.Mutex
-	heartbeatMembers     map[*heartbeatMember]struct{}
-	heartbeatWake        chan struct{}
-	heartbeatRunning     bool
-	heartbeatLease       *heartbeatConnectionLease
-	sharedHeartbeats     bool
+	pool                *pgxpool.Pool
+	queues              []string
+	nextQueueIndex      int
+	workerID            string
+	concurrency         int
+	leaseDuration       time.Duration
+	heartbeatInterval   time.Duration
+	pollInterval        time.Duration
+	maintenanceInterval time.Duration
+	// maintenanceRoutineInterval and lastRoutineOffer gate the slow routines. RunOnce and the
+	// maintenance loop both offer them, so the last offer is shared state.
+	maintenanceRoutineInterval time.Duration
+	lastRoutineOffer           atomic.Int64
+	registryInterval           time.Duration
+	registryEnabled            bool
+	hostname                   string
+	instanceID                 string
+	scheduleNamespaces         []string
+	scheduleCatchupLimit       int
+	shutdownGracePeriod        time.Duration
+	pollingOnly                bool
+	logger                     *slog.Logger
+	metrics                    *workerMetrics
+	runPermit                  chan struct{}
+	handlerSlots               chan struct{}
+	handlers                   map[string]Handler
+	compatibility              *CachedCompatibilityCheck
+	onRegistrationError        func(error)
+	retryDelay                 func(attempt int, task ClaimedTask) *time.Duration
+	contracts                  contractCache
+	activeSlots                atomic.Int64
+	draining                   atomic.Bool
+	remotelyPaused             atomic.Bool
+	registered                 atomic.Bool
+	heartbeatMu                sync.Mutex
+	heartbeatMembers           map[*heartbeatMember]struct{}
+	heartbeatWake              chan struct{}
+	heartbeatRunning           bool
+	heartbeatLease             *heartbeatConnectionLease
+	sharedHeartbeats           bool
 }
 
 type heartbeatMember struct {
@@ -309,7 +343,10 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 	}
 	pollInterval := options.PollInterval
 	if pollInterval == 0 {
-		pollInterval = defaultWorkerPollInterval
+		pollInterval = defaultNotificationPollInterval
+		if options.PollingOnly {
+			pollInterval = defaultWorkerPollInterval
+		}
 	}
 	if pollInterval < 0 {
 		return nil, errors.New(negativeWorkerPollMessage)
@@ -320,6 +357,13 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 	}
 	if maintenanceInterval < time.Millisecond || maintenanceInterval%time.Millisecond != 0 {
 		return nil, errors.New(workerMaintenanceRangeMessage)
+	}
+	maintenanceRoutineInterval := options.MaintenanceRoutineInterval
+	if maintenanceRoutineInterval == 0 {
+		maintenanceRoutineInterval = defaultMaintenanceRoutineInterval
+	}
+	if maintenanceRoutineInterval < time.Millisecond || maintenanceRoutineInterval%time.Millisecond != 0 {
+		return nil, errors.New(workerRoutineIntervalRangeMessage)
 	}
 	registryInterval := options.RegistryInterval
 	if registryInterval == 0 {
@@ -372,32 +416,34 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		return nil, fmt.Errorf(workerMetricCreationErrorFormat, err)
 	}
 	return &Worker{
-		pool:                 pool,
-		queues:               uniqueQueues,
-		workerID:             workerID,
-		concurrency:          concurrency,
-		leaseDuration:        leaseDuration,
-		heartbeatInterval:    heartbeatInterval,
-		pollInterval:         pollInterval,
-		maintenanceInterval:  maintenanceInterval,
-		registryInterval:     registryInterval,
-		registryEnabled:      !options.DisableRegistry,
-		hostname:             workerHostname(),
-		scheduleNamespaces:   scheduleNamespaces,
-		scheduleCatchupLimit: scheduleCatchupLimit,
-		shutdownGracePeriod:  shutdownGracePeriod,
-		pollingOnly:          options.PollingOnly,
-		logger:               logger,
-		metrics:              metrics,
-		runPermit:            runPermit,
-		handlerSlots:         make(chan struct{}, concurrency),
-		handlers:             make(map[string]Handler),
-		compatibility:        NewCachedCompatibilityCheck(NewPGXExecutor(pool)),
-		onRegistrationError:  options.OnRegistrationError,
-		contracts:            newContractCache(),
-		heartbeatMembers:     make(map[*heartbeatMember]struct{}),
-		heartbeatWake:        make(chan struct{}, 1),
-		sharedHeartbeats:     options.SharedHeartbeats,
+		pool:                       pool,
+		queues:                     uniqueQueues,
+		workerID:                   workerID,
+		concurrency:                concurrency,
+		leaseDuration:              leaseDuration,
+		heartbeatInterval:          heartbeatInterval,
+		pollInterval:               pollInterval,
+		maintenanceInterval:        maintenanceInterval,
+		maintenanceRoutineInterval: maintenanceRoutineInterval,
+		registryInterval:           registryInterval,
+		registryEnabled:            !options.DisableRegistry,
+		hostname:                   workerHostname(),
+		scheduleNamespaces:         scheduleNamespaces,
+		scheduleCatchupLimit:       scheduleCatchupLimit,
+		shutdownGracePeriod:        shutdownGracePeriod,
+		pollingOnly:                options.PollingOnly,
+		logger:                     logger,
+		metrics:                    metrics,
+		runPermit:                  runPermit,
+		handlerSlots:               make(chan struct{}, concurrency),
+		handlers:                   make(map[string]Handler),
+		compatibility:              NewCachedCompatibilityCheck(NewPGXExecutor(pool)),
+		onRegistrationError:        options.OnRegistrationError,
+		retryDelay:                 options.RetryDelay,
+		contracts:                  newContractCache(),
+		heartbeatMembers:           make(map[*heartbeatMember]struct{}),
+		heartbeatWake:              make(chan struct{}, 1),
+		sharedHeartbeats:           options.SharedHeartbeats,
 	}, nil
 }
 
@@ -612,18 +658,45 @@ func (worker *Worker) Run(ctx context.Context) error {
 	worker.refreshRegistration(context.WithoutCancel(ctx), executor, true)
 	stopMaintenance()
 	graceTimer := time.NewTimer(worker.shutdownGracePeriod)
-	forcedCancellation := false
+	abandoned := 0
 	for active > 0 {
 		select {
 		case err := <-executionResults:
 			active--
-			if err != nil && firstError == nil && !forcedCancellation {
+			if err != nil && firstError == nil {
 				firstError = err
 			}
+			continue
 		case <-graceTimer.C:
-			cancelExecutions()
-			forcedCancellation = true
 		}
+		// The grace period is the time a handler gets to finish on its own. What follows bounds
+		// what used to be unbounded: cancel, give the cancelled handlers one short window to
+		// unwind, then abandon whatever still runs so Run always returns.
+		cancelExecutions()
+		unwindTimer := time.NewTimer(handlerUnwindPeriod)
+		for active > 0 {
+			select {
+			case <-executionResults:
+				active--
+				continue
+			case <-unwindTimer.C:
+			}
+			break
+		}
+		if !unwindTimer.Stop() {
+			select {
+			case <-unwindTimer.C:
+			default:
+			}
+		}
+		// An abandoned handler keeps running inside the caller's process and settles its own task.
+		// Its lease renewal stops here, so a handler that never returns leaves a lease PostgreSQL
+		// recovers, which is what a worker process that exits at its deadline leaves behind too.
+		if active > 0 {
+			worker.abandonHeartbeats()
+			abandoned = active
+		}
+		break
 	}
 	if !graceTimer.Stop() {
 		select {
@@ -634,6 +707,13 @@ func (worker *Worker) Run(ctx context.Context) error {
 	stopRegistry()
 	<-registryDone
 	worker.deregister(context.WithoutCancel(ctx), executor)
+	if abandoned > 0 {
+		incomplete := fmt.Errorf(workerShutdownIncompleteFormat, ErrShutdownIncomplete, abandoned)
+		if firstError == nil {
+			return incomplete
+		}
+		return errors.Join(firstError, incomplete)
+	}
 	return firstError
 }
 
@@ -709,7 +789,7 @@ func (worker *Worker) refreshRegistration(ctx context.Context, executor Executor
 		int(worker.heartbeatInterval/time.Millisecond),
 		int(worker.pollInterval/time.Millisecond),
 		maintenanceMS,
-		maintenanceMS,
+		max(int(worker.maintenanceRoutineInterval/time.Millisecond), 100),
 		int(worker.registryInterval/time.Millisecond),
 		int(worker.activeSlots.Load()),
 		draining,
@@ -814,6 +894,9 @@ func (worker *Worker) runMaintenance(ctx context.Context) error {
 			return err
 		}
 	}
+	if !worker.dueForMaintenanceRoutines() {
+		return nil
+	}
 	maintenance, err := executor.Query(
 		ctx,
 		internalStatementRegistry[runMaintenanceStatementName],
@@ -831,6 +914,18 @@ func (worker *Worker) runMaintenance(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// dueForMaintenanceRoutines reports whether this pass offers the slow routines, and claims the
+// offer when it does. The tick runs every second to bound dispatch latency, but ADR 0011 puts the
+// routines on their own cadence because PostgreSQL decides which phase is due.
+func (worker *Worker) dueForMaintenanceRoutines() bool {
+	now := time.Now().UnixNano()
+	last := worker.lastRoutineOffer.Load()
+	if last != 0 && now-last < int64(worker.maintenanceRoutineInterval) {
+		return false
+	}
+	return worker.lastRoutineOffer.CompareAndSwap(last, now)
 }
 
 func (worker *Worker) recordRecovery(ctx context.Context, row Row) {
@@ -1145,7 +1240,7 @@ func callHandler(
 ) (result any, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf(workerHandlerPanicFormat, taskType, recovered)
+			err = newHandlerPanicError(workerHandlerPanicFormat, taskType, recovered)
 		}
 	}()
 	return handler(ctx, payload, durability)
@@ -1268,6 +1363,19 @@ func (worker *Worker) registerHeartbeat(member *heartbeatMember) {
 	}
 	worker.heartbeatRunning = true
 	go worker.runHeartbeats()
+}
+
+// abandonHeartbeats drops every registered renewal at once. The tasks the abandoned handlers hold
+// then expire on their own schedule, so PostgreSQL recovers them instead of watching a lease that
+// no one intends to settle.
+func (worker *Worker) abandonHeartbeats() {
+	worker.heartbeatMu.Lock()
+	worker.heartbeatMembers = make(map[*heartbeatMember]struct{})
+	worker.heartbeatMu.Unlock()
+	select {
+	case worker.heartbeatWake <- struct{}{}:
+	default:
+	}
 }
 
 func (worker *Worker) unregisterHeartbeat(member *heartbeatMember) {
@@ -1739,6 +1847,20 @@ func (worker *Worker) release(ctx context.Context, executor Executor, task Claim
 	return nil
 }
 
+// retryDelayOverride reports the delay this attempt sends to fail_v1, in milliseconds. A worker
+// without the option, or a callback that declines, sends nil and PostgreSQL applies the persisted
+// retry policy.
+func (worker *Worker) retryDelayOverride(task ClaimedTask) any {
+	if worker.retryDelay == nil {
+		return nil
+	}
+	delay := worker.retryDelay(task.Attempt, task)
+	if delay == nil || *delay < 0 {
+		return nil
+	}
+	return delay.Milliseconds()
+}
+
 func (worker *Worker) fail(ctx context.Context, executor Executor, task ClaimedTask, handlerError error) error {
 	_, err := worker.failWithState(ctx, executor, task, handlerError)
 	return err
@@ -1756,7 +1878,7 @@ func (worker *Worker) failWithState(
 		return emptyString, err
 	}
 	lease := worker.fencedLease(task)
-	arguments := append(lease.parameters(), encoded, nil)
+	arguments := append(lease.parameters(), encoded, worker.retryDelayOverride(task))
 	rows, err := executor.Query(ctx, protocolStatementRegistry[failStatementName], arguments...)
 	if err != nil {
 		return emptyString, err
@@ -1895,15 +2017,116 @@ func int64Value(value any) (int64, bool) {
 	}
 }
 
+// ErrorNamer lets a handler error choose the name its failure envelope records.
+//
+// An operator groups failures by that name, so the name has to describe the failure rather than
+// the value that carries it. Go attaches no name to an error, so a worker that published the
+// concrete type would file every errors.New value under *errors.errorString and split one failure
+// mode across buckets that mean nothing. Implement this interface to name a failure explicitly.
+type ErrorNamer interface {
+	error
+
+	// ErrorName returns the name the envelope records. An empty name is ignored.
+	ErrorName() string
+}
+
+// ErrorStacker lets a handler error attach a stack to its failure envelope.
+//
+// Go captures no stack when it creates an error, so an envelope carries one only when the error
+// supplies it. A worker records a null stack otherwise.
+type ErrorStacker interface {
+	error
+
+	// ErrorStack returns the stack the envelope records. An empty stack is ignored.
+	ErrorStack() string
+}
+
+// HandlerPanicError reports a handler or batch handler that panicked.
+//
+// It carries the stack captured where the panic was recovered, so the envelope of a Go panic holds
+// the same three fields as the envelope of a TypeScript or Python exception.
+type HandlerPanicError struct {
+	// TaskType is the task type whose handler panicked.
+	TaskType string
+	// Value is the value passed to panic.
+	Value any
+	// Stack is the stack captured at recovery.
+	Stack string
+
+	message string
+}
+
+func (err *HandlerPanicError) Error() string { return err.message }
+
+// ErrorStack returns the stack captured where the panic was recovered.
+func (err *HandlerPanicError) ErrorStack() string { return err.Stack }
+
+func newHandlerPanicError(format string, taskType string, recovered any) *HandlerPanicError {
+	return &HandlerPanicError{
+		TaskType: taskType,
+		Value:    recovered,
+		Stack:    string(debug.Stack()),
+		message:  fmt.Sprintf(format, taskType, recovered),
+	}
+}
+
+// handlerErrorName resolves the name a failure envelope records for a handler error.
+//
+// An error that names itself through ErrorNamer wins, because only the error knows which failure
+// it reports. An exported concrete type names itself next, which keeps a declared error type
+// legible without asking every declaration to implement an interface. Everything else, including
+// every errors.New and fmt.Errorf value, is the generic error TypeScript and Python also call
+// "Error".
+func handlerErrorName(err error) string {
+	var namer ErrorNamer
+	if errors.As(err, &namer) && namer.ErrorName() != emptyString {
+		return namer.ErrorName()
+	}
+	if name := exportedErrorTypeName(err); name != emptyString {
+		return name
+	}
+	return genericHandlerErrorName
+}
+
+// exportedErrorTypeName returns the declared name of an exported error type, or the empty string.
+func exportedErrorTypeName(err error) string {
+	value := reflect.TypeOf(err)
+	for value != nil && value.Kind() == reflect.Pointer {
+		value = value.Elem()
+	}
+	if value == nil {
+		return emptyString
+	}
+	name := value.Name()
+	if name == emptyString || !unicode.IsUpper([]rune(name)[0]) {
+		return emptyString
+	}
+	return name
+}
+
+// handlerErrorStack returns the stack an error supplies, or nil when it supplies none.
+func handlerErrorStack(err error) any {
+	var stacker ErrorStacker
+	if errors.As(err, &stacker) && stacker.ErrorStack() != emptyString {
+		return stacker.ErrorStack()
+	}
+	return nil
+}
+
+// handlerErrorEnvelope renders the failure envelope PostgreSQL stores for a handler error.
+//
+// A redacted envelope carries the two fields redact_error_details_v1 writes, so a worker that
+// redacts locally produces exactly what PostgreSQL would have produced. Every other envelope
+// carries the name, the message, and a stack that is null when the error supplies none.
 func handlerErrorEnvelope(err error, redact bool) map[string]any {
 	if redact {
 		return map[string]any{errorNameField: redactedHandlerErrorNameValue, errorMessageField: redactedHandlerErrorTextValue}
 	}
-	name := genericHandlerErrorName
-	if value := reflect.TypeOf(err); value != nil {
-		name = value.String()
+	return map[string]any{
+		errorNameField:    handlerErrorName(err),
+		errorMessageField: err.Error(),
+		errorStackField:   handlerErrorStack(err),
 	}
-	return map[string]any{errorNameField: name, errorMessageField: err.Error()}
 }
 
 // workerHostname resolves the process hostname once per worker; registration reports it on

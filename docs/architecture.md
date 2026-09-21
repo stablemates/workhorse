@@ -100,6 +100,36 @@ whole step, so an executor that only counts empty polls fails on every run inste
 load. The TypeScript suite
 runs every fixture through `Worker`; Python and Go runtimes must run the same fixtures.
 
+`protocol/v1/failures.json` pins the JSON error envelope a worker passes to `fail_v1`. An
+unredacted envelope carries exactly `name`, `message`, and `stack`; `stack` is a string or null. A
+redacted envelope carries exactly `name` and `message`, holding `RedactedTaskError` and
+`Task handler failed; details redacted`, which is what `redact_error_details_v1` writes, so an
+envelope a worker redacts locally cannot differ in shape from one PostgreSQL redacts.
+
+Each language resolves `name` from its own error, and never from its type system. TypeScript reads
+`Error.name`, and records `NonErrorThrown` with a null stack for a thrown non-`Error`. Python reads
+`type(error).__name__` and always renders a stack through `traceback.format_exception`. Go has no
+name on an error, so `handlerErrorName` takes the first of: the result of `ErrorName()` on any error
+in the chain that implements `ErrorNamer`, the declared name of an exported concrete error type, or
+`Error`. `handlerErrorStack` reads `ErrorStack()` from any error in the chain that implements
+`ErrorStacker`, and records null otherwise. `errors.As` walks the chain, so a wrapped error still
+names and stacks the failure it reports. Both interface lookups ignore an empty string.
+
+An error that names nothing is the one value the three cannot share, because each language's base
+error type names itself: TypeScript and Go record `Error` and Python records `Exception`.
+`failures.json` pins that per language rather than leaving it to drift. `HandlerPanicError` carries
+the stack captured where `callHandler` or `callBatchHandler` recovered the panic, so a Go panic
+records the same three fields as a TypeScript or Python exception.
+
+JSON numbers are the other place the three runtimes differ. PostgreSQL stores a `jsonb` number at
+full precision. Python decodes a JSON integer as an unbounded `int`. TypeScript and Go decode it as
+an IEEE-754 double, so an integer beyond 2^53 - 1 in magnitude arrives rounded and no error is
+raised. Go's `decodeContractJSON` is the exception: contract validation decodes with
+`json.Number`, because a schema bound must be checked against the stored value rather than against
+a double. Workhorse does not reject a value past that bound, because PostgreSQL accepts it and one
+language reads it correctly; `docs/parity.md` records the bound and tells a caller to send a larger
+identifier as a string.
+
 `protocol/v1/requests.json` maps public enqueue inputs to exact PostgreSQL JSON. TypeScript
 `Queue.enqueueMany`, Python `Queue.enqueue_with_result`, and Go `Queue.EnqueueWithResult` run every
 mapping. `protocol/v1/schedules.json` maps recurring definitions to exact PostgreSQL JSON.
@@ -247,8 +277,9 @@ second async implementation. `AsyncCancellationToken.wait(timeout)` is awaitable
 `reason`, and `raise_if_cancelled()` match `CancellationToken`.
 
 Both factories accept `queue`, `queues`, `worker_id`, `concurrency`, `poll_ms`, `lease_ms`,
-`heartbeat_ms`, `maintenance_interval_ms`, `registry_interval_ms`, `schedule_namespaces`, and
-`schedule_catchup_limit` with the same validation and limits as `Worker`. They also accept an
+`heartbeat_ms`, `maintenance_interval_ms`, `maintenance_routine_poll_ms`, `registry_interval_ms`,
+`retry_delay_ms`, `schedule_namespaces`, and `schedule_catchup_limit` with the same validation and
+limits as `Worker`. They also accept an
 awaitable `notification_connection_factory`, an awaitable `heartbeat_connection_factory`,
 and `on_notification_error` and `on_registration_error` callbacks.
 `registry_interval_ms` defaults to 5000. It accepts `0` to disable registration or a non-boolean
@@ -370,7 +401,12 @@ map `stale`, `conflict`, `limit_exceeded`, and `result_too_large` to the corresp
 `claim_many_v1` with its free-slot count until all slots are occupied or a sweep is empty. Each claim
 uses a 30000 millisecond default lease. `lease_ms` accepts 100 through 86400000. `heartbeat_ms`
 defaults to the greater of 100 or one third of `lease_ms`; it must be positive and less than
-`lease_ms`. Each claimed task starts one handler thread. One worker heartbeat timer submits every
+`lease_ms`. `maintenance_routine_poll_ms` bounds how often the worker offers the slow retention
+routines, defaults to 60000, and must be an integer of at least 100. `retry_delay_ms` reports one
+failed attempt's delay to `fail_v1` in place of the persisted retry policy's choice. It accepts a
+whole number of milliseconds or a callable over the attempt and the claimed task, which returns
+`None` to leave the delay to the policy. It is unset by default. Each claimed task starts one
+handler thread. One worker heartbeat timer submits every
 active lease through `heartbeat_many_v1`, and it schedules the next batch only after the prior call
 returns. Without `heartbeat_connection_factory`, heartbeats share the worker connection. A slow
 handler statement on that connection then delays lease renewal. With the factory, the worker opens
@@ -472,6 +508,7 @@ backoff. `AsyncWorker` closes the listener connection but never closes its query
 
 Handler failures pass a JSON error envelope to `fail_v1` with a null retry override, so PostgreSQL
 selects `ready`, `scheduled`, or `failed` from the persisted attempt budget and retry policy.
+`_error_envelope` builds that envelope in the shape `protocol/v1/failures.json` pins.
 
 Python `run_worker_process(worker, *, shutdown_timeout_ms, force_exit)` installs `SIGINT` and
 `SIGTERM` handlers around `Worker.run()`. Each handler writes its signal number to a nonblocking
@@ -520,19 +557,29 @@ occurrence.
 `WorkerOptions.Concurrency` defaults to 1 and accepts integers from 1 through 100. One buffered
 semaphore owns that budget across every configured queue.
 `WorkerOptions.LeaseDuration` defaults to 30000 milliseconds and accepts whole-millisecond values
-from 100 through 86400000. `WorkerOptions.PollInterval` defaults to 1000 milliseconds.
+from 100 through 86400000. `WorkerOptions.PollInterval` defaults to 5000 milliseconds, or to 250
+milliseconds when `WorkerOptions.PollingOnly` is set, matching the TypeScript and Python defaults
+recorded in [ADR 0072](decisions/0072-converge-the-worker-runtime-defaults.md).
 `WorkerOptions.HeartbeatInterval` defaults to one third of `LeaseDuration`, truncated to a whole
 millisecond, and must remain positive and shorter than the lease.
 `WorkerOptions.MaintenanceInterval` defaults to 1000 milliseconds and accepts positive
-whole-millisecond values.
+whole-millisecond values. `WorkerOptions.MaintenanceRoutineInterval` bounds how often the worker
+offers the slow retention routines, defaults to 60000 milliseconds, and accepts positive
+whole-millisecond values. `WorkerOptions.RetryDelay` reports one failed attempt's delay as a
+`*time.Duration` from `func(attempt int, task ClaimedTask)`, and returns nil to leave the delay to
+the persisted retry policy. It is unset by default.
 `WorkerOptions.RegistryInterval` defaults to 5000 milliseconds and accepts whole-millisecond values
 of at least 100. `WorkerOptions.DisableRegistry` prevents registration and remote pause delivery.
 `WorkerOptions.OnRegistrationError` observes a failed refresh without stopping dispatch.
 `WorkerOptions.ScheduleNamespaces` defaults to empty, rejects empty names, and removes duplicates
 after their first occurrence. An empty list disables schedule evaluation.
 `WorkerOptions.ScheduleCatchupLimit` defaults to 100 and accepts integers from 1 through 10,000.
-`WorkerOptions.ShutdownGracePeriod` defaults to 30000 milliseconds and accepts positive
-whole-millisecond values.
+`WorkerOptions.ShutdownGracePeriod` defaults to 25000 milliseconds and accepts positive
+whole-millisecond values. It bounds the drain: `Run` cancels every handler still executing when the
+period expires, allows 250 milliseconds for those handlers to unwind, then stops renewing the
+leases of whatever still runs and returns an error matching `ErrShutdownIncomplete`, naming how
+many it abandoned. `recover_expired_telemetry_v1` recovers their tasks once the leases expire. The
+abandoned goroutines keep running inside the caller's process and may still use the pool.
 `WorkerOptions.Logger` accepts a `*slog.Logger` and defaults to `slog.Default()`.
 `Worker.Handle(type, handler)` registers a
 `Handler(context.Context, any, *HandlerContext) (any, error)`.
@@ -596,9 +643,11 @@ retry timing and attempt exhaustion. A `stale` heartbeat, a rejected completion,
 failure ends that attempt with the `lease_lost` handler outcome. `Run` and `RunOnce` keep
 dispatching, because lease recovery already owns the task. An expiration that PostgreSQL still
 reports as `not_due` after the clock-skew budget ends the same way and logs a warning.
-`callHandler` recovers a panic and converts it to `handler for <type> panicked: <value>`. The worker
-passes that error through the same `fail_v1` path, waits for the ownership supervisor, and keeps the
-dispatch loop alive.
+`handlerErrorEnvelope` builds that envelope in the shape `protocol/v1/failures.json` pins.
+`callHandler` recovers a panic into a `HandlerPanicError` whose message is
+`handler for <type> panicked: <value>` and whose `ErrorStack()` returns the stack captured at
+recovery. The worker passes that error through the same `fail_v1` path, waits for the ownership
+supervisor, and keeps the dispatch loop alive.
 
 The Go SDK installs no process handlers. Applications pass a context from `signal.NotifyContext` to
 `Worker.Run`. Cancellation stops claims and begins the configured drain. `go/worker_process_test.go`
@@ -2066,7 +2115,7 @@ Production maintenance is worker-owned and split by cadence and failure domain.
 
 Each worker calls `tick_v1` at most once per configured `maintenanceIntervalMs` (default one second). Under the transaction-scoped `workhorse:tick` advisory lock it records `maintenance_state.last_started_at`, performs bounded promotion and bounded expired-lease recovery, then records `last_completed_at` if both phases avoid an error. Concurrent callers return immediately with `skipped_lock = true` and do not change the state. The same cadence drives in-process schedule evaluation.
 
-Every TypeScript, Python, and Go worker calls `run_maintenance_v1(p_now)` from its slow maintenance cycle. The function calls `rollup_stats_v1`, `prepare_history_partitions_v1`, `retain_history_v1`, `prune_terminal_storage_v1`, then `prune_worker_registry_v1`. TypeScript offers it on `maintenanceRoutinePollMs`, which defaults to 60 seconds. Python offers it on `maintenance_interval_ms`, which defaults to 1,000 milliseconds. Go offers it on `WorkerOptions.MaintenanceInterval`, which defaults to one second. PostgreSQL checks persisted due state under each routine's advisory lock, so extra offers remain no-ops. The statistics rollup defaults to every minute. Partition preparation defaults to every six hours. Terminal storage cleanup defaults to every five minutes. History retention runs once per local date at or after `maintenance_policy.history_retention_local_time` in `maintenance_policy.timezone`. None shares the promotion advisory lock. Partition retirement abandons a DDL lock attempt after 250 ms rather than waiting indefinitely behind dispatch. Each maintenance function keeps its existing phase exception subtransactions, so a reported phase error does not roll back successful sibling phases. An unexpected top-level failure from the first four functions still rejects the pass. Registry pruning alone is caught by the orchestrator and reported as `worker_registry` after the other phases. Terminal storage reports `enqueue_idempotency`, `released_dependencies`, then `terminal_tasks`; released-edge compaction runs first so the same pass can prune a newly unpinned prerequisite.
+Every TypeScript, Python, and Go worker calls `run_maintenance_v1(p_now)` from its slow maintenance cycle. The function calls `rollup_stats_v1`, `prepare_history_partitions_v1`, `retain_history_v1`, `prune_terminal_storage_v1`, then `prune_worker_registry_v1`. TypeScript offers it on `maintenanceRoutinePollMs`, Python on `maintenance_routine_poll_ms`, and Go on `WorkerOptions.MaintenanceRoutineInterval`. All three default to 60 seconds, which [ADR 0011](decisions/0011-daily-retention-and-split-maintenance.md) decided and [ADR 0072](decisions/0072-converge-the-worker-runtime-defaults.md) holds the three SDKs to. PostgreSQL checks persisted due state under each routine's advisory lock, so extra offers remain no-ops. The statistics rollup defaults to every minute. Partition preparation defaults to every six hours. Terminal storage cleanup defaults to every five minutes. History retention runs once per local date at or after `maintenance_policy.history_retention_local_time` in `maintenance_policy.timezone`. None shares the promotion advisory lock. Partition retirement abandons a DDL lock attempt after 250 ms rather than waiting indefinitely behind dispatch. Each maintenance function keeps its existing phase exception subtransactions, so a reported phase error does not roll back successful sibling phases. An unexpected top-level failure from the first four functions still rejects the pass. Registry pruning alone is caught by the orchestrator and reported as `worker_registry` after the other phases. Terminal storage reports `enqueue_idempotency`, `released_dependencies`, then `terminal_tasks`; released-edge compaction runs first so the same pass can prune a newly unpinned prerequisite.
 
 Terminal-task pruning selects a bounded candidate window of identities with outcomes, both minimum windows elapsed, no live runtime, no retained schedule occurrence, and history boundaries behind the global retained-through watermark. The bounded delete cascades outcome, checkpoints, and waits. History insert triggers serialize with parent deletion and move the watermark backward for late old history, while queue purge explicitly removes history before identity.
 

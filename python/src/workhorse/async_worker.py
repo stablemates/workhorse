@@ -37,7 +37,7 @@ from .types import (
     TaskProgress,
     TaskWait,
 )
-from .worker import Worker
+from .worker import ClaimedTask as _ClaimedTask, Worker
 
 AsyncHandler = Callable[[Any, AsyncHandlerContext], Awaitable[Json]]
 AsyncBatchHandler = Callable[
@@ -321,7 +321,9 @@ class AsyncWorker:
         lease_ms: int = 30_000,
         heartbeat_ms: int | None = None,
         maintenance_interval_ms: int = 1_000,
+        maintenance_routine_poll_ms: int = 60_000,
         registry_interval_ms: int = 5_000,
+        retry_delay_ms: int | Callable[[int, _ClaimedTask], int | None] | None = None,
         schedule_namespaces: Sequence[str] = (),
         schedule_catchup_limit: int = 100,
         on_notification_error: Callable[[BaseException], None] | None = None,
@@ -343,7 +345,9 @@ class AsyncWorker:
             lease_ms=lease_ms,
             heartbeat_ms=heartbeat_ms,
             maintenance_interval_ms=maintenance_interval_ms,
+            maintenance_routine_poll_ms=maintenance_routine_poll_ms,
             registry_interval_ms=registry_interval_ms,
+            retry_delay_ms=retry_delay_ms,
             schedule_namespaces=schedule_namespaces,
             schedule_catchup_limit=schedule_catchup_limit,
         )
@@ -361,7 +365,9 @@ class AsyncWorker:
         lease_ms: int = 30_000,
         heartbeat_ms: int | None = None,
         maintenance_interval_ms: int = 1_000,
+        maintenance_routine_poll_ms: int = 60_000,
         registry_interval_ms: int = 5_000,
+        retry_delay_ms: int | Callable[[int, _ClaimedTask], int | None] | None = None,
         schedule_namespaces: Sequence[str] = (),
         schedule_catchup_limit: int = 100,
         on_notification_error: Callable[[BaseException], None] | None = None,
@@ -383,7 +389,9 @@ class AsyncWorker:
             lease_ms=lease_ms,
             heartbeat_ms=heartbeat_ms,
             maintenance_interval_ms=maintenance_interval_ms,
+            maintenance_routine_poll_ms=maintenance_routine_poll_ms,
             registry_interval_ms=registry_interval_ms,
+            retry_delay_ms=retry_delay_ms,
             schedule_namespaces=schedule_namespaces,
             schedule_catchup_limit=schedule_catchup_limit,
         )

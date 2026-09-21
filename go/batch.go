@@ -331,7 +331,7 @@ func callBatchHandler(
 ) (outcomes []BatchHandlerOutcome, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf(batchHandlerPanicFormat, taskType, recovered)
+			err = newHandlerPanicError(batchHandlerPanicFormat, taskType, recovered)
 		}
 	}()
 	return handler(items), nil

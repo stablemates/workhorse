@@ -3,10 +3,12 @@ import path from "node:path";
 
 import {
   PARITY_CLIENT_ROWS,
+  PARITY_DEFAULT_ROWS,
   PARITY_OPERATOR_ROWS,
   PARITY_WORKER_ROWS,
   PRODUCT_PARITY_ROWS,
   type ParityCell,
+  type ParityDefaultRow,
   type ParityRow,
 } from "../typescript/core/test/support/parity-capabilities.js";
 import { repositoryRoot } from "./packages.js";
@@ -49,6 +51,23 @@ function renderTable(rows: readonly ParityRow[]): string {
   ]);
 }
 
+/** A default renders its value, or Absent when the language has no such setting. */
+function defaultValue(cell: ParityDefaultRow["typescript"]): string {
+  return "absent" in cell ? "Absent" : cell.value;
+}
+
+function renderDefaultsTable(): string {
+  return renderCells([
+    ["Setting", "TypeScript", "Python", "Go"],
+    ...PARITY_DEFAULT_ROWS.map((row) => [
+      row.setting,
+      defaultValue(row.typescript),
+      defaultValue(row.python),
+      defaultValue(row.go),
+    ]),
+  ]);
+}
+
 function renderProductTable(): string {
   return renderCells([
     ["Capability", ...productColumns],
@@ -74,13 +93,23 @@ const generatedLanguages = tables.reduce(
   (document, [name, rows]) => replaceGeneratedTable(document, name, rows),
   current,
 );
+const defaultsStart = "<!-- BEGIN GENERATED PARITY DEFAULTS -->";
+const defaultsEnd = "<!-- END GENERATED PARITY DEFAULTS -->";
+const defaultsPattern = new RegExp(`${defaultsStart}[\\s\\S]*?${defaultsEnd}`);
+if (!defaultsPattern.test(generatedLanguages)) {
+  throw new Error("Missing generated parity markers for defaults");
+}
+const generatedDefaults = generatedLanguages.replace(
+  defaultsPattern,
+  `${defaultsStart}\n\n${renderDefaultsTable()}\n\n${defaultsEnd}`,
+);
 const productStart = "<!-- BEGIN GENERATED PARITY PRODUCT -->";
 const productEnd = "<!-- END GENERATED PARITY PRODUCT -->";
 const productPattern = new RegExp(`${productStart}[\\s\\S]*?${productEnd}`);
-if (!productPattern.test(generatedLanguages)) {
+if (!productPattern.test(generatedDefaults)) {
   throw new Error("Missing generated parity markers for product");
 }
-const generated = generatedLanguages.replace(
+const generated = generatedDefaults.replace(
   productPattern,
   `${productStart}\n\n${renderProductTable()}\n\n${productEnd}`,
 );
