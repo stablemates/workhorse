@@ -3,7 +3,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { publishedPackages, repositoryRoot } from "./packages.js";
 import { compatibilityNotice, prose, publicBetaLabel } from "./public-beta-notice.js";
-import { WORKHORSE_SCHEMA_BASELINE_VERSION } from "../typescript/core/src/index.js";
 
 /** The release this repository cuts next: one version on npm, PyPI, and Go from one commit. */
 const releaseVersion = "0.2.1";
@@ -90,8 +89,10 @@ describe("the 0.2.1 release", () => {
     for (const [relativePath, requirements] of floors) {
       const changelog = await read(relativePath);
       const entry = prose(changelogEntry(changelog, releaseVersion, releaseDate));
-      // The published release remains pinned to its immutable schema baseline.
-      expect(entry).toContain(`**schema v${WORKHORSE_SCHEMA_BASELINE_VERSION}**`);
+      // A published entry states the baseline that release shipped with, and 0.2.1 shipped with
+      // schema v1. The constant has since moved to 6, because 0.3 prunes the chain to the 0.2.0
+      // baseline (ADR 0073), and following it here would rewrite what a published release said.
+      expect(entry).toContain("**schema v1**");
       expect(entry).toContain("from one source commit");
       for (const requirement of requirements) {
         expect(entry).toContain(requirement);

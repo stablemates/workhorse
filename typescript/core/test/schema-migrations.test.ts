@@ -385,11 +385,15 @@ describe("schema migrations", () => {
     expect(version.rows).toEqual([{ version: WORKHORSE_SCHEMA_VERSION + 1 }]);
   });
 
-  it("rejects schema versions below the migration baseline", async () => {
-    await fixtureDatabase.pool.query("UPDATE workhorse.schema_version SET version = 0");
+  it("rejects schema versions below the migration baseline, naming the release that still carries them", async () => {
+    // Pruning the chain to the 0.2.0 baseline stranded every database below it
+    // (ADR 0073), and this release ships no step that reaches one. So the refusal has to name the
+    // release an operator installs instead; telling them to rerun would send them nowhere.
+    // A 0.1.x install is schema 1, which is the version this stands in for.
+    await fixtureDatabase.pool.query("UPDATE workhorse.schema_version SET version = 1");
     try {
       await expect(migrateSchema(fixtureDatabase.pool)).rejects.toThrow(
-        `predates the supported migration baseline ${WORKHORSE_SCHEMA_BASELINE_VERSION}`,
+        `Workhorse schema version 1 predates the supported migration baseline ${WORKHORSE_SCHEMA_BASELINE_VERSION}. Workhorse 0.2.1 is the last release that migrates a schema this old: migrate to the baseline with it, then upgrade to this release`,
       );
     } finally {
       await fixtureDatabase.pool.query("UPDATE workhorse.schema_version SET version = 3");
@@ -459,9 +463,10 @@ describe("schema migrations", () => {
   });
 
   it("migrates every released schema version to a clean-installation schema and keeps its rows", async () => {
-    // The first frozen artifact is `0001.sql`, the 0.1.0 clean install. Each later release freezes
-    // its own, and this loop proves every one of them migrates to a schema byte-identical to a
-    // clean installation of the current artifact, on a database populated first.
+    // The first frozen artifact is `0006.sql`, the 0.2.0 clean install and the baseline this
+    // release migrates from. Each later release freezes its own, and this loop proves every one of
+    // them migrates to a schema byte-identical to a clean installation of the current artifact, on
+    // a database populated first.
     const releases = (await readdir(path.join(repository, "sql", "releases")))
       .filter((file) => file.endsWith(".sql"))
       // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
@@ -477,6 +482,15 @@ describe("schema migrations", () => {
         "SELECT version FROM workhorse.schema_version",
       );
       expect(installed.rows).toEqual([{ version: releasedVersion }]);
+      // The lineage the artifact itself recorded, read before anything migrates it. An artifact
+      // frozen before the chain was pruned carries versions below the current baseline, which is
+      // the history that database really has.
+      const installedLineage = await releaseDatabase.pool
+        .query<{ version: number }>(
+          "SELECT version FROM workhorse.schema_migration ORDER BY version",
+        )
+        .then((result) => result.rows.map((row) => row.version));
+      expect(installedLineage.at(-1)).toBe(releasedVersion);
 
       // A dump speaks for shape, so the artifact is populated first and every seeded row is
       // compared by value afterwards. A count would pass a migration that rewrote a column.
@@ -548,14 +562,19 @@ describe("schema migrations", () => {
       const migrations = await releaseDatabase.pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_migration ORDER BY version",
       );
-      // A clean installation records the full lineage from the baseline, and each migration
-      // appends its own row, so both paths agree on the complete baseline..current range.
-      expect(migrations.rows.map((row) => row.version)).toEqual(
-        Array.from(
-          { length: WORKHORSE_SCHEMA_VERSION - WORKHORSE_SCHEMA_BASELINE_VERSION + 1 },
-          (unused, index) => WORKHORSE_SCHEMA_BASELINE_VERSION + index,
+      // The artifact recorded its own lineage when it installed, and every step the run applied
+      // appended one row, so the two together are the whole history and nothing is missing between
+      // them. The artifact's part may reach below the current baseline, because this release adds
+      // to the history a database already has rather than rewriting it.
+      expect(migrations.rows.map((row) => row.version)).toEqual([
+        ...installedLineage,
+        ...Array.from(
+          { length: WORKHORSE_SCHEMA_VERSION - releasedVersion },
+          (unused, index) => releasedVersion + index + 1,
         ),
-      );
+      ]);
+      // Whatever the artifact carried below it, the supported range is covered end to end.
+      expect(releasedVersion).toBeGreaterThanOrEqual(WORKHORSE_SCHEMA_BASELINE_VERSION);
     }
   });
 
@@ -619,7 +638,7 @@ describe("schema migrations", () => {
   it("answers the fleet read on the frozen baseline, with no migration applied", async () => {
     await releaseDatabase.pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
     await releaseDatabase.pool.query(
-      await readFile(path.join(repository, "sql", "releases", "0001.sql"), "utf8"),
+      await readFile(path.join(repository, "sql", "releases", "0006.sql"), "utf8"),
     );
 
     await expect(readWorkerClientProtocols(releaseDatabase.pool)).resolves.toEqual([]);

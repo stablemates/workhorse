@@ -550,9 +550,13 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
 
   See [Retention and removal](#retention-and-removal).
 
-- **Installation is clean-database only; migration owns every upgrade from 0.1.0.** `installSchema`
+- **Installation is clean-database only; migration owns every upgrade from 0.2.0.** `installSchema`
   refuses to interpret an older or unversioned `workhorse` schema. `migrateSchema` applies ordered,
-  immutable, transactional migrations forward from the baseline frozen as `sql/releases/0001.sql`.
+  immutable, transactional migrations forward from the baseline frozen as `sql/releases/0006.sql`,
+  which is schema 6, the 0.2.0 clean install. The supported floor is that baseline: 0.1.x had no
+  production install and is not carried forward, so `migrateSchema` refuses a schema below 6 and
+  names Workhorse 0.2.1 as the last release that migrates one
+  ([ADR 0073](decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)).
   A deployment runs it from a pipeline step before any process from the new release starts; no
   component migrates on start. `docs/schema-lifecycle.md` records the execution contract, the
   expand/contract rollout rules, and the backup and recovery guidance.

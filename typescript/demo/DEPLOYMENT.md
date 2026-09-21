@@ -428,8 +428,11 @@ remember.
 
 ### Dashboard schema
 
-The current build ships Workhorse schema version 16; its packaged migrations carry a version 1
-baseline forward to it. The baseline includes custom event date-time
-ranges, event worker/search filters, task detail tags and human-decision metadata, and task enqueue
-modes.
+The current build ships Workhorse schema version 23; its packaged migrations carry a version 6
+baseline forward to it. That baseline is the `0.2.0` clean install, and the schema step refuses a
+database below it: the `0.1.x` line had no production install and is not carried forward
+([ADR 0073](../../docs/decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)). A
+database below the baseline reaches it with Workhorse `0.2.1` first. The baseline includes custom
+event date-time ranges, event worker/search filters, task detail tags and human-decision metadata,
+and task enqueue modes.
 Runtime processes validate compatibility and never install or migrate the schema at startup.

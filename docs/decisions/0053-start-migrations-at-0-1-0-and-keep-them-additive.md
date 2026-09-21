@@ -5,7 +5,9 @@
 - **Amends:** [ADR 0034](0034-reset-the-pre-release-schema-baseline.md), [ADR 0042](0042-publish-the-first-public-beta.md), [ADR 0050](0050-release-0-1-0-without-a-prerelease-suffix.md)
 - **Amended by:** [ADR 0057](0057-retain-superseded-functions-and-contract-on-the-operators-schedule.md),
   [ADR 0064](0064-rename-the-unit-noun-from-job-to-task.md) (the 0.1.0 baseline was re-cut for
-  the unit-noun rename)
+  the unit-noun rename),
+  [ADR 0073](0073-prune-the-migration-chain-to-the-0-2-0-baseline.md) (0.1.x had no production
+  installs, so the chain now begins at the 0.2.0 baseline rather than at 0.1.0)
 - **Related:** WH-604, WH-607, WH-605, WH-582
 
 ## Context

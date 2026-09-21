@@ -55,6 +55,15 @@ function stepExecution(step: {
 export interface SchemaMigrationPlan {
   baselineVersion: number;
   currentVersion: number;
+  /**
+   * The last published release whose own chain still reaches `baselineVersion` from below.
+   *
+   * Pruning the chain strands every database under the baseline, and the only way forward is the
+   * release that still carries the steps this one dropped. A refusal names it so an operator reads
+   * what to install rather than only which version they are on. A synthetic plan omits it and the
+   * refusal states the baseline alone.
+   */
+  lastReleaseBelowBaseline?: string;
   steps: readonly SchemaMigrationStep[];
   readStep(file: string): Promise<string>;
   /** Milliseconds a migration body waits for a table lock. Defaults to SCHEMA_MIGRATION_LOCK_TIMEOUT_MS. */
@@ -538,8 +547,14 @@ export async function applySchemaMigrationPlan(
     throw new Error("Workhorse schema_version must contain exactly one version before migration");
   }
   if (version < plan.baselineVersion) {
+    // The steps that would carry this database up to the baseline are not in this release, so
+    // there is nothing to suggest rerunning. Name the release that still has them instead.
+    const route =
+      plan.lastReleaseBelowBaseline === undefined
+        ? ""
+        : `. Workhorse ${plan.lastReleaseBelowBaseline} is the last release that migrates a schema this old: migrate to the baseline with it, then upgrade to this release`;
     throw new Error(
-      `Workhorse schema version ${version} predates the supported migration baseline ${plan.baselineVersion}`,
+      `Workhorse schema version ${version} predates the supported migration baseline ${plan.baselineVersion}${route}`,
     );
   }
   if (version > plan.currentVersion) {

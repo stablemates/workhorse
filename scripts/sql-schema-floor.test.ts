@@ -41,7 +41,10 @@ describe("schema floor", () => {
   it("reads the ordered sql tree for the version that introduced each object", () => {
     // Spot-checks in three places: the baseline, a mid-chain migration, and the newest step. A
     // wrong answer here would silently lower every floor derived below.
-    expect(introduced.get("claim_v1")).toBe(1);
+    // `claim_v1` is older than the baseline, and pruning the chain took the artifact that showed
+    // that away, so the tree now dates it to the baseline. A floor derived from it can only be
+    // higher than the truth, never lower, which is the direction that stays safe.
+    expect(introduced.get("claim_v1")).toBe(6);
     expect(introduced.get("dashboard_checkpoint_value_v1")).toBe(6);
     expect(introduced.get("dashboard_task_value_v1")).toBe(17);
   });

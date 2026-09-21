@@ -5,7 +5,7 @@
     "installedVersion": 23,
     "minimumVersion": 18,
     "maximumVersion": 23,
-    "baselineVersion": 1
+    "baselineVersion": 6
   },
   "supportedClientProtocol": {
     "minimumVersion": 1,

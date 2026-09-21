@@ -39,45 +39,12 @@ export {
   WORKHORSE_SCHEMA_VERSION,
 };
 
-// Version 1 is the permanent baseline, installed whole from sql/schema.sql; every later version
-// arrives as one ordered, immutable step here. Each step declares its kind in this list and in
-// the file's own first line, and the runner refuses a step whose two declarations disagree.
+// Version 6 is the baseline, the 0.2.0 schema installed whole from sql/schema.sql; every later
+// version arrives as one ordered, immutable step here. Each step declares its kind in this list and
+// in the file's own first line, and the runner refuses a step whose two declarations disagree.
+// The chain began at version 1 and was pruned to this baseline when 0.1.x support was dropped
+// ([ADR 0073](../../../docs/decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)).
 export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
-  {
-    fromVersion: 1,
-    toVersion: 2,
-    file: "0002-schedule-catchup-policies.sql",
-    description: "schedule catch-up policies",
-    kind: "additive",
-  },
-  {
-    fromVersion: 2,
-    toVersion: 3,
-    file: "0003-named-budgets.sql",
-    description: "named budgets",
-    kind: "additive",
-  },
-  {
-    fromVersion: 3,
-    toVersion: 4,
-    file: "0004-cold-history-export.sql",
-    description: "cold history export",
-    kind: "additive",
-  },
-  {
-    fromVersion: 4,
-    toVersion: 5,
-    file: "0005-history-partition-horizon.sql",
-    description: "history partition horizon",
-    kind: "additive",
-  },
-  {
-    fromVersion: 5,
-    toVersion: 6,
-    file: "0006-bounded-dashboard-reads.sql",
-    description: "bounded dashboard reads",
-    kind: "additive",
-  },
   {
     fromVersion: 6,
     toVersion: 7,
@@ -199,9 +166,18 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
   },
 ];
 
+/**
+ * The last release whose migration chain still starts below {@link WORKHORSE_SCHEMA_BASELINE_VERSION}.
+ *
+ * 0.2.1 shipped the steps `0002`–`0005` that this release dropped, so it is the one route from a
+ * 0.1.x database to the current baseline. A refusal below the baseline names it.
+ */
+const LAST_RELEASE_BELOW_BASELINE = "0.2.1";
+
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {
   return {
     baselineVersion: WORKHORSE_SCHEMA_BASELINE_VERSION,
+    lastReleaseBelowBaseline: LAST_RELEASE_BELOW_BASELINE,
     currentVersion: WORKHORSE_SCHEMA_VERSION,
     steps: SCHEMA_MIGRATIONS,
     readStep: async (file) => readFile(sqlAsset(`migrations/${file}`), "utf8"),
