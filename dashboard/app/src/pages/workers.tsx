@@ -48,7 +48,7 @@ export function WorkersPage({
               verticalSpacing={6}
               horizontalSpacing="md"
               className="dashboard-table dashboard-table--workers"
-              miw={1180}
+              miw={1260}
             >
               <Table.Thead>
                 <Table.Tr>
@@ -79,6 +79,15 @@ export function WorkersPage({
                   <Table.Th ta="right">Attempts · 1h</Table.Th>
                   <Table.Th ta="right">Failures · 1h</Table.Th>
                   <Table.Th ta="right">Avg execution · 1h</Table.Th>
+                  <Table.Th>
+                    <Group gap={4} wrap="nowrap">
+                      <span>Started</span>
+                      <HelpButton
+                        label="Started"
+                        help="When this worker process announced itself. During a rolling deploy the replacement workers carry young start times, while the instances they sunset keep their old ones and drain or go offline."
+                      />
+                    </Group>
+                  </Table.Th>
                   <Table.Th>Last seen</Table.Th>
                 </Table.Tr>
               </Table.Thead>
@@ -148,42 +157,65 @@ export function WorkersPage({
                         </Group>
                       </Table.Td>
                       <Table.Td>
-                        <Popover
-                          disabled={!data.canManageWorkers}
-                          width={300}
-                          position="bottom"
-                          withArrow
-                          shadow="md"
-                        >
-                          <Popover.Target>
-                            <Box component="span" display="inline-block">
-                              <Tooltip
-                                label="Worker controls are unavailable in read-only mode"
-                                disabled={data.canManageWorkers}
-                              >
-                                <Switch
-                                  size="sm"
-                                  checked={!worker.paused}
-                                  disabled={!data.canManageWorkers || togglingWorker === worker.id}
-                                  aria-label={`${worker.paused ? "Resume" : "Pause"} ${worker.id}`}
-                                  onChange={(event) =>
-                                    setWorkerPaused(worker.id, !event.currentTarget.checked)
-                                  }
-                                />
-                              </Tooltip>
-                            </Box>
-                          </Popover.Target>
-                          <Popover.Dropdown>
-                            <Text fw={600} size="sm">
-                              Pausing a worker affects only this process
-                            </Text>
-                            <Text c="dimmed" mt={4} size="xs">
-                              A paused worker finishes active tasks but accepts no new ones. If the
-                              process restarts or a deploy replaces it, the new instance resumes
-                              automatically. If work must stay paused, pause the queue instead.
-                            </Text>
-                          </Popover.Dropdown>
-                        </Popover>
+                        {worker.draining ? (
+                          <Text
+                            c="dimmed"
+                            size="sm"
+                            title="This worker is draining, so it already accepts no new claims"
+                            aria-label={`${worker.id} is draining and accepts no new claims`}
+                          >
+                            No new claims
+                          </Text>
+                        ) : status === "offline" ? (
+                          <Text
+                            c="dimmed"
+                            size="sm"
+                            title="This worker is offline, so a pause cannot reach it"
+                            aria-label={`${worker.id} is offline, so claims cannot be paused`}
+                          >
+                            —
+                          </Text>
+                        ) : (
+                          <Popover
+                            disabled={!data.canManageWorkers}
+                            width={300}
+                            position="bottom"
+                            withArrow
+                            shadow="md"
+                          >
+                            <Popover.Target>
+                              <Box component="span" display="inline-block">
+                                <Tooltip
+                                  label="Worker controls are unavailable in read-only mode"
+                                  disabled={data.canManageWorkers}
+                                >
+                                  <Switch
+                                    size="sm"
+                                    checked={!worker.paused}
+                                    disabled={
+                                      !data.canManageWorkers || togglingWorker === worker.id
+                                    }
+                                    aria-label={`${worker.paused ? "Resume" : "Pause"} ${worker.id}`}
+                                    onChange={(event) =>
+                                      setWorkerPaused(worker.id, !event.currentTarget.checked)
+                                    }
+                                  />
+                                </Tooltip>
+                              </Box>
+                            </Popover.Target>
+                            <Popover.Dropdown>
+                              <Text fw={600} size="sm">
+                                Pausing a worker affects only this process
+                              </Text>
+                              <Text c="dimmed" mt={4} size="xs">
+                                A paused worker finishes active tasks but accepts no new ones. If
+                                the process restarts or a deploy replaces it, the new instance
+                                resumes automatically. If work must stay paused, pause the queue
+                                instead.
+                              </Text>
+                            </Popover.Dropdown>
+                          </Popover>
+                        )}
                       </Table.Td>
                       <Table.Td
                         ta="right"
@@ -221,6 +253,21 @@ export function WorkersPage({
                       </Table.Td>
                       <Table.Td ta="right">{formatDuration(worker.averageExecutionMs)}</Table.Td>
                       <Table.Td>
+                        {worker.startedAt === null ? (
+                          <Text
+                            c="dimmed"
+                            size="xs"
+                            title="This worker has never registered, so its start time is unknown"
+                          >
+                            —
+                          </Text>
+                        ) : (
+                          <Text c="dimmed" size="xs" title={formatExact(worker.startedAt)}>
+                            {formatRelative(worker.startedAt)}
+                          </Text>
+                        )}
+                      </Table.Td>
+                      <Table.Td>
                         <Text c="dimmed" size="xs" title={formatExact(worker.lastSeenAt)}>
                           {formatRelative(worker.lastSeenAt)}
                         </Text>
@@ -239,7 +286,8 @@ export function WorkersPage({
         sets capacity, and the dashboard cannot change it. A Claims pause applies to this worker
         instance; a restart or deploy that replaces it clears the pause. Pause the queue when work
         must stay paused. A draining worker stops after its active handlers finish. If a worker
-        stops registering, Workhorse marks it offline and later removes it from the fleet.
+        stops registering, Workhorse marks it offline and later removes it from the fleet. During a
+        deploy, the Started column separates a replacement worker from the instance it sunsets.
       </Text>
     </Stack>
   );
