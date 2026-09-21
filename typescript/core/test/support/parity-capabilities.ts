@@ -548,25 +548,7 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
     go: { value: "Lease duration / 3", file: "go/worker.go", pattern: "leaseDuration / 3" },
   },
   {
-    setting: "Claim poll interval",
-    typescript: {
-      value: "250 ms",
-      file: "typescript/core/src/worker.ts",
-      pattern: "DEFAULT_POLL_MS = 250",
-    },
-    python: {
-      value: "250 ms",
-      file: "python/src/workhorse/worker.py",
-      pattern: "poll_ms if poll_ms is not None else 250",
-    },
-    go: {
-      value: "1000 ms",
-      file: "go/worker.go",
-      pattern: "defaultWorkerPollInterval  = time.Second",
-    },
-  },
-  {
-    setting: "Claim poll interval while listening",
+    setting: "Claim poll interval (subscription live)",
     typescript: {
       value: "5000 ms",
       file: "typescript/core/src/worker.ts",
@@ -578,9 +560,27 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
       pattern: "poll_ms if poll_ms is not None else 5_000",
     },
     go: {
-      value: "1000 ms",
+      value: "5000 ms",
       file: "go/worker.go",
-      pattern: "defaultWorkerPollInterval  = time.Second",
+      pattern: "defaultNotificationPollInterval = maximumEmptyPollInterval",
+    },
+  },
+  {
+    setting: "Claim poll interval (polling only)",
+    typescript: {
+      value: "250 ms",
+      file: "typescript/core/src/worker.ts",
+      pattern: "DEFAULT_POLL_MS = 250",
+    },
+    python: {
+      value: "250 ms",
+      file: "python/src/workhorse/worker.py",
+      pattern: "poll_ms if poll_ms is not None else 250",
+    },
+    go: {
+      value: "250 ms",
+      file: "go/worker.go",
+      pattern: "defaultWorkerPollInterval  = 250 * time.Millisecond",
     },
   },
   {
@@ -627,14 +627,14 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
       pattern: "options.maintenanceRoutinePollMs ?? 60_000",
     },
     python: {
-      value: "1000 ms (the tick interval)",
+      value: "60000 ms",
       file: "python/src/workhorse/worker.py",
-      pattern: "maintenance_interval_ms: int = 1_000",
+      pattern: "maintenance_routine_poll_ms: int = 60_000",
     },
     go: {
-      value: "1000 ms (the tick interval)",
+      value: "60000 ms",
       file: "go/worker.go",
-      pattern: "defaultMaintenanceInterval = time.Second",
+      pattern: "defaultMaintenanceRoutineInterval = time.Minute",
     },
   },
   {
@@ -682,9 +682,9 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
       pattern: "_DEFAULT_SHUTDOWN_TIMEOUT_MS = 25_000",
     },
     go: {
-      value: "30000 ms, then cancel handlers",
+      value: "25000 ms, then abandon the handlers",
       file: "go/worker.go",
-      pattern: "defaultShutdownGracePeriod = 30 * time.Second",
+      pattern: "defaultShutdownGracePeriod = 25 * time.Second",
     },
   },
   {
@@ -694,7 +694,15 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
       file: "typescript/core/src/worker.ts",
       pattern: "retryDelayMs",
     },
-    python: { absent: "No worker-side retry override; the persisted policy chooses every delay." },
-    go: { absent: "No worker-side retry override; the persisted policy chooses every delay." },
+    python: {
+      value: "`retry_delay_ms`, unset",
+      file: "python/src/workhorse/worker.py",
+      pattern: "retry_delay_ms: int | Callable",
+    },
+    go: {
+      value: "`RetryDelay`, unset",
+      file: "go/worker.go",
+      pattern: "RetryDelay func(attempt int, task ClaimedTask) *time.Duration",
+    },
   },
 ];

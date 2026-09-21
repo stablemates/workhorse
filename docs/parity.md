@@ -89,47 +89,57 @@ language does when the caller configures nothing, and that is the behavior an op
 runs. Three runtimes can agree on every row above and still drain, poll, and retry differently out
 of the box.
 
-The table below is the whole list. Where a value differs, the difference is deliberate and recorded
-here rather than discovered during an incident.
+The table below is the whole list. A default differs only where the host language forces it, which
+[ADR 0072](decisions/0072-converge-the-worker-runtime-defaults.md) records as the rule. One row
+differs today, and the reason follows the table.
 
 <!-- BEGIN GENERATED PARITY DEFAULTS -->
 
-| Setting                             | TypeScript                      | Python                          | Go                             |
-| ----------------------------------- | ------------------------------- | ------------------------------- | ------------------------------ |
-| Worker concurrency                  | 1                               | 1                               | 1                              |
-| Lease duration                      | 30000 ms                        | 30000 ms                        | 30000 ms                       |
-| Heartbeat interval                  | Lease duration / 3              | Lease duration / 3              | Lease duration / 3             |
-| Claim poll interval                 | 250 ms                          | 250 ms                          | 1000 ms                        |
-| Claim poll interval while listening | 5000 ms                         | 5000 ms                         | 1000 ms                        |
-| Empty-claim backoff ceiling         | 5000 ms                         | 5000 ms                         | 5000 ms                        |
-| Maintenance tick interval           | 1000 ms                         | 1000 ms                         | 1000 ms                        |
-| Maintenance routine offer interval  | 60000 ms                        | 1000 ms (the tick interval)     | 1000 ms (the tick interval)    |
-| Worker registry interval            | 5000 ms                         | 5000 ms                         | 5000 ms                        |
-| Schedule catch-up limit             | 100                             | 100                             | 100                            |
-| Shutdown grace, then                | 25000 ms, then exit the process | 25000 ms, then exit the process | 30000 ms, then cancel handlers |
-| Handler retry delay override        | `retryDelayMs`, unset           | Absent                          | Absent                         |
+| Setting                                 | TypeScript                      | Python                          | Go                                  |
+| --------------------------------------- | ------------------------------- | ------------------------------- | ----------------------------------- |
+| Worker concurrency                      | 1                               | 1                               | 1                                   |
+| Lease duration                          | 30000 ms                        | 30000 ms                        | 30000 ms                            |
+| Heartbeat interval                      | Lease duration / 3              | Lease duration / 3              | Lease duration / 3                  |
+| Claim poll interval (subscription live) | 5000 ms                         | 5000 ms                         | 5000 ms                             |
+| Claim poll interval (polling only)      | 250 ms                          | 250 ms                          | 250 ms                              |
+| Empty-claim backoff ceiling             | 5000 ms                         | 5000 ms                         | 5000 ms                             |
+| Maintenance tick interval               | 1000 ms                         | 1000 ms                         | 1000 ms                             |
+| Maintenance routine offer interval      | 60000 ms                        | 60000 ms                        | 60000 ms                            |
+| Worker registry interval                | 5000 ms                         | 5000 ms                         | 5000 ms                             |
+| Schedule catch-up limit                 | 100                             | 100                             | 100                                 |
+| Shutdown grace, then                    | 25000 ms, then exit the process | 25000 ms, then exit the process | 25000 ms, then abandon the handlers |
+| Handler retry delay override            | `retryDelayMs`, unset           | `retry_delay_ms`, unset         | `RetryDelay`, unset                 |
 
 <!-- END GENERATED PARITY DEFAULTS -->
 
-Three of those rows deserve the reason behind the number.
+Two rows carry a condition the setting name alone cannot.
 
-- **Claim poll interval.** TypeScript and Python poll every 250 ms, and slow to a 5000 ms base once
-  a `LISTEN` subscription is live, because a notification already wakes them. Go keeps one 1000 ms
-  base and instead stops backing off while it is listening. All three reach a claim within the
-  backoff ceiling either way.
-- **Maintenance routine offer interval.** All three tick maintenance every 1000 ms. TypeScript
-  additionally offers the slower retention routines every 60000 ms, while Python and Go offer them
-  on each tick and let PostgreSQL decide which phase is due.
-- **Shutdown grace.** TypeScript and Python own a process, so their deadline ends the process and
-  leaves any surviving lease to `recover_expired_telemetry_v1`. Go owns a `Worker` inside a caller's
-  process, so its deadline cancels the handler context and keeps waiting. A Go handler therefore
-  observes cancellation where a TypeScript or Python handler observes termination.
+- **Claim poll interval.** A worker claims on one of two schedules. While its `LISTEN` subscription
+  is live, a notification wakes it, so polling is only a fallback and the worker waits the ceiling
+  between empty claims. A worker that cannot subscribe, because a connection pooler forbids
+  `LISTEN` or the caller asked for polling only, starts at 250 ms and doubles toward that same
+  ceiling. Most deployments therefore never use the shorter interval.
+- **Maintenance routine offer interval.** All three tick maintenance every 1000 ms, which bounds
+  dispatch latency. The slower retention routines keep their own minute, because PostgreSQL owns
+  the global due decision and a faster offer only adds rejected calls.
 
-`retryDelayMs` is TypeScript's only worker-side retry override. It sends a per-attempt delay to
-`fail_v1` in place of the persisted policy's choice. Python and Go send no override, so the
-persisted retry policy chooses every delay. That is a client-side convenience, not a difference in
-what PostgreSQL will accept: a Python or Go caller reaches the same behavior by persisting a retry
-policy.
+The shutdown deadline agrees at 25000 ms, and it sits under the 30 second termination grace a
+container platform gives a process by default. What follows that deadline cannot agree, and it is
+the one accepted exception.
+
+A TypeScript or Python worker owns a process, so its deadline ends that process. A Go `Worker` runs
+inside a caller's process, and a library that ends someone else's process is wrong. Its deadline
+cancels the handlers, gives them one short window to unwind, then stops renewing the leases of
+whatever still runs and returns `ErrShutdownIncomplete`. The caller decides whether to exit.
+
+PostgreSQL sees the same thing either way. An abandoned handler holds a lease no one renews, so
+`recover_expired_telemetry_v1` recovers its task exactly as it recovers the task of a process that
+exited at its own deadline. What differs is what the handler observes: a Go handler observes
+cancellation, where a TypeScript or Python handler observes termination.
+
+The retry delay override sends one attempt's delay to `fail_v1` in place of the persisted policy's
+choice. All three SDKs carry it and all three leave it unset, so the persisted retry policy chooses
+every delay until a caller says otherwise.
 
 ## Integer semantics
 
