@@ -2,8 +2,13 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript and Go `Queue`, `Admin`, and `Worker` remain thin protocol clients.
 
-The current schema version and migration baseline are 1 (`WORKHORSE_SCHEMA_BASELINE_VERSION`).
-`sql/releases/0001.sql` contains the baseline clean-install artifact.
+The current schema version is 23 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
+(`WORKHORSE_SCHEMA_BASELINE_VERSION`). `sql/releases/0006.sql` contains the baseline clean-install
+artifact, which is the 0.2.0 schema. The chain began at 1 and was pruned to this baseline when
+0.1.x support was dropped
+([ADR 0073](decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)), so
+`applySchemaMigrationPlan` refuses an installed version below 6 with a message naming Workhorse
+0.2.1 as the last release that migrates one.
 
 `installSchema` reads `sql/schema.sql` and accepts a fresh database or an already-current schema.
 `migrateSchema` applies `SCHEMA_MIGRATIONS` from `sql/migrations/` through the same path as
@@ -13,7 +18,8 @@ contract step pending at the installed version through `workhorse schema contrac
 `--yes` and first names every worker still live on a retiring protocol. The current migration plan
 is empty.
 
-A clean installation records `(1, 'baseline')` in `workhorse.schema_migration`.
+A clean installation records `(6, 'baseline')` in `workhorse.schema_migration`, then one row per
+later step.
 `workhorse.protocol_version` records the served
 SQL protocol versions (currently 1) independently of that history; `readProtocolVersions` reads it
 and returns null when that table is absent. `migrateSchema` delegates ordered execution to the internal
@@ -3610,10 +3616,10 @@ interactive stdin and stdout is refused with exit 1.
 
 ## Operational limits
 
-- The canonical artifact installs version 1, which is the whole schema and is frozen as
-  `sql/releases/0001.sql`. From `0.1.0` a schema change is an upgrade rather than a reinstall:
-  `migrateSchema` applies the ordered steps under `sql/migrations/`. The plan is empty at `0.1.0`,
-  so `migrateSchema` validates and has nothing to apply until the first step ships.
+- The canonical artifact installs version 23, the whole current schema. Version 6 is the migration
+  baseline and is frozen as `sql/releases/0006.sql`. A schema change is an upgrade rather than a
+  reinstall: `migrateSchema` applies the ordered steps under `sql/migrations/`, which run from 6 to 23. A database below 6 is not carried forward
+  ([ADR 0073](decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)).
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
   `uuid_v7_v1()` uses core UUID and byte functions rather than `pgcrypto` or `uuid-ossp`.
 - Schedules fire only while one worker has matching `scheduleNamespaces` or `schedule_namespaces`.

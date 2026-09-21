@@ -15640,12 +15640,7 @@ $$;
 
 
 INSERT INTO workhorse.schema_migration(version, description) VALUES
-  (1, 'baseline'),
-  (2, 'schedule catch-up policies'),
-  (3, 'named budgets'),
-  (4, 'cold history export'),
-  (5, 'history partition horizon'),
-  (6, 'bounded dashboard reads'),
+  (6, 'baseline'),
   (7, 'health snapshot without JIT'),
   (8, 'index-pruned task lists'),
   (9, 'composed task-list scope'),

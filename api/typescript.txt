@@ -4591,7 +4591,7 @@ class TypeOrmQueryError extends QueryError {
   constructor(statement: string, cause: unknown);
 }
 
-const WORKHORSE_SCHEMA_BASELINE_VERSION = 1;
+const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
 
 const WORKHORSE_SCHEMA_VERSION = 23;
 

@@ -452,15 +452,12 @@ describe("schema installation", () => {
     const migrations = await pool.query<{ version: number; description: string }>(
       "SELECT version, description FROM workhorse.schema_migration ORDER BY version",
     );
-    // A clean install records the whole lineage, so it agrees with a migrated database about the
-    // baseline..current range rather than claiming to have started where the runtime now is.
+    // A clean install records the whole lineage from the baseline, so it agrees with a migrated
+    // database about the baseline..current range rather than claiming to have started where the
+    // runtime now is. It records no version below the baseline: this release ships no step that
+    // reaches one, so claiming to have applied one would be a history it never had.
     expect(migrations.rows).toEqual([
-      { version: 1, description: "baseline" },
-      { version: 2, description: "schedule catch-up policies" },
-      { version: 3, description: "named budgets" },
-      { version: 4, description: "cold history export" },
-      { version: 5, description: "history partition horizon" },
-      { version: 6, description: "bounded dashboard reads" },
+      { version: 6, description: "baseline" },
       { version: 7, description: "health snapshot without JIT" },
       { version: 8, description: "index-pruned task lists" },
       { version: 9, description: "composed task-list scope" },

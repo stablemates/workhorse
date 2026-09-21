@@ -2,17 +2,19 @@
 
 ## Current policy
 
-Schema version 1 is the migration baseline and schema version 21 is current. `sql/schema/current.sql` is the tracked source and
+Schema version 6 is the migration baseline and schema version 23 is current. `sql/schema/current.sql` is the tracked source and
 `sql/schema.sql` is a build artifact for published packages. `sql/releases/` holds the frozen
-clean-install artifact of every published release: `0001.sql` is the 0.1.5 baseline, `0006.sql` is
-0.2.0, and `0009.sql` is 0.2.1.
+clean-install artifact of every supported published release: `0006.sql` is 0.2.0 and `0009.sql` is
+0.2.1.
 `sql/migrations/` holds the ordered steps that carry a baseline installation forward to the current
 version; each new schema version adds one more step there.
 
-**The migration chain begins at 0.1.0** ([ADR 0053](decisions/0053-start-migrations-at-0-1-0-and-keep-them-additive.md)).
-A database this project has agreed to carry forward exists from that release, so a schema change is
-an upgrade rather than a reinstall. `sql/schema/current.sql` is no longer edited in place: a change
-adds a migration step and applies the same change to the tracked source.
+**The migration chain begins at 0.2.0** ([ADR 0073](decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md),
+amending [ADR 0053](decisions/0053-start-migrations-at-0-1-0-and-keep-them-additive.md)). The chain
+began at 0.1.0, and 0.1.x produced no production install, so this project carries no database
+forward from it. A database this project has agreed to carry forward exists from 0.2.0, so a schema
+change is an upgrade rather than a reinstall. `sql/schema/current.sql` is no longer edited in place:
+a change adds a migration step and applies the same change to the tracked source.
 
 **Inside a major line, a migration only adds.** It may add a function, a view, a column, a table, or
 an index. It may not rename, drop, or change the meaning of anything a supported release reads or
@@ -39,8 +41,10 @@ Every schema change ships as an ordered, immutable step:
    the step to `SCHEMA_MIGRATIONS` in `typescript/core/src/schema.ts` with its description and
    kind. The file's declaration and the entry must agree, and the runner refuses a step whose two
    declarations disagree. Clean
-   installation inserts one `workhorse.schema_migration` row per lineage version, so both paths
-   record the identical baseline-to-current history.
+   installation inserts one `workhorse.schema_migration` row per lineage version from the baseline
+   up, and a migrating database appends one row per step it applies, so both paths record every
+   version from the baseline to the current one. A database installed before the chain was pruned
+   also carries the rows below the baseline that it really applied.
 3. Advance the compatibility manifest (`protocol/v1/manifest.json`,
    `protocol/v1/compatibility.json`) and the Python and Go client bounds
    (`python/src/workhorse/_protocol.py`, `go/compatibility.go`) with the same schema version. The
@@ -155,46 +159,12 @@ DROP INDEX CONCURRENTLY IF EXISTS workhorse.<index>;
 
 ### Shipped migrations that block writes
 
-Two released steps build indexes non-concurrently, from before this class existed. Released
-migrations are never edited ([ADR 0034](decisions/0034-reset-the-pre-release-schema-baseline.md)),
-so each is described here with what an operator can do ahead of it.
-
-**`0006-bounded-dashboard-reads.sql` builds `attempt_history_worker_idx` on every partition of
-`workhorse.attempt_history`.** This is the expensive one: history is the largest relation in the
-schema, and the step holds `SHARE` on every partition at once until it commits. It also has a
-complete concurrent pre-step, because `worker_id` exists in the baseline, so the index can be built
-before the migration runs. Build the parent index on the parent alone, which is instant because the
-parent holds no rows, then build and attach each partition's index concurrently:
-
-```sql
-CREATE INDEX IF NOT EXISTS attempt_history_worker_idx
-  ON ONLY workhorse.attempt_history (worker_id);
-```
-
-```sql
-SELECT format(
-         'CREATE INDEX CONCURRENTLY IF NOT EXISTS %I ON workhorse.%I (worker_id);',
-         partition.relname || '_worker_idx', partition.relname)
-       || format(
-         ' ALTER INDEX workhorse.attempt_history_worker_idx ATTACH PARTITION workhorse.%I;',
-         partition.relname || '_worker_idx')
-FROM pg_inherits
-JOIN pg_class partition ON partition.oid = pg_inherits.inhrelid
-WHERE pg_inherits.inhparent = 'workhorse.attempt_history'::regclass;
-```
-
-Run each statement that query returns, one at a time and outside a transaction. The parent index
-becomes valid once every partition index is attached, and the migration's own
-`CREATE INDEX IF NOT EXISTS` then finds the name taken and does nothing. Partitions created between
-the pre-step and the migration inherit the parent index as they are created, so they need nothing.
-
-**`0003-named-budgets.sql` builds three partial indexes on `workhorse.task_runtime`.** This one has
-no pre-step. All three are predicated on `budget_name`, and the same step adds that column, so the
-indexes cannot exist before it runs. The cost is bounded rather than proportional to the index:
-every row's `budget_name` is null at that moment, so all three predicates match nothing and no
-index entries are written. What the step still pays is three scans of `task_runtime` under `SHARE`,
-during which writes to that table wait. Run it when the ready and active backlog is small, and rely
-on the migration lock timeout to fail the step rather than stall the queue if it cannot get in.
+No supported step builds an index non-concurrently. The two that did, `0003-named-budgets.sql` and
+`0006-bounded-dashboard-reads.sql`, both start below the 0.2.0 baseline, so pruning the chain
+removed them along with the operator pre-steps this section described
+([ADR 0073](decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)). A step added from
+now on that cannot take a lock cheaply declares `"execution":"nontransactional"` instead; see
+[Non-transactional steps](#non-transactional-steps).
 
 `workhorse.schema_migration` records the installed migration history. `workhorse.protocol_version`
 independently records which SQL protocol versions the installed schema serves, so a protocol
@@ -343,13 +313,22 @@ Retention is not support: keeping the old function beside the new one costs sche
 else, so it is promised on a date rather than on a release number. `SECURITY.md` states which
 released versions receive fixes, and `docs/compatibility.md` records the range each release supports.
 
-A database may lag arbitrarily far behind. The migration chain is never pruned, so every released
-step stays in `sql/migrations/` and in `SCHEMA_MIGRATIONS` and a database at any released version
-migrates forward with `workhorse schema migrate` — up to the first contract step, where the run
-stops and reports the step it stopped before. Crossing that step takes one
-`workhorse schema contract` run, after which `migrate` continues. There is no version below which a
-database is stranded, and an operator never skips a step: the runner applies every intervening step
-in order.
+A database at or above the baseline may lag arbitrarily far behind. Every step from the baseline
+upward stays in `sql/migrations/` and in `SCHEMA_MIGRATIONS`, so such a database migrates forward
+with `workhorse schema migrate` — up to the first contract step, where the run stops and reports the
+step it stopped before. Crossing that step takes one `workhorse schema contract` run, after which
+`migrate` continues. An operator never skips a step: the runner applies every intervening step in
+order.
+
+**A database below the baseline is stranded, and that is deliberate.** The chain was pruned to the
+0.2.0 baseline because 0.1.x had no production install
+([ADR 0073](decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)). `migrateSchema`
+refuses a schema below the baseline and names Workhorse 0.2.1, which is the last release carrying
+the dropped steps: migrate to the baseline with that release, then upgrade. A 0.1.4-shaped database
+cannot take even that route and is reinstalled, which is what 0.1.5 already required of it.
+Pruning is not the standing rule. It was available here because the line had no production install,
+which is decided by evidence rather than by age, and a published version that anyone runs stays in
+the chain.
 
 ## The 1.0.0 boundary
 

@@ -67,6 +67,13 @@ The three lines are the nine `@stablemates/workhorse*` npm packages, released in
 [`docs/compatibility.md`](docs/compatibility.md) defines the supported runtimes and the release
 process.
 
+**A fix reaches a database only at or above the supported schema floor, which is schema 6, the
+`0.2.0` baseline.** The `0.1.x` line had no production install and is not carried forward, so the
+migration chain begins at that baseline and `workhorse schema migrate` refuses a database below it
+([ADR 0073](docs/decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)). An operator
+on a `0.1.x` database reaches the baseline with `0.2.1`, which is the last release that migrates
+one, and upgrades from there.
+
 This single-line policy is affordable because every Workhorse upgrade is an ordinary rolling
 deployment. A minor adds, a major adds, and the one destructive act is a contract step the operator
 runs on their own schedule
