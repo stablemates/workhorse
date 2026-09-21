@@ -320,6 +320,29 @@ body {
     0 12px 30px -24px color-mix(in oklab, var(--color-ink-950) 45%, transparent);
 }
 
+/*
+ * The margin above is the spacing a code block needs in running prose. A
+ * Fumadocs container instead pulls its first and last child flush with its own
+ * frame, and a tab panel pulls a code block that fills it out over its own
+ * padding. Those resets are Tailwind utilities, they tie with the rule above on
+ * specificity, and they lose on source order, so without the three rules below
+ * a code block floats in a band of empty space inside the container.
+ *
+ * `.prose-no-margin` is the marker Fumadocs puts on every such container, and
+ * `-1rem` is the padding the one tab panel that carries it applies to itself.
+ */
+.wh-docs-body .prose-no-margin > figure.shiki:first-child {
+  margin-top: 0;
+}
+
+.wh-docs-body .prose-no-margin > figure.shiki:last-child {
+  margin-bottom: 0;
+}
+
+.wh-docs-body [role="tabpanel"].prose-no-margin > figure.shiki:only-child {
+  margin-block: -1rem;
+}
+
 .wh-docs-body figure.shiki > div[role="region"] {
   padding-block: 1rem;
   line-height: 1.65;
