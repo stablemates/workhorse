@@ -892,28 +892,22 @@ def execute_missing_handler_fixture(
     task_id = Queue(connection).enqueue(
         fixture["taskType"], {"index": 1}, EnqueueOptions(queue=queue_name)
     )
-    errors: list[BaseException] = []
     older = Worker(
         worker_pool,
         queue=queue_name,
         worker_id=f"python-{fixture['id']}-older",
         lease_ms=fixture["leaseMs"],
+        poll_ms=fixture["pollMs"],
     ).handle(fixture["registeredTaskType"], lambda _payload, _context: None)
-    thread = run_in_thread(older.run, errors)
-    try:
-        wait_for(
-            lambda: release_evidence(connection, task_id)[1] > 0,
-            f"{fixture['id']} released no claim",
-        )
-    finally:
-        older.stop()
-        join(thread)
-    assert errors == []
+    older.run_once()
     assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedAfterRelease"]})
     attempts, releases = release_evidence(connection, task_id)
     # The refusal belongs to no attempt, so the task keeps the attempt it was enqueued with.
     assert attempts == fixture["expectedAttempts"]
-    assert releases >= fixture["expectedMinimumReleaseEvents"]
+    assert releases == fixture["expectedReleaseEvents"]
+    # The released task is ready again, so a worker that reported the release as progress would
+    # claim and release it without waiting. The next pass makes none.
+    assert older.run_once() is (fixture["expectedRunOutcomeAfterRelease"] != "unprocessed")
 
     handled: list[object] = []
 
@@ -1157,23 +1151,23 @@ async def execute_async_missing_handler_fixture(
         return None
 
     async with async_worker(
-        database_url, fixture, suffix="-older", lease_ms=fixture["leaseMs"]
+        database_url,
+        fixture,
+        suffix="-older",
+        lease_ms=fixture["leaseMs"],
+        poll_ms=fixture["pollMs"],
     ) as older:
         older.handle(fixture["registeredTaskType"], registered)
-        running = asyncio.create_task(older.run())
-        try:
-            await wait_for_async(
-                lambda: _released(connection, task_id),
-                f"{fixture['id']} released no claim",
-            )
-        finally:
-            older.stop()
-            await running
-    assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedAfterRelease"]})
-    attempts, releases = await async_release_evidence(connection, task_id)
-    # The refusal belongs to no attempt, so the task keeps the attempt it was enqueued with.
-    assert attempts == fixture["expectedAttempts"]
-    assert releases >= fixture["expectedMinimumReleaseEvents"]
+        await older.run_once()
+        assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedAfterRelease"]})
+        attempts, releases = await async_release_evidence(connection, task_id)
+        # The refusal belongs to no attempt, so the task keeps the attempt it was enqueued with.
+        assert attempts == fixture["expectedAttempts"]
+        assert releases == fixture["expectedReleaseEvents"]
+        # The released task is ready again, so a worker that reported the release as progress would
+        # claim and release it without waiting. The next pass makes none.
+        made_progress = fixture["expectedRunOutcomeAfterRelease"] != "unprocessed"
+        assert await older.run_once() is made_progress
 
     handled: list[object] = []
 
@@ -1187,10 +1181,6 @@ async def execute_async_missing_handler_fixture(
         assert await newer.run_once() is True
     assert handled == [{"index": 1}]
     assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedAfterHandled"]})
-
-
-async def _released(connection: psycopg.Connection[Any], task_id: str) -> bool:
-    return (await async_release_evidence(connection, task_id))[1] > 0
 
 
 async def execute_async_maintenance_phase_error_fixture(

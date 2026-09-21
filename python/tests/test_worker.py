@@ -1629,7 +1629,9 @@ def test_worker_releases_a_task_of_an_unregistered_type_with_its_attempt_intact(
         old_release = Worker(worker_pool, worker_id="python-release-old").handle(
             "release.some_other_type", lambda _payload, _context: None
         )
-        assert old_release.run_once() is True
+        # A pass that only handed its claim back made no progress, so it reports none. A caller
+        # looping run_once, and the fill loop run() drives, then back off instead of spinning.
+        assert old_release.run_once() is False
 
         runtime = reader.execute(
             "SELECT state, current_attempt, worker_id FROM workhorse.task_runtime"

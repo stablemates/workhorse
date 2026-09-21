@@ -753,6 +753,7 @@ func executeWorkerMissingHandlerFixture(t *testing.T, fixture workerRuntimeFixtu
 	older, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
 		Queue: queueName, WorkerID: "go-" + fixture.ID + "-older",
 		LeaseDuration: time.Duration(fixture.LeaseMS) * time.Millisecond,
+		PollInterval:  time.Duration(fixture.PollMS) * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -760,32 +761,22 @@ func executeWorkerMissingHandlerFixture(t *testing.T, fixture workerRuntimeFixtu
 	older.Handle(fixture.RegisteredTaskType, func(context.Context, any, *workhorse.HandlerContext) (any, error) {
 		return nil, nil
 	})
-	runContext, stop := context.WithCancel(ctx)
-	runResult := make(chan error, 1)
-	go func() { runResult <- older.Run(runContext) }()
-	deadline := time.Now().Add(time.Duration(fixture.ReleaseTimeoutMS) * time.Millisecond)
-	for {
-		_, releases := releaseEvidenceFor(t, ctx, pool, taskID)
-		if releases > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			stop()
-			<-runResult
-			t.Fatal("the worker released no claim it had no handler for")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	stop()
-	if err := <-runResult; err != nil {
+	if _, err := older.RunOnce(ctx); err != nil {
 		t.Fatal(err)
 	}
 	assertWorkerFixtureTaskState(t, ctx, pool, taskID, fixture.ExpectedAfterRelease)
 
 	attempts, releases := releaseEvidenceFor(t, ctx, pool, taskID)
 	// The refusal belongs to no attempt, so the task keeps the attempt it was enqueued with.
-	if attempts != fixture.ExpectedAttempts || releases < fixture.ExpectedMinimumReleaseEvents {
+	if attempts != fixture.ExpectedAttempts || releases != fixture.ExpectedReleaseEvents {
 		t.Fatalf("released task carried attempts=%d releases=%d", attempts, releases)
+	}
+
+	// The released task is ready again, so a worker that reported the release as progress would
+	// claim and release it without waiting. The next pass makes none.
+	expectedProgress := fixture.ExpectedRunOutcomeAfterRelease != "unprocessed"
+	if processed, err := older.RunOnce(ctx); err != nil || processed != expectedProgress {
+		t.Fatalf("the pass after the release reported processed=%t err=%v", processed, err)
 	}
 
 	newer, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{

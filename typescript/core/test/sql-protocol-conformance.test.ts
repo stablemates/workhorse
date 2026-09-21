@@ -693,20 +693,11 @@ async function executeMissingHandlerRuntimeFixture(
     workerId: `runtime-${fixture.id}-older`,
     queue: queueName,
     leaseMs: fixture.leaseMs,
+    pollMs: fixture.pollMs,
     registryIntervalMs: 0,
   }).handle(fixture.registeredTaskType, async () => null);
 
-  const running = older.run();
-  try {
-    const deadline = Date.now() + fixture.releaseTimeoutMs;
-    while ((await releaseEvidence(database, id)).releases === 0) {
-      if (Date.now() >= deadline) throw new Error(`${fixture.id} released no claim`);
-      await sleep(5);
-    }
-  } finally {
-    older.stop();
-    await running;
-  }
+  await older.runOnce();
   await expect(admin.getTask(id)).resolves.toMatchObject({
     state: fixture.expectedAfterRelease.state,
     currentAttempt: fixture.expectedAfterRelease.attempt,
@@ -714,7 +705,12 @@ async function executeMissingHandlerRuntimeFixture(
   const evidence = await releaseEvidence(database, id);
   // The refusal belongs to no attempt, so the task keeps the attempt it was enqueued with.
   expect(evidence.attempts).toBe(fixture.expectedAttempts);
-  expect(evidence.releases).toBeGreaterThanOrEqual(fixture.expectedMinimumReleaseEvents);
+  expect(evidence.releases).toBe(fixture.expectedReleaseEvents);
+  // The released task is ready again, so a worker that reported the release as progress would
+  // claim and release it without waiting. The next pass makes none.
+  await expect(older.runOnce()).resolves.toBe(
+    fixture.expectedRunOutcomeAfterRelease !== "unprocessed",
+  );
 
   const handled: unknown[] = [];
   const newer = new Worker(queue, {

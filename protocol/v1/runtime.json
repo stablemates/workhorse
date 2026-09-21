@@ -207,10 +207,11 @@
     "taskType": "protocol.missing-handler",
     "registeredTaskType": "protocol.missing-handler-registered",
     "leaseMs": 5000,
-    "releaseTimeoutMs": 5000,
+    "pollMs": 5000,
     "expectedAfterRelease": { "state": "ready", "attempt": 1 },
     "expectedAttempts": 0,
-    "expectedMinimumReleaseEvents": 1,
+    "expectedReleaseEvents": 1,
+    "expectedRunOutcomeAfterRelease": "unprocessed",
     "expectedAfterHandled": { "state": "succeeded", "attempt": 1 }
   },
   {

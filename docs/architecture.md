@@ -434,9 +434,11 @@ thread before final settlement. A lost lease ends only that attempt: the handler
 `lease_lost`, and `run()` and `run_once()` keep dispatching because lease recovery owns the task.
 
 `run_once()` refills freed slots until one empty queue sweep, drains every claimed task, and returns
-whether the pass claimed any work. `run()` repeats sweeps until `stop()` is called. `pause()` stops
-new claims without stopping active handlers, and `resume()` wakes the dispatcher. `stop()` also
-wakes the dispatcher and makes `run()` return only after every active handler settles.
+whether the pass ran a handler. A sweep whose claims were all of unhandled types counts as empty, so
+a pass that only released ends the fill and reports no progress. `run()` repeats sweeps until
+`stop()` is called. `pause()` stops new claims without stopping active handlers, and `resume()` wakes
+the dispatcher. `stop()` also wakes the dispatcher and makes `run()` return only after every active
+handler settles.
 
 `AsyncWorker.run_once()`, `run()`, `pause()`, `resume()`, and `stop()` preserve those contracts.
 `AsyncWorker.handle_batch` accepts an async callback and supplies `AsyncBatchHandlerItem` values.
@@ -592,6 +594,7 @@ it also evaluates every configured schedule namespace before claiming. It then
 checks configured queues in round-robin order until one `claim_many_v1(..., 1, ...)` succeeds or every queue is empty.
 It executes at most one matching handler outside a transaction. It calls `complete_v1` or `fail_v1`
 under the returned fence, or `release_owned_v1` when no handler is registered for the claimed type.
+It reports whether the pass ran a handler, so a pass that only released reports no progress.
 
 `Worker.Run` fills free semaphore slots with `claim_many_v1`. Each successful claim starts
 one handler goroutine. The queue cursor advances after every claim attempt, so a busy queue cannot
@@ -2489,7 +2492,10 @@ closed. A worker whose fence PostgreSQL no longer recognizes receives `stale`.
 
 Each SDK releases a task of an unregistered type through it and records the `released` handler
 outcome. A pass whose claims were all unrunnable counts as empty for the poll backoff, so a task no
-deployed worker handles is re-claimed on the poll cadence rather than in a loop.
+deployed worker handles is re-claimed on the poll cadence rather than in a loop. `Worker.RunOnce` and
+`run_once()` report such a pass as unprocessed, and `runOnce()` waits the poll interval on the pass
+that follows one. The shared `missing-handler` runtime fixture asserts in all three SDKs that the
+pass after a released-only pass makes no progress.
 
 ### Terminal transitions
 
