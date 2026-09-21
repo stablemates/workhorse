@@ -83,6 +83,55 @@ describe("workers page", () => {
     expect(html).toContain("the instances they sunset");
   });
 
+  it("counts the schedule namespaces the compact column does not show", async () => {
+    const { WorkersPage } = await import("./dashboard.js");
+    const data: DashboardWorkersPage = {
+      capturedAt: "2026-08-16T12:00:00.000Z",
+      canManageWorkers: false,
+      workers: [
+        {
+          id: "worker-1",
+          queues: ["default"],
+          scheduleNamespaces: ["billing", "reports", "digests"],
+          hostname: "worker-host",
+          pid: 123,
+          activeTasks: 0,
+          concurrency: 4,
+          activeSlots: 0,
+          draining: false,
+          completedAttempts: 0,
+          failedAttempts: 0,
+          averageExecutionMs: null,
+          lastSeenAt: "2026-08-16T12:00:00.000Z",
+          startedAt: "2026-08-16T11:00:00.000Z",
+          registered: true,
+          lastHeartbeatAt: "2026-08-16T12:00:00.000Z",
+          paused: false,
+        },
+      ],
+    };
+    const html = renderToStaticMarkup(
+      createElement(
+        MantineProvider,
+        null,
+        createElement(WorkersPage, {
+          data,
+          togglingWorker: null,
+          setWorkerPaused: () => undefined,
+        }),
+      ),
+    );
+
+    // The column shows one namespace and says how many it holds back.
+    expect(html).toContain("billing");
+    expect(html).toContain("+2");
+    // The full list stays reachable from the cell itself.
+    expect(html).toContain('title="billing, reports, digests"');
+    // The hour window reads without widening its column.
+    expect(html).toContain("Avg execution");
+    expect(html).not.toContain("Avg execution · 1h");
+  });
+
   it("renders inert Claims cells for draining and offline workers", async () => {
     const { WorkersPage } = await import("./dashboard.js");
     const worker = {
