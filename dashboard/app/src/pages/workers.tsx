@@ -176,42 +176,45 @@ export function WorkersPage({
                             —
                           </Text>
                         ) : (
-                        <Popover
-                          disabled={!data.canManageWorkers}
-                          width={300}
-                          position="bottom"
-                          withArrow
-                          shadow="md"
-                        >
-                          <Popover.Target>
-                            <Box component="span" display="inline-block">
-                              <Tooltip
-                                label="Worker controls are unavailable in read-only mode"
-                                disabled={data.canManageWorkers}
-                              >
-                                <Switch
-                                  size="sm"
-                                  checked={!worker.paused}
-                                  disabled={!data.canManageWorkers || togglingWorker === worker.id}
-                                  aria-label={`${worker.paused ? "Resume" : "Pause"} ${worker.id}`}
-                                  onChange={(event) =>
-                                    setWorkerPaused(worker.id, !event.currentTarget.checked)
-                                  }
-                                />
-                              </Tooltip>
-                            </Box>
-                          </Popover.Target>
-                          <Popover.Dropdown>
-                            <Text fw={600} size="sm">
-                              Pausing a worker affects only this process
-                            </Text>
-                            <Text c="dimmed" mt={4} size="xs">
-                              A paused worker finishes active tasks but accepts no new ones. If the
-                              process restarts or a deploy replaces it, the new instance resumes
-                              automatically. If work must stay paused, pause the queue instead.
-                            </Text>
-                          </Popover.Dropdown>
-                        </Popover>
+                          <Popover
+                            disabled={!data.canManageWorkers}
+                            width={300}
+                            position="bottom"
+                            withArrow
+                            shadow="md"
+                          >
+                            <Popover.Target>
+                              <Box component="span" display="inline-block">
+                                <Tooltip
+                                  label="Worker controls are unavailable in read-only mode"
+                                  disabled={data.canManageWorkers}
+                                >
+                                  <Switch
+                                    size="sm"
+                                    checked={!worker.paused}
+                                    disabled={
+                                      !data.canManageWorkers || togglingWorker === worker.id
+                                    }
+                                    aria-label={`${worker.paused ? "Resume" : "Pause"} ${worker.id}`}
+                                    onChange={(event) =>
+                                      setWorkerPaused(worker.id, !event.currentTarget.checked)
+                                    }
+                                  />
+                                </Tooltip>
+                              </Box>
+                            </Popover.Target>
+                            <Popover.Dropdown>
+                              <Text fw={600} size="sm">
+                                Pausing a worker affects only this process
+                              </Text>
+                              <Text c="dimmed" mt={4} size="xs">
+                                A paused worker finishes active tasks but accepts no new ones. If
+                                the process restarts or a deploy replaces it, the new instance
+                                resumes automatically. If work must stay paused, pause the queue
+                                instead.
+                              </Text>
+                            </Popover.Dropdown>
+                          </Popover>
                         )}
                       </Table.Td>
                       <Table.Td
@@ -283,8 +286,8 @@ export function WorkersPage({
         sets capacity, and the dashboard cannot change it. A Claims pause applies to this worker
         instance; a restart or deploy that replaces it clears the pause. Pause the queue when work
         must stay paused. A draining worker stops after its active handlers finish. If a worker
-        stops registering, Workhorse marks it offline and later removes it from the fleet. During
-        a deploy, the Started column separates a replacement worker from the instance it sunsets.
+        stops registering, Workhorse marks it offline and later removes it from the fleet. During a
+        deploy, the Started column separates a replacement worker from the instance it sunsets.
       </Text>
     </Stack>
   );
