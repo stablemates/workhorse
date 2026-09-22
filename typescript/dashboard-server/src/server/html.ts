@@ -70,9 +70,8 @@ function escapeHtmlAttribute(value: string): string {
 export function renderDashboardHtml(template: string, options: RenderDashboardHtmlOptions): string {
   const serialized = JSON.stringify(options.runtime).replaceAll("<", "\\u003c");
   return template
-    .replace(DASHBOARD_RUNTIME_CONFIG_PLACEHOLDER, `window.workhorseDashboard=${serialized}`)
-    .replace(
-      DASHBOARD_BROWSER_MODULES_PLACEHOLDER,
+    .replace(DASHBOARD_RUNTIME_CONFIG_PLACEHOLDER, () => `window.workhorseDashboard=${serialized}`)
+    .replace(DASHBOARD_BROWSER_MODULES_PLACEHOLDER, () =>
       (options.browserModules ?? [])
         .map((source) => `<script type="module" src="${escapeHtmlAttribute(source)}"></script>`)
         .join("\n"),

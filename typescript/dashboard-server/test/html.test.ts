@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   DASHBOARD_BROWSER_MODULES_PLACEHOLDER,
@@ -6,6 +8,10 @@ import {
 } from "../src/server/html.js";
 
 const template = `<html><head><script>${DASHBOARD_RUNTIME_CONFIG_PLACEHOLDER}</script>${DASHBOARD_BROWSER_MODULES_PLACEHOLDER}</head></html>`;
+const packagedTemplate = readFileSync(
+  join(import.meta.dirname, "../../../dashboard/app/browser/index.html"),
+  "utf8",
+);
 
 const runtime = {
   basePath: "/workhorse",
@@ -38,6 +44,21 @@ describe("renderDashboardHtml", () => {
 
     expect(html).not.toContain("</script><script>alert(1)");
     expect(html).toContain("\\u003c/script>");
+  });
+
+  it("renders dollar substitution patterns as data in the packaged template", () => {
+    const html = renderDashboardHtml(packagedTemplate, {
+      runtime: { ...runtime, auditActor: "$&-$`-$'-$1" },
+      browserModules: ["/dev/$&-module.ts"],
+    });
+
+    expect(html).toContain('window.workhorseDashboard={"basePath":"/workhorse"');
+    expect(html).toContain('"auditActor":"$&-$`-$\'-$1"');
+    expect(html).toContain('<script type="module" src="/dev/$&amp;-module.ts"></script>');
+    expect(html.match(/window\.workhorseDashboard=/g)).toHaveLength(1);
+    expect(html.match(/<script>\s*window\.workhorseDashboard=/g)).toHaveLength(1);
+    expect(html).not.toContain(DASHBOARD_RUNTIME_CONFIG_PLACEHOLDER);
+    expect(html).not.toContain(DASHBOARD_BROWSER_MODULES_PLACEHOLDER);
   });
 
   it("renders host-owned browser modules and escapes their URLs", () => {
