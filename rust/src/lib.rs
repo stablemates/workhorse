@@ -213,8 +213,10 @@ impl Queue {
         definitions: &[ScheduleDefinition],
         replace: bool,
     ) -> Result<(), Error> {
-        let v =
-            serde_json::to_value(definitions).map_err(|e| Error::InvalidRequest(e.to_string()))?;
+        let v = serde_json::to_value(
+            definitions.iter().map(|definition| &definition.definition).collect::<Vec<_>>(),
+        )
+        .map_err(|e| Error::InvalidRequest(e.to_string()))?;
         self.client
             .execute(
                 "SELECT workhorse.sync_schedule_definitions_v2($1,$2::jsonb,$3)",
@@ -235,8 +237,17 @@ impl Queue {
         Ok(())
     }
     pub async fn sync_contracts(&self, contracts: &[ContractDefinition]) -> Result<(), Error> {
-        let v =
-            serde_json::to_value(contracts).map_err(|e| Error::InvalidRequest(e.to_string()))?;
+        let v = contracts
+            .iter()
+            .map(|contract| {
+                serde_json::json!({
+                    "taskType": contract.task_type,
+                    "currentVersion": contract.version,
+                    "versions": { contract.version.clone(): contract.definition }
+                })
+            })
+            .collect::<Vec<_>>();
+        let v = serde_json::to_value(v).map_err(|e| Error::InvalidRequest(e.to_string()))?;
         self.client
             .execute("SELECT workhorse.sync_contract_definitions_v1($1::jsonb)", &[&v])
             .await?;

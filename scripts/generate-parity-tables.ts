@@ -39,31 +39,53 @@ function renderCells(cells: readonly (readonly string[])[]): string {
   return [line(cells[0]!), separator, ...cells.slice(1).map(line)].join("\n");
 }
 
-function renderTable(rows: readonly ParityRow[]): string {
+function rustCell(row: ParityRow, table: "client" | "worker" | "operator"): ParityCell {
+  if (row.rust) return row.rust;
+  if (table === "operator")
+    return { absent: "The Rust SDK scope does not include an Admin client." };
+  if (table === "client") return { planned: "SM-868" };
+  if (
+    [
+      "Durable checkpoints (handler context)",
+      "Durable timers (`sleep` / `sleepUntil`)",
+      "Signal and human-decision waits",
+      "Linked child fan-out and result join",
+      "Latest-value progress reporting",
+    ].includes(row.capability)
+  )
+    return { planned: "SM-870" };
+  return { planned: "SM-869" };
+}
+
+function renderTable(rows: readonly ParityRow[], table: "client" | "worker" | "operator"): string {
   return renderCells([
-    ["Capability", "TypeScript", "Python", "Go"],
+    ["Capability", "TypeScript", "Python", "Go", "Rust"],
     ...rows.map((row) => [
       row.capability,
       status(row.typescript),
       status(row.python),
       status(row.go),
+      status(rustCell(row, table)),
     ]),
   ]);
 }
 
 /** A default renders its value, or Absent when the language has no such setting. */
-function defaultValue(cell: ParityDefaultRow["typescript"]): string {
-  return "absent" in cell ? "Absent" : cell.value;
+function defaultValue(cell: ParityDefaultRow["typescript"] | ParityDefaultRow["rust"]): string {
+  if (cell === undefined || "absent" in cell) return "Absent";
+  if ("planned" in cell) return `[Planned][${cell.planned}]`;
+  return cell.value;
 }
 
 function renderDefaultsTable(): string {
   return renderCells([
-    ["Setting", "TypeScript", "Python", "Go"],
+    ["Setting", "TypeScript", "Python", "Go", "Rust"],
     ...PARITY_DEFAULT_ROWS.map((row) => [
       row.setting,
       defaultValue(row.typescript),
       defaultValue(row.python),
       defaultValue(row.go),
+      defaultValue(row.rust ?? { planned: "SM-869" }),
     ]),
   ]);
 }
@@ -80,17 +102,22 @@ function renderProductTable(): string {
   ]);
 }
 
-function replaceGeneratedTable(document: string, name: string, rows: readonly ParityRow[]): string {
+function replaceGeneratedTable(
+  document: string,
+  name: string,
+  rows: readonly ParityRow[],
+  table: "client" | "worker" | "operator",
+): string {
   const start = `<!-- BEGIN GENERATED PARITY ${name.toUpperCase()} -->`;
   const end = `<!-- END GENERATED PARITY ${name.toUpperCase()} -->`;
   const pattern = new RegExp(`${start}[\\s\\S]*?${end}`);
   if (!pattern.test(document)) throw new Error(`Missing generated parity markers for ${name}`);
-  return document.replace(pattern, `${start}\n\n${renderTable(rows)}\n\n${end}`);
+  return document.replace(pattern, `${start}\n\n${renderTable(rows, table)}\n\n${end}`);
 }
 
 const current = await readFile(documentPath, "utf8");
 const generatedLanguages = tables.reduce(
-  (document, [name, rows]) => replaceGeneratedTable(document, name, rows),
+  (document, [name, rows]) => replaceGeneratedTable(document, name, rows, name),
   current,
 );
 const defaultsStart = "<!-- BEGIN GENERATED PARITY DEFAULTS -->";
@@ -116,8 +143,11 @@ const generated = generatedDefaults.replace(
 const plannedItems = [
   ...new Set(
     [
-      ...tables.flatMap(([, rows]) => rows.flatMap((row) => [row.typescript, row.python, row.go])),
+      ...tables.flatMap(([name, rows]) =>
+        rows.flatMap((row) => [row.typescript, row.python, row.go, rustCell(row, name)]),
+      ),
       ...PRODUCT_PARITY_ROWS.flatMap((row) => [row.postgresql, row.dashboard, row.cli]),
+      ...PARITY_DEFAULT_ROWS.map((row) => row.rust ?? { planned: "SM-869" }),
     ].flatMap((cell) => ("planned" in cell ? [cell.planned] : [])),
   ),
 ].toSorted();

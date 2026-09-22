@@ -20,14 +20,15 @@ import {
 // are recorded too, so shipping a capability without flipping its cell fails here.
 
 const repository = path.resolve(import.meta.dirname, "../../..");
-const languages: readonly ParityLanguage[] = ["typescript", "python", "go"];
+type ExistingLanguage = Exclude<ParityLanguage, "rust">;
+const languages: readonly ExistingLanguage[] = ["typescript", "python", "go"];
 const productTargets: readonly ProductParityTarget[] = ["postgresql", "dashboard", "cli"];
 
 type Status = "Supported" | "Planned" | "Absent";
 
 interface DocumentedRow {
   capability: string;
-  statuses: Record<ParityLanguage, Status>;
+  statuses: Record<ExistingLanguage, Status>;
 }
 
 /**
@@ -39,7 +40,9 @@ function documentedTables(markdown: string): DocumentedRow[][] {
   const tables: DocumentedRow[][] = [];
   let current: DocumentedRow[] | null = null;
   for (const line of markdown.split("\n")) {
-    if (/^\|\s*Capability\s*\|\s*TypeScript\s*\|\s*Python\s*\|\s*Go\s*\|$/.test(line)) {
+    if (
+      /^\|\s*Capability\s*\|\s*TypeScript\s*\|\s*Python\s*\|\s*Go\s*(\|\s*Rust\s*)?\|$/.test(line)
+    ) {
       current = [];
       tables.push(current);
       continue;
@@ -53,7 +56,7 @@ function documentedTables(markdown: string): DocumentedRow[][] {
       .split("|")
       .slice(1, -1)
       .map((cell) => cell.trim());
-    if (cells.length !== 4 || /^-+$/.test(cells[0]!)) continue;
+    if ((cells.length !== 4 && cells.length !== 5) || /^-+$/.test(cells[0]!)) continue;
     const [capability, ...statuses] = cells as [string, Status, Status, Status];
     current.push({
       capability,
@@ -99,7 +102,7 @@ async function expectEvidence(root: string, evidence: ParityCell): Promise<void>
  * of cell answer the same two questions and the caller asserts once.
  */
 async function describeDefault(
-  cell: ParityDefaultRow[ParityLanguage],
+  cell: ParityDefaultRow[ExistingLanguage],
 ): Promise<{ sourced: boolean; published: boolean }> {
   if ("absent" in cell) {
     return { sourced: cell.absent.trim().length > 0, published: true };
@@ -116,7 +119,7 @@ function unexplainedAbsent(cells: readonly ParityCell[]): ParityCell[] {
 const markdown = await readFile(path.join(repository, "docs", "parity.md"), "utf8");
 const tables = documentedTables(markdown);
 
-const registryCells: Array<{ row: ParityRow; language: ParityLanguage }> = PARITY_TABLES.flatMap(
+const registryCells: Array<{ row: ParityRow; language: ExistingLanguage }> = PARITY_TABLES.flatMap(
   (table) => table.flatMap((row) => languages.map((language) => ({ row, language }))),
 );
 const supportedCells = registryCells.filter(

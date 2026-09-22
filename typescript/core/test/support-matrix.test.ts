@@ -636,14 +636,16 @@ describe("continuous integration", () => {
       "DATABASE_URL_TEST_PACKED: postgres://workhorse:workhorse@localhost:5432/workhorse_test_packed",
     );
     expect(npmRelease).not.toContain("DATABASE_URL_PRIMARY");
-    expect(npmRelease).not.toContain("postgresql-client-18");
+    expect(npmRelease).toContain("postgresql-client-18");
+    expect(npmRelease).toContain("/usr/lib/postgresql/18/bin");
 
     const pythonRelease = await read(".github/workflows/release-python.yml");
     expect(pythonRelease).toContain("image: postgres:18-alpine");
     expect(pythonRelease).toContain(
       "DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test",
     );
-    expect(pythonRelease).not.toContain("postgresql-client-18");
+    expect(pythonRelease).toContain("postgresql-client-18");
+    expect(pythonRelease).toContain("/usr/lib/postgresql/18/bin");
   });
 
   it("benchmarks weekly on a supported PostgreSQL major under an explicit timeout", async () => {

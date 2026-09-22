@@ -40,3 +40,5 @@ scripts/with-env-probe.tmp.*
 
 rust/target/
 rust/*.crate
+
+/target/

@@ -22,6 +22,7 @@ export const PARITY_TEST_ROOTS = {
   typescript: "typescript/core/test",
   python: "python/tests",
   go: "go",
+  rust: "rust",
 } as const;
 
 export type ParityLanguage = keyof typeof PARITY_TEST_ROOTS;
@@ -46,6 +47,8 @@ export interface ParityRow {
   typescript: ParityCell;
   python: ParityCell;
   go: ParityCell;
+  /** Rust adapters are delivered by SM-16A/B/C; unsupported cells remain Planned until then. */
+  rust?: ParityCell;
 }
 
 /** Where each product operator surface's tests live, relative to the repository root. */
@@ -74,12 +77,14 @@ const pythonAdmin = { file: "test_admin.py", pattern: "admin." } as const;
 export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Transactional enqueue in a caller-owned tx",
+    rust: { file: "protocol_conformance.rs", pattern: "enqueue_batch" },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "transaction" },
     python: { file: "test_enqueue.py", pattern: "transaction" },
     go: { file: "queue_test.go", pattern: "Tx" },
   },
   {
     capability: "Atomic batch enqueue",
+    rust: { file: "protocol_conformance.rs", pattern: "enqueue_batch" },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "enqueueMany" },
     python: { file: "test_enqueue.py", pattern: "enqueue_many" },
     go: { file: "queue_test.go", pattern: "EnqueueMany" },
@@ -191,18 +196,21 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Recurring schedule definition sync",
+    rust: { file: "protocol_conformance.rs", pattern: "sync_schedule" },
     typescript: { file: "integration-cron-schedules.test.ts", pattern: "syncSchedules" },
     python: { file: "test_schedules.py", pattern: "sync_schedules" },
     go: { file: "queue_test.go", pattern: "SyncSchedules" },
   },
   {
     capability: "Payload and result contracts",
+    rust: { file: "protocol_conformance.rs", pattern: "sync_contracts" },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "contracts" },
     python: { file: "test_worker.py", pattern: "test_contract_sync_validates" },
     go: { file: "worker_test.go", pattern: "TestContractSyncValidates" },
   },
   {
     capability: "Compatibility refusal before mutation",
+    rust: { file: "protocol_conformance.rs", pattern: "check_compatibility" },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "schema" },
     python: { file: "test_compatibility.py", pattern: "compatib" },
     go: { file: "compatibility_test.go", pattern: "Compatibility" },
@@ -215,6 +223,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "SQL protocol conformance fixtures executed",
+    rust: {
+      file: "protocol_conformance.rs",
+      pattern: "fixture_manifest_covers_local_interpreters",
+    },
     typescript: { file: "sql-protocol-conformance.test.ts", pattern: "scenarios" },
     python: { file: "test_protocol_conformance.py", pattern: "scenarios" },
     go: { file: "conformance_test.go", pattern: "scenarios" },
@@ -491,6 +503,7 @@ export interface ParityDefaultRow {
   typescript: ParityDefaultCell | { absent: string };
   python: ParityDefaultCell | { absent: string };
   go: ParityDefaultCell | { absent: string };
+  rust?: ParityDefaultCell | { absent: string } | { planned: string };
 }
 
 /**

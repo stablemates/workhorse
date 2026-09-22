@@ -4,20 +4,24 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 
 const root = path.resolve(import.meta.dirname, "..");
-function run(args: string[], cwd = root): Promise<void> {
+function run(command: string, args: string[], cwd = root): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn("cargo", args, {
-      cwd,
-      stdio: "inherit",
-      env: process.env,
-    });
+    const child = spawn(command, args, { cwd, stdio: "inherit", env: process.env });
     child.once("error", reject);
     child.once("exit", (code) =>
-      code === 0 ? resolve() : reject(new Error(`cargo exited with ${code}`)),
+      code === 0
+        ? resolve()
+        : reject(new Error(`${command} ${args.join(" ")} exited with ${code}`)),
     );
   });
 }
-await run(["package", "--manifest-path", "rust/Cargo.toml", "--allow-dirty"]);
+const cargo = (...args: string[]) => run("mise", ["exec", "--", "cargo", ...args]);
+
+await cargo("fmt", "--all", "--", "--check");
+await cargo("clippy", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings");
+await cargo("test", "--workspace");
+await cargo("package", "-p", "workhorse-client", "--allow-dirty", "--no-verify");
+
 const consumer = await mkdtemp(path.join(tmpdir(), "workhorse-rust-consumer-"));
 try {
   await mkdir(path.join(consumer, "src"));
@@ -27,9 +31,10 @@ try {
   );
   await writeFile(
     path.join(consumer, "src", "main.rs"),
-    "fn main() { let _ = workhorse_client::CLIENT_PROTOCOL_VERSION; }\n",
+    "fn main() { assert_eq!(workhorse_client::CLIENT_PROTOCOL_VERSION, 4); }\n",
   );
-  await run(["check", "--manifest-path", path.join(consumer, "Cargo.toml")]);
+  await cargo("check", "--manifest-path", path.join(consumer, "Cargo.toml"));
+  await cargo("check", "--manifest-path", path.join(consumer, "Cargo.toml"), "--locked");
 } finally {
   await rm(consumer, { recursive: true, force: true });
 }

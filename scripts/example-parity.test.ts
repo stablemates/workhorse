@@ -8,7 +8,6 @@ import {
   PARITY_OPERATOR_ROWS,
   PARITY_WORKER_ROWS,
   type ParityCell,
-  type ParityLanguage,
 } from "../typescript/core/test/support/parity-capabilities.js";
 import { repositoryRoot } from "./packages.js";
 
@@ -41,7 +40,8 @@ const parityRows = [...PARITY_CLIENT_ROWS, ...PARITY_WORKER_ROWS, ...PARITY_OPER
 function parityStatus(capability: string, language: string): ParityStatus | undefined {
   const row = parityRows.find((entry) => entry.capability === capability);
   if (row === undefined || !(language in row)) return undefined;
-  return cellStatus(row[language as ParityLanguage]);
+  const cell = (row as unknown as Record<string, ParityCell | undefined>)[language];
+  return cell === undefined ? undefined : cellStatus(cell);
 }
 
 function isExampleFile(language: string, relativePath: string): boolean {

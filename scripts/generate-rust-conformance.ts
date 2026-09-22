@@ -41,12 +41,12 @@ const fixtureWidth = Math.max("Fixture".length, ...rows.map(([name]) => name.len
 const entryWidth = Math.max("Entries".length, ...rows.map(([, count]) => count.length));
 const table = [
   `| ${"Fixture".padEnd(fixtureWidth)} | ${"Entries".padStart(entryWidth)} |`,
-  `| ${"-".repeat(fixtureWidth)} | ${":".padStart(entryWidth, "-")} |`,
+  `| ${"-".repeat(fixtureWidth)} | ${"-".repeat(entryWidth - 1)}: |`,
   ...rows.map(
     ([name, count]) => `| ${name.padEnd(fixtureWidth)} | ${count.padStart(entryWidth)} |`,
   ),
 ].join("\n");
-const body = `# Rust conformance evidence\n\nGenerated from \`protocol/v1\` at protocol version ${manifest.protocolVersion}. The harness currently proves fixture loading, manifest coverage, and fixture shape. Runtime execution awaits the SDK seams owned by SM-16A, SM-16B, and SM-16C.\n\n## Generated fixture inventory\n\n${table}\n\nThe manifest declares ${manifest.runtimeCoverage.length} runtime capabilities and ${Object.values(manifest.fixtureCoverage).flat().length} language fixture identifiers. Once the client, worker, and durable context crates land, their adapters must execute these same files without copying them.\n\nRegenerate with \`pnpm rust:conformance:generate\`; CI uses \`pnpm rust:conformance:check\`.\n`;
+const body = `# Rust conformance evidence\n\nGenerated from \`protocol/v1\` at protocol version ${manifest.protocolVersion}. The harness executes request, schedule, and contract fixtures through the \`workhorse-client\` PostgreSQL adapter when \`DATABASE_URL_TEST\` is set. Interpreter and failure execution remains Planned until public adapter operations exist; runtime execution remains Planned until the worker and durable context fixture seams land.\n\n## Generated fixture inventory\n\n${table}\n\nThe manifest declares ${manifest.runtimeCoverage.length} runtime capabilities and ${Object.values(manifest.fixtureCoverage).flat().length} language fixture identifiers. The client adapter is exercised by the PostgreSQL test. SM-16B and SM-16C still need to expose runtime fixture execution before runtime evidence can become Supported.\n\nRegenerate with \`pnpm rust:conformance:generate\`; CI uses \`pnpm rust:conformance:check\`.\n`;
 if (check) {
   const current = await readFile(output, "utf8");
   if (current !== body)

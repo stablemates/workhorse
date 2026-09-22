@@ -1,0 +1,3 @@
+[workspace]
+members = ["rust", "rust/workhorse-worker"]
+resolver = "2"
