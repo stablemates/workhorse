@@ -190,6 +190,7 @@ describe("supported version constants", () => {
       node: manifest.toolchains.node,
       pnpm: manifest.toolchains.pnpm,
       python: manifest.support.python.minimum,
+      rust: manifest.toolchains.rust,
       uv: manifest.toolchains.uv,
     });
     expect(
@@ -406,7 +407,7 @@ describe("continuous integration", () => {
     expect(workflow).toContain("schedule:");
     expect(workflow).toContain("name: required");
     expect(workflow).toContain(
-      "needs: [plan, static, unit, typescript, python, go, runtime-smoke, packed, demo]",
+      "needs: [plan, static, unit, typescript, python, go, runtime-smoke, packed, rust, demo]",
     );
     expect(workflow).toContain('cron: "43 3 * * *" # Daily packed-install verification.');
     expect(workflow).toContain('cron: "17 4 * * 0" # Weekly full compatibility matrix.');
@@ -417,7 +418,7 @@ describe("continuous integration", () => {
       workflow.match(
         /if: github\.event_name != 'schedule' \|\| github\.event\.schedule == '17 4 \* \* 0'/g,
       ),
-    ).toHaveLength(7);
+    ).toHaveLength(8);
     expect(workflow).toContain('all(.[]; .result == "success" or .result == "skipped")');
     expect(workflow).toContain(
       "name: demo and site smoke\n    if: github.event_name != 'schedule'",

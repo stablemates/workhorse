@@ -63,6 +63,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm python:release-check
