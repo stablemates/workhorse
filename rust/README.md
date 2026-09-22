@@ -1,8 +1,37 @@
-# Rust workspace
+# Workhorse for Rust
 
-The canonical Cargo workspace is rooted at `Cargo.toml` and contains the client crate in `rust/`,
-the worker lifecycle crate in `rust/workhorse-worker/`, and durable context crate in
-`rust/workhorse/`. The integration tests in `rust/tests/` load the shared `protocol/v1` fixtures.
+The Rust SDK is under construction. [ADR 0074](../docs/decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md)
+fixes its shape, and the Linear issues SM-877 through SM-885 implement it. Until they land, no crate
+here is published and the public API is not stable.
+
+## Target shape
+
+The SDK is one crate rooted at this directory. Its library name is `workhorse`, and it follows the
+Python SDK's surface on Tokio.
+
+- `Queue` enqueues, cancels, signals, and synchronizes schedules, policies, budgets, and contracts.
+  It takes an executor, so an open transaction makes the enqueue transactional.
+- `Worker` takes a `deadpool_postgres::Pool`, registers typed handlers by task type, and runs them
+  under a lease with a shared heartbeat connection.
+- `HandlerContext` offers checkpoints, durable sleeps, signal and human waits, child tasks, and
+  progress. PostgreSQL owns every durable decision.
+- `Admin` lists, inspects, and repairs tasks, dead letters, waits, workers, and queues. Every
+  control takes an `AdminAudit`.
+- The `dashboard` feature adds an embedded dashboard backend. It is a `tower::Service` that axum,
+  hyper, or any tower host mounts under its own path.
+- `tracing` spans are always on. The `opentelemetry` feature adds metrics and trace propagation.
+
+## Current state
+
+The workspace in the repository-root `Cargo.toml` still holds two interim crates.
+
+- `rust/` builds the `workhorse-client` package. It contains the interim queue, the PostgreSQL
+  durable adapter in `src/durable_postgres.rs`, and an in-memory model in `src/durable_context/`
+  that ADR 0074 retires.
+- `rust/workhorse-worker/` holds an interim worker. SM-878 folds it into `rust/src/worker/`.
+
+The integration tests in `rust/tests/` load the shared `protocol/v1` fixtures.
+[`PARITY.md`](PARITY.md) maps the durable operations to their PostgreSQL functions.
 
 The PostgreSQL tests in `rust/tests/postgres.rs`, `rust/tests/enqueue_postgres.rs`, and
 `rust/tests/protocol_conformance.rs` exercise the real `workhorse-client` adapter. Each one creates a

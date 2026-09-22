@@ -29,25 +29,25 @@ Two boundaries keep this matrix small:
 | ------------------------------------------ | ---------- | --------- | --------- | ----------------- |
 | Transactional enqueue in a caller-owned tx | Supported  | Supported | Supported | Supported         |
 | Atomic batch enqueue                       | Supported  | Supported | Supported | [Planned][SM-877] |
-| Delayed enqueue (`runAt` / `run_at`)       | Supported  | Supported | Supported | [Planned][SM-868] |
-| Priority                                   | Supported  | Supported | Supported | [Planned][SM-868] |
-| Tags and max attempts                      | Supported  | Supported | Supported | [Planned][SM-868] |
-| Persisted retry policies                   | Supported  | Supported | Supported | [Planned][SM-868] |
-| Absolute deadlines and execution timeouts  | Supported  | Supported | Supported | [Planned][SM-868] |
-| Enqueue idempotency                        | Supported  | Supported | Supported | [Planned][SM-868] |
-| Keyed debounce                             | Supported  | Supported | Supported | [Planned][SM-868] |
-| Keyed throttle                             | Supported  | Supported | Supported | [Planned][SM-868] |
-| Task dependencies with terminal policies   | Supported  | Supported | Supported | [Planned][SM-868] |
-| Concurrency keys                           | Supported  | Supported | Supported | [Planned][SM-868] |
-| Concurrency policy management              | Supported  | Supported | Supported | [Planned][SM-868] |
-| Rate-limit policy management               | Supported  | Supported | Supported | [Planned][SM-868] |
-| Named budget management                    | Supported  | Supported | Supported | [Planned][SM-868] |
+| Delayed enqueue (`runAt` / `run_at`)       | Supported  | Supported | Supported | [Planned][SM-877] |
+| Priority                                   | Supported  | Supported | Supported | [Planned][SM-877] |
+| Tags and max attempts                      | Supported  | Supported | Supported | [Planned][SM-877] |
+| Persisted retry policies                   | Supported  | Supported | Supported | [Planned][SM-877] |
+| Absolute deadlines and execution timeouts  | Supported  | Supported | Supported | [Planned][SM-877] |
+| Enqueue idempotency                        | Supported  | Supported | Supported | [Planned][SM-877] |
+| Keyed debounce                             | Supported  | Supported | Supported | [Planned][SM-877] |
+| Keyed throttle                             | Supported  | Supported | Supported | [Planned][SM-877] |
+| Task dependencies with terminal policies   | Supported  | Supported | Supported | [Planned][SM-877] |
+| Concurrency keys                           | Supported  | Supported | Supported | [Planned][SM-877] |
+| Concurrency policy management              | Supported  | Supported | Supported | [Planned][SM-877] |
+| Rate-limit policy management               | Supported  | Supported | Supported | [Planned][SM-877] |
+| Named budget management                    | Supported  | Supported | Supported | [Planned][SM-877] |
 | Recurring schedule definition sync         | Supported  | Supported | Supported | [Planned][SM-877] |
 | Payload and result contracts               | Supported  | Supported | Supported | [Planned][SM-877] |
 | Compatibility refusal before mutation      | Supported  | Supported | Supported | Supported         |
-| Public startup schema compatibility check  | Supported  | Supported | Supported | [Planned][SM-868] |
+| Public startup schema compatibility check  | Supported  | Supported | Supported | [Planned][SM-877] |
 | SQL protocol conformance fixtures executed | Supported  | Supported | Supported | Supported         |
-| Enqueue trace-context propagation          | Supported  | Supported | Supported | [Planned][SM-868] |
+| Enqueue trace-context propagation          | Supported  | Supported | Supported | [Planned][SM-877] |
 
 <!-- END GENERATED PARITY CLIENT -->
 
@@ -61,24 +61,24 @@ telemetry, and graceful shutdown.
 
 | Capability                                   | TypeScript | Python    | Go        | Rust              |
 | -------------------------------------------- | ---------- | --------- | --------- | ----------------- |
-| Claiming and handler execution               | Supported  | Supported | Supported | [Planned][SM-869] |
-| Bounded worker concurrency                   | Supported  | Supported | Supported | [Planned][SM-869] |
-| Unhandled task type released to its queue    | Supported  | Supported | Supported | [Planned][SM-869] |
-| Heartbeats, lease recovery, fenced ownership | Supported  | Supported | Supported | [Planned][SM-869] |
-| Cooperative cancellation delivery            | Supported  | Supported | Supported | [Planned][SM-869] |
-| Notification-assisted dispatch with polling  | Supported  | Supported | Supported | [Planned][SM-869] |
-| Durable checkpoints (handler context)        | Supported  | Supported | Supported | [Planned][SM-870] |
-| Durable timers (`sleep` / `sleepUntil`)      | Supported  | Supported | Supported | [Planned][SM-870] |
-| Signal and human-decision waits              | Supported  | Supported | Supported | [Planned][SM-870] |
-| Linked child fan-out and result join         | Supported  | Supported | Supported | [Planned][SM-870] |
-| Latest-value progress reporting              | Supported  | Supported | Supported | [Planned][SM-870] |
-| Batch handler delivery                       | Supported  | Supported | Supported | [Planned][SM-869] |
-| Schedule firing (database cron evaluation)   | Supported  | Supported | Supported | [Planned][SM-869] |
-| Worker fleet registration and remote pause   | Supported  | Supported | Supported | [Planned][SM-869] |
-| Graceful stop and signal drain               | Supported  | Supported | Supported | [Planned][SM-869] |
-| Retention maintenance participation          | Supported  | Supported | Supported | [Planned][SM-869] |
-| OpenTelemetry tracing and metrics            | Supported  | Supported | Supported | [Planned][SM-869] |
-| Shared runtime fixtures executed             | Supported  | Supported | Supported | [Planned][SM-869] |
+| Claiming and handler execution               | Supported  | Supported | Supported | [Planned][SM-878] |
+| Bounded worker concurrency                   | Supported  | Supported | Supported | [Planned][SM-878] |
+| Unhandled task type released to its queue    | Supported  | Supported | Supported | [Planned][SM-878] |
+| Heartbeats, lease recovery, fenced ownership | Supported  | Supported | Supported | [Planned][SM-878] |
+| Cooperative cancellation delivery            | Supported  | Supported | Supported | [Planned][SM-878] |
+| Notification-assisted dispatch with polling  | Supported  | Supported | Supported | [Planned][SM-878] |
+| Durable checkpoints (handler context)        | Supported  | Supported | Supported | [Planned][SM-879] |
+| Durable timers (`sleep` / `sleepUntil`)      | Supported  | Supported | Supported | [Planned][SM-879] |
+| Signal and human-decision waits              | Supported  | Supported | Supported | [Planned][SM-879] |
+| Linked child fan-out and result join         | Supported  | Supported | Supported | [Planned][SM-879] |
+| Latest-value progress reporting              | Supported  | Supported | Supported | [Planned][SM-879] |
+| Batch handler delivery                       | Supported  | Supported | Supported | [Planned][SM-878] |
+| Schedule firing (database cron evaluation)   | Supported  | Supported | Supported | [Planned][SM-878] |
+| Worker fleet registration and remote pause   | Supported  | Supported | Supported | [Planned][SM-878] |
+| Graceful stop and signal drain               | Supported  | Supported | Supported | [Planned][SM-878] |
+| Retention maintenance participation          | Supported  | Supported | Supported | [Planned][SM-878] |
+| OpenTelemetry tracing and metrics            | Supported  | Supported | Supported | [Planned][SM-878] |
+| Shared runtime fixtures executed             | Supported  | Supported | Supported | [Planned][SM-878] |
 
 <!-- END GENERATED PARITY WORKER -->
 
@@ -97,18 +97,18 @@ differs today, and the reason follows the table.
 
 | Setting                                 | TypeScript                      | Python                          | Go                                  | Rust              |
 | --------------------------------------- | ------------------------------- | ------------------------------- | ----------------------------------- | ----------------- |
-| Worker concurrency                      | 1                               | 1                               | 1                                   | [Planned][SM-869] |
-| Lease duration                          | 30000 ms                        | 30000 ms                        | 30000 ms                            | [Planned][SM-869] |
-| Heartbeat interval                      | Lease duration / 3              | Lease duration / 3              | Lease duration / 3                  | [Planned][SM-869] |
-| Claim poll interval (subscription live) | 5000 ms                         | 5000 ms                         | 5000 ms                             | [Planned][SM-869] |
-| Claim poll interval (polling only)      | 250 ms                          | 250 ms                          | 250 ms                              | [Planned][SM-869] |
-| Empty-claim backoff ceiling             | 5000 ms                         | 5000 ms                         | 5000 ms                             | [Planned][SM-869] |
-| Maintenance tick interval               | 1000 ms                         | 1000 ms                         | 1000 ms                             | [Planned][SM-869] |
-| Maintenance routine offer interval      | 60000 ms                        | 60000 ms                        | 60000 ms                            | [Planned][SM-869] |
-| Worker registry interval                | 5000 ms                         | 5000 ms                         | 5000 ms                             | [Planned][SM-869] |
-| Schedule catch-up limit                 | 100                             | 100                             | 100                                 | [Planned][SM-869] |
-| Shutdown grace, then                    | 25000 ms, then exit the process | 25000 ms, then exit the process | 25000 ms, then abandon the handlers | [Planned][SM-869] |
-| Handler retry delay override            | `retryDelayMs`, unset           | `retry_delay_ms`, unset         | `RetryDelay`, unset                 | [Planned][SM-869] |
+| Worker concurrency                      | 1                               | 1                               | 1                                   | [Planned][SM-878] |
+| Lease duration                          | 30000 ms                        | 30000 ms                        | 30000 ms                            | [Planned][SM-878] |
+| Heartbeat interval                      | Lease duration / 3              | Lease duration / 3              | Lease duration / 3                  | [Planned][SM-878] |
+| Claim poll interval (subscription live) | 5000 ms                         | 5000 ms                         | 5000 ms                             | [Planned][SM-878] |
+| Claim poll interval (polling only)      | 250 ms                          | 250 ms                          | 250 ms                              | [Planned][SM-878] |
+| Empty-claim backoff ceiling             | 5000 ms                         | 5000 ms                         | 5000 ms                             | [Planned][SM-878] |
+| Maintenance tick interval               | 1000 ms                         | 1000 ms                         | 1000 ms                             | [Planned][SM-878] |
+| Maintenance routine offer interval      | 60000 ms                        | 60000 ms                        | 60000 ms                            | [Planned][SM-878] |
+| Worker registry interval                | 5000 ms                         | 5000 ms                         | 5000 ms                             | [Planned][SM-878] |
+| Schedule catch-up limit                 | 100                             | 100                             | 100                                 | [Planned][SM-878] |
+| Shutdown grace, then                    | 25000 ms, then exit the process | 25000 ms, then exit the process | 25000 ms, then abandon the handlers | [Planned][SM-878] |
+| Handler retry delay override            | `retryDelayMs`, unset           | `retry_delay_ms`, unset         | `RetryDelay`, unset                 | [Planned][SM-878] |
 
 <!-- END GENERATED PARITY DEFAULTS -->
 
@@ -197,15 +197,16 @@ through its own public SDK.
 
 <!-- BEGIN GENERATED PARITY OPERATOR -->
 
-| Capability                                 | TypeScript | Python    | Go        | Rust   |
-| ------------------------------------------ | ---------- | --------- | --------- | ------ |
-| Task lookup, listing, and timeline         | Supported  | Supported | Supported | Absent |
-| Queue health snapshot                      | Supported  | Supported | Supported | Absent |
-| Cancellation requests                      | Supported  | Supported | Supported | Absent |
-| Queue pause, resume, and purge             | Supported  | Supported | Supported | Absent |
-| Dead-letter listing and redrive            | Supported  | Supported | Supported | Absent |
-| Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported | Absent |
-| Durable operator worker pause              | Supported  | Supported | Supported | Absent |
+| Capability                                 | TypeScript | Python    | Go        | Rust              |
+| ------------------------------------------ | ---------- | --------- | --------- | ----------------- |
+| Task lookup, listing, and timeline         | Supported  | Supported | Supported | [Planned][SM-883] |
+| Queue health snapshot                      | Supported  | Supported | Supported | [Planned][SM-877] |
+| Cancellation requests                      | Supported  | Supported | Supported | [Planned][SM-877] |
+| Queue pause, resume, and purge             | Supported  | Supported | Supported | [Planned][SM-883] |
+| Dead-letter listing and redrive            | Supported  | Supported | Supported | [Planned][SM-883] |
+| Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported | [Planned][SM-883] |
+| Durable operator worker pause              | Supported  | Supported | Supported | [Planned][SM-883] |
+| Embedded dashboard backend                 | Supported  | Supported | Supported | [Planned][SM-885] |
 
 <!-- END GENERATED PARITY OPERATOR -->
 
@@ -213,6 +214,13 @@ TypeScript and Go expose these methods through dedicated public `Admin` clients.
 synchronous `Admin` over Psycopg and `AsyncAdmin` over Psycopg or asyncpg. Their embedded dashboards
 call the same clients for shared operator reads and controls. Cancellation remains
 application-shaped, so every queue client exposes it with audit attribution.
+
+The embedded dashboard backend row records which language can serve the dashboard from its own HTTP
+server ([ADR 0029](decisions/0029-embeddable-dashboard-backends.md)). A cell is Supported only when
+that backend passes the shared `dashboard/v1` HTTP fixtures. [ADR
+0074](decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md) gives Rust a `tower::Service`
+backend behind the `dashboard` feature before 1.0.0. Until it ships, a Rust deployment runs the
+standalone dashboard against its database.
 
 ## Schema tooling is TypeScript-only, deliberately
 
@@ -268,9 +276,10 @@ stops the published view from becoming another source of truth.
 
 <!-- BEGIN GENERATED PARITY LINEAR LINKS -->
 
-[SM-868]: https://linear.app/stablemates/issue/SM-868
-[SM-869]: https://linear.app/stablemates/issue/SM-869
-[SM-870]: https://linear.app/stablemates/issue/SM-870
 [SM-877]: https://linear.app/stablemates/issue/SM-877
+[SM-878]: https://linear.app/stablemates/issue/SM-878
+[SM-879]: https://linear.app/stablemates/issue/SM-879
+[SM-883]: https://linear.app/stablemates/issue/SM-883
+[SM-885]: https://linear.app/stablemates/issue/SM-885
 
 <!-- END GENERATED PARITY LINEAR LINKS -->
