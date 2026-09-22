@@ -5,8 +5,11 @@ pre-commit:
       glob: "{protocol/v1/manifest.json,scripts/generate-sql-catalogues.ts,go/sql_catalogue_generated.go,typescript/core/src/queue/sql-catalogue.generated.ts,python/src/workhorse/_statements.py}"
       run: mise exec -- pnpm sql-catalogues:check
     - name: check parity tables
-      glob: "{typescript/core/test/support/parity-capabilities.ts,docs/parity.md,scripts/generate-parity-tables.ts}"
+      glob: "{rust/**,rust/PARITY.md,typescript/core/test/support/parity-capabilities.ts,docs/parity.md,scripts/generate-parity-tables.ts}"
       run: mise exec -- pnpm parity:check
+    - name: check generated Rust conformance evidence
+      glob: "{rust/**,rust/PARITY.md,docs/rust-conformance.md,scripts/generate-rust-conformance.ts}"
+      run: mise exec -- pnpm rust:conformance:check
     - name: check the TypeScript public API snapshot
       glob: "{typescript/*/src/**,typescript/*/package.json,typescript/dashboard-contract/index.d.ts,scripts/typescript-api.ts,scripts/generate-typescript-api.ts,scripts/api-snapshot.ts,api/typescript.txt}"
       run: mise exec -- pnpm typescript-api:check
@@ -58,7 +61,14 @@ pre-commit:
     # CI's format lane rejects what an editor forgot to format on save. Staged files pass
     # through oxfmt itself so its config decides coverage and ignores, exactly as CI does.
     - name: check formatting
+      glob: "**/*.{ts,tsx,js,jsx,mjs,cjs,json,md,yml,yaml}"
       run: mise exec -- pnpm exec oxfmt --check {staged_files}
+    - name: check Rust formatting
+      glob: "{rust/**/*.rs,rust/Cargo.toml,rust/Cargo.lock,rustfmt.toml,rust/rust-toolchain.toml}"
+      run: mise exec -- pnpm rust:format:check
+    - name: test Rust workspace
+      glob: "{rust/**/*.rs,rust/Cargo.toml,rust/Cargo.lock}"
+      run: mise exec -- pnpm rust:test
     - name: lint Python
       glob: "python/**"
       run: mise exec -- pnpm python:lint
