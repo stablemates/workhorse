@@ -1,5 +1,5 @@
 use serde_json::json;
-use workhorse_client::{EnqueueRequest, MAX_ENQUEUE_BATCH_SIZE, CLIENT_PROTOCOL_VERSION};
+use workhorse_client::{EnqueueRequest, CLIENT_PROTOCOL_VERSION, MAX_ENQUEUE_BATCH_SIZE};
 
 #[test]
 fn request_serializes_protocol_fields() {

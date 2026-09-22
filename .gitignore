@@ -37,3 +37,6 @@ scripts/with-env-probe.tmp.*
 /site/public/about.md
 /site/public/contact.md
 /site/public/privacy.md
+
+rust/target/
+rust/*.crate

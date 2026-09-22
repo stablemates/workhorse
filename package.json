@@ -141,7 +141,15 @@
     "build:check": "tsx scripts/with-env.ts tsx scripts/full-build.ts --check",
     "test:packed:built": "pnpm build:check && pnpm test:build-check && tsx scripts/with-env.ts tsx typescript/core/test/packed-packages.ts",
     "test:demo-smoke:built": "pnpm build:check && pnpm test:build-check && tsx scripts/with-env.ts tsx typescript/core/test/demo-smoke.ts --reuse-build",
-    "test:site-smoke:built": "pnpm build:check && tsx scripts/with-env.ts tsx typescript/core/test/site-smoke.ts"
+    "test:site-smoke:built": "pnpm build:check && tsx scripts/with-env.ts tsx typescript/core/test/site-smoke.ts",
+    "rust:format:check": "mise exec -- cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "rust:clippy": "mise exec -- cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets -- -D warnings",
+    "rust:test": "mise exec -- cargo test --manifest-path rust/Cargo.toml --workspace",
+    "rust:conformance:check": "tsx scripts/generate-rust-conformance.ts --check && pnpm parity:check",
+    "rust:integration": "pnpm test:protocol",
+    "rust:gates": "pnpm rust:format:check && pnpm rust:clippy && pnpm rust:test && pnpm rust:conformance:check",
+    "rust:release-check": "pnpm rust:gates && tsx scripts/check-rust-release.ts",
+    "rust:conformance:generate": "tsx scripts/generate-rust-conformance.ts"
   },
   "devDependencies": {
     "@opentelemetry/context-async-hooks": "2.11.0",
