@@ -1,6 +1,8 @@
 # Rust durable runtime parity evidence
 
-The Rust adapter uses the same PostgreSQL protocol functions as the established runtimes:
+The Rust adapter uses the same PostgreSQL protocol functions as the established runtimes. The
+adapter method names are interim. [ADR 0074](../docs/decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md)
+renames them to the `HandlerContext` methods that Python and Go expose.
 
 | Handler operation          | PostgreSQL authority                    | Rust adapter                             |
 | -------------------------- | --------------------------------------- | ---------------------------------------- |
