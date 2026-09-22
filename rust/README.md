@@ -4,8 +4,8 @@ The canonical Cargo workspace is rooted at `Cargo.toml` and contains the client 
 the worker lifecycle crate in `rust/workhorse-worker/`, and durable context crate in
 `rust/workhorse/`. The integration tests in `rust/tests/` load the shared `protocol/v1` fixtures.
 
-The PostgreSQL tests in `rust/tests/postgres.rs` and the request, schedule, and contract test
-exercise the real `workhorse-client` adapter. Each one creates a scratch database from
+The PostgreSQL tests in `rust/tests/postgres.rs` and `rust/tests/enqueue_postgres.rs` exercise the
+real `workhorse-client` adapter, as does the request, schedule, and contract test. Each one creates a scratch database from
 `DATABASE_URL_TEST`, installs `sql/schema/current.sql`, and drops the database afterward.
 `pnpm db:sweep` finds any scratch database that a failed teardown leaves behind.
 

@@ -146,7 +146,7 @@
     "rust:conformance:check": "tsx scripts/generate-rust-conformance.ts --check && pnpm parity:check",
     "rust:format:check": "mise exec -- cargo fmt --all -- --check",
     "rust:test": "tsx scripts/with-env.ts mise exec -- cargo test --workspace",
-    "rust:integration": "WORKHORSE_REQUIRE_DATABASE=1 tsx scripts/with-env.ts mise exec -- cargo test --package workhorse-client --test postgres --test protocol_conformance",
+    "rust:integration": "WORKHORSE_REQUIRE_DATABASE=1 tsx scripts/with-env.ts mise exec -- cargo test --package workhorse-client --test postgres --test enqueue_postgres --test protocol_conformance",
     "rust:gates": "pnpm rust:format:check && pnpm rust:clippy && pnpm rust:test && pnpm rust:conformance:check",
     "rust:release-check": "pnpm rust:gates && tsx scripts/check-rust-release.ts",
     "rust:clippy": "mise exec -- cargo clippy --workspace --all-targets --all-features -- -D warnings"
