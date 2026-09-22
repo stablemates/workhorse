@@ -107,7 +107,16 @@ const procedure = os
   .$context<DashboardRpcContext>()
   .$meta<DashboardProcedureMeta>({})
   .use(boundedRead);
-const mutationProcedure = procedure.meta({ mutation: true });
+const mutationAuthorization = os
+  .$context<DashboardRpcContext>()
+  .$meta<DashboardProcedureMeta>({})
+  .middleware(async ({ context, next }) => {
+    if (context.operator.mode !== "writable") {
+      throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+    }
+    return next();
+  });
+const mutationProcedure = procedure.meta({ mutation: true }).use(mutationAuthorization);
 
 const auditSchema = z.object({
   actor: z.string().trim().min(1),
@@ -581,7 +590,7 @@ export const dashboardRouter = {
       ),
     ),
     enqueueTest: mutationProcedure.input(enqueueTestInput).handler(async ({ context, input }) => {
-      if (context.operator.mode !== "writable" || !context.operator.enqueueTest) {
+      if (!context.operator.enqueueTest) {
         throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
       }
       return context.operator.enqueueTest(
@@ -595,10 +604,7 @@ export const dashboardRouter = {
     setSchedulePaused: mutationProcedure
       .input(setSchedulePausedInput)
       .handler(async ({ context, input }) => {
-        if (
-          context.operator.mode !== "writable" ||
-          !context.scheduleController?.setSchedulePaused
-        ) {
+        if (!context.scheduleController?.setSchedulePaused) {
           throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
         }
         return context.scheduleController.setSchedulePaused(
@@ -611,7 +617,7 @@ export const dashboardRouter = {
     setQueuePaused: mutationProcedure
       .input(setQueuePausedInput)
       .handler(async ({ context, input }) => {
-        if (context.operator.mode !== "writable" || !context.queueController?.setQueuePaused) {
+        if (!context.queueController?.setQueuePaused) {
           throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
         }
         return context.queueController.setQueuePaused(
@@ -621,7 +627,7 @@ export const dashboardRouter = {
         );
       }),
     purgeQueue: mutationProcedure.input(purgeQueueInput).handler(async ({ context, input }) => {
-      if (context.operator.mode !== "writable" || !context.queueController?.purgeQueue) {
+      if (!context.queueController?.purgeQueue) {
         throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
       }
       return context.queueController.purgeQueue(
@@ -632,7 +638,7 @@ export const dashboardRouter = {
     setWorkerPaused: mutationProcedure
       .input(setWorkerPausedInput)
       .handler(async ({ context, input }) => {
-        if (context.operator.mode !== "writable" || !context.workerController?.setWorkerPaused) {
+        if (!context.workerController?.setWorkerPaused) {
           throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
         }
         return context.workerController.setWorkerPaused(
@@ -644,7 +650,7 @@ export const dashboardRouter = {
     overrideMaintenancePolicy: mutationProcedure
       .input(overrideMaintenancePolicyInput)
       .handler(async ({ context, input }) => {
-        if (context.operator.mode !== "writable" || !context.settingsController) {
+        if (!context.settingsController) {
           throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
         }
         await context.settingsController.overrideMaintenancePolicy(
@@ -655,7 +661,7 @@ export const dashboardRouter = {
     revertMaintenancePolicy: mutationProcedure
       .input(revertMaintenancePolicyInput)
       .handler(async ({ context, input }) => {
-        if (context.operator.mode !== "writable" || !context.settingsController) {
+        if (!context.settingsController) {
           throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
         }
         await context.settingsController.revertMaintenancePolicy(
@@ -666,7 +672,7 @@ export const dashboardRouter = {
     overrideRetentionPolicy: mutationProcedure
       .input(overrideRetentionPolicyInput)
       .handler(async ({ context, input }) => {
-        if (context.operator.mode !== "writable" || !context.settingsController) {
+        if (!context.settingsController) {
           throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
         }
         await context.settingsController.overrideRetentionPolicy(
@@ -677,7 +683,7 @@ export const dashboardRouter = {
     revertRetentionPolicy: mutationProcedure
       .input(revertRetentionPolicyInput)
       .handler(async ({ context, input }) => {
-        if (context.operator.mode !== "writable" || !context.settingsController) {
+        if (!context.settingsController) {
           throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
         }
         await context.settingsController.revertRetentionPolicy(
@@ -686,7 +692,7 @@ export const dashboardRouter = {
         );
       }),
     runTaskNow: mutationProcedure.input(runTaskNowInput).handler(async ({ context, input }) => {
-      if (context.operator.mode !== "writable" || !context.taskController?.runTaskNow) {
+      if (!context.taskController?.runTaskNow) {
         throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
       }
       const result = await context.taskController.runTaskNow(
@@ -704,7 +710,7 @@ export const dashboardRouter = {
      * to observe, and from a terminal task that was left untouched.
      */
     cancelTask: mutationProcedure.input(cancelTaskInput).handler(async ({ context, input }) => {
-      if (context.operator.mode !== "writable" || !context.taskController?.cancelTask) {
+      if (!context.taskController?.cancelTask) {
         throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
       }
       const result = await context.taskController.cancelTask(
@@ -717,7 +723,7 @@ export const dashboardRouter = {
       return result;
     }),
     signalTask: mutationProcedure.input(signalTaskInput).handler(async ({ context, input }) => {
-      if (context.operator.mode !== "writable" || !context.taskController?.signalTask) {
+      if (!context.taskController?.signalTask) {
         throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
       }
       const result = await context.taskController.signalTask(
@@ -735,7 +741,7 @@ export const dashboardRouter = {
     completeHumanWait: mutationProcedure
       .input(completeHumanWaitInput)
       .handler(async ({ context, input }) => {
-        if (context.operator.mode !== "writable" || !context.taskController?.completeHumanWait) {
+        if (!context.taskController?.completeHumanWait) {
           throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
         }
         const result = await context.taskController.completeHumanWait(
@@ -758,7 +764,7 @@ export const dashboardRouter = {
      * already applied under the same identity.
      */
     redriveTask: mutationProcedure.input(redriveTaskInput).handler(async ({ context, input }) => {
-      if (context.operator.mode !== "writable" || !context.taskController?.redriveTask) {
+      if (!context.taskController?.redriveTask) {
         throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
       }
       const result = await context.taskController.redriveTask(
@@ -779,7 +785,7 @@ export const dashboardRouter = {
     redriveDeadLetters: mutationProcedure
       .input(redriveDeadLettersInput)
       .handler(async ({ context, input }) => {
-        if (context.operator.mode !== "writable" || !context.taskController?.redriveDeadLetters) {
+        if (!context.taskController?.redriveDeadLetters) {
           throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
         }
         return context.taskController.redriveDeadLetters(
