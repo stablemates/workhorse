@@ -397,9 +397,9 @@ jobs:
       - run: mise install rust
       - run: pnpm rust:format:check
       - run: pnpm rust:clippy
-      - run: pnpm rust:test
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:reset:test
+      - run: pnpm rust:test
       - run: pnpm rust:conformance:check
       - run: pnpm rust:release-check
 
