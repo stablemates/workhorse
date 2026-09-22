@@ -332,7 +332,7 @@ impl Queue {
         self.client
             .execute(
                 "SELECT workhorse.sync_concurrency_policies_v1($1,$2::jsonb,true)",
-                &[&name, &v],
+                &[&name, &v, &true],
             )
             .await?;
         Ok(())
