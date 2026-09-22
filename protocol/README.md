@@ -79,3 +79,14 @@ PostgreSQL owns accepted JSON values, lifecycle transitions, idempotency, retrie
 and structured database errors. A language runtime owns local validation, handler dispatch,
 concurrency, heartbeats, polling or notifications, cancellation delivery, telemetry, and graceful
 shutdown.
+
+## Rust integration lane
+
+The Rust integration harness lives in `rust/`. It reads these fixtures directly, so generated
+protocol evidence remains shared across languages. The harness owns only fixture loading and the
+`ProtocolClient` and `RuntimeFixtureAdapter` seams. SM-16A supplies the client adapter, SM-16B the
+worker lifecycle adapter, and SM-16C the durable handler context adapter. Until those issues land,
+CI proves fixture shape and manifest coverage and marks runtime execution pending.
+
+Run `pnpm rust:conformance:check` for generated evidence and `pnpm rust:release-check` for the
+pinned-toolchain, crate-package, and clean-project consumer checks.
