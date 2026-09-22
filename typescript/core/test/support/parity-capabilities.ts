@@ -13,6 +13,12 @@
  * An Absent cell carries a reason instead. Recording why keeps a deliberate boundary distinguishable
  * from a gap that is merely open.
  *
+ * A Rust Supported cell is stricter. It names executed evidence instead of a pattern: either
+ * `protocol/v1` fixtures, or one test function in a file that `pnpm rust:integration` runs against
+ * PostgreSQL. `pnpm parity:check` fails unless each fixture exists and is absent from the Rust
+ * runner's expected-unsupported list, or unless the named test exists in an integration target. A
+ * Rust cell is therefore Supported only while CI executes and passes its evidence.
+ *
  * A Planned cell carries the Ontrack Issue that owns the gap. The generator writes its link into
  * the document, so a Planned cell cannot outlive the work it points at unnoticed.
  */
@@ -41,14 +47,31 @@ interface PatternListEvidence {
 type ParityEvidence = SinglePatternEvidence | PatternListEvidence;
 export type ParityCell = ParityEvidence | { absent: string } | { planned: string };
 
+/** `<category>/<fixture id>` keys from `protocol/v1` that the Rust runner executes and passes. */
+interface RustFixtureEvidence {
+  fixtures: readonly string[];
+}
+
+/** A test function, by exact name, in a `rust/tests` target that `pnpm rust:integration` runs. */
+interface RustIntegrationTestEvidence {
+  file: string;
+  test: string;
+}
+
+export type RustParityCell =
+  | RustFixtureEvidence
+  | RustIntegrationTestEvidence
+  | { absent: string }
+  | { planned: string };
+
 export interface ParityRow {
   /** The capability column, byte for byte as `docs/parity.md` writes it. */
   capability: string;
   typescript: ParityCell;
   python: ParityCell;
   go: ParityCell;
-  /** Rust adapters are delivered by SM-16A/B/C; unsupported cells remain Planned until then. */
-  rust?: ParityCell;
+  /** A Rust cell is Supported only with fixtures or an integration test that CI executes. */
+  rust?: RustParityCell;
 }
 
 /** Where each product operator surface's tests live, relative to the repository root. */
@@ -79,7 +102,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
     capability: "Transactional enqueue in a caller-owned tx",
     rust: {
       file: "enqueue_postgres.rs",
-      pattern: "transactional_enqueue_commits_and_rolls_back_with_the_caller",
+      test: "transactional_enqueue_commits_and_rolls_back_with_the_caller",
     },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "transaction" },
     python: { file: "test_enqueue.py", pattern: "transaction" },
@@ -87,7 +110,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Atomic batch enqueue",
-    rust: { file: "protocol_conformance.rs", pattern: "enqueue_batch" },
+    rust: { planned: "SM-877" },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "enqueueMany" },
     python: { file: "test_enqueue.py", pattern: "enqueue_many" },
     go: { file: "queue_test.go", pattern: "EnqueueMany" },
@@ -199,14 +222,14 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Recurring schedule definition sync",
-    rust: { file: "protocol_conformance.rs", pattern: "sync_schedule" },
+    rust: { planned: "SM-877" },
     typescript: { file: "integration-cron-schedules.test.ts", pattern: "syncSchedules" },
     python: { file: "test_schedules.py", pattern: "sync_schedules" },
     go: { file: "queue_test.go", pattern: "SyncSchedules" },
   },
   {
     capability: "Payload and result contracts",
-    rust: { file: "protocol_conformance.rs", pattern: "sync_contracts" },
+    rust: { planned: "SM-877" },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "contracts" },
     python: { file: "test_worker.py", pattern: "test_contract_sync_validates" },
     go: { file: "worker_test.go", pattern: "TestContractSyncValidates" },
@@ -215,7 +238,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
     capability: "Compatibility refusal before mutation",
     rust: {
       file: "enqueue_postgres.rs",
-      pattern: "incompatible_schema_refuses_before_the_first_write",
+      test: "incompatible_schema_refuses_before_the_first_write",
     },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "schema" },
     python: { file: "test_compatibility.py", pattern: "compatib" },
@@ -229,7 +252,26 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "SQL protocol conformance fixtures executed",
-    rust: { planned: "SM-875" },
+    rust: {
+      fixtures: [
+        "interpreter/matcher-semantics",
+        "scenarios/successful-batch-lifecycle",
+        "scenarios/retry-and-terminal-failure",
+        "scenarios/ownership-expiration-and-recovery",
+        "scenarios/cancellation",
+        "scenarios/timer-wait",
+        "scenarios/coalescing-and-structured-errors",
+        "scenarios/dependencies",
+        "scenarios/children",
+        "scenarios/signals",
+        "scenarios/queue-health",
+        "scenarios/human-tokens",
+        "scenarios/contract-definition-sync-and-read",
+        "scenarios/batch-claim-admission",
+        "scenarios/retention-maintenance",
+        "scenarios/unknown-type-release",
+      ],
+    },
     typescript: { file: "sql-protocol-conformance.test.ts", pattern: "scenarios" },
     python: { file: "test_protocol_conformance.py", pattern: "scenarios" },
     go: { file: "conformance_test.go", pattern: "scenarios" },

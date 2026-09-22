@@ -1,21 +1,77 @@
 # Rust conformance evidence
 
-Generated from `protocol/v1` at protocol version 4. The harness executes request, schedule, and contract fixtures through the `workhorse-client` PostgreSQL adapter when `DATABASE_URL_TEST` is set. Interpreter and failure execution remains Planned until public adapter operations exist; runtime execution remains Planned until the worker and durable context fixture seams land.
+Generated from `protocol/v1` at protocol version 4 and from
+`rust/tests/conformance/expected-unsupported.json`.
 
-## Generated fixture inventory
+`rust/tests/protocol_conformance.rs` executes every `protocol/v1` fixture through the Rust
+adapters against a scratch PostgreSQL database. A fixture either passes or appears on the
+expected-unsupported list with the Issue that owns the gap. The runner fails when an unlisted
+fixture does not pass, and when a listed fixture passes. `pnpm rust:integration` runs it in CI.
 
-| Fixture                 | Entries |
-| ----------------------- | ------: |
-| `compatibility.json`    |      10 |
-| `contracts.json`        |       7 |
-| `cron-occurrences.json` |      19 |
-| `failures.json`         |       4 |
-| `interpreter.json`      |       1 |
-| `requests.json`         |       2 |
-| `runtime.json`          |      16 |
-| `scenarios.json`        |      15 |
-| `schedules.json`        |       2 |
+## Fixture inventory
 
-The manifest declares 19 runtime capabilities and 5 language fixture identifiers. The client adapter is exercised by the PostgreSQL test. SM-16B and SM-16C still need to expose runtime fixture execution before runtime evidence can become Supported.
+| Fixture file            | Declared | Passing | Expected unsupported |
+| ----------------------- | -------: | ------: | -------------------: |
+| `compatibility.json`    |       10 |       2 |                    8 |
+| `contracts.json`        |        7 |       0 |                    7 |
+| `cron-occurrences.json` |       19 |      19 |                    0 |
+| `failures.json`         |        4 |       0 |                    4 |
+| `interpreter.json`      |        1 |       1 |                    0 |
+| `requests.json`         |        2 |       0 |                    2 |
+| `runtime.json`          |       16 |       0 |                   16 |
+| `scenarios.json`        |       15 |      15 |                    0 |
+| `schedules.json`        |        2 |       0 |                    2 |
+
+## Expected unsupported fixtures
+
+The list gives the reason for each entry. Remove an entry in the commit that makes it pass.
+
+### SM-877
+
+- `compatibility/client-protocol-too-new`
+- `compatibility/client-protocol-too-old`
+- `compatibility/schema-below-the-dashboard-reads`
+- `compatibility/schema-below-the-statement-catalogues`
+- `compatibility/schema-no-longer-serves-client`
+- `compatibility/schema-not-installed`
+- `compatibility/schema-too-old`
+- `compatibility/served-protocol-undeclared`
+- `contracts/bundled-reference`
+- `contracts/custom-keyword-rejected`
+- `contracts/dynamic-reference-rejected`
+- `contracts/format-is-annotation`
+- `contracts/object-validation`
+- `contracts/remote-reference-rejected`
+- `contracts/unevaluated-properties-rejected`
+- `requests/keyed-enqueue-request`
+- `requests/minimal-enqueue-request`
+- `schedules/minimal-schedule-definition`
+- `schedules/recurring-schedule-definition`
+
+### SM-878
+
+- `failures/declared-name-and-stack`
+- `failures/declared-name-without-stack`
+- `failures/redacted-details`
+- `failures/undeclared-name`
+- `runtime/budget-admission-holds-across-queues`
+- `runtime/cooperative-cancellation-reaches-handler`
+- `runtime/deadline-settles-after-database-first-heartbeat`
+- `runtime/deadline-settles-after-early-local-timer`
+- `runtime/empty-polls-back-off-with-jitter`
+- `runtime/enqueue-trace-context-reaches-handler`
+- `runtime/execution-timeout-settles-after-early-local-timer`
+- `runtime/failed-heartbeat-rounds-keep-the-attempt-running`
+- `runtime/failing-maintenance-phase-leaves-the-worker-claiming`
+- `runtime/heartbeats-never-overlap`
+- `runtime/json-values-survive-the-payload-and-result-round-trip`
+- `runtime/lease-loss-fences-handler-writes`
+- `runtime/missing-handler-releases-the-task-with-its-attempt-intact`
+- `runtime/priority-ordered-mixed-batch`
+- `runtime/stop-drains-active-slots-without-new-claims`
+
+### SM-879
+
+- `runtime/durable-wait-suspension-and-checkpoint-replay`
 
 Regenerate with `pnpm rust:conformance:generate`; CI uses `pnpm rust:conformance:check`.
