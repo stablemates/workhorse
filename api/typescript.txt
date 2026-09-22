@@ -5290,7 +5290,7 @@ const dashboardRouter: {
       }>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardTaskValue, import("../wire.js").DashboardTaskValue>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     humanWaits: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardHumanWaitPage, import("../wire.js").DashboardHumanWaitPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    enqueueTest: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
+    enqueueTest: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, DashboardRpcContext & Record<never, never>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>>, import("@orpc/server").MergedCurrentContext<import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, Record<never, never>>, z.ZodObject<{
       kind: z.ZodEnum<{
         retry: "retry";
         success: "success";
@@ -5333,7 +5333,7 @@ const dashboardRouter: {
         requestId: z.ZodString;
       }, z.core.$strip>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("./types.js").DashboardEnqueueTestResult, import("./types.js").DashboardEnqueueTestResult>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    setSchedulePaused: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
+    setSchedulePaused: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, DashboardRpcContext & Record<never, never>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>>, import("@orpc/server").MergedCurrentContext<import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, Record<never, never>>, z.ZodObject<{
       kind: z.ZodLiteral<"user">;
       namespace: z.ZodString;
       name: z.ZodString;
@@ -5348,7 +5348,7 @@ const dashboardRouter: {
     }, {
       paused: boolean;
     }>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    setQueuePaused: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
+    setQueuePaused: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, DashboardRpcContext & Record<never, never>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>>, import("@orpc/server").MergedCurrentContext<import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, Record<never, never>>, z.ZodObject<{
       queue: z.ZodString;
       paused: z.ZodBoolean;
       audit: z.ZodObject<{
@@ -5361,7 +5361,7 @@ const dashboardRouter: {
     }, {
       paused: boolean;
     }>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    purgeQueue: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
+    purgeQueue: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, DashboardRpcContext & Record<never, never>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>>, import("@orpc/server").MergedCurrentContext<import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, Record<never, never>>, z.ZodObject<{
       queue: z.ZodString;
       audit: z.ZodObject<{
         actor: z.ZodString;
@@ -5373,7 +5373,7 @@ const dashboardRouter: {
     }, {
       deletedCount: number;
     }>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    setWorkerPaused: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
+    setWorkerPaused: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, DashboardRpcContext & Record<never, never>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>>, import("@orpc/server").MergedCurrentContext<import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, Record<never, never>>, z.ZodObject<{
       workerId: z.ZodString;
       paused: z.ZodBoolean;
       audit: z.ZodObject<{
@@ -5386,7 +5386,7 @@ const dashboardRouter: {
     }, {
       paused: boolean;
     }>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    overrideMaintenancePolicy: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
+    overrideMaintenancePolicy: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, DashboardRpcContext & Record<never, never>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>>, import("@orpc/server").MergedCurrentContext<import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, Record<never, never>>, z.ZodObject<{
       definition: z.ZodObject<{
         timezone: z.ZodOptional<z.ZodString>;
         partitionPreparationIntervalMs: z.ZodOptional<z.ZodNumber>;
@@ -5402,7 +5402,7 @@ const dashboardRouter: {
         requestId: z.ZodString;
       }, z.core.$strip>;
     }, z.core.$strip>, import("@orpc/server").Schema<void, void>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    revertMaintenancePolicy: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
+    revertMaintenancePolicy: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, DashboardRpcContext & Record<never, never>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>>, import("@orpc/server").MergedCurrentContext<import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, Record<never, never>>, z.ZodObject<{
       settings: z.ZodArray<z.ZodEnum<{
         timezone: "timezone";
         partitionPreparationIntervalMs: "partitionPreparationIntervalMs";
@@ -5418,7 +5418,7 @@ const dashboardRouter: {
         requestId: z.ZodString;
       }, z.core.$strip>;
     }, z.core.$strip>, import("@orpc/server").Schema<void, void>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    overrideRetentionPolicy: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
+    overrideRetentionPolicy: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, DashboardRpcContext & Record<never, never>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>>, import("@orpc/server").MergedCurrentContext<import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, Record<never, never>>, z.ZodObject<{
       definition: z.ZodObject<{
         taskIdentityRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
         terminalOutcomeRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
@@ -5438,7 +5438,7 @@ const dashboardRouter: {
         requestId: z.ZodString;
       }, z.core.$strip>;
     }, z.core.$strip>, import("@orpc/server").Schema<void, void>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    revertRetentionPolicy: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
+    revertRetentionPolicy: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, DashboardRpcContext & Record<never, never>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>>, import("@orpc/server").MergedCurrentContext<import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, Record<never, never>>, z.ZodObject<{
       settings: z.ZodArray<z.ZodEnum<{
         taskIdentityRetentionDays: "taskIdentityRetentionDays";
         terminalOutcomeRetentionDays: "terminalOutcomeRetentionDays";
@@ -5458,7 +5458,7 @@ const dashboardRouter: {
         requestId: z.ZodString;
       }, z.core.$strip>;
     }, z.core.$strip>, import("@orpc/server").Schema<void, void>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    runTaskNow: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
+    runTaskNow: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, DashboardRpcContext & Record<never, never>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>>, import("@orpc/server").MergedCurrentContext<import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, Record<never, never>>, z.ZodObject<{
       id: z.ZodUUID;
       audit: z.ZodObject<{
         actor: z.ZodString;
@@ -5471,7 +5471,7 @@ const dashboardRouter: {
     * distinguish an immediate cancellation from a cooperative request an active handler still has
     * to observe, and from a terminal task that was left untouched.
     */
-    cancelTask: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
+    cancelTask: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, DashboardRpcContext & Record<never, never>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>>, import("@orpc/server").MergedCurrentContext<import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, Record<never, never>>, z.ZodObject<{
       id: z.ZodUUID;
       audit: z.ZodObject<{
         actor: z.ZodString;
@@ -5479,7 +5479,7 @@ const dashboardRouter: {
         requestId: z.ZodString;
       }, z.core.$strip>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("./types.js").DashboardCancelTaskResult, import("./types.js").DashboardCancelTaskResult>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    signalTask: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
+    signalTask: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, DashboardRpcContext & Record<never, never>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>>, import("@orpc/server").MergedCurrentContext<import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, Record<never, never>>, z.ZodObject<{
       id: z.ZodUUID;
       name: z.ZodString;
       payload: z.ZodJSONSchema;
@@ -5490,7 +5490,7 @@ const dashboardRouter: {
         requestId: z.ZodString;
       }, z.core.$strip>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("./types.js").DashboardSignalTaskResult, import("./types.js").DashboardSignalTaskResult>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    completeHumanWait: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
+    completeHumanWait: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, DashboardRpcContext & Record<never, never>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>>, import("@orpc/server").MergedCurrentContext<import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, Record<never, never>>, z.ZodObject<{
       id: z.ZodUUID;
       name: z.ZodString;
       result: z.ZodJSONSchema;
@@ -5508,7 +5508,7 @@ const dashboardRouter: {
     * and the reported status distinguishes a new task from the replay of a request that was
     * already applied under the same identity.
     */
-    redriveTask: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
+    redriveTask: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, DashboardRpcContext & Record<never, never>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>>, import("@orpc/server").MergedCurrentContext<import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, Record<never, never>>, z.ZodObject<{
       id: z.ZodUUID;
       audit: z.ZodObject<{
         actor: z.ZodString;
@@ -5522,7 +5522,7 @@ const dashboardRouter: {
     * Every result is reported, including a source PostgreSQL refused, so an operator reads what
     * the batch actually did rather than a count that hides the refusals inside it.
     */
-    redriveDeadLetters: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
+    redriveDeadLetters: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, DashboardRpcContext & Record<never, never>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>>, import("@orpc/server").MergedCurrentContext<import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, Record<never, never>>, z.ZodObject<{
       queue: z.ZodDefault<z.ZodNullable<z.ZodString>>;
       taskType: z.ZodDefault<z.ZodNullable<z.ZodString>>;
       tags: z.ZodDefault<z.ZodArray<z.ZodString>>;
