@@ -206,7 +206,7 @@ through its own public SDK.
 | Dead-letter listing and redrive            | Supported  | Supported | Supported | [Planned][SM-883] |
 | Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported | [Planned][SM-883] |
 | Durable operator worker pause              | Supported  | Supported | Supported | [Planned][SM-883] |
-| Embedded dashboard backend                 | Supported  | Supported | Supported | [Planned][SM-884] |
+| Embedded dashboard backend                 | Supported  | Supported | Supported | [Planned][SM-885] |
 
 <!-- END GENERATED PARITY OPERATOR -->
 
@@ -218,8 +218,9 @@ application-shaped, so every queue client exposes it with audit attribution.
 The embedded dashboard backend row records which language can serve the dashboard from its own HTTP
 server ([ADR 0029](decisions/0029-embeddable-dashboard-backends.md)). A cell is Supported only when
 that backend passes the shared `dashboard/v1` HTTP fixtures. [ADR
-0074](decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md) keeps it out of the first
-Rust release. Until it ships, a Rust deployment runs the standalone dashboard against its database.
+0074](decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md) gives Rust a `tower::Service`
+backend behind the `dashboard` feature before 1.0.0. Until it ships, a Rust deployment runs the
+standalone dashboard against its database.
 
 ## Schema tooling is TypeScript-only, deliberately
 
@@ -279,6 +280,6 @@ stops the published view from becoming another source of truth.
 [SM-878]: https://linear.app/stablemates/issue/SM-878
 [SM-879]: https://linear.app/stablemates/issue/SM-879
 [SM-883]: https://linear.app/stablemates/issue/SM-883
-[SM-884]: https://linear.app/stablemates/issue/SM-884
+[SM-885]: https://linear.app/stablemates/issue/SM-885
 
 <!-- END GENERATED PARITY LINEAR LINKS -->

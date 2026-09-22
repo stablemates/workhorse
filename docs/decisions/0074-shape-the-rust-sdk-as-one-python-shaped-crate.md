@@ -2,7 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-22
-- **Related:** [ADR 0023](0023-language-sdks-and-http-boundaries.md),
+- **Related:** [ADR 0018](0018-framework-neutral-dashboard-host.md),
+  [ADR 0021](0021-no-framework-integration-packages.md),
+  [ADR 0023](0023-language-sdks-and-http-boundaries.md),
   [ADR 0028](0028-flat-per-language-repository-layout.md),
   [ADR 0029](0029-embeddable-dashboard-backends.md),
   [ADR 0030](0030-distinguish-suspensions-gates-and-child-joins.md),
@@ -35,7 +37,7 @@ client in every language. The budget is reachable if Rust copies their behavior 
 inventing its own.
 
 This record fixes the crate layout, the public API, and the division of the implementation issues
-SM-877 through SM-883. It does not implement the SDK.
+SM-877 through SM-885. It does not implement the SDK.
 
 ## Decision
 
@@ -46,17 +48,19 @@ write `use workhorse::…`. The worker lives in `rust/src/worker/`. SM-878 delet
 `rust/workhorse-worker/` and removes it from the workspace members.
 
 The crate has no `worker` feature. Python ships one `workhorse` package and Go ships one module,
-and each feature combination would need its own test lane. The single optional feature is
-`opentelemetry`, described below.
+and each feature combination would need its own test lane. The crate has two optional features.
+`opentelemetry` is described under Telemetry. `dashboard` adds the embedded dashboard backend,
+described below. It carries an HTTP stack and the browser bundle, which a worker-only build does
+not need.
 
 The release lane packages exactly that one crate. SM-880 points `scripts/check-rust-release.ts` at
 it and keeps the path-dependency consumer that asserts `CLIENT_PROTOCOL_VERSION`.
 
-The crates.io package name is a maintainer decision, recorded on SM-882. The name `workhorse` was
-unclaimed on 2026-09-22 and is the recommendation. If it is taken first, the fallback is
+The crates.io package name is `workhorse`, a maintainer decision recorded on SM-882. The name was
+unclaimed on 2026-09-22. If another party claims it before SM-882 reserves it, the fallback is
 `stablemates-workhorse`, which matches the PyPI distribution. Either way, `[lib] name =
 "workhorse"` keeps the import path stable. Crate ownership, token storage, and the publishing
-procedure are also maintainer decisions.
+procedure remain maintainer decisions on SM-882.
 
 ### SQL comes from the generated catalogue
 
@@ -340,10 +344,42 @@ PostgreSQL, as Python does. The query and page types mirror Python's field sets,
 carries the cursor for the next page. `Admin` has no `health` method, because `Queue::health`
 already reads the same snapshot.
 
-`Admin` does not embed the dashboard. ADR 0029 gives Python and Go an HTTP backend that serves the
-dashboard from the host process. That backend builds on `Admin`, but it needs its own decision on
-HTTP integration, so it is not part of the first release. SM-884 tracks it. Until then, Rust users
-run the standalone dashboard against the same database.
+`Admin` does not serve HTTP. The embedded dashboard backend builds on it.
+
+### Embedded dashboard backend
+
+ADR 0029 requires every SDK to serve the dashboard from the host application's own HTTP server.
+Rust ships that backend before 1.0.0, a maintainer decision recorded on SM-884. SM-885 builds it
+after `Admin` lands.
+
+```rust
+#[cfg(feature = "dashboard")]
+pub mod dashboard {
+    pub struct DashboardOptions<E: Executor> {
+        pub executor: E,
+        pub authorize: Authorize,
+        pub path: String,
+        pub environment: String,
+        pub audit_actor: String,
+        pub read_only: bool,
+        pub configured_workers: Vec<String>,
+    }
+
+    pub fn handler<E: Executor>(options: DashboardOptions<E>) -> Result<DashboardService<E>, Error>;
+
+    // DashboardService<E> implements tower::Service<http::Request<B>>.
+}
+```
+
+The backend is a `tower::Service`, as Go's `NewHandler` returns an `http.Handler`. axum mounts it
+with `Router::nest_service`, and hyper and tonic accept it directly. So Rust needs no framework
+integration crate, as ADR 0018 and ADR 0021 require. A request outside the mount path falls through
+to the host's own routes.
+
+The options mirror Go's `HandlerOptions`. Reads and controls go through `Admin` and `Queue`, so the
+backend writes no dashboard SQL. The `dashboard/v1` procedure bindings are generated from
+`dashboard/v1/procedures.json`, as `go/dashboard/v1_generated.go` is. The Rust cell becomes
+Supported only when the backend passes every shared `dashboard/v1` HTTP fixture.
 
 ### Durable handler context
 
@@ -446,13 +482,14 @@ Without the feature, the crate pulls no OpenTelemetry dependency.
 The SDK is asynchronous only, on Tokio. Rust's PostgreSQL ecosystem is asynchronous, and a
 synchronous caller can use `block_on`.
 
-When the implementation issues land, all seven operator rows in `docs/parity.md` become Supported
+When the implementation issues land, all eight operator rows in `docs/parity.md` become Supported
 for Rust. `Queue::health` and `Queue::cancel` cover the health and cancellation rows, as they do in
-Python and Go. `Admin` covers the other five. Each row flips only with its PostgreSQL integration
+Python and Go. `Admin` covers five more, and the `dashboard` module covers the embedded backend. Each row flips only with its PostgreSQL integration
 test as evidence.
 
 The budget is 5,000 to 7,000 lines in `rust/src/`, excluding the generated catalogue and tests.
-`Admin` takes about 800 of them. Python and Go both land near 8,000 lines. Python's synchronous
+`Admin` takes about 800 of them. The `dashboard` module adds about 1,200 hand-written lines
+outside that budget, as the Python count above excludes its dashboard module. Python and Go both land near 8,000 lines. Python's synchronous
 twin and Go's manual value converters account for most of the gap.
 
 | Module                                                  | Owner  | Contents                                     |
@@ -464,6 +501,7 @@ twin and Go's manual value converters account for most of the gap.
 | `context.rs`, `waits.rs`, `children.rs`                 | SM-879 | durable context and suspension               |
 | `telemetry.rs`                                          | SM-878 | spans, metrics, and trace context            |
 | `admin.rs`                                              | SM-883 | the operator client and its page types       |
+| `dashboard/`                                            | SM-885 | the embedded backend, outside the budget     |
 
 ## Consequences
 
@@ -484,6 +522,8 @@ twin and Go's manual value converters account for most of the gap.
   that detail for callers who need it.
 - deadpool becomes part of the public API through the worker constructor. A caller on another pool
   must adapt at the boundary.
+- The `dashboard` feature adds a second build to the Rust CI lane, which must test the crate with
+  and without it.
 - The existing `workhorse-client` and `workhorse-worker` names never reach crates.io. Nothing
   depends on them yet, so no migration is owed.
 
@@ -507,5 +547,9 @@ twin and Go's manual value converters account for most of the gap.
 - **A synchronous API.** It doubles the surface, which breaks the line budget.
 - **Omitting `Admin`.** It saves about 800 lines, but it breaks the 1.0.0 promise that every
   language has an `Admin` client. Rust operators would then depend on another language's SDK.
-- **Embedding the dashboard in the first release.** It needs an HTTP host decision that nothing
-  else in this record depends on. SM-884 owns it.
+- **Leaving the embedded dashboard until after 1.0.0.** Rust would be the only SDK that cannot
+  host the operator console, which ADR 0029 promises in every language.
+- **An `axum` router as the dashboard backend.** It ties the crate to one framework. A
+  `tower::Service` serves axum unchanged and also serves every other tower host.
+- **The dashboard in the default build.** Every worker would compile an HTTP stack and carry the
+  browser bundle it never serves.
