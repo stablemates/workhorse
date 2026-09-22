@@ -77,7 +77,10 @@ const pythonAdmin = { file: "test_admin.py", pattern: "admin." } as const;
 export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Transactional enqueue in a caller-owned tx",
-    rust: { planned: "SM-874" },
+    rust: {
+      file: "enqueue_postgres.rs",
+      pattern: "transactional_enqueue_commits_and_rolls_back_with_the_caller",
+    },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "transaction" },
     python: { file: "test_enqueue.py", pattern: "transaction" },
     go: { file: "queue_test.go", pattern: "Tx" },
@@ -210,7 +213,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Compatibility refusal before mutation",
-    rust: { planned: "SM-874" },
+    rust: {
+      file: "enqueue_postgres.rs",
+      pattern: "incompatible_schema_refuses_before_the_first_write",
+    },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "schema" },
     python: { file: "test_compatibility.py", pattern: "compatib" },
     go: { file: "compatibility_test.go", pattern: "Compatibility" },
