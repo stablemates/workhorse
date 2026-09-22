@@ -10,6 +10,8 @@ describe("lefthook Rust and generated-artifact routing", () => {
       'glob: "{rust/**/*.rs,rust/Cargo.toml,rust/Cargo.lock,rustfmt.toml,rust/rust-toolchain.toml}"',
     );
     expect(config).toContain("run: mise exec -- pnpm rust:format:check");
+    expect(config).toContain('glob: "{rust/**/*.rs,rust/Cargo.toml,rust/Cargo.lock}"');
+    expect(config).toContain("run: mise exec -- pnpm rust:test");
     expect(config).toContain('glob: "**/*.{ts,tsx,js,jsx,mjs,cjs,json,md,yml,yaml}"');
   });
 

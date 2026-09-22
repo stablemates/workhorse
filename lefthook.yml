@@ -66,6 +66,9 @@ pre-commit:
     - name: check Rust formatting
       glob: "{rust/**/*.rs,rust/Cargo.toml,rust/Cargo.lock,rustfmt.toml,rust/rust-toolchain.toml}"
       run: mise exec -- pnpm rust:format:check
+    - name: test Rust workspace
+      glob: "{rust/**/*.rs,rust/Cargo.toml,rust/Cargo.lock}"
+      run: mise exec -- pnpm rust:test
     - name: lint Python
       glob: "python/**"
       run: mise exec -- pnpm python:lint
