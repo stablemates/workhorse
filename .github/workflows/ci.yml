@@ -399,6 +399,8 @@ jobs:
       - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
         with:
           install_args: rust
+      - name: Install Rust formatting and lint components
+        run: mise exec -- rustup component add rustfmt clippy --toolchain 1.89.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:reset:test
       - run: pnpm rust:gates

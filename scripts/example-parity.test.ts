@@ -8,7 +8,6 @@ import {
   PARITY_OPERATOR_ROWS,
   PARITY_WORKER_ROWS,
   type ParityCell,
-  type ParityLanguage,
 } from "../typescript/core/test/support/parity-capabilities.js";
 import { repositoryRoot } from "./packages.js";
 
