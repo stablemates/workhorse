@@ -54,6 +54,36 @@ function htmlResponse(body: string, status = 200): Response {
   });
 }
 
+/** Read a request body while retaining at most the configured login limit. */
+async function readLoginBody(request: Request): Promise<string | undefined> {
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      size += value.byteLength;
+      if (size > MAX_LOGIN_BODY_BYTES) {
+        await reader.cancel();
+        return undefined;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const body = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(body);
+}
+
 function cookieValue(request: Request): string | undefined {
   for (const part of (request.headers.get("cookie") ?? "").split(";")) {
     const [name, ...value] = part.trim().split("=");
@@ -187,14 +217,20 @@ export function createSingleAdminAuthentication(
       if (request.method !== "POST") {
         return new Response(null, { status: 405, headers: { allow: "GET, HEAD, POST" } });
       }
-      const contentLength = Number(request.headers.get("content-length") ?? "0");
-      if (contentLength > MAX_LOGIN_BODY_BYTES) return new Response(null, { status: 413 });
+      const contentLengthHeader = request.headers.get("content-length");
+      if (contentLengthHeader !== null) {
+        if (!/^\d+$/.test(contentLengthHeader)) return new Response(null, { status: 413 });
+        const contentLength = Number(contentLengthHeader);
+        if (!Number.isSafeInteger(contentLength)) {
+          return new Response(null, { status: 413 });
+        }
+        if (contentLength > MAX_LOGIN_BODY_BYTES) return new Response(null, { status: 413 });
+      }
       if (!request.headers.get("content-type")?.startsWith("application/x-www-form-urlencoded")) {
         return new Response(null, { status: 415 });
       }
-      const body = await request.text();
-      if (Buffer.byteLength(body) > MAX_LOGIN_BODY_BYTES)
-        return new Response(null, { status: 413 });
+      const body = await readLoginBody(request);
+      if (body === undefined) return new Response(null, { status: 413 });
       const form = new URLSearchParams(body);
       const username = form.get("username") ?? "";
       const password = form.get("password") ?? "";

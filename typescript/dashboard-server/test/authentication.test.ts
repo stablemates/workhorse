@@ -152,6 +152,49 @@ dashboardAuthenticationSuite(dashboardAuthenticationSuiteName, () => {
     expect(await response?.text()).toContain("Invalid username or password");
   });
 
+  it("rejects an oversized login body when the request does not declare a length", async () => {
+    const host = createDashboardHost({
+      database,
+      path: "/",
+      singleAdmin: { username: "operator", passwordHash },
+    });
+    const response = await host.handle(
+      new Request("https://dashboard.test/login", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("x".repeat(4_097)));
+            controller.close();
+          },
+        }),
+        duplex: "half",
+      } as RequestInit),
+    );
+
+    expect(response?.status).toBe(413);
+  });
+
+  it("rejects an unparseable declared login body length", async () => {
+    const host = createDashboardHost({
+      database,
+      path: "/",
+      singleAdmin: { username: "operator", passwordHash },
+    });
+    const response = await host.handle(
+      new Request("https://dashboard.test/login", {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "content-length": "not-a-number",
+        },
+        body: "username=operator&password=correct+horse",
+      }),
+    );
+
+    expect(response?.status).toBe(413);
+  });
+
   it("creates a bounded secure server-side session after a valid login", async () => {
     const host = createDashboardHost({
       database,
