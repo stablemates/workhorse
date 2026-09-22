@@ -63,6 +63,19 @@ impl<C: Client> Worker<C> {
     pub fn deliver_cancellation(&self) -> Result<Vec<TaskId>, ClientError> { let ids=self.client.cancel_requested(&self.id)?; let mut s=self.state.lock().unwrap(); for id in &ids{s.cancelled.insert(id.clone());} self.telemetry.lock().unwrap().cancellations+=ids.len() as u64; Ok(ids) }
     pub fn is_cancelled(&self,id:&TaskId)->bool { self.state.lock().unwrap().cancelled.contains(id) }
     pub fn complete(&self,id:&TaskId)->Result<(),ClientError>{ let lease=self.state.lock().unwrap().active.get(id).cloned().ok_or(ClientError::Fenced)?; self.client.complete(&self.id,id,lease.fence)?; self.state.lock().unwrap().active.remove(id); self.telemetry.lock().unwrap().completed+=1; Ok(()) }
+    /// Dispatches a claimed batch in order. A handler error leaves the lease available for
+    /// the caller's retry policy; successful handlers settle through the SQL fence.
+    pub fn dispatch_batch<F>(&self, leases: Vec<Lease>, mut handler: F) -> Result<usize, ClientError>
+    where F: FnMut(&Task) -> Result<(), ClientError> {
+        let mut completed = 0;
+        for lease in leases {
+            if self.is_cancelled(&lease.task.id) { continue; }
+            handler(&lease.task)?;
+            self.complete(&lease.task.id)?;
+            completed += 1;
+        }
+        Ok(completed)
+    }
     pub fn maintenance(&self)->Result<(),ClientError>{self.client.run_maintenance_v1(&self.id)}
     pub fn wait_for_notification(&self, timeout:Duration)->bool { let (lock,cv)=&*self.notify; let mut n=lock.lock().unwrap(); if *n>0{*n=0;return true} let (mut n,_)=cv.wait_timeout(n,timeout).unwrap(); if *n>0{*n=0;true}else{false} }
 }
@@ -74,4 +87,4 @@ impl<C: Client> Registry<C>{ pub fn register(&self,w:Arc<Worker<C>>){self.worker
 #[cfg(test)]
 mod tests { use super::*; struct Fake{tasks:Mutex<VecDeque<Task>>,maint:Mutex<u32>} impl Client for Fake{fn claim(&self,_:&str,_:&[String],n:usize)->Result<Vec<Task>,ClientError>{let mut q=self.tasks.lock().unwrap();Ok((0..n).filter_map(|_|q.pop_front()).collect())}fn heartbeat(&self,_:&str,_:&TaskId,_:u64)->Result<(),ClientError>{Ok(())}fn cancel_requested(&self,_:&str)->Result<Vec<TaskId>,ClientError>{Ok(vec!["cancel".into()])}fn complete(&self,_:&str,_:&TaskId,_:u64)->Result<(),ClientError>{Ok(())}fn run_maintenance_v1(&self,_:&str)->Result<(),ClientError>{*self.maint.lock().unwrap()+=1;Ok(())}}
  fn worker()->Worker<Fake>{Worker::new(Arc::new(Fake{tasks:Mutex::new(VecDeque::from([Task{id:"a".into(),queue:"q".into(),rank:1,payload:vec![],fence:2}])),maint:Mutex::new(0)}),"w",vec!["q".into()]).with_batch_size(2)}
- #[test]fn bounded_claim_and_settle(){let w=worker();let ls=w.poll().unwrap();assert_eq!(ls.len(),1);w.heartbeat(&"a".into()).unwrap();w.complete(&"a".into()).unwrap();assert_eq!(w.telemetry().completed,1)} #[test]fn cancellation_is_delivered(){let w=worker();assert_eq!(w.deliver_cancellation().unwrap(),vec!["cancel"]);assert!(w.is_cancelled(&"cancel".into()));} #[test]fn pause_and_drain_stop_claims(){let w=worker();w.pause();assert!(w.poll().unwrap().is_empty());w.resume();w.request_drain();assert!(w.poll().unwrap().is_empty());}}
+ #[test]fn bounded_claim_and_settle(){let w=worker();let ls=w.poll().unwrap();assert_eq!(ls.len(),1);w.heartbeat(&"a".into()).unwrap();w.complete(&"a".into()).unwrap();assert_eq!(w.telemetry().completed,1)} #[test]fn cancellation_is_delivered(){let w=worker();assert_eq!(w.deliver_cancellation().unwrap(),vec!["cancel"]);assert!(w.is_cancelled(&"cancel".into()));} #[test]fn dispatch_settles_batch(){let w=worker();let ls=w.poll().unwrap();assert_eq!(w.dispatch_batch(ls, |_| Ok(())).unwrap(),1);} #[test]fn pause_and_drain_stop_claims(){let w=worker();w.pause();assert!(w.poll().unwrap().is_empty());w.resume();w.request_drain();assert!(w.poll().unwrap().is_empty());}}
