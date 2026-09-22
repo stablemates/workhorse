@@ -82,11 +82,11 @@ shutdown.
 
 ## Rust integration lane
 
-The Rust integration harness lives in the canonical Cargo workspace rooted at `Cargo.toml`. It
-executes request, schedule, and contract fixtures through the `workhorse-client` PostgreSQL adapter,
-so generated protocol evidence remains shared across languages. Interpreter and failure execution
-remain Planned until public adapter operations exist. Runtime execution remains Planned until the
-SM-16B worker lifecycle and SM-16C durable context crates expose their fixture seam.
+The Rust integration harness lives in the canonical Cargo workspace rooted at `Cargo.toml`.
+`rust/tests/protocol_conformance.rs` executes every fixture kind through the Rust adapters, as the
+Go and Python lanes do. Fixtures the Rust lane cannot pass yet appear on
+`rust/tests/conformance/expected-unsupported.json`, each with the Issue that owns the gap. The runner
+fails when an unlisted fixture does not pass, and when a listed fixture passes.
 
 Run `pnpm rust:conformance:check` for generated evidence and `pnpm rust:release-check` for the
 pinned-toolchain, crate-package, and clean-project consumer checks.

@@ -28,7 +28,7 @@ Two boundaries keep this matrix small:
 | Capability                                 | TypeScript | Python    | Go        | Rust              |
 | ------------------------------------------ | ---------- | --------- | --------- | ----------------- |
 | Transactional enqueue in a caller-owned tx | Supported  | Supported | Supported | Supported         |
-| Atomic batch enqueue                       | Supported  | Supported | Supported | Supported         |
+| Atomic batch enqueue                       | Supported  | Supported | Supported | [Planned][SM-877] |
 | Delayed enqueue (`runAt` / `run_at`)       | Supported  | Supported | Supported | [Planned][SM-868] |
 | Priority                                   | Supported  | Supported | Supported | [Planned][SM-868] |
 | Tags and max attempts                      | Supported  | Supported | Supported | [Planned][SM-868] |
@@ -42,11 +42,11 @@ Two boundaries keep this matrix small:
 | Concurrency policy management              | Supported  | Supported | Supported | [Planned][SM-868] |
 | Rate-limit policy management               | Supported  | Supported | Supported | [Planned][SM-868] |
 | Named budget management                    | Supported  | Supported | Supported | [Planned][SM-868] |
-| Recurring schedule definition sync         | Supported  | Supported | Supported | Supported         |
-| Payload and result contracts               | Supported  | Supported | Supported | Supported         |
+| Recurring schedule definition sync         | Supported  | Supported | Supported | [Planned][SM-877] |
+| Payload and result contracts               | Supported  | Supported | Supported | [Planned][SM-877] |
 | Compatibility refusal before mutation      | Supported  | Supported | Supported | Supported         |
 | Public startup schema compatibility check  | Supported  | Supported | Supported | [Planned][SM-868] |
-| SQL protocol conformance fixtures executed | Supported  | Supported | Supported | [Planned][SM-875] |
+| SQL protocol conformance fixtures executed | Supported  | Supported | Supported | Supported         |
 | Enqueue trace-context propagation          | Supported  | Supported | Supported | [Planned][SM-868] |
 
 <!-- END GENERATED PARITY CLIENT -->
@@ -253,6 +253,14 @@ document is stale. Every Supported cell must name an existing test file for that
 must match every evidence pattern. Every Absent cell must record why it is absent. Every Planned
 cell must name a Linear `SM-*` issue, whose link the generator also writes.
 
+A Rust Supported cell cites executed evidence instead of a pattern in a test file. It names either
+`protocol/v1` fixtures or one test function in a file that `pnpm rust:integration` runs. The Rust
+runner in `rust/tests/protocol_conformance.rs` executes every fixture. It fails on a fixture that
+neither passes nor appears in `rust/tests/conformance/expected-unsupported.json`. `pnpm parity:check`
+fails when a cited fixture does not exist or the list still holds it. It also fails when the cited
+file is not in that script or has no test function by that name. That script requires a database,
+so the named test cannot skip there.
+
 That check binds the document to declared evidence, not to a proof of behaviour — no static check
 can supply one. Naming a test file that never exercises the capability would satisfy it. The rule
 this document states still governs: a cell says Supported because tests prove it, and generation
@@ -263,6 +271,6 @@ stops the published view from becoming another source of truth.
 [SM-868]: https://linear.app/stablemates/issue/SM-868
 [SM-869]: https://linear.app/stablemates/issue/SM-869
 [SM-870]: https://linear.app/stablemates/issue/SM-870
-[SM-875]: https://linear.app/stablemates/issue/SM-875
+[SM-877]: https://linear.app/stablemates/issue/SM-877
 
 <!-- END GENERATED PARITY LINEAR LINKS -->

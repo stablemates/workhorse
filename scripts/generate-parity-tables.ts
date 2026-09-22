@@ -10,8 +10,10 @@ import {
   type ParityCell,
   type ParityDefaultRow,
   type ParityRow,
+  type RustParityCell,
 } from "../typescript/core/test/support/parity-capabilities.js";
 import { repositoryRoot } from "./packages.js";
+import { readRustFixtureState, rustEvidenceProblems } from "./rust-parity-evidence.js";
 
 const documentPath = path.join(repositoryRoot, "docs/parity.md");
 const check = process.argv.includes("--check");
@@ -24,7 +26,7 @@ const tables = [
 
 const productColumns = ["PostgreSQL", "Dashboard", "CLI"] as const;
 
-function status(cell: ParityCell): string {
+function status(cell: ParityCell | RustParityCell): string {
   if ("absent" in cell) return "Absent";
   // Reference-style so the reader reaches the Issue; the definitions are generated below.
   if ("planned" in cell) return `[Planned][${cell.planned}]`;
@@ -39,7 +41,7 @@ function renderCells(cells: readonly (readonly string[])[]): string {
   return [line(cells[0]!), separator, ...cells.slice(1).map(line)].join("\n");
 }
 
-function rustCell(row: ParityRow, table: "client" | "worker" | "operator"): ParityCell {
+function rustCell(row: ParityRow, table: "client" | "worker" | "operator"): RustParityCell {
   if (row.rust) return row.rust;
   if (table === "operator")
     return { absent: "The Rust SDK scope does not include an Admin client." };
@@ -113,6 +115,15 @@ function replaceGeneratedTable(
   const pattern = new RegExp(`${start}[\\s\\S]*?${end}`);
   if (!pattern.test(document)) throw new Error(`Missing generated parity markers for ${name}`);
   return document.replace(pattern, `${start}\n\n${renderTable(rows, table)}\n\n${end}`);
+}
+
+// Both modes refuse a Rust Supported cell that the conformance runner does not back.
+const rustProblems = rustEvidenceProblems(
+  tables.flatMap(([, rows]) => rows),
+  readRustFixtureState(repositoryRoot),
+);
+if (rustProblems.length > 0) {
+  throw new Error(`Rust parity cells lack executed evidence:\n${rustProblems.join("\n")}`);
 }
 
 const current = await readFile(documentPath, "utf8");
