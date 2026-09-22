@@ -6,14 +6,14 @@ import { spawn } from "node:child_process";
 const root = path.resolve(import.meta.dirname, "..");
 function run(args: string[], cwd = root): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn("mise", ["exec", "--", "cargo", ...args], {
+    const child = spawn("cargo", args, {
       cwd,
       stdio: "inherit",
       env: process.env,
     });
     child.once("error", reject);
     child.once("exit", (code) =>
-      code === 0 ? resolve() : reject(new Error(`mise exec cargo exited with ${code}`)),
+      code === 0 ? resolve() : reject(new Error(`cargo exited with ${code}`)),
     );
   });
 }
