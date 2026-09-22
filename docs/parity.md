@@ -27,7 +27,7 @@ Two boundaries keep this matrix small:
 
 | Capability                                 | TypeScript | Python    | Go        | Rust              |
 | ------------------------------------------ | ---------- | --------- | --------- | ----------------- |
-| Transactional enqueue in a caller-owned tx | Supported  | Supported | Supported | Supported         |
+| Transactional enqueue in a caller-owned tx | Supported  | Supported | Supported | [Planned][SM-874] |
 | Atomic batch enqueue                       | Supported  | Supported | Supported | Supported         |
 | Delayed enqueue (`runAt` / `run_at`)       | Supported  | Supported | Supported | [Planned][SM-868] |
 | Priority                                   | Supported  | Supported | Supported | [Planned][SM-868] |
@@ -44,9 +44,9 @@ Two boundaries keep this matrix small:
 | Named budget management                    | Supported  | Supported | Supported | [Planned][SM-868] |
 | Recurring schedule definition sync         | Supported  | Supported | Supported | Supported         |
 | Payload and result contracts               | Supported  | Supported | Supported | Supported         |
-| Compatibility refusal before mutation      | Supported  | Supported | Supported | Supported         |
+| Compatibility refusal before mutation      | Supported  | Supported | Supported | [Planned][SM-874] |
 | Public startup schema compatibility check  | Supported  | Supported | Supported | [Planned][SM-868] |
-| SQL protocol conformance fixtures executed | Supported  | Supported | Supported | Supported         |
+| SQL protocol conformance fixtures executed | Supported  | Supported | Supported | [Planned][SM-875] |
 | Enqueue trace-context propagation          | Supported  | Supported | Supported | [Planned][SM-868] |
 
 <!-- END GENERATED PARITY CLIENT -->
@@ -263,5 +263,7 @@ stops the published view from becoming another source of truth.
 [SM-868]: https://linear.app/stablemates/issue/SM-868
 [SM-869]: https://linear.app/stablemates/issue/SM-869
 [SM-870]: https://linear.app/stablemates/issue/SM-870
+[SM-874]: https://linear.app/stablemates/issue/SM-874
+[SM-875]: https://linear.app/stablemates/issue/SM-875
 
 <!-- END GENERATED PARITY LINEAR LINKS -->
