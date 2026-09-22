@@ -67,7 +67,7 @@ impl<T: Clone> HandlerContext<T> {
         I: IntoIterator<Item = N>,
         N: Into<String>,
     {
-        self.children.new(names);
+        self.children.add_all(names);
     }
     pub fn child_fan_out<I, N>(&mut self, names: I)
     where

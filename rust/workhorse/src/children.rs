@@ -29,7 +29,7 @@ impl<T> Default for ChildSet<T> {
     }
 }
 impl<T: Clone> ChildSet<T> {
-    pub fn new<I, N>(&mut self, names: I)
+    pub fn add_all<I, N>(&mut self, names: I)
     where
         I: IntoIterator<Item = N>,
         N: Into<String>,
@@ -82,5 +82,8 @@ impl<T: Clone> ChildSet<T> {
     }
     pub fn len(&self) -> usize {
         self.children.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.children.is_empty()
     }
 }
