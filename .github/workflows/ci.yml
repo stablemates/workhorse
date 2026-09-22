@@ -399,13 +399,10 @@ jobs:
       - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
         with:
           install_args: rust
-      - run: pnpm rust:format:check
-      - run: pnpm rust:clippy
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:reset:test
-      - run: pnpm rust:test
-      - run: pnpm rust:conformance:check
-      - run: pnpm rust:release-check
+      - run: pnpm rust:gates
+      - run: pnpm rust:integration
 
   demo:
     name: demo and site smoke
