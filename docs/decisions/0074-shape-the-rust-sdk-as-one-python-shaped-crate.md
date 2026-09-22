@@ -4,6 +4,7 @@
 - **Date:** 2026-09-22
 - **Related:** [ADR 0023](0023-language-sdks-and-http-boundaries.md),
   [ADR 0028](0028-flat-per-language-repository-layout.md),
+  [ADR 0029](0029-embeddable-dashboard-backends.md),
   [ADR 0030](0030-distinguish-suspensions-gates-and-child-joins.md),
   [ADR 0071](0071-give-every-worker-a-pool-and-a-dedicated-heartbeat-connection.md),
   [ADR 0072](0072-converge-the-worker-runtime-defaults.md)
@@ -28,11 +29,13 @@ The workspace holds two crates that disagree with each other.
 The parent issue, SM-16, asks for a Rust SDK of four to six thousand lines with a Python-shaped
 API. Python and Go already carry the whole product surface. Python's `src/workhorse` is 8,242
 lines without the dashboard module. Go is 7,919 lines without its generated catalogue, and about
-7,100 without its admin surface. Both include a synchronous or operator surface that Rust does not
-need, so the budget is reachable if Rust copies their behavior instead of inventing its own.
+7,100 without its admin surface. Python also carries a synchronous twin of every client that Rust
+does not need. The operator surface is still owed, because `docs/parity.md` promises an `Admin`
+client in every language. The budget is reachable if Rust copies their behavior instead of
+inventing its own.
 
 This record fixes the crate layout, the public API, and the division of the implementation issues
-SM-877 through SM-882. It does not implement the SDK.
+SM-877 through SM-883. It does not implement the SDK.
 
 ## Decision
 
@@ -285,7 +288,62 @@ impl<E: Executor> Queue<E> {
 `EnqueueResult.outcome` is an enum of `Accepted`, `Replayed`, `Replaced`, `NonReplaceable`, and
 `Coalesced`. Rust's `enqueue` and `enqueue_many` return `EnqueueResult`, which carries the task ID
 and the outcome. Python's separate `*_with_result` methods therefore have no Rust counterpart. Task
-inspection belongs to the operator surface, which Rust does not ship.
+inspection belongs to `Admin`, not to `Queue`.
+
+### Admin surface
+
+Operators and operator tools need to read and repair tasks without the dashboard. `Admin` gives
+Rust the same operator capability as Python's and Go's `Admin` clients. It takes the same sealed
+`Executor` as `Queue`, so a control can join a caller-owned transaction.
+
+```rust
+pub struct Admin<E: Executor> { /* private */ }
+
+pub struct AdminAudit {
+    pub actor: String,
+    pub reason: String,
+    pub request_id: String,
+}
+
+impl<E: Executor> Admin<E> {
+    pub fn new(executor: E) -> Self;
+
+    pub async fn list_tasks(&self, query: TaskListQuery) -> Result<TaskListPage, Error>;
+    pub async fn get_task(&self, task_id: Uuid) -> Result<Option<TaskSnapshot>, Error>;
+    pub async fn get_task_timeline(&self, task_id: Uuid, query: TaskTimelineQuery)
+        -> Result<TaskTimelinePage, Error>;
+
+    pub async fn list_dead_letters(&self, query: DeadLetterQuery) -> Result<DeadLetterPage, Error>;
+    pub async fn redrive(&self, source_task_id: Uuid, audit: &AdminAudit) -> Result<RedriveResult, Error>;
+    pub async fn redrive_many(&self, filter: DeadLetterFilter, audit: &AdminAudit,
+        options: BulkRedriveOptions) -> Result<BulkRedrivePage, Error>;
+
+    pub async fn get_checkpoint(&self, task_id: Uuid, name: &str) -> Result<Option<TaskCheckpoint>, Error>;
+    pub async fn list_checkpoints(&self, task_id: Uuid) -> Result<Vec<TaskCheckpoint>, Error>;
+    pub async fn get_progress(&self, task_id: Uuid) -> Result<Option<TaskProgress>, Error>;
+    pub async fn get_wait(&self, task_id: Uuid, name: &str) -> Result<Option<TaskWait>, Error>;
+    pub async fn list_waits(&self, task_id: Uuid) -> Result<Vec<TaskWait>, Error>;
+    pub async fn list_signal_waits(&self, query: ExternalWaitQuery) -> Result<ExternalWaitPage, Error>;
+    pub async fn list_human_waits(&self, query: ExternalWaitQuery) -> Result<HumanWaitPage, Error>;
+
+    pub async fn list_workers(&self) -> Result<Vec<WorkerRegistryEntry>, Error>;
+    pub async fn set_worker_paused(&self, worker_id: &str, paused: bool, audit: &AdminAudit)
+        -> Result<Option<WorkerPauseResult>, Error>;
+    pub async fn pause_queue(&self, queue: &str, audit: &AdminAudit) -> Result<(), Error>;
+    pub async fn resume_queue(&self, queue: &str, audit: &AdminAudit) -> Result<(), Error>;
+    pub async fn purge_queue(&self, queue: &str, audit: &AdminAudit) -> Result<u64, Error>;
+}
+```
+
+Every control takes an `AdminAudit`. `Admin` rejects a blank audit field before it calls
+PostgreSQL, as Python does. The query and page types mirror Python's field sets, and each page
+carries the cursor for the next page. `Admin` has no `health` method, because `Queue::health`
+already reads the same snapshot.
+
+`Admin` does not embed the dashboard. ADR 0029 gives Python and Go an HTTP backend that serves the
+dashboard from the host process. That backend builds on `Admin`, but it needs its own decision on
+HTTP integration, so it is not part of the first release. SM-884 tracks it. Until then, Rust users
+run the standalone dashboard against the same database.
 
 ### Durable handler context
 
@@ -338,8 +396,8 @@ as Python does. Go returns a slice, but a map keeps lookups independent of reque
 Concurrent calls that share one name share one in-flight request, as in Python. A second call
 awaits the first call's result instead of issuing its own statement.
 
-`get_checkpoint` and `get_wait` are not part of the first release. Go omits them, and no parity row
-requires them. `BatchHandlerContext` offers `task`, `cancellation`, `checkpoint`, `get_progress`,
+`HandlerContext` has no `get_checkpoint` or `get_wait`. Go's context omits them, and no parity row
+requires them. A caller who needs those reads uses `Admin`. `BatchHandlerContext` offers `task`, `cancellation`, `checkpoint`, `get_progress`,
 and `set_progress` only, because ADR 0030 gives batch handlers no suspending or child primitives.
 
 ### Suspension
@@ -386,12 +444,16 @@ Without the feature, the crate pulls no OpenTelemetry dependency.
 ### Scope and line budget
 
 The SDK is asynchronous only, on Tokio. Rust's PostgreSQL ecosystem is asynchronous, and a
-synchronous caller can use `block_on`. The crate has no admin surface, so the operator rows in
-`docs/parity.md` stay Absent for Rust. `Queue::cancel` and `Queue::health` are the
-application-shaped forms that every queue client carries, not the operator surface.
+synchronous caller can use `block_on`.
 
-The budget is 4,000 to 6,000 lines in `rust/src/`, excluding the generated catalogue and tests.
-Python and Go both land near 8,000 lines with a synchronous or admin surface Rust omits.
+When the implementation issues land, all seven operator rows in `docs/parity.md` become Supported
+for Rust. `Queue::health` and `Queue::cancel` cover the health and cancellation rows, as they do in
+Python and Go. `Admin` covers the other five. Each row flips only with its PostgreSQL integration
+test as evidence.
+
+The budget is 5,000 to 7,000 lines in `rust/src/`, excluding the generated catalogue and tests.
+`Admin` takes about 800 of them. Python and Go both land near 8,000 lines. Python's synchronous
+twin and Go's manual value converters account for most of the gap.
 
 | Module                                                  | Owner  | Contents                                     |
 | ------------------------------------------------------- | ------ | -------------------------------------------- |
@@ -401,6 +463,7 @@ Python and Go both land near 8,000 lines with a synchronous or admin surface Rus
 | `worker/{mod,heartbeat,notifications,batch,process}.rs` | SM-878 | run loop, leases, listener, batches, signals |
 | `context.rs`, `waits.rs`, `children.rs`                 | SM-879 | durable context and suspension               |
 | `telemetry.rs`                                          | SM-878 | spans, metrics, and trace context            |
+| `admin.rs`                                              | SM-883 | the operator client and its page types       |
 
 ## Consequences
 
@@ -442,3 +505,7 @@ Python and Go both land near 8,000 lines with a synchronous or admin surface Rus
 - **Keeping the in-memory durable model.** It duplicates what PostgreSQL decides and can drift from
   it.
 - **A synchronous API.** It doubles the surface, which breaks the line budget.
+- **Omitting `Admin`.** It saves about 800 lines, but it breaks the 1.0.0 promise that every
+  language has an `Admin` client. Rust operators would then depend on another language's SDK.
+- **Embedding the dashboard in the first release.** It needs an HTTP host decision that nothing
+  else in this record depends on. SM-884 owns it.

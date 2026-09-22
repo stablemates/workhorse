@@ -1,7 +1,7 @@
 # Workhorse for Rust
 
 The Rust SDK is under construction. [ADR 0074](../docs/decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md)
-fixes its shape, and the Linear issues SM-877 through SM-882 implement it. Until they land, no crate
+fixes its shape, and the Linear issues SM-877 through SM-883 implement it. Until they land, no crate
 here is published and the public API is not stable.
 
 ## Target shape
@@ -15,6 +15,9 @@ Python SDK's surface on Tokio.
   under a lease with a shared heartbeat connection.
 - `HandlerContext` offers checkpoints, durable sleeps, signal and human waits, child tasks, and
   progress. PostgreSQL owns every durable decision.
+- `Admin` lists, inspects, and repairs tasks, dead letters, waits, workers, and queues. Every
+  control takes an `AdminAudit`. It does not embed the dashboard; a Rust deployment runs the
+  standalone dashboard.
 - `tracing` spans are always on. The `opentelemetry` feature adds metrics and trace propagation.
 
 ## Current state

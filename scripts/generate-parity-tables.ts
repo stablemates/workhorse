@@ -43,9 +43,12 @@ function renderCells(cells: readonly (readonly string[])[]): string {
 
 function rustCell(row: ParityRow, table: "client" | "worker" | "operator"): RustParityCell {
   if (row.rust) return row.rust;
+  // ADR 0074: `Queue` carries health and cancellation, and `Admin` carries the other operator rows.
   if (table === "operator")
-    return { absent: "The Rust SDK scope does not include an Admin client." };
-  if (table === "client") return { planned: "SM-868" };
+    return ["Queue health snapshot", "Cancellation requests"].includes(row.capability)
+      ? { planned: "SM-877" }
+      : { planned: "SM-883" };
+  if (table === "client") return { planned: "SM-877" };
   if (
     [
       "Durable checkpoints (handler context)",
@@ -55,8 +58,8 @@ function rustCell(row: ParityRow, table: "client" | "worker" | "operator"): Rust
       "Latest-value progress reporting",
     ].includes(row.capability)
   )
-    return { planned: "SM-870" };
-  return { planned: "SM-869" };
+    return { planned: "SM-879" };
+  return { planned: "SM-878" };
 }
 
 function renderTable(rows: readonly ParityRow[], table: "client" | "worker" | "operator"): string {
@@ -87,7 +90,7 @@ function renderDefaultsTable(): string {
       defaultValue(row.typescript),
       defaultValue(row.python),
       defaultValue(row.go),
-      defaultValue(row.rust ?? { planned: "SM-869" }),
+      defaultValue(row.rust ?? { planned: "SM-878" }),
     ]),
   ]);
 }
@@ -158,7 +161,7 @@ const plannedItems = [
         rows.flatMap((row) => [row.typescript, row.python, row.go, rustCell(row, name)]),
       ),
       ...PRODUCT_PARITY_ROWS.flatMap((row) => [row.postgresql, row.dashboard, row.cli]),
-      ...PARITY_DEFAULT_ROWS.map((row) => row.rust ?? { planned: "SM-869" }),
+      ...PARITY_DEFAULT_ROWS.map((row) => row.rust ?? { planned: "SM-878" }),
     ].flatMap((cell) => ("planned" in cell ? [cell.planned] : [])),
   ),
 ].toSorted();

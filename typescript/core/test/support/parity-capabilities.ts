@@ -93,7 +93,8 @@ export interface ProductParityRow {
 
 /**
  * The public operator surface is reachable through the dashboard, the `workhorse` CLI, and the
- * TypeScript, Python, and Go `Admin` clients.
+ * TypeScript, Python, and Go `Admin` clients. Each SDK also embeds the dashboard in its own HTTP
+ * server, and the embedded backend must pass the shared `dashboard/v1` HTTP fixtures.
  */
 const pythonAdmin = { file: "test_admin.py", pattern: "admin." } as const;
 
@@ -443,6 +444,19 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
     typescript: { file: "integration-worker-registry.test.ts", pattern: "paused" },
     python: pythonAdmin,
     go: { file: "admin_test.go", pattern: "SetWorkerPaused" },
+  },
+  {
+    capability: "Embedded dashboard backend",
+    typescript: {
+      file: "../../dashboard-server/test/conformance.test.ts",
+      pattern: "dashboard/v1 HTTP conformance fixtures",
+    },
+    python: { file: "test_dashboard_conformance.py", pattern: "dashboard/v1/conformance.json" },
+    go: {
+      file: "dashboard/conformance_test.go",
+      pattern: "TestDashboardSatisfiesEverySharedHTTPScenario",
+    },
+    rust: { planned: "SM-884" },
   },
 ];
 
