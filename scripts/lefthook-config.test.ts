@@ -10,6 +10,7 @@ describe("lefthook Rust and generated-artifact routing", () => {
       'glob: "{rust/**/*.rs,rust/Cargo.toml,rust/Cargo.lock,rustfmt.toml,rust/rust-toolchain.toml}"',
     );
     expect(config).toContain("run: mise exec -- pnpm rust:format:check");
+    expect(config).toContain('glob: "**/*.{ts,tsx,js,jsx,mjs,cjs,json,md,yml,yaml}"');
   });
 
   it("routes Rust and generated parity files to their checks", () => {

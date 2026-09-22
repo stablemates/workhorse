@@ -61,6 +61,7 @@ pre-commit:
     # CI's format lane rejects what an editor forgot to format on save. Staged files pass
     # through oxfmt itself so its config decides coverage and ignores, exactly as CI does.
     - name: check formatting
+      glob: "**/*.{ts,tsx,js,jsx,mjs,cjs,json,md,yml,yaml}"
       run: mise exec -- pnpm exec oxfmt --check {staged_files}
     - name: check Rust formatting
       glob: "{rust/**/*.rs,rust/Cargo.toml,rust/Cargo.lock,rustfmt.toml,rust/rust-toolchain.toml}"
