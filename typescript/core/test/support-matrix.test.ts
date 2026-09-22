@@ -56,6 +56,7 @@ interface SupportManifest {
     readonly go: string;
     readonly node: string;
     readonly pnpm: string;
+    readonly rust: string;
     readonly uv: string;
   };
 }

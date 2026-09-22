@@ -58,9 +58,10 @@ jobs:
           node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org
-      - uses: actions-rust-lang/setup-rust-toolchain@c8ff772090ab9d00f7f7bd7b388f3c3032282e3b # main
+      - uses: actions-rust-lang/setup-rust-toolchain@c8ff772090ab9d00f7f7bd7b388f3c3032282e3b # v1
         with:
           toolchain: 1.89.0
+          components: rustfmt, clippy
       - run: pnpm install --frozen-lockfile
       - run: pnpm npm:release-check
       - run: pnpm rust:release-check
