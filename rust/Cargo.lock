@@ -975,6 +975,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "workhorse-worker"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde_json",
+ "tokio",
+ "tokio-postgres",
+ "uuid",
+ "workhorse-client",
+]
+
+[[package]]
 name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"

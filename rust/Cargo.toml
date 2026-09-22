@@ -21,5 +21,5 @@ chrono = { version = "0.4", features = ["serde"] }
 [dev-dependencies]
 
 [workspace]
-members = ["."]
+members = [".", "workhorse-worker"]
 resolver = "2"
