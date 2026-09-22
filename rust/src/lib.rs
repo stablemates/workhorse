@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
-use tokio_postgres::{Client, NoTls};
+use tokio_postgres::{error::DbError, Client, GenericClient, NoTls, Transaction};
 use uuid::Uuid;
 
 pub const CLIENT_PROTOCOL_VERSION: i32 = 4;
@@ -27,9 +27,42 @@ pub enum Error {
     IncompatibleSchema(i32),
     #[error("enqueue failed: {0}")]
     Enqueue(String),
+    #[error("contract validation failed for {task_type} {version}: {message}")]
+    ContractValidation {
+        task_type: String,
+        version: String,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DatabaseError {
+    pub code: String,
+    pub message: String,
+    pub detail: Option<String>,
+    pub hint: Option<String>,
+}
+impl From<&DbError> for DatabaseError {
+    fn from(error: &DbError) -> Self {
+        Self {
+            code: error.code().code().to_owned(),
+            message: error.message().to_owned(),
+            detail: error.detail().map(str::to_owned),
+            hint: error.hint().map(str::to_owned),
+        }
+    }
+}
+impl Error {
+    pub fn database_error(&self) -> Option<DatabaseError> {
+        match self {
+            Self::Postgres(error) => error.as_db_error().map(DatabaseError::from),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct EnqueueRequest {
     pub queue: String,
     #[serde(rename = "type")]
@@ -41,15 +74,32 @@ pub struct EnqueueRequest {
     pub priority: i32,
     #[serde(default)]
     pub tags: Vec<String>,
-    #[serde(default)]
-    pub idempotency_key: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concurrency_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency: Option<Idempotency>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contract_version: Option<String>,
-    #[serde(default)]
-    pub max_attempts: Option<i32>,
+    #[serde(default = "default_max_attempts")]
+    pub max_attempts: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_policy: Option<Value>,
     #[serde(default)]
     pub deadline: Option<DateTime<Utc>>,
 }
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Idempotency {
+    pub scope: String,
+    pub key: String,
+    pub ttl_ms: i64,
+}
+fn default_max_attempts() -> i32 {
+    25
+}
+
 impl EnqueueRequest {
     pub fn new(queue: impl Into<String>, task_type: impl Into<String>, payload: Value) -> Self {
         Self {
@@ -59,9 +109,12 @@ impl EnqueueRequest {
             run_at: None,
             priority: 0,
             tags: vec![],
-            idempotency_key: None,
+            concurrency_key: None,
+            budget: None,
+            idempotency: None,
             contract_version: None,
-            max_attempts: None,
+            max_attempts: default_max_attempts(),
+            retry_policy: None,
             deadline: None,
         }
     }
@@ -106,6 +159,43 @@ pub struct ContractDefinition {
 pub struct Queue {
     client: Client,
     queue: String,
+    contracts: Vec<ContractDefinition>,
+}
+
+/// Execute a batch using a transaction owned by the caller. This function never commits or rolls back.
+pub async fn enqueue_in_transaction(
+    transaction: &Transaction<'_>,
+    requests: &[EnqueueRequest],
+) -> Result<Vec<EnqueueResult>, Error> {
+    enqueue_batch_with(transaction, requests).await
+}
+
+async fn enqueue_batch_with<C: GenericClient>(
+    client: &C,
+    requests: &[EnqueueRequest],
+) -> Result<Vec<EnqueueResult>, Error> {
+    if requests.len() > MAX_ENQUEUE_BATCH_SIZE {
+        return Err(Error::InvalidRequest(format!(
+            "batch exceeds {MAX_ENQUEUE_BATCH_SIZE}"
+        )));
+    }
+    let payload =
+        serde_json::to_value(requests).map_err(|error| Error::InvalidRequest(error.to_string()))?;
+    let rows = client
+        .query(
+            "SELECT ordinal, task_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
+            &[&payload],
+        )
+        .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(EnqueueResult {
+                task_id: row.try_get("task_id")?,
+                outcome: row.try_get("outcome")?,
+                reason: row.try_get("reason")?,
+            })
+        })
+        .collect()
 }
 
 impl Queue {
@@ -117,34 +207,59 @@ impl Queue {
         Ok(Self {
             client,
             queue: queue.into(),
+            contracts: Vec::new(),
         })
     }
     pub fn new(client: Client, queue: impl Into<String>) -> Self {
         Self {
             client,
             queue: queue.into(),
+            contracts: Vec::new(),
         }
     }
     pub fn queue_name(&self) -> &str {
         &self.queue
     }
+    pub fn with_contracts(mut self, contracts: Vec<ContractDefinition>) -> Self {
+        self.contracts = contracts;
+        self
+    }
 
     pub async fn check_compatibility(&self) -> Result<Compatibility, Error> {
-        let row = self.client.query_one("SELECT max(version) FILTER (WHERE kind='protocol'), max(version) FILTER (WHERE kind='schema') FROM (SELECT 'protocol' kind, version FROM workhorse.protocol_version UNION ALL SELECT 'schema', version FROM workhorse.schema_version) v", &[]).await?;
-        let protocol: i32 = row.try_get(0)?;
-        let schema: i32 = row.try_get(1)?;
-        if protocol != CLIENT_PROTOCOL_VERSION {
+        let rows = self.client.query("SELECT kind, version FROM (SELECT 'protocol' AS kind, version FROM workhorse.protocol_version UNION ALL SELECT 'schema', version FROM workhorse.schema_version) versions ORDER BY kind, version", &[]).await?;
+        let mut protocol_versions = Vec::new();
+        let mut schema = None;
+        for row in rows {
+            let kind: &str = row.try_get("kind")?;
+            let version: i32 = row.try_get("version")?;
+            if kind == "protocol" {
+                protocol_versions.push(version);
+            } else {
+                schema = Some(version);
+            }
+        }
+        let protocol = *protocol_versions
+            .iter()
+            .max()
+            .ok_or(Error::IncompatibleProtocol {
+                server: 0,
+                client: CLIENT_PROTOCOL_VERSION,
+            })?;
+        if !schema
+            .map(|value| (MIN_SCHEMA_VERSION..=MAX_SCHEMA_VERSION).contains(&value))
+            .unwrap_or(false)
+        {
+            return Err(Error::IncompatibleSchema(schema.unwrap_or(0)));
+        }
+        if !protocol_versions.is_empty() && !protocol_versions.contains(&CLIENT_PROTOCOL_VERSION) {
             return Err(Error::IncompatibleProtocol {
                 server: protocol,
                 client: CLIENT_PROTOCOL_VERSION,
             });
         }
-        if !(MIN_SCHEMA_VERSION..=MAX_SCHEMA_VERSION).contains(&schema) {
-            return Err(Error::IncompatibleSchema(schema));
-        }
         Ok(Compatibility {
             protocol_version: protocol,
-            schema_version: schema,
+            schema_version: schema.unwrap_or(0),
         })
     }
 
@@ -152,51 +267,28 @@ impl Queue {
         if request.queue.is_empty() {
             request.queue = self.queue.clone();
         }
-        let row = self.client.query_one("SELECT workhorse.enqueue_v1($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9,$10,$11,$12) AS task_id", &[&request.queue, &request.task_type, &request.payload, &request.run_at, &request.priority, &request.tags, &request.idempotency_key, &request.contract_version, &"rust-client", &request.max_attempts.unwrap_or(1), &1048576i32, &Vec::<String>::new()]).await?;
-        Ok(row.try_get("task_id")?)
+        let result = enqueue_batch_with(&self.client, &[request]).await?;
+        result
+            .into_iter()
+            .next()
+            .map(|item| item.task_id)
+            .ok_or_else(|| Error::InvalidRequest("enqueue returned no result".into()))
     }
     pub async fn enqueue_batch(
         &self,
         requests: &[EnqueueRequest],
     ) -> Result<Vec<EnqueueResult>, Error> {
-        if requests.len() > MAX_ENQUEUE_BATCH_SIZE {
-            return Err(Error::InvalidRequest(format!(
-                "batch exceeds {MAX_ENQUEUE_BATCH_SIZE}"
-            )));
+        for request in requests {
+            self.validate_contract(request)?;
         }
-        let payload =
-            serde_json::to_value(requests).map_err(|e| Error::InvalidRequest(e.to_string()))?;
-        let rows = self.client.query("SELECT ordinal, task_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal", &[&payload]).await?;
-        rows.into_iter()
-            .map(|r| {
-                Ok(EnqueueResult {
-                    task_id: r.try_get("task_id")?,
-                    outcome: r.try_get("outcome")?,
-                    reason: r.try_get("reason")?,
-                })
-            })
-            .collect()
+        enqueue_batch_with(&self.client, requests).await
     }
     pub async fn enqueue_transactional(
         &self,
+        transaction: &Transaction<'_>,
         requests: &[EnqueueRequest],
     ) -> Result<Vec<EnqueueResult>, Error> {
-        self.client.batch_execute("BEGIN").await?;
-        let payload =
-            serde_json::to_value(requests).map_err(|e| Error::InvalidRequest(e.to_string()))?;
-        let rows = self.client.query("SELECT ordinal, task_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal", &[&payload]).await?;
-        let out = rows
-            .into_iter()
-            .map(|r| {
-                Ok(EnqueueResult {
-                    task_id: r.try_get("task_id")?,
-                    outcome: r.try_get("outcome")?,
-                    reason: r.try_get("reason")?,
-                })
-            })
-            .collect::<Result<Vec<_>, Error>>()?;
-        self.client.batch_execute("COMMIT").await?;
-        Ok(out)
+        enqueue_batch_with(transaction, requests).await
     }
     pub async fn cancel(
         &self,
@@ -245,6 +337,41 @@ impl Queue {
             .await?;
         Ok(())
     }
+    fn validate_contract(&self, request: &EnqueueRequest) -> Result<(), Error> {
+        let Some(version) = request.contract_version.as_deref() else {
+            return Ok(());
+        };
+        let Some(contract) = self.contracts.iter().find(|contract| {
+            contract.task_type == request.task_type && contract.version == version
+        }) else {
+            return Ok(());
+        };
+        if let Some(required) = contract
+            .definition
+            .get("required")
+            .and_then(Value::as_array)
+        {
+            let object = request
+                .payload
+                .as_object()
+                .ok_or_else(|| Error::ContractValidation {
+                    task_type: request.task_type.clone(),
+                    version: version.to_owned(),
+                    message: "expected object".into(),
+                })?;
+            for field in required.iter().filter_map(Value::as_str) {
+                if !object.contains_key(field) {
+                    return Err(Error::ContractValidation {
+                        task_type: request.task_type.clone(),
+                        version: version.to_owned(),
+                        message: format!("missing required property {field}"),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub async fn sync_contracts(&self, contracts: &[ContractDefinition]) -> Result<(), Error> {
         let v =
             serde_json::to_value(contracts).map_err(|e| Error::InvalidRequest(e.to_string()))?;
