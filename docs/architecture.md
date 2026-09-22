@@ -2947,6 +2947,15 @@ Vite uses `renderDashboardHtml` for the development transform, and the browser i
 types. The compiled static archive contains no Node.js module, so the dependency does not cross the
 language-neutral delivery boundary.
 
+`dashboard/app/browser/index.html` is the authoritative document template for production and
+development. `renderDashboardHtml` is the sole assembler. It serializes `DashboardRuntimeConfig`
+with `JSON.stringify`, escapes each `<` as `\u003c`, and fills the runtime-config placeholder with a
+replacement callback. It HTML-attribute escapes each host-owned browser module URL and fills that
+placeholder with another callback. Dollar patterns in either input remain literal data rather than
+`String.prototype.replace` syntax. `typescript/dashboard-server/test/html.test.ts` exercises both
+substitutions against the packaged template and requires one runtime assignment with no remaining
+placeholder.
+
 `@stablemates/workhorse-dashboard/standalone` re-exports
 `@stablemates/workhorse-dashboard-server/standalone.startDashboardServer(database, options)`. The caller owns
 `database` and closes it after `RunningDashboard.close()` stops the HTTP listener. The backend
@@ -3026,6 +3035,12 @@ request URL. If `publicOrigin` is configured, that canonical HTTP or HTTPS origi
 scheme and authority instead. This keeps Secure-cookie and same-origin mutation policy independent
 of untrusted proxy headers. The CLI maps `--socket`, `--public-origin`, and
 `WORKHORSE_DASHBOARD_PUBLIC_ORIGIN` to those options.
+
+`MAX_LOGIN_BODY_BYTES` is 4,096 bytes. When `content-length` is present, the login endpoint requires
+decimal non-negative digits whose value is a safe integer no greater than that bound. A malformed,
+unsafe, or oversized declared length receives `413` before the form is read. If the header is
+absent, `readLoginBody` treats the length as unknown and counts the request stream. It retains at
+most 4,096 bytes, cancels the stream as soon as it crosses the bound, and returns `413`.
 
 `DashboardHostOptions.allowedHosts` lists the `host[:port]` values a host answers to. When it is
 set, `createDashboardHost` answers any owned request whose URL host is not listed with 421 and
