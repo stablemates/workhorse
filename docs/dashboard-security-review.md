@@ -45,16 +45,17 @@ a writable operator.
   drives each one against a read-only operator to assert `FORBIDDEN` before any query runs. A new
   mutation fails that suite until it is named there, so this row's work is confirming the suite
   still asserts what it claims rather than re-deriving the list.
-- For each mutation, confirm `typescript/dashboard-server/src/server/router.ts` refuses it when
-  `context.operator.mode !== "writable"`, and refuses it when the controller that performs it is
-  absent.
+- Confirm `mutationProcedure` applies the `mutationAuthorization` middleware before every mutation
+  handler. The middleware refuses `context.operator.mode !== "writable"` with `FORBIDDEN` before
+  controller or database work. Each handler still refuses the request when its controller is absent.
 - Confirm `createDashboardHost` reaches `options.authorize` or `singleAdmin.authorize` before it
   dispatches any RPC, asset, or application request.
 - Confirm the browser cannot choose its own attribution: `auditWithOccurredAt` must overwrite
   `audit.actor` with `context.authenticatedActor`.
 
-**Re-walk when** a procedure is added, removed, or changes its `mutation` classification; when a
-controller becomes optional or mandatory; or when the authorization call moves.
+**Re-walk when** a procedure is added, removed, or changes its `mutation` classification; when
+`mutationProcedure` or `mutationAuthorization` changes; when a controller becomes optional or
+mandatory; or when handler authorization moves.
 
 ## Row 2: payload and result redaction in the read surface
 
@@ -146,10 +147,12 @@ Confirm the CLI's single-administrator mode is the boundary it claims to be.
 - Confirm the unauthenticated development bypass is refused on any listener that is not loopback
   or a Unix socket, and that an authenticated remote listener requires an explicit HTTPS
   `publicOrigin`.
-- Confirm the login endpoint bounds its body, requires
+- Confirm the login endpoint rejects an oversized or malformed declared length before reading. If
+  the request declares no length, confirm the endpoint counts stream bytes, retains no more than
+  the bound, and cancels the stream when it crosses that bound. Confirm the endpoint also requires
   `application/x-www-form-urlencoded`, throttles failures in a fixed window, reserves throttle
-  capacity before `scrypt` yields, and returns one generic failure for a wrong username and a
-  wrong password alike.
+  capacity before `scrypt` yields, and returns one generic failure for a wrong username and a wrong
+  password alike.
 - Confirm every RPC request body is bounded before a procedure is matched, whether or not it
   declares its length.
 - Confirm sessions are server-side, bounded in count, bounded in lifetime, minted only at a
@@ -191,6 +194,30 @@ Confirm the asset route serves only packaged files.
 - Confirm no reserved route segment can be shadowed by a workspace name.
 
 **Re-walk when** the asset route, the mount-path normalizer, or the reserved-name set changes.
+
+## Row 9: served document and runtime configuration
+
+Confirm the host treats the served HTML document as a security boundary. `renderDashboardHtml`
+serializes `DashboardRuntimeConfig` with `JSON.stringify`, escapes every `<` in the serialized
+value as `\u003c`, and substitutes it into the script placeholder through a callback. Host-owned
+browser module URLs are HTML-attribute escaped, and their tags are also substituted through a
+callback. Dollar patterns in either value remain data rather than replacement syntax. The packaged
+document therefore cannot be closed by caller-shaped runtime values, and a module URL cannot add
+attributes or markup.
+
+Any exploitable walkthrough remains in the private operations review under
+`docs/reviews/2026-09-22-dashboard-server/`; this public row records the review outcome and fix.
+
+- Confirm both the production host and development transform call `renderDashboardHtml` rather than
+  implementing their own replacements.
+- Confirm both placeholders occur in `dashboard/app/browser/index.html`. Confirm
+  `typescript/dashboard-server/test/html.test.ts` exercises that packaged template with
+  caller-shaped values containing script delimiters, replacement markers, and attribute
+  metacharacters.
+
+**Re-walk when** `DashboardRuntimeConfig` gains a field, `renderDashboardHtml` changes its
+serialization, escaping, or placeholder replacement, the packaged `index.html` changes either
+placeholder, or a host adds another caller-shaped value to the document.
 
 ---
 
