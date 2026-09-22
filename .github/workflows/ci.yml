@@ -366,6 +366,8 @@ jobs:
 
   rust:
     name: Rust protocol and release harness
+    # Pull requests, pushes, and the weekly compatibility schedule run this lane. The daily packed
+    # schedule intentionally skips it; the aggregate required job accepts that planned skip.
     if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 30
@@ -394,7 +396,9 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - run: mise install rust
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          install_args: rust
       - run: pnpm rust:format:check
       - run: pnpm rust:clippy
       - run: pnpm install --frozen-lockfile
