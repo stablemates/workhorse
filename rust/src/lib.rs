@@ -346,30 +346,13 @@ impl Queue {
         }) else {
             return Ok(());
         };
-        if let Some(required) = contract
-            .definition
-            .get("required")
-            .and_then(Value::as_array)
-        {
-            let object = request
-                .payload
-                .as_object()
-                .ok_or_else(|| Error::ContractValidation {
-                    task_type: request.task_type.clone(),
-                    version: version.to_owned(),
-                    message: "expected object".into(),
-                })?;
-            for field in required.iter().filter_map(Value::as_str) {
-                if !object.contains_key(field) {
-                    return Err(Error::ContractValidation {
-                        task_type: request.task_type.clone(),
-                        version: version.to_owned(),
-                        message: format!("missing required property {field}"),
-                    });
-                }
+        Self::validate_json_schema(&contract.definition, &request.payload).map_err(|message| {
+            Error::ContractValidation {
+                task_type: request.task_type.clone(),
+                version: version.to_owned(),
+                message,
             }
-        }
-        Ok(())
+        })
     }
 
     pub async fn sync_contracts(&self, contracts: &[ContractDefinition]) -> Result<(), Error> {
@@ -381,6 +364,47 @@ impl Queue {
                 &[&v],
             )
             .await?;
+        Ok(())
+    }
+
+    fn validate_json_schema(schema: &Value, value: &Value) -> Result<(), String> {
+        let schema = schema.as_object().ok_or("schema must be an object")?;
+        if let Some(kind) = schema.get("type").and_then(Value::as_str) {
+            let valid = match kind {
+                "object" => value.is_object(),
+                "array" => value.is_array(),
+                "string" => value.is_string(),
+                "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+                "number" => value.is_number(),
+                "boolean" => value.is_boolean(),
+                "null" => value.is_null(),
+                _ => true,
+            };
+            if !valid {
+                return Err(format!("expected {kind}"));
+            }
+        }
+        if let Some(required) = schema.get("required").and_then(Value::as_array) {
+            let object = value.as_object().ok_or("expected object")?;
+            for field in required.iter().filter_map(Value::as_str) {
+                if !object.contains_key(field) {
+                    return Err(format!("missing required property {field}"));
+                }
+            }
+        }
+        if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+            let object = value.as_object().ok_or("expected object")?;
+            for (name, child_schema) in properties {
+                if let Some(child) = object.get(name) {
+                    Self::validate_json_schema(child_schema, child)?;
+                }
+            }
+            if schema.get("additionalProperties").and_then(Value::as_bool) == Some(false) {
+                if let Some(extra) = object.keys().find(|name| !properties.contains_key(*name)) {
+                    return Err(format!("additional property {extra}"));
+                }
+            }
+        }
         Ok(())
     }
 }
