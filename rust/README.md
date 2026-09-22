@@ -1,15 +1,19 @@
-# Rust integration harness
+# Rust workspace
 
-This crate owns shared integration only. It validates the checked-in `protocol/v1` fixtures and
-provides `ProtocolClient` and `RuntimeFixtureAdapter` seams for the Rust SDK.
+The canonical Cargo workspace is rooted at `Cargo.toml` and contains the client crate in `rust/`,
+the worker lifecycle crate in `rust/workhorse-worker/`, and durable context crate in
+`rust/workhorse/`. The integration tests in `rust/tests/` load the shared `protocol/v1` fixtures.
 
-The client implementation belongs to SM-16A, worker lifecycle to SM-16B, and durable handler
-context to SM-16C. Until those issues land, the harness runs fixture-shape and generated-evidence
-checks only; it does not claim runtime conformance.
+The request, schedule, and contract test exercises the real `workhorse-client` PostgreSQL adapter
+when `DATABASE_URL_TEST` is set. Interpreter and failure fixture execution remains Planned in the
+parity registry until the corresponding public adapter operations are exposed. Runtime fixtures
+remain Planned until the worker lifecycle and durable context adapters expose a fixture runner.
 
-Run from the repository root:
+Run the scoped checks from the repository root:
 
 ```sh
-cargo test --manifest-path rust/Cargo.toml
-cargo run --manifest-path rust/Cargo.toml --example fixture_runner
+pnpm rust:format:check
+pnpm rust:clippy
+pnpm rust:test
+pnpm rust:release-check
 ```

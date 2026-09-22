@@ -365,7 +365,7 @@ jobs:
       - run: pnpm test:packed
 
   rust:
-    name: Rust delivery gates
+    name: Rust protocol and release harness
     if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 30
@@ -394,21 +394,14 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: actions-rust-lang/setup-rust-toolchain@c8ff772090ab9d00f7f7bd7b388f3c3032282e3b # v1
-        with:
-          toolchain: 1.89.0
-          components: rustfmt, clippy
-      - name: Install matching PostgreSQL client
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes postgresql-common
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install --yes postgresql-client-18
-          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+      - run: mise install rust
+      - run: pnpm rust:format:check
+      - run: pnpm rust:clippy
+      - run: pnpm rust:test
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:reset:test
-      - run: pnpm rust:gates
-      - run: pnpm rust:integration
+      - run: pnpm rust:conformance:check
+      - run: pnpm rust:release-check
 
   demo:
     name: demo and site smoke

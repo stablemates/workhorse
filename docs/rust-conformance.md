@@ -1,6 +1,6 @@
 # Rust conformance evidence
 
-Generated from `protocol/v1` at protocol version 4. The harness currently proves fixture loading, manifest coverage, and fixture shape. Runtime execution awaits the SDK seams owned by SM-16A, SM-16B, and SM-16C.
+Generated from `protocol/v1` at protocol version 4. The harness executes request, schedule, and contract fixtures through the `workhorse-client` PostgreSQL adapter when `DATABASE_URL_TEST` is set. Interpreter and failure execution remains Planned until public adapter operations exist; runtime execution remains Planned until the worker and durable context fixture seams land.
 
 ## Generated fixture inventory
 
@@ -16,6 +16,6 @@ Generated from `protocol/v1` at protocol version 4. The harness currently proves
 | `scenarios.json`        |      15 |
 | `schedules.json`        |       2 |
 
-The manifest declares 19 runtime capabilities and 5 language fixture identifiers. Once the client, worker, and durable context crates land, their adapters must execute these same files without copying them.
+The manifest declares 19 runtime capabilities and 5 language fixture identifiers. The client adapter is exercised by the PostgreSQL test. SM-16B and SM-16C still need to expose runtime fixture execution before runtime evidence can become Supported.
 
 Regenerate with `pnpm rust:conformance:generate`; CI uses `pnpm rust:conformance:check`.
