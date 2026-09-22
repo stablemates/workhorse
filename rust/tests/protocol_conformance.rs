@@ -30,13 +30,27 @@ fn manifest_declares_every_interpreted_fixture() {
 
 #[test]
 fn shared_fixture_sets_are_well_formed() {
-    for name in ["compatibility.json", "contracts.json", "cron-occurrences.json", "failures.json", "requests.json", "runtime.json", "scenarios.json", "schedules.json"] {
+    for name in [
+        "compatibility.json",
+        "contracts.json",
+        "cron-occurrences.json",
+        "failures.json",
+        "requests.json",
+        "runtime.json",
+        "scenarios.json",
+        "schedules.json",
+    ] {
         let value = fixture(name);
         assert!(!value.is_null(), "{name} must decode");
         if let Some(entries) = value.as_array() {
-            let entry_ids = entries.iter().filter_map(|entry| entry["id"].as_str()).collect::<Vec<_>>();
+            let entry_ids =
+                entries.iter().filter_map(|entry| entry["id"].as_str()).collect::<Vec<_>>();
             assert_eq!(entry_ids.len(), entries.len(), "{name} entries need ids");
-            assert_eq!(entry_ids.iter().collect::<BTreeSet<_>>().len(), entries.len(), "{name} ids must be unique");
+            assert_eq!(
+                entry_ids.iter().collect::<BTreeSet<_>>().len(),
+                entries.len(),
+                "{name} ids must be unique"
+            );
         }
     }
 }

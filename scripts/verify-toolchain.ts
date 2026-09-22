@@ -54,6 +54,7 @@ const probes: Record<string, ToolProbe> = {
   node: { arguments: ["--version"], identity: new RegExp(String.raw`^v${version}`) },
   pnpm: { arguments: ["--version"], identity: new RegExp(String.raw`^${version}`) },
   python: { arguments: ["--version"], identity: new RegExp(String.raw`^Python ${version}`) },
+  rust: { arguments: ["--version"], identity: new RegExp(String.raw`^rustc ${version}`) },
   uv: { arguments: ["--version"], identity: new RegExp(String.raw`^uv ${version}`) },
 };
 
@@ -173,7 +174,7 @@ export async function verifyToolchain(options: {
     ];
   }
   return await verifyTools(
-    tools.map((tool) => ({ tool, executable: tool })),
+    tools.map((tool) => ({ tool, executable: tool === "rust" ? "rustc" : tool })),
     { mode: options.mode, pins, checkoutRoot: root },
   );
 }
