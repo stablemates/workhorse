@@ -1,7 +1,4 @@
-//! Durable handler state primitives.
-//!
-//! This crate deliberately contains no PostgreSQL client or worker lease code. The worker
-//! supplies persistence and settlement through [`settlement::SettlementSink`].
+//! Durable handler context primitives and the worker settlement seam.
 pub mod checkpoint;
 pub mod children;
 pub mod context;

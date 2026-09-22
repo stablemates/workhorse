@@ -14,9 +14,7 @@ pub struct CheckpointStore<T> {
 
 impl<T> Default for CheckpointStore<T> {
     fn default() -> Self {
-        Self {
-            values: BTreeMap::new(),
-        }
+        Self { values: BTreeMap::new() }
     }
 }
 

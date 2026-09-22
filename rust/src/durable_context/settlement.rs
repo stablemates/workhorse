@@ -1,4 +1,4 @@
-use crate::progress::Progress;
+use super::progress::Progress;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Settlement<T> {

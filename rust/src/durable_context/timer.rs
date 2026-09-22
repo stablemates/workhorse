@@ -34,11 +34,7 @@ impl TimerRegistry {
         if let Some(timer) = self.timers.get(&name) {
             return timer.clone();
         }
-        let timer = DurableTimer {
-            name: name.clone(),
-            due_at: now + delay,
-            fired: false,
-        };
+        let timer = DurableTimer { name: name.clone(), due_at: now + delay, fired: false };
         self.timers.insert(name, timer.clone());
         timer
     }

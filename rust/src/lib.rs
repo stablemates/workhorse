@@ -243,3 +243,7 @@ impl Queue {
         Ok(())
     }
 }
+
+/// Durable handler context primitives. PostgreSQL-backed operations live in `durable_postgres`.
+pub mod durable_context;
+pub mod durable_postgres;

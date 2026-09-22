@@ -1,4 +1,4 @@
-use crate::{
+use super::{
     checkpoint::CheckpointStore,
     children::{ChildSet, ChildStatus},
     progress::{Progress, ProgressStore},
@@ -33,7 +33,7 @@ impl<T: Clone> HandlerContext<T> {
         &mut self,
         name: impl Into<String>,
         producer: F,
-    ) -> Result<T, crate::CheckpointError>
+    ) -> Result<T, super::CheckpointError>
     where
         F: FnOnce() -> T,
     {
@@ -79,7 +79,7 @@ impl<T: Clone> HandlerContext<T> {
     pub fn child_complete(&mut self, name: &str, status: ChildStatus<T>) -> bool {
         self.children.complete(name, status)
     }
-    pub fn join_children(&self) -> Option<crate::children::ChildOutcome<T>> {
+    pub fn join_children(&self) -> Option<super::children::ChildOutcome<T>> {
         self.children.join()
     }
     pub fn report_progress(&mut self, value: impl Into<String>) -> Progress {

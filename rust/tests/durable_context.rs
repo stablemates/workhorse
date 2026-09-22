@@ -1,5 +1,5 @@
 use std::time::{Duration, SystemTime};
-use workhorse::{
+use workhorse_client::durable_context::{
     ChildOutcome, ChildStatus, HandlerContext, Settlement, SettlementBuffer, WaitResult,
 };
 
@@ -31,11 +31,7 @@ fn timers_and_waits_are_idempotent() {
     let mut ctx = HandlerContext::<String>::default();
     let now = SystemTime::UNIX_EPOCH;
     assert!(!ctx.timer("reminder", Duration::from_secs(5), now).fired());
-    assert!(ctx
-        .timers
-        .observe("reminder", now + Duration::from_secs(5))
-        .unwrap()
-        .fired());
+    assert!(ctx.timers.observe("reminder", now + Duration::from_secs(5)).unwrap().fired());
     assert_eq!(ctx.signal("payment"), WaitResult::Pending);
     assert!(ctx.resolve_signal("payment", "paid".into()));
     assert_eq!(ctx.signal("payment"), WaitResult::Resolved("paid".into()));
@@ -66,10 +62,6 @@ fn progress_keeps_only_latest_and_settles_through_seam() {
     assert_eq!(ctx.report_progress("50%").value, "50%");
     assert_eq!(ctx.progress.latest().unwrap().value, "50%");
     let mut sink = SettlementBuffer::default();
-    ctx.settle(
-        &mut sink,
-        Settlement::Progress(ctx.progress.latest().unwrap().clone()),
-    )
-    .unwrap();
+    ctx.settle(&mut sink, Settlement::Progress(ctx.progress.latest().unwrap().clone())).unwrap();
     assert_eq!(sink.entries.len(), 1);
 }

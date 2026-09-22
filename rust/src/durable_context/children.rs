@@ -10,11 +10,7 @@ pub enum ChildStatus<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChildOutcome<T> {
     All(Vec<T>),
-    Partial {
-        succeeded: Vec<T>,
-        failed: Vec<String>,
-        cancelled: usize,
-    },
+    Partial { succeeded: Vec<T>, failed: Vec<String>, cancelled: usize },
 }
 #[derive(Debug, Clone)]
 pub struct ChildSet<T> {
@@ -23,9 +19,7 @@ pub struct ChildSet<T> {
 
 impl<T> Default for ChildSet<T> {
     fn default() -> Self {
-        Self {
-            children: BTreeMap::new(),
-        }
+        Self { children: BTreeMap::new() }
     }
 }
 impl<T: Clone> ChildSet<T> {
@@ -35,9 +29,7 @@ impl<T: Clone> ChildSet<T> {
         N: Into<String>,
     {
         for name in names {
-            self.children
-                .entry(name.into())
-                .or_insert(ChildStatus::Pending);
+            self.children.entry(name.into()).or_insert(ChildStatus::Pending);
         }
     }
     pub fn complete(&mut self, name: &str, status: ChildStatus<T>) -> bool {
@@ -51,9 +43,7 @@ impl<T: Clone> ChildSet<T> {
         true
     }
     pub fn is_ready(&self) -> bool {
-        self.children
-            .values()
-            .all(|s| !matches!(s, ChildStatus::Pending))
+        self.children.values().all(|s| !matches!(s, ChildStatus::Pending))
     }
     pub fn join(&self) -> Option<ChildOutcome<T>> {
         if !self.is_ready() {
@@ -73,11 +63,7 @@ impl<T: Clone> ChildSet<T> {
         if failed.is_empty() && cancelled == 0 {
             Some(ChildOutcome::All(ok))
         } else {
-            Some(ChildOutcome::Partial {
-                succeeded: ok,
-                failed,
-                cancelled,
-            })
+            Some(ChildOutcome::Partial { succeeded: ok, failed, cancelled })
         }
     }
     pub fn len(&self) -> usize {

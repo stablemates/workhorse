@@ -29,9 +29,7 @@ pub struct WaitRegistry<T> {
 
 impl<T> Default for WaitRegistry<T> {
     fn default() -> Self {
-        Self {
-            waits: BTreeMap::new(),
-        }
+        Self { waits: BTreeMap::new() }
     }
 }
 impl<T: Clone> WaitRegistry<T> {
@@ -40,13 +38,8 @@ impl<T: Clone> WaitRegistry<T> {
     }
     pub fn wait(&mut self, name: impl Into<String>, kind: WaitKind) -> WaitResult<T> {
         let name = name.into();
-        let wait = self
-            .waits
-            .entry(name)
-            .or_insert(Wait { kind, result: None });
-        wait.result
-            .clone()
-            .map_or(WaitResult::Pending, WaitResult::Resolved)
+        let wait = self.waits.entry(name).or_insert(Wait { kind, result: None });
+        wait.result.clone().map_or(WaitResult::Pending, WaitResult::Resolved)
     }
     pub fn resolve(&mut self, name: &str, value: T) -> bool {
         let Some(wait) = self.waits.get_mut(name) else {

@@ -14,10 +14,7 @@ impl ProgressStore {
     }
     pub fn publish(&mut self, value: impl Into<String>) -> Progress {
         self.next_sequence += 1;
-        let p = Progress {
-            sequence: self.next_sequence,
-            value: value.into(),
-        };
+        let p = Progress { sequence: self.next_sequence, value: value.into() };
         self.latest = Some(p.clone());
         p
     }
