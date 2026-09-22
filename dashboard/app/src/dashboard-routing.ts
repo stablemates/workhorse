@@ -1,4 +1,4 @@
-import { mountedHref, readLocation, type PageRoute } from "./core.js";
+import { mountedHref, readLocation } from "./core.js";
 
 export interface DashboardRouter {
   read(): ReturnType<typeof readLocation>;
@@ -37,5 +37,3 @@ export function createDashboardRouter(
     },
   };
 }
-
-export type DashboardRoute = PageRoute;
