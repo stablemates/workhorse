@@ -2,11 +2,9 @@ import { createRefreshRequests } from "../refresh-requests.js";
 import {
   createDashboardPollingClock,
   createDashboardRefreshResumePolicy,
-  dashboardAutoRefreshPaused,
   dashboardRefreshIntervalMs,
   dashboardRefreshIntervals,
   defaultDashboardRefreshInterval,
-  discardBackgroundRefresh,
   type DashboardRefreshIntervalValue,
 } from "../refresh-policy.js";
 import type { DashboardDemoTools } from "@stablemates/workhorse-dashboard-server";
@@ -71,6 +69,9 @@ import { readyLoadState, readyTaskCounts } from "../render-identity.js";
 import { subscribeTimeZone } from "../preferences.js";
 import type { DemoTaskOptions } from "../pages/tasks.js";
 import { seekDashboardTaskPage } from "../task-page-seek.js";
+import { createDashboardRouter } from "../dashboard-routing.js";
+import { createDashboardRefreshController } from "../dashboard-refresh-controller.js";
+import { useMutationInFlight } from "../mutation-in-flight.js";
 
 const TasksPage = lazy(() =>
   import("../pages/tasks.js").then((module) => ({ default: module.TasksPage })),
@@ -120,12 +121,17 @@ export function useDashboardController(
 ) {
   const client = useDashboardClient();
   const refreshBlockers = useRefreshBlockers();
+  const router = useMemo(() => createDashboardRouter(basePath), [basePath]);
+  const refreshController = useMemo(
+    () => createDashboardRefreshController(refreshBlockers.isBlocked),
+    [refreshBlockers.isBlocked],
+  );
   const refreshRequests = useMemo(() => createRefreshRequests(), [client]);
   const [navbarOpened, { toggle: toggleNavbar, close: closeNavbar }] = useDisclosure();
   // Timestamps format through module-level displayTimeZone; re-render everything on change.
   const [, setTimeZoneTick] = useState(0);
   useEffect(() => subscribeTimeZone(() => setTimeZoneTick((tick) => tick + 1)), []);
-  const [location, setLocation] = useState(() => readLocation(basePath));
+  const [location, setLocation] = useState(() => router.read());
   const [loadState, setLoadState] = useState<LoadState>({
     status: "loading",
     data: null,
@@ -145,13 +151,13 @@ export function useDashboardController(
       cancelled = true;
     };
   }, [client]);
-  const [runningDemoTask, setRunningDemoTask] = useState<DemoTaskKind | null>(null);
-  const [togglingSchedule, setTogglingSchedule] = useState<string | null>(null);
-  const [togglingQueue, setTogglingQueue] = useState<string | null>(null);
-  const [purgingQueue, setPurgingQueue] = useState<string | null>(null);
+  const runningDemoTask = useMutationInFlight<DemoTaskKind>();
+  const togglingSchedule = useMutationInFlight<string>();
+  const togglingQueue = useMutationInFlight<string>();
+  const purgingQueue = useMutationInFlight<string>();
   const [confirmingQueue, setConfirmingQueue] = useState<string | null>(null);
-  const [togglingWorker, setTogglingWorker] = useState<string | null>(null);
-  const [savingSettings, setSavingSettings] = useState(false);
+  const togglingWorker = useMutationInFlight<string>();
+  const savingSettings = useMutationInFlight<boolean>();
   /**
    * The open task is read from the URL rather than held beside it, so a copied or reloaded link
    * restores the same list and the same open drawer, and Back/Forward can only ever agree with
@@ -231,25 +237,20 @@ export function useDashboardController(
     localStorage.setItem(refreshStorageKey, value);
   }, []);
   const requestId = useRef(0);
-  const shouldDiscardBackgroundRefresh = useCallback(
-    (background: boolean) => discardBackgroundRefresh(background, refreshBlockers.isBlocked()),
-    [refreshBlockers.isBlocked],
-  );
+  const shouldDiscardBackgroundRefresh = refreshController.shouldDiscardBackground;
 
   const navigate = useCallback(
     (href: string) => {
-      window.history.pushState(null, "", mountedHref(basePath, href));
-      setLocation(readLocation(basePath));
+      setLocation(router.push(href));
       closeNavbar();
     },
-    [basePath, closeNavbar],
+    [closeNavbar, router],
   );
   const replace = useCallback(
     (href: string) => {
-      window.history.replaceState(null, "", mountedHref(basePath, href));
-      setLocation(readLocation(basePath));
+      setLocation(router.replace(href));
     },
-    [basePath],
+    [router],
   );
   const setEventsQuery = useCallback(
     (next: EventsLocationState) => navigate(eventsLocationHref(next)),
@@ -485,7 +486,7 @@ export function useDashboardController(
   const toggleSchedule = useCallback(
     async (namespace: string, name: string, paused: boolean) => {
       const scheduleKey = `${namespace}:${name}`;
-      setTogglingSchedule(scheduleKey);
+      togglingSchedule.start(scheduleKey);
       try {
         await client.setSchedulePaused({
           kind: "user",
@@ -509,15 +510,15 @@ export function useDashboardController(
       } catch (cause) {
         notifyFailure("Schedule not updated", cause, "Workhorse could not update the schedule");
       } finally {
-        setTogglingSchedule(null);
+        togglingSchedule.stop();
       }
     },
-    [auditActor, client, loadPage],
+    [auditActor, client, loadPage, togglingSchedule],
   );
 
   const toggleQueue = useCallback(
     async (queue: string, paused: boolean) => {
-      setTogglingQueue(queue);
+      togglingQueue.start(queue);
       try {
         await client.setQueuePaused({
           queue,
@@ -539,15 +540,15 @@ export function useDashboardController(
       } catch (cause) {
         notifyFailure("Queue not updated", cause, "Workhorse could not update the queue");
       } finally {
-        setTogglingQueue(null);
+        togglingQueue.stop();
       }
     },
-    [auditActor, client, loadPage],
+    [auditActor, client, loadPage, togglingQueue],
   );
 
   const clearQueue = useCallback(
     async (queue: string) => {
-      setPurgingQueue(queue);
+      purgingQueue.start(queue);
       try {
         const result = await client.purgeQueue({
           queue,
@@ -569,15 +570,15 @@ export function useDashboardController(
       } catch (cause) {
         notifyFailure("Queue not cleared", cause, "Workhorse could not clear the queue");
       } finally {
-        setPurgingQueue(null);
+        purgingQueue.stop();
       }
     },
-    [auditActor, client, loadPage],
+    [auditActor, client, loadPage, purgingQueue],
   );
 
   const toggleWorker = useCallback(
     async (workerId: string, paused: boolean) => {
-      setTogglingWorker(workerId);
+      togglingWorker.start(workerId);
       try {
         await client.setWorkerPaused({
           workerId,
@@ -599,15 +600,15 @@ export function useDashboardController(
       } catch (cause) {
         notifyFailure("Worker not updated", cause, "Workhorse could not update the worker");
       } finally {
-        setTogglingWorker(null);
+        togglingWorker.stop();
       }
     },
-    [auditActor, client, loadPage],
+    [auditActor, client, loadPage, togglingWorker],
   );
 
   const saveMaintenanceSettings = useCallback(
     async (definition: Partial<MaintenancePolicyDefinition>) => {
-      setSavingSettings(true);
+      savingSettings.start(true);
       try {
         await client.overrideMaintenancePolicy({
           definition,
@@ -630,10 +631,10 @@ export function useDashboardController(
           "Workhorse rejected the maintenance policy",
         );
       } finally {
-        setSavingSettings(false);
+        savingSettings.stop();
       }
     },
-    [auditActor, client, loadPage],
+    [auditActor, client, loadPage, savingSettings],
   );
   const revertMaintenanceSetting = useCallback(
     async (setting: MaintenancePolicySetting) => {
@@ -731,7 +732,7 @@ export function useDashboardController(
   const runDemoTask = useCallback(
     async (kind: DemoTaskKind, options: DemoTaskOptions = {}) => {
       const { scenario, feature } = options;
-      setRunningDemoTask(kind);
+      runningDemoTask.start(kind);
       try {
         if (!demoTools) return;
         const enqueued = await demoTools.enqueueTest({
@@ -753,10 +754,19 @@ export function useDashboardController(
       } catch (cause) {
         notifyFailure("Demo task not enqueued", cause, "Workhorse could not enqueue the demo task");
       } finally {
-        setRunningDemoTask(null);
+        runningDemoTask.stop();
       }
     },
-    [auditActor, demoTools, inspectTask, loadPage, location.filter, location.page, navigate],
+    [
+      auditActor,
+      demoTools,
+      inspectTask,
+      loadPage,
+      location.filter,
+      location.page,
+      navigate,
+      runningDemoTask,
+    ],
   );
   const inspectEvent = useCallback(
     (event: DashboardEventRow) => {
@@ -885,19 +895,17 @@ export function useDashboardController(
     refreshResumePolicy.update(refreshBlocked, refreshInterval !== "off");
   }, [refreshBlocked, refreshInterval, refreshResumePolicy]);
   useEffect(() => () => refreshResumePolicy.stop(), [refreshResumePolicy]);
-  const autoRefreshPaused = dashboardAutoRefreshPaused(
-    refreshBlocked,
+  const autoRefreshPaused = refreshController.autoRefreshPaused(
     refreshWasBlocked,
     resumeCountdown,
-    refreshInterval !== "off",
+    refreshInterval,
   );
   const autoRefreshPausedRef = useRef(autoRefreshPaused);
   autoRefreshPausedRef.current = autoRefreshPaused;
-  const refreshPauseDescription =
-    refreshBlockers.description ??
-    (resumeCountdown !== null
-      ? `Auto refresh resumes in ${resumeCountdown} seconds`
-      : "Auto refresh interval");
+  const refreshPauseDescription = refreshController.pauseDescription(
+    refreshBlockers.description,
+    resumeCountdown,
+  );
   useEffect(() => {
     pollingClock.setRefresh(() => {
       if (route === "/tasks") setActivityPollTick((tick) => tick + 1);
@@ -949,7 +957,7 @@ export function useDashboardController(
         replace={replace}
         taskLocation={location}
         runDemoTask={demoTools ? runDemoTask : null}
-        runningDemoTask={runningDemoTask}
+        runningDemoTask={runningDemoTask.value}
         inspectTask={inspectTask}
         taskEventsHref={taskEventsHref}
         runTaskNow={runTaskNow}
@@ -971,7 +979,7 @@ export function useDashboardController(
     content = (
       <CronPage
         data={loadState.data.value}
-        togglingSchedule={togglingSchedule}
+        togglingSchedule={togglingSchedule.value}
         taskTypeHref={(taskType) =>
           mountedHref(basePath, `/tasks?type=${encodeURIComponent(taskType)}`)
         }
@@ -984,8 +992,8 @@ export function useDashboardController(
     content = (
       <QueuesPage
         data={loadState.data.value}
-        togglingQueue={togglingQueue}
-        purgingQueue={purgingQueue}
+        togglingQueue={togglingQueue.value}
+        purgingQueue={purgingQueue.value}
         confirmingQueue={confirmingQueue}
         setQueuePaused={(queue, paused) => void toggleQueue(queue, paused)}
         setConfirmingQueue={setConfirmingQueue}
@@ -1000,7 +1008,7 @@ export function useDashboardController(
     content = (
       <WorkersPage
         data={loadState.data.value}
-        togglingWorker={togglingWorker}
+        togglingWorker={togglingWorker.value}
         setWorkerPaused={(workerId, paused) => void toggleWorker(workerId, paused)}
       />
     );
@@ -1008,7 +1016,7 @@ export function useDashboardController(
     content = (
       <SettingsPage
         data={loadState.data.value}
-        saving={savingSettings}
+        saving={savingSettings.value ?? false}
         onSaveMaintenance={saveMaintenanceSettings}
         onRevertMaintenance={revertMaintenanceSetting}
       />
