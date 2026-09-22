@@ -1,5 +1,6 @@
+mod support;
+
 use std::collections::BTreeSet;
-use std::env;
 
 use serde_json::{json, Value};
 use workhorse_client::{ContractDefinition, EnqueueRequest, Queue, ScheduleDefinition};
@@ -96,13 +97,12 @@ fn runtime_fixture_set_is_present_until_worker_adapter_wiring_lands() {
 
 #[tokio::test]
 async fn request_schedule_and_contract_fixtures_use_the_real_client_adapter() {
-    let Some(database_url) = env::var_os("DATABASE_URL_TEST") else {
-        eprintln!("DATABASE_URL_TEST is unset; PostgreSQL adapter lane is skipped locally");
+    let Some(database) = support::scratch_database("protocol_conformance_client_adapter").await
+    else {
         return;
     };
-    let queue = Queue::connect(database_url.to_str().unwrap(), "rust-conformance")
-        .await
-        .expect("connect Rust client");
+    let queue =
+        Queue::connect(database.url(), "rust-conformance").await.expect("connect Rust client");
     queue.check_compatibility().await.expect("protocol compatibility");
 
     let request = &fixture("requests.json")[0]["application"];

@@ -77,7 +77,7 @@ const pythonAdmin = { file: "test_admin.py", pattern: "admin." } as const;
 export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Transactional enqueue in a caller-owned tx",
-    rust: { file: "protocol_conformance.rs", pattern: "enqueue_batch" },
+    rust: { planned: "SM-874" },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "transaction" },
     python: { file: "test_enqueue.py", pattern: "transaction" },
     go: { file: "queue_test.go", pattern: "Tx" },
@@ -210,7 +210,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Compatibility refusal before mutation",
-    rust: { file: "protocol_conformance.rs", pattern: "check_compatibility" },
+    rust: { planned: "SM-874" },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "schema" },
     python: { file: "test_compatibility.py", pattern: "compatib" },
     go: { file: "compatibility_test.go", pattern: "Compatibility" },
@@ -223,10 +223,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "SQL protocol conformance fixtures executed",
-    rust: {
-      file: "protocol_conformance.rs",
-      pattern: "fixture_manifest_covers_local_interpreters",
-    },
+    rust: { planned: "SM-875" },
     typescript: { file: "sql-protocol-conformance.test.ts", pattern: "scenarios" },
     python: { file: "test_protocol_conformance.py", pattern: "scenarios" },
     go: { file: "conformance_test.go", pattern: "scenarios" },
