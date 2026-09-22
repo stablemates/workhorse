@@ -114,10 +114,16 @@ impl Queue {
         tokio::spawn(async move {
             let _ = connection_task.await;
         });
-        Ok(Self { client, queue: queue.into() })
+        Ok(Self {
+            client,
+            queue: queue.into(),
+        })
     }
     pub fn new(client: Client, queue: impl Into<String>) -> Self {
-        Self { client, queue: queue.into() }
+        Self {
+            client,
+            queue: queue.into(),
+        }
     }
     pub fn queue_name(&self) -> &str {
         &self.queue
@@ -136,7 +142,10 @@ impl Queue {
         if !(MIN_SCHEMA_VERSION..=MAX_SCHEMA_VERSION).contains(&schema) {
             return Err(Error::IncompatibleSchema(schema));
         }
-        Ok(Compatibility { protocol_version: protocol, schema_version: schema })
+        Ok(Compatibility {
+            protocol_version: protocol,
+            schema_version: schema,
+        })
     }
 
     pub async fn enqueue(&self, mut request: EnqueueRequest) -> Result<Uuid, Error> {
@@ -151,7 +160,9 @@ impl Queue {
         requests: &[EnqueueRequest],
     ) -> Result<Vec<EnqueueResult>, Error> {
         if requests.len() > MAX_ENQUEUE_BATCH_SIZE {
-            return Err(Error::InvalidRequest(format!("batch exceeds {MAX_ENQUEUE_BATCH_SIZE}")));
+            return Err(Error::InvalidRequest(format!(
+                "batch exceeds {MAX_ENQUEUE_BATCH_SIZE}"
+            )));
         }
         let payload =
             serde_json::to_value(requests).map_err(|e| Error::InvalidRequest(e.to_string()))?;
@@ -238,7 +249,10 @@ impl Queue {
         let v =
             serde_json::to_value(contracts).map_err(|e| Error::InvalidRequest(e.to_string()))?;
         self.client
-            .execute("SELECT workhorse.sync_contract_definitions_v1($1::jsonb)", &[&v])
+            .execute(
+                "SELECT workhorse.sync_contract_definitions_v1($1::jsonb)",
+                &[&v],
+            )
             .await?;
         Ok(())
     }
