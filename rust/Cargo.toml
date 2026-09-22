@@ -19,7 +19,3 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 [dev-dependencies]
-
-[workspace]
-members = [".", "workhorse-worker"]
-resolver = "2"
