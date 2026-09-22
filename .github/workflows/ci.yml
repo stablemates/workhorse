@@ -364,6 +364,52 @@ jobs:
       - run: pnpm db:reset:test-packed
       - run: pnpm test:packed
 
+  rust:
+    name: Rust delivery gates
+    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: workhorse
+          POSTGRES_PASSWORD: workhorse
+          POSTGRES_DB: workhorse_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U workhorse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions-rust-lang/setup-rust-toolchain@c8ff772090ab9d00f7f7bd7b388f3c3032282e3b # v1
+        with:
+          toolchain: 1.89.0
+          components: rustfmt, clippy
+      - name: Install matching PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install --yes postgresql-client-18
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:reset:test
+      - run: pnpm rust:gates
+      - run: pnpm rust:integration
+
   demo:
     name: demo and site smoke
     if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
@@ -409,7 +455,7 @@ jobs:
   required:
     name: required
     if: always()
-    needs: [plan, static, unit, typescript, python, go, runtime-smoke, packed, demo]
+    needs: [plan, static, unit, typescript, python, go, runtime-smoke, packed, rust, demo]
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 5
     env:
@@ -423,7 +469,7 @@ jobs:
     # Nobody watches the Actions tab, and a runner that dies uploads no log, so the packed lane
     # failed for eleven nights unseen. A scheduled failure opens an issue instead. See SM-775.
     if: always() && github.event_name == 'schedule' && contains(needs.*.result, 'failure')
-    needs: [plan, static, unit, typescript, python, go, runtime-smoke, packed, demo, required]
+    needs: [plan, static, unit, typescript, python, go, runtime-smoke, packed, rust, demo, required]
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 5
     permissions:
