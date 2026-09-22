@@ -10,10 +10,7 @@ fn lifecycle_adapter_has_canonical_sql_functions() {
         "run_maintenance_v1",
         "deregister_worker_v1",
     ] {
-        assert!(
-            schema.contains(&format!("workhorse.{function}")),
-            "missing {function}"
-        );
+        assert!(schema.contains(&format!("workhorse.{function}")), "missing {function}");
     }
     let adapter = include_str!("../src/lib.rs");
     for function in [
@@ -24,9 +21,6 @@ fn lifecycle_adapter_has_canonical_sql_functions() {
         "register_worker_v1",
         "run_maintenance_v1",
     ] {
-        assert!(
-            adapter.contains(function),
-            "adapter does not call {function}"
-        );
+        assert!(adapter.contains(function), "adapter does not call {function}");
     }
 }

@@ -78,10 +78,7 @@ async fn fixture_exercises_protocol_settlement_and_drain() {
         .with_lease(Duration::from_secs(1));
     worker.start().await.unwrap();
     let leases = worker.poll().await.unwrap();
-    worker
-        .dispatch_batch(leases, |_| async { Ok(()) })
-        .await
-        .unwrap();
+    worker.dispatch_batch(leases, |_| async { Ok(()) }).await.unwrap();
     worker.maintenance().await.unwrap();
     worker.drain().await.unwrap();
     assert_eq!(

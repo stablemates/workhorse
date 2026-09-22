@@ -124,9 +124,7 @@ impl Client for PostgresClient {
         fence: u64,
         lease_ms: i32,
     ) -> Result<(), ClientError> {
-        let id = task
-            .parse::<uuid::Uuid>()
-            .map_err(|e| ClientError::Other(e.to_string()))?;
+        let id = task.parse::<uuid::Uuid>().map_err(|e| ClientError::Other(e.to_string()))?;
         let status: String = self
             .db
             .query_one(
@@ -150,15 +148,10 @@ impl Client for PostgresClient {
             .collect())
     }
     async fn complete(&self, worker: &str, task: &TaskId, fence: u64) -> Result<(), ClientError> {
-        let id = task
-            .parse::<uuid::Uuid>()
-            .map_err(|e| ClientError::Other(e.to_string()))?;
+        let id = task.parse::<uuid::Uuid>().map_err(|e| ClientError::Other(e.to_string()))?;
         let ok: bool = self
             .db
-            .query_one(
-                "SELECT workhorse.complete_v1($1,$2,$3)",
-                &[&id, &worker, &(fence as i64)],
-            )
+            .query_one("SELECT workhorse.complete_v1($1,$2,$3)", &[&id, &worker, &(fence as i64)])
             .await
             .map_err(|e| ClientError::Other(e.to_string()))?
             .get(0);
@@ -175,9 +168,7 @@ impl Client for PostgresClient {
         fence: u64,
         error: serde_json::Value,
     ) -> Result<(), ClientError> {
-        let id = task
-            .parse::<uuid::Uuid>()
-            .map_err(|e| ClientError::Other(e.to_string()))?;
+        let id = task.parse::<uuid::Uuid>().map_err(|e| ClientError::Other(e.to_string()))?;
         let ok: bool = self
             .db
             .query_one(
@@ -340,10 +331,8 @@ impl<C: Client> Worker<C> {
         let mut qs = self.queues.clone();
         let rotation = start.min(qs.len());
         qs.rotate_left(rotation);
-        let tasks = self
-            .client
-            .claim(&self.id, &qs, self.batch, self.lease.as_millis() as i32)
-            .await?;
+        let tasks =
+            self.client.claim(&self.id, &qs, self.batch, self.lease.as_millis() as i32).await?;
         let now = Instant::now();
         let mut out = Vec::new();
         let mut s = self.state.lock().unwrap();
@@ -361,20 +350,11 @@ impl<C: Client> Worker<C> {
         Ok(out)
     }
     pub async fn heartbeat(&self, id: &TaskId) -> Result<(), ClientError> {
-        let l = self
-            .state
-            .lock()
-            .unwrap()
-            .active
-            .get(id)
-            .cloned()
-            .ok_or(ClientError::Fenced)?;
+        let l = self.state.lock().unwrap().active.get(id).cloned().ok_or(ClientError::Fenced)?;
         if Instant::now() >= l.expires_at {
             return Err(ClientError::Fenced);
         }
-        self.client
-            .heartbeat(&self.id, id, l.fence, self.lease.as_millis() as i32)
-            .await?;
+        self.client.heartbeat(&self.id, id, l.fence, self.lease.as_millis() as i32).await?;
         if let Some(x) = self.state.lock().unwrap().active.get_mut(id) {
             x.expires_at = Instant::now() + self.lease
         }
@@ -391,31 +371,15 @@ impl<C: Client> Worker<C> {
         Ok(ids)
     }
     pub async fn complete(&self, id: &TaskId) -> Result<(), ClientError> {
-        let l = self
-            .state
-            .lock()
-            .unwrap()
-            .active
-            .get(id)
-            .cloned()
-            .ok_or(ClientError::Fenced)?;
+        let l = self.state.lock().unwrap().active.get(id).cloned().ok_or(ClientError::Fenced)?;
         self.client.complete(&self.id, id, l.fence).await?;
         self.state.lock().unwrap().active.remove(id);
         self.telemetry.lock().unwrap().completed += 1;
         Ok(())
     }
     pub async fn fail(&self, id: &TaskId, error: serde_json::Value) -> Result<(), ClientError> {
-        let l = self
-            .state
-            .lock()
-            .unwrap()
-            .active
-            .get(id)
-            .cloned()
-            .ok_or(ClientError::Fenced)?;
-        self.client
-            .retry_or_dead_letter(&self.id, id, l.fence, error)
-            .await?;
+        let l = self.state.lock().unwrap().active.get(id).cloned().ok_or(ClientError::Fenced)?;
+        self.client.retry_or_dead_letter(&self.id, id, l.fence, error).await?;
         self.state.lock().unwrap().active.remove(id);
         self.telemetry.lock().unwrap().failed += 1;
         Ok(())
@@ -440,8 +404,7 @@ impl<C: Client> Worker<C> {
                     n += 1
                 }
                 Err(e) => {
-                    self.fail(&l.task.id, serde_json::json!({"error":format!("{e:?}")}))
-                        .await?
+                    self.fail(&l.task.id, serde_json::json!({"error":format!("{e:?}")})).await?
                 }
             }
         }
@@ -464,17 +427,12 @@ pub struct Registry<C: Client> {
 }
 impl<C: Client> Default for Registry<C> {
     fn default() -> Self {
-        Self {
-            workers: Mutex::new(HashMap::new()),
-        }
+        Self { workers: Mutex::new(HashMap::new()) }
     }
 }
 impl<C: Client> Registry<C> {
     pub fn register(&self, worker: Arc<Worker<C>>) {
-        self.workers
-            .lock()
-            .unwrap()
-            .insert(worker.info().id.clone(), worker);
+        self.workers.lock().unwrap().insert(worker.info().id.clone(), worker);
     }
     pub async fn pause(&self, id: &str) -> Result<bool, ClientError> {
         let w = self.workers.lock().unwrap().get(id).cloned();
