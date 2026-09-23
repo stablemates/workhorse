@@ -532,7 +532,9 @@ describe("continuous integration", () => {
       workflow.indexOf("\n  github-release:"),
     );
 
-    expect(workflow).toContain("pnpm rust:release-check");
+    expect(workflow).toContain(
+      "- run: pnpm rust:release-check\n        env:\n          DATABASE_URL_TEST: postgres://",
+    );
     expect(job).toContain("if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true");
     expect(job).toContain("needs: publish");
     // crates.io mints a token only for the trusted publisher registered on the crate, which names

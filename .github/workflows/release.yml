@@ -71,7 +71,11 @@ jobs:
           echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
       - run: pnpm install --frozen-lockfile
       - run: pnpm npm:release-check
+      # Under CI the Rust database tests refuse to skip, and they read only `DATABASE_URL_TEST`.
+      # Scoping it to this step leaves the npm check on the database it has always used.
       - run: pnpm rust:release-check
+        env:
+          DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test_packed
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
