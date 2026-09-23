@@ -3,12 +3,12 @@ title: Batch handlers
 description: Process several tasks of one type through a shared application call while preserving per-task outcomes.
 ---
 
-Use TypeScript's `Worker.handleBatch`, Go's `Worker.HandleBatch`, or Python's
-`Worker.handle_batch` when one application call can process several tasks more efficiently. Each
-member keeps its own durable identity, lease, fence, retry budget, checkpoints, progress, and
+Use TypeScript's `Worker.handleBatch`, Go's `Worker.HandleBatch`, Python's `Worker.handle_batch`, or
+Rust's `Worker::handle_batch` when one application call can process several tasks more efficiently.
+Each member keeps its own durable identity, lease, fence, retry budget, checkpoints, progress, and
 cancellation.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     worker.handleBatch("email.send", { maxSize: 20, lingerMs: 50 }, async (items) => {
@@ -50,6 +50,17 @@ cancellation.
     })
     ```
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    worker.handle_batch(
+        "email.send",
+        BatchOptions { max_size: 20, linger: Duration::from_millis(50) },
+        |items: Vec<BatchItem<Value>>| async move {
+            items.iter().map(|_| BatchResult::Succeeded(json!({ "sent": true }))).collect()
+        },
+    );
+    ```
+  </Tab>
 </Tabs>
 
 `maxSize` caps the group, while `lingerMs` lets a partial group wait briefly for peers. Claims still
@@ -66,6 +77,10 @@ the same `succeeded` and `failed` statuses. Each item carries a `BatchHandlerCon
 Go passes `MaxSize` and `Linger` through `BatchHandlerOptions`. Its callback returns positional
 `BatchSucceeded` or `BatchFailed` values, and each item carries a `BatchHandlerContext` with its
 standard cancellation context, checkpoint operation, `GetProgress`, and `SetProgress`.
+
+Rust passes `max_size` and `linger` through `BatchOptions`. Its callback receives `BatchItem`
+values, each with a payload and its own `HandlerContext`. It returns one `BatchResult::Succeeded` or
+`BatchResult::Failed` per item, in item order.
 
 Workhorse records each shared invocation before the callback starts. The task drawer shows the
 batch size and links the other members. If the shared callback fails, the drawer identifies that

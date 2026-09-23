@@ -221,7 +221,9 @@ const allowedTypeScriptOnlyExamples: Partial<Record<(typeof crossSdkGuidePaths)[
 for (const guidePath of crossSdkGuidePaths) {
   const source = readFileSync(resolve(siteRoot, "content/docs", guidePath), "utf8");
   const languageTabs = [
-    ...source.matchAll(/<Tabs items=\{\["TypeScript", "Python", "Go"\]\}>([\s\S]*?)<\/Tabs>/g),
+    ...source.matchAll(
+      /<Tabs items=\{\["TypeScript", "Python", "Go"(?:, "Rust")?\]\}>([\s\S]*?)<\/Tabs>/g,
+    ),
   ];
   if (languageTabs.length === 0) throw new Error(`${guidePath} has no cross-SDK feature examples`);
   const typeScriptFenceCount = [...source.matchAll(/^\s*```ts(?:\s|$)/gm)].length;
@@ -327,6 +329,103 @@ for (const pattern of examplePatterns) {
     )?.[1];
     if (!code?.trim()) {
       throw new Error(`${title} has no ${tab} example`);
+    }
+  }
+}
+
+// Rust examples live as `// docs:start <name>` regions in `rust/examples/`, where `cargo clippy
+// --all-targets` compiles them in CI. Every `rust` fence in the documentation must equal one region
+// after both lose their common indentation, and every region must appear in some fence, so a page
+// cannot carry Rust the compiler never saw.
+const rustExamplesRoot = resolve(repositoryRoot, "rust/examples");
+const rustRegions = new Map<string, string>();
+for (const name of readdirSync(rustExamplesRoot).filter((entry) => entry.endsWith(".rs"))) {
+  const source = readFileSync(resolve(rustExamplesRoot, name), "utf8");
+  for (const region of source.matchAll(
+    /^[ \t]*\/\/ docs:start (\S+)[ \t]*\n([\s\S]*?)\n[ \t]*\/\/ docs:end[ \t]*$/gm,
+  )) {
+    if (rustRegions.has(region[1]!)) throw new Error(`Rust docs region ${region[1]} is duplicated`);
+    rustRegions.set(region[1]!, dedent(region[2]!));
+  }
+}
+if (rustRegions.size === 0) throw new Error("rust/examples has no documentation regions");
+
+function dedent(code: string): string {
+  const lines = code.split("\n");
+  const indent = Math.min(
+    ...lines.filter((line) => line.trim() !== "").map((line) => line.match(/^ */)![0].length),
+  );
+  return lines.map((line) => (line.trim() === "" ? "" : line.slice(indent))).join("\n");
+}
+
+const usedRustRegions = new Set<string>();
+const regionBySource = new Map([...rustRegions].map(([name, code]) => [code, name]));
+for (const fencePath of goFencePaths) {
+  const source = readFileSync(resolve(repositoryRoot, fencePath), "utf8");
+  const backticks = "`".repeat(3);
+  const declared = [...source.matchAll(new RegExp(`^[ \\t]*${backticks}rust\\b`, "gm"))].length;
+  const fences = [
+    ...source.matchAll(
+      new RegExp(`^([ \\t]*)${backticks}rust\\n([\\s\\S]*?)\\n[ \\t]*${backticks}[ \\t]*$`, "gm"),
+    ),
+  ];
+  if (fences.length !== declared) {
+    throw new Error(`${fencePath} has a Rust fence this check could not read`);
+  }
+  for (const [index, fence] of fences.entries()) {
+    const region = regionBySource.get(dedent(fence[2]!));
+    if (region === undefined) {
+      throw new Error(
+        `${fencePath} Rust example ${index + 1} matches no docs region in rust/examples`,
+      );
+    }
+    usedRustRegions.add(region);
+  }
+}
+for (const name of rustRegions.keys()) {
+  if (!usedRustRegions.has(name)) throw new Error(`Rust docs region ${name} appears on no page`);
+}
+
+// Every tab group that carries Go carries Rust, except where the Rust API the example needs has not
+// landed. Each exclusion names the Issue that removes it, and an exclusion a page no longer needs
+// fails the check.
+const rustPendingPages: Record<string, string> = {
+  "agentic-flow.mdx": "SM-879 durable HandlerContext",
+  "child-tasks.mdx": "SM-879 durable HandlerContext",
+  "dashboard.mdx": "SM-885 dashboard tower::Service",
+  "durable-execution.mdx": "SM-879 durable HandlerContext",
+  "for-ai-agents.mdx": "SM-879 durable HandlerContext",
+  "human-waits.mdx": "SM-879 durable HandlerContext",
+  "progress.mdx": "SM-879 durable HandlerContext",
+  "signals.mdx": "SM-879 durable HandlerContext",
+};
+const rustPendingExamples: Record<string, string> = {
+  "Multi-stage handler with checkpoints and a durable sleep": "SM-879 durable HandlerContext",
+  "Durable agentic flow": "SM-879 durable HandlerContext",
+};
+for (const name of readdirSync(resolve(siteRoot, "content/docs")).filter((entry) =>
+  entry.endsWith(".mdx"),
+)) {
+  const source = readFileSync(resolve(siteRoot, "content/docs", name), "utf8");
+  const sections = name === "examples.mdx" ? examplePatterns : [source];
+  for (const section of sections) {
+    const title = name === "examples.mdx" ? section.match(/^## (.+)$/m)![1]! : undefined;
+    const pending = title === undefined ? rustPendingPages[name] : rustPendingExamples[title];
+    const groups = [...section.matchAll(/<Tabs items=\{\[([^\]]*)\]\}>/g)].map(
+      (match) => match[1]!,
+    );
+    const goGroups = groups.filter((items) => items.includes('"Go"'));
+    const rustGroups = goGroups.filter((items) => items.endsWith('"Go", "Rust"'));
+    const label = title === undefined ? name : `${name} ${title}`;
+    if (pending !== undefined) {
+      if (goGroups.length === 0 || rustGroups.length === goGroups.length) {
+        throw new Error(`${label} no longer needs its pending-Rust exclusion (${pending})`);
+      }
+    } else if (rustGroups.length !== goGroups.length) {
+      throw new Error(`${label} has a tab group with Go but no Rust`);
+    }
+    if (section.split('<Tab value="Rust">').length - 1 !== rustGroups.length) {
+      throw new Error(`${label} lists Rust in a tab group without a Rust tab`);
     }
   }
 }

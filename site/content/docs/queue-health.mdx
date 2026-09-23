@@ -6,7 +6,7 @@ description: Read one bounded snapshot with a verdict and stable reason codes fo
 `Queue.health()` reports backlog depth, lease state, external waits, admission pressure, statistics,
 and retention progress with a `healthy`, `degraded`, or `critical` verdict.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
 
     ```ts
@@ -35,6 +35,17 @@ and retention progress with a `healthy`, `degraded`, or `critical` verdict.
     ```
 
   </Tab>
+  <Tab value="Rust">
+
+    ```rust
+    let health = queue.health().await?;
+    let status = &health["status"];
+    if status["level"] != "healthy" {
+        eprintln!("{}", status["reasons"]);
+    }
+    ```
+
+  </Tab>
 </Tabs>
 
 PostgreSQL reads correctness-sensitive values in one statement, so every exact count describes the
@@ -52,7 +63,7 @@ stalled promotion. Degraded reasons mean the queue still runs while maintenance 
 behind. The reason codes are stable, so alerts can branch on them without parsing prose.
 
 PostgreSQL owns the budgets and returns the applied values under `budgets`. Application sync seeds
-defaults without replacing operator overrides, so TypeScript, Go, Python, the dashboard, and
+defaults without replacing operator overrides, so TypeScript, Go, Python, Rust, the dashboard, and
 `workhorse health --json` all use the same evaluation.
 
 Every client decodes the database response into its language's `QueueHealth` type, preserving the

@@ -13,7 +13,7 @@ The problem: a request creates an order and must guarantee a fulfillment task �
 order commits. Pass your open transaction as the last argument to `enqueue`, and the task and the
 order share one commit or one rollback.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     import { Admin, Pool, Queue } from "@stablemates/workhorse";
@@ -100,6 +100,30 @@ order share one commit or one rollback.
     }
     ```
 
+  </Tab>
+  <Tab value="Rust">
+    ```rust
+    use serde_json::json;
+    use workhorse::deadpool_postgres::Pool;
+    use workhorse::{EnqueueOptions, Queue};
+
+    pub async fn create_order(
+        pool: &Pool,
+        order_id: &str,
+        items: &[String],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut client = pool.get().await?;
+        let transaction = client.transaction().await?;
+        transaction
+            .execute("INSERT INTO orders (id, items) VALUES ($1, $2)", &[&order_id, &items])
+            .await?;
+        Queue::new(&transaction, "orders")
+            .enqueue("order.fulfill", &json!({ "orderId": order_id }), EnqueueOptions::default())
+            .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+    ```
   </Tab>
 </Tabs>
 
@@ -225,7 +249,7 @@ The problem: an invoice run must happen every night at 03:00 with no separate sc
 Declare the schedule in code and synchronize it during deployment; any worker watching the
 namespace fires it.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     // Deployment step: reconcile the namespace to exactly this set.
@@ -347,6 +371,37 @@ namespace fires it.
     ```
 
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    use serde_json::{json, Value};
+    use workhorse::deadpool_postgres::Pool;
+    use workhorse::{
+        run_worker_process, Queue, ScheduleDefinition, ScheduledTask, Worker, WorkerOptions,
+    };
+
+    pub async fn run_billing_worker(pool: Pool) -> Result<(), Box<dyn std::error::Error>> {
+        let queue = Queue::new(pool.clone(), "billing");
+        let mut task = ScheduledTask::new("invoice.generate", json!({ "scope": "due" }));
+        task.queue = Some("billing".into());
+        let schedule = ScheduleDefinition::new("nightly-invoice-run", "0 3 * * *", task);
+        queue.sync_schedules("billing-production", vec![schedule], false).await?;
+
+        let worker = Worker::new(
+            pool,
+            WorkerOptions {
+                queues: vec!["billing".into()],
+                schedule_namespaces: vec!["billing-production".into()],
+                ..Default::default()
+            },
+        )?;
+        worker.handle("invoice.generate", |payload: Value, _context| async move {
+            Ok(json!({ "generated": true, "payload": payload }))
+        });
+        run_worker_process(&worker).await?;
+        Ok(())
+    }
+    ```
+  </Tab>
 </Tabs>
 
 Competing workers cannot double-fire: each occurrence has a durable key from its namespace, name,
@@ -359,7 +414,7 @@ The problem: payment providers redeliver webhooks, and each delivery must produc
 Build the idempotency key from the provider's event ID; a replayed delivery returns the original
 task instead of creating another.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     export async function handleStripeWebhook(event: { id: string; type: string; data: unknown }) {
@@ -447,11 +502,46 @@ task instead of creating another.
     ```
 
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    use serde_json::{json, Value};
+    use workhorse::deadpool_postgres::Pool;
+    use workhorse::{EnqueueOptions, Idempotency, Queue};
+
+    pub struct StripeEvent {
+        pub id: String,
+        pub event_type: String,
+        pub data: Value,
+    }
+
+    pub async fn handle_stripe_webhook(
+        queue: &Queue<Pool>,
+        event: &StripeEvent,
+    ) -> Result<Value, workhorse::Error> {
+        let result = queue
+            .enqueue(
+                "stripe.event",
+                &json!({ "eventId": event.id, "eventType": event.event_type }),
+                EnqueueOptions {
+                    queue: Some("webhooks".into()),
+                    idempotency: Some(Idempotency {
+                        scope: "stripe-webhooks".into(),
+                        ..Idempotency::new(format!("stripe:{}", event.id))
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(json!({ "accepted": result.task_id }))
+    }
+    ```
+  </Tab>
 </Tabs>
 
 An equivalent replay returns the same task ID with no new task, event, or notification — the route
 stays safely retryable end to end. If a request reuses the key with a _different_ payload,
-TypeScript and Python throw `EnqueueIdempotencyConflictError`; Go returns the matching typed error.
+TypeScript and Python throw `EnqueueIdempotencyConflictError`; Go returns the matching typed error;
+Rust returns `Error::EnqueueIdempotencyConflict`.
 No SDK silently drops the difference. The handler still runs at least once, so keep its external
 effects idempotent too.
 
@@ -461,7 +551,7 @@ The problem: a provider outage dead-lettered a batch of tasks, the provider has 
 operator needs to replay exactly those failures — safely, and only once. Dry-run first, then reuse
 one incident request ID across pages so a crashed script can rerun without duplicating work.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     const filter = { queue: "billing", errorName: "ProviderTimeout" };
@@ -584,6 +674,54 @@ one incident request ID across pages so a crashed script can rerun without dupli
     ```
 
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    use workhorse::deadpool_postgres::Pool;
+    use workhorse::{Admin, AdminAudit, BulkRedriveOptions, DeadLetterFilter};
+
+    pub async fn redrive_incident(admin: &Admin<Pool>) -> Result<(), workhorse::Error> {
+        let filter = DeadLetterFilter {
+            queue: Some("billing".into()),
+            error_name: Some("ProviderTimeout".into()),
+            ..Default::default()
+        };
+        let audit = AdminAudit {
+            actor: "reviewer@example.com".into(),
+            reason: "provider incident INC-2041 resolved".into(),
+            request_id: "INC-2041".into(),
+        };
+        let preview = admin
+            .redrive_many(
+                filter.clone(),
+                &audit,
+                BulkRedriveOptions { dry_run: true, limit: 100, cursor: None },
+            )
+            .await?;
+        println!("{} tasks eligible", preview.results.len());
+
+        let mut cursor = None;
+        loop {
+            let page = admin
+                .redrive_many(
+                    filter.clone(),
+                    &audit,
+                    BulkRedriveOptions { dry_run: false, limit: 100, cursor },
+                )
+                .await?;
+            for result in &page.results {
+                println!(
+                    "{:?} {} -> {:?}",
+                    result.status, result.source_task_id, result.target_task_id
+                );
+            }
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                return Ok(());
+            }
+        }
+    }
+    ```
+  </Tab>
 </Tabs>
 
 Each redrive creates a fresh task that copies the queue, type, payload, and retry policy; the failed
@@ -597,7 +735,7 @@ The problem: a customer withdraws an order while its export task is running. Han
 cannot be preempted safely, so cancellation is a durable request each SDK delivers through its
 handler cancellation primitive.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     // Operator side: record who asked and why.
@@ -707,13 +845,53 @@ handler cancellation primitive.
     ```
 
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    use serde::Deserialize;
+    use serde_json::json;
+    use tokio_postgres::Client;
+    use uuid::Uuid;
+    use workhorse::{HandlerError, Queue, Worker};
+
+    #[derive(Deserialize)]
+    struct Export {
+        parts: Vec<String>,
+    }
+
+    async fn upload_part(part: &str) -> Result<(), HandlerError> {
+        println!("uploading {part}");
+        Ok(())
+    }
+
+    pub async fn configure_export(
+        queue: &Queue<Client>,
+        worker: &Worker,
+        task_id: Uuid,
+    ) -> Result<(), workhorse::Error> {
+        queue
+            .cancel(task_id, Some("support@example.com"), Some("customer withdrew the order"))
+            .await?;
+
+        worker.handle("export.build", |export: Export, context| async move {
+            for part in &export.parts {
+                if let Some(reason) = context.cancellation().reason() {
+                    return Err(workhorse::Error::Cancelled(reason).into());
+                }
+                upload_part(part).await?;
+            }
+            Ok(json!({ "exported": true }))
+        });
+        Ok(())
+    }
+    ```
+  </Tab>
 </Tabs>
 
 If the task has not started, PostgreSQL cancels it immediately with no invented attempt history. If
 it is active, the worker's heartbeat delivers the request. TypeScript aborts `context.signal`,
-Python cancels `context.cancellation`, and Go cancels the handler's standard context. A handler that
-ignores that request loses its lease eventually, and recovery materializes the cancellation instead
-of retrying.
+Python cancels `context.cancellation`, Go cancels the handler's standard context, and Rust reports
+it through `context.cancellation()`. A handler that ignores that request loses its lease eventually,
+and recovery materializes the cancellation instead of retrying.
 
 ## Durable agentic flow
 

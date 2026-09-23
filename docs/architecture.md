@@ -674,9 +674,80 @@ example through an external module. Its consumer test writes a separate module w
 pgx stdlib driver.
 
 `scripts/readme-alignment.test.ts` derives SDK support sentences from `support.json` and the Go pgx
-claim from `go/go.mod`. It requires the TypeScript, Python, and Go README code blocks to be verbatim
-excerpts of their release-tested quickstart files. `pnpm check` runs this focused test before the
-repository test suite.
+claim from `go/go.mod`. It derives the Rust claim from `rust-version` in `rust/Cargo.toml`. It
+requires the TypeScript, Python, Go, and Rust README code blocks to be verbatim excerpts of their
+release-tested quickstart files. `pnpm check` runs this focused test before the repository test
+suite.
+
+The Rust crate is `workhorse` in `rust/`, requires Rust 1.89 or newer, and runs on Tokio over
+`tokio-postgres` 0.7 and `deadpool-postgres` 0.14. [ADR
+0074](decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md) records its shape. The sealed
+`Executor` trait covers `tokio_postgres::Client`, `tokio_postgres::Transaction`,
+`deadpool_postgres::Pool`, `deadpool_postgres::Object`, `deadpool_postgres::Transaction`, and a
+reference to any of them. A transaction executor makes every call part of the caller's transaction.
+The client never commits, rolls back, or closes what the caller owns. The crate exports
+`MIN_SCHEMA_VERSION` and `MAX_SCHEMA_VERSION` from `rust/src/sql_catalogue_generated.rs`, and they
+bound the schemas it accepts.
+
+`Queue::new(executor, default_queue)` constructs the client, and `Queue::connect(url,
+default_queue)` opens a `tokio_postgres::Client` without TLS. `Queue` runs
+`Queue::assert_compatible` before its first mutation. The check caches a refusal and retries after a
+driver error. `Queue` exposes `enqueue`, `enqueue_many`, `cancel`, `send_signal`,
+`complete_human_wait`, `health`, `sync_schedules`, `sync_contracts`, `sync_concurrency_policies`,
+`sync_rate_limit_policies`, `sync_budgets`, and the matching policy and budget list methods.
+`EnqueueOptions.max_attempts` defaults to 25, and zero selects that default. `enqueue_many` accepts
+at most 1000 requests. Task dependencies accept 1 through 100 unique prerequisite task IDs. A signal
+payload or human-wait result encodes to at most 65,536 bytes of JSON.
+
+`Admin::new(executor)` and `Admin::connect(url)` expose `list_tasks`, `get_task`,
+`get_task_timeline`, `list_dead_letters`, `redrive`, `redrive_many`, `get_checkpoint`,
+`list_checkpoints`, `get_progress`, `get_wait`, `list_waits`, `list_signal_waits`,
+`list_human_waits`, `list_workers`, `set_worker_paused`, `pause_queue`, `resume_queue`, and
+`purge_queue`. A page limit defaults to 100 and accepts 1 through 1000. A payload view defaults to
+16,384 bytes, accepts 1 through 1,048,576, and accepts at most 50 redaction keys. `AdminAudit`
+carries `actor` of 1 through 200 characters, `reason` of 1 through 2000 characters, and `request_id`
+of 1 through 512 UTF-8 bytes.
+
+`Worker::new(pool, options)` accepts a caller-owned `deadpool_postgres::Pool` and validates
+`WorkerOptions` before it returns. `WorkerOptions::default()` gives the ADR 0072 values.
+`WorkerOptions.queues` defaults to `["default"]`, drops empty names and later duplicates, and must
+keep one name. `worker_id` defaults to the host name, process ID, and a random suffix. `concurrency`
+defaults to 1 and accepts 1 through 100. `lease_duration` defaults to 30 seconds and accepts whole
+milliseconds from 100 milliseconds through 24 hours. `heartbeat_interval` defaults to one third of
+the lease, truncated to a whole millisecond, and must stay positive and shorter than the lease.
+`poll_interval` defaults to 5 seconds when the worker expects a listener and to 250 milliseconds
+otherwise. The worker expects a listener only when `listen_config` is set, `polling_only` is false,
+and the pool permits at least two connections. `maintenance_interval` defaults to 1 second,
+`maintenance_routine_interval` to 60 seconds, and both accept positive whole milliseconds.
+`registry_interval` defaults to 5 seconds and accepts whole milliseconds of at least 100.
+`schedule_namespaces` defaults to empty, rejects empty names, and drops later duplicates.
+`schedule_catchup_limit` defaults to 100 and accepts 1 through 10,000. `shutdown_grace_period`
+defaults to 25 seconds and accepts positive whole milliseconds. `retry_delay` overrides one failed
+attempt's delay and returns `None` to keep the persisted policy. `Worker::new` rejects a pool whose
+maximum size is below 3, because heartbeats reserve one connection beside one claim and one
+settlement. `shared_heartbeats` opts out and sends heartbeat rounds through the shared pool.
+
+`Worker::handle` registers a typed handler for one task type and replaces any earlier one. A payload
+that fails to decode fails the attempt through the task's retry policy. `Worker::handle_batch` takes
+`BatchOptions`. Its `max_size` accepts 1 through 100 and must not exceed the worker's concurrency.
+Its `linger` accepts whole milliseconds from zero through 60 seconds. Both methods panic on an empty
+task type, and `handle_batch` panics on invalid options. `Worker::run(shutdown)` and
+`Worker::run_once` share one execution permit.
+
+When `shutdown` resolves, `Worker::run` stops claiming and drains within `shutdown_grace_period`.
+Handlers still running when grace ends see `CancelReason::Shutdown` and get 250 milliseconds to
+unwind. `run` abandons any that outlive that window and returns `Error::ShutdownIncomplete`. Their
+leases expire, and lease recovery reclaims the tasks. The notification listener reconnects after an
+exponential delay from 100 milliseconds through 5 seconds, and allows 1 second for `UNLISTEN` on
+clean shutdown. `run_worker_process(&worker)` in `rust/src/worker/process.rs` installs `SIGINT` and
+`SIGTERM` handlers, or waits for Ctrl-C on other platforms, and passes that signal as the shutdown
+future. It never exits the process, so the caller chooses the exit code.
+
+`rust/examples/` holds the runnable quickstart, transaction, and dedicated-worker programs.
+`rust/examples/docs.rs` holds the `// docs:start` regions the site embeds. `pnpm rust:clippy`
+compiles every example with `--all-targets`. `site/scripts/check-language-examples.ts` requires each
+Rust fence in `site/content/docs/` and `docs/guides/` to equal one region, and every region to back
+at least one fence.
 
 `support.json` also owns the install commands under its `install` key: `node` is
 `npm install @stablemates/workhorse`, `python` is `pip install stablemates-workhorse`, `go` is

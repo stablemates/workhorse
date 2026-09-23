@@ -1,29 +1,105 @@
 # Workhorse for Rust
 
-The Rust SDK is under construction. [ADR 0074](../docs/decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md)
-fixes its shape, and the Linear issues SM-877 through SM-885 implement it. Until they land, no crate
-here is published and the public API is not stable. SM-877 has landed the `Queue` client, SM-883
-the `Admin` client, SM-878 the `Worker` runtime, SM-885 the embedded dashboard backend, and SM-879
-the durable `HandlerContext`.
+The Rust queue client, operator client, and worker runtime for the Workhorse durable task queue for
+PostgreSQL.
 
-## Target shape
+> **Under construction:** [ADR 0074](../docs/decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md)
+> fixes the crate's shape, and the Linear issues SM-877 through SM-885 implement it. The `Queue`,
+> `Admin`, `Worker`, durable `HandlerContext`, and embedded dashboard have landed. The public API is
+> not stable yet.
 
-The SDK is one crate rooted at this directory. Its library name is `workhorse`, and it follows the
-Python SDK's surface on Tokio.
+An AI agent should read [the Workhorse documentation index](https://workhorse.run/llms.txt) first.
+
+## Install
+
+Crates.io holds only a placeholder until the next release publishes the crate, so add it from the
+repository:
+
+```bash
+cargo add workhorse --git https://github.com/stablemates/workhorse
+cargo add tokio --features macros,rt-multi-thread
+cargo add serde_json
+```
+
+Install the schema once, as a deployment step. The application never installs or migrates it.
+
+```bash
+npx --package @stablemates/workhorse@0.3.0 workhorse schema install
+```
+
+The machine that runs that deployment step needs Node.js 22 or newer. The application itself needs
+no Node.js. Until the crate has a release of its own, use the latest release's schema tool.
+
+Runtime processes verify compatibility instead of changing the schema. Call
+`Queue::assert_compatible` or `Admin::assert_compatible` at startup. A refusal is
+`workhorse::Error::Compatibility`, whose `code` names the reason.
+
+Requires Rust 1.89 or newer and PostgreSQL 15 through 18.
+
+## Run one task
+
+```rust
+use serde_json::{json, Value};
+use workhorse::deadpool_postgres::tokio_postgres::NoTls;
+use workhorse::deadpool_postgres::{Manager, Pool};
+use workhorse::{Admin, EnqueueOptions, Queue, Worker, WorkerOptions};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let url = std::env::var("DATABASE_URL")?;
+    let queue = Queue::connect(&url, "default").await?;
+    let enqueued = queue
+        .enqueue("email.welcome", &json!({ "to": "ada@example.com" }), EnqueueOptions::default())
+        .await?;
+
+    let pool = Pool::builder(Manager::new(url.parse()?, NoTls)).max_size(4).build()?;
+    let worker = Worker::new(pool, WorkerOptions::default())?;
+    worker.handle("email.welcome", |payload: Value, _context| async move {
+        Ok(json!({ "deliveredTo": payload["to"] }))
+    });
+    worker.run_once().await?; // production uses run_worker_process(&worker)
+
+    let admin = Admin::connect(&url).await?;
+    if let Some(task) = admin.get_task(enqueued.task_id).await? {
+        println!("{:?} {}", task.state, task.result.unwrap_or_default());
+    }
+    Ok(())
+}
+```
+
+Handlers receive at-least-once delivery. Use stable provider idempotency keys around external
+effects. `rust/examples/` also holds a transactional enqueue and a dedicated worker process.
+
+## Package boundary
+
+The crate's library name is `workhorse`, and it follows the Python SDK's surface on Tokio.
 
 - `Queue` enqueues, cancels, signals, and synchronizes schedules, policies, budgets, and contracts.
-  It takes an executor, so an open transaction makes the enqueue transactional.
+  `Queue::new` accepts a `tokio_postgres` or `deadpool_postgres` client, pool, or transaction.
+  A transaction makes the enqueue part of your commit.
 - `Worker` takes a `deadpool_postgres::Pool`, registers typed handlers by task type, and runs them
-  under a lease with a shared heartbeat connection.
+  under a lease with a shared heartbeat connection. `run_worker_process` drains it on SIGINT or
+  SIGTERM.
 - `HandlerContext` offers checkpoints, durable sleeps, signal and human waits, child tasks, and
-  progress. PostgreSQL owns every durable decision.
-- `Admin` lists, inspects, and repairs tasks, dead letters, waits, workers, and queues. Every
-  control takes an `AdminAudit`.
+  progress. PostgreSQL owns every durable decision, and an unresolved wait suspends the task.
+- `Admin` lists, inspects, and repairs tasks, dead letters, waits, workers, and queues.
 - The `dashboard` feature adds an embedded dashboard backend. It is a `tower::Service` that axum,
   hyper, or any tower host mounts under its own path.
 - `tracing` spans are always on. The `opentelemetry` feature adds metrics and trace propagation.
 
-## Current state
+The crate never installs or migrates the shared PostgreSQL schema.
+
+## Next
+
+- Follow the [quickstart](https://workhorse.run/docs/quickstart) and deploy
+  [worker processes](https://workhorse.run/docs/worker-processes).
+- Read the [compatibility policy](https://workhorse.run/docs/compatibility).
+- Use the [operations guide](https://workhorse.run/docs/operations) for telemetry, health, and
+  maintenance.
+
+## Development
+
+### Current state
 
 The workspace in the repository-root `Cargo.toml` holds one crate. `rust/` builds the `workhorse`
 package, the one crate ADR 0074 publishes.

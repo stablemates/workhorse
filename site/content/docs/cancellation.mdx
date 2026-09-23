@@ -12,7 +12,7 @@ how quickly it listens.
 
 Call `Queue.cancel` after your application authorizes the actor.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     const result = await queue.cancel(taskId, {
@@ -40,6 +40,12 @@ Call `Queue.cancel` after your application authorizes the actor.
     })
     ```
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    let result =
+        queue.cancel(task_id, Some(&actor.email), Some("customer withdrew the order")).await?;
+    ```
+  </Tab>
 </Tabs>
 
 `requestedBy` and `reason` are audit attribution, nothing more. Workhorse records them but
@@ -60,7 +66,7 @@ What happens next depends on where the task is:
 Pass `ctx.signal` into every API that accepts an `AbortSignal`, and check it between units of
 work before starting another external effect.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     for (const part of payload.parts) {
@@ -85,6 +91,16 @@ work before starting another external effect.
     	if err := uploadPart(ctx, part); err != nil {
     		return nil, err
     	}
+    }
+    ```
+  </Tab>
+  <Tab value="Rust">
+    ```rust
+    for part in &payload.parts {
+        if let Some(reason) = ctx.cancellation().reason() {
+            return Err(workhorse::Error::Cancelled(reason).into());
+        }
+        upload_part(part).await?;
     }
     ```
   </Tab>

@@ -14,7 +14,7 @@ Pass `contracts` through the third `Queue` constructor argument, or through an a
 `queueOptions`. Each task type names a `currentVersion` for newly accepted tasks and retains every
 version that live or redrivable tasks may still carry.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     const contracts = {
@@ -57,11 +57,31 @@ version that live or redrivable tasks may still carry.
     err := queue.SyncContracts(ctx, contracts)
     ```
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    let contracts = BTreeMap::from([(
+        "mail.send".to_string(),
+        TaskTypeContracts {
+            current_version: "mail-current".into(),
+            versions: BTreeMap::from([(
+                "mail-current".to_string(),
+                TaskContractVersion {
+                    payload_schema: json!({ "type": "object", "required": ["recipient"] }),
+                    result_schema: json!({ "type": "object" }),
+                    sensitive_payload_keys: vec!["accessToken".into()],
+                    ..Default::default()
+                },
+            )]),
+        },
+    )]);
+    queue.sync_contracts(&contracts).await?;
+    ```
+  </Tab>
 </Tabs>
 
-Call `queue.syncContracts()` during application startup. Python exposes `sync_contracts`, and Go
-exposes `SyncContracts`. PostgreSQL inserts an immutable document for every version and keeps the
-current version in a separate policy row, so an operator override survives the next deploy.
+Call `queue.syncContracts()` during application startup. Python and Rust expose `sync_contracts`,
+and Go exposes `SyncContracts`. PostgreSQL inserts an immutable document for every version and keeps
+the current version in a separate policy row, so an operator override survives the next deploy.
 
 After synchronization, the TypeScript client caches the selected document for each task type. If an
 operator changes the selected version, PostgreSQL reports the stale selection so the client can

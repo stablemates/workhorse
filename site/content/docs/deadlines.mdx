@@ -14,7 +14,7 @@ again. Mixing them up is the usual source of confusion, so this page keeps them 
 runs while the task is queued, retrying, sleeping on a durable wait, and executing. Use it when
 the result becomes useless at a known time, even if attempts remain.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("price.quote", { quoteId }, { deadline: quoteExpiresAt });
@@ -36,6 +36,17 @@ the result becomes useless at a known time, even if attempts remain.
     }, workhorse.EnqueueOptions{Deadline: &quoteExpiresAt})
     ```
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    queue
+        .enqueue(
+            "price.quote",
+            &json!({ "quoteId": quote_id }),
+            EnqueueOptions { deadline: Some(quote_expires_at), ..Default::default() },
+        )
+        .await?;
+    ```
+  </Tab>
 </Tabs>
 
 After the deadline passes, PostgreSQL refuses new claims for the task. If a handler is active,
@@ -52,7 +63,7 @@ would make the new task fail on arrival.
 Use it when one run must stop consuming resources but a later attempt may still succeed — a
 stuck HTTP call, a wedged subprocess.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("report.build", { reportId }, {
@@ -83,6 +94,21 @@ stuck HTTP call, a wedged subprocess.
     })
     ```
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    queue
+        .enqueue(
+            "report.build",
+            &json!({ "reportId": report_id }),
+            EnqueueOptions {
+                execution_timeout_ms: Some(attempt_timeout_ms),
+                max_attempts: attempt_budget,
+                ..Default::default()
+            },
+        )
+        .await?;
+    ```
+  </Tab>
 </Tabs>
 
 Only real execution spends the budget. If the handler suspends on a
@@ -97,7 +123,8 @@ If attempts remain, PostgreSQL schedules another one under the normal
 ordinary thrown error, so an operator can tell "slow" apart from "broken".
 
 The options compose directly: set `deadline` with `executionTimeoutMs` in TypeScript,
-`deadline` with `execution_timeout_ms` in Python, or `Deadline` with `ExecutionTimeoutMS` in Go.
+`deadline` with `execution_timeout_ms` in Python or Rust, or `Deadline` with `ExecutionTimeoutMS` in
+Go.
 
 Together they bound each attempt by its execution budget and abandon the whole task at the
 business cutoff regardless of attempts left.

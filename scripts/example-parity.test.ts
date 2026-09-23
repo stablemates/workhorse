@@ -48,6 +48,8 @@ function isExampleFile(language: string, relativePath: string): boolean {
   const name = path.basename(relativePath);
   if (language === "go") return name === "main.go";
   if (language === "python") return name.endsWith(".py") && !name.startsWith("test_");
+  // docs.rs holds the regions the documentation site embeds, not a runnable scenario.
+  if (language === "rust") return name.endsWith(".rs") && name !== "docs.rs";
   if (language === "typescript") {
     return (
       /\.(?:mjs|cjs|js|mts|cts|ts)$/.test(name) &&

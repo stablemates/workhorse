@@ -38,7 +38,7 @@ options that Workhorse already enforces:
   filters, and the dashboard task list accept a tag filter, so an operator can see one tenant's work
   at a glance.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     const tenant = "acme";
@@ -88,11 +88,48 @@ options that Workhorse already enforces:
     ```
 
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    let tenant = "acme";
+    queue
+        .sync_concurrency_policies(
+            "workers",
+            &[ConcurrencyPolicyDefinition {
+                queue: "reports".into(),
+                max_active: 40,
+                max_active_per_key: Some(4),
+            }],
+            false,
+        )
+        .await?;
+    queue
+        .sync_budgets(
+            "workers",
+            &[BudgetDefinition { name: tenant.into(), max_active: Some(8), rate: None }],
+            false,
+        )
+        .await?;
+    queue
+        .enqueue(
+            "report.generate",
+            &json!({ "month": "2026-08" }),
+            EnqueueOptions {
+                queue: Some("reports".into()),
+                concurrency_key: Some(tenant.into()),
+                budget: Some(tenant.into()),
+                tags: vec![format!("tenant:{tenant}")],
+                ..Default::default()
+            },
+        )
+        .await?;
+    ```
+  </Tab>
 </Tabs>
 
 Go applications set `ConcurrencyKey`, `Budget`, and `Tags` on `EnqueueOptions` and synchronize
 with `Queue.SyncBudgets`. Python applications set `concurrency_key`, `budget`, and `tags` and
-synchronize with `Queue.sync_budgets` or `AsyncQueue.sync_budgets`.
+synchronize with `Queue.sync_budgets` or `AsyncQueue.sync_budgets`. Rust applications set the same
+snake_case fields and synchronize with `Queue::sync_budgets`.
 
 A queue is a dispatch lane, not a tenant. Tenants share queues, and the key and budget keep them
 fair. A queue per tenant works for a handful of tenants, but it multiplies health rows, worker
