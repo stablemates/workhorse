@@ -73,8 +73,13 @@ impl Inner {
         let task = Arc::new(task);
         let mut beats = self.register_heartbeat(task.id, task.fence_token);
         let token = CancellationToken::default();
-        let context = HandlerContext::new(Arc::clone(&task), token.clone());
-        let future = AssertUnwindSafe(handler(task.payload.clone(), context))
+        let context = HandlerContext::new(
+            Arc::clone(&task),
+            token.clone(),
+            self.pool.clone(),
+            self.worker_id.clone(),
+        );
+        let future = AssertUnwindSafe(handler(task.payload.clone(), context.clone()))
             .catch_unwind()
             .instrument(span.clone());
         tokio::pin!(future);
@@ -127,7 +132,12 @@ impl Inner {
         let result: HandlerResult = result
             .unwrap_or_else(|panic| Err(HandlerError::from_panic(&task.task_type, false, panic)));
 
-        let settled = self.settle(&task, result, expired, rejected, token.reason()).await;
+        // A suspending call settled the task in PostgreSQL, so the handler's return is moot.
+        let settled = if context.suspended() {
+            Ok("suspended")
+        } else {
+            self.settle(&task, result, expired, rejected, token.reason()).await
+        };
         let settled = match settled {
             Err(Error::LeaseLost { .. }) => Ok("lease_lost"),
             other => other,

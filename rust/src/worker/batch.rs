@@ -18,7 +18,10 @@ use uuid::Uuid;
 use super::handler::{self, ErasedHandler};
 use super::{lock, sql, Inner, Worker};
 use crate::telemetry::{Attribute, Histogram};
-use crate::{BatchItem, BatchOptions, BatchResult, Executor, HandlerContext, HandlerError};
+use crate::{
+    BatchHandlerContext, BatchItem, BatchOptions, BatchResult, Executor, HandlerContext,
+    HandlerError,
+};
 
 const MAX_BATCH_SIZE: usize = 100;
 const MAX_BATCH_LINGER: Duration = Duration::from_secs(60);
@@ -118,7 +121,7 @@ impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
             members.push(Member {
                 arrival,
                 arrived: Instant::now(),
-                item: BatchItem { payload, context },
+                item: BatchItem { payload, context: BatchHandlerContext::new(context) },
                 result: sender,
             });
             (arrival, members[0].arrived, members.len() >= self.options.max_size)

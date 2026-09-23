@@ -2,19 +2,20 @@
 mod support;
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use serde_json::{json, Value};
-use support::scratch_database;
+use support::{scratch_database, worker};
 use tokio_postgres::Client;
 use uuid::Uuid;
 use workhorse::contracts::{TaskContractVersion, TaskTypeContracts};
-use workhorse::durable_postgres::{PostgresDurableContext, WaitState};
 use workhorse::policies::{
     BudgetDefinition, ConcurrencyPolicyDefinition, RateLimit, RateLimitPolicyDefinition,
 };
 use workhorse::{
-    CancelStatus, DeliveryOptions, EnqueueOptions, Error, HumanWaitCompletionStatus, Queue,
-    ScheduleCatchupPolicy, ScheduleDefinition, ScheduledTask, SignalDeliveryStatus, TaskState,
+    CancelStatus, DeliveryOptions, EnqueueOptions, Error, HandlerContext, HumanOutcome,
+    HumanWaitCompletionStatus, Queue, ScheduleCatchupPolicy, ScheduleDefinition, ScheduledTask,
+    SignalDeliveryStatus, SignalOutcome, TaskState,
 };
 
 const WORKER: &str = "rust-client-test";
@@ -87,21 +88,22 @@ async fn health_returns_the_queue_health_snapshot() {
 async fn send_signal_delivers_once_and_reports_each_status() {
     let Some(database) = scratch_database("client_signal").await else { return };
     let queue = Queue::connect(database.url(), "rust-signal").await.unwrap();
-    let observer = database.connect().await;
 
-    let task = queue.enqueue("t", &json!({}), EnqueueOptions::default()).await.unwrap();
+    let task = queue.enqueue("wait", &json!({}), EnqueueOptions::default()).await.unwrap();
     let not_waiting = queue
         .send_signal(task.task_id, "approved", &json!({}), DeliveryOptions::new("k0", "ops"))
         .await
         .unwrap();
     assert_eq!(not_waiting.status, SignalDeliveryStatus::NotWaiting);
 
-    let (task_id, fence) = claim(&observer, "rust-signal").await;
-    let context = PostgresDurableContext::new(database.connect().await, task_id, WORKER, fence);
-    assert!(matches!(
-        context.wait_for_signal("approved", 60_000).await.unwrap(),
-        WaitState::Waiting
-    ));
+    let task_id = task.task_id;
+    let worker = worker(&database, "rust-signal");
+    worker.handle("wait", |_: Value, context: HandlerContext| async move {
+        let signal: SignalOutcome<Value> =
+            context.wait_for_signal("approved", Some(Duration::from_secs(60))).await?;
+        Ok(signal.payload)
+    });
+    assert!(worker.run_once().await.unwrap());
 
     let options = DeliveryOptions::new("k1", "ops");
     let payload = json!({"ok": true});
@@ -134,22 +136,23 @@ async fn send_signal_delivers_once_and_reports_each_status() {
 async fn complete_human_wait_completes_once_and_reports_each_status() {
     let Some(database) = scratch_database("client_human_wait").await else { return };
     let queue = Queue::connect(database.url(), "rust-human").await.unwrap();
-    let observer = database.connect().await;
 
-    let task = queue.enqueue("t", &json!({}), EnqueueOptions::default()).await.unwrap();
+    let task = queue.enqueue("wait", &json!({}), EnqueueOptions::default()).await.unwrap();
     let not_waiting = queue
         .complete_human_wait(task.task_id, "review", &json!({}), DeliveryOptions::new("k0", "ann"))
         .await
         .unwrap();
     assert_eq!(not_waiting.status, HumanWaitCompletionStatus::NotWaiting);
 
-    let (task_id, fence) = claim(&observer, "rust-human").await;
-    let context = PostgresDurableContext::new(database.connect().await, task_id, WORKER, fence);
-    let prompt = json!({"question": "ship it?"});
-    assert!(matches!(
-        context.wait_for_human("review", &prompt, 60_000).await.unwrap(),
-        WaitState::Waiting
-    ));
+    let task_id = task.task_id;
+    let worker = worker(&database, "rust-human");
+    worker.handle("wait", |_: Value, context: HandlerContext| async move {
+        let prompt = json!({"question": "ship it?"});
+        let human: HumanOutcome<Value> =
+            context.wait_for_human("review", &prompt, Some(Duration::from_secs(60))).await?;
+        Ok(human.result)
+    });
+    assert!(worker.run_once().await.unwrap());
 
     let options = DeliveryOptions::new("k1", "ann");
     let answer = json!({"approved": true});

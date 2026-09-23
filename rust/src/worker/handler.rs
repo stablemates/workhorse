@@ -8,7 +8,7 @@ use futures_util::future::BoxFuture;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::CancelReason;
+use crate::{BatchHandlerContext, CancelReason, HandlerContext};
 
 /// One task the worker owns under a fenced lease.
 #[non_exhaustive]
@@ -60,27 +60,6 @@ impl CancellationToken {
     pub(crate) fn cancel(&self, reason: CancelReason) {
         let _ = self.reason.set(reason);
         self.token.cancel();
-    }
-}
-
-/// The fenced task and cancellation one handler invocation observes.
-#[derive(Clone, Debug)]
-pub struct HandlerContext {
-    task: Arc<ClaimedTask>,
-    cancellation: CancellationToken,
-}
-
-impl HandlerContext {
-    pub(crate) fn new(task: Arc<ClaimedTask>, cancellation: CancellationToken) -> Self {
-        Self { task, cancellation }
-    }
-
-    pub fn task(&self) -> &ClaimedTask {
-        &self.task
-    }
-
-    pub fn cancellation(&self) -> &CancellationToken {
-        &self.cancellation
     }
 }
 
@@ -146,7 +125,7 @@ pub struct BatchOptions {
 #[derive(Debug)]
 pub struct BatchItem<P> {
     pub payload: P,
-    pub context: HandlerContext,
+    pub context: BatchHandlerContext,
 }
 
 /// One member's explicit outcome, returned by position.

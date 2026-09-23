@@ -26,6 +26,13 @@ pub enum Operation {
     Release,
     RegisterWorker,
     Maintenance,
+    Checkpoint,
+    Sleep,
+    WaitForSignal,
+    WaitForHuman,
+    RunChild,
+    RunChildren,
+    Progress,
 }
 
 impl fmt::Display for Operation {
@@ -46,6 +53,13 @@ impl fmt::Display for Operation {
             Self::Release => "release",
             Self::RegisterWorker => "register worker",
             Self::Maintenance => "maintenance",
+            Self::Checkpoint => "checkpoint",
+            Self::Sleep => "sleep",
+            Self::WaitForSignal => "wait for signal",
+            Self::WaitForHuman => "wait for human",
+            Self::RunChild => "run child",
+            Self::RunChildren => "run children",
+            Self::Progress => "progress",
         })
     }
 }
@@ -183,6 +197,39 @@ pub enum Error {
 impl Error {
     pub(crate) fn invalid(message: impl Into<String>) -> Self {
         Self::InvalidArgument(message.into())
+    }
+
+    /// A copy for a concurrent caller that shared this call; driver errors keep only their text.
+    pub(crate) fn share(&self) -> Self {
+        match self {
+            Self::LeaseLost { task_id, operation } => {
+                Self::LeaseLost { task_id: *task_id, operation: *operation }
+            }
+            Self::Conflict { operation, name } => {
+                Self::Conflict { operation: *operation, name: name.clone() }
+            }
+            Self::LimitExceeded { operation, name } => {
+                Self::LimitExceeded { operation: *operation, name: name.clone() }
+            }
+            Self::AlreadyWaiting { operation, name } => {
+                Self::AlreadyWaiting { operation: *operation, name: name.clone() }
+            }
+            Self::ChildResultLimitExceeded { result_bytes, limit_bytes } => {
+                Self::ChildResultLimitExceeded {
+                    result_bytes: *result_bytes,
+                    limit_bytes: *limit_bytes,
+                }
+            }
+            Self::ProgressRateLimited { retry_after } => {
+                Self::ProgressRateLimited { retry_after: *retry_after }
+            }
+            Self::UnexpectedStatus { operation, status } => {
+                Self::UnexpectedStatus { operation: *operation, status: status.clone() }
+            }
+            Self::Cancelled(reason) => Self::Cancelled(*reason),
+            Self::Suspended => Self::Suspended,
+            other => Self::InvalidArgument(other.to_string()),
+        }
     }
 
     /// The SQLSTATE of a PostgreSQL error, if this is one.

@@ -1,15 +1,4 @@
 {
   "$comment": "protocol/v1 fixtures the Rust lane does not pass yet. Each entry names the Issue that owns the gap. protocol_conformance.rs fails when an unlisted fixture does not pass and when a listed fixture passes.",
-  "fixtures": [
-    {
-      "fixture": "runtime/durable-wait-suspension-and-checkpoint-replay",
-      "issue": "SM-879",
-      "reason": "No Rust durable handler context suspends a task and replays its checkpoints."
-    },
-    {
-      "fixture": "runtime/lease-loss-fences-handler-writes",
-      "issue": "SM-879",
-      "reason": "The writes a lost lease must reject (checkpoint, sleep, sleepUntil, waitForSignal, waitForHuman, runChild and runChildren) are durable-context APIs, which the Rust worker gains in SM-879."
-    }
-  ]
+  "fixtures": []
 }

@@ -25,12 +25,10 @@ describe("Rust parity evidence", () => {
     expect(rustEvidenceProblems(PARITY_TABLES.flat(), state)).toEqual([]);
   });
 
-  it("reads the declared fixtures and the expected-unsupported list", () => {
+  it("reads the declared fixtures and an empty expected-unsupported list", () => {
     expect(state.declared.has("interpreter/matcher-semantics")).toBe(true);
     expect(state.declared.has("failures/undeclared-name")).toBe(true);
-    expect(state.unsupported.get("runtime/durable-wait-suspension-and-checkpoint-replay")).toBe(
-      "SM-879",
-    );
+    expect(state.unsupported.size).toBe(0);
   });
 
   it("rejects a Rust Supported cell that cites a pattern instead of executed evidence", () => {
@@ -87,9 +85,10 @@ describe("Rust parity evidence", () => {
   });
 
   it("rejects a fixture the Rust runner lists as expected unsupported", () => {
-    const [listed, issue] = [...state.unsupported][0]!;
-    expect(rustEvidenceProblems([row({ fixtures: [listed] })], state)).toEqual([
-      `Probe: ${listed} is expected unsupported in Rust (${issue}), so the cell cannot be Supported`,
+    const listed = "runtime/durable-wait-suspension-and-checkpoint-replay";
+    const ledger = { ...state, unsupported: new Map([[listed, "SM-1"]]) };
+    expect(rustEvidenceProblems([row({ fixtures: [listed] })], ledger)).toEqual([
+      `Probe: ${listed} is expected unsupported in Rust (SM-1), so the cell cannot be Supported`,
     ]);
   });
 

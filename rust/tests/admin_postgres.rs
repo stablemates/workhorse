@@ -2,15 +2,18 @@
 mod support;
 
 use chrono::{Duration, Utc};
-use serde_json::json;
-use support::scratch_database;
+use std::sync::{Arc, Mutex};
+use std::time::Duration as StdDuration;
+
+use serde_json::{json, Value};
+use support::{scratch_database, worker};
 use tokio_postgres::{Client, NoTls};
 use uuid::Uuid;
-use workhorse::durable_postgres::{PostgresDurableContext, WaitState};
 use workhorse::{
     Admin, AdminAudit, BulkRedriveOptions, DeadLetterFilter, DeadLetterQuery, EnqueueOptions,
-    Error, ExternalWaitQuery, PayloadStatus, Queue, RedriveStatus, TaskListQuery,
-    TaskPayloadProjection, TaskState, TaskTimelineEntry, TaskTimelineQuery, WaitMode,
+    Error, ExternalWaitQuery, HandlerContext, HumanOutcome, PayloadStatus, Queue, RedriveStatus,
+    SignalOutcome, TaskListQuery, TaskPayloadProjection, TaskState, TaskTimelineEntry,
+    TaskTimelineQuery, WaitMode,
 };
 
 const WORKER: &str = "rust-admin-test";
@@ -249,17 +252,39 @@ async fn admin_reads_checkpoints_waits_and_human_waits() {
     let Some(database) = scratch_database("admin_durable_reads").await else { return };
     let queue = Queue::connect(database.url(), "rust-admin").await.unwrap();
     let admin = Admin::connect(database.url()).await.unwrap();
-    let observer = database.connect().await;
 
-    queue.enqueue("admin.durable", &json!({}), EnqueueOptions::default()).await.unwrap();
-    let (task_id, fence) = claim(&observer, "rust-admin").await;
-    let context = PostgresDurableContext::new(database.connect().await, task_id, WORKER, fence);
-    context.save_checkpoint("fetched", &json!({"rows": 3})).await.unwrap();
-    context.publish_progress(&json!({"done": 1})).await.unwrap();
-    assert!(matches!(
-        context.schedule_timer("cool-down", 60_000).await.unwrap(),
-        WaitState::Waiting
-    ));
+    let worker = worker(&database, "rust-admin");
+    let fence = Arc::new(Mutex::new(None));
+    let seen = Arc::clone(&fence);
+    worker.handle("admin.durable", move |_: Value, context: HandlerContext| {
+        *seen.lock().unwrap() = Some(context.task().fence_token);
+        async move {
+            let rows: Value =
+                context.checkpoint("fetched", || async { Ok(json!({"rows": 3})) }).await?;
+            context.set_progress(&json!({"done": rows["rows"].as_i64().unwrap() - 2})).await?;
+            context.sleep("cool-down", StdDuration::from_secs(60)).await?;
+            Ok(Value::Null)
+        }
+    });
+    worker.handle("admin.signal", |n: i64, context: HandlerContext| async move {
+        let timeout = Some(StdDuration::from_secs(60));
+        let signal: SignalOutcome<Value> =
+            context.wait_for_signal(&format!("approved-{n}"), timeout).await?;
+        Ok(signal.payload)
+    });
+    worker.handle("admin.human", |n: i64, context: HandlerContext| async move {
+        let timeout = Some(StdDuration::from_secs(60));
+        let human: HumanOutcome<Value> =
+            context.wait_for_human("review", &json!({"n": n}), timeout).await?;
+        Ok(human.result)
+    });
+    let task_id = queue
+        .enqueue("admin.durable", &json!({}), EnqueueOptions::default())
+        .await
+        .unwrap()
+        .task_id;
+    assert!(worker.run_once().await.unwrap());
+    let fence = fence.lock().unwrap().expect("the handler ran");
 
     let checkpoint = admin.get_checkpoint(task_id, "fetched").await.unwrap().expect("checkpoint");
     assert_eq!(checkpoint.value, json!({"rows": 3}));
@@ -268,7 +293,7 @@ async fn admin_reads_checkpoints_waits_and_human_waits() {
     assert_eq!(admin.get_checkpoint(task_id, "missing").await.unwrap(), None);
     let progress = admin.get_progress(task_id).await.unwrap().expect("progress");
     assert_eq!(progress.value, json!({"done": 1}));
-    assert_eq!(progress.worker_id, WORKER);
+    assert!(progress.worker_id.starts_with("rust-test-"), "{}", progress.worker_id);
     let wait = admin.get_wait(task_id, "cool-down").await.unwrap().expect("wait");
     assert_eq!(wait.mode, WaitMode::Relative);
     assert_eq!(wait.duration_ms, Some(60_000));
@@ -277,16 +302,13 @@ async fn admin_reads_checkpoints_waits_and_human_waits() {
     let mut signals = Vec::new();
     let mut humans = Vec::new();
     for n in 0..2 {
-        queue.enqueue("admin.signal", &json!({}), EnqueueOptions::default()).await.unwrap();
-        let (task_id, fence) = claim(&observer, "rust-admin").await;
-        let context = PostgresDurableContext::new(database.connect().await, task_id, WORKER, fence);
-        context.wait_for_signal(&format!("approved-{n}"), 60_000).await.unwrap();
-        signals.push(task_id);
-        queue.enqueue("admin.human", &json!({}), EnqueueOptions::default()).await.unwrap();
-        let (task_id, fence) = claim(&observer, "rust-admin").await;
-        let context = PostgresDurableContext::new(database.connect().await, task_id, WORKER, fence);
-        context.wait_for_human("review", &json!({"n": n}), 60_000).await.unwrap();
-        humans.push(task_id);
+        let options = EnqueueOptions::default();
+        let task = queue.enqueue("admin.signal", &json!(n), options.clone()).await.unwrap();
+        assert!(worker.run_once().await.unwrap());
+        signals.push(task.task_id);
+        let task = queue.enqueue("admin.human", &json!(n), options).await.unwrap();
+        assert!(worker.run_once().await.unwrap());
+        humans.push(task.task_id);
     }
     let first =
         admin.list_signal_waits(ExternalWaitQuery { limit: 1, cursor: None }).await.unwrap();
