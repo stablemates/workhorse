@@ -131,14 +131,31 @@ def test_checkpoint_replays_the_saved_value_without_repeating_the_operation(
                 raise RuntimeError("retry after the durable boundary")
             return {"prepared": prepared}
 
-        worker = Worker(
-            worker_pool, worker_id="python-checkpoint-worker", maintenance_interval_ms=100
-        ).handle("checkpoint.replay", handle)
+        def checkpoint_worker() -> Worker:
+            # A worker ticks on its first sweep and, with this interval, never again. A shorter
+            # interval lets a slow first pass tick after the failure, promote the retry, and run
+            # the second attempt itself.
+            return Worker(
+                worker_pool,
+                worker_id="python-checkpoint-worker",
+                maintenance_interval_ms=3_600_000,
+            ).handle("checkpoint.replay", handle)
 
-        assert worker.run_once() is True
-        # The next tick promotes the retry; a dispatch pass between ticks only claims.
-        sleep(0.1)
-        assert worker.run_once() is True
+        assert checkpoint_worker().run_once() is True
+        assert handler_calls == 1
+        eventually(
+            lambda: (
+                worker_connection.execute(
+                    "SELECT state = 'scheduled' AND run_at <= clock_timestamp() "
+                    "FROM workhorse.task_runtime WHERE task_id = %s",
+                    (task_id,),
+                ).fetchone()
+                == (True,)
+            ),
+            "the retry never came due",
+        )
+        # The next worker's first tick promotes the due retry, and its claim replays the checkpoint.
+        assert checkpoint_worker().run_once() is True
 
         outcome = worker_connection.execute(
             "SELECT state, current_attempt, result FROM workhorse.task_outcome WHERE task_id = %s",
