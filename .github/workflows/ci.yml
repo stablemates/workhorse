@@ -80,13 +80,17 @@ jobs:
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: 0.8.9 # Pinned to the uv version in mise.toml.
-      # `sql-catalogues:check` formats the Rust statement catalogue with rustfmt.
+      # `sql-catalogues:check` formats the Rust statement catalogue with rustfmt, and `rust:vuln` asks
+      # cargo for the dependency graph of the root Cargo.lock.
       - uses: actions-rust-lang/setup-rust-toolchain@c8ff772090ab9d00f7f7bd7b388f3c3032282e3b # v1
         with:
           toolchain: 1.89.0 # Pinned to the rust version in mise.toml.
           components: rustfmt
           cache: false
           rustflags: ""
+      - uses: taiki-e/install-action@7623a79cdfecb99d681017af368ca353d9f49bb5 # v2.87.19
+        with:
+          tool: cargo-deny@0.20.2 # Pinned to the cargo-deny version in mise.toml.
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:runtime:dev
       - run: pnpm sql-catalogues:check
@@ -103,6 +107,7 @@ jobs:
       - run: pnpm npm:vuln
       - run: pnpm python:vuln
       - run: pnpm go:vuln
+      - run: pnpm rust:vuln
       - run: pnpm typecheck
 
   unit:

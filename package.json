@@ -121,7 +121,7 @@
     "worktree:remove": "tsx scripts/remove-worktree.ts",
     "worktree:prune": "tsx scripts/prune-worktrees.ts",
     "toolchain:verify": "tsx scripts/verify-toolchain.ts",
-    "check": "pnpm toolchain:verify && pnpm sql-catalogues:check && pnpm dashboard-spec:check && pnpm build:verified && pnpm parity:check && pnpm readme-alignment:check && pnpm format:check && pnpm lint && pnpm npm:vuln && pnpm python:vuln && pnpm go:vuln && pnpm typecheck && pnpm typescript-api:check && pnpm python-api:check && pnpm go-api:check && pnpm cli-surface:check && pnpm telemetry-surface:check && pnpm test && pnpm go:test:race && pnpm test:packed:built && pnpm test:site-smoke:built && pnpm test:demo-smoke:built",
+    "check": "pnpm toolchain:verify && pnpm sql-catalogues:check && pnpm dashboard-spec:check && pnpm build:verified && pnpm parity:check && pnpm readme-alignment:check && pnpm format:check && pnpm lint && pnpm npm:vuln && pnpm python:vuln && pnpm go:vuln && pnpm rust:vuln && pnpm typecheck && pnpm typescript-api:check && pnpm python-api:check && pnpm go-api:check && pnpm cli-surface:check && pnpm telemetry-surface:check && pnpm test && pnpm go:test:race && pnpm test:packed:built && pnpm test:site-smoke:built && pnpm test:demo-smoke:built",
     "db:provision": "tsx scripts/with-env.ts tsx scripts/setup-checkout.ts",
     "db:sweep": "tsx scripts/with-env.ts tsx scripts/sweep-test-databases.ts",
     "db:reset": "pnpm db:reset:dev-primary",
@@ -150,7 +150,8 @@
     "rust:gates": "pnpm rust:format:check && pnpm rust:clippy && pnpm rust:test && pnpm rust:conformance:check",
     "rust:package-check": "tsx scripts/with-env.ts tsx scripts/check-rust-release.ts",
     "rust:release-check": "pnpm rust:gates && pnpm rust:package-check",
-    "rust:clippy": "tsx scripts/with-env.ts cargo clippy --workspace --all-targets --all-features -- -D warnings"
+    "rust:clippy": "tsx scripts/with-env.ts cargo clippy --workspace --all-targets --all-features -- -D warnings",
+    "rust:vuln": "tsx scripts/audit-rust-dependencies.ts"
   },
   "devDependencies": {
     "@opentelemetry/context-async-hooks": "2.11.0",
