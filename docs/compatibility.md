@@ -123,7 +123,8 @@ names, so no equivalent exists on the TypeScript or Python lines.
 
 Each language line fails its build on an advisory in its own dependency tree. `pnpm npm:vuln`
 covers npm, `pnpm python:vuln` covers PyPI, and `pnpm go:vuln` covers the Go module. `pnpm check`
-runs all three, and so does the `static` task in `.github/workflows/ci.yml`.
+runs all three, and so does the `static` task in `.github/workflows/ci.yml`. The Rust crate's
+dependency tree has no scan yet; SM-895 adds one.
 
 `pnpm npm:vuln` runs `pnpm audit --prod` and fails on every advisory it reports, whatever the
 severity. Severity describes the advisory rather than this repository's exposure to it, so a
@@ -281,7 +282,7 @@ version 1 are their compatibility boundary instead. Their version numbers still 
 packages, because every line releases from one commit.
 
 Every release publishes one version to npm, PyPI, and the Go module proxy from one source commit.
-The current release is `0.3.0`. “Public beta” means the release is usable for evaluation and early production adoption without a
+The current release is `0.4.0`. “Public beta” means the release is usable for evaluation and early production adoption without a
 0.x compatibility promise. The label is retired at 1.0.0 and replaced by “stable”; see
 [What SemVer governs](#what-semver-governs).
 
@@ -585,24 +586,26 @@ for the distribution being published.
 
 ### Release train
 
-Every release publishes the same version to npm, PyPI, and the Go module proxy from one source
-commit, in one controlled window, in a fixed order. Dates go into the changelogs before the
+Every release publishes the same version to npm, PyPI, the Go module proxy, and crates.io from one
+source commit, in one controlled window, in a fixed order. Dates go into the changelogs before the
 candidate is cut, and a slipped date means a new candidate. No commit lands on `main` between the
 first tag and the last, so every tag names the candidate commit.
 
-The Rust crate rides the same `v*` tag once `rust/Cargo.toml` carries the train's version; [Rust
-crate](#rust-crate) describes that step.
+The Rust crate has no tag of its own. It rides the npm `v*` tag and publishes after npm, as
+[Rust crate](#rust-crate) describes.
 
 1. Rehearse. The candidate commit's `main` push run must show a green `CI / required`.
    `.github/workflows/release.yml` and `.github/workflows/release-python.yml` are dispatched
    manually with `dry-run` enabled, and every npm and Python archive is downloaded and inspected.
    All nine npm tarballs, the Python wheel, and the Python source distribution are installed in
-   clean consumers, and the Go external consumer is built from the same commit.
+   clean consumers. The Go external consumer and the Rust packaged-crate consumer are built from the
+   same commit.
    Test registries are not part of the rehearsal.
 2. Publish Python first. One distribution is the smallest production test of trusted publishing.
    Its PEP 740 attestations are verified on PyPI before the train continues.
 3. Publish npm second. `@stablemates/workhorse` goes before its eight dependents, and every
-   package's provenance is verified before the train continues.
+   package's provenance is verified. The same run then publishes the Rust crate, and its version is
+   verified on crates.io before the train continues.
 4. Publish Go last. The `go/vX.Y.Z` tag is pushed after the gate passes, and the version is
    verified through the public module proxy.
 
@@ -614,7 +617,8 @@ the remaining stages stay blocked, and the fix ships as a new candidate.
 A published version is never reused. An ordinary defect stays available and receives a higher
 fix. A security, secret, privacy, or legal exposure triggers credential rotation and removal where
 the registry permits it. The response also deprecates the npm release, yanks the PyPI release, or
-retracts the Go version as appropriate. Removal does not make prior public access reversible.
+retracts the Go version as appropriate, and yanks the crates.io version. Removal does not make prior
+public access reversible.
 [`SECURITY.md`](../SECURITY.md) states how to report a vulnerability privately and which versions
 receive fixes.
 
@@ -670,9 +674,9 @@ pipeline.
 ### Rust crate
 
 The Rust SDK publishes one crate, `workhorse`, from `rust/`
-([ADR 0074](decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md)). It is not on the
-release train yet. crates.io holds only the `0.0.0` placeholder that reserved the name. The crate
-joins the train in the release whose `rust/Cargo.toml` carries the train's version.
+([ADR 0074](decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md)). It has no tag of its
+own and publishes from the npm `v*` tag. The crate joined the release train at `0.4.0`. Before that
+release, crates.io held only the `0.0.0` placeholder that reserved the name.
 
 1. Set `version` in `rust/Cargo.toml` to the release version and commit it with the candidate.
 2. Tag `vX.Y.Z`. The build job of `.github/workflows/release.yml` runs `pnpm rust:release-check`.
@@ -698,8 +702,8 @@ or with `cargo owner --add <github-login> workhorse` using a token that carries 
 accept it.
 
 The public repository requires pull requests and `CI / required` on `main`. Outside collaborators
-require workflow approval. The protected `npm` and `pypi` environments require review and prevent
-administrator bypass.
+require workflow approval. The protected `npm`, `pypi`, and `crates-io` environments require review.
+The `npm` and `pypi` environments also prevent administrator bypass.
 
 ### Publication credentials
 

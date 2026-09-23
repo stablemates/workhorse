@@ -1,6 +1,6 @@
 {
   "name": "@stablemates/workhorse-dashboard",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Public beta compatibility facade for the Workhorse dashboard application",
   "homepage": "https://workhorse.run",
   "bugs": {
@@ -84,7 +84,7 @@
     "vite": "^8.3.0"
   },
   "peerDependencies": {
-    "@stablemates/workhorse": ">=0.3.0 <0.4.0",
+    "@stablemates/workhorse": ">=0.4.0 <0.5.0",
     "react": ">=19 <20",
     "react-dom": ">=19 <20",
     "vite": ">=6 <9"

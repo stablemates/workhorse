@@ -4,10 +4,10 @@ import { describe, expect, it } from "vitest";
 import { publishedPackages, repositoryRoot } from "./packages.js";
 import { compatibilityNotice, prose, publicBetaLabel } from "./public-beta-notice.js";
 
-/** The release this repository cuts next: one version on npm, PyPI, and Go from one commit. */
-const releaseVersion = "0.3.0";
-const releaseDate = "2026-09-21";
-const corePeerRange = ">=0.3.0 <0.4.0";
+/** The release this repository cuts next: one version on every registry from one commit. */
+const releaseVersion = "0.4.0";
+const releaseDate = "2026-09-23";
+const corePeerRange = ">=0.4.0 <0.5.0";
 
 /** The published beta. Its entries stay in the changelogs as history and must keep their facts. */
 const betaNpmVersion = "0.1.0-beta.2";
@@ -41,7 +41,7 @@ function changelogEntry(changelog: string, version: string, date: string): strin
   return next === -1 ? body : body.slice(0, next);
 }
 
-describe("the 0.3.0 release", () => {
+describe("the 0.4.0 release", () => {
   it("carries the plain version and peer range in every published manifest", async () => {
     for (const entry of await publishedPackages()) {
       const manifest = JSON.parse(await read(entry.manifest)) as {
@@ -70,10 +70,17 @@ describe("the 0.3.0 release", () => {
     expect(await read("python/uv.lock")).toContain(
       `name = "stablemates-workhorse"\nversion = "${releaseVersion}"`,
     );
+
+    expect(await read("rust/Cargo.toml")).toContain(
+      `name = "workhorse"\nversion = "${releaseVersion}"`,
+    );
+    expect(await read("Cargo.lock")).toContain(`name = "workhorse"\nversion = "${releaseVersion}"`);
   });
 
   it("dates each release entry with the schema version and runtime requirements", async () => {
     const manifest = JSON.parse(await read("support.json")) as SupportManifest;
+    const rustMinimum = /^rust-version = "([^"]+)"$/m.exec(await read("rust/Cargo.toml"))?.[1];
+    expect(rustMinimum).toBeDefined();
     const floors = [
       [
         "CHANGELOG.md",
@@ -84,6 +91,13 @@ describe("the 0.3.0 release", () => {
       ],
       ["python/CHANGELOG.md", [`Python **${manifest.support.python.minimum}** or newer`]],
       ["go/CHANGELOG.md", [`Go **${manifest.support.go.minimum.replace(/\.0$/, "")}** or newer`]],
+      [
+        "rust/CHANGELOG.md",
+        [
+          `Rust **${rustMinimum}** or newer`,
+          `PostgreSQL **${manifest.support.postgres.minimum}** or newer`,
+        ],
+      ],
     ] as const;
 
     for (const [relativePath, requirements] of floors) {
@@ -91,9 +105,10 @@ describe("the 0.3.0 release", () => {
       const entry = prose(changelogEntry(changelog, releaseVersion, releaseDate));
       // An entry states the schema version that release refuses to run below, which is the
       // compatibility gate's floor rather than the migration baseline. 0.2.1 stated v1 because
-      // both were 1 then; 0.3.0 states v18, the floor SM-812 derived from the newest statement
-      // the SDKs call. The number is written here rather than read from the manifest, because a
-      // published entry is immutable and a later release moving the floor must not rewrite it.
+      // both were 1 then; 0.3.0 and 0.4.0 state v18, the floor SM-812 derived from the newest
+      // statement the SDKs call. The number is written here rather than read from the manifest,
+      // because a published entry is immutable and a later release moving the floor must not
+      // rewrite it.
       expect(entry).toContain("**schema v18**");
       expect(entry).toContain("from one source commit");
       for (const requirement of requirements) {
@@ -130,6 +145,7 @@ describe("the public beta line", () => {
       ...(await publishedPackages()).map((entry) => `${entry.location}/README.md`),
       "python/README.md",
       "go/README.md",
+      "rust/README.md",
     ];
 
     for (const relativePath of readmes) {
@@ -160,6 +176,7 @@ describe("the public beta line", () => {
       "CHANGELOG.md",
       "python/CHANGELOG.md",
       "go/CHANGELOG.md",
+      "rust/CHANGELOG.md",
       "go/doc.go",
     ];
 
@@ -173,6 +190,7 @@ describe("the public beta line", () => {
       "CHANGELOG.md",
       "python/CHANGELOG.md",
       "go/CHANGELOG.md",
+      "rust/CHANGELOG.md",
     ];
     for (const relativePath of compatibilitySurfaces) {
       expect(prose(await read(relativePath))).toContain(compatibilityNotice);

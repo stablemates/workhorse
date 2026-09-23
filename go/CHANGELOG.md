@@ -1,12 +1,33 @@
 # Go changelog
 
 `github.com/stablemates/workhorse/go` versions and release notes live here because the Go module
-builds and publishes from its own tag. It carries the version the TypeScript packages and the Python
-distribution carry, because all three tags name one commit.
+builds and publishes from its own tag. It carries the version the TypeScript packages, the Python
+distribution, and the Rust crate carry, because every release tag names one commit.
 
 Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.1.0` the schema
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
+
+## 0.4.0 — 2026-09-23
+
+The npm packages, Python distribution, Go module, and Rust crate release from one source commit.
+
+Requires **schema v18** and Go **1.25** or newer.
+
+**A 0.3.x database upgrades in place.** Run `workhorse schema migrate` from a deployment step before
+any process from this release starts. It applies migration 0024 and leaves the installation at
+schema version 24. The step is additive: it replaces one read function. No table changes, no
+database is dropped, and no data is lost. The compatibility floor stays at version 18.
+
+- Measure row retention lag against the history gate the prune applies. `prune_terminal_tasks_v1`
+  keeps a terminal task until daily history retention passes its `history_through_at`, but queue
+  health counted a row held only by that gate as lag. The measured lag climbed toward a day between
+  history passes, so health read Degraded for most of every day. Migration 0024 replaces
+  `queue_health_v1` so both eligible boundaries apply the prune's predicate. A history pass that
+  stops advancing still shows as task event and attempt history lag.
+- Fit the embedded dashboard Workers table on a laptop viewport without horizontal scrolling. Schedules
+  become a calendar icon with a hover card, the Paused badge moves to the placement line, queues
+  stack one per line, and a long worker name is truncated in the middle with the full name on hover.
 
 ## 0.3.0 — 2026-09-21
 

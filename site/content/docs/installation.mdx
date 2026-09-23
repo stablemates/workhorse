@@ -117,7 +117,7 @@ A Python, Go, or Rust project has no `node_modules` to resolve the binary from, 
 package and the version:
 
 ```bash
-npx --package @stablemates/workhorse@0.3.0 workhorse schema install
+npx --package @stablemates/workhorse@0.4.0 workhorse schema install
 ```
 
 Pin that to the version of `stablemates-workhorse` or `github.com/stablemates/workhorse/go` the
@@ -205,11 +205,11 @@ release instead. Download that asset from the release for the version your appli
 then apply it:
 
 ```bash
-curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.3.0/schema.sql
+curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.4.0/schema.sql
 psql "$DATABASE_URL" -f schema.sql
 ```
 
-The [`v0.3.0` release](https://github.com/stablemates/workhorse/releases/tag/v0.3.0) is the page
+The [`v0.4.0` release](https://github.com/stablemates/workhorse/releases/tag/v0.4.0) is the page
 that carries the file. Change both version numbers together when you pin a different one: the
 schema the file creates is the schema that release's SDK expects.
 
