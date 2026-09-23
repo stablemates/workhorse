@@ -1446,7 +1446,9 @@ describe("retention maintenance", () => {
     );
     await pool.query(
       `UPDATE workhorse.task_outcome
-          SET finished_at = clock_timestamp() - interval '30 days' WHERE task_id = $1`,
+          SET finished_at = clock_timestamp() - interval '30 days',
+              history_through_at = clock_timestamp() - interval '30 days'
+        WHERE task_id = $1`,
       [id],
     );
     await queue.syncRetentionPolicy({
@@ -1471,9 +1473,60 @@ describe("retention maintenance", () => {
       scheduleOccurrenceRetentionDays: 1,
       statisticsRetentionDays: 1,
     });
+    await queue.retainHistory({ force: true });
     const eligible = await queue.health();
     expect(eligible.retentionLagMs.taskIdentity).toBeGreaterThan(0);
     expect(eligible.retentionLagMs.terminalOutcome).toBeGreaterThan(0);
+  });
+
+  it("does not report row lag while history retention still holds the row", async () => {
+    // Workhorse deletes a terminal task only after daily history retention has passed the task's
+    // history. History retention advances in whole days, so a row can pass both row windows hours
+    // before the prune may delete it. Health measures lag only against rows the prune could delete.
+    const id = await queue.enqueue("row-lag-history-gate", {});
+    const task = await queue.claim("retention-health-worker");
+    expect(task?.id).toBe(id);
+    expect(await queue.complete(task!, "retention-health-worker", { done: true })).toBe(true);
+    await pool.query(
+      `UPDATE workhorse.task
+          SET created_at = clock_timestamp() - interval '30 days' WHERE id = $1`,
+      [id],
+    );
+    await pool.query(
+      `UPDATE workhorse.task_outcome
+          SET finished_at = clock_timestamp() - interval '30 days' WHERE task_id = $1`,
+      [id],
+    );
+    await queue.syncRetentionPolicy({
+      taskIdentityRetentionDays: 1,
+      terminalOutcomeRetentionDays: 1,
+      taskEventRetentionDays: 1,
+      attemptHistoryRetentionDays: 1,
+      scheduleOccurrenceRetentionDays: 1,
+      statisticsRetentionDays: 1,
+    });
+    await queue.retainHistory({ force: true });
+
+    const held = await queue.health();
+    expect(held.retentionLagMs.taskIdentity).toBeNull();
+    expect(held.retentionLagMs.terminalOutcome).toBeNull();
+    expect(held.status.reasons.map((reason) => reason.code)).not.toContain("retention-lag");
+    expect((await queue.pruneTerminalStorage({ force: true }))[2]).toMatchObject({
+      phase: "terminal_tasks",
+      rowsAffected: 0,
+    });
+
+    await pool.query(
+      `UPDATE workhorse.task_outcome
+          SET history_through_at = clock_timestamp() - interval '30 days' WHERE task_id = $1`,
+      [id],
+    );
+    const released = await queue.health();
+    expect(released.retentionLagMs.taskIdentity).toBeGreaterThan(0);
+    expect(released.retentionLagMs.terminalOutcome).toBeGreaterThan(0);
+    expect(released.status.reasons).toContainEqual(
+      expect.objectContaining({ code: "retention-lag", category: "taskIdentity" }),
+    );
   });
 
   it("prepares more history days than the snapshot demands over a full preparation interval", async () => {

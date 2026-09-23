@@ -475,6 +475,7 @@ describe("schema installation", () => {
       { version: 21, description: "a claim locks only the row it takes" },
       { version: 22, description: "history staging through pg_temp" },
       { version: 23, description: "a canceled dependent releases its edges" },
+      { version: 24, description: "row retention lag waits for history retention" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
