@@ -7,7 +7,7 @@ description: Store decision context and pause a task until an authenticated oper
 JSON context so an operator can understand the decision, then returns the retained result after the
 handler restarts.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     const review = await context.waitForHuman<
@@ -44,12 +44,27 @@ handler restarts.
     }
     ```
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    let review: Value = context
+        .wait_for_human(
+            "account-review",
+            &json!({ "accountId": account_id, "prompt": "Approve this account?" }),
+            None,
+        )
+        .await?
+        .result;
+    if review["approved"] == true {
+        activate_account(account_id).await?;
+    }
+    ```
+  </Tab>
 </Tabs>
 
 Code before the wait runs again, so wrap earlier effects in a checkpoint or make them idempotent.
 
 Go handlers can pass `ExternalWaitOptions` when the decision needs a shorter lifetime. Python
-handlers pass `timeout_ms` for the same boundary.
+handlers pass `timeout_ms` for the same boundary. Rust handlers pass `Some(duration)` as the timeout.
 
 A declaration that names no timeout gets Workhorse's longest supported wait as its default, so a
 decision nobody answers still closes rather than waiting forever. An earlier task deadline wins over
@@ -75,7 +90,8 @@ cannot overwrite the accepted audit evidence.
 The queue response exposes that accepted decision as `payload`, matching signal delivery.
 
 Go applications complete decisions through `Queue.CompleteHumanWait` with
-`ExternalWaitDelivery`. The result retains the accepted decision and actor.
+`ExternalWaitDelivery`. Rust applications call `Queue::complete_human_wait` with `DeliveryOptions`.
+Both results retain the accepted decision and actor.
 
 `Admin.listHumanWaits` exposes the same paginated projection for custom operator tools. A timeout,
 task deadline, or cancellation closes the decision and makes late completion stale.

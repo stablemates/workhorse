@@ -13,7 +13,7 @@ between `new Worker(queue)` and a clean shutdown.
 serve many types. Each handler receives the payload and a `HandlerContext`, and returns a JSON
 result that becomes the task's durable outcome.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     const worker = new Worker(queue, {
@@ -60,6 +60,20 @@ result that becomes the task's durable outcome.
     err = worker.Run(ctx)
     ```
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    let worker = Worker::new(
+        pool,
+        WorkerOptions {
+            queues: vec!["email".into(), "billing".into()],
+            concurrency: worker_concurrency,
+            ..Default::default()
+        },
+    )?;
+    worker.handle("email.send", |payload: Value, _context| mailer::send(payload));
+    worker.run(shutdown).await?;
+    ```
+  </Tab>
 </Tabs>
 
 `run` loops until you stop it; pass an `AbortSignal` as `worker.run(signal)` to tie its
@@ -102,7 +116,7 @@ accidentally write as a stale owner after the task moves on.
 
 ## The options that matter
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     const worker = new Worker(queue, {
@@ -130,6 +144,20 @@ accidentally write as a stale owner after the task moves on.
     })
     ```
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    let worker = Worker::new(
+        pool,
+        WorkerOptions {
+            queues: vec!["email".into(), "billing".into()],
+            concurrency: worker_concurrency,
+            lease_duration: worker_lease_duration,
+            worker_id: Some("email-worker-1".into()),
+            ..Default::default()
+        },
+    )?;
+    ```
+  </Tab>
 </Tabs>
 
 - **`concurrency`** caps simultaneous handlers in this one `Worker`. Replicas multiply that
@@ -149,7 +177,8 @@ accidentally write as a stale owner after the task moves on.
   [recurring schedules](/docs/schedules).
 
 Python uses `schedule_namespaces` and `schedule_catchup_limit` for the same boundary. Go uses
-`WorkerOptions.ScheduleNamespaces` and `WorkerOptions.ScheduleCatchupLimit`.
+`WorkerOptions.ScheduleNamespaces` and `WorkerOptions.ScheduleCatchupLimit`. Rust sets
+`schedule_namespaces` and `schedule_catchup_limit` on `WorkerOptions`.
 
 Each worker publishes its schedule namespaces with its queue list. The Workers page shows both:
 queues control claims, while schedule namespaces control recurring evaluation.
@@ -166,8 +195,9 @@ worker when work needs a different lease, retry override, schedule namespace, or
 payloads efficiently. Every member still occupies one concurrency slot and keeps its own lease,
 fence, cancellation signal, progress, retry budget, and final result.
 
-The TypeScript `handleBatch`, Python `handle_batch`, and Go `HandleBatch` forms are shown together
-in [Batch handlers](/docs/batch-handlers), including their positional success and failure results.
+The TypeScript `handleBatch`, Python `handle_batch`, Go `HandleBatch`, and Rust `handle_batch` forms
+are shown together in [Batch handlers](/docs/batch-handlers), including their positional success and
+failure results.
 
 The callback must return one ordered outcome per member. Batch contexts omit durable waits,
 signals, human decisions, and child joins because one member cannot suspend independently inside a
@@ -179,7 +209,7 @@ Queue depth and HTTP traffic rarely scale together, so production deployments pu
 their own process. `defineWorkerProcess` describes the adapter and workers; the
 `workhorse worker` CLI loads the compiled definition and adds signal handling and supervision.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     export default defineWorkerProcess({
@@ -213,6 +243,20 @@ their own process. `defineWorkerProcess` describes the adapter and workers; the
     err = worker.Run(ctx)
     ```
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    let worker = Worker::new(
+        pool,
+        WorkerOptions {
+            queues: vec!["email".into(), "billing".into()],
+            concurrency: worker_concurrency,
+            ..Default::default()
+        },
+    )?;
+    worker.handle("email.send", send_email);
+    run_worker_process(&worker).await?;
+    ```
+  </Tab>
 </Tabs>
 
 The process owns its database resources, worker loops, optional probes, and shutdown. Compile
@@ -225,6 +269,10 @@ Go applications create the same boundary with `signal.NotifyContext`, then pass 
 `Worker.Run`. A handler panic becomes a recorded attempt failure, so it does not terminate the
 worker process or prevent later tasks from running.
 
+Rust applications call `run_worker_process`, which drains on `SIGINT` or `SIGTERM`. To own the
+boundary instead, pass any shutdown future to `Worker::run`. A handler panic becomes a recorded
+attempt failure there too.
+
 ## Pause, stop, and drain
 
 Three verbs cover controlled slowdown, and each answers a different situation:
@@ -234,7 +282,7 @@ Three verbs cover controlled slowdown, and each answers a different situation:
 - **`Worker.stop`** drains: no new claims, active handlers run to completion, then `run`
   resolves. On `SIGTERM`, the worker process does this for you.
 - **`Admin.setWorkerPaused`** stores an operator pause in `worker_registry`. TypeScript, Python,
-  and Go workers pick it up on their next registration refresh, so a dashboard — or
+  Go, and Rust workers pick it up on their next registration refresh, so a dashboard — or
   `workhorse admin pause-worker` — can pause a process it does not host. A local resume cannot
   clear an operator pause, and an operator pause dies with the process incarnation it named.
 
@@ -248,9 +296,9 @@ If work must stop durably — surviving worker restarts — pause the queue with
 slot counts are recent observations, not synchronous views of another event loop — treat them as a
 moment-ago snapshot.
 
-TypeScript configures the cadence with `registryIntervalMs`, Python uses `registry_interval_ms`,
-and Go uses `RegistryInterval`. A registration error does not stop dispatch, and the worker keeps
-its last remote-pause decision until a later refresh succeeds.
+TypeScript configures the cadence with `registryIntervalMs`, Python uses `registry_interval_ms`, Go
+uses `RegistryInterval`, and Rust uses `registry_interval`. A registration error does not stop
+dispatch, and the worker keeps its last remote-pause decision until a later refresh succeeds.
 
 Each refresh also records which client library the worker runs, at which version, speaking which
 protocol. A rolling deploy runs more than one build at once by design, so the dashboard shows this

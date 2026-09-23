@@ -4,13 +4,14 @@ description: Install the schema, run your first task, then kill the worker mid-t
 ---
 
 In five minutes you will enqueue a task, run it, and then prove the interesting part: a task that
-survives its own worker being killed. Choose TypeScript, Python, or Go for the application code.
+survives its own worker being killed. Choose TypeScript, Python, Go, or Rust for the application
+code.
 Schema installation uses the Workhorse CLI, which runs on Node.js. Every path also needs a
 PostgreSQL connection string.
 
 ## 1. Install
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
 
     ```bash
@@ -38,6 +39,21 @@ PostgreSQL connection string.
     runs on Node.js.
 
   </Tab>
+  <Tab value="Rust">
+
+    ```bash
+    cargo add workhorse --git https://github.com/stablemates/workhorse
+    cargo add tokio --features macros,rt-multi-thread
+    cargo add serde_json
+    ```
+
+    Crates.io holds only a placeholder until the next release publishes the crate, so add it from
+    the repository.
+
+    Your application never installs the schema. A deployment step installs it once, and that step
+    runs on Node.js.
+
+  </Tab>
 </Tabs>
 
 ## 2. Install the schema
@@ -52,14 +68,15 @@ A TypeScript project runs the binary it already depends on:
 npm exec --no -- workhorse schema install
 ```
 
-A Python or Go project has no `node_modules` to resolve that binary from, so it names the version
-instead — the same version as the SDK it installed above:
+A Python, Go, or Rust project has no `node_modules` to resolve that binary from, so it names the
+version instead — the same version as the SDK it installed above:
 
 ```bash
 npx --package @stablemates/workhorse@0.3.0 workhorse schema install
 ```
 
-That step runs on Node.js, even when the application is written in Python or Go.
+That step runs on Node.js, even when the application is written in Python, Go, or
+Rust.
 [Installation](/docs/installation) explains why the two forms differ, and
 [Compatibility](/docs/compatibility) names the version.
 
@@ -80,7 +97,7 @@ installing anything.
 A `Queue` accepts work; a `Worker` with a matching handler runs it. This example keeps both in one
 file so you can watch the whole lifecycle.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     import { Admin, Pool, Queue, Worker } from "@stablemates/workhorse";
@@ -197,12 +214,43 @@ file so you can watch the whole lifecycle.
     ```
 
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    use serde_json::{json, Value};
+    use workhorse::deadpool_postgres::tokio_postgres::NoTls;
+    use workhorse::deadpool_postgres::{Manager, Pool};
+    use workhorse::{Admin, EnqueueOptions, Queue, Worker, WorkerOptions};
+
+    #[tokio::main]
+    async fn main() -> Result<(), Box<dyn std::error::Error>> {
+        let url = std::env::var("DATABASE_URL")?;
+        let queue = Queue::connect(&url, "default").await?;
+        let enqueued = queue
+            .enqueue("email.welcome", &json!({ "to": "ada@example.com" }), EnqueueOptions::default())
+            .await?;
+
+        let pool = Pool::builder(Manager::new(url.parse()?, NoTls)).max_size(4).build()?;
+        let worker = Worker::new(pool, WorkerOptions::default())?;
+        worker.handle("email.welcome", |payload: Value, _context| async move {
+            Ok(json!({ "deliveredTo": payload["to"] }))
+        });
+        worker.run_once().await?; // production uses run_worker_process(&worker)
+
+        let admin = Admin::connect(&url).await?;
+        if let Some(task) = admin.get_task(enqueued.task_id).await? {
+            println!("{:?} {}", task.state, task.result.unwrap_or_default());
+        }
+        Ok(())
+    }
+    ```
+  </Tab>
 </Tabs>
 
 Each example reads the durable outcome after the worker records state `succeeded`. That record is
 queryable evidence, not a log line — it stays after the process exits. The Python and Go examples
 read the shared projection directly to keep the quickstart to one dependency; both languages also
-ship `Admin` clients for the same operator reads.
+ship `Admin` clients for the same operator reads. The Rust example reads the outcome through its
+`Admin` client.
 
 ## 4. Kill the worker. The task finishes anyway.
 
@@ -273,7 +321,7 @@ interruption, and the boundaries you name are the parts that never repeat.
 In a real application, enqueue rarely stands alone. Pass your open transaction as the last
 argument and the task commits — or rolls back — with your business write.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     const client = await pool.connect();
@@ -333,6 +381,27 @@ argument and the task commits — or rolls back — with your business write.
     }
     ```
 
+  </Tab>
+  <Tab value="Rust">
+    ```rust
+    use serde_json::json;
+    use workhorse::deadpool_postgres::Pool;
+    use workhorse::{EnqueueOptions, Queue};
+
+    pub async fn create_order(
+        pool: &Pool,
+        order_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut client = pool.get().await?;
+        let transaction = client.transaction().await?;
+        transaction.execute("INSERT INTO orders (id) VALUES ($1)", &[&order_id]).await?;
+        Queue::new(&transaction, "default")
+            .enqueue("order.fulfill", &json!({ "orderId": order_id }), EnqueueOptions::default())
+            .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+    ```
   </Tab>
 </Tabs>
 

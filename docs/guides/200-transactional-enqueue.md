@@ -71,14 +71,32 @@ err = tx.Commit(ctx)
 `NewSQLExecutor` does the same for the standard library, and accepts a `*sql.Tx`. Either way the
 queue reads and writes through the handle you passed, so your commit covers the task.
 
+## With tokio-postgres
+
+Rust has no transaction argument either. `Queue::new` accepts a `tokio_postgres` client or
+transaction, or their `deadpool_postgres` counterparts. Pass it the transaction:
+
+```rust
+let transaction = client.transaction().await?;
+transaction.execute("INSERT INTO account (id, email) VALUES ($1, $2)", &[&id, &email]).await?;
+Queue::new(&transaction, "default")
+    .enqueue("account.created", &json!({ "accountId": id }), EnqueueOptions::default())
+    .await?;
+transaction.commit().await?;
+```
+
+If an error returns before `commit`, dropping the transaction rolls it back, and the task goes
+with your row.
+
 ## With an ORM provider
 
 If your TypeScript application talks to PostgreSQL through an ORM, use that ORM's Workhorse
-package instead of managing a raw client next to it. Python and Go have no equivalent package, so
-they pass their own connection or transaction as the sections above show. Each provider wraps the database object you
-already own and exposes `forTransaction`, which returns a `Queue` bound to your open
-transaction. The provider never commits, rolls back, or closes that transaction — your ORM
-stays in charge, and Workhorse rides along on the transaction's own connection.
+package instead of managing a raw client next to it. Python, Go, and Rust have no equivalent
+package, so they pass their own connection or transaction as the sections above show. Each
+provider wraps the database object you already own and exposes `forTransaction`, which returns a
+`Queue` bound to your open transaction. The provider never commits, rolls back, or closes that
+transaction — your ORM stays in charge, and Workhorse rides along on the transaction's own
+connection.
 
 Drizzle, with `createDrizzleAdapter` from `@stablemates/workhorse-drizzle`:
 

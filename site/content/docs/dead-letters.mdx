@@ -10,8 +10,8 @@ redrive: Workhorse keeps the failed task as immutable evidence and creates a new
 an audit trail linking the two.
 
 The operator client stays separate from application enqueueing in every SDK. TypeScript constructs
-`Admin` with a pool, Python uses `Admin` or `AsyncAdmin`, and Go calls `NewAdmin` with a
-caller-owned pgx or `database/sql` executor.
+`Admin` with a pool, Python uses `Admin` or `AsyncAdmin`, Go calls `NewAdmin` with a
+caller-owned pgx or `database/sql` executor, and Rust uses `Admin::connect` or `Admin::new`.
 
 ## List terminal failures
 
@@ -19,7 +19,7 @@ caller-owned pgx or `database/sql` executor.
 active indexes. Dead-letter growth does not enlarge the dispatch indexes, although database load
 and storage health can still affect both paths.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     const page = await admin.listDeadLetters({
@@ -48,6 +48,22 @@ and storage health can still affect both paths.
     })
     ```
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    let finished_after = Utc.with_ymd_and_hms(2026, 8, 12, 9, 0, 0).unwrap();
+    let page = admin
+        .list_dead_letters(DeadLetterQuery {
+            filter: DeadLetterFilter {
+                queue: Some("billing".into()),
+                error_name: Some("ProviderTimeout".into()),
+                finished_after: Some(finished_after),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .await?;
+    ```
+  </Tab>
 </Tabs>
 
 Filters cover `queue`, `type`, `tags` (every supplied tag must match), `errorName`,
@@ -60,7 +76,7 @@ cursor pages by immutable finish time and task identity, so pages stay stable wh
 `Admin.redrive` requires the actor, reason, and a stable request
 ID. Workhorse records attribution; your operator layer must authorize the actor before calling.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     const result = await admin.redrive(sourceTaskId, {
@@ -81,6 +97,16 @@ ID. Workhorse records attribution; your operator layer must authorize the actor 
     result, err := admin.Redrive(ctx, sourceTaskID, workhorse.AdminAudit{
     	Actor: actor.Email, Reason: "provider incident resolved", RequestID: incidentID,
     })
+    ```
+  </Tab>
+  <Tab value="Rust">
+    ```rust
+    let audit = AdminAudit {
+        actor: actor.email.clone(),
+        reason: "provider incident resolved".into(),
+        request_id: incident_id.into(),
+    };
+    let result = admin.redrive(source_task_id, &audit).await?;
     ```
   </Tab>
 </Tabs>
@@ -108,7 +134,7 @@ become durable payload — operator views still get safe diagnostics.
 `Admin.redriveMany` processes a bounded page of matching failures in
 stable order. Start with a dry run:
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     const filter = { queue: "billing", errorName: "ProviderTimeout" };
@@ -135,6 +161,30 @@ stable order. Start with a dry run:
     	DryRun: true, Limit: pageSize,
     })
     page, err := admin.RedriveMany(ctx, filter, audit, workhorse.BulkRedriveOptions{Limit: pageSize})
+    ```
+  </Tab>
+  <Tab value="Rust">
+    ```rust
+    let filter = DeadLetterFilter {
+        queue: Some("billing".into()),
+        error_name: Some("ProviderTimeout".into()),
+        ..Default::default()
+    };
+    let audit = AdminAudit {
+        actor: actor.email.clone(),
+        reason: "provider incident resolved".into(),
+        request_id: incident_id.into(),
+    };
+    let preview = admin
+        .redrive_many(
+            filter.clone(),
+            &audit,
+            BulkRedriveOptions { dry_run: true, limit: page_size, ..Default::default() },
+        )
+        .await?;
+    let page = admin
+        .redrive_many(filter, &audit, BulkRedriveOptions { limit: page_size, ..Default::default() })
+        .await?;
     ```
   </Tab>
 </Tabs>

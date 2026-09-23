@@ -1,30 +1,39 @@
 {
-  "languages": ["typescript", "python", "go"],
+  "languages": ["typescript", "python", "go", "rust"],
   "scenarios": {
     "quickstart": {
       "typescript": { "file": "typescript/examples/quickstart.mjs" },
       "python": { "file": "python/examples/quickstart.py" },
-      "go": { "file": "go/examples/quickstart/main.go" }
+      "go": { "file": "go/examples/quickstart/main.go" },
+      "rust": { "file": "rust/examples/quickstart.rs" }
     },
     "transaction": {
       "typescript": { "file": "typescript/examples/transaction.mjs" },
       "python": { "file": "python/examples/async_enqueue.py" },
-      "go": { "file": "go/examples/transaction/main.go" }
+      "go": { "file": "go/examples/transaction/main.go" },
+      "rust": { "file": "rust/examples/transaction.rs" }
     },
     "dedicated-worker": {
       "typescript": { "file": "typescript/examples/dedicated-worker.mjs" },
       "python": { "file": "python/examples/dedicated_worker.py" },
-      "go": { "file": "go/examples/dedicated-worker/main.go" }
+      "go": { "file": "go/examples/dedicated-worker/main.go" },
+      "rust": { "file": "rust/examples/dedicated_worker.rs" }
     },
     "orchestration": {
       "typescript": { "file": "typescript/examples/orchestration.mjs" },
       "python": { "file": "python/examples/lifecycle.py" },
-      "go": { "file": "go/examples/orchestration/main.go" }
+      "go": { "file": "go/examples/orchestration/main.go" },
+      "rust": { "file": "rust/examples/orchestration.rs" }
     },
     "demo-worker": {
       "typescript": { "file": "typescript/examples/demo-worker.mjs" },
       "python": { "file": "python/examples/demo_worker.py" },
-      "go": { "file": "go/examples/demo-worker/main.go" }
+      "go": { "file": "go/examples/demo-worker/main.go" },
+      "rust": {
+        "exclusion": {
+          "reason": "The demo runs no Rust worker, so there is no Rust demo-worker example."
+        }
+      }
     },
     "agentic-flow": {
       "typescript": { "file": "typescript/examples/agentic-flow.mjs" },
@@ -36,6 +45,11 @@
       "go": {
         "exclusion": {
           "reason": "Go has no agentic-flow example; the TypeScript file is the current composition."
+        }
+      },
+      "rust": {
+        "exclusion": {
+          "reason": "Rust has no agentic-flow example; the TypeScript file is the current composition."
         }
       }
     },
@@ -49,6 +63,11 @@
       "go": {
         "exclusion": {
           "reason": "Go Worker uses goroutines, so there is no separate async-worker example."
+        }
+      },
+      "rust": {
+        "exclusion": {
+          "reason": "Rust Worker is already asynchronous on Tokio, so there is no separate async-worker example."
         }
       }
     }

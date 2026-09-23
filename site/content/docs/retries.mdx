@@ -14,7 +14,7 @@ when the next attempt runs, and what survives in between.
 a thrown error or a crashed worker's expired lease — spends one. When the budget is gone,
 the database deletes the runtime row and writes an immutable failed outcome.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("provider.sync", { accountId }, { maxAttempts: 5 });
@@ -36,6 +36,17 @@ the database deletes the runtime row and writes an immutable failed outcome.
     }, workhorse.EnqueueOptions{MaxAttempts: 5})
     ```
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    queue
+        .enqueue(
+            "provider.sync",
+            &json!({ "accountId": account_id }),
+            EnqueueOptions { max_attempts: 5, ..Default::default() },
+        )
+        .await?;
+    ```
+  </Tab>
 </Tabs>
 
 The budget check happens in SQL, always. A worker override can change retry timing, but no
@@ -49,7 +60,7 @@ Retrying instantly is usually wrong: if a provider is down, hammering it just bu
 PostgreSQL validates it at enqueue time. Pending keyed debounce may replace that definition before
 dispatch. Three shapes exist:
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     const jitter = { type: "decorrelated-jitter", baseDelayMs: 1_000, maxDelayMs: 60_000 };
@@ -71,6 +82,23 @@ dispatch. Three shapes exist:
     _, err := queue.Enqueue(ctx, "provider.sync", map[string]any{
     	"accountId": accountID,
     }, workhorse.EnqueueOptions{RetryPolicy: jitter, MaxAttempts: 5})
+    ```
+  </Tab>
+  <Tab value="Rust">
+    ```rust
+    let jitter =
+        json!({ "type": "decorrelated-jitter", "baseDelayMs": 1_000, "maxDelayMs": 60_000 });
+    queue
+        .enqueue(
+            "provider.sync",
+            &json!({ "accountId": account_id }),
+            EnqueueOptions {
+                retry_policy: jitter.as_object().cloned(),
+                max_attempts: 5,
+                ..Default::default()
+            },
+        )
+        .await?;
     ```
   </Tab>
 </Tabs>

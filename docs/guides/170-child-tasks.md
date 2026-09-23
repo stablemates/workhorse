@@ -57,6 +57,23 @@ results, err := handler.RunChildren([]workhorse.ChildTaskRequest{
 })
 ```
 
+Rust handlers pass `ChildTaskRequest` values to `run_children`. The set method returns a map from
+each name to a `ChildOutcome`, whose `Succeeded`, `Failed`, and `Canceled` variants cover every
+terminal state.
+
+```rust
+let results = context
+    .run_children(vec![
+        ChildTaskRequest::new("fraud", "orders.check-fraud", &order)?,
+        ChildTaskRequest::new("inventory", "orders.reserve", &order)?,
+    ])
+    .await?;
+
+if let Some(ChildOutcome::Failed(error)) = results.get("fraud") {
+    return Ok(json!({ "accepted": false, "reason": error.message }));
+}
+```
+
 An empty set returns immediately. A non-empty set suspends the parent once, and PostgreSQL releases
 it only after every child reaches a terminal state. A failed or canceled child stays in the returned
 set, so the parent decides its own result.

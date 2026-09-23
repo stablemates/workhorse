@@ -43,7 +43,7 @@ Choose the host for your application's language. Each host serves the browser bu
 dashboard procedures under `/workhorse`, checks schema compatibility after authorization, and
 never installs or migrates the schema.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     `createDashboardHost` accepts a caller-owned database pool and returns a Fetch-native handler.
 
@@ -119,6 +119,30 @@ never installs or migrates the schema.
     	return err
     }
     http.Handle("/workhorse/", operator)
+    ```
+
+  </Tab>
+  <Tab value="Rust">
+    `dashboard::handler` returns a `tower::Service` over a caller-owned Workhorse executor. Enable
+    the crate's `dashboard` feature, then nest the service in any tower-based router.
+
+    ```rust
+    use workhorse::dashboard::{self, Authorization, DashboardOptions, Principal};
+
+    let authorize = dashboard::authorize(|request| {
+        let session = application_admin_session(request);
+        async move {
+            match session {
+                Some(username) => Authorization::Principal(Principal { actor: username }),
+                None => Authorization::Unauthenticated,
+            }
+        }
+    });
+    let mut options = DashboardOptions::new(pool, authorize);
+    options.path = "/workhorse".into();
+    options.environment = "production".into();
+    let operator = dashboard::handler(options)?;
+    let app = axum::Router::new().nest_service("/workhorse", operator);
     ```
 
   </Tab>

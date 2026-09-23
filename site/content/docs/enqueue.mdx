@@ -15,7 +15,7 @@ batch, and target a named queue.
 returns its ID. Without `runAt`, PostgreSQL places the task in `ready` and a worker can claim it
 immediately. A future `runAt` places it in `scheduled` until promotion moves it to `ready`.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("email.send", { to: "person@example.com" });
@@ -44,6 +44,24 @@ immediately. A future `runAt` places it in `scheduled` until promotion moves it 
     ```
 
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    queue
+        .enqueue("email.send", &json!({ "to": "person@example.com" }), EnqueueOptions::default())
+        .await?;
+    queue
+        .enqueue(
+            "invoice.remind",
+            &json!({ "invoiceId": invoice_id }),
+            EnqueueOptions {
+                queue: Some("billing".into()),
+                run_at: Some(reminder_date),
+                ..Default::default()
+            },
+        )
+        .await?;
+    ```
+  </Tab>
 </Tabs>
 
 `runAt` is a not-before boundary, not an appointment. If someone pauses the queue, or workers
@@ -51,7 +69,7 @@ become unavailable, a worker claims the task later than the boundary — never e
 
 `EnqueueOptions` carries everything else a task can be born with:
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("report.generate", { month: "2026-08" }, {
@@ -77,6 +95,26 @@ become unavailable, a worker claims the task later than the boundary — never e
     	})
     ```
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    queue
+        .enqueue(
+            "report.generate",
+            &json!({ "month": "2026-08" }),
+            EnqueueOptions {
+                queue: Some("reports".into()),
+                tags: vec!["tenant:acme".into()],
+                concurrency_key: Some("acme".into()),
+                priority: 10,
+                max_attempts: 5,
+                deadline: Some(end_of_month),
+                execution_timeout_ms: Some(120_000),
+                ..Default::default()
+            },
+        )
+        .await?;
+    ```
+  </Tab>
 </Tabs>
 
 Each option is owned by its own page — [retries](/docs/retries), [deadlines](/docs/deadlines),
@@ -90,9 +128,10 @@ no window where one exists without the other.
 
 Each language hands it over differently. TypeScript passes the transaction client as the fourth
 argument to `enqueue`. Python builds a `Queue` on the connection whose transaction is open. Go wraps
-the transaction in an executor and builds a `Queue` around that.
+the transaction in an executor and builds a `Queue` around that. Rust builds a `Queue` on the open
+`tokio_postgres` transaction.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     await client.query("BEGIN");
@@ -117,13 +156,24 @@ the transaction in an executor and builds a `Queue` around that.
     err = tx.Commit(ctx)
     ```
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    let transaction = client.transaction().await?;
+    transaction.execute("INSERT INTO account (id, email) VALUES ($1, $2)", &[&id, &email]).await?;
+    Queue::new(&transaction, "default")
+        .enqueue("account.created", &json!({ "accountId": id }), EnqueueOptions::default())
+        .await?;
+    transaction.commit().await?;
+    ```
+  </Tab>
 </Tabs>
 
 TypeScript's fourth argument accepts anything with a pg-compatible `query` method, so the ORM
 adapters pass their own transaction handles the same way. Go's `NewPGXExecutor` accepts a `pgx.Tx`
-and `NewSQLExecutor` accepts a `*sql.Tx`. Python's `Worker` needs its own connection in autocommit
-mode and raises `ValueError` otherwise, so keep the connection you enqueue on separate from the one
-a worker runs on.
+and `NewSQLExecutor` accepts a `*sql.Tx`. Rust's `Queue::new` accepts a `tokio_postgres` client or
+`Transaction`, or their `deadpool_postgres` counterparts. Python's `Worker` needs its own connection
+in autocommit mode and raises `ValueError` otherwise, so keep the connection you enqueue on separate
+from the one a worker runs on.
 
 SQLAlchemy applications using its Psycopg dialect can reach that same driver connection through
 `sqlalchemy_connection.connection.driver_connection`. Build the queue inside SQLAlchemy's own
@@ -157,7 +207,7 @@ If a single operation produces many tasks — a fan-out to every subscriber, an 
 `queue.enqueueMany`. It validates and writes the whole group in one statement, and it also accepts
 a transaction as its second argument.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     const taskIds = await queue.enqueueMany(recipients.map((recipient) => ({
@@ -185,6 +235,19 @@ a transaction as its second argument.
     taskIDs, err := queue.EnqueueMany(ctx, requests)
     ```
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    let requests = recipients
+        .iter()
+        .map(|recipient| EnqueueRequest {
+            task_type: "email.digest".into(),
+            payload: json!({ "to": recipient.email }),
+            options: EnqueueOptions { queue: Some("mail".into()), ..Default::default() },
+        })
+        .collect();
+    let results = queue.enqueue_many(requests).await?;
+    ```
+  </Tab>
 </Tabs>
 
 Returned IDs preserve input order, and the whole group commits or rolls back together. One call
@@ -207,7 +270,7 @@ dispatch order within one queue; it does not reserve capacity for lower-priority
 
 Whole-queue controls belong to `Admin`, and every mutation carries audit identity:
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     await admin.pauseQueue("billing", { actor, reason, requestId });
@@ -228,6 +291,15 @@ Whole-queue controls belong to `Admin`, and every mutation carries audit identit
     err = admin.ResumeQueue(ctx, "billing", workhorse.AdminAudit{
     	Actor: actor, Reason: reason, RequestID: resumeRequestID,
     })
+    ```
+  </Tab>
+  <Tab value="Rust">
+    ```rust
+    let audit =
+        AdminAudit { actor: actor.into(), reason: reason.into(), request_id: request_id.into() };
+    admin.pause_queue("billing", &audit).await?;
+    let audit = AdminAudit { request_id: resume_request_id.into(), ..audit };
+    admin.resume_queue("billing", &audit).await?;
     ```
   </Tab>
 </Tabs>

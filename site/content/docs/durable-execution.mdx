@@ -15,7 +15,7 @@ first activation finds none, runs the operation, and persists its JSON result un
 current fenced lease. Every later activation finds the value and returns it without running
 the operation again.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     const charge = await ctx.checkpoint("charge", () =>
@@ -53,6 +53,15 @@ the operation again.
     })
     ```
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    let charge: Value = context
+        .checkpoint("charge", || payments::charge(&order.id, format!("charge:{}", order.id)))
+        .await?;
+    let shipment: Value =
+        context.checkpoint("shipment", || logistics::create_shipment(&order.id, &charge)).await?;
+    ```
+  </Tab>
 </Tabs>
 
 If this handler fails while creating the shipment, the retry replays the stored `charge`
@@ -68,7 +77,8 @@ Reusing a checkpoint name with a different value raises `CheckpointConflictError
 silently changing durable evidence.
 
 The synchronous Python worker accepts a regular callable, while Go accepts a function returning a
-JSON value and an error. Replay returns the stored value without invoking either callback again.
+JSON value and an error. Rust accepts a closure that returns a future of `Result<T, HandlerError>`.
+Replay returns the stored value without invoking the callback again.
 
 ## Release the worker slot with a durable wait
 
@@ -84,7 +94,7 @@ The wait drops the lease, frees the worker slot, and places the task in `schedul
 **not** consume an attempt — waiting is normal work, not failure. Repeated sleeps remain part
 of the same logical attempt.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     await ctx.checkpoint("welcome", () => mailer.welcome(payload.to));
@@ -108,6 +118,13 @@ of the same logical attempt.
     followUp, err := handler.Checkpoint("follow-up", func() (any, error) {
     	return mailer.FollowUp(payload.To)
     })
+    ```
+  </Tab>
+  <Tab value="Rust">
+    ```rust
+    let welcome: Value = context.checkpoint("welcome", || mailer::welcome(&trial.to)).await?;
+    context.sleep_until("follow-up-window", trial.follow_up_at).await?;
+    let follow_up: Value = context.checkpoint("follow-up", || mailer::follow_up(&trial.to)).await?;
     ```
   </Tab>
 </Tabs>
@@ -143,7 +160,7 @@ operator code.
 Timers resume because time passed. Signals and human waits resume because another actor supplied a
 JSON value:
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     const event = await ctx.waitForSignal<{ id: string }>("provider-event");
@@ -162,6 +179,15 @@ JSON value:
     review, err := handler.WaitForHuman("operator-review", map[string]any{
     	"eventId": event.(map[string]any)["id"],
     })
+    ```
+  </Tab>
+  <Tab value="Rust">
+    ```rust
+    let event: ProviderEvent = context.wait_for_signal("provider-event", None).await?.payload;
+    let review: Value = context
+        .wait_for_human("operator-review", &json!({ "eventId": event.id }), None)
+        .await?
+        .result;
     ```
   </Tab>
 </Tabs>

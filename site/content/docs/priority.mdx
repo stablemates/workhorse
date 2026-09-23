@@ -6,7 +6,7 @@ description: Run urgent ready tasks before ordinary work while preserving FIFO o
 Set `EnqueueOptions.priority` when tasks in one queue should not all compete at the same rank.
 PostgreSQL claims higher values first, then keeps FIFO order among tasks with the same value.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("invoice.remind", { invoiceId }, { queue: "billing", priority: 10 });
@@ -24,6 +24,17 @@ PostgreSQL claims higher values first, then keeps FIFO order among tasks with th
     _, err := queue.Enqueue(ctx, "invoice.remind", map[string]any{
     	"invoiceId": invoiceID,
     }, workhorse.EnqueueOptions{Queue: "billing", Priority: 10})
+    ```
+  </Tab>
+  <Tab value="Rust">
+    ```rust
+    queue
+        .enqueue(
+            "invoice.remind",
+            &json!({ "invoiceId": invoice_id }),
+            EnqueueOptions { queue: Some("billing".into()), priority: 10, ..Default::default() },
+        )
+        .await?;
     ```
   </Tab>
 </Tabs>

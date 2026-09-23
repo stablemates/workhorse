@@ -48,6 +48,11 @@ function isExampleFile(language: string, relativePath: string): boolean {
   const name = path.basename(relativePath);
   if (language === "go") return name === "main.go";
   if (language === "python") return name.endsWith(".py") && !name.startsWith("test_");
+  // docs.rs holds the regions the documentation site embeds, and agent_playbook.rs is the program
+  // the agent playbook page embeds whole. Neither is a scenario the other languages mirror.
+  if (language === "rust") {
+    return name.endsWith(".rs") && name !== "docs.rs" && name !== "agent_playbook.rs";
+  }
   if (language === "typescript") {
     return (
       /\.(?:mjs|cjs|js|mts|cts|ts)$/.test(name) &&

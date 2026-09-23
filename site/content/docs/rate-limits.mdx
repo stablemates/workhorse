@@ -18,12 +18,13 @@ TypeScript applications call `Queue.syncRateLimitPolicies`. `Queue.listRateLimit
 the persisted typed definitions.
 
 Go applications call `Queue.SyncRateLimitPolicies` through their caller-owned executor.
-`Queue.ListRateLimitPolicies` returns the persisted typed definitions.
+`Queue.ListRateLimitPolicies` returns the persisted typed definitions. Rust applications use
+`Queue::sync_rate_limit_policies` and `Queue::list_rate_limit_policies`.
 
 Python applications call `sync_rate_limit_policies` through `Queue` or `AsyncQueue` on their
 caller-owned connection. `list_rate_limit_policies` returns the persisted typed definitions.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.syncRateLimitPolicies("workers", [{
@@ -49,6 +50,21 @@ caller-owned connection. `list_rate_limit_policies` returns the persisted typed 
     	Rate:   workhorse.RateLimit{Limit: 60, IntervalMS: 60_000, Burst: 10},
     	PerKey: &workhorse.RateLimit{Limit: 5, IntervalMS: 60_000, Burst: 2},
     }})
+    ```
+  </Tab>
+  <Tab value="Rust">
+    ```rust
+    let policies = queue
+        .sync_rate_limit_policies(
+            "workers",
+            &[RateLimitPolicyDefinition {
+                queue: "provider-api".into(),
+                rate: RateLimit { limit: 60, interval_ms: 60_000, burst: 10 },
+                per_key: Some(RateLimit { limit: 5, interval_ms: 60_000, burst: 2 }),
+            }],
+            false,
+        )
+        .await?;
     ```
   </Tab>
 </Tabs>

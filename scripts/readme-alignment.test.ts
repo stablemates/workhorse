@@ -15,7 +15,7 @@ interface SupportManifest {
 interface ReadmeContract {
   readonly example: string;
   readonly exampleLanguage: string;
-  readonly languageSupport: (support: SupportManifest["support"]) => string;
+  readonly languageSupport: (support: SupportManifest["support"], rustVersion: string) => string;
   readonly readme: string;
 }
 
@@ -79,6 +79,12 @@ const contracts: readonly ReadmeContract[] = [
     exampleLanguage: "go",
     languageSupport: (support) => `Go ${support.go.minimum.replace(/\.0$/, "")} or newer`,
   },
+  {
+    readme: "rust/README.md",
+    example: "rust/examples/quickstart.rs",
+    exampleLanguage: "rust",
+    languageSupport: (_support, rustVersion) => `Rust ${rustVersion} or newer`,
+  },
 ];
 
 /**
@@ -92,9 +98,12 @@ describe("SDK README alignment", () => {
   it("derives every language and PostgreSQL support sentence from support.json", async () => {
     const manifest = JSON.parse(await read("support.json")) as SupportManifest;
     const postgresSupport = `PostgreSQL ${versionRange(manifest.support.postgres.tested)}`;
+    // The crate's own rust-version is its minimum, so the README cannot drift from what Cargo enforces.
+    const rustVersion = /^rust-version = "([^"]+)"$/m.exec(await read("rust/Cargo.toml"))?.[1];
+    expect(rustVersion).toBeDefined();
 
     for (const contract of contracts) {
-      const expected = `Requires ${contract.languageSupport(manifest.support)} and ${postgresSupport}.`;
+      const expected = `Requires ${contract.languageSupport(manifest.support, rustVersion!)} and ${postgresSupport}.`;
       expect(prose(await read(contract.readme))).toContain(expected);
     }
   });

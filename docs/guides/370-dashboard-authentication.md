@@ -84,7 +84,29 @@ if err != nil {
 http.Handle("/workhorse/", operator)
 ```
 
-All three hosts serve the same browser bundle and versioned dashboard procedures. The language
+Rust applications return a `Principal` from a `tower::Service` behind the crate's `dashboard`
+feature:
+
+```rust
+use workhorse::dashboard::{self, Authorization, DashboardOptions, Principal};
+
+let authorize = dashboard::authorize(|request| {
+    let session = application_admin_session(request);
+    async move {
+        match session {
+            Some(username) => Authorization::Principal(Principal { actor: username }),
+            None => Authorization::Unauthenticated,
+        }
+    }
+});
+let mut options = DashboardOptions::new(pool, authorize);
+options.path = "/workhorse".into();
+options.environment = "production".into();
+let operator = dashboard::handler(options)?;
+let app = axum::Router::new().nest_service("/workhorse", operator);
+```
+
+All four hosts serve the same browser bundle and versioned dashboard procedures. The language
 changes the HTTP adapter, while PostgreSQL keeps the operator behavior consistent.
 
 If the TypeScript host serves several workspaces, `authorize` also receives the resolved workspace

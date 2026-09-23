@@ -6,7 +6,7 @@ description: Keep downstream work blocked until its prerequisites reach declared
 Dependencies prevent a task from entering dispatch before its inputs are ready. PostgreSQL stores
 the task and its dependency edges in the enqueue transaction, so a rollback removes both.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     const importId = await queue.enqueue("contacts.import", { source: "upload" });
@@ -39,6 +39,28 @@ the task and its dependency edges in the enqueue transaction, so a rollback remo
     })
     ```
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    let import = queue
+        .enqueue("contacts.import", &json!({ "source": "upload" }), EnqueueOptions::default())
+        .await?;
+    queue
+        .enqueue(
+            "contacts.notify",
+            &json!({ "importId": import.task_id }),
+            EnqueueOptions {
+                dependencies: Some(Dependencies {
+                    prerequisite_task_ids: vec![import.task_id],
+                    on_success: DependencyTerminalPolicy::Release,
+                    on_failure: DependencyTerminalPolicy::Fail,
+                    on_cancellation: DependencyTerminalPolicy::Cancel,
+                }),
+                ..Default::default()
+            },
+        )
+        .await?;
+    ```
+  </Tab>
 </Tabs>
 
 The older `prerequisiteTaskId` shorthand is deprecated because it hides the terminal policies.
@@ -46,7 +68,8 @@ The older `prerequisiteTaskId` shorthand is deprecated because it hides the term
 For fan-in, declare every prerequisite and what each terminal outcome means:
 
 The same `Dependencies` value accepts several prerequisite IDs for fan-in. TypeScript uses
-`prerequisiteTaskIds`, Python uses `prerequisite_task_ids`, and Go uses `PrerequisiteTaskIDs`.
+`prerequisiteTaskIds`, Python and Rust use `prerequisite_task_ids`, and Go uses
+`PrerequisiteTaskIDs`.
 
 The dependent remains `blocked` until every edge resolves. If policies disagree after fan-in,
 `fail` wins over `cancel`, and `cancel` wins over `release`, so concurrent completion order cannot
