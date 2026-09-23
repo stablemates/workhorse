@@ -1,6 +1,6 @@
 {
   "name": "@stablemates/workhorse-dashboard-server",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Public beta Node.js backend for the Workhorse operator dashboard",
   "homepage": "https://workhorse.run",
   "bugs": {
@@ -68,7 +68,7 @@
     "typescript": "^5.8.3"
   },
   "peerDependencies": {
-    "@stablemates/workhorse": ">=0.3.0 <0.4.0"
+    "@stablemates/workhorse": ">=0.4.0 <0.5.0"
   },
   "engines": {
     "node": ">=22"

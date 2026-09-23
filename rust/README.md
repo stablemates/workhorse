@@ -3,20 +3,18 @@
 The Rust queue client, operator client, and worker runtime for the Workhorse durable task queue for
 PostgreSQL.
 
-> **Under construction:** [ADR 0074](../docs/decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md)
-> fixes the crate's shape, and the Linear issues SM-877 through SM-885 implement it. The `Queue`,
-> `Admin`, `Worker`, durable `HandlerContext`, and embedded dashboard have landed. The public API is
-> not stable yet.
+> **Public beta:** Workhorse is usable for evaluation and early production adoption. A 0.x minor
+> release may change behaviour, so read the
+> [changelog](https://github.com/stablemates/workhorse/blob/main/rust/CHANGELOG.md) before you
+> upgrade. It will not ask you to recreate your database: migrations are ordered, and inside a major
+> line a migration only adds, so a running deployment upgrades in place.
 
 An AI agent should read [the Workhorse documentation index](https://workhorse.run/llms.txt) first.
 
 ## Install
 
-Crates.io holds only a placeholder until the next release publishes the crate, so add it from the
-repository:
-
 ```bash
-cargo add workhorse --git https://github.com/stablemates/workhorse
+cargo add workhorse@0.4
 cargo add tokio --features macros,rt-multi-thread
 cargo add serde_json
 ```
@@ -24,11 +22,15 @@ cargo add serde_json
 Install the schema once, as a deployment step. The application never installs or migrates it.
 
 ```bash
-npx --package @stablemates/workhorse@0.3.0 workhorse schema install
+npx --package @stablemates/workhorse@0.4.0 workhorse schema install
 ```
 
 The machine that runs that deployment step needs Node.js 22 or newer. The application itself needs
-no Node.js. Until the crate has a release of its own, use the latest release's schema tool.
+no Node.js.
+
+Pin that version to the `workhorse` crate version the application depends on. The two are released
+together from one commit, so the numbers match. A schema tool older than the application leaves a
+schema the application refuses to start against.
 
 Runtime processes verify compatibility instead of changing the schema. Call
 `Queue::assert_compatible` or `Admin::assert_compatible` at startup. A refusal is

@@ -773,7 +773,7 @@ at least one fence.
 `npm install @stablemates/workhorse`, `python` is `pip install stablemates-workhorse`, `go` is
 `go get github.com/stablemates/workhorse/go`, `schema` is
 `npm exec --no -- workhorse schema install`, and `schemaPinned` is
-`npx --package @stablemates/workhorse@0.3.0 workhorse schema install`. The three language commands
+`npx --package @stablemates/workhorse@0.4.0 workhorse schema install`. The three language commands
 carry no version. The two schema commands are the deployment tool rather than an adoption step, and
 their version must equal the SDK the application depends on: `schema` achieves that by resolving
 the binary from the project's own `node_modules`, which `--no` requires and never installs, and
@@ -2251,7 +2251,7 @@ this lifecycle over module-scope instrument creation.
 `@stablemates/workhorse-otel` implements the contract. `registerOpenTelemetry()` has no import side
 effect and returns `registerTelemetryProvider()`'s cleanup function. The adapter declares
 `@opentelemetry/api >=1.9.0 <2`, `@opentelemetry/api-logs >=0.200.0 <0.300.0`, and
-`@stablemates/workhorse >=0.3.0 <0.4.0` as peer dependencies. It resolves tracer, meter,
+`@stablemates/workhorse >=0.4.0 <0.5.0` as peer dependencies. It resolves tracer, meter,
 logger, context, and propagation state from those host-owned API copies. Its synchronous metric and
 log wrappers re-read the OpenTelemetry global provider, preserving SDK registration after adapter
 registration.
@@ -3728,9 +3728,9 @@ interactive stdin and stdout is refused with exit 1.
 
 ## Operational limits
 
-- The canonical artifact installs version 23, the whole current schema. Version 6 is the migration
+- The canonical artifact installs version 24, the whole current schema. Version 6 is the migration
   baseline and is frozen as `sql/releases/0006.sql`. A schema change is an upgrade rather than a
-  reinstall: `migrateSchema` applies the ordered steps under `sql/migrations/`, which run from 6 to 23. A database below 6 is not carried forward
+  reinstall: `migrateSchema` applies the ordered steps under `sql/migrations/`, which run from 6 to 24. A database below 6 is not carried forward
   ([ADR 0073](decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)).
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
   `uuid_v7_v1()` uses core UUID and byte functions rather than `pgcrypto` or `uuid-ossp`.

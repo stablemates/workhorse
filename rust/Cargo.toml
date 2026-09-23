@@ -2,7 +2,7 @@
 # ADR 0074 publishes this one crate. SM-882 reserved `workhorse` on crates.io, and
 # `.github/workflows/release.yml` publishes it when this version matches a release tag.
 name = "workhorse"
-version = "0.1.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.89"
 description = "Rust SDK for Workhorse, a durable task queue whose state lives in PostgreSQL"
