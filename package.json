@@ -144,12 +144,13 @@
     "test:site-smoke:built": "pnpm build:check && tsx scripts/with-env.ts tsx typescript/core/test/site-smoke.ts",
     "rust:conformance:generate": "tsx scripts/generate-rust-conformance.ts",
     "rust:conformance:check": "tsx scripts/generate-rust-conformance.ts --check && pnpm parity:check",
-    "rust:format:check": "mise exec -- cargo fmt --all -- --check",
+    "rust:format:check": "tsx scripts/with-env.ts mise exec -- cargo fmt --all -- --check && tsx scripts/with-env.ts mise exec -- rustfmt --check --edition 2021 rust/release-consumer/main.rs",
     "rust:test": "tsx scripts/with-env.ts mise exec -- cargo test --workspace",
-    "rust:integration": "WORKHORSE_REQUIRE_DATABASE=1 tsx scripts/with-env.ts mise exec -- cargo test --package workhorse-client --test postgres --test enqueue_postgres --test protocol_conformance",
+    "rust:integration": "WORKHORSE_REQUIRE_DATABASE=1 tsx scripts/with-env.ts mise exec -- cargo test --package workhorse --test postgres --test enqueue_postgres --test protocol_conformance",
     "rust:gates": "pnpm rust:format:check && pnpm rust:clippy && pnpm rust:test && pnpm rust:conformance:check",
-    "rust:release-check": "pnpm rust:gates && tsx scripts/check-rust-release.ts",
-    "rust:clippy": "mise exec -- cargo clippy --workspace --all-targets --all-features -- -D warnings"
+    "rust:package-check": "tsx scripts/with-env.ts tsx scripts/check-rust-release.ts",
+    "rust:release-check": "pnpm rust:gates && pnpm rust:package-check",
+    "rust:clippy": "tsx scripts/with-env.ts mise exec -- cargo clippy --workspace --all-targets --all-features -- -D warnings"
   },
   "devDependencies": {
     "@opentelemetry/context-async-hooks": "2.11.0",

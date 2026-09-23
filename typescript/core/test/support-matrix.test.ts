@@ -525,6 +525,27 @@ describe("continuous integration", () => {
     expect(publish).not.toContain('"access", "list", "packages"');
   });
 
+  it("publishes the Rust crate through crates.io trusted publishing on matching tags", async () => {
+    const workflow = await read(".github/workflows/release.yml");
+    const job = workflow.slice(
+      workflow.indexOf("\n  crates-io:"),
+      workflow.indexOf("\n  github-release:"),
+    );
+
+    expect(workflow).toContain("pnpm rust:release-check");
+    expect(job).toContain("if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true");
+    expect(job).toContain("needs: publish");
+    // crates.io mints a token only for the trusted publisher registered on the crate, which names
+    // this workflow file and this environment. Renaming either stops publication.
+    expect(job).toContain("environment: crates-io");
+    expect(job).toContain("id-token: write");
+    expect(job).toContain("rust-lang/crates-io-auth-action@");
+    expect(job).toContain("CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}");
+    expect(job).toContain('if [ "v$crate" = "$GITHUB_REF_NAME" ]; then');
+    expect(job).toContain("cargo publish --package workhorse --locked");
+    expect(job).not.toContain("secrets.");
+  });
+
   it("publishes Python distributions from a checked, versioned tag", async () => {
     const workflow = await read(".github/workflows/release-python.yml");
     const releaseCheck = await read("scripts/check-python-release.ts");

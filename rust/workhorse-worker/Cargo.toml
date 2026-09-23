@@ -2,6 +2,8 @@
 name = "workhorse-worker"
 version = "0.1.0"
 edition = "2021"
+# Interim crate; ADR 0074 publishes only `rust/`, and SM-878 deletes this one.
+publish = false
 
 [dependencies]
 async-trait = "0.1"
@@ -13,4 +15,4 @@ tokio-postgres = { version = "0.7", features = [
 ] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
-workhorse-client = { path = ".." }
+workhorse-client = { package = "workhorse", path = ".." }

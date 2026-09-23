@@ -1,5 +1,5 @@
 use std::time::{Duration, SystemTime};
-use workhorse_client::durable_context::{
+use workhorse::durable_context::{
     ChildOutcome, ChildStatus, HandlerContext, Settlement, SettlementBuffer, WaitResult,
 };
 
