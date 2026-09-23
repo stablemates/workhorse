@@ -9,7 +9,8 @@
     "genericName": {
       "typescript": "Error",
       "python": "Exception",
-      "go": "Error"
+      "go": "Error",
+      "rust": "Error"
     },
     "forbiddenNameCharacters": ["*", ".", "<", " "]
   },

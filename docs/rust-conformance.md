@@ -12,41 +12,19 @@ fixture does not pass, and when a listed fixture passes. `pnpm rust:integration`
 
 | Fixture file            | Declared | Passing | Expected unsupported |
 | ----------------------- | -------: | ------: | -------------------: |
-| `compatibility.json`    |       10 |       2 |                    8 |
-| `contracts.json`        |        7 |       0 |                    7 |
+| `compatibility.json`    |       10 |      10 |                    0 |
+| `contracts.json`        |        7 |       7 |                    0 |
 | `cron-occurrences.json` |       19 |      19 |                    0 |
 | `failures.json`         |        4 |       0 |                    4 |
 | `interpreter.json`      |        1 |       1 |                    0 |
-| `requests.json`         |        2 |       0 |                    2 |
+| `requests.json`         |        2 |       2 |                    0 |
 | `runtime.json`          |       16 |       0 |                   16 |
 | `scenarios.json`        |       15 |      15 |                    0 |
-| `schedules.json`        |        2 |       0 |                    2 |
+| `schedules.json`        |        2 |       2 |                    0 |
 
 ## Expected unsupported fixtures
 
 The list gives the reason for each entry. Remove an entry in the commit that makes it pass.
-
-### SM-877
-
-- `compatibility/client-protocol-too-new`
-- `compatibility/client-protocol-too-old`
-- `compatibility/schema-below-the-dashboard-reads`
-- `compatibility/schema-below-the-statement-catalogues`
-- `compatibility/schema-no-longer-serves-client`
-- `compatibility/schema-not-installed`
-- `compatibility/schema-too-old`
-- `compatibility/served-protocol-undeclared`
-- `contracts/bundled-reference`
-- `contracts/custom-keyword-rejected`
-- `contracts/dynamic-reference-rejected`
-- `contracts/format-is-annotation`
-- `contracts/object-validation`
-- `contracts/remote-reference-rejected`
-- `contracts/unevaluated-properties-rejected`
-- `requests/keyed-enqueue-request`
-- `requests/minimal-enqueue-request`
-- `schedules/minimal-schedule-definition`
-- `schedules/recurring-schedule-definition`
 
 ### SM-878
 

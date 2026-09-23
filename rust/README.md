@@ -2,7 +2,7 @@
 
 The Rust SDK is under construction. [ADR 0074](../docs/decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md)
 fixes its shape, and the Linear issues SM-877 through SM-885 implement it. Until they land, no crate
-here is published and the public API is not stable.
+here is published and the public API is not stable. SM-877 has landed the `Queue` client.
 
 ## Target shape
 
@@ -25,17 +25,24 @@ Python SDK's surface on Tokio.
 
 The workspace in the repository-root `Cargo.toml` still holds two interim crates.
 
-- `rust/` builds the `workhorse` package, the one crate ADR 0074 publishes. It contains the interim queue, the PostgreSQL
-  durable adapter in `src/durable_postgres.rs`, and an in-memory model in `src/durable_context/`
-  that ADR 0074 retires.
+- `rust/` builds the `workhorse` package, the one crate ADR 0074 publishes. `Queue` in
+  `src/queue.rs` is the ADR 0074 client.
+  It calls PostgreSQL only through the generated `src/sql_catalogue_generated.rs`. The crate also
+  holds the interim PostgreSQL durable adapter in `src/durable_postgres.rs`, and an in-memory model
+  in `src/durable_context/` that ADR 0074 retires.
 - `rust/workhorse-worker/` holds an interim worker marked `publish = false`. SM-878 folds it into
   `rust/src/worker/`.
+
+`Queue` follows the Python client's signatures where the ADR sketch is shorter. The policy and
+budget sync methods take a namespace and a `prune` flag and return the stored rows. `cancel` takes an
+optional requester, and `sync_contracts` takes the per-type contract map that the worker registers.
 
 The integration tests in `rust/tests/` load the shared `protocol/v1` fixtures.
 [`PARITY.md`](PARITY.md) maps the durable operations to their PostgreSQL functions.
 
-The PostgreSQL tests in `rust/tests/postgres.rs`, `rust/tests/enqueue_postgres.rs`, and
-`rust/tests/protocol_conformance.rs` exercise the real `workhorse` adapter. Each one creates a
+The PostgreSQL tests in `rust/tests/postgres.rs`, `rust/tests/enqueue_postgres.rs`,
+`rust/tests/client_postgres.rs`, and `rust/tests/protocol_conformance.rs` exercise the real `workhorse`
+adapter. Each one creates a
 scratch database from `DATABASE_URL_TEST`, installs `sql/schema/current.sql`, and drops the database afterward.
 `pnpm db:sweep` finds any scratch database that a failed teardown leaves behind.
 

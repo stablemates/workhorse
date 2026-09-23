@@ -25,29 +25,29 @@ Two boundaries keep this matrix small:
 
 <!-- BEGIN GENERATED PARITY CLIENT -->
 
-| Capability                                 | TypeScript | Python    | Go        | Rust              |
-| ------------------------------------------ | ---------- | --------- | --------- | ----------------- |
-| Transactional enqueue in a caller-owned tx | Supported  | Supported | Supported | Supported         |
-| Atomic batch enqueue                       | Supported  | Supported | Supported | [Planned][SM-877] |
-| Delayed enqueue (`runAt` / `run_at`)       | Supported  | Supported | Supported | [Planned][SM-877] |
-| Priority                                   | Supported  | Supported | Supported | [Planned][SM-877] |
-| Tags and max attempts                      | Supported  | Supported | Supported | [Planned][SM-877] |
-| Persisted retry policies                   | Supported  | Supported | Supported | [Planned][SM-877] |
-| Absolute deadlines and execution timeouts  | Supported  | Supported | Supported | [Planned][SM-877] |
-| Enqueue idempotency                        | Supported  | Supported | Supported | [Planned][SM-877] |
-| Keyed debounce                             | Supported  | Supported | Supported | [Planned][SM-877] |
-| Keyed throttle                             | Supported  | Supported | Supported | [Planned][SM-877] |
-| Task dependencies with terminal policies   | Supported  | Supported | Supported | [Planned][SM-877] |
-| Concurrency keys                           | Supported  | Supported | Supported | [Planned][SM-877] |
-| Concurrency policy management              | Supported  | Supported | Supported | [Planned][SM-877] |
-| Rate-limit policy management               | Supported  | Supported | Supported | [Planned][SM-877] |
-| Named budget management                    | Supported  | Supported | Supported | [Planned][SM-877] |
-| Recurring schedule definition sync         | Supported  | Supported | Supported | [Planned][SM-877] |
-| Payload and result contracts               | Supported  | Supported | Supported | [Planned][SM-877] |
-| Compatibility refusal before mutation      | Supported  | Supported | Supported | Supported         |
-| Public startup schema compatibility check  | Supported  | Supported | Supported | [Planned][SM-877] |
-| SQL protocol conformance fixtures executed | Supported  | Supported | Supported | Supported         |
-| Enqueue trace-context propagation          | Supported  | Supported | Supported | [Planned][SM-877] |
+| Capability                                 | TypeScript | Python    | Go        | Rust      |
+| ------------------------------------------ | ---------- | --------- | --------- | --------- |
+| Transactional enqueue in a caller-owned tx | Supported  | Supported | Supported | Supported |
+| Atomic batch enqueue                       | Supported  | Supported | Supported | Supported |
+| Delayed enqueue (`runAt` / `run_at`)       | Supported  | Supported | Supported | Supported |
+| Priority                                   | Supported  | Supported | Supported | Supported |
+| Tags and max attempts                      | Supported  | Supported | Supported | Supported |
+| Persisted retry policies                   | Supported  | Supported | Supported | Supported |
+| Absolute deadlines and execution timeouts  | Supported  | Supported | Supported | Supported |
+| Enqueue idempotency                        | Supported  | Supported | Supported | Supported |
+| Keyed debounce                             | Supported  | Supported | Supported | Supported |
+| Keyed throttle                             | Supported  | Supported | Supported | Supported |
+| Task dependencies with terminal policies   | Supported  | Supported | Supported | Supported |
+| Concurrency keys                           | Supported  | Supported | Supported | Supported |
+| Concurrency policy management              | Supported  | Supported | Supported | Supported |
+| Rate-limit policy management               | Supported  | Supported | Supported | Supported |
+| Named budget management                    | Supported  | Supported | Supported | Supported |
+| Recurring schedule definition sync         | Supported  | Supported | Supported | Supported |
+| Payload and result contracts               | Supported  | Supported | Supported | Supported |
+| Compatibility refusal before mutation      | Supported  | Supported | Supported | Supported |
+| Public startup schema compatibility check  | Supported  | Supported | Supported | Supported |
+| SQL protocol conformance fixtures executed | Supported  | Supported | Supported | Supported |
+| Enqueue trace-context propagation          | Supported  | Supported | Supported | Supported |
 
 <!-- END GENERATED PARITY CLIENT -->
 
@@ -200,8 +200,8 @@ through its own public SDK.
 | Capability                                 | TypeScript | Python    | Go        | Rust              |
 | ------------------------------------------ | ---------- | --------- | --------- | ----------------- |
 | Task lookup, listing, and timeline         | Supported  | Supported | Supported | [Planned][SM-883] |
-| Queue health snapshot                      | Supported  | Supported | Supported | [Planned][SM-877] |
-| Cancellation requests                      | Supported  | Supported | Supported | [Planned][SM-877] |
+| Queue health snapshot                      | Supported  | Supported | Supported | Supported         |
+| Cancellation requests                      | Supported  | Supported | Supported | Supported         |
 | Queue pause, resume, and purge             | Supported  | Supported | Supported | [Planned][SM-883] |
 | Dead-letter listing and redrive            | Supported  | Supported | Supported | [Planned][SM-883] |
 | Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported | [Planned][SM-883] |
@@ -276,7 +276,6 @@ stops the published view from becoming another source of truth.
 
 <!-- BEGIN GENERATED PARITY LINEAR LINKS -->
 
-[SM-877]: https://linear.app/stablemates/issue/SM-877
 [SM-878]: https://linear.app/stablemates/issue/SM-878
 [SM-879]: https://linear.app/stablemates/issue/SM-879
 [SM-883]: https://linear.app/stablemates/issue/SM-883
