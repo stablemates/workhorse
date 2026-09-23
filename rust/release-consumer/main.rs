@@ -10,7 +10,7 @@
 
 use serde_json::json;
 use tokio_postgres::NoTls;
-use workhorse::{EnqueueRequest, Queue};
+use workhorse::{EnqueueOptions, Queue};
 
 const QUEUE: &str = "release-consumer";
 const TASK_TYPE: &str = "release.consumer";
@@ -26,9 +26,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let connection = tokio::spawn(connection);
 
     let queue = Queue::new(client, QUEUE);
-    let task_id =
-        queue.enqueue(EnqueueRequest::new(QUEUE, TASK_TYPE, json!({ "packaged": true }))).await?;
-    println!("{task_id}");
+    let result =
+        queue.enqueue(TASK_TYPE, &json!({ "packaged": true }), EnqueueOptions::default()).await?;
+    println!("{}", result.task_id);
 
     drop(queue);
     connection.await??;

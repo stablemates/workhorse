@@ -2,7 +2,10 @@
 
 mod support;
 
-use workhorse::{Queue, CLIENT_PROTOCOL_VERSION, MAX_SCHEMA_VERSION, MIN_SCHEMA_VERSION};
+use workhorse::compatibility::{
+    assert_schema_compatible, read_compatibility_state, CompatibilityCode,
+};
+use workhorse::{Error, Queue, CLIENT_PROTOCOL_VERSION, MAX_SCHEMA_VERSION, MIN_SCHEMA_VERSION};
 
 #[tokio::test]
 async fn postgres_client_reads_the_installed_protocol_and_schema_versions() {
@@ -11,10 +14,32 @@ async fn postgres_client_reads_the_installed_protocol_and_schema_versions() {
     };
     let queue = Queue::connect(database.url(), "rust-postgres").await.expect("connect Rust client");
 
-    let compatibility = queue.check_compatibility().await.expect("installed schema is compatible");
+    queue.assert_compatible().await.expect("installed schema is compatible");
 
-    assert_eq!(compatibility.protocol_version, CLIENT_PROTOCOL_VERSION);
-    assert!((MIN_SCHEMA_VERSION..=MAX_SCHEMA_VERSION).contains(&compatibility.schema_version));
+    let state = read_compatibility_state(queue.executor()).await.unwrap();
+    assert!(state.served_protocol_versions.contains(&CLIENT_PROTOCOL_VERSION));
+    let schema_version = state.installed_schema_version.expect("an installed schema");
+    assert!((MIN_SCHEMA_VERSION..=MAX_SCHEMA_VERSION).contains(&schema_version));
+}
+
+#[tokio::test]
+async fn assert_schema_compatible_refuses_a_database_without_the_schema() {
+    let Some(database) = support::scratch_database("postgres_startup_check").await else {
+        return;
+    };
+    let client = database.connect().await;
+    assert_schema_compatible(&client).await.expect("the installed schema is compatible");
+
+    client.batch_execute("ALTER SCHEMA workhorse RENAME TO workhorse_hidden").await.unwrap();
+    let refused = assert_schema_compatible(&client).await;
+    client.batch_execute("ALTER SCHEMA workhorse_hidden RENAME TO workhorse").await.unwrap();
+    assert!(
+        matches!(
+            refused,
+            Err(Error::Compatibility { code: CompatibilityCode::SchemaNotInstalled })
+        ),
+        "got {refused:?}"
+    );
 }
 
 #[tokio::test]

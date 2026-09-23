@@ -111,73 +111,111 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Atomic batch enqueue",
-    rust: { planned: "SM-877" },
+    rust: {
+      file: "enqueue_postgres.rs",
+      test: "enqueue_many_writes_an_atomic_batch_in_request_order",
+    },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "enqueueMany" },
     python: { file: "test_enqueue.py", pattern: "enqueue_many" },
     go: { file: "queue_test.go", pattern: "EnqueueMany" },
   },
   {
     capability: "Delayed enqueue (`runAt` / `run_at`)",
+    rust: {
+      file: "enqueue_postgres.rs",
+      test: "enqueue_persists_run_at_priority_tags_and_max_attempts",
+    },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "runAt" },
     python: { file: "test_driver_integration.py", pattern: "run_at" },
     go: { file: "queue_test.go", pattern: "RunAt" },
   },
   {
     capability: "Priority",
+    rust: {
+      file: "enqueue_postgres.rs",
+      test: "enqueue_persists_run_at_priority_tags_and_max_attempts",
+    },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "priority" },
     python: { file: "test_enqueue.py", pattern: "priority" },
     go: { file: "queue_test.go", pattern: "Priority" },
   },
   {
     capability: "Tags and max attempts",
+    rust: {
+      file: "enqueue_postgres.rs",
+      test: "enqueue_persists_run_at_priority_tags_and_max_attempts",
+    },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "maxAttempts" },
     python: { file: "test_enqueue.py", pattern: "max_attempts" },
     go: { file: "queue_test.go", pattern: "MaxAttempts" },
   },
   {
     capability: "Persisted retry policies",
+    rust: {
+      file: "enqueue_postgres.rs",
+      test: "enqueue_persists_retry_policy_deadline_and_execution_timeout",
+    },
     typescript: { file: "integration-retry-attempt-lifecycle.test.ts", pattern: "retryPolicy" },
     python: { file: "test_enqueue.py", pattern: "retry_policy" },
     go: { file: "queue_test.go", pattern: "RetryPolicy" },
   },
   {
     capability: "Absolute deadlines and execution timeouts",
+    rust: {
+      file: "enqueue_postgres.rs",
+      test: "enqueue_persists_retry_policy_deadline_and_execution_timeout",
+    },
     typescript: { file: "integration-claim-lease-fence.test.ts", pattern: "executionTimeoutMs" },
     python: { file: "test_worker.py", pattern: "execution_timeout" },
     go: { file: "queue_test.go", pattern: "ExecutionTimeout" },
   },
   {
     capability: "Enqueue idempotency",
+    rust: {
+      file: "enqueue_postgres.rs",
+      test: "enqueue_idempotency_replays_and_rejects_a_conflicting_request",
+    },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "idempotency" },
     python: { file: "test_enqueue.py", pattern: "idempotency" },
     go: { file: "queue_test.go", pattern: "Idempotency" },
   },
   {
     capability: "Keyed debounce",
+    rust: {
+      file: "enqueue_postgres.rs",
+      test: "debounce_replaces_a_pending_task_inside_its_window",
+    },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "debounce" },
     python: { file: "test_driver_integration.py", pattern: "debounce" },
     go: { file: "queue_test.go", pattern: "Debounce" },
   },
   {
     capability: "Keyed throttle",
+    rust: { file: "enqueue_postgres.rs", test: "throttle_coalesces_requests_inside_its_window" },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "throttle" },
     python: { file: "test_driver_integration.py", pattern: "throttle" },
     go: { file: "queue_test.go", pattern: "Throttle" },
   },
   {
     capability: "Task dependencies with terminal policies",
+    rust: {
+      file: "enqueue_postgres.rs",
+      test: "dependencies_block_a_task_with_its_terminal_policies",
+    },
     typescript: { file: "integration-dependencies.test.ts", pattern: "dependencies" },
     python: { file: "test_driver_integration.py", pattern: "dependencies" },
     go: { file: "queue_test.go", pattern: "Dependencies" },
   },
   {
     capability: "Concurrency keys",
+    rust: { file: "enqueue_postgres.rs", test: "enqueue_persists_concurrency_key_and_budget" },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "concurrencyKey" },
     python: { file: "test_enqueue.py", pattern: "concurrency_key" },
     go: { file: "queue_test.go", pattern: "ConcurrencyKey" },
   },
   {
     capability: "Concurrency policy management",
+    rust: { file: "client_postgres.rs", test: "sync_concurrency_policies_stores_lists_and_prunes" },
     typescript: {
       file: "integration-retention-maintenance.test.ts",
       patterns: ["syncConcurrencyPolicies", "listConcurrencyPolicies"],
@@ -193,6 +231,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Rate-limit policy management",
+    rust: { file: "client_postgres.rs", test: "sync_rate_limit_policies_stores_lists_and_prunes" },
     typescript: {
       file: "integration-claim-lease-fence.test.ts",
       patterns: ["syncRateLimitPolicies", "listRateLimitPolicies"],
@@ -208,6 +247,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Named budget management",
+    rust: { file: "client_postgres.rs", test: "sync_budgets_stores_lists_and_prunes" },
     typescript: {
       file: "integration-budgets.test.ts",
       patterns: ["syncBudgets", "listBudgets"],
@@ -223,14 +263,17 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Recurring schedule definition sync",
-    rust: { planned: "SM-877" },
+    rust: { file: "client_postgres.rs", test: "sync_schedules_stores_and_prunes_definitions" },
     typescript: { file: "integration-cron-schedules.test.ts", pattern: "syncSchedules" },
     python: { file: "test_schedules.py", pattern: "sync_schedules" },
     go: { file: "queue_test.go", pattern: "SyncSchedules" },
   },
   {
     capability: "Payload and result contracts",
-    rust: { planned: "SM-877" },
+    rust: {
+      file: "client_postgres.rs",
+      test: "sync_contracts_validates_payloads_and_stamps_contract_fields",
+    },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "contracts" },
     python: { file: "test_worker.py", pattern: "test_contract_sync_validates" },
     go: { file: "worker_test.go", pattern: "TestContractSyncValidates" },
@@ -247,6 +290,20 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Public startup schema compatibility check",
+    rust: {
+      fixtures: [
+        "compatibility/current",
+        "compatibility/schema-newer-inside-major-line",
+        "compatibility/served-protocol-undeclared",
+        "compatibility/schema-not-installed",
+        "compatibility/schema-too-old",
+        "compatibility/schema-below-the-dashboard-reads",
+        "compatibility/schema-below-the-statement-catalogues",
+        "compatibility/schema-no-longer-serves-client",
+        "compatibility/client-protocol-too-old",
+        "compatibility/client-protocol-too-new",
+      ],
+    },
     typescript: { file: "schema-installation.test.ts", pattern: "assertSchemaCompatible" },
     python: { file: "test_compatibility.py", pattern: "assert_schema_compatible" },
     go: { file: "compatibility_test.go", pattern: "AssertSchemaCompatible" },
@@ -279,6 +336,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Enqueue trace-context propagation",
+    rust: { file: "enqueue_postgres.rs", test: "enqueue_propagates_the_current_trace_context" },
     typescript: {
       file: "sql-protocol-conformance.test.ts",
       pattern: "trace-propagation",
@@ -411,12 +469,14 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Queue health snapshot",
+    rust: { file: "client_postgres.rs", test: "health_returns_the_queue_health_snapshot" },
     typescript: { file: "integration-health-snapshots.test.ts", pattern: "health" },
     python: { file: "test_driver_integration.py", pattern: "health" },
     go: { file: "queue_test.go", pattern: "Health" },
   },
   {
     capability: "Cancellation requests",
+    rust: { file: "client_postgres.rs", test: "cancel_reports_each_postgres_disposition" },
     typescript: { file: "integration-operator-reads.test.ts", pattern: "cancel" },
     python: { file: "test_worker_runtime_conformance.py", pattern: "cancel" },
     go: { file: "worker_test.go", pattern: "Cancel" },

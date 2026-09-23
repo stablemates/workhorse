@@ -18,7 +18,12 @@ use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 use support::ScratchDatabase;
 use tokio_postgres::Client;
-use workhorse::{EnqueueRequest, Error as ClientError, Queue, ScheduleDefinition};
+use workhorse::compatibility::{check_compatibility, read_compatibility_state};
+use workhorse::contracts::compile_contract_schema;
+use workhorse::{
+    EnqueueOptions, Error as ClientError, Idempotency, Queue, RetryPolicy, ScheduleCatchupPolicy,
+    ScheduleDefinition, ScheduledTask,
+};
 
 use conformance::database;
 use conformance::ledger::{reconcile, Ledger, Outcome};
@@ -144,8 +149,7 @@ async fn every_protocol_fixture_passes_or_is_listed() {
         record(&mut outcomes, "interpreter", fixture, outcome(run_interpreter(fixture)));
     }
     for fixture in catalogue.category("contracts") {
-        let reason = "the Rust client does not validate instances against a contract schema";
-        record(&mut outcomes, "contracts", fixture, Outcome::Unsupported(reason.to_owned()));
+        record(&mut outcomes, "contracts", fixture, outcome(run_contract(fixture)));
     }
     for fixture in catalogue.category("failures") {
         let reason = "the Rust worker does not record a handler failure envelope";
@@ -220,6 +224,30 @@ fn report(outcomes: &BTreeMap<String, Outcome>) {
             Outcome::Skipped(reason) => eprintln!("  skipped     {fixture}: {reason}"),
         }
     }
+}
+
+// ----- contracts -----------------------------------------------------------------------------
+
+/// A contract fixture compiles its schema the way `Queue::sync_contracts` does, then checks each
+/// instance's verdict.
+fn run_contract(fixture: &Value) -> Result<(), String> {
+    let compiled = compile_contract_schema(&fixture["schema"]);
+    if fixture["schemaError"].as_bool() == Some(true) {
+        return match compiled {
+            Err(_) => Ok(()),
+            Ok(_) => Err("compiled a schema the protocol rejects".to_owned()),
+        };
+    }
+    let schema = compiled.map_err(|error| format!("rejected a valid schema: {error}"))?;
+    for (index, instance) in
+        fixture["instances"].as_array().ok_or("fixture lists no instances")?.iter().enumerate()
+    {
+        let expected = instance["valid"].as_bool().ok_or("instance states no verdict")?;
+        if schema.is_valid(&instance["value"]) != expected {
+            return Err(format!("instance {index}: expected valid = {expected}"));
+        }
+    }
+    Ok(())
 }
 
 // ----- interpreter ---------------------------------------------------------------------------
@@ -569,9 +597,63 @@ fn client_error(error: ClientError) -> String {
     }
 }
 
-/// Options `EnqueueRequest` has no field for. A fixture that sets one cannot be expressed in Rust.
-const INEXPRESSIBLE_OPTIONS: &[&str] =
-    &["concurrencyKey", "budget", "retryPolicy", "idempotency", "delayMs", "executionTimeoutMs"];
+fn integer<T: TryFrom<i64>>(value: &Value, field: &str) -> Result<T, String> {
+    value
+        .as_i64()
+        .and_then(|value| T::try_from(value).ok())
+        .ok_or_else(|| format!("{field} is not an integer in range"))
+}
+
+fn retry_policy(value: &Value) -> Result<Option<RetryPolicy>, String> {
+    match value {
+        Value::Null => Ok(None),
+        Value::Object(policy) => Ok(Some(policy.clone())),
+        _ => Err("retryPolicy is neither null nor an object".to_owned()),
+    }
+}
+
+/// Translate a fixture's application options into `EnqueueOptions`, refusing any option the
+/// adapter does not know, so a new fixture option cannot pass by being ignored.
+fn enqueue_options(options: &serde_json::Map<String, Value>) -> Result<EnqueueOptions, String> {
+    let mut result = EnqueueOptions::default();
+    for (name, value) in options {
+        match name.as_str() {
+            "queue" => result.queue = Some(value.as_str().ok_or("queue is not a string")?.into()),
+            "priority" => result.priority = integer(value, name)?,
+            "concurrencyKey" => {
+                result.concurrency_key =
+                    Some(value.as_str().ok_or("concurrencyKey is not a string")?.into());
+            }
+            "budget" => {
+                result.budget = Some(value.as_str().ok_or("budget is not a string")?.into())
+            }
+            "maxAttempts" => result.max_attempts = integer(value, name)?,
+            "retryPolicy" => result.retry_policy = retry_policy(value)?,
+            "executionTimeoutMs" => result.execution_timeout_ms = Some(integer(value, name)?),
+            "tags" => {
+                result.tags = value
+                    .as_array()
+                    .ok_or("tags is not an array")?
+                    .iter()
+                    .map(|tag| tag.as_str().map(str::to_owned).ok_or("tag is not a string"))
+                    .collect::<Result<_, _>>()?;
+            }
+            "idempotency" => {
+                let mut idempotency =
+                    Idempotency::new(value["key"].as_str().ok_or("idempotency.key is missing")?);
+                if let Some(scope) = value["scope"].as_str() {
+                    idempotency.scope = scope.into();
+                }
+                if !value["ttlMs"].is_null() {
+                    idempotency.ttl_ms = integer(&value["ttlMs"], "idempotency.ttlMs")?;
+                }
+                result.idempotency = Some(idempotency);
+            }
+            other => return Err(format!("the adapter does not translate option {other}")),
+        }
+    }
+    Ok(result)
+}
 
 /// A request fixture records the JSON request every client sends to `enqueue_many_v1`, so the Rust
 /// `Queue::enqueue` passes only when it sends that call with that request.
@@ -583,41 +665,20 @@ async fn run_requests(
     let setup = database.connect().await;
     let interposed = record_calls(&setup, "enqueue_many_v1").await;
     for fixture in catalogue.category("requests") {
-        let application = &fixture["application"];
-        let options = application["options"].as_object().cloned().unwrap_or_default();
-        let inexpressible: Vec<&str> = INEXPRESSIBLE_OPTIONS
-            .iter()
-            .copied()
-            .filter(|option| options.contains_key(*option))
-            .collect();
-        if !inexpressible.is_empty() {
-            let reason = format!("EnqueueRequest cannot express {}", inexpressible.join(", "));
-            record(outcomes, "requests", fixture, Outcome::Unsupported(reason));
-            continue;
-        }
         let result = async {
             interposed.clone()?;
-            let queue_name = fixture
-                .pointer("/postgres/queue")
-                .and_then(Value::as_str)
-                .ok_or("fixture names no queue")?;
-            let mut request = EnqueueRequest::new(
-                options.get("queue").and_then(Value::as_str).unwrap_or(queue_name),
-                application["type"].as_str().ok_or("fixture names no type")?,
-                application["payload"].clone(),
-            );
-            if let Some(priority) = options.get("priority").and_then(Value::as_i64) {
-                request.priority = i32::try_from(priority).map_err(|error| error.to_string())?;
-            }
-            if let Some(attempts) = options.get("maxAttempts").and_then(Value::as_i64) {
-                request.max_attempts =
-                    Some(i32::try_from(attempts).map_err(|error| error.to_string())?);
-            }
-            if let Some(tags) = options.get("tags").and_then(Value::as_array) {
-                request.tags = tags.iter().filter_map(Value::as_str).map(str::to_owned).collect();
-            }
-            let queue = Queue::new(database.connect().await, queue_name);
-            queue.enqueue(request).await.map_err(client_error)?;
+            let application = &fixture["application"];
+            let options =
+                enqueue_options(&application["options"].as_object().cloned().unwrap_or_default())?;
+            let queue = Queue::new(database.connect().await, "default");
+            queue
+                .enqueue(
+                    application["type"].as_str().ok_or("fixture names no type")?,
+                    &application["payload"],
+                    options,
+                )
+                .await
+                .map_err(client_error)?;
             let calls = recorded(&setup, "enqueue_many_v1").await?;
             let [arguments] = calls.as_slice() else {
                 return Err(format!("expected one enqueue_many_v1 call, recorded {}", calls.len()));
@@ -636,6 +697,33 @@ async fn run_requests(
     }
 }
 
+fn schedule_definition(definition: &Value) -> Result<ScheduleDefinition, String> {
+    let task = &definition["task"];
+    let mut scheduled = ScheduledTask::new(
+        task["type"].as_str().ok_or("schedule task names no type")?,
+        task["payload"].clone(),
+    );
+    scheduled.queue = task["queue"].as_str().map(str::to_owned);
+    scheduled.concurrency_key = task["concurrencyKey"].as_str().map(str::to_owned);
+    scheduled.priority = integer(&task["priority"], "priority")?;
+    scheduled.max_attempts = integer(&task["maxAttempts"], "maxAttempts")?;
+    scheduled.retry_policy = retry_policy(&task["retryPolicy"])?;
+    let mut result = ScheduleDefinition::new(
+        definition["name"].as_str().ok_or("schedule names no name")?,
+        definition["schedule"].as_str().ok_or("schedule has no expression")?,
+        scheduled,
+    );
+    result.timezone = definition["timezone"].as_str().ok_or("schedule has no timezone")?.into();
+    result.enabled = definition["enabled"].as_bool().ok_or("schedule sets no enabled flag")?;
+    result.catchup_policy = match definition["catchupPolicy"].as_str() {
+        Some("skip") => ScheduleCatchupPolicy::Skip,
+        Some("latest") => ScheduleCatchupPolicy::Latest,
+        Some("all") => ScheduleCatchupPolicy::All,
+        other => return Err(format!("unknown catchup policy {other:?}")),
+    };
+    Ok(result)
+}
+
 async fn run_schedules(
     database: &ScratchDatabase,
     catalogue: &Catalogue,
@@ -652,16 +740,12 @@ async fn run_schedules(
                 .as_array()
                 .ok_or("fixture has no application definitions")?
                 .iter()
-                .map(|definition| ScheduleDefinition {
-                    namespace: namespace.to_owned(),
-                    name: definition["name"].as_str().unwrap_or_default().to_owned(),
-                    definition: definition.clone(),
-                })
-                .collect::<Vec<_>>();
+                .map(schedule_definition)
+                .collect::<Result<Vec<_>, _>>()?;
             let default_queue =
                 fixture["defaultQueue"].as_str().ok_or("fixture names no default queue")?;
             let queue = Queue::new(database.connect().await, default_queue);
-            queue.sync_schedule(namespace, &definitions, prune).await.map_err(client_error)?;
+            queue.sync_schedules(namespace, definitions, prune).await.map_err(client_error)?;
             let calls = recorded(&setup, "sync_schedule_definitions_v2").await?;
             let [arguments] = calls.as_slice() else {
                 return Err(format!(
@@ -684,8 +768,9 @@ async fn run_schedules(
 
 // ----- compatibility -------------------------------------------------------------------------
 
-/// Install the versions a compatibility fixture describes, then ask the Rust client whether it
-/// would run against them. The client reports no refusal code, so a refusing fixture cannot pass.
+/// Install the versions a compatibility fixture describes, read them back the way the client does,
+/// and compare the verdict and refusal code. A fixture that presents this client's protocol runs
+/// through `Queue::assert_compatible`; another protocol runs the same decision directly.
 async fn run_compatibility(
     database: &ScratchDatabase,
     catalogue: &Catalogue,
@@ -693,33 +778,35 @@ async fn run_compatibility(
 ) {
     let setup = database.connect().await;
     for fixture in catalogue.category("compatibility") {
-        if fixture["clientProtocolVersion"].as_i64()
-            != Some(i64::from(workhorse::CLIENT_PROTOCOL_VERSION))
-        {
-            let reason = format!(
-                "the Rust client always speaks protocol {}; it cannot present protocol {}",
-                workhorse::CLIENT_PROTOCOL_VERSION,
-                fixture["clientProtocolVersion"]
-            );
-            record(outcomes, "compatibility", fixture, Outcome::Unsupported(reason));
-            continue;
-        }
         let result = async {
             let installed = fixture["installedSchemaVersion"].as_i64();
+            let client_protocol: i32 =
+                integer(&fixture["clientProtocolVersion"], "clientProtocolVersion")?;
             let served: Vec<i32> = fixture["servedProtocolVersions"]
                 .as_array()
                 .ok_or("fixture lists no served protocols")?
                 .iter()
-                .map(|version| {
-                    version
-                        .as_i64()
-                        .and_then(|version| i32::try_from(version).ok())
-                        .ok_or("bad protocol version")
-                })
+                .map(|version| integer(version, "servedProtocolVersions"))
                 .collect::<Result<_, _>>()?;
             install_versions(&setup, installed, &served).await?;
-            let queue = Queue::new(database.connect().await, "default");
-            let checked = queue.check_compatibility().await;
+            let checked = async {
+                let queue = Queue::new(database.connect().await, "default");
+                if client_protocol == workhorse::CLIENT_PROTOCOL_VERSION {
+                    return match queue.assert_compatible().await {
+                        Ok(()) => Ok(Ok(())),
+                        Err(ClientError::Compatibility { code }) => Ok(Err(code)),
+                        Err(error) => Err(client_error(error)),
+                    };
+                }
+                let state =
+                    read_compatibility_state(queue.executor()).await.map_err(client_error)?;
+                Ok(check_compatibility(
+                    state.installed_schema_version,
+                    client_protocol,
+                    &state.served_protocol_versions,
+                ))
+            }
+            .await;
             if installed.is_none() {
                 setup
                     .batch_execute("ALTER SCHEMA workhorse_hidden RENAME TO workhorse")
@@ -727,19 +814,18 @@ async fn run_compatibility(
                     .map_err(|error| database::describe(&error))?;
             }
             let expected = fixture["compatible"].as_bool().ok_or("fixture states no verdict")?;
-            match (checked, expected) {
-                (Ok(_), true) => Ok(()),
-                (Ok(found), false) => {
-                    Err(format!("accepted {found:?}; expected refusal {}", fixture["refusalCode"]))
+            match (checked?, expected) {
+                (Ok(()), true) => Ok(()),
+                (Ok(()), false) => {
+                    Err(format!("accepted; expected refusal {}", fixture["refusalCode"]))
                 }
-                (Err(error), true) => {
-                    Err(format!("refused a compatible installation: {}", client_error(error)))
+                (Err(code), true) => Err(format!("refused a compatible installation: {code}")),
+                (Err(code), false) if fixture["refusalCode"].as_str() == Some(code.as_str()) => {
+                    Ok(())
                 }
-                (Err(error), false) => Err(format!(
-                    "refused without refusal code {} ({})",
-                    fixture["refusalCode"],
-                    client_error(error)
-                )),
+                (Err(code), false) => {
+                    Err(format!("refused with {code}; expected {}", fixture["refusalCode"]))
+                }
             }
         }
         .await;

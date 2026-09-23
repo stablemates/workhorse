@@ -2,81 +2,6 @@
   "$comment": "protocol/v1 fixtures the Rust lane does not pass yet. Each entry names the Issue that owns the gap. protocol_conformance.rs fails when an unlisted fixture does not pass and when a listed fixture passes.",
   "fixtures": [
     {
-      "fixture": "compatibility/client-protocol-too-new",
-      "issue": "SM-877",
-      "reason": "The Rust client always presents protocol 4 and has no compatibility check that could present another version."
-    },
-    {
-      "fixture": "compatibility/client-protocol-too-old",
-      "issue": "SM-877",
-      "reason": "The Rust client always presents protocol 4 and has no compatibility check that could present another version."
-    },
-    {
-      "fixture": "compatibility/schema-below-the-dashboard-reads",
-      "issue": "SM-877",
-      "reason": "check_compatibility refuses without the fixture refusal code; the startup compatibility check does not exist yet."
-    },
-    {
-      "fixture": "compatibility/schema-below-the-statement-catalogues",
-      "issue": "SM-877",
-      "reason": "check_compatibility refuses without the fixture refusal code; the startup compatibility check does not exist yet."
-    },
-    {
-      "fixture": "compatibility/schema-no-longer-serves-client",
-      "issue": "SM-877",
-      "reason": "check_compatibility refuses without the fixture refusal code; the startup compatibility check does not exist yet."
-    },
-    {
-      "fixture": "compatibility/schema-not-installed",
-      "issue": "SM-877",
-      "reason": "check_compatibility refuses without the fixture refusal code; the startup compatibility check does not exist yet."
-    },
-    {
-      "fixture": "compatibility/schema-too-old",
-      "issue": "SM-877",
-      "reason": "check_compatibility refuses without the fixture refusal code; the startup compatibility check does not exist yet."
-    },
-    {
-      "fixture": "compatibility/served-protocol-undeclared",
-      "issue": "SM-877",
-      "reason": "check_compatibility reads max(protocol_version) as a non-null integer, so an installation that declares no served protocol fails with a decoding error instead of being accepted."
-    },
-    {
-      "fixture": "contracts/bundled-reference",
-      "issue": "SM-877",
-      "reason": "The Rust client does not validate instances against a contract schema."
-    },
-    {
-      "fixture": "contracts/custom-keyword-rejected",
-      "issue": "SM-877",
-      "reason": "The Rust client does not validate instances against a contract schema."
-    },
-    {
-      "fixture": "contracts/dynamic-reference-rejected",
-      "issue": "SM-877",
-      "reason": "The Rust client does not validate instances against a contract schema."
-    },
-    {
-      "fixture": "contracts/format-is-annotation",
-      "issue": "SM-877",
-      "reason": "The Rust client does not validate instances against a contract schema."
-    },
-    {
-      "fixture": "contracts/object-validation",
-      "issue": "SM-877",
-      "reason": "The Rust client does not validate instances against a contract schema."
-    },
-    {
-      "fixture": "contracts/remote-reference-rejected",
-      "issue": "SM-877",
-      "reason": "The Rust client does not validate instances against a contract schema."
-    },
-    {
-      "fixture": "contracts/unevaluated-properties-rejected",
-      "issue": "SM-877",
-      "reason": "The Rust client does not validate instances against a contract schema."
-    },
-    {
       "fixture": "failures/declared-name-and-stack",
       "issue": "SM-878",
       "reason": "The Rust worker does not record a handler failure envelope."
@@ -95,16 +20,6 @@
       "fixture": "failures/undeclared-name",
       "issue": "SM-878",
       "reason": "The Rust worker does not record a handler failure envelope."
-    },
-    {
-      "fixture": "requests/keyed-enqueue-request",
-      "issue": "SM-877",
-      "reason": "EnqueueRequest cannot express concurrencyKey, budget, retryPolicy or idempotency."
-    },
-    {
-      "fixture": "requests/minimal-enqueue-request",
-      "issue": "SM-877",
-      "reason": "EnqueueRequest omits the options it does not expose yet, such as budget, concurrencyKey and dependencies, so enqueue_many_v1 receives 5 of the 19 request keys the protocol sends."
     },
     {
       "fixture": "runtime/budget-admission-holds-across-queues",
@@ -185,16 +100,6 @@
       "fixture": "runtime/stop-drains-active-slots-without-new-claims",
       "issue": "SM-878",
       "reason": "No Rust worker runtime executes graceful-drain fixtures."
-    },
-    {
-      "fixture": "schedules/minimal-schedule-definition",
-      "issue": "SM-877",
-      "reason": "Queue::sync_schedule sends each definition unflattened, so sync_schedule_definitions_v2 rejects it for a missing queue and type."
-    },
-    {
-      "fixture": "schedules/recurring-schedule-definition",
-      "issue": "SM-877",
-      "reason": "Queue::sync_schedule sends each definition unflattened, so sync_schedule_definitions_v2 rejects it for a missing queue and type."
     }
   ]
 }
