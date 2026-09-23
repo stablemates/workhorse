@@ -135,7 +135,7 @@ Exported constants such as `MAX_ENQUEUE_BATCH_SIZE`, `MAX_CHECKPOINT_VALUE_BYTES
 
 - `installSchema(database)` installs the full schema; run it as a deployment step.
 - `assertSchemaCompatible(database)` fails startup on a runtime/schema mismatch, throwing
-  `SchemaCompatibilityError` with the `code` Python and Go also report;
+  `SchemaCompatibilityError` with the `code` Python, Go, and Rust also report;
   `readSchemaVersion` and `WORKHORSE_SCHEMA_VERSION` expose both sides of that check.
 - `protocol/v1/` publishes language-neutral fixtures for canonical enqueue requests, worker
   transitions, result shapes, and SQLSTATE-backed structured errors.
@@ -161,8 +161,8 @@ the package, every subcommand runs through the same invocation, shown here with 
 npm exec --no -- workhorse schema install
 ```
 
-From a deployment step outside such a project — a Python or Go pipeline — name the package and the
-version instead:
+From a deployment step outside such a project — a Python, Go, or Rust pipeline — name the package
+and the version instead:
 
 ```bash title="Terminal"
 npx --package @stablemates/workhorse@0.4.0 workhorse schema install

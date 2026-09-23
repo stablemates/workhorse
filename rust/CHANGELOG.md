@@ -16,7 +16,7 @@ The npm packages, Python distribution, Go module, and Rust crate release from on
 Requires **schema v18**, Rust **1.89** or newer, and PostgreSQL **15** or newer.
 
 **This is the first published `workhorse` crate.** Crates.io held only a `0.0.0` placeholder that
-reserved the name. Add the crate with `cargo add workhorse@0.4`, and install or migrate the schema
+reserved the name. Add the crate with `cargo add workhorse`, and install or migrate the schema
 with the schema tool of the same release. The crate never installs or migrates the schema itself.
 [ADR 0074](../docs/decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md) shapes it as
 one crate that follows the Python SDK's surface on Tokio.

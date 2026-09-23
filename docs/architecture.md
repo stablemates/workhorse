@@ -763,17 +763,19 @@ a `tower::Service` over a caller-owned executor, and `dashboard::authorize` adap
 that returns an `Authorization`.
 
 `rust/examples/` holds the runnable quickstart, transaction, dedicated-worker, and orchestration
-programs. `rust/examples/docs.rs` holds the `// docs:start` regions the site embeds, and
-`rust/examples/agent_playbook.rs` is the whole-file region behind the agent playbook. `pnpm rust:clippy`
-compiles every example with `--all-targets`. `site/scripts/check-language-examples.ts` requires each
-Rust fence in `site/content/docs/` and `docs/guides/` to equal one region, and every region to back
-at least one fence.
+programs. `rust/examples/docs.rs` holds the `// docs:start` regions the site embeds,
+`rust/examples/landing.rs` holds the `landing-*` regions behind the landing page's Rust tabs, and
+`rust/examples/agent_playbook.rs` is the whole-file region behind the agent playbook.
+`pnpm rust:clippy` compiles every example with `--all-targets`.
+`site/scripts/check-language-examples.ts` requires each Rust fence in `site/content/docs/` and
+`docs/guides/`, and each Rust snippet in `site/lib/landing-snippets.ts`, to equal one region, and
+every region to back at least one of them.
 
 `support.json` also owns the install commands under its `install` key: `node` is
 `npm install @stablemates/workhorse`, `python` is `pip install stablemates-workhorse`, `go` is
-`go get github.com/stablemates/workhorse/go`, `schema` is
+`go get github.com/stablemates/workhorse/go`, `rust` is `cargo add workhorse`, `schema` is
 `npm exec --no -- workhorse schema install`, and `schemaPinned` is
-`npx --package @stablemates/workhorse@0.4.0 workhorse schema install`. The three language commands
+`npx --package @stablemates/workhorse@0.4.0 workhorse schema install`. The four language commands
 carry no version. The two schema commands are the deployment tool rather than an adoption step, and
 their version must equal the SDK the application depends on: `schema` achieves that by resolving
 the binary from the project's own `node_modules`, which `--no` requires and never installs, and
@@ -782,8 +784,10 @@ the binary from the project's own `node_modules`, which `--no` requires and neve
 product: `README.md` and `typescript/core/README.md` state `node` and `schema`; the
 `dashboard`, `dashboard-server`, `drizzle`, `kysely`, `otel`, `prisma`, and `typeorm` READMEs under
 `typescript/` state `node`; `python/README.md` states `python` and `schemaPinned`; `go/README.md`
-states `go` and `schemaPinned`; `go/examples/README.md` states `go`;
-`site/content/docs/installation.mdx`, `quickstart.mdx`, and `for-ai-agents.mdx` state all five; and
+states `go` and `schemaPinned`; `go/examples/README.md` states `go`; `rust/README.md` states `rust`
+and `schemaPinned`; `site/content/docs/installation.mdx`, `quickstart.mdx`, and `for-ai-agents.mdx`
+state the four language commands and both schema commands, and `installation.mdx` also states
+`schemaDownload`; and
 `site/content/docs/api.mdx` states both schema commands. `typescript/dashboard-contract/README.md`
 is exempt because it installs a type-only development dependency, and the test fails when a
 published package gains a README that is neither governed nor exempt. Three sweeps cover every

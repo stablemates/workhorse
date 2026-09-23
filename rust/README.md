@@ -13,8 +13,10 @@ An AI agent should read [the Workhorse documentation index](https://workhorse.ru
 
 ## Install
 
+Add the crate and the runtime it runs on:
+
 ```bash
-cargo add workhorse@0.4
+cargo add workhorse
 cargo add tokio --features macros,rt-multi-thread
 cargo add serde_json
 ```

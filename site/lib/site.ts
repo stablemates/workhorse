@@ -4,13 +4,14 @@ export const siteConfig = {
   name: "Workhorse",
   tagline: "A durable task queue for PostgreSQL",
   description:
-    "A durable task queue for PostgreSQL, with TypeScript, Python, and Go workers on one SQL protocol.",
+    "A durable task queue for PostgreSQL, with TypeScript, Python, Go, and Rust workers on one SQL protocol.",
   url: siteUrl,
   socialImage: `${siteUrl}/brand/workhorse-mark.png`,
   github: "https://github.com/stablemates/workhorse",
   npm: "https://www.npmjs.com/package/@stablemates/workhorse",
   pypi: "https://pypi.org/project/stablemates-workhorse/",
   goModule: "https://pkg.go.dev/github.com/stablemates/workhorse/go",
+  crates: "https://crates.io/crates/workhorse",
 } as const;
 
 /**
@@ -28,7 +29,13 @@ export const organization = {
   name: "Stablemates",
   url: siteUrl,
   logo: siteConfig.socialImage,
-  sameAs: [siteConfig.github, siteConfig.npm, siteConfig.pypi, siteConfig.goModule],
+  sameAs: [
+    siteConfig.github,
+    siteConfig.npm,
+    siteConfig.pypi,
+    siteConfig.goModule,
+    siteConfig.crates,
+  ],
   contactPoint: {
     "@type": "ContactPoint",
     contactType: "technical support",

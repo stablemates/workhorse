@@ -60,13 +60,18 @@ Install the SDK. Each package includes its default PostgreSQL driver.
   <Tab value="Rust">
 
     ```bash
-    cargo add workhorse --git https://github.com/stablemates/workhorse
+    cargo add workhorse
     cargo add tokio --features macros,rt-multi-thread
     cargo add serde_json
     ```
 
-    Crates.io holds only a placeholder until the next release publishes the crate, so add it from
-    the repository.
+    The crate has two optional features. `dashboard` embeds the dashboard backend as a
+    `tower::Service`, and `opentelemetry` connects telemetry to your OpenTelemetry provider. Enable
+    the ones you use:
+
+    ```bash
+    cargo add workhorse --features dashboard,opentelemetry
+    ```
 
     Your application never installs the schema. A deployment step installs it once, and that step
     runs on Node.js.
@@ -120,9 +125,9 @@ package and the version:
 npx --package @stablemates/workhorse@0.4.0 workhorse schema install
 ```
 
-Pin that to the version of `stablemates-workhorse` or `github.com/stablemates/workhorse/go` the
-application depends on. All three release together from one commit, so the numbers are the same.
-The Rust crate has no release yet, so a Rust project uses the latest release's version.
+Pin that to the version of `stablemates-workhorse`, `github.com/stablemates/workhorse/go`, or the
+`workhorse` crate the application depends on. Every line releases together from one commit, so the
+numbers are the same.
 `--package` also names where the binary comes from: without it `npx` looks for a `workhorse`
 package by that bare name, which belongs to someone else.
 

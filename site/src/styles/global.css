@@ -369,8 +369,8 @@ body {
  * The panels are server-highlighted markup, so the switcher must not require
  * hydration. Radio inputs carry the state, native radiogroup semantics carry
  * the keyboard and screen-reader behaviour, and the pairing rules below map
- * the nth checked input to the nth label and nth panel. Six tabs is the
- * ceiling; add another pair here before adding a seventh tab.
+ * the nth checked input to the nth label and nth panel. Eight tabs is the
+ * ceiling; add another pair here before adding a ninth tab.
  */
 .wh-tabs {
   position: relative;
@@ -410,7 +410,9 @@ body {
 .wh-tabs > input:nth-of-type(3):checked ~ .wh-tablist > .wh-tab:nth-of-type(3),
 .wh-tabs > input:nth-of-type(4):checked ~ .wh-tablist > .wh-tab:nth-of-type(4),
 .wh-tabs > input:nth-of-type(5):checked ~ .wh-tablist > .wh-tab:nth-of-type(5),
-.wh-tabs > input:nth-of-type(6):checked ~ .wh-tablist > .wh-tab:nth-of-type(6) {
+.wh-tabs > input:nth-of-type(6):checked ~ .wh-tablist > .wh-tab:nth-of-type(6),
+.wh-tabs > input:nth-of-type(7):checked ~ .wh-tablist > .wh-tab:nth-of-type(7),
+.wh-tabs > input:nth-of-type(8):checked ~ .wh-tablist > .wh-tab:nth-of-type(8) {
   background-color: color-mix(in oklab, var(--wh-accent) 12%, transparent);
   color: var(--wh-accent);
 }
@@ -420,7 +422,9 @@ body {
 .wh-tabs > input:nth-of-type(3):checked ~ .wh-tab-panel:nth-of-type(3),
 .wh-tabs > input:nth-of-type(4):checked ~ .wh-tab-panel:nth-of-type(4),
 .wh-tabs > input:nth-of-type(5):checked ~ .wh-tab-panel:nth-of-type(5),
-.wh-tabs > input:nth-of-type(6):checked ~ .wh-tab-panel:nth-of-type(6) {
+.wh-tabs > input:nth-of-type(6):checked ~ .wh-tab-panel:nth-of-type(6),
+.wh-tabs > input:nth-of-type(7):checked ~ .wh-tab-panel:nth-of-type(7),
+.wh-tabs > input:nth-of-type(8):checked ~ .wh-tab-panel:nth-of-type(8) {
   display: block;
 }
 

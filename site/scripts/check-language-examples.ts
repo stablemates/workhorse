@@ -289,13 +289,20 @@ for (const guidePath of crossSdkGuidePaths) {
 
 function assertVerifiedLanguageSnippets(
   name: string,
-  snippets: { typescript: LandingSnippetId; python?: LandingSnippetId; go?: LandingSnippetId },
+  snippets: {
+    typescript: LandingSnippetId;
+    python?: LandingSnippetId;
+    go?: LandingSnippetId;
+    rust?: LandingSnippetId;
+  },
 ) {
   if (
     snippets.python === undefined ||
     snippets.go === undefined ||
+    snippets.rust === undefined ||
     landingSnippetLanguages[snippets.python] !== "python" ||
-    landingSnippetLanguages[snippets.go] !== "go"
+    landingSnippetLanguages[snippets.go] !== "go" ||
+    landingSnippetLanguages[snippets.rust] !== "rust"
   ) {
     throw new Error(`landing example ${name} has unverified language snippets`);
   }
@@ -334,9 +341,9 @@ for (const pattern of examplePatterns) {
 }
 
 // Rust examples live as `// docs:start <name>` regions in `rust/examples/`, where `cargo clippy
-// --all-targets` compiles them in CI. Every `rust` fence in the documentation must equal one region
-// after both lose their common indentation, and every region must appear in some fence, so a page
-// cannot carry Rust the compiler never saw.
+// --all-targets` compiles them in CI. Every `rust` fence in the documentation and every Rust landing
+// snippet must equal one region after both lose their common indentation, and every region must
+// appear somewhere, so a page cannot carry Rust the compiler never saw.
 const rustExamplesRoot = resolve(repositoryRoot, "rust/examples");
 const rustRegions = new Map<string, string>();
 for (const name of readdirSync(rustExamplesRoot).filter((entry) => entry.endsWith(".rs"))) {
@@ -381,6 +388,16 @@ for (const fencePath of goFencePaths) {
     }
     usedRustRegions.add(region);
   }
+}
+// The landing page's Rust snippets are strings in lib/landing-snippets.ts, not fences, so each one
+// has to equal a region verbatim.
+for (const [snippet, language] of Object.entries(landingSnippetLanguages)) {
+  if (language !== "rust") continue;
+  const region = regionBySource.get(landingSnippets[snippet as LandingSnippetId]);
+  if (region === undefined) {
+    throw new Error(`landing snippet ${snippet} matches no docs region in rust/examples`);
+  }
+  usedRustRegions.add(region);
 }
 for (const name of rustRegions.keys()) {
   if (!usedRustRegions.has(name)) throw new Error(`Rust docs region ${name} appears on no page`);

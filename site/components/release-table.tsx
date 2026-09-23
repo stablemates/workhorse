@@ -2,9 +2,10 @@ import resolved from "@/.source/releases.json";
 import type { ResolvedReleaseLine } from "@/lib/releases";
 
 /**
- * The published versions of the three lines, rendered from
+ * The published versions of the four lines, rendered from
  * `site/.source/releases.json` after `scripts/gen-docs-index.ts` has read them
- * out of `CHANGELOG.md`, `python/CHANGELOG.md`, and `go/CHANGELOG.md`.
+ * out of `CHANGELOG.md`, `python/CHANGELOG.md`, `go/CHANGELOG.md`, and
+ * `rust/CHANGELOG.md`.
  *
  * Reading the generated file rather than typing the versions is the whole point
  * of the page: a stale table here would turn the support policy in `SECURITY.md`

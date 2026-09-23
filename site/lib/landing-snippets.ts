@@ -10,6 +10,10 @@
  * typescript/core/src/worker.ts, and option types in
  * typescript/core/src/types.ts. Change the source, change the snippet. Never
  * the other way around.
+ *
+ * Every Rust snippet is a copy of one `landing-*` region in
+ * rust/examples/landing.rs, which `pnpm rust:clippy` compiles.
+ * `scripts/check-language-examples.ts` fails when a copy and its region differ.
  */
 export const landingSnippets = {
   hero: `import { installSchema, Pool, Queue, Worker } from "@stablemates/workhorse";
@@ -77,6 +81,24 @@ func run(ctx context.Context, pool *pgxpool.Pool) error {
 		return map[string]any{"deliveredTo": message["to"]}, nil
 	})
 	return worker.Run(ctx)
+}`,
+
+  heroRust: `use serde_json::{json, Value};
+use workhorse::deadpool_postgres::Pool;
+use workhorse::{run_worker_process, EnqueueOptions, Queue, Worker, WorkerOptions};
+
+pub async fn run(pool: Pool) -> Result<(), Box<dyn std::error::Error>> {
+    let welcome = json!({ "to": "ada@example.com" });
+    Queue::new(&pool, "default")
+        .enqueue("email.welcome", &welcome, EnqueueOptions::default())
+        .await?;
+
+    let worker = Worker::new(pool, WorkerOptions { concurrency: 4, ..Default::default() })?;
+    worker.handle("email.welcome", |payload: Value, _context| async move {
+        Ok(json!({ "deliveredTo": payload["to"] }))
+    });
+    run_worker_process(&worker).await?;
+    Ok(())
 }`,
 
   languageTypeScript: `import { Pool, Queue } from "@stablemates/workhorse";
@@ -180,6 +202,30 @@ func createOrder(ctx context.Context, pool *pgxpool.Pool, orderID string, total 
 	return tx.Commit(ctx)
 }`,
 
+  enqueueRust: `use serde_json::json;
+use workhorse::deadpool_postgres::Pool;
+use workhorse::{EnqueueOptions, Queue};
+
+pub async fn create_order(
+    pool: &Pool,
+    order_id: &str,
+    total: i64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = pool.get().await?;
+    let transaction = client.transaction().await?;
+    transaction
+        .execute("INSERT INTO orders (id, total) VALUES ($1, $2)", &[&order_id, &total])
+        .await?;
+
+    // Same transaction: the task exists exactly when the order does.
+    Queue::new(&transaction, "default")
+        .enqueue("order.confirm", &json!({ "orderId": order_id }), EnqueueOptions::default())
+        .await?;
+
+    transaction.commit().await?;
+    Ok(())
+}`,
+
   checkpoints: `worker.handle("invoice.issue", async (payload, ctx) => {
   // Runs once. Every later activation replays the stored result.
   const charge = await ctx.checkpoint("charge", () =>
@@ -246,6 +292,38 @@ func registerInvoice(worker *workhorse.Worker) {
 	})
 }`,
 
+  checkpointsRust: `use serde::Deserialize;
+use serde_json::{json, Value};
+use workhorse::{HandlerError, Worker};
+
+#[derive(Deserialize)]
+struct Invoice {
+    amount: i64,
+    email: String,
+}
+
+async fn charge_card(amount: i64) -> Result<Value, HandlerError> {
+    Ok(json!({ "id": format!("ch_{amount}") }))
+}
+
+async fn render_invoice(charge_id: Value) -> Result<Value, HandlerError> {
+    Ok(json!({ "chargeId": charge_id }))
+}
+
+pub fn register_invoice(worker: &Worker) {
+    worker.handle("invoice.issue", |invoice: Invoice, context| async move {
+        // Runs once. Every later activation replays the stored result.
+        let charge: Value =
+            context.checkpoint("charge", || charge_card(invoice.amount)).await?;
+
+        let pdf: Value =
+            context.checkpoint("render", || render_invoice(charge["id"].clone())).await?;
+
+        println!("email {} {pdf}", invoice.email);
+        Ok(json!({ "chargeId": charge["id"] }))
+    });
+}`,
+
   sleep: `worker.handle("order.settle", async (payload, ctx) => {
   const order = await ctx.checkpoint("place", () =>
     placeOrder(payload),
@@ -299,6 +377,26 @@ func registerSettlement(worker *workhorse.Worker) {
 		}
 		return map[string]any{"order": order, "confirmed": true}, nil
 	})
+}`,
+
+  sleepRust: `use std::time::Duration;
+
+use serde_json::{json, Value};
+use workhorse::{HandlerError, Worker};
+
+async fn place_order(payload: Value) -> Result<Value, HandlerError> {
+    Ok(json!({ "orderId": payload["orderId"] }))
+}
+
+pub fn register_settlement(worker: &Worker) {
+    worker.handle("order.settle", |payload: Value, context| async move {
+        let order: Value = context.checkpoint("place", || place_order(payload)).await?;
+
+        // Slot released here. The process can restart, deploy, or die.
+        context.sleep("settlement-window", Duration::from_secs(60 * 60)).await?;
+
+        Ok(json!({ "settled": order["orderId"] }))
+    });
 }`,
 
   retries: `await queue.enqueue(
@@ -364,6 +462,35 @@ func enqueueReminder(ctx context.Context, queue *workhorse.Queue, matchID string
 	})
 }`,
 
+  retriesRust: `use chrono::{DateTime, Utc};
+use serde_json::json;
+use workhorse::deadpool_postgres::Pool;
+use workhorse::{EnqueueOptions, EnqueueResult, Error, Queue};
+
+pub async fn remind(
+    queue: &Queue<Pool>,
+    match_id: &str,
+    kickoff: DateTime<Utc>,
+) -> Result<EnqueueResult, Error> {
+    let options = EnqueueOptions {
+        // Pointless after kickoff, whatever else happens.
+        deadline: Some(kickoff),
+        // Any single attempt is stuck after 30 seconds.
+        execution_timeout_ms: Some(30_000),
+        max_attempts: 5,
+        retry_policy: json!({
+            "kind": "exponential",
+            "initialDelayMs": 1_000,
+            "multiplier": 2,
+            "maxDelayMs": 60_000,
+        })
+        .as_object()
+        .cloned(),
+        ..Default::default()
+    };
+    queue.enqueue("match.reminder", &json!({ "matchId": match_id }), options).await
+}`,
+
   idempotency: `const taskId = await queue.enqueue(
   "invoice.capture",
   { invoiceId: "inv-1" },
@@ -414,6 +541,24 @@ func captureInvoice(ctx context.Context, queue *workhorse.Queue) (string, error)
 			Key: "capture:inv-1", Scope: "tenant-42", TTLMS: 86_400_000,
 		},
 	})
+}`,
+
+  idempotencyRust: `use serde_json::json;
+use workhorse::deadpool_postgres::Pool;
+use workhorse::{EnqueueOptions, EnqueueResult, Error, Idempotency, Queue};
+
+// A retried webhook gets the same task_id back instead of a second capture.
+pub async fn capture(queue: &Queue<Pool>) -> Result<EnqueueResult, Error> {
+    let options = EnqueueOptions {
+        queue: Some("billing".into()),
+        idempotency: Some(Idempotency {
+            key: "capture:inv-1".into(),
+            scope: "tenant-42".into(),
+            ttl_ms: 86_400_000,
+        }),
+        ..Default::default()
+    };
+    queue.enqueue("invoice.capture", &json!({ "invoiceId": "inv-1" }), options).await
 }`,
 
   schedules: `// Run on every deployment with the complete list.
@@ -507,6 +652,26 @@ func runBilling(ctx context.Context, pool *pgxpool.Pool) error {
 	return worker.Run(ctx)
 }`,
 
+  schedulesRust: `use serde_json::json;
+use workhorse::deadpool_postgres::Pool;
+use workhorse::{
+    run_worker_process, Queue, ScheduleDefinition, ScheduledTask, Worker, WorkerOptions,
+};
+
+pub async fn run(pool: Pool) -> Result<(), Box<dyn std::error::Error>> {
+    // Run on every deployment with the complete list.
+    let task = ScheduledTask::new("invoices.generate", json!({}));
+    let schedule = ScheduleDefinition::new("nightly-invoice-run", "0 2 * * *", task);
+    Queue::new(&pool, "default").sync_schedules("billing", vec![schedule], true).await?;
+
+    // Any worker in the namespace fires due schedules itself.
+    let options =
+        WorkerOptions { schedule_namespaces: vec!["billing".into()], ..Default::default() };
+    let worker = Worker::new(pool, options)?;
+    run_worker_process(&worker).await?;
+    Ok(())
+}`,
+
   flowControl: `await queue.syncConcurrencyPolicies("workers", [
   // At most 20 mail tasks active; at most 2 per tenant.
   { queue: "mail", maxActive: 20, maxActivePerKey: 2 },
@@ -594,6 +759,40 @@ func configureFlowControl(
 	return err
 }`,
 
+  flowControlRust: `use serde_json::json;
+use workhorse::deadpool_postgres::Pool;
+use workhorse::policies::{ConcurrencyPolicyDefinition, RateLimit, RateLimitPolicyDefinition};
+use workhorse::{EnqueueOptions, Error, Queue};
+
+pub async fn configure(
+    queue: &Queue<Pool>,
+    message_id: &str,
+    tenant_id: &str,
+) -> Result<(), Error> {
+    // At most 20 mail tasks active; at most 2 per tenant.
+    let mail = ConcurrencyPolicyDefinition {
+        queue: "mail".into(),
+        max_active: 20,
+        max_active_per_key: Some(2),
+    };
+    queue.sync_concurrency_policies("workers", &[mail], false).await?;
+
+    let provider = RateLimitPolicyDefinition {
+        queue: "provider-api".into(),
+        rate: RateLimit { limit: 100, interval_ms: 1_000, burst: 200 },
+        per_key: None,
+    };
+    queue.sync_rate_limit_policies("workers", &[provider], false).await?;
+
+    let options = EnqueueOptions {
+        queue: Some("mail".into()),
+        concurrency_key: Some(format!("tenant:{tenant_id}")),
+        ..Default::default()
+    };
+    queue.enqueue("mail.send", &json!({ "messageId": message_id }), options).await?;
+    Ok(())
+}`,
+
   dependencies: `const inventoryId = await queue.enqueue(
   "inventory.reserve",
   { orderId },
@@ -679,6 +878,36 @@ func configureCheckout(ctx context.Context, queue *workhorse.Queue, worker *work
 	return nil
 }`,
 
+  dependenciesRust: `use serde_json::{json, Value};
+use workhorse::deadpool_postgres::Pool;
+use workhorse::{Dependencies, DependencyTerminalPolicy, EnqueueOptions, Error, Queue, Worker};
+
+pub async fn confirm(queue: &Queue<Pool>, order_id: &str) -> Result<(), Error> {
+    let order = json!({ "orderId": order_id });
+    let inventory =
+        queue.enqueue("inventory.reserve", &order, EnqueueOptions::default()).await?;
+
+    let dependencies = Dependencies {
+        prerequisite_task_ids: vec![inventory.task_id],
+        on_success: DependencyTerminalPolicy::Release,
+        on_failure: DependencyTerminalPolicy::Cancel,
+        on_cancellation: DependencyTerminalPolicy::Cancel,
+    };
+    let options = EnqueueOptions { dependencies: Some(dependencies), ..Default::default() };
+    queue.enqueue("order.confirm", &order, options).await?;
+    Ok(())
+}
+
+pub fn register_fulfillment(worker: &Worker) {
+    worker.handle("order.fulfill", |order: Value, context| async move {
+        let options = EnqueueOptions { queue: Some("payments".into()), ..Default::default() };
+        let capture = json!({ "orderId": order["id"] });
+        let receipt: Value =
+            context.run_child("charge", "payment.capture", &capture, options).await?;
+        Ok(json!({ "receipt": receipt }))
+    });
+}`,
+
   coalescing: `const options = {
   debounce: {
     key: documentId,
@@ -753,6 +982,30 @@ func reindex(ctx context.Context, queue *workhorse.Queue, documentID string, qui
 		fmt.Println(first.Outcome, latest.Outcome)
 	}
 	return err
+}`,
+
+  coalescingRust: `use serde_json::json;
+use workhorse::deadpool_postgres::Pool;
+use workhorse::{Debounce, DebounceSchedule, EnqueueOptions, Error, Queue};
+
+pub async fn reindex(
+    queue: &Queue<Pool>,
+    document_id: &str,
+    quiet_ms: i64,
+) -> Result<(), Error> {
+    let options = || EnqueueOptions {
+        debounce: Some(Debounce {
+            scope: "search-index".into(),
+            ..Debounce::new(document_id, quiet_ms, DebounceSchedule::Reset)
+        }),
+        ..Default::default()
+    };
+    let first = json!({ "documentId": document_id, "revision": 1 });
+    let first = queue.enqueue("search.reindex", &first, options()).await?;
+    let latest = json!({ "documentId": document_id, "revision": 2 });
+    let latest = queue.enqueue("search.reindex", &latest, options()).await?;
+    println!("{:?} {:?}", first.outcome, latest.outcome);
+    Ok(())
 }`,
 
   externalWaits: `worker.handle("release.publish", async (release, ctx) => {
@@ -839,6 +1092,37 @@ func deliverScan(ctx context.Context, queue *workhorse.Queue, taskID string, res
 	return err
 }`,
 
+  externalWaitsRust: `use serde_json::{json, Value};
+use uuid::Uuid;
+use workhorse::deadpool_postgres::Pool;
+use workhorse::{DeliveryOptions, Error, Queue, Worker};
+
+pub fn register_release(worker: &Worker) {
+    worker.handle("release.publish", |release: Value, context| async move {
+        let scan: Value = context.wait_for_signal("security-scan", None).await?.payload;
+
+        let request = json!({ "releaseId": release["id"], "scan": scan });
+        let review: Value =
+            context.wait_for_human("release-approval", &request, None).await?.result;
+
+        Ok(json!({ "published": review["approved"] }))
+    });
+}
+
+pub async fn deliver_scan(
+    queue: &Queue<Pool>,
+    task_id: Uuid,
+    result: &Value,
+    delivery_id: &str,
+) -> Result<(), Error> {
+    let delivery = DeliveryOptions {
+        idempotency_key: delivery_id.into(),
+        requested_by: "security-scanner".into(),
+    };
+    queue.send_signal(task_id, "security-scan", result, delivery).await?;
+    Ok(())
+}`,
+
   batchHandlers: `worker.handleBatch(
   "email.send",
   { maxSize: batchSize, lingerMs: batchLingerMs },
@@ -889,6 +1173,21 @@ func registerEmailBatch(worker *workhorse.Worker, batchSize int, linger time.Dur
 		}
 		return outcomes
 	})
+}`,
+
+  batchHandlersRust: `use std::time::Duration;
+
+use serde_json::Value;
+use workhorse::{BatchItem, BatchOptions, BatchResult, Worker};
+
+pub fn register_email_batch(worker: &Worker, batch_size: usize, linger: Duration) {
+    worker.handle_batch(
+        "email.send",
+        BatchOptions { max_size: batch_size, linger },
+        |items: Vec<BatchItem<Value>>| async move {
+            items.into_iter().map(|item| BatchResult::Succeeded(item.payload)).collect()
+        },
+    );
 }`,
 
   cancellation: `worker.handle("rows.export", async (payload, ctx) => {
@@ -952,6 +1251,31 @@ func configureExport(ctx context.Context, queue *workhorse.Queue, worker *workho
 	return err
 }`,
 
+  cancellationRust: `use serde_json::{json, Value};
+use uuid::Uuid;
+use workhorse::deadpool_postgres::Pool;
+use workhorse::{Error, Queue, Worker};
+
+pub async fn configure_export(
+    queue: &Queue<Pool>,
+    worker: &Worker,
+    task_id: Uuid,
+) -> Result<(), Error> {
+    worker.handle("rows.export", |rows: Vec<Value>, context| async move {
+        for row in rows {
+            if let Some(reason) = context.cancellation().reason() {
+                return Err(Error::Cancelled(reason).into());
+            }
+            println!("upload {row}");
+        }
+        Ok(json!({ "stopped": false }))
+    });
+
+    let reason = Some("customer withdrew the request");
+    queue.cancel(task_id, Some("operator@example.com"), reason).await?;
+    Ok(())
+}`,
+
   deadLetters: `const admin = new Admin(pool);
 const page = await admin.listDeadLetters({
   queue: "billing",
@@ -1013,6 +1337,29 @@ func redriveBilling(ctx context.Context, admin *workhorse.Admin) error {
 		}
 	}
 	return nil
+}`,
+
+  deadLettersRust: `use workhorse::deadpool_postgres::Pool;
+use workhorse::{Admin, AdminAudit, DeadLetterFilter, DeadLetterQuery, Error};
+
+pub async fn redrive_billing(admin: &Admin<Pool>) -> Result<(), Error> {
+    let filter = DeadLetterFilter {
+        queue: Some("billing".into()),
+        error_name: Some("CardDeclined".into()),
+        ..Default::default()
+    };
+    let page =
+        admin.list_dead_letters(DeadLetterQuery { filter, limit: 100, cursor: None }).await?;
+
+    for failure in page.items {
+        let audit = AdminAudit {
+            actor: "operator@example.com".into(),
+            reason: "provider incident resolved".into(),
+            request_id: format!("incident-2026-08-03:{}", failure.task_id),
+        };
+        admin.redrive(failure.task_id, &audit).await?;
+    }
+    Ok(())
 }`,
 
   operateDashboard: `import { createDashboardHost } from "@stablemates/workhorse-dashboard/server";
@@ -1079,6 +1426,29 @@ func mountDashboard(mux *http.ServeMux, executor workhorse.Executor) error {
 	return nil
 }`,
 
+  operateDashboardRust: `use workhorse::dashboard::{self, Authorization, DashboardOptions, Principal};
+use workhorse::deadpool_postgres::Pool;
+
+fn is_admin(request: &http::request::Parts) -> Option<String> {
+    request.headers.get("x-admin").and_then(|value| value.to_str().ok()).map(str::to_owned)
+}
+
+pub fn mount(pool: Pool) -> Result<axum::Router, workhorse::Error> {
+    let authorize = dashboard::authorize(|request| {
+        let session = is_admin(request);
+        async move {
+            match session {
+                Some(actor) => Authorization::Principal(Principal { actor }),
+                None => Authorization::Unauthenticated,
+            }
+        }
+    });
+    let mut options = DashboardOptions::new(pool, authorize);
+    options.path = "/workhorse".into();
+    let host = dashboard::handler(options)?;
+    Ok(axum::Router::new().nest_service("/workhorse", host))
+}`,
+
   operateHealth: `const admin = new Admin(pool);
 const health = await admin.health();
 
@@ -1141,6 +1511,27 @@ func inspect(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }`,
 
+  operateHealthRust: `use workhorse::deadpool_postgres::Pool;
+use workhorse::{Admin, Error, Queue, TaskListQuery, TaskState};
+
+pub async fn inspect(pool: &Pool) -> Result<(), Error> {
+    let health = Queue::new(pool, "default").health().await?;
+    if health["status"]["level"] != "healthy" {
+        println!("{}", health["status"]["reasons"]);
+    }
+
+    // Cross-state listing on a dedicated projection: reading it never slows dispatch down.
+    let live = Admin::new(pool)
+        .list_tasks(TaskListQuery {
+            states: vec![TaskState::Active, TaskState::Scheduled],
+            limit: 100,
+            ..Default::default()
+        })
+        .await?;
+    println!("{}", live.items.len());
+    Ok(())
+}`,
+
   operateFleet: `const admin = new Admin(pool);
 for (const entry of await admin.listWorkers()) {
   if (entry.queue !== "billing") continue;
@@ -1201,6 +1592,25 @@ func pauseBilling(ctx context.Context, pool *pgxpool.Pool) error {
 		}
 	}
 	return nil
+}`,
+
+  operateFleetRust: `use workhorse::deadpool_postgres::Pool;
+use workhorse::{Admin, AdminAudit, Error};
+
+pub async fn pause_billing(pool: &Pool) -> Result<(), Error> {
+    let admin = Admin::new(pool);
+    for entry in admin.list_workers().await? {
+        if entry.queue != "billing" {
+            continue;
+        }
+        let audit = AdminAudit {
+            actor: "operator@example.com".into(),
+            reason: "rolling deploy".into(),
+            request_id: format!("deploy-2026-08-23:{}", entry.worker_id),
+        };
+        admin.set_worker_paused(&entry.worker_id, true, &audit).await?;
+    }
+    Ok(())
 }`,
 
   ormDrizzle: `import { createDrizzleAdapter } from "@stablemates/workhorse-drizzle";
@@ -1338,135 +1748,206 @@ func runWorker(ctx context.Context, pool *pgxpool.Pool) error {
 	defer stop()
 	return worker.Run(runContext)
 }`,
+
+  deployRust: `use std::time::Duration;
+
+use serde_json::{json, Value};
+use workhorse::deadpool_postgres::tokio_postgres::NoTls;
+use workhorse::deadpool_postgres::{Manager, Pool};
+use workhorse::{run_worker_process, Worker, WorkerOptions};
+
+pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let url = std::env::var("DATABASE_URL")?;
+    let pool = Pool::builder(Manager::new(url.parse()?, NoTls)).max_size(10).build()?;
+
+    let worker = Worker::new(
+        pool,
+        WorkerOptions {
+            queues: vec!["email".into()],
+            concurrency: 8,
+            // Bounded graceful drain on SIGTERM.
+            shutdown_grace_period: Duration::from_secs(25),
+            ..Default::default()
+        },
+    )?;
+    worker.handle("email.send", |email: Value, _context| async move {
+        Ok(json!({ "sent": email["to"] }))
+    });
+    run_worker_process(&worker).await?;
+    Ok(())
+}`,
 } as const;
 
 export type LandingSnippetId = keyof typeof landingSnippets;
 
 /** One verified snippet per supported language for every numbered landing feature. */
 export const landingFeatureSnippets = {
-  enqueue: { typescript: "enqueue", python: "enqueuePython", go: "enqueueGo" },
+  enqueue: { typescript: "enqueue", python: "enqueuePython", go: "enqueueGo", rust: "enqueueRust" },
   checkpoints: {
     typescript: "checkpoints",
     python: "checkpointsPython",
     go: "checkpointsGo",
+    rust: "checkpointsRust",
   },
-  sleep: { typescript: "sleep", python: "sleepPython", go: "sleepGo" },
-  retries: { typescript: "retries", python: "retriesPython", go: "retriesGo" },
+  sleep: { typescript: "sleep", python: "sleepPython", go: "sleepGo", rust: "sleepRust" },
+  retries: { typescript: "retries", python: "retriesPython", go: "retriesGo", rust: "retriesRust" },
   idempotency: {
     typescript: "idempotency",
     python: "idempotencyPython",
     go: "idempotencyGo",
+    rust: "idempotencyRust",
   },
   schedules: {
     typescript: "schedules",
     python: "schedulesPython",
     go: "schedulesGo",
+    rust: "schedulesRust",
   },
   flowControl: {
     typescript: "flowControl",
     python: "flowControlPython",
     go: "flowControlGo",
+    rust: "flowControlRust",
   },
   dependencies: {
     typescript: "dependencies",
     python: "dependenciesPython",
     go: "dependenciesGo",
+    rust: "dependenciesRust",
   },
   coalescing: {
     typescript: "coalescing",
     python: "coalescingPython",
     go: "coalescingGo",
+    rust: "coalescingRust",
   },
   externalWaits: {
     typescript: "externalWaits",
     python: "externalWaitsPython",
     go: "externalWaitsGo",
+    rust: "externalWaitsRust",
   },
   batchHandlers: {
     typescript: "batchHandlers",
     python: "batchHandlersPython",
     go: "batchHandlersGo",
+    rust: "batchHandlersRust",
   },
   cancellation: {
     typescript: "cancellation",
     python: "cancellationPython",
     go: "cancellationGo",
+    rust: "cancellationRust",
   },
   deadLetters: {
     typescript: "deadLetters",
     python: "deadLettersPython",
     go: "deadLettersGo",
+    rust: "deadLettersRust",
   },
 } as const satisfies Record<
   string,
   | { typescript: LandingSnippetId }
-  | { typescript: LandingSnippetId; python: LandingSnippetId; go: LandingSnippetId }
+  | {
+      typescript: LandingSnippetId;
+      python: LandingSnippetId;
+      go: LandingSnippetId;
+      rust: LandingSnippetId;
+    }
 >;
 
 export type LandingFeatureSnippetId = keyof typeof landingFeatureSnippets;
 
 /** Other landing examples whose SDK behavior is supported in every language. */
 export const landingSupplementalSnippets = {
-  hero: { typescript: "hero", python: "heroPython", go: "heroGo" },
+  hero: { typescript: "hero", python: "heroPython", go: "heroGo", rust: "heroRust" },
   operateDashboard: {
     typescript: "operateDashboard",
     python: "operateDashboardPython",
     go: "operateDashboardGo",
+    rust: "operateDashboardRust",
   },
   operateHealth: {
     typescript: "operateHealth",
     python: "operateHealthPython",
     go: "operateHealthGo",
+    rust: "operateHealthRust",
   },
   operateFleet: {
     typescript: "operateFleet",
     python: "operateFleetPython",
     go: "operateFleetGo",
+    rust: "operateFleetRust",
   },
-  deploy: { typescript: "deploy", python: "deployPython", go: "deployGo" },
+  deploy: { typescript: "deploy", python: "deployPython", go: "deployGo", rust: "deployRust" },
 } as const satisfies Record<
   string,
-  { typescript: LandingSnippetId; python: LandingSnippetId; go: LandingSnippetId }
+  {
+    typescript: LandingSnippetId;
+    python: LandingSnippetId;
+    go: LandingSnippetId;
+    rust: LandingSnippetId;
+  }
 >;
 
 /** Shiki language overrides for snippets that are not TypeScript. */
-export const landingSnippetLanguages: Partial<Record<LandingSnippetId, "python" | "go" | "ts">> = {
+export const landingSnippetLanguages: Partial<
+  Record<LandingSnippetId, "python" | "go" | "rust" | "ts">
+> = {
   heroPython: "python",
   heroGo: "go",
+  heroRust: "rust",
   languagePython: "python",
   languageGo: "go",
   enqueuePython: "python",
   enqueueGo: "go",
+  enqueueRust: "rust",
   checkpointsPython: "python",
   checkpointsGo: "go",
+  checkpointsRust: "rust",
   sleepPython: "python",
   sleepGo: "go",
+  sleepRust: "rust",
   retriesPython: "python",
   retriesGo: "go",
+  retriesRust: "rust",
   idempotencyPython: "python",
   idempotencyGo: "go",
+  idempotencyRust: "rust",
   schedulesPython: "python",
   schedulesGo: "go",
+  schedulesRust: "rust",
   flowControlPython: "python",
   flowControlGo: "go",
+  flowControlRust: "rust",
   dependenciesPython: "python",
   dependenciesGo: "go",
+  dependenciesRust: "rust",
   coalescingPython: "python",
   coalescingGo: "go",
+  coalescingRust: "rust",
   externalWaitsPython: "python",
   externalWaitsGo: "go",
+  externalWaitsRust: "rust",
   batchHandlersPython: "python",
   batchHandlersGo: "go",
+  batchHandlersRust: "rust",
   cancellationPython: "python",
   cancellationGo: "go",
+  cancellationRust: "rust",
   deadLettersPython: "python",
   deadLettersGo: "go",
+  deadLettersRust: "rust",
   operateDashboardPython: "python",
   operateDashboardGo: "go",
+  operateDashboardRust: "rust",
   operateHealthPython: "python",
   operateHealthGo: "go",
+  operateHealthRust: "rust",
   operateFleetPython: "python",
   operateFleetGo: "go",
+  operateFleetRust: "rust",
   deployPython: "python",
   deployGo: "go",
+  deployRust: "rust",
 };
