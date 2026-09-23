@@ -1,7 +1,12 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { consumerManifest, publishedCrate, scratchDatabaseName } from "./check-rust-release.js";
+import {
+  consumerManifest,
+  httpDependencies,
+  publishedCrate,
+  scratchDatabaseName,
+} from "./check-rust-release.js";
 import { repositoryRoot } from "./packages.js";
 import { classifyTestDatabase, testFamilyRoots } from "./test-database-sweep.js";
 
@@ -73,6 +78,12 @@ describe("the release consumer", () => {
     );
     expect(manifest).toContain('"stablemates-workhorse" = { path = "/tmp/unpacked" }');
     expect(manifest).toMatch(/\[workspace\]\n$/);
+  });
+
+  it("names the HTTP crates a dependency tree resolves", () => {
+    const tree = ["workhorse v0.1.0", "bytes v1.10.1", "http-body v1.0.1", "tokio v1.47.1"];
+    expect(httpDependencies(tree.join("\n"))).toEqual(["http-body"]);
+    expect(httpDependencies("workhorse v0.1.0\nhttparse v1.10.1\n")).toEqual([]);
   });
 
   it("names a scratch database that pnpm db:sweep can drop", () => {

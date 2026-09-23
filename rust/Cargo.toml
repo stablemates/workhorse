@@ -14,13 +14,31 @@ keywords = ["postgresql", "task-queue", "durable", "workflow", "jobs"]
 categories = ["asynchronous", "database"]
 # The integration tests read `sql/schema/current.sql` from outside this directory, so the
 # published archive carries only what a dependent crate compiles.
-include = ["Cargo.toml", "LICENSE", "NOTICE", "README.md", "src/**/*.rs"]
+include = [
+  "Cargo.toml",
+  "LICENSE",
+  "NOTICE",
+  "README.md",
+  "src/**/*.rs",
+  "dashboard/bundle.json",
+  "dashboard/*.tar.gz",
+]
 
 [lib]
 name = "workhorse"
 
 [features]
 opentelemetry = ["dep:opentelemetry", "dep:tracing-opentelemetry"]
+# The embedded dashboard backend. A build without it compiles no HTTP dependency.
+dashboard = [
+  "dep:bytes",
+  "dep:flate2",
+  "dep:http",
+  "dep:http-body",
+  "dep:http-body-util",
+  "dep:tar",
+  "dep:tower-service",
+]
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
@@ -45,8 +63,16 @@ opentelemetry = { version = "0.32", optional = true, default-features = false, f
   "metrics",
 ] }
 tracing-opentelemetry = { version = "0.33", optional = true, default-features = false }
+bytes = { version = "1", optional = true }
+flate2 = { version = "1", optional = true }
+http = { version = "1", optional = true }
+http-body = { version = "1", optional = true }
+http-body-util = { version = "0.1", optional = true }
+tar = { version = "0.4", optional = true, default-features = false }
+tower-service = { version = "0.3", optional = true }
 
 [dev-dependencies]
+axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
 opentelemetry_sdk = { version = "0.32", default-features = false, features = [
   "trace",
   "metrics",
@@ -57,3 +83,12 @@ tracing-subscriber = { version = "0.3", default-features = false, features = [
   "registry",
   "std",
 ] }
+tower = { version = "0.5", default-features = false, features = ["util"] }
+
+[[test]]
+name = "dashboard_conformance"
+required-features = ["dashboard"]
+
+[[test]]
+name = "dashboard_http"
+required-features = ["dashboard"]

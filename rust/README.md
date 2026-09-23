@@ -3,7 +3,7 @@
 The Rust SDK is under construction. [ADR 0074](../docs/decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md)
 fixes its shape, and the Linear issues SM-877 through SM-885 implement it. Until they land, no crate
 here is published and the public API is not stable. SM-877 has landed the `Queue` client, SM-883
-the `Admin` client, and SM-878 the `Worker` runtime.
+the `Admin` client, SM-878 the `Worker` runtime, and SM-885 the embedded dashboard backend.
 
 ## Target shape
 
@@ -40,6 +40,12 @@ package, the one crate ADR 0074 publishes.
 budget sync methods take a namespace and a `prune` flag and return the stored rows. `cancel` takes an
 optional requester, and `sync_contracts` takes the per-type contract map that the worker registers.
 
+The `dashboard` feature compiles `src/dashboard/`. Its service embeds the browser bundle from
+`rust/dashboard/`, which `pnpm dashboard-bundle:generate` writes. Its request schemas come from the
+generated `src/dashboard/v1_generated.rs`, and its reads call the generated statement catalogue.
+`rust/tests/dashboard_conformance.rs` runs the shared `dashboard/v1/conformance.json` fixture through
+the service. `rust/tests/dashboard_http.rs` mounts it in an axum router.
+
 The integration tests in `rust/tests/` load the shared `protocol/v1` fixtures.
 [`PARITY.md`](PARITY.md) maps the durable operations to their PostgreSQL functions.
 
@@ -73,8 +79,9 @@ pnpm rust:release-check
 
 `pnpm rust:package-check` runs `cargo package` with verification. It then builds
 `rust/release-consumer/main.rs` in a temporary project outside the workspace. That consumer depends
-on the unpacked `.crate` archive, never on the checkout. With `DATABASE_URL_TEST` set, it enqueues
-one task into a scratch database and runs it through a `Worker`. The check then reads back the
-succeeded outcome. A change to the public API
+on the unpacked `.crate` archive, never on the checkout. The check fails when the archive exceeds
+10 MB, or when a consumer without the `dashboard` feature resolves an HTTP crate. With
+`DATABASE_URL_TEST` set, it enqueues one task into a scratch database and runs it through a
+`Worker`. The check then reads back the succeeded outcome. A change to the public API
 updates the consumer in the same commit. `pnpm rust:release-check` runs the gates and then this
 check. CI packages only committed files; a local run may pass `--allow-dirty`.

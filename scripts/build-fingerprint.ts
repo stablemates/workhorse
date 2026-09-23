@@ -6,7 +6,7 @@ import path from "node:path";
 function generatedBundle(file: string): boolean {
   return (
     file.startsWith("dashboard/v1/bundle/") ||
-    /^(go\/dashboard|python\/src\/workhorse\/dashboard)\/(bundle\.json|read-surface-.*\.tar\.gz)$/.test(
+    /^(go\/dashboard|python\/src\/workhorse\/dashboard|rust\/dashboard)\/(bundle\.json|read-surface-.*\.tar\.gz)$/.test(
       file,
     )
   );

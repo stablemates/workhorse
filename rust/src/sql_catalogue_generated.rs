@@ -733,6 +733,68 @@ pub const RETENTION_POLICY_PREVIEW: &str = r#"SELECT
           LIMIT 10001
         ) rows) AS statistics"#;
 
+/// `dashboard_task_counts_v1` (internal)
+pub const DASHBOARD_TASK_COUNTS_V1: &str =
+    r#"SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb) AS result"#;
+
+/// `dashboard_task_facets_v1` (internal)
+pub const DASHBOARD_TASK_FACETS_V1: &str =
+    r#"SELECT workhorse.dashboard_task_facets_v1($1::jsonb) AS result"#;
+
+/// `dashboard_queues_v1` (internal)
+pub const DASHBOARD_QUEUES_V1: &str =
+    r#"SELECT workhorse.dashboard_queues_v1('{}'::jsonb) AS result"#;
+
+/// `dashboard_tasks_v1` (internal)
+pub const DASHBOARD_TASKS_V1: &str = r#"SELECT workhorse.dashboard_tasks_v1($1::jsonb) AS result"#;
+
+/// `dashboard_tasks_cursor_v1` (internal)
+pub const DASHBOARD_TASKS_CURSOR_V1: &str =
+    r#"SELECT workhorse.dashboard_tasks_cursor_v1($1::jsonb) AS result"#;
+
+/// `dashboard_activity_v1` (internal)
+pub const DASHBOARD_ACTIVITY_V1: &str =
+    r#"SELECT workhorse.dashboard_activity_v1($1::jsonb) AS result"#;
+
+/// `dashboard_cron_v1` (internal)
+pub const DASHBOARD_CRON_V1: &str = r#"SELECT workhorse.dashboard_cron_v1($1::jsonb) AS result"#;
+
+/// `dashboard_workers_v1` (internal)
+pub const DASHBOARD_WORKERS_V1: &str =
+    r#"SELECT workhorse.dashboard_workers_v1($1::jsonb) AS result"#;
+
+/// `dashboard_human_waits_v1` (internal)
+pub const DASHBOARD_HUMAN_WAITS_V1: &str =
+    r#"SELECT workhorse.dashboard_human_waits_v1($1::jsonb) AS result"#;
+
+/// `dashboard_events_v1` (internal)
+pub const DASHBOARD_EVENTS_V1: &str =
+    r#"SELECT workhorse.dashboard_events_v1($1::jsonb) AS result"#;
+
+/// `dashboard_event_detail_v1` (internal)
+pub const DASHBOARD_EVENT_DETAIL_V1: &str =
+    r#"SELECT workhorse.dashboard_event_detail_v1($1::jsonb) AS result"#;
+
+/// `dashboard_task_detail_v1` (internal)
+pub const DASHBOARD_TASK_DETAIL_V1: &str =
+    r#"SELECT workhorse.dashboard_task_detail_v1($1::jsonb) AS result"#;
+
+/// `dashboard_checkpoint_value_v1` (internal)
+pub const DASHBOARD_CHECKPOINT_VALUE_V1: &str =
+    r#"SELECT workhorse.dashboard_checkpoint_value_v1($1::jsonb) AS result"#;
+
+/// `dashboard_task_value_v1` (internal)
+pub const DASHBOARD_TASK_VALUE_V1: &str =
+    r#"SELECT workhorse.dashboard_task_value_v1($1::jsonb) AS result"#;
+
+/// `dashboard_settings_v1` (internal)
+pub const DASHBOARD_SETTINGS_V1: &str =
+    r#"SELECT workhorse.dashboard_settings_v1($1::jsonb) AS result"#;
+
+/// `dashboard_system_v1` (internal)
+pub const DASHBOARD_SYSTEM_V1: &str =
+    r#"SELECT workhorse.dashboard_system_v1($1::jsonb) AS result"#;
+
 /// `get_retention_policy_v1` (internal)
 pub const GET_RETENTION_POLICY_V1: &str =
     r#"SELECT (policy).* FROM workhorse.get_retention_policy_v1() policy"#;

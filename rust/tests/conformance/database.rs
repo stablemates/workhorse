@@ -5,7 +5,7 @@
 use std::error::Error as StdError;
 use std::path::PathBuf;
 
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use serde_json::{Map, Number, Value};
 use tokio_postgres::types::{FromSql, ToSql, Type};
 use tokio_postgres::{Row, Statement};
@@ -79,6 +79,14 @@ pub fn parameter(value: &Value, kind: &Type) -> Result<Parameter, String> {
                 .map_err(|_| mismatch())?
                 .with_timezone(&Utc),
         ),
+        Type::TIME => {
+            let text = value.as_str().ok_or_else(mismatch)?;
+            Box::new(
+                NaiveTime::parse_from_str(text, "%H:%M:%S")
+                    .or_else(|_| NaiveTime::parse_from_str(text, "%H:%M"))
+                    .map_err(|_| mismatch())?,
+            )
+        }
         Type::TEXT_ARRAY => Box::new(
             value
                 .as_array()
@@ -103,6 +111,7 @@ fn null_of(kind: &Type) -> Option<Parameter> {
         }
         Type::UUID => Box::new(None::<Uuid>),
         Type::TIMESTAMPTZ => Box::new(None::<DateTime<Utc>>),
+        Type::TIME => Box::new(None::<NaiveTime>),
         Type::TEXT_ARRAY => Box::new(None::<Vec<String>>),
         _ => return None,
     })

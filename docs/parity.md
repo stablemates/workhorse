@@ -197,16 +197,16 @@ through its own public SDK.
 
 <!-- BEGIN GENERATED PARITY OPERATOR -->
 
-| Capability                                 | TypeScript | Python    | Go        | Rust              |
-| ------------------------------------------ | ---------- | --------- | --------- | ----------------- |
-| Task lookup, listing, and timeline         | Supported  | Supported | Supported | Supported         |
-| Queue health snapshot                      | Supported  | Supported | Supported | Supported         |
-| Cancellation requests                      | Supported  | Supported | Supported | Supported         |
-| Queue pause, resume, and purge             | Supported  | Supported | Supported | Supported         |
-| Dead-letter listing and redrive            | Supported  | Supported | Supported | Supported         |
-| Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported | Supported         |
-| Durable operator worker pause              | Supported  | Supported | Supported | Supported         |
-| Embedded dashboard backend                 | Supported  | Supported | Supported | [Planned][SM-885] |
+| Capability                                 | TypeScript | Python    | Go        | Rust      |
+| ------------------------------------------ | ---------- | --------- | --------- | --------- |
+| Task lookup, listing, and timeline         | Supported  | Supported | Supported | Supported |
+| Queue health snapshot                      | Supported  | Supported | Supported | Supported |
+| Cancellation requests                      | Supported  | Supported | Supported | Supported |
+| Queue pause, resume, and purge             | Supported  | Supported | Supported | Supported |
+| Dead-letter listing and redrive            | Supported  | Supported | Supported | Supported |
+| Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported | Supported |
+| Durable operator worker pause              | Supported  | Supported | Supported | Supported |
+| Embedded dashboard backend                 | Supported  | Supported | Supported | Supported |
 
 <!-- END GENERATED PARITY OPERATOR -->
 
@@ -277,6 +277,5 @@ stops the published view from becoming another source of truth.
 <!-- BEGIN GENERATED PARITY LINEAR LINKS -->
 
 [SM-879]: https://linear.app/stablemates/issue/SM-879
-[SM-885]: https://linear.app/stablemates/issue/SM-885
 
 <!-- END GENERATED PARITY LINEAR LINKS -->

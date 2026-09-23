@@ -8,6 +8,9 @@
  * `[patch.crates-io]` entry points that version at the unpacked archive. The consumer therefore
  * sees only the files crates.io would serve, never the checkout.
  *
+ * The archive must stay under crates.io's 10 MB upload limit. A consumer that enables no feature
+ * must resolve no HTTP crate, because only the `dashboard` feature serves HTTP.
+ *
  * The consumer builds with no features and with every declared feature. When a test database is
  * configured, it enqueues one task into a scratch database and the check reads that row back.
  *
@@ -17,7 +20,7 @@
  */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Client } from "pg";
@@ -37,6 +40,12 @@ const requiredMetadata = [
   "keywords",
   "rust_version",
 ] as const;
+
+/** crates.io refuses a larger `.crate` upload. */
+const maximumArchiveBytes = 10 * 1024 * 1024;
+
+/** Crates only the `dashboard` feature may bring into a consumer's build. */
+const httpCrates = ["http", "http-body", "http-body-util", "tower-service"] as const;
 
 interface CargoPackage {
   id: string;
@@ -149,6 +158,12 @@ export function consumerManifest(crate: { name: string; version: string }, unpac
   ].join("\n");
 }
 
+/** The HTTP crates a `cargo tree --prefix none` listing names. */
+export function httpDependencies(tree: string): string[] {
+  const names = new Set(tree.split("\n").map((line) => line.trim().split(" ")[0]));
+  return httpCrates.filter((name) => names.has(name));
+}
+
 /** A scratch name `pnpm db:sweep` recognizes: the source name, a tag, and a ten-digit digest. */
 export function scratchDatabaseName(source: string, pid: number): string {
   const digest = createHash("sha256").update(`rust-release:${pid}`).digest("hex");
@@ -238,6 +253,13 @@ async function checkRustRelease(argv: readonly string[]): Promise<void> {
     "package",
     `${crate.name}-${crate.version}.crate`,
   );
+  const { size } = await stat(archive);
+  if (size > maximumArchiveBytes) {
+    throw new Error(
+      `${archive} is ${size} bytes; crates.io accepts at most ${maximumArchiveBytes}`,
+    );
+  }
+  console.log(`The packaged crate is ${size} bytes`);
   const temporary = await mkdtemp(path.join(tmpdir(), "workhorse-rust-release-"));
   try {
     await run("tar", ["-xzf", archive, "-C", temporary]);
@@ -254,6 +276,15 @@ async function checkRustRelease(argv: readonly string[]): Promise<void> {
     );
     if (!resolved || resolved.source !== null || !resolved.manifest_path.startsWith(unpacked)) {
       throw new Error(`The consumer resolved ${crate.name} from outside ${archive}`);
+    }
+
+    const tree = await cargo(
+      ["tree", "--manifest-path", manifest, "--edges", "normal", "--prefix", "none"],
+      { capture: true },
+    );
+    const leaked = httpDependencies(tree);
+    if (leaked.length > 0) {
+      throw new Error(`A build without the dashboard feature resolves ${leaked.join(", ")}`);
     }
 
     // A shared target directory caches the dependencies between runs without sharing sources.
