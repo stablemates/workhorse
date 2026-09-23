@@ -2297,6 +2297,9 @@ BEGIN
                 AS oldest_task_identity_at,
               (SELECT finished_at FROM workhorse.task_outcome ORDER BY finished_at, task_id LIMIT 1)
                 AS oldest_terminal_outcome_at,
+              -- A row counts as eligible only once workhorse.prune_terminal_tasks_v1 could delete it.
+              -- That prune also waits until daily history retention has passed the row's history, so
+              -- a row held only by that gate is waiting on history retention, not lagging here.
               (SELECT task.created_at
                  FROM workhorse.task task
                  JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
@@ -2306,6 +2309,10 @@ BEGIN
                     - make_interval(days => policy.task_identity_retention_days)
                   AND outcome.finished_at < clock_timestamp()
                     - make_interval(days => policy.terminal_outcome_retention_days)
+                  AND outcome.history_through_at < (
+                    SELECT history_retained_before FROM workhorse.maintenance_state
+                     WHERE routine_name = 'history_retention'
+                  )
                 ORDER BY task.created_at, task.id LIMIT 1)
                 AS eligible_task_identity_at,
               (SELECT outcome.finished_at
@@ -2317,6 +2324,10 @@ BEGIN
                     - make_interval(days => policy.task_identity_retention_days)
                   AND outcome.finished_at < clock_timestamp()
                     - make_interval(days => policy.terminal_outcome_retention_days)
+                  AND outcome.history_through_at < (
+                    SELECT history_retained_before FROM workhorse.maintenance_state
+                     WHERE routine_name = 'history_retention'
+                  )
                 ORDER BY outcome.finished_at, outcome.task_id LIMIT 1)
                 AS eligible_terminal_outcome_at,
               (SELECT occurred_at FROM workhorse.task_event ORDER BY occurred_at, event_id LIMIT 1)
@@ -15657,10 +15668,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (20, 'enqueue skips the dependency block'),
   (21, 'a claim locks only the row it takes'),
   (22, 'history staging through pg_temp'),
-  (23, 'a canceled dependent releases its edges')
+  (23, 'a canceled dependent releases its edges'),
+  (24, 'row retention lag waits for history retention')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (23) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (24) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

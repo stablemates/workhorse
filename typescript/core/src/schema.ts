@@ -164,6 +164,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "a canceled dependent releases its edges",
     kind: "additive",
   },
+  {
+    fromVersion: 23,
+    toVersion: 24,
+    file: "0024-row-retention-lag-waits-for-history-retention.sql",
+    description: "row retention lag waits for history retention",
+    kind: "additive",
+  },
 ];
 
 /**
