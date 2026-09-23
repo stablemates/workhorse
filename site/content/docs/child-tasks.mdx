@@ -6,7 +6,7 @@ description: Delegate durable work from a handler and join its result without ho
 `HandlerContext.runChild` creates a child and moves its parent to `blocked` in one transaction. The
 parent releases its lease while the child runs, then restarts from the top when the child settles.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     const charge = await context.runChild<{ orderId: string }, { receiptId: string }>(
@@ -37,6 +37,18 @@ parent releases its lease while the child runs, then restarts from the top when 
     )
     ```
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    let charge: Value = context
+        .run_child(
+            "charge",
+            "payments.charge",
+            &json!({ "orderId": order.id }),
+            EnqueueOptions { queue: Some("payments".into()), ..Default::default() },
+        )
+        .await?;
+    ```
+  </Tab>
 </Tabs>
 
 On replay, the stable child name and request return the retained result instead of creating another
@@ -48,11 +60,12 @@ only after the whole set settles. The method returns a tagged `succeeded`, `fail
 outcome for every child, so the parent handler chooses its own final result.
 
 Python handlers call `run_child` or `run_children`. Go handlers call `RunChild` or
-`RunChildren`. Both set methods retain the declared names and request order. Use
-`runChildrenAll`, `run_children_all`, or `RunChildrenAll` when a child failure or cancellation
-must propagate to the parent.
+`RunChildren`. Rust handlers call `run_child` or `run_children` with `ChildTaskRequest` values. Every
+set method retains the declared names. Use `runChildrenAll`, `run_children_all`, or `RunChildrenAll`
+when a child failure or cancellation must propagate to the parent.
 
-Go represents the three tags as `ChildSucceeded`, `ChildFailed`, and `ChildCanceled`.
+Go represents the three tags as `ChildSucceeded`, `ChildFailed`, and `ChildCanceled`. Rust
+represents them as the `ChildOutcome` variants `Succeeded`, `Failed`, and `Canceled`.
 
 Code before either call runs again when the parent resumes. Wrap external effects in checkpoints or
 make them independently idempotent.

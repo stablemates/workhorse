@@ -22,10 +22,10 @@ use workhorse::policies::{
 };
 use workhorse::{
     run_worker_process, Admin, AdminAudit, BatchItem, BatchOptions, BatchResult,
-    BulkRedriveOptions, DeadLetterFilter, DeadLetterQuery, Debounce, DebounceSchedule,
-    Dependencies, DependencyTerminalPolicy, EnqueueOptions, EnqueueRequest, HandlerContext,
-    HandlerError, Idempotency, Queue, ScheduleDefinition, ScheduledTask, Throttle, Worker,
-    WorkerOptions,
+    BulkRedriveOptions, ChildOutcome, ChildTaskRequest, DeadLetterFilter, DeadLetterQuery,
+    Debounce, DebounceSchedule, Dependencies, DependencyTerminalPolicy, EnqueueOptions,
+    EnqueueRequest, HandlerContext, HandlerError, Idempotency, Queue, ScheduleDefinition,
+    ScheduledTask, Throttle, Worker, WorkerOptions,
 };
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -47,6 +47,70 @@ mod mailer {
     pub async fn send(payload: Value) -> Result<Value, HandlerError> {
         Ok(json!({ "sent": payload }))
     }
+
+    pub async fn welcome(to: &str) -> Result<Value, HandlerError> {
+        Ok(json!({ "deliveredTo": to, "kind": "welcome" }))
+    }
+
+    pub async fn follow_up(to: &str) -> Result<Value, HandlerError> {
+        Ok(json!({ "deliveredTo": to, "kind": "follow-up" }))
+    }
+}
+
+mod payments {
+    use serde_json::{json, Value};
+    use workhorse::HandlerError;
+
+    pub async fn charge(order_id: &str, idempotency_key: String) -> Result<Value, HandlerError> {
+        Ok(json!({ "orderId": order_id, "idempotencyKey": idempotency_key }))
+    }
+}
+
+mod logistics {
+    use serde_json::{json, Value};
+    use workhorse::HandlerError;
+
+    pub async fn create_shipment(order_id: &str, charge: &Value) -> Result<Value, HandlerError> {
+        Ok(json!({ "orderId": order_id, "charge": charge }))
+    }
+}
+
+struct Order {
+    id: String,
+}
+
+struct Trial {
+    to: String,
+    follow_up_at: DateTime<Utc>,
+}
+
+struct Import {
+    source: String,
+}
+
+#[derive(Deserialize)]
+struct ProviderEvent {
+    id: String,
+}
+
+async fn publish_order() -> std::result::Result<(), HandlerError> {
+    Ok(())
+}
+
+async fn activate_account(account_id: &str) -> std::result::Result<(), HandlerError> {
+    Ok(())
+}
+
+async fn read_batches(source: &str) -> std::result::Result<Vec<Vec<Value>>, HandlerError> {
+    Ok(Vec::new())
+}
+
+async fn import_batch(batch: &[Value]) -> std::result::Result<(), HandlerError> {
+    Ok(())
+}
+
+async fn call_model(prompt: &str) -> std::result::Result<Value, HandlerError> {
+    Ok(json!({ "prompt": prompt }))
 }
 
 async fn send_email(
@@ -657,6 +721,245 @@ fn batch_handlers(worker: &Worker) {
     // docs:end
 }
 
+async fn durable_checkpoints(
+    context: HandlerContext,
+    order: Order,
+) -> std::result::Result<Value, HandlerError> {
+    // docs:start durable-checkpoint
+    let charge: Value = context
+        .checkpoint("charge", || payments::charge(&order.id, format!("charge:{}", order.id)))
+        .await?;
+    let shipment: Value =
+        context.checkpoint("shipment", || logistics::create_shipment(&order.id, &charge)).await?;
+    // docs:end
+    Ok(shipment)
+}
+
+async fn durable_sleep(
+    context: HandlerContext,
+    trial: Trial,
+) -> std::result::Result<Value, HandlerError> {
+    // docs:start durable-sleep
+    let welcome: Value = context.checkpoint("welcome", || mailer::welcome(&trial.to)).await?;
+    context.sleep_until("follow-up-window", trial.follow_up_at).await?;
+    let follow_up: Value = context.checkpoint("follow-up", || mailer::follow_up(&trial.to)).await?;
+    // docs:end
+    Ok(follow_up)
+}
+
+async fn durable_external(context: HandlerContext) -> std::result::Result<Value, HandlerError> {
+    // docs:start durable-external
+    let event: ProviderEvent = context.wait_for_signal("provider-event", None).await?.payload;
+    let review: Value = context
+        .wait_for_human("operator-review", &json!({ "eventId": event.id }), None)
+        .await?
+        .result;
+    // docs:end
+    Ok(review)
+}
+
+async fn signals(context: HandlerContext) -> std::result::Result<Value, HandlerError> {
+    // docs:start signals-wait
+    let approval: Value = context.wait_for_signal("approval", None).await?.payload;
+    if approval["approved"] == true {
+        publish_order().await?;
+    }
+    // docs:end
+    Ok(approval)
+}
+
+async fn human_waits(
+    context: HandlerContext,
+    account_id: &str,
+) -> std::result::Result<Value, HandlerError> {
+    // docs:start human-waits
+    let review: Value = context
+        .wait_for_human(
+            "account-review",
+            &json!({ "accountId": account_id, "prompt": "Approve this account?" }),
+            None,
+        )
+        .await?
+        .result;
+    if review["approved"] == true {
+        activate_account(account_id).await?;
+    }
+    // docs:end
+    Ok(review)
+}
+
+async fn child_tasks(
+    context: HandlerContext,
+    order: Order,
+) -> std::result::Result<Value, HandlerError> {
+    // docs:start child-tasks
+    let charge: Value = context
+        .run_child(
+            "charge",
+            "payments.charge",
+            &json!({ "orderId": order.id }),
+            EnqueueOptions { queue: Some("payments".into()), ..Default::default() },
+        )
+        .await?;
+    // docs:end
+    Ok(charge)
+}
+
+async fn child_task_set(
+    context: HandlerContext,
+    order: Value,
+) -> std::result::Result<Value, HandlerError> {
+    // docs:start child-tasks-set
+    let results = context
+        .run_children(vec![
+            ChildTaskRequest::new("fraud", "orders.check-fraud", &order)?,
+            ChildTaskRequest::new("inventory", "orders.reserve", &order)?,
+        ])
+        .await?;
+
+    if let Some(ChildOutcome::Failed(error)) = results.get("fraud") {
+        return Ok(json!({ "accepted": false, "reason": error.message }));
+    }
+    // docs:end
+    Ok(json!({ "accepted": true }))
+}
+
+async fn progress(
+    context: HandlerContext,
+    payload: Import,
+) -> std::result::Result<Value, HandlerError> {
+    let mut processed = 0;
+    // docs:start progress-set
+    context.set_progress(&json!({ "phase": "reading", "processed": 0 })).await?;
+    for batch in read_batches(&payload.source).await? {
+        import_batch(&batch).await?;
+        processed += batch.len();
+        context.set_progress(&json!({ "phase": "importing", "processed": processed })).await?;
+    }
+    // docs:end
+    Ok(json!({ "processed": processed }))
+}
+
+async fn agentic_flow(
+    context: HandlerContext,
+    prompt: String,
+    tool_requests: Vec<ChildTaskRequest>,
+    cooldown: Duration,
+) -> std::result::Result<Value, HandlerError> {
+    // docs:start agentic-flow
+    let plan: Value = context.checkpoint("plan", || call_model(&prompt)).await?;
+    context.set_progress(&json!({ "stage": "planned" })).await?;
+    let tools = context.run_children_all(tool_requests).await?;
+    context.sleep("model-cooldown", cooldown).await?;
+    let approval: Value = context.wait_for_signal("approval", None).await?.payload;
+    // docs:end
+    Ok(json!({ "plan": plan, "tools": tools, "approval": approval }))
+}
+
+mod example_trial {
+    // docs:start examples-trial
+    use chrono::{DateTime, Utc};
+    use serde::Deserialize;
+    use serde_json::{json, Value};
+    use workhorse::{HandlerError, Worker};
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Trial {
+        to: String,
+        follow_up_at: DateTime<Utc>,
+    }
+
+    async fn send_welcome(to: &str) -> Result<Value, HandlerError> {
+        Ok(json!({ "deliveredTo": to, "kind": "welcome" }))
+    }
+
+    async fn send_follow_up(to: &str) -> Result<Value, HandlerError> {
+        Ok(json!({ "deliveredTo": to, "kind": "follow-up" }))
+    }
+
+    pub fn register_trial_handler(worker: &Worker) {
+        worker.handle("trial.lifecycle", |trial: Trial, context| async move {
+            let _: Value = context.checkpoint("welcome", || send_welcome(&trial.to)).await?;
+            context.sleep_until("follow-up-window", trial.follow_up_at).await?;
+            let _: Value = context.checkpoint("follow-up", || send_follow_up(&trial.to)).await?;
+            Ok(json!({ "deliveredTo": trial.to }))
+        });
+    }
+    // docs:end
+}
+
+mod example_agent {
+    // docs:start examples-agent
+    use std::future::Future;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use serde::Deserialize;
+    use serde_json::{json, Value};
+    use workhorse::{ChildTaskRequest, EnqueueOptions, HandlerError, Worker};
+
+    pub trait Model: Send + Sync + 'static {
+        fn plan(
+            &self,
+            prompt: &str,
+            idempotency_key: String,
+        ) -> impl Future<Output = Result<Plan, HandlerError>> + Send;
+    }
+
+    #[derive(serde::Serialize, Deserialize)]
+    pub struct Plan {
+        tools: Vec<Tool>,
+    }
+
+    #[derive(serde::Serialize, Deserialize)]
+    struct Tool {
+        id: String,
+        #[serde(flatten)]
+        arguments: Value,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct AgentRun {
+        prompt: String,
+        conversation_id: String,
+    }
+
+    #[derive(Deserialize)]
+    struct Approval {
+        approved: bool,
+    }
+
+    pub fn register_agent<M: Model>(worker: &Worker, model: Arc<M>, cooldown: Duration) {
+        worker.handle("agent.run", move |run: AgentRun, context| {
+            let model = Arc::clone(&model);
+            async move {
+                let key = format!("plan:{}", context.task().id);
+                let plan: Plan =
+                    context.checkpoint("plan", || model.plan(&run.prompt, key)).await?;
+
+                let mut children = Vec::with_capacity(plan.tools.len());
+                for tool in &plan.tools {
+                    let mut child = ChildTaskRequest::new(&tool.id, "agent.tool", tool)?;
+                    child.options = EnqueueOptions {
+                        queue: Some("tools".into()),
+                        concurrency_key: Some(run.conversation_id.clone()),
+                        ..Default::default()
+                    };
+                    children.push(child);
+                }
+
+                let tools = context.run_children_all(children).await?;
+                context.sleep("model-cooldown", cooldown).await?;
+                let approval: Approval = context.wait_for_signal("approval", None).await?.payload;
+                Ok(json!({ "plan": plan, "tools": tools, "approved": approval.approved }))
+            }
+        });
+    }
+    // docs:end
+}
+
 mod example_transaction {
     // docs:start examples-transaction
     use serde_json::json;
@@ -859,4 +1162,36 @@ mod quickstart_order {
         Ok(())
     }
     // docs:end
+}
+
+#[cfg(feature = "dashboard")]
+mod dashboard_mount {
+    use workhorse::dashboard::http::request::Parts;
+    use workhorse::deadpool_postgres::Pool;
+
+    fn application_admin_session(request: &Parts) -> Option<String> {
+        request.headers.get("x-admin").and_then(|value| value.to_str().ok()).map(str::to_owned)
+    }
+
+    fn mount(pool: Pool) -> super::Result<axum::Router> {
+        // docs:start dashboard-mount
+        use workhorse::dashboard::{self, Authorization, DashboardOptions, Principal};
+
+        let authorize = dashboard::authorize(|request| {
+            let session = application_admin_session(request);
+            async move {
+                match session {
+                    Some(username) => Authorization::Principal(Principal { actor: username }),
+                    None => Authorization::Unauthenticated,
+                }
+            }
+        });
+        let mut options = DashboardOptions::new(pool, authorize);
+        options.path = "/workhorse".into();
+        options.environment = "production".into();
+        let operator = dashboard::handler(options)?;
+        let app = axum::Router::new().nest_service("/workhorse", operator);
+        // docs:end
+        Ok(app)
+    }
 }

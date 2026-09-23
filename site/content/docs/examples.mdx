@@ -137,7 +137,7 @@ The problem: a trial signup should send a welcome email now and a follow-up in s
 neither email may ever send twice. Checkpoints make each send a restart boundary; the durable sleep
 releases the worker slot for the whole week.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     worker.handle("trial.lifecycle", async (payload: { to: string; followUpAt: string }, context) => {
@@ -235,6 +235,38 @@ releases the worker slot for the whole week.
     }
     ```
 
+  </Tab>
+  <Tab value="Rust">
+    ```rust
+    use chrono::{DateTime, Utc};
+    use serde::Deserialize;
+    use serde_json::{json, Value};
+    use workhorse::{HandlerError, Worker};
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Trial {
+        to: String,
+        follow_up_at: DateTime<Utc>,
+    }
+
+    async fn send_welcome(to: &str) -> Result<Value, HandlerError> {
+        Ok(json!({ "deliveredTo": to, "kind": "welcome" }))
+    }
+
+    async fn send_follow_up(to: &str) -> Result<Value, HandlerError> {
+        Ok(json!({ "deliveredTo": to, "kind": "follow-up" }))
+    }
+
+    pub fn register_trial_handler(worker: &Worker) {
+        worker.handle("trial.lifecycle", |trial: Trial, context| async move {
+            let _: Value = context.checkpoint("welcome", || send_welcome(&trial.to)).await?;
+            context.sleep_until("follow-up-window", trial.follow_up_at).await?;
+            let _: Value = context.checkpoint("follow-up", || send_follow_up(&trial.to)).await?;
+            Ok(json!({ "deliveredTo": trial.to }))
+        });
+    }
+    ```
   </Tab>
 </Tabs>
 
@@ -899,7 +931,7 @@ The problem: a model plans work, several tools run independently, and execution 
 deploy while waiting for approval. Checkpoint the model call, join tools as child tasks, cross a
 durable timer, then wait for an idempotent signal.
 
-<Tabs items={["TypeScript", "Python", "Go"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
   <Tab value="TypeScript">
     ```ts
     worker.handle("agent.run", async ({ prompt, conversationId }, context) => {
@@ -1072,6 +1104,76 @@ durable timer, then wait for an idempotent signal.
     ```
 
   </Tab>
+  <Tab value="Rust">
+    ```rust
+    use std::future::Future;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use serde::Deserialize;
+    use serde_json::{json, Value};
+    use workhorse::{ChildTaskRequest, EnqueueOptions, HandlerError, Worker};
+
+    pub trait Model: Send + Sync + 'static {
+        fn plan(
+            &self,
+            prompt: &str,
+            idempotency_key: String,
+        ) -> impl Future<Output = Result<Plan, HandlerError>> + Send;
+    }
+
+    #[derive(serde::Serialize, Deserialize)]
+    pub struct Plan {
+        tools: Vec<Tool>,
+    }
+
+    #[derive(serde::Serialize, Deserialize)]
+    struct Tool {
+        id: String,
+        #[serde(flatten)]
+        arguments: Value,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct AgentRun {
+        prompt: String,
+        conversation_id: String,
+    }
+
+    #[derive(Deserialize)]
+    struct Approval {
+        approved: bool,
+    }
+
+    pub fn register_agent<M: Model>(worker: &Worker, model: Arc<M>, cooldown: Duration) {
+        worker.handle("agent.run", move |run: AgentRun, context| {
+            let model = Arc::clone(&model);
+            async move {
+                let key = format!("plan:{}", context.task().id);
+                let plan: Plan =
+                    context.checkpoint("plan", || model.plan(&run.prompt, key)).await?;
+
+                let mut children = Vec::with_capacity(plan.tools.len());
+                for tool in &plan.tools {
+                    let mut child = ChildTaskRequest::new(&tool.id, "agent.tool", tool)?;
+                    child.options = EnqueueOptions {
+                        queue: Some("tools".into()),
+                        concurrency_key: Some(run.conversation_id.clone()),
+                        ..Default::default()
+                    };
+                    children.push(child);
+                }
+
+                let tools = context.run_children_all(children).await?;
+                context.sleep("model-cooldown", cooldown).await?;
+                let approval: Approval = context.wait_for_signal("approval", None).await?.payload;
+                Ok(json!({ "plan": plan, "tools": tools, "approved": approval.approved }))
+            }
+        });
+    }
+    ```
+  </Tab>
 </Tabs>
 
 Every boundary releases the lease and restarts the handler later, so names and child requests must
@@ -1080,7 +1182,9 @@ whole lifecycle; run it with `pnpm example:agentic-flow` against an installed Wo
 
 Python consumers can run `python/examples/lifecycle.py` for retry, checkpoint, timer, child, signal,
 and human-decision boundaries. Go consumers can run `go/examples/orchestration/main.go` for child,
-signal, and human-decision boundaries. Both release lanes verify the public package imports.
+signal, and human-decision boundaries. Rust consumers can run `rust/examples/orchestration.rs` for
+child, signal, and human-decision boundaries. Every release lane verifies the public package
+imports.
 
 ## Next
 

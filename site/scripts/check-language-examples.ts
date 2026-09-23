@@ -389,20 +389,8 @@ for (const name of rustRegions.keys()) {
 // Every tab group that carries Go carries Rust, except where the Rust API the example needs has not
 // landed. Each exclusion names the Issue that removes it, and an exclusion a page no longer needs
 // fails the check.
-const rustPendingPages: Record<string, string> = {
-  "agentic-flow.mdx": "SM-879 durable HandlerContext",
-  "child-tasks.mdx": "SM-879 durable HandlerContext",
-  "dashboard.mdx": "SM-885 dashboard tower::Service",
-  "durable-execution.mdx": "SM-879 durable HandlerContext",
-  "for-ai-agents.mdx": "SM-879 durable HandlerContext",
-  "human-waits.mdx": "SM-879 durable HandlerContext",
-  "progress.mdx": "SM-879 durable HandlerContext",
-  "signals.mdx": "SM-879 durable HandlerContext",
-};
-const rustPendingExamples: Record<string, string> = {
-  "Multi-stage handler with checkpoints and a durable sleep": "SM-879 durable HandlerContext",
-  "Durable agentic flow": "SM-879 durable HandlerContext",
-};
+const rustPendingPages: Record<string, string> = {};
+const rustPendingExamples: Record<string, string> = {};
 for (const name of readdirSync(resolve(siteRoot, "content/docs")).filter((entry) =>
   entry.endsWith(".mdx"),
 )) {
@@ -432,16 +420,18 @@ for (const name of readdirSync(resolve(siteRoot, "content/docs")).filter((entry)
 
 // The agent playbook page names SDK identifiers in prose that no compiler sees. Tier 1 is the
 // compilation of its `verify` fences below. Tier 2 requires every backticked identifier the prose
-// attributes to a language to appear in that language's `verify` fence on the same page. Tier 3
+// attributes to a language to appear in that language's `verify` fence on the same page, or in the
+// page's one Rust fence, which the docs-region check above ties to a compiled example. Tier 3
 // admits the identifiers no fence exercises through a fixed allowlist, and each entry names the
 // source file that must still define it.
-type PlaybookLanguage = "ts" | "python" | "go";
+type PlaybookLanguage = "ts" | "python" | "go" | "rust";
 const playbookLanguageNames: Record<string, PlaybookLanguage> = {
   TypeScript: "ts",
   Python: "python",
   Go: "go",
+  Rust: "rust",
 };
-const playbookLanguagePattern = /TypeScript|Python|Go/g;
+const playbookLanguagePattern = /TypeScript|Python|Go|Rust/g;
 // Identifiers named in the playbook's prose that its fences do not exercise, paired with the source
 // file that defines each one. An entry the prose no longer needs fails the check, so the list cannot
 // outlive the sentence it serves.
@@ -450,21 +440,23 @@ const playbookProseAllowlist: Record<string, string> = {
   assertSchemaCompatible: "typescript/core/src/schema.ts",
   assert_schema_compatible: "python/src/workhorse/compatibility.py",
   AssertSchemaCompatible: "go/compatibility.go",
+  assert_compatible: "rust/src/admin.rs",
   // Enqueue bounds the example does not set. Prose with no language attribution is read as the
   // TypeScript spelling, which is the spelling the cross-SDK pages lead with.
   deadline: "typescript/core/src/types.ts",
   executionTimeoutMs: "typescript/core/src/types.ts",
 };
 const playbookFences = Object.fromEntries(
-  (["ts", "python", "go"] as const).map((language) => {
+  (["ts", "python", "go", "rust"] as const).map((language) => {
     const fence = "`".repeat(3);
+    const info = language === "rust" ? "rust" : `${language} verify`;
     const matches = [
       ...agentIntegrationSource.matchAll(
-        new RegExp(`${fence}${language} verify\\n([\\s\\S]*?)\\n {0,4}${fence}`, "g"),
+        new RegExp(`${fence}${info}\\n([\\s\\S]*?)\\n {0,4}${fence}`, "g"),
       ),
     ];
     if (matches.length !== 1) {
-      throw new Error(`for-ai-agents.mdx must hold exactly one ${language} verify fence`);
+      throw new Error(`for-ai-agents.mdx must hold exactly one ${info} fence`);
     }
     return [language, matches[0]![1]!];
   }),
@@ -482,7 +474,9 @@ function playbookProseLanguages(sentence: string, start: number, end: number): P
   // that, the nearest language named earlier in the sentence owns it, as in "Go wraps ... `name`".
   const following = sentence
     .slice(end)
-    .match(/^ in ((?:(?:TypeScript|Python|Go)(?:,? (?:and|or) |, ))*(?:TypeScript|Python|Go))/);
+    .match(
+      /^ in ((?:(?:TypeScript|Python|Go|Rust)(?:,? (?:and|or) |, ))*(?:TypeScript|Python|Go|Rust))/,
+    );
   const attributed = following
     ? [...following[1]!.matchAll(playbookLanguagePattern)].map((match) => match[0])
     : [...sentence.slice(0, start).matchAll(playbookLanguagePattern)].slice(-1).map((m) => m[0]);
@@ -491,8 +485,9 @@ function playbookProseLanguages(sentence: string, start: number, end: number): P
 
 function playbookFenceUses(fence: string, identifier: string): boolean {
   // `Admin.getTask` is satisfied by `new Admin(pool).getTask(taskId)`: the member must appear as a
-  // whole word, and each qualifier may end a longer name such as `NewAdmin`.
-  const segments = identifier.replace(/\(.*\)$/, "").split(".");
+  // whole word, and each qualifier may end a longer name such as `NewAdmin`. Rust paths qualify
+  // with `::`.
+  const segments = identifier.replace(/\(.*\)$/, "").split(/\.|::/);
   const member = segments.pop()!;
   return (
     new RegExp(`\\b${member}\\b`).test(fence) &&
@@ -503,7 +498,7 @@ function playbookFenceUses(fence: string, identifier: string): boolean {
 for (const sentence of playbookSentences) {
   for (const match of sentence.matchAll(/`([^`]+)`/g)) {
     const span = match[1]!;
-    if (!/^[A-Za-z_][\w.]*(?:\([^()]*\))?$/.test(span)) continue;
+    if (!/^[A-Za-z_](?:[\w.]|::)*(?:\([^()]*\))?$/.test(span)) continue;
     for (const language of playbookProseLanguages(
       sentence,
       match.index,
@@ -513,7 +508,7 @@ for (const sentence of playbookSentences) {
       const sourcePath = playbookProseAllowlist[span];
       if (sourcePath === undefined) {
         throw new Error(
-          `for-ai-agents.mdx names ${span} for ${language} but no ${language} verify fence uses it`,
+          `for-ai-agents.mdx names ${span} for ${language} but no ${language} fence on the page uses it`,
         );
       }
       consultedAllowlist.add(span);

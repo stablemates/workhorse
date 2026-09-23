@@ -68,7 +68,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 Handlers receive at-least-once delivery. Use stable provider idempotency keys around external
-effects. `rust/examples/` also holds a transactional enqueue and a dedicated worker process.
+effects. `rust/examples/` also holds a transactional enqueue, a dedicated worker process, and an
+orchestration of child tasks, signals, and human decisions.
 
 ## Package boundary
 

@@ -23,11 +23,7 @@
       "typescript": { "file": "typescript/examples/orchestration.mjs" },
       "python": { "file": "python/examples/lifecycle.py" },
       "go": { "file": "go/examples/orchestration/main.go" },
-      "rust": {
-        "exclusion": {
-          "reason": "Rust has no orchestration example until SM-879 adds checkpoints, durable sleep, and child tasks to the handler context."
-        }
-      }
+      "rust": { "file": "rust/examples/orchestration.rs" }
     },
     "demo-worker": {
       "typescript": { "file": "typescript/examples/demo-worker.mjs" },
@@ -53,7 +49,7 @@
       },
       "rust": {
         "exclusion": {
-          "reason": "Rust has no agentic-flow example; the flow needs the durable handler context SM-879 adds."
+          "reason": "Rust has no agentic-flow example; the TypeScript file is the current composition."
         }
       }
     },

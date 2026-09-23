@@ -743,8 +743,28 @@ clean shutdown. `run_worker_process(&worker)` in `rust/src/worker/process.rs` in
 `SIGTERM` handlers, or waits for Ctrl-C on other platforms, and passes that signal as the shutdown
 future. It never exits the process, so the caller chooses the exit code.
 
-`rust/examples/` holds the runnable quickstart, transaction, and dedicated-worker programs.
-`rust/examples/docs.rs` holds the `// docs:start` regions the site embeds. `pnpm rust:clippy`
+`HandlerContext` in `rust/src/context.rs`, `rust/src/waits.rs`, and `rust/src/children.rs` gives
+each handler its durable calls over the worker's pool. Every checkpoint, wait, and child name
+contains 1 through 200 characters. `checkpoint(name, op)` returns the stored value, or runs `op` once
+and saves its result. `set_progress` replaces the latest progress, and `get_progress` returns `None`
+before any report. A throttled report returns `Error::ProgressRateLimited` with its retry delay.
+`sleep` accepts whole milliseconds from 1 millisecond through 365 days, and `sleep_until` accepts a
+wake time at most 365 days ahead. `wait_for_signal` and `wait_for_human` take an optional timeout of
+whole milliseconds from 1 millisecond through 7 days. The human context encodes to at most 65,536
+bytes of JSON. `run_child`, `run_children`, and `run_children_all` accept at most 100 children with
+unique names. `run_children` maps each name to a `ChildOutcome`, and `run_children_all` fails unless
+every child succeeds. An oversized child result returns `Error::ChildResultLimitExceeded`. A
+refused durable call returns `Error::Conflict`, `Error::LimitExceeded`, `Error::AlreadyWaiting`, or
+`Error::LeaseLost`. A suspending call returns `Error::Suspended`. PostgreSQL has already settled that task, so
+the worker ignores the handler's return.
+
+The `dashboard` feature adds `rust/src/dashboard/`. `dashboard::handler(DashboardOptions)` returns
+a `tower::Service` over a caller-owned executor, and `dashboard::authorize` adapts an async closure
+that returns an `Authorization`.
+
+`rust/examples/` holds the runnable quickstart, transaction, dedicated-worker, and orchestration
+programs. `rust/examples/docs.rs` holds the `// docs:start` regions the site embeds, and
+`rust/examples/agent_playbook.rs` is the whole-file region behind the agent playbook. `pnpm rust:clippy`
 compiles every example with `--all-targets`. `site/scripts/check-language-examples.ts` requires each
 Rust fence in `site/content/docs/` and `docs/guides/` to equal one region, and every region to back
 at least one fence.
