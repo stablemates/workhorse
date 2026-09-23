@@ -151,16 +151,14 @@ async fn every_protocol_fixture_passes_or_is_listed() {
     for fixture in catalogue.category("contracts") {
         record(&mut outcomes, "contracts", fixture, outcome(run_contract(fixture)));
     }
+    let envelope = read_json(&protocol_directory().join("failures.json"))["envelope"].clone();
     for fixture in catalogue.category("failures") {
-        let reason = "the Rust worker does not record a handler failure envelope";
-        record(&mut outcomes, "failures", fixture, Outcome::Unsupported(reason.to_owned()));
+        let result = conformance::runtime::run_failure(fixture, &envelope).await;
+        record(&mut outcomes, "failures", fixture, result);
     }
     for fixture in catalogue.category("runtime") {
-        let reason = format!(
-            "no Rust worker runtime executes {} fixtures",
-            fixture["kind"].as_str().unwrap_or("runtime")
-        );
-        record(&mut outcomes, "runtime", fixture, Outcome::Unsupported(reason));
+        let result = conformance::runtime::run_runtime(fixture).await;
+        record(&mut outcomes, "runtime", fixture, result);
     }
 
     let mut problems = Vec::new();

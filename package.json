@@ -146,7 +146,7 @@
     "rust:conformance:check": "tsx scripts/generate-rust-conformance.ts --check && pnpm parity:check",
     "rust:format:check": "tsx scripts/with-env.ts cargo fmt --all -- --check && tsx scripts/with-env.ts rustfmt --check --edition 2021 rust/release-consumer/main.rs",
     "rust:test": "tsx scripts/with-env.ts cargo test --workspace",
-    "rust:integration": "WORKHORSE_REQUIRE_DATABASE=1 tsx scripts/with-env.ts cargo test --package workhorse --features opentelemetry --test postgres --test enqueue_postgres --test client_postgres --test admin_postgres --test protocol_conformance",
+    "rust:integration": "WORKHORSE_REQUIRE_DATABASE=1 tsx scripts/with-env.ts cargo test --package workhorse --features opentelemetry --test postgres --test enqueue_postgres --test client_postgres --test admin_postgres --test worker_postgres --test protocol_conformance",
     "rust:gates": "pnpm rust:format:check && pnpm rust:clippy && pnpm rust:test && pnpm rust:conformance:check",
     "rust:package-check": "tsx scripts/with-env.ts tsx scripts/check-rust-release.ts",
     "rust:release-check": "pnpm rust:gates && pnpm rust:package-check",

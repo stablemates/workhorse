@@ -2,104 +2,14 @@
   "$comment": "protocol/v1 fixtures the Rust lane does not pass yet. Each entry names the Issue that owns the gap. protocol_conformance.rs fails when an unlisted fixture does not pass and when a listed fixture passes.",
   "fixtures": [
     {
-      "fixture": "failures/declared-name-and-stack",
-      "issue": "SM-878",
-      "reason": "The Rust worker does not record a handler failure envelope."
-    },
-    {
-      "fixture": "failures/declared-name-without-stack",
-      "issue": "SM-878",
-      "reason": "The Rust worker does not record a handler failure envelope."
-    },
-    {
-      "fixture": "failures/redacted-details",
-      "issue": "SM-878",
-      "reason": "The Rust worker does not record a handler failure envelope."
-    },
-    {
-      "fixture": "failures/undeclared-name",
-      "issue": "SM-878",
-      "reason": "The Rust worker does not record a handler failure envelope."
-    },
-    {
-      "fixture": "runtime/budget-admission-holds-across-queues",
-      "issue": "SM-878",
-      "reason": "No Rust worker runtime executes budget-admission-race fixtures."
-    },
-    {
-      "fixture": "runtime/cooperative-cancellation-reaches-handler",
-      "issue": "SM-878",
-      "reason": "No Rust worker runtime executes cooperative-cancellation fixtures."
-    },
-    {
-      "fixture": "runtime/deadline-settles-after-database-first-heartbeat",
-      "issue": "SM-878",
-      "reason": "No Rust worker runtime executes expiration fixtures."
-    },
-    {
-      "fixture": "runtime/deadline-settles-after-early-local-timer",
-      "issue": "SM-878",
-      "reason": "No Rust worker runtime executes expiration fixtures."
-    },
-    {
       "fixture": "runtime/durable-wait-suspension-and-checkpoint-replay",
       "issue": "SM-879",
       "reason": "No Rust durable handler context suspends a task and replays its checkpoints."
     },
     {
-      "fixture": "runtime/empty-polls-back-off-with-jitter",
-      "issue": "SM-878",
-      "reason": "No Rust worker runtime executes poll-cadence fixtures."
-    },
-    {
-      "fixture": "runtime/enqueue-trace-context-reaches-handler",
-      "issue": "SM-878",
-      "reason": "No Rust worker runtime executes trace-propagation fixtures."
-    },
-    {
-      "fixture": "runtime/execution-timeout-settles-after-early-local-timer",
-      "issue": "SM-878",
-      "reason": "No Rust worker runtime executes expiration fixtures."
-    },
-    {
-      "fixture": "runtime/failed-heartbeat-rounds-keep-the-attempt-running",
-      "issue": "SM-878",
-      "reason": "No Rust worker runtime executes heartbeat-failure fixtures."
-    },
-    {
-      "fixture": "runtime/failing-maintenance-phase-leaves-the-worker-claiming",
-      "issue": "SM-878",
-      "reason": "No Rust worker runtime executes maintenance-phase-error fixtures."
-    },
-    {
-      "fixture": "runtime/heartbeats-never-overlap",
-      "issue": "SM-878",
-      "reason": "No Rust worker runtime executes heartbeat-cadence fixtures."
-    },
-    {
-      "fixture": "runtime/json-values-survive-the-payload-and-result-round-trip",
-      "issue": "SM-878",
-      "reason": "No Rust worker runtime executes json-round-trip fixtures."
-    },
-    {
       "fixture": "runtime/lease-loss-fences-handler-writes",
-      "issue": "SM-878",
-      "reason": "No Rust worker runtime executes lease-loss fixtures."
-    },
-    {
-      "fixture": "runtime/missing-handler-releases-the-task-with-its-attempt-intact",
-      "issue": "SM-878",
-      "reason": "No Rust worker runtime executes missing-handler fixtures."
-    },
-    {
-      "fixture": "runtime/priority-ordered-mixed-batch",
-      "issue": "SM-878",
-      "reason": "No Rust worker runtime executes batch fixtures."
-    },
-    {
-      "fixture": "runtime/stop-drains-active-slots-without-new-claims",
-      "issue": "SM-878",
-      "reason": "No Rust worker runtime executes graceful-drain fixtures."
+      "issue": "SM-879",
+      "reason": "The writes a lost lease must reject (checkpoint, sleep, sleepUntil, waitForSignal, waitForHuman, runChild and runChildren) are durable-context APIs, which the Rust worker gains in SM-879."
     }
   ]
 }

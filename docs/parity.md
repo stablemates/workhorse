@@ -61,24 +61,24 @@ telemetry, and graceful shutdown.
 
 | Capability                                   | TypeScript | Python    | Go        | Rust              |
 | -------------------------------------------- | ---------- | --------- | --------- | ----------------- |
-| Claiming and handler execution               | Supported  | Supported | Supported | [Planned][SM-878] |
-| Bounded worker concurrency                   | Supported  | Supported | Supported | [Planned][SM-878] |
-| Unhandled task type released to its queue    | Supported  | Supported | Supported | [Planned][SM-878] |
-| Heartbeats, lease recovery, fenced ownership | Supported  | Supported | Supported | [Planned][SM-878] |
-| Cooperative cancellation delivery            | Supported  | Supported | Supported | [Planned][SM-878] |
-| Notification-assisted dispatch with polling  | Supported  | Supported | Supported | [Planned][SM-878] |
+| Claiming and handler execution               | Supported  | Supported | Supported | Supported         |
+| Bounded worker concurrency                   | Supported  | Supported | Supported | Supported         |
+| Unhandled task type released to its queue    | Supported  | Supported | Supported | Supported         |
+| Heartbeats, lease recovery, fenced ownership | Supported  | Supported | Supported | Supported         |
+| Cooperative cancellation delivery            | Supported  | Supported | Supported | Supported         |
+| Notification-assisted dispatch with polling  | Supported  | Supported | Supported | Supported         |
 | Durable checkpoints (handler context)        | Supported  | Supported | Supported | [Planned][SM-879] |
 | Durable timers (`sleep` / `sleepUntil`)      | Supported  | Supported | Supported | [Planned][SM-879] |
 | Signal and human-decision waits              | Supported  | Supported | Supported | [Planned][SM-879] |
 | Linked child fan-out and result join         | Supported  | Supported | Supported | [Planned][SM-879] |
 | Latest-value progress reporting              | Supported  | Supported | Supported | [Planned][SM-879] |
-| Batch handler delivery                       | Supported  | Supported | Supported | [Planned][SM-878] |
-| Schedule firing (database cron evaluation)   | Supported  | Supported | Supported | [Planned][SM-878] |
-| Worker fleet registration and remote pause   | Supported  | Supported | Supported | [Planned][SM-878] |
-| Graceful stop and signal drain               | Supported  | Supported | Supported | [Planned][SM-878] |
-| Retention maintenance participation          | Supported  | Supported | Supported | [Planned][SM-878] |
-| OpenTelemetry tracing and metrics            | Supported  | Supported | Supported | [Planned][SM-878] |
-| Shared runtime fixtures executed             | Supported  | Supported | Supported | [Planned][SM-878] |
+| Batch handler delivery                       | Supported  | Supported | Supported | Supported         |
+| Schedule firing (database cron evaluation)   | Supported  | Supported | Supported | Supported         |
+| Worker fleet registration and remote pause   | Supported  | Supported | Supported | Supported         |
+| Graceful stop and signal drain               | Supported  | Supported | Supported | Supported         |
+| Retention maintenance participation          | Supported  | Supported | Supported | Supported         |
+| OpenTelemetry tracing and metrics            | Supported  | Supported | Supported | Supported         |
+| Shared runtime fixtures executed             | Supported  | Supported | Supported | Supported         |
 
 <!-- END GENERATED PARITY WORKER -->
 
@@ -95,20 +95,20 @@ differs today, and the reason follows the table.
 
 <!-- BEGIN GENERATED PARITY DEFAULTS -->
 
-| Setting                                 | TypeScript                      | Python                          | Go                                  | Rust              |
-| --------------------------------------- | ------------------------------- | ------------------------------- | ----------------------------------- | ----------------- |
-| Worker concurrency                      | 1                               | 1                               | 1                                   | [Planned][SM-878] |
-| Lease duration                          | 30000 ms                        | 30000 ms                        | 30000 ms                            | [Planned][SM-878] |
-| Heartbeat interval                      | Lease duration / 3              | Lease duration / 3              | Lease duration / 3                  | [Planned][SM-878] |
-| Claim poll interval (subscription live) | 5000 ms                         | 5000 ms                         | 5000 ms                             | [Planned][SM-878] |
-| Claim poll interval (polling only)      | 250 ms                          | 250 ms                          | 250 ms                              | [Planned][SM-878] |
-| Empty-claim backoff ceiling             | 5000 ms                         | 5000 ms                         | 5000 ms                             | [Planned][SM-878] |
-| Maintenance tick interval               | 1000 ms                         | 1000 ms                         | 1000 ms                             | [Planned][SM-878] |
-| Maintenance routine offer interval      | 60000 ms                        | 60000 ms                        | 60000 ms                            | [Planned][SM-878] |
-| Worker registry interval                | 5000 ms                         | 5000 ms                         | 5000 ms                             | [Planned][SM-878] |
-| Schedule catch-up limit                 | 100                             | 100                             | 100                                 | [Planned][SM-878] |
-| Shutdown grace, then                    | 25000 ms, then exit the process | 25000 ms, then exit the process | 25000 ms, then abandon the handlers | [Planned][SM-878] |
-| Handler retry delay override            | `retryDelayMs`, unset           | `retry_delay_ms`, unset         | `RetryDelay`, unset                 | [Planned][SM-878] |
+| Setting                                 | TypeScript                      | Python                          | Go                                  | Rust                                |
+| --------------------------------------- | ------------------------------- | ------------------------------- | ----------------------------------- | ----------------------------------- |
+| Worker concurrency                      | 1                               | 1                               | 1                                   | 1                                   |
+| Lease duration                          | 30000 ms                        | 30000 ms                        | 30000 ms                            | 30000 ms                            |
+| Heartbeat interval                      | Lease duration / 3              | Lease duration / 3              | Lease duration / 3                  | Lease duration / 3                  |
+| Claim poll interval (subscription live) | 5000 ms                         | 5000 ms                         | 5000 ms                             | 5000 ms                             |
+| Claim poll interval (polling only)      | 250 ms                          | 250 ms                          | 250 ms                              | 250 ms                              |
+| Empty-claim backoff ceiling             | 5000 ms                         | 5000 ms                         | 5000 ms                             | 5000 ms                             |
+| Maintenance tick interval               | 1000 ms                         | 1000 ms                         | 1000 ms                             | 1000 ms                             |
+| Maintenance routine offer interval      | 60000 ms                        | 60000 ms                        | 60000 ms                            | 60000 ms                            |
+| Worker registry interval                | 5000 ms                         | 5000 ms                         | 5000 ms                             | 5000 ms                             |
+| Schedule catch-up limit                 | 100                             | 100                             | 100                                 | 100                                 |
+| Shutdown grace, then                    | 25000 ms, then exit the process | 25000 ms, then exit the process | 25000 ms, then abandon the handlers | 25000 ms, then abandon the handlers |
+| Handler retry delay override            | `retryDelayMs`, unset           | `retry_delay_ms`, unset         | `RetryDelay`, unset                 | `retry_delay`, unset                |
 
 <!-- END GENERATED PARITY DEFAULTS -->
 
@@ -276,7 +276,6 @@ stops the published view from becoming another source of truth.
 
 <!-- BEGIN GENERATED PARITY LINEAR LINKS -->
 
-[SM-878]: https://linear.app/stablemates/issue/SM-878
 [SM-879]: https://linear.app/stablemates/issue/SM-879
 [SM-885]: https://linear.app/stablemates/issue/SM-885
 

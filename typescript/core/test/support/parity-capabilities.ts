@@ -352,36 +352,54 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
 export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Claiming and handler execution",
+    rust: { file: "worker_postgres.rs", test: "the_handler_result_reaches_the_task_outcome" },
     typescript: { file: "integration-claim-lease-fence.test.ts", pattern: "claim" },
     python: { file: "test_worker.py", pattern: "handler" },
     go: { file: "worker_test.go", pattern: "Handler" },
   },
   {
     capability: "Bounded worker concurrency",
+    rust: {
+      file: "worker_postgres.rs",
+      test: "concurrent_handlers_stay_within_the_concurrency_limit",
+    },
     typescript: { file: "integration-claim-lease-fence.test.ts", pattern: "concurrency" },
     python: { file: "test_worker.py", pattern: "concurrency" },
     go: { file: "worker_test.go", pattern: "Concurrency" },
   },
   {
     capability: "Unhandled task type released to its queue",
+    rust: { fixtures: ["runtime/missing-handler-releases-the-task-with-its-attempt-intact"] },
     typescript: { file: "integration-claim-lease-fence.test.ts", pattern: "unregistered type" },
     python: { file: "test_worker.py", pattern: "unregistered_type" },
     go: { file: "worker_test.go", pattern: "UnregisteredType" },
   },
   {
     capability: "Heartbeats, lease recovery, fenced ownership",
+    rust: {
+      fixtures: [
+        "runtime/heartbeats-never-overlap",
+        "runtime/failed-heartbeat-rounds-keep-the-attempt-running",
+        "runtime/deadline-settles-after-database-first-heartbeat",
+      ],
+    },
     typescript: { file: "integration-claim-lease-fence.test.ts", pattern: "fence" },
     python: { file: "test_worker.py", pattern: "fence" },
     go: { file: "worker_test.go", pattern: "fence" },
   },
   {
     capability: "Cooperative cancellation delivery",
+    rust: { fixtures: ["runtime/cooperative-cancellation-reaches-handler"] },
     typescript: { file: "integration-claim-lease-fence.test.ts", pattern: "cancel" },
     python: { file: "test_worker.py", pattern: "cancel" },
     go: { file: "worker_test.go", pattern: "ancel" },
   },
   {
     capability: "Notification-assisted dispatch with polling",
+    rust: {
+      file: "worker_postgres.rs",
+      test: "a_notification_wakes_an_idle_worker_before_its_poll",
+    },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "workhorse_tasks" },
     python: { file: "test_notifications.py", pattern: "notif" },
     go: { file: "notifications_test.go", pattern: "otif" },
@@ -418,42 +436,61 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Batch handler delivery",
+    rust: { file: "worker_postgres.rs", test: "a_batch_handler_receives_its_members_in_one_call" },
     typescript: { file: "integration-batch-handlers.test.ts", pattern: "batch" },
     python: { file: "test_worker.py", pattern: "batch" },
     go: { file: "batch_test.go", pattern: "atch" },
   },
   {
     capability: "Schedule firing (database cron evaluation)",
+    rust: { file: "worker_postgres.rs", test: "maintenance_fires_due_schedules_in_its_namespaces" },
     typescript: { file: "integration-cron-schedules.test.ts", pattern: "fireSchedule" },
     python: { file: "test_worker_schedules.py", pattern: "schedule" },
     go: { file: "worker_schedules_test.go", pattern: "chedule" },
   },
   {
     capability: "Worker fleet registration and remote pause",
+    rust: {
+      file: "worker_postgres.rs",
+      test: "an_operator_pause_stops_claims_until_it_is_cleared",
+    },
     typescript: { file: "integration-worker-registry.test.ts", pattern: "register" },
     python: { file: "test_worker.py", pattern: "registry_delivers_remote_pause" },
     go: { file: "worker_test.go", pattern: "RegistryDeliversRemotePause" },
   },
   {
     capability: "Graceful stop and signal drain",
+    rust: { file: "worker_postgres.rs", test: "a_stuck_handler_is_abandoned_when_grace_ends" },
     typescript: { file: "worker-process.test.ts", pattern: "drain" },
     python: { file: "test_worker_process.py", pattern: "drain" },
     go: { file: "worker_process_test.go", pattern: "rain" },
   },
   {
     capability: "Retention maintenance participation",
+    rust: { file: "worker_postgres.rs", test: "a_worker_runs_terminal_storage_maintenance" },
     typescript: { file: "integration-retention-maintenance.test.ts", pattern: "retain" },
     python: { file: "test_worker.py", pattern: "participates_in_slow_maintenance" },
     go: { file: "worker_test.go", pattern: "ParticipatesInSlowMaintenance" },
   },
   {
     capability: "OpenTelemetry tracing and metrics",
+    rust: { file: "worker_postgres.rs", test: "worker_metrics_reach_the_global_meter_provider" },
     typescript: { file: "telemetry.test.ts", pattern: "span" },
     python: { file: "test_worker_telemetry.py", pattern: "span" },
     go: { file: "telemetry_test.go", pattern: "pan" },
   },
   {
     capability: "Shared runtime fixtures executed",
+    rust: {
+      fixtures: [
+        "runtime/enqueue-trace-context-reaches-handler",
+        "runtime/priority-ordered-mixed-batch",
+        "runtime/stop-drains-active-slots-without-new-claims",
+        "runtime/budget-admission-holds-across-queues",
+        "runtime/empty-polls-back-off-with-jitter",
+        "runtime/failing-maintenance-phase-leaves-the-worker-claiming",
+      ],
+    },
     typescript: { file: "integration-claim-lease-fence.test.ts", pattern: "runtime" },
     python: { file: "test_worker_runtime_conformance.py", pattern: "runtime" },
     go: { file: "runtime_conformance_test.go", pattern: "untime" },
@@ -640,6 +677,7 @@ export interface ParityDefaultRow {
 export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   {
     setting: "Worker concurrency",
+    rust: { value: "1", file: "rust/src/worker/mod.rs", pattern: "concurrency: 1," },
     typescript: {
       value: "1",
       file: "typescript/core/src/worker.ts",
@@ -654,6 +692,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Lease duration",
+    rust: {
+      value: "30000 ms",
+      file: "rust/src/worker/mod.rs",
+      pattern: "const DEFAULT_LEASE: Duration = Duration::from_secs(30);",
+    },
     typescript: {
       value: "30000 ms",
       file: "typescript/core/src/worker.ts",
@@ -672,6 +715,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Heartbeat interval",
+    rust: {
+      value: "Lease duration / 3",
+      file: "rust/src/worker/mod.rs",
+      pattern: "lease.as_millis() / 3",
+    },
     typescript: {
       value: "Lease duration / 3",
       file: "typescript/core/src/worker.ts",
@@ -686,6 +734,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Claim poll interval (subscription live)",
+    rust: {
+      value: "5000 ms",
+      file: "rust/src/worker/mod.rs",
+      pattern: "const LISTENING_POLL: Duration = Duration::from_secs(5);",
+    },
     typescript: {
       value: "5000 ms",
       file: "typescript/core/src/worker.ts",
@@ -704,6 +757,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Claim poll interval (polling only)",
+    rust: {
+      value: "250 ms",
+      file: "rust/src/worker/mod.rs",
+      pattern: "const POLLING_POLL: Duration = Duration::from_millis(250);",
+    },
     typescript: {
       value: "250 ms",
       file: "typescript/core/src/worker.ts",
@@ -722,6 +780,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Empty-claim backoff ceiling",
+    rust: {
+      value: "5000 ms",
+      file: "rust/src/worker/mod.rs",
+      pattern: "const MAX_EMPTY_POLL: Duration = Duration::from_secs(5);",
+    },
     typescript: {
       value: "5000 ms",
       file: "typescript/core/src/worker.ts",
@@ -740,6 +803,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Maintenance tick interval",
+    rust: {
+      value: "1000 ms",
+      file: "rust/src/worker/mod.rs",
+      pattern: "maintenance_interval: Duration::from_secs(1),",
+    },
     typescript: {
       value: "1000 ms",
       file: "typescript/core/src/worker.ts",
@@ -758,6 +826,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Maintenance routine offer interval",
+    rust: {
+      value: "60000 ms",
+      file: "rust/src/worker/mod.rs",
+      pattern: "maintenance_routine_interval: Duration::from_secs(60),",
+    },
     typescript: {
       value: "60000 ms",
       file: "typescript/core/src/worker.ts",
@@ -776,6 +849,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Worker registry interval",
+    rust: {
+      value: "5000 ms",
+      file: "rust/src/worker/mod.rs",
+      pattern: "registry_interval: Duration::from_secs(5),",
+    },
     typescript: {
       value: "5000 ms",
       file: "typescript/core/src/worker.ts",
@@ -794,6 +872,7 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Schedule catch-up limit",
+    rust: { value: "100", file: "rust/src/worker/mod.rs", pattern: "schedule_catchup_limit: 100," },
     typescript: {
       value: "100",
       file: "typescript/core/src/worker.ts",
@@ -808,6 +887,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Shutdown grace, then",
+    rust: {
+      value: "25000 ms, then abandon the handlers",
+      file: "rust/src/worker/mod.rs",
+      pattern: "shutdown_grace_period: Duration::from_secs(25),",
+    },
     typescript: {
       value: "25000 ms, then exit the process",
       file: "typescript/core/src/worker-process.ts",
@@ -826,6 +910,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Handler retry delay override",
+    rust: {
+      value: "`retry_delay`, unset",
+      file: "rust/src/worker/mod.rs",
+      pattern: "pub retry_delay: Option<RetryDelay>",
+    },
     typescript: {
       value: "`retryDelayMs`, unset",
       file: "typescript/core/src/worker.ts",
