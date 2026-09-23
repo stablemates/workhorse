@@ -19,6 +19,13 @@ pub enum Operation {
     SyncSchedules,
     SyncContracts,
     Redrive,
+    Claim,
+    Complete,
+    Fail,
+    Heartbeat,
+    Release,
+    RegisterWorker,
+    Maintenance,
 }
 
 impl fmt::Display for Operation {
@@ -32,11 +39,19 @@ impl fmt::Display for Operation {
             Self::SyncSchedules => "sync schedules",
             Self::SyncContracts => "sync contracts",
             Self::Redrive => "redrive",
+            Self::Claim => "claim",
+            Self::Complete => "complete",
+            Self::Fail => "fail",
+            Self::Heartbeat => "heartbeat",
+            Self::Release => "release",
+            Self::RegisterWorker => "register worker",
+            Self::Maintenance => "maintenance",
         })
     }
 }
 
 /// Why a cancellation token fired.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CancelReason {
     Requested,

@@ -170,7 +170,7 @@ function withDatabase(url: string, database: string): string {
   return parsed.toString();
 }
 
-async function enqueueThroughConsumer(binary: string, sourceUrl: string): Promise<void> {
+async function runTaskThroughConsumer(binary: string, sourceUrl: string): Promise<void> {
   const source = decodeURIComponent(new URL(sourceUrl).pathname.slice(1));
   if (!source.includes("test")) throw new Error(`${source} is not a test database`);
   const scratch = scratchDatabaseName(source, process.pid);
@@ -190,15 +190,27 @@ async function enqueueThroughConsumer(binary: string, sourceUrl: string): Promis
           await readFile(path.join(root, "sql", "schema", "current.sql"), "utf8"),
         );
         const taskId = (await run(binary, [scratchUrl], { capture: true })).trim();
-        const { rows } = await database.query<{ queue_name: string; task_type: string }>(
-          "SELECT queue_name, task_type FROM workhorse.task WHERE id = $1::uuid",
+        const { rows } = await database.query<{
+          queue_name: string;
+          task_type: string;
+          state: string | null;
+          packaged: boolean | null;
+        }>(
+          `SELECT task.queue_name, task.task_type, outcome.state,
+                  (outcome.result -> 'echo' ->> 'packaged')::boolean AS packaged
+             FROM workhorse.task task
+             LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
+            WHERE task.id = $1::uuid`,
           [taskId],
         );
         const row = rows[0];
         if (row?.queue_name !== consumerQueue || row.task_type !== consumerTaskType) {
           throw new Error(`The consumer reported task ${taskId}, but no matching row exists`);
         }
-        console.log(`The packaged crate enqueued task ${taskId} into ${scratch}`);
+        if (row.state !== "succeeded" || row.packaged !== true) {
+          throw new Error(`The consumer's worker left task ${taskId} in state ${row.state}`);
+        }
+        console.log(`The packaged crate enqueued and ran task ${taskId} in ${scratch}`);
       } finally {
         await database.end();
       }
@@ -257,8 +269,8 @@ async function checkRustRelease(argv: readonly string[]): Promise<void> {
     const binary = path.join(target, "debug", consumerBinary);
     await run(binary, []);
 
-    if (url) await enqueueThroughConsumer(binary, url);
-    else console.log("SKIPPED the consumer enqueue: DATABASE_URL_TEST is unset");
+    if (url) await runTaskThroughConsumer(binary, url);
+    else console.log("SKIPPED the consumer task: DATABASE_URL_TEST is unset");
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }

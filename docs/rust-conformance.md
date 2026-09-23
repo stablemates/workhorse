@@ -15,10 +15,10 @@ fixture does not pass, and when a listed fixture passes. `pnpm rust:integration`
 | `compatibility.json`    |       10 |      10 |                    0 |
 | `contracts.json`        |        7 |       7 |                    0 |
 | `cron-occurrences.json` |       19 |      19 |                    0 |
-| `failures.json`         |        4 |       0 |                    4 |
+| `failures.json`         |        4 |       4 |                    0 |
 | `interpreter.json`      |        1 |       1 |                    0 |
 | `requests.json`         |        2 |       2 |                    0 |
-| `runtime.json`          |       16 |       0 |                   16 |
+| `runtime.json`          |       16 |      14 |                    2 |
 | `scenarios.json`        |       15 |      15 |                    0 |
 | `schedules.json`        |        2 |       2 |                    0 |
 
@@ -26,30 +26,9 @@ fixture does not pass, and when a listed fixture passes. `pnpm rust:integration`
 
 The list gives the reason for each entry. Remove an entry in the commit that makes it pass.
 
-### SM-878
-
-- `failures/declared-name-and-stack`
-- `failures/declared-name-without-stack`
-- `failures/redacted-details`
-- `failures/undeclared-name`
-- `runtime/budget-admission-holds-across-queues`
-- `runtime/cooperative-cancellation-reaches-handler`
-- `runtime/deadline-settles-after-database-first-heartbeat`
-- `runtime/deadline-settles-after-early-local-timer`
-- `runtime/empty-polls-back-off-with-jitter`
-- `runtime/enqueue-trace-context-reaches-handler`
-- `runtime/execution-timeout-settles-after-early-local-timer`
-- `runtime/failed-heartbeat-rounds-keep-the-attempt-running`
-- `runtime/failing-maintenance-phase-leaves-the-worker-claiming`
-- `runtime/heartbeats-never-overlap`
-- `runtime/json-values-survive-the-payload-and-result-round-trip`
-- `runtime/lease-loss-fences-handler-writes`
-- `runtime/missing-handler-releases-the-task-with-its-attempt-intact`
-- `runtime/priority-ordered-mixed-batch`
-- `runtime/stop-drains-active-slots-without-new-claims`
-
 ### SM-879
 
 - `runtime/durable-wait-suspension-and-checkpoint-replay`
+- `runtime/lease-loss-fences-handler-writes`
 
 Regenerate with `pnpm rust:conformance:generate`; CI uses `pnpm rust:conformance:check`.

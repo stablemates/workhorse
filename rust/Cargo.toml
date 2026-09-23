@@ -20,10 +20,14 @@ include = ["Cargo.toml", "LICENSE", "NOTICE", "README.md", "src/**/*.rs"]
 name = "workhorse"
 
 [features]
-opentelemetry = ["dep:opentelemetry"]
+opentelemetry = ["dep:opentelemetry", "dep:tracing-opentelemetry"]
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
+tokio-util = "0.7"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+tracing = "0.1"
+libc = "0.2"
 tokio-postgres = { version = "0.7", features = [
   "with-serde_json-1",
   "with-uuid-1",
@@ -38,6 +42,18 @@ deadpool-postgres = "0.14"
 jsonschema = { version = "0.57", default-features = false }
 opentelemetry = { version = "0.32", optional = true, default-features = false, features = [
   "trace",
+  "metrics",
 ] }
+tracing-opentelemetry = { version = "0.33", optional = true, default-features = false }
 
 [dev-dependencies]
+opentelemetry_sdk = { version = "0.32", default-features = false, features = [
+  "trace",
+  "metrics",
+  "testing",
+] }
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+  "fmt",
+  "registry",
+  "std",
+] }
