@@ -359,7 +359,23 @@ var internalStatementRegistry = map[string]string{
             AND bucket_start < clock_timestamp() - make_interval(days => $6)
           LIMIT 10001
         ) rows) AS statistics`,
-	"get_retention_policy_v1": `SELECT (policy).* FROM workhorse.get_retention_policy_v1() policy`,
+	"dashboard_task_counts_v1":      `SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb) AS result`,
+	"dashboard_task_facets_v1":      `SELECT workhorse.dashboard_task_facets_v1($1::jsonb) AS result`,
+	"dashboard_queues_v1":           `SELECT workhorse.dashboard_queues_v1('{}'::jsonb) AS result`,
+	"dashboard_tasks_v1":            `SELECT workhorse.dashboard_tasks_v1($1::jsonb) AS result`,
+	"dashboard_tasks_cursor_v1":     `SELECT workhorse.dashboard_tasks_cursor_v1($1::jsonb) AS result`,
+	"dashboard_activity_v1":         `SELECT workhorse.dashboard_activity_v1($1::jsonb) AS result`,
+	"dashboard_cron_v1":             `SELECT workhorse.dashboard_cron_v1($1::jsonb) AS result`,
+	"dashboard_workers_v1":          `SELECT workhorse.dashboard_workers_v1($1::jsonb) AS result`,
+	"dashboard_human_waits_v1":      `SELECT workhorse.dashboard_human_waits_v1($1::jsonb) AS result`,
+	"dashboard_events_v1":           `SELECT workhorse.dashboard_events_v1($1::jsonb) AS result`,
+	"dashboard_event_detail_v1":     `SELECT workhorse.dashboard_event_detail_v1($1::jsonb) AS result`,
+	"dashboard_task_detail_v1":      `SELECT workhorse.dashboard_task_detail_v1($1::jsonb) AS result`,
+	"dashboard_checkpoint_value_v1": `SELECT workhorse.dashboard_checkpoint_value_v1($1::jsonb) AS result`,
+	"dashboard_task_value_v1":       `SELECT workhorse.dashboard_task_value_v1($1::jsonb) AS result`,
+	"dashboard_settings_v1":         `SELECT workhorse.dashboard_settings_v1($1::jsonb) AS result`,
+	"dashboard_system_v1":           `SELECT workhorse.dashboard_system_v1($1::jsonb) AS result`,
+	"get_retention_policy_v1":       `SELECT (policy).* FROM workhorse.get_retention_policy_v1() policy`,
 	"sync_maintenance_policy_v1": `SELECT (policy).* FROM workhorse.sync_maintenance_policy_v1(
          $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer,
          $8::boolean

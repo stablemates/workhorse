@@ -443,6 +443,70 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
         "SELECT\n        (SELECT count(*)::integer FROM (\n          SELECT 1 FROM workhorse.task task\n          JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id\n          WHERE %s::integer IS NOT NULL AND %s::integer IS NOT NULL\n            AND task.created_at < clock_timestamp() - make_interval(days => %s)\n            AND outcome.finished_at < clock_timestamp() - make_interval(days => %s)\n          LIMIT 10001\n        ) rows) AS terminal_tasks,\n        (SELECT count(*)::integer FROM (\n          SELECT 1 FROM workhorse.task_event\n          WHERE %s::integer IS NOT NULL\n            AND occurred_at < clock_timestamp() - make_interval(days => %s)\n          LIMIT 10001\n        ) rows) AS task_events,\n        (SELECT count(*)::integer FROM (\n          SELECT 1 FROM workhorse.attempt_history\n          WHERE %s::integer IS NOT NULL\n            AND occurred_at < clock_timestamp() - make_interval(days => %s)\n          LIMIT 10001\n        ) rows) AS attempt_history,\n        (SELECT count(*)::integer FROM (\n          SELECT 1 FROM workhorse.schedule_occurrence\n          WHERE %s::integer IS NOT NULL\n            AND occurrence_at < clock_timestamp() - make_interval(days => %s)\n          LIMIT 10001\n        ) rows) AS schedule_occurrences,\n        (SELECT count(*)::integer FROM (\n          SELECT 1 FROM workhorse.task_stat_bucket\n          WHERE %s::integer IS NOT NULL\n            AND bucket_start < clock_timestamp() - make_interval(days => %s)\n          UNION ALL\n          SELECT 1 FROM workhorse.task_stat_bucket_hour\n          WHERE %s::integer IS NOT NULL\n            AND bucket_start < clock_timestamp() - make_interval(days => %s)\n          UNION ALL\n          SELECT 1 FROM workhorse.task_stat_bucket_day\n          WHERE %s::integer IS NOT NULL\n            AND bucket_start < clock_timestamp() - make_interval(days => %s)\n          LIMIT 10001\n        ) rows) AS statistics",
         "SELECT\n        (SELECT count(*)::integer FROM (\n          SELECT 1 FROM workhorse.task task\n          JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id\n          WHERE $1::integer IS NOT NULL AND $2::integer IS NOT NULL\n            AND task.created_at < clock_timestamp() - make_interval(days => $1)\n            AND outcome.finished_at < clock_timestamp() - make_interval(days => $2)\n          LIMIT 10001\n        ) rows) AS terminal_tasks,\n        (SELECT count(*)::integer FROM (\n          SELECT 1 FROM workhorse.task_event\n          WHERE $3::integer IS NOT NULL\n            AND occurred_at < clock_timestamp() - make_interval(days => $3)\n          LIMIT 10001\n        ) rows) AS task_events,\n        (SELECT count(*)::integer FROM (\n          SELECT 1 FROM workhorse.attempt_history\n          WHERE $4::integer IS NOT NULL\n            AND occurred_at < clock_timestamp() - make_interval(days => $4)\n          LIMIT 10001\n        ) rows) AS attempt_history,\n        (SELECT count(*)::integer FROM (\n          SELECT 1 FROM workhorse.schedule_occurrence\n          WHERE $5::integer IS NOT NULL\n            AND occurrence_at < clock_timestamp() - make_interval(days => $5)\n          LIMIT 10001\n        ) rows) AS schedule_occurrences,\n        (SELECT count(*)::integer FROM (\n          SELECT 1 FROM workhorse.task_stat_bucket\n          WHERE $6::integer IS NOT NULL\n            AND bucket_start < clock_timestamp() - make_interval(days => $6)\n          UNION ALL\n          SELECT 1 FROM workhorse.task_stat_bucket_hour\n          WHERE $6::integer IS NOT NULL\n            AND bucket_start < clock_timestamp() - make_interval(days => $6)\n          UNION ALL\n          SELECT 1 FROM workhorse.task_stat_bucket_day\n          WHERE $6::integer IS NOT NULL\n            AND bucket_start < clock_timestamp() - make_interval(days => $6)\n          LIMIT 10001\n        ) rows) AS statistics",
     ),
+    "dashboard_task_counts_v1": (
+        "SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb) AS result",
+        "SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb) AS result",
+    ),
+    "dashboard_task_facets_v1": (
+        "SELECT workhorse.dashboard_task_facets_v1(%s::jsonb) AS result",
+        "SELECT workhorse.dashboard_task_facets_v1($1::jsonb) AS result",
+    ),
+    "dashboard_queues_v1": (
+        "SELECT workhorse.dashboard_queues_v1('{}'::jsonb) AS result",
+        "SELECT workhorse.dashboard_queues_v1('{}'::jsonb) AS result",
+    ),
+    "dashboard_tasks_v1": (
+        "SELECT workhorse.dashboard_tasks_v1(%s::jsonb) AS result",
+        "SELECT workhorse.dashboard_tasks_v1($1::jsonb) AS result",
+    ),
+    "dashboard_tasks_cursor_v1": (
+        "SELECT workhorse.dashboard_tasks_cursor_v1(%s::jsonb) AS result",
+        "SELECT workhorse.dashboard_tasks_cursor_v1($1::jsonb) AS result",
+    ),
+    "dashboard_activity_v1": (
+        "SELECT workhorse.dashboard_activity_v1(%s::jsonb) AS result",
+        "SELECT workhorse.dashboard_activity_v1($1::jsonb) AS result",
+    ),
+    "dashboard_cron_v1": (
+        "SELECT workhorse.dashboard_cron_v1(%s::jsonb) AS result",
+        "SELECT workhorse.dashboard_cron_v1($1::jsonb) AS result",
+    ),
+    "dashboard_workers_v1": (
+        "SELECT workhorse.dashboard_workers_v1(%s::jsonb) AS result",
+        "SELECT workhorse.dashboard_workers_v1($1::jsonb) AS result",
+    ),
+    "dashboard_human_waits_v1": (
+        "SELECT workhorse.dashboard_human_waits_v1(%s::jsonb) AS result",
+        "SELECT workhorse.dashboard_human_waits_v1($1::jsonb) AS result",
+    ),
+    "dashboard_events_v1": (
+        "SELECT workhorse.dashboard_events_v1(%s::jsonb) AS result",
+        "SELECT workhorse.dashboard_events_v1($1::jsonb) AS result",
+    ),
+    "dashboard_event_detail_v1": (
+        "SELECT workhorse.dashboard_event_detail_v1(%s::jsonb) AS result",
+        "SELECT workhorse.dashboard_event_detail_v1($1::jsonb) AS result",
+    ),
+    "dashboard_task_detail_v1": (
+        "SELECT workhorse.dashboard_task_detail_v1(%s::jsonb) AS result",
+        "SELECT workhorse.dashboard_task_detail_v1($1::jsonb) AS result",
+    ),
+    "dashboard_checkpoint_value_v1": (
+        "SELECT workhorse.dashboard_checkpoint_value_v1(%s::jsonb) AS result",
+        "SELECT workhorse.dashboard_checkpoint_value_v1($1::jsonb) AS result",
+    ),
+    "dashboard_task_value_v1": (
+        "SELECT workhorse.dashboard_task_value_v1(%s::jsonb) AS result",
+        "SELECT workhorse.dashboard_task_value_v1($1::jsonb) AS result",
+    ),
+    "dashboard_settings_v1": (
+        "SELECT workhorse.dashboard_settings_v1(%s::jsonb) AS result",
+        "SELECT workhorse.dashboard_settings_v1($1::jsonb) AS result",
+    ),
+    "dashboard_system_v1": (
+        "SELECT workhorse.dashboard_system_v1(%s::jsonb) AS result",
+        "SELECT workhorse.dashboard_system_v1($1::jsonb) AS result",
+    ),
     "get_retention_policy_v1": (
         "SELECT (policy).* FROM workhorse.get_retention_policy_v1() policy",
         "SELECT (policy).* FROM workhorse.get_retention_policy_v1() policy",

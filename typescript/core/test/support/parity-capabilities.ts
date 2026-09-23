@@ -558,7 +558,10 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
       file: "dashboard/conformance_test.go",
       pattern: "TestDashboardSatisfiesEverySharedHTTPScenario",
     },
-    rust: { planned: "SM-885" },
+    rust: {
+      file: "dashboard_conformance.rs",
+      test: "dashboard_satisfies_every_shared_http_scenario",
+    },
   },
 ];
 

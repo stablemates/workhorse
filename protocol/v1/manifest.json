@@ -890,6 +890,102 @@
       "catalogues": ["internal"]
     },
     {
+      "name": "dashboard_task_counts_v1",
+      "arity": 0,
+      "contract": "SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb) AS result",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "dashboard_task_facets_v1",
+      "arity": 1,
+      "contract": "SELECT workhorse.dashboard_task_facets_v1($1::jsonb) AS result",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "dashboard_queues_v1",
+      "arity": 0,
+      "contract": "SELECT workhorse.dashboard_queues_v1('{}'::jsonb) AS result",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "dashboard_tasks_v1",
+      "arity": 1,
+      "contract": "SELECT workhorse.dashboard_tasks_v1($1::jsonb) AS result",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "dashboard_tasks_cursor_v1",
+      "arity": 1,
+      "contract": "SELECT workhorse.dashboard_tasks_cursor_v1($1::jsonb) AS result",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "dashboard_activity_v1",
+      "arity": 1,
+      "contract": "SELECT workhorse.dashboard_activity_v1($1::jsonb) AS result",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "dashboard_cron_v1",
+      "arity": 1,
+      "contract": "SELECT workhorse.dashboard_cron_v1($1::jsonb) AS result",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "dashboard_workers_v1",
+      "arity": 1,
+      "contract": "SELECT workhorse.dashboard_workers_v1($1::jsonb) AS result",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "dashboard_human_waits_v1",
+      "arity": 1,
+      "contract": "SELECT workhorse.dashboard_human_waits_v1($1::jsonb) AS result",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "dashboard_events_v1",
+      "arity": 1,
+      "contract": "SELECT workhorse.dashboard_events_v1($1::jsonb) AS result",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "dashboard_event_detail_v1",
+      "arity": 1,
+      "contract": "SELECT workhorse.dashboard_event_detail_v1($1::jsonb) AS result",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "dashboard_task_detail_v1",
+      "arity": 1,
+      "contract": "SELECT workhorse.dashboard_task_detail_v1($1::jsonb) AS result",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "dashboard_checkpoint_value_v1",
+      "arity": 1,
+      "contract": "SELECT workhorse.dashboard_checkpoint_value_v1($1::jsonb) AS result",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "dashboard_task_value_v1",
+      "arity": 1,
+      "contract": "SELECT workhorse.dashboard_task_value_v1($1::jsonb) AS result",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "dashboard_settings_v1",
+      "arity": 1,
+      "contract": "SELECT workhorse.dashboard_settings_v1($1::jsonb) AS result",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "dashboard_system_v1",
+      "arity": 1,
+      "contract": "SELECT workhorse.dashboard_system_v1($1::jsonb) AS result",
+      "catalogues": ["internal"]
+    },
+    {
       "name": "get_retention_policy_v1",
       "arity": 0,
       "contract": "SELECT (policy).* FROM workhorse.get_retention_policy_v1() policy",

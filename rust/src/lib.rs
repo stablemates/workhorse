@@ -6,6 +6,8 @@
 mod admin;
 pub mod compatibility;
 pub mod contracts;
+#[cfg(feature = "dashboard")]
+pub mod dashboard;
 pub mod durable_context;
 pub mod durable_postgres;
 mod error;

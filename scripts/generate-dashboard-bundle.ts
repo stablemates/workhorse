@@ -22,6 +22,7 @@ const bundleDirectory = path.join(repositoryRoot, "dashboard/v1/bundle");
 const languageDirectories = [
   path.join(repositoryRoot, "go/dashboard"),
   path.join(repositoryRoot, "python/src/workhorse/dashboard"),
+  path.join(repositoryRoot, "rust/dashboard"),
 ];
 
 function writeString(target: Buffer, offset: number, length: number, value: string): void {

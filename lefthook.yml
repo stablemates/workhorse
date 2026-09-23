@@ -32,10 +32,10 @@ pre-commit:
       glob: "typescript/dashboard-server/**"
       run: mise exec -- pnpm --filter @stablemates/workhorse-dashboard-server typecheck
     - name: check generated dashboard specification
-      glob: "{dashboard/v1/**,typescript/dashboard-server/spec/**,typescript/dashboard-server/src/router.ts,typescript/dashboard-server/src/wire.ts,go/dashboard/v1_generated.go,python/src/workhorse/dashboard_v1.py}"
+      glob: "{dashboard/v1/**,typescript/dashboard-server/spec/**,typescript/dashboard-server/src/router.ts,typescript/dashboard-server/src/wire.ts,go/dashboard/v1_generated.go,python/src/workhorse/dashboard_v1.py,rust/src/dashboard/v1_generated.rs}"
       run: mise exec -- pnpm dashboard-spec:check
     - name: check generated dashboard bundle
-      glob: "{dashboard/app/**,dashboard/v1/bundle/**,dashboard/v1/manifest.json,scripts/build-runtime.ts,scripts/generate-dashboard-bundle.ts,go/dashboard/bundle.json,go/dashboard/read-surface-*.tar.gz,python/src/workhorse/dashboard/bundle.json,python/src/workhorse/dashboard/read-surface-*.tar.gz}"
+      glob: "{dashboard/app/**,dashboard/v1/bundle/**,dashboard/v1/manifest.json,scripts/build-runtime.ts,scripts/generate-dashboard-bundle.ts,go/dashboard/bundle.json,go/dashboard/read-surface-*.tar.gz,python/src/workhorse/dashboard/bundle.json,python/src/workhorse/dashboard/read-surface-*.tar.gz,rust/dashboard/bundle.json,rust/dashboard/read-surface-*.tar.gz}"
       run: mise exec -- pnpm dashboard-bundle:check
     - name: check dashboard types
       glob: "typescript/dashboard/**"
