@@ -25,8 +25,7 @@ use tokio_util::sync::CancellationToken as StopToken;
 use uuid::Uuid;
 
 pub use handler::{
-    BatchItem, BatchOptions, BatchResult, CancellationToken, ClaimedTask, HandlerContext,
-    HandlerError,
+    BatchItem, BatchOptions, BatchResult, CancellationToken, ClaimedTask, HandlerError,
 };
 pub use process::run_worker_process;
 
@@ -34,6 +33,7 @@ use crate::contracts::ContractSchema;
 use crate::queue::exactly_one;
 use crate::sql_catalogue_generated as sql;
 use crate::telemetry::{Attribute, Counter, Histogram, Metrics};
+use crate::HandlerContext;
 use crate::{Error, Executor, Operation};
 use handler::ErasedHandler;
 

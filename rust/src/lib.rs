@@ -4,21 +4,24 @@
 //! protocol calls through a caller-supplied [`Executor`], so a transaction executor makes a
 //! call part of the caller's transaction.
 mod admin;
+mod children;
 pub mod compatibility;
+mod context;
 pub mod contracts;
 #[cfg(feature = "dashboard")]
 pub mod dashboard;
-pub mod durable_context;
-pub mod durable_postgres;
 mod error;
 pub mod policies;
 mod queue;
 mod sql_catalogue_generated;
 mod telemetry;
 mod types;
+mod waits;
 mod worker;
 
 pub use admin::*;
+pub use children::{ChildOutcome, ChildTaskRequest, FailureEnvelope};
+pub use context::{BatchHandlerContext, HandlerContext};
 pub use deadpool_postgres;
 pub use error::{
     CancelReason, DependencyCycleDetails, DependencyLimitDetails, Error,
@@ -30,7 +33,8 @@ pub use sql_catalogue_generated::{
     MINIMUM_SCHEMA_VERSION as MIN_SCHEMA_VERSION,
 };
 pub use types::*;
+pub use waits::{HumanOutcome, SignalOutcome};
 pub use worker::{
     run_worker_process, BatchItem, BatchOptions, BatchResult, CancellationToken, ClaimedTask,
-    HandlerContext, HandlerError, RegistrationErrorHook, RetryDelay, Worker, WorkerOptions,
+    HandlerError, RegistrationErrorHook, RetryDelay, Worker, WorkerOptions,
 };

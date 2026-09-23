@@ -35,22 +35,10 @@ pub async fn run_failure(fixture: &Value, envelope: &Value) -> Outcome {
     bounded(&name, failure(&database, fixture, envelope)).await
 }
 
-/// Runs one fixture from `runtime.json`; the durable-context kinds belong to SM-879.
+/// Runs one fixture from `runtime.json`.
 pub async fn run_runtime(fixture: &Value) -> Outcome {
     let kind = text(fixture, "kind");
     match kind {
-        "suspension-replay" => {
-            return Outcome::Unsupported(
-                "no Rust durable handler context suspends a task and replays its checkpoints"
-                    .into(),
-            )
-        }
-        "lease-loss" => {
-            return Outcome::Unsupported(
-                "the writes a lost lease rejects are durable-context APIs the Rust worker lacks"
-                    .into(),
-            )
-        }
         #[cfg(not(feature = "opentelemetry"))]
         "trace-propagation" => {
             return Outcome::Skipped("the opentelemetry feature is off".into());
@@ -64,6 +52,8 @@ pub async fn run_runtime(fixture: &Value) -> Outcome {
         match kind {
             #[cfg(feature = "opentelemetry")]
             "trace-propagation" => trace::propagation(database, fixture).await,
+            "suspension-replay" => suspension_replay(database, fixture).await,
+            "lease-loss" => lease_loss(database, fixture).await,
             "batch" => batch(database, fixture).await,
             "cooperative-cancellation" => cooperative_cancellation(database, fixture).await,
             "expiration" => expiration(database, fixture).await,
@@ -431,7 +421,7 @@ async fn batch(database: &ScratchDatabase, fixture: &Value) -> Checked {
             priority: i32::try_from(number(task, "priority")).map_err(|error| error.to_string())?,
             max_attempts: i32::try_from(number(task, "maxAttempts"))
                 .map_err(|error| error.to_string())?,
-            retry_policy: Some(retry),
+            retry_policy: json!({ "type": "fixed", "delayMs": 0 }).as_object().cloned(),
             ..Default::default()
         };
         let payload = json!({"key": key, "outcome": task["outcome"]});
@@ -551,7 +541,7 @@ async fn expiration(database: &ScratchDatabase, fixture: &Value) -> Checked {
     retry.insert("delayMs".into(), json!(0));
     let mut options = EnqueueOptions {
         max_attempts: i32::try_from(number(fixture, "maxAttempts")).unwrap_or(1),
-        retry_policy: Some(retry),
+        retry_policy: json!({ "type": "fixed", "delayMs": 0 }).as_object().cloned(),
         ..Default::default()
     };
     if deadline {
@@ -1167,6 +1157,207 @@ async fn heartbeat_failure(database: &ScratchDatabase, fixture: &Value) -> Check
     })?;
     assert_state(&client, task, &fixture["expectedState"]).await?;
     assert_outcomes(&client, task, &[text(fixture, "expectedAttemptOutcome")]).await
+}
+
+async fn attempt_count(client: &Client, task: Uuid) -> Checked<i64> {
+    Ok(attempt_outcomes(client, task).await?.len() as i64)
+}
+
+async fn move_run_at(client: &Client, task: Uuid, offset: &str) -> Checked {
+    let statement = format!(
+        "UPDATE workhorse.task_runtime SET run_at = clock_timestamp() + interval '{offset}' \
+         WHERE task_id = $1"
+    );
+    client.execute(&statement, &[&task]).await.map_err(sql).map(drop)
+}
+
+async fn suspension_replay(database: &ScratchDatabase, fixture: &Value) -> Checked {
+    let client = database.connect().await;
+    let queue = queue(database, fixture).await?;
+    let (task_type, following_type) =
+        (text(fixture, "taskType"), text(fixture, "followingTaskType"));
+    let suspending =
+        queue.enqueue(task_type, &Value::Null, Default::default()).await.map_err(driver)?;
+    let following =
+        queue.enqueue(following_type, &Value::Null, Default::default()).await.map_err(driver)?;
+    let (suspending, following) = (suspending.task_id, following.task_id);
+    let worker = worker(database, 4, WorkerOptions { concurrency: 1, ..options(fixture) })?;
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let (runs, operations) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let checkpoint = text(fixture, "checkpointName").to_owned();
+    let wait = text(fixture, "waitName").to_owned();
+    let wait_for = millis(fixture, "waitMs");
+    let (seen, counted, operated) =
+        (Arc::clone(&order), Arc::clone(&runs), Arc::clone(&operations));
+    worker.handle(task_type, move |_: Value, context: HandlerContext| {
+        let (seen, counted, operated) =
+            (Arc::clone(&seen), Arc::clone(&counted), Arc::clone(&operated));
+        let (checkpoint, wait) = (checkpoint.clone(), wait.clone());
+        async move {
+            counted.fetch_add(1, Ordering::SeqCst);
+            seen.lock().unwrap().push(format!("suspension:{}", context.task().attempt));
+            let prepared: Value = context
+                .checkpoint(&checkpoint, || async move {
+                    Ok(json!({ "operation": operated.fetch_add(1, Ordering::SeqCst) + 1 }))
+                })
+                .await?;
+            context.sleep(&wait, wait_for).await?;
+            Ok(prepared)
+        }
+    });
+    let seen = Arc::clone(&order);
+    worker.handle(following_type, move |_: Value, context: HandlerContext| {
+        let seen = Arc::clone(&seen);
+        async move {
+            seen.lock().unwrap().push(format!("following:{}", context.task().attempt));
+            Ok(Value::Null)
+        }
+    });
+    run_once(&worker, true).await?;
+    move_run_at(&client, suspending, "30 seconds").await?;
+    let expected = &fixture["expectedAfterSuspension"];
+    assert_state(&client, suspending, &expected["suspension"]).await?;
+    assert_state(&client, following, &expected["following"]).await?;
+    let attempts = attempt_count(&client, suspending).await?;
+    let want = number(fixture, "expectedAttemptsAfterSuspension");
+    check(attempts == want, || format!("{attempts} attempts after suspension, want {want}"))?;
+    // The suspension released the only slot, so the next pass runs the following task.
+    run_once(&worker, true).await?;
+    let expected = &fixture["expectedAfterSlotRelease"];
+    assert_state(&client, suspending, &expected["suspension"]).await?;
+    assert_state(&client, following, &expected["following"]).await?;
+    move_run_at(&client, suspending, "-1 millisecond").await?;
+    run_once(&worker, true).await?;
+    let expected = &fixture["expectedAfterReplay"];
+    assert_state(&client, suspending, &expected["suspension"]).await?;
+    assert_state(&client, following, &expected["following"]).await?;
+    let order = order.lock().unwrap().clone();
+    let want = strings(&fixture["expectedHandlerOrder"]);
+    check(order == want, || format!("handler order {order:?}, want {want:?}"))?;
+    let runs = runs.load(Ordering::SeqCst) as i64;
+    let want = number(fixture, "expectedHandlerRuns");
+    check(runs == want, || format!("{runs} handler runs, want {want}"))?;
+    let operations = operations.load(Ordering::SeqCst) as i64;
+    let want = number(fixture, "expectedCheckpointOperations");
+    check(operations == want, || format!("{operations} checkpoint operations, want {want}"))?;
+    let attempts = attempt_count(&client, suspending).await?;
+    let want = number(fixture, "expectedAttemptsAfterReplay");
+    check(attempts == want, || format!("{attempts} attempts after replay, want {want}"))
+}
+
+/// Tries every portable durable write after the lease is lost and names those it rejected.
+async fn late_writes(context: &HandlerContext) -> Vec<&'static str> {
+    let lost = |error: &Error| matches!(error, Error::LeaseLost { .. });
+    let child = || workhorse::ChildTaskRequest::new("too-late", "protocol.child", &Value::Null);
+    let late = json!({ "late": true });
+    let checkpoint = context.checkpoint("too-late", || async { Ok(json!({ "late": true })) }).await;
+    let writes = [
+        (
+            "checkpoint",
+            checkpoint.err().and_then(|error| error.name).as_deref() == Some("LeaseLostError"),
+        ),
+        (
+            "sleep",
+            context.sleep("too-late", Duration::from_millis(1)).await.is_err_and(|e| lost(&e)),
+        ),
+        (
+            "sleepUntil",
+            context
+                .sleep_until("too-late-until", chrono::Utc::now())
+                .await
+                .is_err_and(|e| lost(&e)),
+        ),
+        (
+            "waitForSignal",
+            context.wait_for_signal::<Value>("too-late", None).await.is_err_and(|e| lost(&e)),
+        ),
+        (
+            "waitForHuman",
+            context
+                .wait_for_human::<_, Value>("too-late", &late, None)
+                .await
+                .is_err_and(|e| lost(&e)),
+        ),
+        (
+            "runChild",
+            context
+                .run_child::<_, Value>(
+                    "too-late",
+                    "protocol.child",
+                    &Value::Null,
+                    Default::default(),
+                )
+                .await
+                .is_err_and(|e| lost(&e)),
+        ),
+        (
+            "runChildren",
+            context.run_children(vec![child().unwrap()]).await.is_err_and(|e| lost(&e)),
+        ),
+    ];
+    writes.into_iter().filter(|(_, rejected)| *rejected).map(|(name, _)| name).collect()
+}
+
+async fn lease_loss(database: &ScratchDatabase, fixture: &Value) -> Checked {
+    let client = database.connect().await;
+    let queue = queue(database, fixture).await?;
+    let task_type = text(fixture, "taskType");
+    let options = EnqueueOptions {
+        max_attempts: i32::try_from(number(fixture, "maxAttempts")).map_err(|e| e.to_string())?,
+        retry_policy: json!({ "type": "fixed", "delayMs": 0 }).as_object().cloned(),
+        ..Default::default()
+    };
+    let task = queue.enqueue(task_type, &Value::Null, options).await.map_err(driver)?.task_id;
+    let worker = worker(database, 4, lease_options(fixture))?;
+    let (started, mut handler_started) = mpsc::unbounded_channel();
+    let (report, mut reported) = mpsc::unbounded_channel();
+    worker.handle(task_type, move |_: Value, context: HandlerContext| {
+        let (started, report) = (started.clone(), report.clone());
+        async move {
+            let _ = started.send(());
+            context.cancellation().cancelled().await;
+            let reason = context.cancellation().reason();
+            let _ = report.send((reason, late_writes(&context).await));
+            Ok(json!({ "mustNotSettle": true }))
+        }
+    });
+    let running = {
+        let worker = worker.clone();
+        tokio::spawn(async move { worker.run_once().await })
+    };
+    handler_started.recv().await.ok_or("the handler never started")?;
+    let row = client
+        .query_one("SELECT fence_token FROM workhorse.task_runtime WHERE task_id = $1", &[&task])
+        .await
+        .map_err(sql)?;
+    let stale_fence: i64 = row.get(0);
+    // One implicit transaction holds the row lock, so no heartbeat renews between the two.
+    client
+        .batch_execute(&format!(
+            "UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' \
+               WHERE task_id = '{task}';
+             SELECT * FROM workhorse.recover_expired_telemetry_v1(100, NULL);"
+        ))
+        .await
+        .map_err(sql)?;
+    let processed = running.await.map_err(|error| error.to_string())?.map_err(driver)?;
+    check(processed, || "run_once() processed nothing".into())?;
+    let (reason, rejected) = reported.recv().await.ok_or("the handler never reported")?;
+    check(reason == Some(CancelReason::LeaseLost), || format!("cancellation reason {reason:?}"))?;
+    let want = strings(&fixture["portableRejectedWrites"]);
+    check(rejected == want, || format!("rejected writes {rejected:?}, want {want:?}"))?;
+    assert_state(&client, task, &fixture["expectedState"]).await?;
+    assert_outcomes(&client, task, &[text(fixture, "expectedAttemptOutcome")]).await?;
+    let worker_id = format!("rust-{}", text(fixture, "id"));
+    let accepted: bool = client
+        .query_one(
+            "SELECT workhorse.complete_v1($1, $2, $3, $4)",
+            &[&task, &worker_id, &stale_fence, &json!({ "stale": true })],
+        )
+        .await
+        .map_err(sql)?
+        .get(0);
+    check(!accepted, || "PostgreSQL accepted settlement under the stale fence".into())
 }
 
 async fn maintenance_phase_error(database: &ScratchDatabase, fixture: &Value) -> Checked {

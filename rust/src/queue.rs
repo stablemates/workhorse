@@ -222,7 +222,8 @@ impl<E: Executor> Queue<E> {
         let options = &request.options;
         validate_options(options)
             .map_err(|message| format!("invalid enqueue options: {message}"))?;
-        let mut input = self.task_input(
+        let mut input = task_input(
+            &self.default_queue,
             &request.task_type,
             &request.payload,
             options.queue.as_deref(),
@@ -273,39 +274,6 @@ impl<E: Executor> Queue<E> {
             input.insert("traceContext".into(), trace_context.clone());
         }
         Ok(input)
-    }
-
-    /// The fields an enqueued task and a scheduled task share.
-    #[allow(clippy::too_many_arguments)]
-    fn task_input(
-        &self,
-        task_type: &str,
-        payload: &Value,
-        queue: Option<&str>,
-        priority: i32,
-        concurrency_key: Option<&str>,
-        max_attempts: i32,
-        retry_policy: Option<&RetryPolicy>,
-    ) -> Map<String, Value> {
-        let queue = queue.filter(|queue| !queue.is_empty()).unwrap_or(&self.default_queue);
-        let max_attempts = if max_attempts == 0 { DEFAULT_MAX_ATTEMPTS } else { max_attempts };
-        let Value::Object(input) = json!({
-            "queue": queue,
-            "type": task_type,
-            "payload": payload,
-            "priority": priority,
-            "concurrencyKey": non_empty(concurrency_key),
-            "maxAttempts": max_attempts,
-            "retryPolicy": retry_policy,
-            "contractVersion": null,
-            "payloadMaxBytes": sql::DEFAULT_TASK_VALUE_MAX_BYTES,
-            "resultMaxBytes": sql::DEFAULT_TASK_VALUE_MAX_BYTES,
-            "sensitivePayloadKeys": [],
-            "sensitiveResultKeys": [],
-        }) else {
-            unreachable!("json! object literal")
-        };
-        input
     }
 
     /// Validates a contracted payload and stamps the contract fields PostgreSQL enforces.
@@ -476,7 +444,8 @@ impl<E: Executor> Queue<E> {
                     )));
                 }
                 let task = &definition.task;
-                let mut input = self.task_input(
+                let mut input = task_input(
+            &self.default_queue,
                     &task.task_type,
                     &task.payload,
                     task.queue.as_deref(),
@@ -603,7 +572,7 @@ impl<E: Executor> Queue<E> {
     }
 }
 
-fn validate_options(options: &EnqueueOptions) -> Result<(), &'static str> {
+pub(crate) fn validate_options(options: &EnqueueOptions) -> Result<(), &'static str> {
     let keyed =
         [options.idempotency.is_some(), options.debounce.is_some(), options.throttle.is_some()];
     if keyed.iter().filter(|present| **present).count() > 1 {
@@ -717,6 +686,39 @@ fn enqueue_results(rows: &[Row], count: usize) -> Result<Vec<EnqueueResult>, Err
     Ok(results.into_iter().flatten().collect())
 }
 
+/// The fields an enqueued, scheduled or child task shares.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn task_input(
+    default_queue: &str,
+    task_type: &str,
+    payload: &Value,
+    queue: Option<&str>,
+    priority: i32,
+    concurrency_key: Option<&str>,
+    max_attempts: i32,
+    retry_policy: Option<&RetryPolicy>,
+) -> Map<String, Value> {
+    let queue = queue.filter(|queue| !queue.is_empty()).unwrap_or(default_queue);
+    let max_attempts = if max_attempts == 0 { DEFAULT_MAX_ATTEMPTS } else { max_attempts };
+    let Value::Object(input) = json!({
+        "queue": queue,
+        "type": task_type,
+        "payload": payload,
+        "priority": priority,
+        "concurrencyKey": non_empty(concurrency_key),
+        "maxAttempts": max_attempts,
+        "retryPolicy": retry_policy,
+        "contractVersion": null,
+        "payloadMaxBytes": sql::DEFAULT_TASK_VALUE_MAX_BYTES,
+        "resultMaxBytes": sql::DEFAULT_TASK_VALUE_MAX_BYTES,
+        "sensitivePayloadKeys": [],
+        "sensitiveResultKeys": [],
+    }) else {
+        unreachable!("json! object literal")
+    };
+    input
+}
+
 fn invalid_result() -> Error {
     Error::invalid("PostgreSQL returned an invalid enqueue result")
 }
@@ -739,11 +741,11 @@ pub(crate) fn parse_status<T: serde::de::DeserializeOwned>(
         .map_err(|_| Error::UnexpectedStatus { operation, status: status.into() })
 }
 
-fn timestamp(value: DateTime<Utc>) -> Value {
+pub(crate) fn timestamp(value: DateTime<Utc>) -> Value {
     Value::String(value.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
 }
 
-fn non_empty(value: Option<&str>) -> Value {
+pub(crate) fn non_empty(value: Option<&str>) -> Value {
     value.filter(|value| !value.is_empty()).map_or(Value::Null, Value::from)
 }
 

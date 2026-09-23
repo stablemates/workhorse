@@ -18,7 +18,7 @@ fixture does not pass, and when a listed fixture passes. `pnpm rust:integration`
 | `failures.json`         |        4 |       4 |                    0 |
 | `interpreter.json`      |        1 |       1 |                    0 |
 | `requests.json`         |        2 |       2 |                    0 |
-| `runtime.json`          |       16 |      14 |                    2 |
+| `runtime.json`          |       16 |      16 |                    0 |
 | `scenarios.json`        |       15 |      15 |                    0 |
 | `schedules.json`        |        2 |       2 |                    0 |
 
@@ -26,9 +26,6 @@ fixture does not pass, and when a listed fixture passes. `pnpm rust:integration`
 
 The list gives the reason for each entry. Remove an entry in the commit that makes it pass.
 
-### SM-879
-
-- `runtime/durable-wait-suspension-and-checkpoint-replay`
-- `runtime/lease-loss-fences-handler-writes`
+The list is empty: every fixture passes.
 
 Regenerate with `pnpm rust:conformance:generate`; CI uses `pnpm rust:conformance:check`.

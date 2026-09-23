@@ -406,30 +406,44 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Durable checkpoints (handler context)",
+    rust: { fixtures: ["runtime/durable-wait-suspension-and-checkpoint-replay"] },
     typescript: { file: "integration-checkpoints-progress-waits.test.ts", pattern: "checkpoint" },
     python: { file: "test_worker.py", pattern: "checkpoint" },
     go: { file: "worker_test.go", pattern: "heckpoint" },
   },
   {
     capability: "Durable timers (`sleep` / `sleepUntil`)",
+    rust: {
+      file: "durable_postgres.rs",
+      test: "sleep_suspends_until_its_wake_time_and_a_past_wake_time_returns_at_once",
+    },
     typescript: { file: "integration-checkpoints-progress-waits.test.ts", pattern: "sleep" },
     python: { file: "test_worker.py", pattern: "sleep" },
     go: { file: "worker_test.go", pattern: "Sleep" },
   },
   {
     capability: "Signal and human-decision waits",
+    rust: {
+      file: "durable_postgres.rs",
+      test: "signal_and_human_waits_resume_with_what_was_delivered",
+    },
     typescript: { file: "integration-signals.test.ts", pattern: "signal" },
     python: { file: "test_worker_external_waits.py", pattern: "signal" },
     go: { file: "external_waits_test.go", pattern: "ignal" },
   },
   {
     capability: "Linked child fan-out and result join",
+    rust: { file: "durable_postgres.rs", test: "run_children_reports_how_each_child_ended" },
     typescript: { file: "integration-child-tasks.test.ts", pattern: "child" },
     python: { file: "test_worker_child_tasks.py", pattern: "child" },
     go: { file: "child_tasks_test.go", pattern: "hild" },
   },
   {
     capability: "Latest-value progress reporting",
+    rust: {
+      file: "durable_postgres.rs",
+      test: "progress_round_trips_and_a_quick_change_is_rate_limited",
+    },
     typescript: { file: "integration-checkpoints-progress-waits.test.ts", pattern: "progress" },
     python: { file: "test_worker.py", pattern: "progress" },
     go: { file: "worker_test.go", pattern: "Progress" },

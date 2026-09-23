@@ -59,26 +59,26 @@ telemetry, and graceful shutdown.
 
 <!-- BEGIN GENERATED PARITY WORKER -->
 
-| Capability                                   | TypeScript | Python    | Go        | Rust              |
-| -------------------------------------------- | ---------- | --------- | --------- | ----------------- |
-| Claiming and handler execution               | Supported  | Supported | Supported | Supported         |
-| Bounded worker concurrency                   | Supported  | Supported | Supported | Supported         |
-| Unhandled task type released to its queue    | Supported  | Supported | Supported | Supported         |
-| Heartbeats, lease recovery, fenced ownership | Supported  | Supported | Supported | Supported         |
-| Cooperative cancellation delivery            | Supported  | Supported | Supported | Supported         |
-| Notification-assisted dispatch with polling  | Supported  | Supported | Supported | Supported         |
-| Durable checkpoints (handler context)        | Supported  | Supported | Supported | [Planned][SM-879] |
-| Durable timers (`sleep` / `sleepUntil`)      | Supported  | Supported | Supported | [Planned][SM-879] |
-| Signal and human-decision waits              | Supported  | Supported | Supported | [Planned][SM-879] |
-| Linked child fan-out and result join         | Supported  | Supported | Supported | [Planned][SM-879] |
-| Latest-value progress reporting              | Supported  | Supported | Supported | [Planned][SM-879] |
-| Batch handler delivery                       | Supported  | Supported | Supported | Supported         |
-| Schedule firing (database cron evaluation)   | Supported  | Supported | Supported | Supported         |
-| Worker fleet registration and remote pause   | Supported  | Supported | Supported | Supported         |
-| Graceful stop and signal drain               | Supported  | Supported | Supported | Supported         |
-| Retention maintenance participation          | Supported  | Supported | Supported | Supported         |
-| OpenTelemetry tracing and metrics            | Supported  | Supported | Supported | Supported         |
-| Shared runtime fixtures executed             | Supported  | Supported | Supported | Supported         |
+| Capability                                   | TypeScript | Python    | Go        | Rust      |
+| -------------------------------------------- | ---------- | --------- | --------- | --------- |
+| Claiming and handler execution               | Supported  | Supported | Supported | Supported |
+| Bounded worker concurrency                   | Supported  | Supported | Supported | Supported |
+| Unhandled task type released to its queue    | Supported  | Supported | Supported | Supported |
+| Heartbeats, lease recovery, fenced ownership | Supported  | Supported | Supported | Supported |
+| Cooperative cancellation delivery            | Supported  | Supported | Supported | Supported |
+| Notification-assisted dispatch with polling  | Supported  | Supported | Supported | Supported |
+| Durable checkpoints (handler context)        | Supported  | Supported | Supported | Supported |
+| Durable timers (`sleep` / `sleepUntil`)      | Supported  | Supported | Supported | Supported |
+| Signal and human-decision waits              | Supported  | Supported | Supported | Supported |
+| Linked child fan-out and result join         | Supported  | Supported | Supported | Supported |
+| Latest-value progress reporting              | Supported  | Supported | Supported | Supported |
+| Batch handler delivery                       | Supported  | Supported | Supported | Supported |
+| Schedule firing (database cron evaluation)   | Supported  | Supported | Supported | Supported |
+| Worker fleet registration and remote pause   | Supported  | Supported | Supported | Supported |
+| Graceful stop and signal drain               | Supported  | Supported | Supported | Supported |
+| Retention maintenance participation          | Supported  | Supported | Supported | Supported |
+| OpenTelemetry tracing and metrics            | Supported  | Supported | Supported | Supported |
+| Shared runtime fixtures executed             | Supported  | Supported | Supported | Supported |
 
 <!-- END GENERATED PARITY WORKER -->
 
@@ -275,7 +275,4 @@ this document states still governs: a cell says Supported because tests prove it
 stops the published view from becoming another source of truth.
 
 <!-- BEGIN GENERATED PARITY LINEAR LINKS -->
-
-[SM-879]: https://linear.app/stablemates/issue/SM-879
-
 <!-- END GENERATED PARITY LINEAR LINKS -->

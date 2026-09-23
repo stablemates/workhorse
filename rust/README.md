@@ -3,7 +3,8 @@
 The Rust SDK is under construction. [ADR 0074](../docs/decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md)
 fixes its shape, and the Linear issues SM-877 through SM-885 implement it. Until they land, no crate
 here is published and the public API is not stable. SM-877 has landed the `Queue` client, SM-883
-the `Admin` client, SM-878 the `Worker` runtime, and SM-885 the embedded dashboard backend.
+the `Admin` client, SM-878 the `Worker` runtime, SM-885 the embedded dashboard backend, and SM-879
+the durable `HandlerContext`.
 
 ## Target shape
 
@@ -32,9 +33,9 @@ package, the one crate ADR 0074 publishes.
   period. `src/telemetry.rs` holds its spans, metrics, and trace context.
 - Every PostgreSQL call goes through the generated `src/sql_catalogue_generated.rs`. The worker's
   `LISTEN` and `UNLISTEN` are the only other statements.
-- The crate still holds the interim PostgreSQL durable adapter in `src/durable_postgres.rs`, and an
-  in-memory model in `src/durable_context/` that ADR 0074 retires. SM-879 replaces both with the
-  worker's `HandlerContext`.
+- `HandlerContext` in `src/context.rs`, `src/waits.rs`, and `src/children.rs` gives a handler
+  checkpoints, durable sleeps, signal and human waits, child tasks, and progress. A wait that has not
+  resolved suspends the task, and the worker releases it without settling.
 
 `Queue` follows the Python client's signatures where the ADR sketch is shorter. The policy and
 budget sync methods take a namespace and a `prune` flag and return the stored rows. `cancel` takes an
@@ -50,9 +51,10 @@ The integration tests in `rust/tests/` load the shared `protocol/v1` fixtures.
 [`PARITY.md`](PARITY.md) maps the durable operations to their PostgreSQL functions.
 
 The PostgreSQL tests in `rust/tests/postgres.rs`, `rust/tests/enqueue_postgres.rs`,
-`rust/tests/client_postgres.rs`, `rust/tests/admin_postgres.rs`, `rust/tests/worker_postgres.rs`, and
-`rust/tests/protocol_conformance.rs` exercise the real `workhorse` adapter. Each one creates a
-scratch database from `DATABASE_URL_TEST`, installs `sql/schema/current.sql`, and drops the database afterward.
+`rust/tests/client_postgres.rs`, `rust/tests/admin_postgres.rs`, `rust/tests/worker_postgres.rs`,
+`rust/tests/durable_postgres.rs`, and `rust/tests/protocol_conformance.rs` exercise the real
+`workhorse` adapter. Each one creates a scratch database from `DATABASE_URL_TEST`, installs
+`sql/schema/current.sql`, and drops the database afterward.
 `pnpm db:sweep` finds any scratch database that a failed teardown leaves behind.
 
 Without `DATABASE_URL_TEST` a local `pnpm rust:test` skips those tests and prints the reason.

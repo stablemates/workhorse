@@ -52,6 +52,7 @@ const gaps = [...byIssue]
         .join("\n")}`,
   )
   .join("\n\n");
+const gapSection = gaps || "The list is empty: every fixture passes.";
 
 const body = `# Rust conformance evidence
 
@@ -71,7 +72,7 @@ ${inventory}
 
 The list gives the reason for each entry. Remove an entry in the commit that makes it pass.
 
-${gaps}
+${gapSection}
 
 Regenerate with \`pnpm rust:conformance:generate\`; CI uses \`pnpm rust:conformance:check\`.
 `;

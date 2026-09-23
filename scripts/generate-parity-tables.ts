@@ -43,18 +43,7 @@ function renderCells(cells: readonly (readonly string[])[]): string {
 
 function rustCell(row: ParityRow, table: "client" | "worker" | "operator"): RustParityCell {
   if (row.rust) return row.rust;
-  if (table !== "worker") throw new Error(`Rust ${table} row "${row.capability}" needs a cell`);
-  if (
-    [
-      "Durable checkpoints (handler context)",
-      "Durable timers (`sleep` / `sleepUntil`)",
-      "Signal and human-decision waits",
-      "Linked child fan-out and result join",
-      "Latest-value progress reporting",
-    ].includes(row.capability)
-  )
-    return { planned: "SM-879" };
-  return { planned: "SM-878" };
+  throw new Error(`Rust ${table} row "${row.capability}" needs a cell`);
 }
 
 function renderTable(rows: readonly ParityRow[], table: "client" | "worker" | "operator"): string {
