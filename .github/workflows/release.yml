@@ -71,7 +71,11 @@ jobs:
           echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
       - run: pnpm install --frozen-lockfile
       - run: pnpm npm:release-check
+      # Under CI the Rust database tests refuse to skip, and they read only `DATABASE_URL_TEST`.
+      # Scoping it to this step leaves the npm check on the database it has always used.
       - run: pnpm rust:release-check
+        env:
+          DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test_packed
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -127,6 +131,54 @@ jobs:
       # rolled back, so that ledger is the only record of what recovery has to work around.
       - name: Preflight the publisher, then publish with provenance
         run: pnpm npm:publish
+
+  # The Rust crate joins the train only once `rust/Cargo.toml` carries the tag's version, so an
+  # unfinished SDK never ships because some other line released. It follows npm so that a stopped
+  # train never reaches crates.io, and crates.io, like npm, never accepts a version twice.
+  crates-io:
+    if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true
+    needs: publish
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 20
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@c8ff772090ab9d00f7f7bd7b388f3c3032282e3b # v1
+        with:
+          toolchain: 1.89.0
+          cache: false
+      - name: Compare the crate version with the tag
+        id: version
+        run: |
+          set -euo pipefail
+          crate="$(cargo metadata --locked --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "workhorse") | .version')"
+          if [ "v$crate" = "$GITHUB_REF_NAME" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            message="rust/Cargo.toml is at $crate, so $GITHUB_REF_NAME does not publish workhorse to crates.io"
+            echo "::notice::$message"
+            echo "$message" >> "$GITHUB_STEP_SUMMARY"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+      # Publication carries no secret. The action exchanges this job's OIDC identity for a
+      # short-lived crates.io token, which crates.io mints only for the trusted publisher the
+      # `workhorse` crate names: this repository, this workflow file, and the `crates-io`
+      # environment. The action's post step revokes the token when the job ends.
+      - name: Exchange the OIDC identity for a crates.io token
+        if: steps.version.outputs.publish == 'true'
+        id: auth
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+      - name: Publish workhorse
+        if: steps.version.outputs.publish == 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish --package workhorse --locked
 
   # The schema tool ships only on npm, so a Python or Go developer without a Node.js toolchain has
   # no way to create a development database from a published artifact. Attaching the clean-install

@@ -18,7 +18,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 use support::ScratchDatabase;
 use tokio_postgres::Client;
-use workhorse_client::{EnqueueRequest, Error as ClientError, Queue, ScheduleDefinition};
+use workhorse::{EnqueueRequest, Error as ClientError, Queue, ScheduleDefinition};
 
 use conformance::database;
 use conformance::ledger::{reconcile, Ledger, Outcome};
@@ -694,11 +694,11 @@ async fn run_compatibility(
     let setup = database.connect().await;
     for fixture in catalogue.category("compatibility") {
         if fixture["clientProtocolVersion"].as_i64()
-            != Some(i64::from(workhorse_client::CLIENT_PROTOCOL_VERSION))
+            != Some(i64::from(workhorse::CLIENT_PROTOCOL_VERSION))
         {
             let reason = format!(
                 "the Rust client always speaks protocol {}; it cannot present protocol {}",
-                workhorse_client::CLIENT_PROTOCOL_VERSION,
+                workhorse::CLIENT_PROTOCOL_VERSION,
                 fixture["clientProtocolVersion"]
             );
             record(outcomes, "compatibility", fixture, Outcome::Unsupported(reason));

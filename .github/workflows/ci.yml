@@ -412,6 +412,7 @@ jobs:
       - run: pnpm db:reset:test
       - run: pnpm rust:gates
       - run: pnpm rust:integration
+      - run: pnpm rust:package-check
 
   demo:
     name: demo and site smoke

@@ -1,9 +1,23 @@
 [package]
-name = "workhorse-client"
+# ADR 0074 publishes this one crate. SM-882 reserved `workhorse` on crates.io, and
+# `.github/workflows/release.yml` publishes it when this version matches a release tag.
+name = "workhorse"
 version = "0.1.0"
 edition = "2021"
-description = "Rust client for the Workhorse PostgreSQL task queue"
+rust-version = "1.89"
+description = "Rust SDK for Workhorse, a durable task queue whose state lives in PostgreSQL"
 license = "Apache-2.0"
+repository = "https://github.com/stablemates/workhorse"
+homepage = "https://github.com/stablemates/workhorse"
+readme = "README.md"
+keywords = ["postgresql", "task-queue", "durable", "workflow", "jobs"]
+categories = ["asynchronous", "database"]
+# The integration tests read `sql/schema/current.sql` from outside this directory, so the
+# published archive carries only what a dependent crate compiles.
+include = ["Cargo.toml", "LICENSE", "NOTICE", "README.md", "src/**/*.rs"]
+
+[lib]
+name = "workhorse"
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }

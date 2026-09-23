@@ -590,6 +590,9 @@ commit, in one controlled window, in a fixed order. Dates go into the changelogs
 candidate is cut, and a slipped date means a new candidate. No commit lands on `main` between the
 first tag and the last, so every tag names the candidate commit.
 
+The Rust crate rides the same `v*` tag once `rust/Cargo.toml` carries the train's version; [Rust
+crate](#rust-crate) describes that step.
+
 1. Rehearse. The candidate commit's `main` push run must show a green `CI / required`.
    `.github/workflows/release.yml` and `.github/workflows/release-python.yml` are dispatched
    manually with `dry-run` enabled, and every npm and Python archive is downloaded and inspected.
@@ -664,13 +667,43 @@ pipeline.
 2. Run `scripts/release-go.sh X.Y.Z` from a clean worktree.
 3. The script runs `pnpm check`, creates `go/vX.Y.Z`, and pushes the tag only after the gate passes.
 
+### Rust crate
+
+The Rust SDK publishes one crate, `workhorse`, from `rust/`
+([ADR 0074](decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md)). It is not on the
+release train yet. crates.io holds only the `0.0.0` placeholder that reserved the name. The crate
+joins the train in the release whose `rust/Cargo.toml` carries the train's version.
+
+1. Set `version` in `rust/Cargo.toml` to the release version and commit it with the candidate.
+2. Tag `vX.Y.Z`. The build job of `.github/workflows/release.yml` runs `pnpm rust:release-check`.
+   It packages the crate with verification and builds a clean consumer from the packaged archive.
+   With PostgreSQL available, that consumer enqueues one task.
+3. After npm publishes, the `crates-io` job compares the crate version with the tag. A mismatch
+   writes a notice and publishes nothing, so a release that leaves the crate behind still succeeds.
+4. On a match, the job exchanges its OIDC identity for a crates.io token and runs
+   `cargo publish --package workhorse --locked`, which verifies the package again before the upload.
+
+The job can publish only after a crate owner registers the workflow on crates.io:
+
+1. Sign in to crates.io as an owner of `workhorse` and open workhorse → Settings → Trusted Publishing.
+2. Add a GitHub publisher with owner `stablemates`, repository `workhorse`, and workflow filename
+   `release.yml`.
+3. Enter the environment `crates-io`. The field is optional, but it makes crates.io refuse a token
+   to any job outside that environment. Protect the `crates-io` environment on GitHub with required
+   reviewers, as `npm` and `pypi` are.
+
+`skyeagle` (Anton Orel) is the only owner. An owner adds another in workhorse → Settings → Owners,
+or with `cargo owner --add <github-login> workhorse` using a token that carries the
+`change-owners` scope. crates.io sends the new owner an invitation, and ownership starts when they
+accept it.
+
 The public repository requires pull requests and `CI / required` on `main`. Outside collaborators
 require workflow approval. The protected `npm` and `pypi` environments require review and prevent
 administrator bypass.
 
 ### Publication credentials
 
-None of the three registries holds a credential this repository stores, and none of them holds one
+None of the four registries holds a credential this repository stores, and none of them holds one
 that can expire.
 
 npm publication uses trusted publishing. `npm publish` exchanges the publish job's GitHub Actions
@@ -692,6 +725,14 @@ this environment name. Nothing expires, so nothing needs rotating. Those three n
 credential instead. Renaming `.github/workflows/release-python.yml`, renaming the `pypi`
 environment, or renaming the repository breaks publication until someone updates the trusted
 publisher on PyPI. A maintainer who changes one of them updates PyPI in the same change.
+
+crates.io publication stores no credential. `rust-lang/crates-io-auth-action` exchanges the
+`crates-io` job's OIDC identity for a short-lived token. crates.io mints that token only for the
+trusted publisher registered on the `workhorse` crate: this repository, `release.yml`, and the
+`crates-io` environment. The action revokes the token when the job ends. Renaming the workflow
+file, the environment, or the repository breaks publication until an owner updates the trusted
+publisher on crates.io. The `0.0.0` placeholder was published by hand, because crates.io accepts
+a trusted publisher only for a crate that already exists.
 
 The Go module proxy needs no credential at all. `scripts/release-go.sh` pushes a tag, and the proxy
 serves what the public repository already holds.

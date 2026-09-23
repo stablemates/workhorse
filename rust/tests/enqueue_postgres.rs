@@ -6,7 +6,7 @@ use serde_json::json;
 use support::scratch_database;
 use tokio_postgres::Client;
 use uuid::Uuid;
-use workhorse_client::{EnqueueRequest, Error, Queue};
+use workhorse::{EnqueueRequest, Error, Queue};
 
 struct StoredTask {
     queue: String,

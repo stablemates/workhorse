@@ -25,16 +25,17 @@ Python SDK's surface on Tokio.
 
 The workspace in the repository-root `Cargo.toml` still holds two interim crates.
 
-- `rust/` builds the `workhorse-client` package. It contains the interim queue, the PostgreSQL
+- `rust/` builds the `workhorse` package, the one crate ADR 0074 publishes. It contains the interim queue, the PostgreSQL
   durable adapter in `src/durable_postgres.rs`, and an in-memory model in `src/durable_context/`
   that ADR 0074 retires.
-- `rust/workhorse-worker/` holds an interim worker. SM-878 folds it into `rust/src/worker/`.
+- `rust/workhorse-worker/` holds an interim worker marked `publish = false`. SM-878 folds it into
+  `rust/src/worker/`.
 
 The integration tests in `rust/tests/` load the shared `protocol/v1` fixtures.
 [`PARITY.md`](PARITY.md) maps the durable operations to their PostgreSQL functions.
 
 The PostgreSQL tests in `rust/tests/postgres.rs`, `rust/tests/enqueue_postgres.rs`, and
-`rust/tests/protocol_conformance.rs` exercise the real `workhorse-client` adapter. Each one creates a
+`rust/tests/protocol_conformance.rs` exercise the real `workhorse` adapter. Each one creates a
 scratch database from `DATABASE_URL_TEST`, installs `sql/schema/current.sql`, and drops the database afterward.
 `pnpm db:sweep` finds any scratch database that a failed teardown leaves behind.
 
@@ -56,5 +57,13 @@ pnpm rust:format:check
 pnpm rust:clippy
 pnpm rust:test
 pnpm rust:integration
+pnpm rust:package-check
 pnpm rust:release-check
 ```
+
+`pnpm rust:package-check` runs `cargo package` with verification. It then builds
+`rust/release-consumer/main.rs` in a temporary project outside the workspace. That consumer depends
+on the unpacked `.crate` archive, never on the checkout. With `DATABASE_URL_TEST` set, it enqueues
+one task into a scratch database, and the check reads that row back. A change to the public API
+updates the consumer in the same commit. `pnpm rust:release-check` runs the gates and then this
+check. CI packages only committed files; a local run may pass `--allow-dirty`.

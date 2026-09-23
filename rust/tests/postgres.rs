@@ -2,7 +2,7 @@
 
 mod support;
 
-use workhorse_client::{Queue, CLIENT_PROTOCOL_VERSION, MAX_SCHEMA_VERSION, MIN_SCHEMA_VERSION};
+use workhorse::{Queue, CLIENT_PROTOCOL_VERSION, MAX_SCHEMA_VERSION, MIN_SCHEMA_VERSION};
 
 #[tokio::test]
 async fn postgres_client_reads_the_installed_protocol_and_schema_versions() {
