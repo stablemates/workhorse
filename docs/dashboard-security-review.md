@@ -179,8 +179,8 @@ advisory is either outside the closure or accepted with a reason and a review da
   advisory is unreachable through Workhorse's own code, say why in the entry rather than leaving
   the row silent.
 
-`python:vuln` and `go:vuln` cover the other two lines. This row covers npm.
-[`docs/compatibility.md`](compatibility.md) owns the policy the three commands share.
+`python:vuln`, `go:vuln`, and `rust:vuln` cover the other three lines. This row covers npm.
+[`docs/compatibility.md`](compatibility.md) owns the policy the four commands share.
 
 **Re-walk when** a published package gains a dependency, or when `pnpm npm:vuln` fails.
 

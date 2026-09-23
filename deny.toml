@@ -1,0 +1,13 @@
+# cargo-deny reads this file for `pnpm rust:vuln`, which runs only the advisories check.
+# scripts/audit-rust-dependencies.ts explains the scan. Accepted advisories live in
+# scripts/rust-advisory-acceptances.json with a reason and a review date, never in an `ignore` list
+# here, so that every accepted advisory carries a date on which it has to be reviewed again.
+
+[graph]
+# The published crate has optional features, and a consumer can enable any of them.
+all-features = true
+
+[advisories]
+# A yanked version is not a RustSec advisory, and checking for one queries the crates.io index.
+# Leaving it out keeps the RustSec advisory database as the scan's only network dependency.
+yanked = "allow"

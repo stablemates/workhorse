@@ -132,6 +132,24 @@ describe("a substituted tool", () => {
     expect(await refusals("rustfmt", "identity", pins)).toEqual([]);
   });
 
+  it.skipIf(!onPosix)("refuses a cargo-deny that answers as another tool", async () => {
+    leadPath(await toolDirectory({ "cargo-deny": 'echo "cargo 1.89.0 (c24e10642 2025-06-23)"' }));
+
+    const [refusal] = await refusals("cargo-deny", "identity", [["cargo-deny", "0.20.2"]]);
+
+    expect(refusal).toContain("cargo-deny did not identify itself");
+  });
+
+  it.skipIf(!onPosix)("refuses a cargo-deny that disagrees with its pin", async () => {
+    leadPath(await toolDirectory({ "cargo-deny": 'echo "cargo-deny 0.19.9"' }));
+    const pins: [string, string][] = [["cargo-deny", "0.20.2"]];
+
+    expect(await refusals("cargo-deny", "identity", pins)).toEqual([]);
+    expect((await refusals("cargo-deny", "pinned", pins))[0]).toContain(
+      "cargo-deny 0.19.9 does not match the mise.toml pin 0.20.2",
+    );
+  });
+
   it.skipIf(!onPosix)("accepts a uv that answers as the pinned uv does", async () => {
     leadPath(await toolDirectory({ uv: 'echo "uv 0.8.9"' }));
 

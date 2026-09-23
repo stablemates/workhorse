@@ -122,9 +122,9 @@ names, so no equivalent exists on the TypeScript or Python lines.
 ### Dependency advisories
 
 Each language line fails its build on an advisory in its own dependency tree. `pnpm npm:vuln`
-covers npm, `pnpm python:vuln` covers PyPI, and `pnpm go:vuln` covers the Go module. `pnpm check`
-runs all three, and so does the `static` task in `.github/workflows/ci.yml`. The Rust crate's
-dependency tree has no scan yet; SM-895 adds one.
+covers npm, `pnpm python:vuln` covers PyPI, `pnpm go:vuln` covers the Go module, and
+`pnpm rust:vuln` covers the Rust crate. `pnpm check` runs all four, and so does the `static` task in
+`.github/workflows/ci.yml`.
 
 `pnpm npm:vuln` runs `pnpm audit --prod` and fails on every advisory it reports, whatever the
 severity. Severity describes the advisory rather than this repository's exposure to it, so a
@@ -143,6 +143,19 @@ never answered is refused in one place and never read as a clean tree. The packe
 high or critical advisory that no acceptance names a published package for; `pnpm npm:vuln` remains
 the scan with no severity threshold. A release therefore needs an answer from the advisory service
 twice, which is deliberate: the two trees can hold different versions of the same dependency.
+
+`pnpm rust:vuln` runs `cargo deny check advisories` against the root `Cargo.lock`. `mise.toml` pins
+the cargo-deny version, and `deny.toml` holds its configuration. The graph includes every feature
+of the published crate, because a consumer can enable any of them. The scan fails on every RustSec
+entry that reaches the lockfile, whatever its kind: a vulnerability, an unmaintained crate, or an
+unsound API. A reported entry passes only when `scripts/rust-advisory-acceptances.json` states a
+reason and a review date for it. The check fails once that date passes, and when an entry stops
+matching anything. cargo-deny's own `ignore` list stays empty, because it carries no review date.
+
+cargo-deny exits non-zero both on an advisory and on an advisory database it could not fetch.
+`scripts/audit-rust-dependencies.ts` tells them apart by the summary record a completed check
+writes. Without that record, the scan reports the unreachable database and names no acceptance
+entry as stale.
 
 Fixing beats accepting. Prefer a lockfile bump, then a declared-range bump; write an entry only when
 no released version carries the fix, or when the path is provably outside what this repository

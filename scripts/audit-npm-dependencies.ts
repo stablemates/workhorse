@@ -6,10 +6,10 @@ import { publishedPackages } from "./packages.js";
 /**
  * Dependency advisory scanning for the npm half of the repository.
  *
- * `pnpm python:vuln` and `pnpm go:vuln` fail their line's build on any advisory the upstream
- * database reports. This is the npm equivalent, and it holds the same standing: `pnpm audit --prod`
- * reports an advisory, and the build fails unless the repository has written down why that advisory
- * is acceptable.
+ * `pnpm python:vuln`, `pnpm go:vuln` and `pnpm rust:vuln` fail their line's build on any advisory
+ * the upstream database reports. This is the npm equivalent, and it holds the same standing:
+ * `pnpm audit --prod` reports an advisory, and the build fails unless the repository has written
+ * down why that advisory is acceptable.
  *
  * A severity threshold is deliberately not the gate. Severity describes the advisory, not this
  * repository's exposure to it, so a threshold both hides advisories that matter here and fails on
