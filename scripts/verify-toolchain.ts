@@ -58,6 +58,15 @@ const probes: Record<string, ToolProbe> = {
   uv: { arguments: ["--version"], identity: new RegExp(String.raw`^uv ${version}`) },
 };
 
+/**
+ * Commands of the pinned Rust toolchain that repository scripts start directly. Each names itself,
+ * so a substitute is refused; `rustc` answers for the `mise.toml` pin.
+ */
+const rustCommands: Record<string, ToolProbe> = {
+  cargo: { arguments: ["--version"], identity: new RegExp(String.raw`^cargo ${version}`) },
+  rustfmt: { arguments: ["--version"], identity: new RegExp(String.raw`^rustfmt ${version}`) },
+};
+
 /** Part of the Go toolchain rather than a `mise.toml` entry, and checked by a rule of its own. */
 export const gofmtTool = "gofmt";
 
@@ -125,7 +134,7 @@ export function toolsNamedBy(
   };
 
   const name = executableName(command);
-  if (checkable.has(name)) add(name, command);
+  if (checkable.has(name) || (checkable.has("rust") && name in rustCommands)) add(name, command);
   // `go:fmt:check` and `health` reach their real tool through a shell, because they need a pipe or
   // a variable. Without this the wrapper would check `sh` and let a substituted `gofmt` through.
   if (name === "sh" || name === "bash") {
@@ -183,7 +192,7 @@ async function verifyVersioned(
   { tool, executable }: ToolRequest,
   { mode, pins }: VerifyOptions,
 ): Promise<string | undefined> {
-  const probe = probes[tool];
+  const probe = probes[tool] ?? rustCommands[tool];
   if (!probe) return undefined;
   const pin = pins.get(tool);
 
