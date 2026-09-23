@@ -43,9 +43,7 @@ function renderCells(cells: readonly (readonly string[])[]): string {
 
 function rustCell(row: ParityRow, table: "client" | "worker" | "operator"): RustParityCell {
   if (row.rust) return row.rust;
-  // ADR 0074: `Queue` carries health and cancellation, and `Admin` carries the other operator rows.
-  if (table === "operator") return { planned: "SM-883" };
-  if (table === "client") throw new Error(`Rust client row "${row.capability}" needs a cell`);
+  if (table !== "worker") throw new Error(`Rust ${table} row "${row.capability}" needs a cell`);
   if (
     [
       "Durable checkpoints (handler context)",

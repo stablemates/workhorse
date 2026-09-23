@@ -18,6 +18,7 @@ pub enum Operation {
     Health,
     SyncSchedules,
     SyncContracts,
+    Redrive,
 }
 
 impl fmt::Display for Operation {
@@ -30,6 +31,7 @@ impl fmt::Display for Operation {
             Self::Health => "health",
             Self::SyncSchedules => "sync schedules",
             Self::SyncContracts => "sync contracts",
+            Self::Redrive => "redrive",
         })
     }
 }
@@ -80,6 +82,33 @@ pub struct DependencyLimitDetails {
     pub max: i64,
 }
 
+/// PostgreSQL's retained-request conflict diagnosis for a redrive, SQLSTATE `P1002`.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RedriveConflictDetails {
+    pub source_task_id: String,
+    pub existing_target_task_id: Option<String>,
+    pub request_id_preview: String,
+    pub request_id_digest: String,
+    pub request_id_length: i64,
+    pub conflicting_fields: Vec<String>,
+    pub stored_request_digest: String,
+    pub rejected_request_digest: String,
+}
+
+/// PostgreSQL's retained-request conflict diagnosis for a queue purge, SQLSTATE `P1006`.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PurgeConflictDetails {
+    pub queue: String,
+    pub request_id_preview: String,
+    pub request_id_digest: String,
+    pub request_id_length: i64,
+    pub conflicting_fields: Vec<String>,
+    pub stored_request_digest: String,
+    pub rejected_request_digest: String,
+}
+
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -103,6 +132,10 @@ pub enum Error {
     DependencyCycle { details: Box<DependencyCycleDetails> },
     #[error("PostgreSQL rejected a task dependency limit")]
     DependencyLimitExceeded { details: Box<DependencyLimitDetails> },
+    #[error("PostgreSQL rejected a materially different idempotent redrive")]
+    RedriveIdempotencyConflict { details: Box<RedriveConflictDetails> },
+    #[error("PostgreSQL rejected a materially different idempotent queue purge")]
+    PurgeIdempotencyConflict { details: Box<PurgeConflictDetails> },
     #[error("{task_type} payload does not satisfy contract version {version}")]
     ContractValidation { task_type: String, version: String },
     #[error("{task_type} contract version {version} is unavailable")]
@@ -165,6 +198,29 @@ impl Error {
                 details: Box::new(serde_json::from_str(detail).unwrap_or_default()),
             },
             _ => error.into(),
+        }
+    }
+
+    /// Maps SQLSTATE `P1002` and `P1006` to their structured variants.
+    pub(crate) fn translate_admin(self) -> Self {
+        let database = match &self {
+            Self::Postgres(error) => error.as_db_error(),
+            Self::Pool(deadpool_postgres::PoolError::Backend(error)) => error.as_db_error(),
+            _ => None,
+        };
+        let Some((code, detail)) =
+            database.map(|database| (database.code().code(), database.detail().unwrap_or("{}")))
+        else {
+            return self;
+        };
+        match code {
+            "P1002" => Self::RedriveIdempotencyConflict {
+                details: Box::new(serde_json::from_str(detail).unwrap_or_default()),
+            },
+            "P1006" => Self::PurgeIdempotencyConflict {
+                details: Box::new(serde_json::from_str(detail).unwrap_or_default()),
+            },
+            _ => self,
         }
     }
 }

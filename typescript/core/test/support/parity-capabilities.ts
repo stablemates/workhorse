@@ -463,6 +463,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
 export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   {
     capability: "Task lookup, listing, and timeline",
+    rust: { file: "admin_postgres.rs", test: "admin_lists_looks_up_and_times_tasks_across_pages" },
     typescript: { file: "integration-operator-reads.test.ts", pattern: "admin.listTasks" },
     python: pythonAdmin,
     go: { file: "admin_test.go", pattern: "ListTasks" },
@@ -483,24 +484,28 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Queue pause, resume, and purge",
+    rust: { file: "admin_postgres.rs", test: "admin_pauses_resumes_and_purges_a_queue" },
     typescript: { file: "integration-queue-administration.test.ts", pattern: "admin.purgeQueue" },
     python: pythonAdmin,
     go: { file: "admin_test.go", pattern: "PurgeQueue" },
   },
   {
     capability: "Dead-letter listing and redrive",
+    rust: { file: "admin_postgres.rs", test: "admin_lists_and_redrives_dead_letters" },
     typescript: { file: "integration-operator-reads.test.ts", pattern: "admin.redrive" },
     python: pythonAdmin,
     go: { file: "admin_test.go", pattern: "Redrive" },
   },
   {
     capability: "Checkpoint, wait, and human-decision reads",
+    rust: { file: "admin_postgres.rs", test: "admin_reads_checkpoints_waits_and_human_waits" },
     typescript: { file: "integration-human-waits.test.ts", pattern: "admin.listHumanWaits" },
     python: pythonAdmin,
     go: { file: "admin_test.go", pattern: "ListHumanWaits" },
   },
   {
     capability: "Durable operator worker pause",
+    rust: { file: "admin_postgres.rs", test: "admin_pauses_and_resumes_a_registered_worker" },
     typescript: { file: "integration-worker-registry.test.ts", pattern: "paused" },
     python: pythonAdmin,
     go: { file: "admin_test.go", pattern: "SetWorkerPaused" },
