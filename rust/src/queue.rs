@@ -721,7 +721,7 @@ fn invalid_result() -> Error {
     Error::invalid("PostgreSQL returned an invalid enqueue result")
 }
 
-fn exactly_one<'a>(rows: &'a [Row], function: &str) -> Result<&'a Row, Error> {
+pub(crate) fn exactly_one<'a>(rows: &'a [Row], function: &str) -> Result<&'a Row, Error> {
     match rows {
         [row] => Ok(row),
         _ => Err(Error::invalid(format!(
@@ -731,7 +731,7 @@ fn exactly_one<'a>(rows: &'a [Row], function: &str) -> Result<&'a Row, Error> {
     }
 }
 
-fn parse_status<T: serde::de::DeserializeOwned>(
+pub(crate) fn parse_status<T: serde::de::DeserializeOwned>(
     operation: Operation,
     status: &str,
 ) -> Result<T, Error> {

@@ -3,6 +3,7 @@
 //! PostgreSQL owns queue state and every lifecycle decision. This crate issues the versioned
 //! protocol calls through a caller-supplied [`Executor`], so a transaction executor makes a
 //! call part of the caller's transaction.
+mod admin;
 pub mod compatibility;
 pub mod contracts;
 pub mod durable_context;
@@ -13,10 +14,11 @@ mod queue;
 mod sql_catalogue_generated;
 mod types;
 
+pub use admin::*;
 pub use deadpool_postgres;
 pub use error::{
     CancelReason, DependencyCycleDetails, DependencyLimitDetails, Error,
-    IdempotencyConflictDetails, Operation,
+    IdempotencyConflictDetails, Operation, PurgeConflictDetails, RedriveConflictDetails,
 };
 pub use queue::{Executor, Queue};
 pub use sql_catalogue_generated::{

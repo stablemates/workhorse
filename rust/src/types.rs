@@ -37,6 +37,7 @@ macro_rules! string_enum {
         }
     };
 }
+pub(crate) use string_enum;
 
 string_enum!(
     /// PostgreSQL's durable disposition for one enqueue request.
