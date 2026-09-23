@@ -107,6 +107,31 @@ describe("a substituted tool", () => {
     expect(refusal).toContain("uv is not on the PATH");
   });
 
+  it.skipIf(!onPosix)("refuses a cargo or rustfmt that does not name itself", async () => {
+    leadPath(await toolDirectory({ cargo: "exec cat", rustfmt: 'echo "rustc 1.89.0"' }));
+    const pins: [string, string][] = [["rust", "1.89.0"]];
+
+    expect((await refusals("cargo", "identity", pins))[0]).toContain(
+      "cargo did not identify itself",
+    );
+    expect((await refusals("rustfmt", "identity", pins))[0]).toContain(
+      "rustfmt did not identify itself",
+    );
+  });
+
+  it.skipIf(!onPosix)("accepts a cargo and rustfmt that answer as themselves", async () => {
+    leadPath(
+      await toolDirectory({
+        cargo: 'echo "cargo 1.89.0 (c24e10642 2025-06-23)"',
+        rustfmt: 'echo "rustfmt 1.8.0-stable (29483883ee 2025-08-04)"',
+      }),
+    );
+    const pins: [string, string][] = [["rust", "1.89.0"]];
+
+    expect(await refusals("cargo", "identity", pins)).toEqual([]);
+    expect(await refusals("rustfmt", "identity", pins)).toEqual([]);
+  });
+
   it.skipIf(!onPosix)("accepts a uv that answers as the pinned uv does", async () => {
     leadPath(await toolDirectory({ uv: 'echo "uv 0.8.9"' }));
 
@@ -235,6 +260,13 @@ describe("the tools a repository command starts", () => {
     expect(toolsNamedBy("sh", ["-c", "gofmt -l go | diff -u /dev/null -"], checkable)).toEqual([
       { tool: gofmtTool, executable: gofmtTool },
       { tool: "go", executable: "go" },
+    ]);
+  });
+
+  it("checks a Rust toolchain command once rust is pinned", () => {
+    expect(toolsNamedBy("cargo", ["test"], checkable)).toEqual([]);
+    expect(toolsNamedBy("cargo", ["test"], new Set(["rust"]))).toEqual([
+      { tool: "cargo", executable: "cargo" },
     ]);
   });
 

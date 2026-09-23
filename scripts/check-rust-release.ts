@@ -83,7 +83,7 @@ function run(
 }
 
 const cargo = (args: readonly string[], options?: { cwd?: string; capture?: boolean }) =>
-  run("mise", ["exec", "--", "cargo", ...args], options);
+  run("cargo", args, options);
 
 async function metadata(manifestPath: string, noDeps: boolean): Promise<CargoMetadata> {
   const args = ["metadata", "--format-version", "1", "--manifest-path", manifestPath];
