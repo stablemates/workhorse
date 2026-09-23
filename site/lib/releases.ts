@@ -1,15 +1,15 @@
 /**
- * The three release lines and what a published version of one looks like.
+ * The four release lines and what a published version of one looks like.
  *
- * Workhorse publishes to npm, PyPI, and the Go module proxy from one source
- * commit, and each line keeps its own changelog because each line carries its
+ * Workhorse publishes to npm, PyPI, the Go module proxy, and crates.io from one
+ * source commit, and each line keeps its own changelog because each line carries its
  * own version. This file names the lines; it states no version, because the
  * versions are read from the changelogs at build time by
  * `scripts/release-changelogs.ts`.
  *
  * `SECURITY.md` says a fix ships on the highest published minor of the current
  * major of each affected line and nowhere else. A reader cannot apply that rule
- * without the three current versions, so `/docs/releases` prints them
+ * without the four current versions, so `/docs/releases` prints them
  * ([ADR 0058](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0058-fix-the-current-line-and-gate-floors-on-upstream-end-of-life.md)).
  */
 
@@ -43,7 +43,7 @@ export interface ResolvedReleaseLine extends ReleaseLine {
 
 /**
  * The lines, in the order the site names them everywhere else: TypeScript,
- * Python, Go.
+ * Python, Go, Rust.
  *
  * The npm line is nine packages released in lockstep from one changelog, so it
  * appears once and names the package a reader installs first.
@@ -72,5 +72,13 @@ export const releaseLines: readonly ReleaseLine[] = [
     registry: "Go module proxy",
     registryUrl: "https://pkg.go.dev/github.com/stablemates/workhorse/go",
     changelog: "go/CHANGELOG.md",
+  },
+  {
+    id: "rust",
+    name: "Rust",
+    artifact: "workhorse",
+    registry: "crates.io",
+    registryUrl: "https://crates.io/crates/workhorse",
+    changelog: "rust/CHANGELOG.md",
   },
 ];

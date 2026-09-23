@@ -326,7 +326,7 @@ const catalogMarkdown = catalog.categories
   .join("\n\n");
 
 /**
- * The published versions of the three lines, read out of the three changelogs
+ * The published versions of the four lines, read out of their changelogs
  * (ADR 0058). `/docs/releases` prints them so a reader can apply the support
  * policy in `SECURITY.md`, which names the current line and no version.
  */
@@ -737,8 +737,8 @@ await writeFile(
 
 Start at [${entryPoint.title}](${base}${entryPoint.url}.md). ${entryPoint.description}
 
-Append \`.md\` to any page URL for its Markdown source. A Markdown page shows all three languages
-where the HTML page shows one.
+Append \`.md\` to any page URL for its Markdown source. A Markdown page shows every language —
+TypeScript, Python, Go, and Rust — where the HTML page shows one.
 
 Install with the commands on [${installation.title}](${base}${installation.url}.md). They name no
 version, and the runtime compatibility check confirms the schema before a process starts.
@@ -755,6 +755,7 @@ ${renderMachineReadable(site)}
 - [npm](${siteConfig.npm})
 - [PyPI](${siteConfig.pypi})
 - [Go module](${siteConfig.goModule})
+- [crates.io](${siteConfig.crates})
 `,
 );
 

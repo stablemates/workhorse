@@ -322,6 +322,7 @@ try {
     'aria-label="typescript"',
     'aria-label="python"',
     'aria-label="go"',
+    'aria-label="rust"',
   ]);
 
   // Shiki writes a token's colours as a class, and one generated stylesheet
@@ -336,7 +337,7 @@ try {
     );
   }
   const landingBytes = Buffer.byteLength(landingHtml, "utf8");
-  if (landingBytes > 380_000) {
+  if (landingBytes > 440_000) {
     throw new Error(`The landing page grew to ${landingBytes} bytes, past its shape`);
   }
 

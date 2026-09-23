@@ -45,10 +45,10 @@ ID — to close the final gap between effect and checkpoint commit.
 
 ## Schema and terminal tooling ship in TypeScript
 
-Python and Go ship transactional queue clients, complete worker runtimes, and `Admin` operator
-clients over the shared SQL protocol. Schema installation and migration, and the `workhorse` admin
-CLI and TUI, ship only in the TypeScript package, so a polyglot deployment keeps that package
-available for those operations.
+Python, Go, and Rust ship transactional queue clients, complete worker runtimes, and `Admin`
+operator clients over the shared SQL protocol. Schema installation and migration, and the
+`workhorse` admin CLI and TUI, ship only in the TypeScript package, so a polyglot deployment keeps
+that package available for those operations.
 
 This one is a decision rather than a missing feature. No component can migrate on its own start,
 because no component is a singleton: the dashboard and every worker deploy on many nodes, so a

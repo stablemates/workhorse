@@ -4,10 +4,10 @@ description: Mount the operator interface behind application authorization, or r
 ---
 
 Workhorse gives your operators one shared interface — tasks, attempts, checkpoints, schedules,
-queues, workers, failures, health — without you building an admin page. TypeScript, Python, and Go
-can each embed the same packaged React application in their native HTTP server. Every backend reads
-PostgreSQL through the versioned `dashboard/v1` contract, so the interface can observe workers on
-machines it has never met.
+queues, workers, failures, health — without you building an admin page. TypeScript, Python, Go, and
+Rust can each embed the same packaged React application in their native HTTP server. Every backend
+reads PostgreSQL through the versioned `dashboard/v1` contract, so the interface can observe workers
+on machines it has never met.
 
 ## What it shows
 
@@ -173,9 +173,9 @@ unrelated routes.
 ## Serve several databases as workspaces
 
 The TypeScript embedded host and standalone CLI can serve several Workhorse databases as named
-workspaces. Python and Go embedded hosts currently mount one database per host. In TypeScript,
-configure `workspaces` instead of `database`; each entry owns its connection and may override
-`environment`, `operator`, and the controllers:
+workspaces. Python, Go, and Rust embedded hosts currently mount one database per host. In
+TypeScript, configure `workspaces` instead of `database`; each entry owns its connection and may
+override `environment`, `operator`, and the controllers:
 
 ```ts
 const host = createDashboardHost({
@@ -208,8 +208,8 @@ the request, while TypeScript and Go can also return a custom response.
 
 Every backend replaces actor text from the browser with the verified principal before a mutation.
 The resulting `auditActor` and `requestedBy` fields record who acted, but never decide who may.
-TypeScript controller options and Python or Go procedure extensions can route selected mutations
-through application-owned services.
+TypeScript controller options and Python, Go, or Rust procedure extensions can route selected
+mutations through application-owned services.
 
 The settings page edits maintenance and retention policy through `DashboardSettingsController`,
 previews destructive retention changes before applying them, and shows process-owned worker

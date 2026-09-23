@@ -5,12 +5,12 @@ description: Workers keep PostgreSQL tidy automatically — promotion, recovery,
 
 A durable queue accumulates: delayed tasks waiting to become ready, leases that expired with their
 workers, history partitions filling up, and evidence that eventually outlives its usefulness.
-Workhorse handles all of it as bounded background work that workers drive automatically.
-PostgreSQL coordinates the passes with advisory locks, so scaling from one worker to fifty never
-multiplies destructive work — one worker wins each due phase, the rest get cheap no-ops.
-TypeScript, Python, and Go workers all call `run_maintenance_v1`, which keeps the slow phase order
-in PostgreSQL. A deployment therefore needs no TypeScript worker to replenish partitions, roll up
-statistics, retire history, or prune terminal and worker records.
+Workhorse handles all of it as bounded background work that workers drive automatically. PostgreSQL
+coordinates the passes with advisory locks, so scaling from one worker to fifty never multiplies
+destructive work — one worker wins each due phase, the rest get cheap no-ops. TypeScript, Python,
+Go, and Rust workers all call `run_maintenance_v1`, which keeps the slow phase order in PostgreSQL.
+A deployment therefore needs no TypeScript worker to replenish partitions, roll up statistics,
+retire history, or prune terminal and worker records.
 
 ## The phases, and how to watch them
 

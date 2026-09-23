@@ -3,6 +3,7 @@
     "go": "go get github.com/stablemates/workhorse/go",
     "node": "npm install @stablemates/workhorse",
     "python": "pip install stablemates-workhorse",
+    "rust": "cargo add workhorse",
     "schema": "npm exec --no -- workhorse schema install",
     "schemaDownload": "curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.4.0/schema.sql",
     "schemaPinned": "npx --package @stablemates/workhorse@0.4.0 workhorse schema install"

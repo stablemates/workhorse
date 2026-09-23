@@ -42,13 +42,10 @@ PostgreSQL connection string.
   <Tab value="Rust">
 
     ```bash
-    cargo add workhorse --git https://github.com/stablemates/workhorse
+    cargo add workhorse
     cargo add tokio --features macros,rt-multi-thread
     cargo add serde_json
     ```
-
-    Crates.io holds only a placeholder until the next release publishes the crate, so add it from
-    the repository.
 
     Your application never installs the schema. A deployment step installs it once, and that step
     runs on Node.js.
