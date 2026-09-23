@@ -3,6 +3,7 @@
 //! PostgreSQL owns every state transition. The worker supervises handler futures, renews their
 //! leases in one batched round, and runs the maintenance and registry loops ADR 0072 describes.
 mod batch;
+mod dispatch;
 mod execute;
 mod handler;
 mod heartbeat;
@@ -426,41 +427,20 @@ impl Worker {
         let shutdown_token = StopToken::new();
         let mut executions: JoinSet<Result<(), Error>> = JoinSet::new();
         let mut first_error = None;
-        let mut consecutive_empty = 0u32;
-        loop {
-            if shutdown.as_mut().now_or_never().is_some() {
-                break;
-            }
-            let free = inner.options.concurrency - executions.len();
-            if free > 0 && !inner.paused.load(Ordering::SeqCst) {
-                let (tasks, error) = inner.claim(free).await;
-                if let Some(error) = error {
-                    tracing::warn!(error = %error, workhorse.worker.id = %inner.worker_id, "task claim failed");
-                }
-                let mut handled = false;
-                for task in tasks {
-                    let handler = inner.handler(&task.task_type);
-                    handled |= handler.is_some();
-                    inner.spawn_execution(&mut executions, task, handler, shutdown_token.clone());
-                }
-                consecutive_empty = if handled { 0 } else { consecutive_empty.saturating_add(1) };
-            }
-            let delay = inner.poll_delay(consecutive_empty, listening.load(Ordering::SeqCst));
-            tokio::select! {
-                () = &mut shutdown => break,
-                Some(result) = executions.join_next() => record(result, &mut first_error),
-                () = tokio::time::sleep(delay) => {}
-                () = wake.notified() => {
-                    // A short random delay spreads one notification's claims across workers.
-                    let spread = (random_fraction() * (MAX_NOTIFICATION_DELAY_MS + 1) as f64) as u64;
-                    tokio::select! {
-                        () = &mut shutdown => break,
-                        () = tokio::time::sleep(Duration::from_millis(spread)) => {}
-                    }
-                }
-                () = registry_wake.notified() => {}
-            }
-        }
+        let dispatcher = Arc::new(WorkerDispatch {
+            inner: Arc::clone(inner),
+            shutdown: shutdown_token.clone(),
+            listening,
+        });
+        dispatch::dispatch(
+            &dispatcher,
+            &mut executions,
+            shutdown.as_mut(),
+            &wake,
+            &registry_wake,
+            &mut first_error,
+        )
+        .await;
 
         inner.draining.store(true, Ordering::SeqCst);
         inner.refresh_registration().await;
@@ -527,6 +507,47 @@ impl Worker {
         .await;
         inner.stop().await;
         result
+    }
+}
+
+/// The worker side of the dispatch loop.
+struct WorkerDispatch {
+    inner: Arc<Inner>,
+    shutdown: StopToken,
+    listening: Arc<AtomicBool>,
+}
+
+impl dispatch::Dispatch for WorkerDispatch {
+    type Task = ClaimedTask;
+
+    fn concurrency(&self) -> usize {
+        self.inner.options.concurrency
+    }
+
+    fn paused(&self) -> bool {
+        self.inner.paused.load(Ordering::SeqCst)
+    }
+
+    fn poll_delay(&self, consecutive_empty: u32) -> Duration {
+        self.inner.poll_delay(consecutive_empty, self.listening.load(Ordering::SeqCst))
+    }
+
+    fn claim(&self, limit: usize) -> impl Future<Output = Vec<ClaimedTask>> + Send + 'static {
+        let inner = Arc::clone(&self.inner);
+        async move {
+            let (tasks, error) = inner.claim(limit).await;
+            if let Some(error) = error {
+                tracing::warn!(error = %error, workhorse.worker.id = %inner.worker_id, "task claim failed");
+            }
+            tasks
+        }
+    }
+
+    fn launch(&self, executions: &mut JoinSet<Result<(), Error>>, task: ClaimedTask) -> bool {
+        let handler = self.inner.handler(&task.task_type);
+        let handled = handler.is_some();
+        self.inner.spawn_execution(executions, task, handler, self.shutdown.clone());
+        handled
     }
 }
 

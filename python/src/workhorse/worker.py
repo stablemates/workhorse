@@ -11,8 +11,9 @@ from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from queue import SimpleQueue
 from threading import Event, Lock, Thread, current_thread
-from time import monotonic
+from time import monotonic, sleep
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
 
@@ -151,6 +152,30 @@ _REDACTED_ERROR_MESSAGE = "Task handler failed; details redacted"
 # The ceiling the empty-claim backoff doubles toward. An idle worker waits at most this long before
 # it claims again, so a task enqueued into a quiet queue is never delayed past it.
 _MAX_EMPTY_POLL_MS = 5_000
+_NOTIFICATION_CLAIM_DELAY_SECONDS = 0.05
+
+
+def _dispatch_refill_batch(concurrency: int) -> int:
+    """Free slots that let a second claim start while one is in flight (ADR 0076).
+
+    A quarter of the concurrency, rounded up.
+    """
+    return -(-concurrency // 4)
+
+
+@dataclass(frozen=True, slots=True)
+class _ClaimOutcome:
+    """What one dispatch claim leased, and the error that ended it early, if any."""
+
+    claim_id: int
+    limit: int
+    # The dispatch wake version when the claim started. A later wake ends its empty-poll wait.
+    wake_version: int
+    # None when the worker stopped or paused during the notification delay, so no claim was sent.
+    claimed: tuple[tuple[ClaimedTask, float], ...] | None
+    error: BaseException | None = None
+
+
 _AttemptOutcome = Literal[
     "completed",
     "failed",
@@ -889,6 +914,7 @@ class Worker:
         self._contract_validators: dict[tuple[str, str], Any] = {}
         self._execution_lock = Lock()
         self._wake = Event()
+        self._dispatch_wake_version = 0
         self._active_threads: set[Thread] = set()
         self._dispatch_sequence = 0
         self._dispatch_order: dict[str, int] = {}
@@ -1293,7 +1319,7 @@ class Worker:
             "Worker paused locally",
             {"workhorse.worker.id": self.worker_id, "workhorse.worker.queues": self.queues},
         )
-        self._wake.set()
+        self._wake_dispatcher()
 
     def resume(self) -> None:
         """Allow claims and wake an idle run loop immediately."""
@@ -1305,7 +1331,7 @@ class Worker:
             "Worker resumed locally",
             {"workhorse.worker.id": self.worker_id, "workhorse.worker.queues": self.queues},
         )
-        self._wake.set()
+        self._wake_dispatcher()
 
     def is_paused(self) -> bool:
         with self._state_lock:
@@ -1327,24 +1353,21 @@ class Worker:
                 "workhorse.worker.queues": self.queues,
             },
         )
-        self._wake.set()
+        self._wake_dispatcher()
 
     def _stop_version_snapshot(self) -> int:
         with self._state_lock:
             return self._stop_version
 
     def _wake_dispatcher(self) -> None:
+        """Wake the run loop for a state change, which also ends an empty-poll wait."""
+        with self._state_lock:
+            self._dispatch_wake_version += 1
         self._wake.set()
 
-    def _dispatch_state(self) -> Literal["stopping", "paused", "full", "ready"]:
+    def _claims_halted(self) -> bool:
         with self._state_lock:
-            if self._stopping:
-                return "stopping"
-            if self._locally_paused or self._remotely_paused:
-                return "paused"
-            if len(self._active_threads) >= self.concurrency:
-                return "full"
-            return "ready"
+            return self._stopping or self._locally_paused or self._remotely_paused
 
     def _run_loop(self, *, continuous: bool, requested_stop_version: int) -> bool:
         self._compatibility.assert_compatible()
@@ -1367,98 +1390,123 @@ class Worker:
                 "workhorse.worker.queues": self.queues,
             },
         )
+        # Keeps the slots full without one serial claim round trip per task (ADR 0076). A claim
+        # reserves the slots it asks for, so claimed tasks never exceed the concurrency. With no
+        # claim in flight, any free slot starts one. While one is in flight, another starts only
+        # once the unreserved free slots reach the refill batch, so a busy worker claims in
+        # batches and its claims overlap. Claims run on their own threads and report back here.
+        refill_batch = _dispatch_refill_batch(self.concurrency)
+        claims: dict[int, int] = {}
+        results: SimpleQueue[_ClaimOutcome] = SimpleQueue()
+        reserved = 0
+        next_claim_id = 0
+        claim_error: BaseException | None = None
+        # Set by a claim that found nothing to run: no claim starts until its deadline, or until
+        # a dispatch wake newer than that claim's start.
+        empty_wait: tuple[float, int] | None = None
+        # A single pass ends at its first claim that made no progress.
+        pass_ended = False
+
+        def settle(outcome: _ClaimOutcome) -> None:
+            nonlocal reserved, claim_error, claimed_any, consecutive_empty_claims
+            nonlocal empty_wait, pass_ended
+            claims.pop(outcome.claim_id)
+            reserved -= outcome.limit
+            if outcome.claimed is None:
+                return
+            # A claimed task holds a lease, so it runs even when the loop is stopping or failed.
+            for task, claim_started_at in outcome.claimed:
+                self._start_claimed_task(task, claim_started_at)
+            if outcome.error is not None:
+                if claim_error is None:
+                    claim_error = outcome.error
+                return
+            # A claim that only handed its tasks back made no progress: every one of them goes
+            # straight back to its queue. It backs off like an empty claim instead of spinning on
+            # a task no handler here can run, and a caller looping run_once backs off too.
+            if any(task.type in self._handlers for task, _ in outcome.claimed):
+                consecutive_empty_claims = 0
+                claimed_any = True
+                empty_wait = None
+                return
+            consecutive_empty_claims += 1
+            pass_ended = True
+            if empty_wait is None:
+                empty_wait = (
+                    monotonic() + self._dispatch_wait_seconds(listener, consecutive_empty_claims),
+                    outcome.wake_version,
+                )
+
+        def settle_returned() -> None:
+            while not results.empty():
+                settle(results.get())
+
+        def start_claim(limit: int) -> None:
+            nonlocal reserved, next_claim_id
+            claim_id = next_claim_id
+            next_claim_id += 1
+            reserved += limit
+            claims[claim_id] = limit
+            delayed = self._notification_wake.is_set()
+            self._notification_wake.clear()
+            with self._state_lock:
+                wake_version = self._dispatch_wake_version
+            Thread(
+                target=self._run_dispatch_claim,
+                args=(claim_id, limit, wake_version, delayed, results),
+                name=f"workhorse-claim-{claim_id}",
+                daemon=True,
+            ).start()
+
+        def free_slots() -> int:
+            with self._state_lock:
+                active = len(self._active_threads)
+            return self.concurrency - active - reserved
+
         try:
-            while True:
-                # Clear before the sweep. A completion or state change that arrives while a claim
-                # is in flight remains latched and prevents the following wait from sleeping.
-                self._wake.clear()
-                self._refresh_registration()
-                state = self._dispatch_state()
-                if state == "stopping":
-                    break
-                if state == "paused":
-                    if not continuous:
-                        break
-                    self._wake.wait(self._dispatch_wait_seconds(listener, consecutive_empty_claims))
-                    continue
-                if state == "full":
-                    self._wake.wait(self._dispatch_wait_seconds(listener, consecutive_empty_claims))
-                    continue
-
-                if self._notification_wake.is_set():
-                    self._notification_wake.clear()
-                    self._wake.wait(random.uniform(0, 0.05))
-                    if self._dispatch_state() != "ready":
-                        continue
-
-                # tick_v1 promotes and recovers, so a pass between ticks only claims.
-                self._run_maintenance_if_due()
-                empty_attempts = 0
-                while empty_attempts < len(self.queues):
-                    if self._dispatch_state() != "ready":
-                        break
+            try:
+                while True:
+                    # Clear before observing. A completion, claim result, or state change that
+                    # arrives afterwards remains latched and prevents the following wait.
+                    self._wake.clear()
+                    settle_returned()
+                    self._refresh_registration()
                     with self._state_lock:
-                        free_slots = self.concurrency - len(self._active_threads)
-                        queue_name = self.queues[self._next_queue_index]
-                        self._next_queue_index = (self._next_queue_index + 1) % len(self.queues)
-                    claim_started_at = monotonic()
-                    with _start_span(
-                        "workhorse.claim",
-                        {"workhorse.queue.name": queue_name},
-                    ) as claim_span:
-                        rows = self._executor.rows(
-                            _STATEMENTS.claim_many,
-                            (queue_name, self.worker_id, free_slots, self.lease_ms),
-                        )
-                        claimed_tasks = tuple(_claimed_task(row, queue_name) for row in rows)
-                        _record_claim(
-                            queue_name,
-                            (monotonic() - claim_started_at) * 1_000,
-                            claimed_tasks,
-                        )
-                        if rows:
-                            for key, value in _task_span_attributes(claimed_tasks[0]).items():
-                                claim_span.set_attribute(key, value)
-                    if not rows:
-                        empty_attempts += 1
-                        continue
-                    # A sweep that claimed only task types this worker cannot run made no
-                    # progress: every one of them goes straight back to its queue. Counting it as
-                    # empty ends the fill and backs off, instead of spinning on a task no worker in
-                    # this release can run. The pass reports no progress for the same reason, so a
-                    # caller looping run_once backs off too.
-                    if any(task.type in self._handlers for task in claimed_tasks):
-                        empty_attempts = 0
-                        consecutive_empty_claims = 0
-                        claimed_any = True
-                    else:
-                        empty_attempts += 1
-                    for task in claimed_tasks:
-                        _emit_log(
-                            "DEBUG",
-                            "workhorse.task.claimed",
-                            "Task claimed",
-                            {
-                                **_task_span_attributes(task),
-                                "workhorse.queue.name": queue_name,
-                                "workhorse.worker.id": self.worker_id,
-                            },
-                        )
-                        self._start_claimed_task(task, claim_started_at)
-
-                state = self._dispatch_state()
-                if state == "stopping":
-                    break
-                if state == "paused":
-                    continue
-                if empty_attempts >= len(self.queues):
-                    consecutive_empty_claims += 1
-                    if not continuous:
+                        stopping = self._stopping or bool(self._run_errors)
+                        paused = self._locally_paused or self._remotely_paused
+                        wake_version = self._dispatch_wake_version
+                    if stopping or claim_error is not None:
                         break
+                    if not continuous and pass_ended:
+                        break
+                    if paused:
+                        if not continuous:
+                            break
+                        # Paused starts no claims but keeps observing executions and claims.
+                        self._wake.wait(
+                            self._dispatch_wait_seconds(listener, consecutive_empty_claims)
+                        )
+                        continue
+                    if empty_wait is not None:
+                        remaining = empty_wait[0] - monotonic()
+                        if remaining <= 0 or wake_version != empty_wait[1]:
+                            empty_wait = None
+                            continue
+                        self._wake.wait(remaining)
+                        continue
+                    free = free_slots()
+                    if free > 0 and (not claims or free >= refill_batch):
+                        # tick_v1 promotes and recovers, so a claim between ticks only claims.
+                        self._run_maintenance_if_due()
+                        free = free_slots()
+                        while free > 0 and (not claims or free >= refill_batch):
+                            start_claim(free)
+                            free = free_slots()
                     self._wake.wait(self._dispatch_wait_seconds(listener, consecutive_empty_claims))
-                    continue
-                if state == "full":
-                    self._wake.wait(self._dispatch_wait_seconds(listener, consecutive_empty_claims))
+            finally:
+                # Tasks an in-flight claim returns hold leases, so they run before the drain.
+                while claims:
+                    settle(results.get())
         finally:
             if listener is not None:
                 listener.close()
@@ -1483,7 +1531,73 @@ class Worker:
             )
         if errors:
             raise errors[0]
+        if claim_error is not None:
+            raise claim_error
         return claimed_any
+
+    def _run_dispatch_claim(
+        self,
+        claim_id: int,
+        limit: int,
+        wake_version: int,
+        delayed: bool,
+        results: SimpleQueue[_ClaimOutcome],
+    ) -> None:
+        """Run one dispatch claim on its own thread and report the outcome to the run loop."""
+        claimed: list[tuple[ClaimedTask, float]] = []
+        outcome = _ClaimOutcome(claim_id, limit, wake_version, None)
+        try:
+            # The notification jitter spreads workers woken together. It delays only this claim.
+            if delayed:
+                sleep(random.uniform(0, _NOTIFICATION_CLAIM_DELAY_SECONDS))
+                if self._claims_halted():
+                    return
+            self._claim_across_queues(limit, claimed)
+            outcome = _ClaimOutcome(claim_id, limit, wake_version, tuple(claimed))
+        except BaseException as error:
+            outcome = _ClaimOutcome(claim_id, limit, wake_version, tuple(claimed), error)
+        finally:
+            results.put(outcome)
+            self._wake.set()
+
+    def _claim_across_queues(self, limit: int, claimed: list[tuple[ClaimedTask, float]]) -> None:
+        """Claim up to limit tasks, checking each queue at most once in rotation order."""
+        for _ in range(len(self.queues)):
+            if len(claimed) >= limit:
+                return
+            with self._state_lock:
+                queue_name = self.queues[self._next_queue_index]
+                self._next_queue_index = (self._next_queue_index + 1) % len(self.queues)
+            claim_started_at = monotonic()
+            with _start_span(
+                "workhorse.claim",
+                {"workhorse.queue.name": queue_name},
+            ) as claim_span:
+                rows = self._executor.rows(
+                    _STATEMENTS.claim_many,
+                    (queue_name, self.worker_id, limit - len(claimed), self.lease_ms),
+                )
+                claimed_tasks = tuple(_claimed_task(row, queue_name) for row in rows)
+                _record_claim(
+                    queue_name,
+                    (monotonic() - claim_started_at) * 1_000,
+                    claimed_tasks,
+                )
+                if rows:
+                    for key, value in _task_span_attributes(claimed_tasks[0]).items():
+                        claim_span.set_attribute(key, value)
+            for task in claimed_tasks:
+                _emit_log(
+                    "DEBUG",
+                    "workhorse.task.claimed",
+                    "Task claimed",
+                    {
+                        **_task_span_attributes(task),
+                        "workhorse.queue.name": queue_name,
+                        "workhorse.worker.id": self.worker_id,
+                    },
+                )
+                claimed.append((task, claim_started_at))
 
     def _due_for_maintenance_routines(self, now_monotonic: float) -> bool:
         """Report whether this pass offers the slow routines, and claim the offer when it does."""
@@ -1711,7 +1825,7 @@ class Worker:
                 "Worker paused remotely" if paused else "Worker resumed remotely",
                 {"workhorse.worker.id": self.worker_id},
             )
-            self._wake.set()
+            self._wake_dispatcher()
 
     def _deregister(self) -> None:
         if not self._registered:
@@ -1741,7 +1855,7 @@ class Worker:
 
     def _wake_from_notification(self) -> None:
         self._notification_wake.set()
-        self._wake.set()
+        self._wake_dispatcher()
 
     def _set_notification_listening(self, listening: bool) -> None:
         if listening:
