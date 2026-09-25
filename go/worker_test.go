@@ -2618,3 +2618,134 @@ func TestReleaseOwnedRefusesAStaleFence(t *testing.T) {
 		t.Fatalf("a released lease was accepted twice: %s", status)
 	}
 }
+
+// pgx hands the worker a jsonb string already decoded. Every durable value that is a JSON string
+// has to reach the handler unchanged, and none of them may stop Run.
+func TestWorkerRunDeliversJSONStringValuesUnchanged(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-string-values")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "go-worker-string-values"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	taskID, err := queue.Enqueue(ctx, "strings.parent", "before")
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-string-worker", LeaseDuration: time.Second,
+		PollInterval: 5 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	waiting := make(chan struct{}, 10)
+	worker.Handle("strings.child", func(_ context.Context, payload any, _ *workhorse.HandlerContext) (any, error) {
+		if payload != "child-input" {
+			return nil, fmt.Errorf("child payload %#v", payload)
+		}
+		return "child-output", nil
+	})
+	worker.Handle("strings.parent", func(
+		_ context.Context,
+		payload any,
+		handlerContext *workhorse.HandlerContext,
+	) (any, error) {
+		if payload != "before" {
+			return nil, fmt.Errorf("parent payload %#v", payload)
+		}
+		checkpoint, err := handlerContext.Checkpoint("saved", func() (any, error) {
+			return "checkpointed", nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		if _, err := handlerContext.SetProgress("halfway"); err != nil {
+			return nil, err
+		}
+		progress, err := handlerContext.GetProgress()
+		if err != nil {
+			return nil, err
+		}
+		child, err := handlerContext.RunChild(
+			"child", "strings.child", "child-input", workhorse.EnqueueOptions{Queue: queueName},
+		)
+		if err != nil {
+			return nil, err
+		}
+		waiting <- struct{}{}
+		signal, err := handlerContext.WaitForSignal("approval")
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"checkpoint": checkpoint, "progress": progress.Value, "child": child, "signal": signal,
+		}, nil
+	})
+
+	runContext, stop := context.WithCancel(ctx)
+	runResult := make(chan error, 1)
+	go func() { runResult <- worker.Run(runContext) }()
+
+	select {
+	case <-waiting:
+	case err := <-runResult:
+		t.Fatalf("Run ended before the parent reached its wait: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the parent never reached its wait")
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		delivery, err := queue.SendSignal(ctx, taskID, "approval", "approved", workhorse.ExternalWaitDelivery{
+			IdempotencyKey: "string-approval", RequestedBy: "go-test",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if delivery.Status == workhorse.SignalDelivered {
+			if delivery.Payload != "approved" {
+				t.Fatalf("signal delivery returned payload %#v", delivery.Payload)
+			}
+			break
+		}
+		if delivery.Status != workhorse.SignalNotWaiting || time.Now().After(deadline) {
+			t.Fatalf("unexpected signal delivery: %#v", delivery)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	var state string
+	var result any
+	for {
+		if err := pool.QueryRow(
+			ctx,
+			"SELECT state, result FROM workhorse.task_outcome WHERE task_id = $1::uuid",
+			taskID,
+		).Scan(&state, &result); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatal(err)
+		}
+		if state != "" || time.Now().After(deadline) {
+			break
+		}
+		select {
+		case err := <-runResult:
+			t.Fatalf("Run ended before the parent settled: %v", err)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	stop()
+	if err := <-runResult; err != nil {
+		t.Fatalf("Run returned %v", err)
+	}
+	expected := map[string]any{
+		"checkpoint": "checkpointed", "progress": "halfway", "child": "child-output", "signal": "approved",
+	}
+	if state != "succeeded" || fmt.Sprint(result) != fmt.Sprint(expected) {
+		t.Fatalf("unexpected parent outcome: state=%s result=%#v", state, result)
+	}
+}

@@ -786,16 +786,13 @@ func parsePostgresTextArray(value string) []string {
 	}
 	return append(result, string(current))
 }
+
+// jsonValue reads a json or jsonb column the way decodedJSON does, keeping the raw value when the
+// bytes do not parse. A string is already a decoded JSON string value.
 func jsonValue(value any) any {
-	switch v := value.(type) {
-	case []byte:
+	if v, ok := value.([]byte); ok {
 		var out any
 		if json.Unmarshal(v, &out) == nil {
-			return out
-		}
-	case string:
-		var out any
-		if json.Unmarshal([]byte(v), &out) == nil {
 			return out
 		}
 	}

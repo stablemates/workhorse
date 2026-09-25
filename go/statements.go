@@ -335,6 +335,7 @@ const (
 	invalidBatchOutcomeFormat           = "batch handler for %s returned an invalid outcome at index %d"
 	batchIDFormat                       = "%x-%x-%x-%x-%x"
 	invalidClaimResultMessage           = "PostgreSQL returned an invalid claim result"
+	undecodablePayloadFormat            = "workhorse could not decode the task payload: %w"
 	invalidCompletionResultMessage      = "PostgreSQL returned an invalid completion result"
 	invalidFailureResultMessage         = "PostgreSQL returned an invalid failure result"
 	rejectedFailureStateFormat          = "PostgreSQL rejected failure settlement with state %s"
