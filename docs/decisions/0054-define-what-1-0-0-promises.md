@@ -30,7 +30,7 @@ WH-576 surveyed seven peers. Two findings shaped this decision. First, the proje
 declared 1.0 did not thereby avoid the question: River publishes 47 minors while stating its core
 APIs "have been stable since release," which is a stability promise wearing a 0.x number. Declining
 to number the promise does not decline to make it. Second, breakage clusters at the boundary. Every
-painful upgrade in the survey — pg-boss v10 to v11, Graphile Worker 0.14.0 — was a release that
+painful upgrade in the survey — pg-boss v10 to v11 among them — was a release that
 removed or rebuilt something while users were mid-fleet. The boundary is where the cost lands, so
 the boundary is what a 1.0 decision has to be about.
 
