@@ -3640,10 +3640,19 @@ $$;
 -- or cancellation no longer allows completion is left alone and missing from the result, exactly
 -- as complete_v1 returns false for it. The worker checks result sizes before it calls; an oversized
 -- result that still arrives fails the whole batch, as it fails complete_v1.
+--
+-- The DELETE matches on the primary key, the fence, and the owning worker. It has no state
+-- predicate: fast_task_runtime_state_shape_check gives a ready row a NULL worker_id, so the
+-- worker match already implies an active row. A state predicate let the planner prefer
+-- fast_task_runtime_active_due_idx, whose scan grows with every active row of every worker.
+-- The generic plan keeps the primary-key plan: a custom plan per call cost more to plan than
+-- the statement costs to run. The history insert joins queue_control once instead of calling
+-- fast_records_attempts_v1 per completed row.
 CREATE OR REPLACE FUNCTION workhorse.fast_complete_many_v1(
   p_worker_id text, p_task_ids uuid[], p_fence_tokens bigint[], p_results jsonb[]
 ) RETURNS uuid[]
 LANGUAGE plpgsql
+SET plan_cache_mode = force_generic_plan
 AS $$
 DECLARE
   v_now timestamptz := clock_timestamp();
@@ -3663,7 +3672,7 @@ BEGIN
   ), done AS (
     DELETE FROM workhorse.fast_task_runtime runtime
      USING input
-     WHERE runtime.task_id = input.task_id AND runtime.state = 'active'
+     WHERE runtime.task_id = input.task_id
        AND runtime.fence_token = input.fence_token AND runtime.worker_id = p_worker_id
        AND runtime.expires_at > v_now
        AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
@@ -3687,7 +3696,8 @@ BEGIN
     SELECT done.task_id, done.attempt, done.fence_token, done.worker_id, 'succeeded',
            done.claimed_at, done.claimed_at, v_now
       FROM done
-     WHERE workhorse.fast_records_attempts_v1(done.queue_name)
+      JOIN workhorse.queue_control control
+        ON control.queue_name = done.queue_name AND control.record_attempts
   )
   SELECT COALESCE(array_agg(kept.task_id), '{}'::uuid[]) INTO v_accepted FROM kept;
   RETURN v_accepted;
@@ -4134,7 +4144,6 @@ DECLARE
   v_accepted uuid[];
   v_control workhorse.queue_control%ROWTYPE;
   v_first boolean := true;
-  v_claim record;
 BEGIN
   IF p_worker_id IS NULL OR p_worker_id = '' THEN RAISE EXCEPTION 'worker_id must not be empty'; END IF;
   IF p_lease_ms IS NULL OR p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
@@ -4159,31 +4168,19 @@ BEGIN
   END IF;
   v_accepted := workhorse.fast_complete_many_v1(p_worker_id, p_task_ids, p_fence_tokens, p_results);
   IF p_limit > 0 AND NOT v_control.paused THEN
-    FOR v_claim IN
-      SELECT * FROM workhorse.fast_claim_v1(
-        p_queue_name, p_worker_id, p_limit, p_lease_ms, v_control.record_claims
-      )
-    LOOP
-      accepted := CASE WHEN v_first THEN v_accepted END;
-      v_first := false;
-      task_id := v_claim.task_id;
-      task_type := v_claim.task_type;
-      priority := v_claim.priority;
-      payload := v_claim.payload;
-      contract_version := v_claim.contract_version;
-      result_max_bytes := v_claim.result_max_bytes;
-      redact_error_details := v_claim.redact_error_details;
-      trace_context := v_claim.trace_context;
-      attempt := v_claim.attempt;
-      max_attempts := v_claim.max_attempts;
-      retry_policy := v_claim.retry_policy;
-      deadline_at := v_claim.deadline_at;
-      execution_timeout_ms := v_claim.execution_timeout_ms;
-      attempt_timeout_at := v_claim.attempt_timeout_at;
-      fence_token := v_claim.fence_token;
-      lease_expires_at := v_claim.lease_expires_at;
-      RETURN NEXT;
-    END LOOP;
+    -- One set-returning query streams the claims. A per-row RETURN NEXT loop costs measurably more
+    -- per claim on the hot path.
+    RETURN QUERY
+      SELECT CASE WHEN claim.ordinality = 1 THEN v_accepted END,
+             claim.task_id, claim.task_type, claim.priority, claim.payload, claim.contract_version,
+             claim.result_max_bytes, claim.redact_error_details, claim.trace_context, claim.attempt,
+             claim.max_attempts, claim.retry_policy, claim.deadline_at, claim.execution_timeout_ms,
+             claim.attempt_timeout_at, claim.fence_token, claim.lease_expires_at
+        FROM workhorse.fast_claim_v1(
+          p_queue_name, p_worker_id, p_limit, p_lease_ms, v_control.record_claims
+        ) WITH ORDINALITY AS claim
+       ORDER BY claim.ordinality;
+    v_first := NOT FOUND;
   END IF;
   IF v_first THEN
     accepted := v_accepted;

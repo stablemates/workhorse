@@ -236,6 +236,20 @@ describe("fast task tier", () => {
       [id],
     );
     expect(attempts.rows).toEqual([{ attempt: 1, outcome: "succeeded" }]);
+
+    await makeFast("fast-no-history");
+    const unrecorded = await queue.enqueue("recorded", {}, { queue: "fast-no-history" });
+    const quiet = new Worker(queue, { workerId: "quiet", queue: "fast-no-history" }).handle(
+      "recorded",
+      () => ({ ok: true }),
+    );
+    expect(await quiet.runOnce()).toBe(true);
+    await expect(admin.getTask(unrecorded)).resolves.toMatchObject({ state: "succeeded" });
+    const none = await pool.query(
+      `SELECT attempt FROM workhorse.attempt_history WHERE task_id = $1`,
+      [unrecorded],
+    );
+    expect(none.rows).toEqual([]);
   });
 
   it("counts a fast-tier outcome in the retention preview", async () => {

@@ -294,6 +294,36 @@ outcome row, and every retry rewrites the live row with the whole array. A cap w
 keeps the row bounded and still reports the loss. `record_attempts` covers anyone who needs every
 attempt.
 
+### Drop the outcome foreign key and the row checks
+
+`fast_task_outcome.task_id` references `task` with `ON DELETE CASCADE`. Both fast-tier tables also
+carry checks that the functions already respect. SM-918 measured each drop against the same
+invocation's control at 16 consumers. Dropping the foreign key saved about 40 µs of a fused
+completion-and-claim call, and dropping the checks saved less. Neither moved throughput. One serial
+pipeline of fused calls bounds a single worker, and commit and round-trip latency dominate that
+pipeline. At 4 consumers the database's share of that pipeline is larger. There, both drops, a
+leaner claim statement and both changes under "Settle less inside the fused call" together raised
+the ratio to the baseline from 0.71 to 0.82. That is still short of 1.0 and short of the research
+build at one cohort. The foreign key also carries the cascade that purge and retention rely on, so a
+drop would need a replacement. The checks stay because they state the row shapes that the completion
+statement's reasoning depends on.
+
+### Send the fused call as a named prepared statement
+
+node-postgres can send a statement by name, so each pooled connection parses it once. SM-918
+measured this at 16 consumers with the other hot-path changes applied, and it raised throughput by
+about 6%. It is not adopted. The connection pooling guide promises that every queue operation works
+behind a transaction-mode pooler. Protocol-level named statements break that promise under PgCat and
+under PgBouncer without prepared-statement support. Adopting it needs a maintainer decision to narrow
+that promise or to add an opt-in.
+
+### Settle less inside the fused call
+
+Two further changes each moved throughput by less than the variance of the control. One folded the
+result-size check into the completion statement, and one returned claims unordered within a batch.
+Both change observable behavior. The first stops rejecting an oversized result from a stale attempt,
+and the second hands a batch's claims to the worker in no defined order. Neither is adopted.
+
 ### Keep the session setting for the claimed event
 
 A per-session `workhorse.claim_events` makes history depend on worker configuration. Two workers on

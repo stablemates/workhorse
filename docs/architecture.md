@@ -2840,7 +2840,11 @@ statement: a fenced `DELETE` from `fast_task_runtime`, one `fast_task_outcome` i
 `attempt_history` insert per task when the queue records attempts. It returns the accepted task
 IDs. An attempt whose fence, worker, lease, deadline, or attempt timeout no longer matches, or that
 carries a pending cancellation, is left alone and missing from the result. A result larger than its
-`result_max_bytes` fails the whole batch.
+`result_max_bytes` fails the whole batch. The `DELETE` finds each row by primary key and has no
+`state` predicate, because `fast_task_runtime_state_shape_check` gives a ready row a null
+`worker_id`. The function runs with `plan_cache_mode = force_generic_plan`, so PL/pgSQL does not
+build a custom plan for the statement on every call. The history insert joins `queue_control` on
+`record_attempts` instead of calling `fast_records_attempts_v1` per completed row.
 
 `complete_many_and_claim_v1(p_worker_id, p_task_ids, p_fence_tokens, p_results, p_queue_name,
 p_limit, p_lease_ms)` completes up to 100 tasks and claims up to `p_limit` more from one fast-tier
