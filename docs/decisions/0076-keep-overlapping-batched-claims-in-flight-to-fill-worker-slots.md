@@ -9,8 +9,7 @@
 ## Context
 
 [SM-907](https://linear.app/stablemates/issue/SM-907) measured Node worker throughput and found it
-flat as concurrency grew: 647 tasks/s at concurrency 1 and 809 at concurrency 16. Graphile Worker
-0.17.3 reached 1,712 and 5,285 on the same host.
+flat as concurrency grew: 647 tasks/s at concurrency 1 and 809 at concurrency 16.
 [SM-909](https://linear.app/stablemates/issue/SM-909) found the cause in the dispatch loop.
 
 Every SDK ran the same loop. It filled its free slots with one `claim_many_v1` call and waited for
@@ -98,7 +97,6 @@ drain at `stop`, the empty-poll wait and the release of unhandled task types.
 ### Prefetch a buffer of claimed tasks
 
 A worker could claim ahead of its free slots and hand buffered tasks to slots as they free.
-Graphile Worker offers a local queue that fetches ahead in the same way.
 
 It was rejected because a Workhorse claim takes a lease. A buffered task spends lease time and
 attempt timeout without running, and a crashed worker strands its whole buffer until lease
