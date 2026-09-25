@@ -2538,7 +2538,12 @@ until the run ends. `runOnce()` takes one when the first attempt registers its l
 handler starts, and closes it with the last lease. Each round on the reservation is bounded by
 `heartbeatMs`. A round that exceeds the bound, or whose statement fails, releases the client with an
 error. node-postgres then destroys the connection rather than pooling it, which is the client-side
-cancel, and the next round connects a new one. No session `SET` is involved, so the reservation is
+cancel, and the next round connects a new one. The reservation listens for the client's `error`
+event while it holds the client. An error between rounds, as when PostgreSQL terminates the backend
+of an idle worker, destroys the client the same way and changes no lease. A checked-out
+node-postgres client has no listener of its own, so without this one the error would end the
+process. The Go, Python, and Rust drivers report a lost connection only on the next statement, which
+fails that round and discards the connection. No session `SET` is involved, so the reservation is
 safe under transaction pooling. Go workers use the pool's dedicated heartbeat connection unless `WorkerOptions.SharedHeartbeats` opts out. A Python worker
 takes its dedicated heartbeat connection from the supplied pool.
 

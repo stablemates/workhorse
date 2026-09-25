@@ -9,6 +9,8 @@ const MINIMUM_RESERVING_CAPACITY = 3;
 
 interface ReservedClient extends Queryable {
   release(error?: Error | boolean): void;
+  on?(event: "error", listener: (error: Error) => void): unknown;
+  removeListener?(event: "error", listener: (error: Error) => void): unknown;
 }
 
 /**
@@ -53,6 +55,9 @@ async function connectClient(pool: ConnectionPool): Promise<ReservedClient> {
  * because the heartbeat never waits for the shared pool. A round that outlives its bound destroys
  * the connection, which is the client-side cancel: no session setting is involved, so the
  * connection stays safe behind a transaction-mode pooler. The next round reconnects.
+ *
+ * A connection that fails between rounds, as when PostgreSQL terminates its backend, is discarded
+ * the same way. The failure changes no lease: each attempt's watchdog alone decides when one lapses.
  */
 export class ReservedConnection {
   private client: Promise<ReservedClient> | undefined;
@@ -92,13 +97,32 @@ export class ReservedConnection {
       return Promise.reject(new Error("The reserved heartbeat connection is closed"));
     }
     if (this.client === undefined) {
-      const pending = connectClient(this.pool);
+      const pending: Promise<ReservedClient> = connectClient(this.pool).then((client) =>
+        this.watch(client, pending),
+      );
       this.client = pending;
       pending.catch(() => {
         if (this.client === pending) this.client = undefined;
       });
     }
     return this.client;
+  }
+
+  /**
+   * Discard the client when it reports an error outside a round. A checked-out node-postgres
+   * client has no error listener of its own, and an unobserved error event ends the process.
+   */
+  private watch(client: ReservedClient, pending: Promise<ReservedClient>): ReservedClient {
+    if (client.on === undefined) return client;
+    const onError = (error: Error): void => this.discard(pending, error);
+    client.on("error", onError);
+    const release = client.release.bind(client);
+    // The listener stays until release, because the connection can still fail before then.
+    client.release = (...error) => {
+      release(...error);
+      client.removeListener?.("error", onError);
+    };
+    return client;
   }
 
   private async runBounded<T>(

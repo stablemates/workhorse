@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { QueryResult } from "pg";
 import {
@@ -126,6 +127,38 @@ describe("reserved heartbeat connection", () => {
     await connection.run((client) => client.query("SELECT 1"), 1_000);
     expect(pool.connect).toHaveBeenCalledTimes(2);
     await connection.close();
+  });
+
+  it("destroys a client that fails between rounds and reconnects for the next round", async () => {
+    const emitters: EventEmitter[] = [];
+    const releases: ReturnType<typeof vi.fn<(error?: Error | boolean) => void>>[] = [];
+    const pool = {
+      options: { max: 10 },
+      query: vi.fn<Queryable["query"]>(async () => emptyResult),
+      connect: vi.fn<() => Promise<EventEmitter & ReturnType<typeof fakeClient>>>(async () => {
+        const release = vi.fn<(error?: Error | boolean) => void>();
+        const client = Object.assign(new EventEmitter(), { ...fakeClient(), release });
+        emitters.push(client);
+        releases.push(release);
+        return client;
+      }),
+    };
+    const connection = new ReservedConnection(asDatabase(pool));
+
+    await connection.run((client) => client.query("SELECT 1"), 1_000);
+    const terminated = new Error("terminating connection due to administrator command");
+    // Without a listener, EventEmitter throws an unobserved error event.
+    emitters[0]!.emit("error", terminated);
+
+    await vi.waitFor(() => expect(releases[0]).toHaveBeenCalledExactlyOnceWith(terminated));
+    expect(emitters[0]!.listenerCount("error")).toBe(0);
+    await connection.run((client) => client.query("SELECT 2"), 1_000);
+    expect(pool.connect).toHaveBeenCalledTimes(2);
+    expect(emitters[1]!.listenerCount("error")).toBe(1);
+
+    await connection.close();
+    expect(releases[1]).toHaveBeenCalledExactlyOnceWith();
+    expect(emitters[1]!.listenerCount("error")).toBe(0);
   });
 
   it("waits for a round in flight before returning the client on close", async () => {

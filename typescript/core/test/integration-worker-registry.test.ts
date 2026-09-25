@@ -1342,6 +1342,70 @@ describe("worker registry", () => {
     }
   });
 
+  it("survives PostgreSQL terminating the idle heartbeat connection and resumes heartbeats", async () => {
+    const kind = `heartbeat-reconnect-${randomUUID()}`;
+    const heartbeatBackends = async (): Promise<number[]> => {
+      const backends = await pool.query<{ pid: number }>(
+        `SELECT pid
+           FROM pg_stat_activity
+          WHERE datname = current_database()
+            AND pid <> pg_backend_pid()
+            AND query LIKE '%workhorse.heartbeat_many_v1%'`,
+      );
+      return backends.rows.map((row) => row.pid);
+    };
+    const finished: string[] = [];
+    const releases = new Map<string, ReturnType<typeof deferred<void>>>();
+    const worker = new Worker(queue, {
+      workerId: kind,
+      heartbeatMs: 20,
+      leaseMs: 5_000,
+      pollMs: 50,
+      registryIntervalMs: 0,
+    }).handle<{ step: string }>(kind, async ({ step }) => {
+      await releases.get(step)!.promise;
+      finished.push(step);
+      return null;
+    });
+
+    const running = worker.run();
+    try {
+      releases.set("before", deferred());
+      await queue.enqueue(kind, { step: "before" });
+      const [terminatedPid] = await vi.waitFor(
+        async () => {
+          const pids = await heartbeatBackends();
+          expect(pids).toHaveLength(1);
+          return pids;
+        },
+        { timeout: 2_000 },
+      );
+      releases.get("before")!.resolve();
+      await vi.waitFor(() => expect(finished).toEqual(["before"]), { timeout: 2_000 });
+
+      // The worker is idle and still holds the connection, so the error arrives outside a round.
+      await pool.query("SELECT pg_terminate_backend($1)", [terminatedPid]);
+      await sleep(100);
+
+      releases.set("after", deferred());
+      await queue.enqueue(kind, { step: "after" });
+      await vi.waitFor(
+        async () => {
+          const pids = await heartbeatBackends();
+          expect(pids).toHaveLength(1);
+          expect(pids[0]).not.toBe(terminatedPid);
+        },
+        { timeout: 2_000 },
+      );
+      releases.get("after")!.resolve();
+      await vi.waitFor(() => expect(finished).toEqual(["before", "after"]), { timeout: 2_000 });
+    } finally {
+      for (const release of releases.values()) release.resolve();
+      worker.stop();
+      await running;
+    }
+  });
+
   it("keeps bounded polling as the fallback when the database cannot LISTEN", async () => {
     const pollingQueue = new Queue({ query: pool.query.bind(pool) });
     const handled: string[] = [];

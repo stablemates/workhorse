@@ -417,3 +417,175 @@ func TestWorkerWatchdogCancelsAHandlerAfterALeaseWithoutAnAcceptedHeartbeat(t *t
 		t.Fatal("the watchdog settled a task whose lease it had already lost")
 	}
 }
+
+// heartbeatSessionPID waits for a backend other than the observer's that last ran a heartbeat,
+// skipping the session named by previous, and returns its pid.
+func heartbeatSessionPID(t *testing.T, ctx context.Context, observer *pgx.Conn, previous uint32) uint32 {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var pid uint32
+		err := observer.QueryRow(
+			ctx,
+			`SELECT pid
+			 FROM pg_stat_activity
+			 WHERE datname = current_database()
+			   AND pid <> pg_backend_pid()
+			   AND pid <> $1
+			   AND query LIKE '%heartbeat_many_v1%'
+			 LIMIT 1`,
+			previous,
+		).Scan(&pid)
+		if err == nil {
+			return pid
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no heartbeat session was found")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestWorkerRunSurvivesTheTerminationOfItsIdleHeartbeatConnection pins the idle case: PostgreSQL
+// may end the reserved heartbeat session while no task runs, and Run keeps running. The next task's
+// first round fails on the dead session, and the round after renews on a fresh connection.
+func TestWorkerRunSurvivesTheTerminationOfItsIdleHeartbeatConnection(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-idle-heartbeat-termination")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	observer := observeDatabase(t, ctx, databaseURL)
+
+	var logs lockedBuffer
+	queueName := "go-worker-idle-heartbeat-termination"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue:               queueName,
+		WorkerID:            "idle-heartbeat-termination-worker",
+		LeaseDuration:       10 * time.Second,
+		HeartbeatInterval:   20 * time.Millisecond,
+		PollInterval:        5 * time.Millisecond,
+		MaintenanceInterval: 20 * time.Millisecond,
+		Logger:              slog.New(slog.NewTextHandler(&logs, nil)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan string, 2)
+	releases := map[string]chan struct{}{"before": make(chan struct{}), "after": make(chan struct{})}
+	cancelled := make(chan string, 2)
+	worker.Handle("idle-heartbeat", func(handlerContext context.Context, payload any, _ *workhorse.HandlerContext) (any, error) {
+		document, _ := payload.(map[string]any)
+		name, _ := document["name"].(string)
+		started <- name
+		select {
+		case <-releases[name]:
+		case <-handlerContext.Done():
+			cancelled <- name
+		}
+		return nil, nil
+	})
+	runContext, stopRun := context.WithCancel(ctx)
+	defer stopRun()
+	runResult := make(chan error, 1)
+	go func() { runResult <- worker.Run(runContext) }()
+
+	runTask := func(name string, previousSession uint32) uint32 {
+		t.Helper()
+		taskID, err := queue.Enqueue(ctx, "idle-heartbeat", map[string]any{"name": name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case startedName := <-started:
+			if startedName != name {
+				t.Fatalf("expected task %q to start, received %q", name, startedName)
+			}
+		case <-time.After(5 * time.Second):
+			select {
+			case err := <-runResult:
+				t.Fatalf("Run returned before task %q started: %v", name, err)
+			default:
+			}
+			t.Fatalf("worker did not start task %q, logged:\n%s", name, logs.String())
+		}
+		claimed := leaseExpiry(t, ctx, observer, taskID)
+		waitForLeaseRenewal(t, ctx, observer, taskID, claimed, 2*time.Second)
+		session := heartbeatSessionPID(t, ctx, observer, previousSession)
+		close(releases[name])
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			var state string
+			err := observer.QueryRow(
+				ctx,
+				"SELECT state FROM workhorse.task_outcome WHERE task_id = $1::uuid",
+				taskID,
+			).Scan(&state)
+			if err == nil {
+				if state != "succeeded" {
+					t.Fatalf("expected task %q to succeed, received %s", name, state)
+				}
+				return session
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				t.Fatal(err)
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("worker did not settle task %q", name)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
+	before := runTask("before", 0)
+	// The worker is idle now, and its reservation still holds the session that heartbeated.
+	var terminated bool
+	if err := observer.QueryRow(ctx, "SELECT pg_terminate_backend($1)", before).Scan(&terminated); err != nil {
+		t.Fatal(err)
+	}
+	if !terminated {
+		t.Fatalf("heartbeat session %d was not terminated", before)
+	}
+	time.Sleep(100 * time.Millisecond)
+	select {
+	case err := <-runResult:
+		t.Fatalf("Run returned while idle after its heartbeat session ended: %v", err)
+	default:
+	}
+
+	after := runTask("after", before)
+	if after == before {
+		t.Fatalf("heartbeats resumed on the terminated session %d", before)
+	}
+	select {
+	case name := <-cancelled:
+		t.Fatalf("the terminated heartbeat session cancelled task %q", name)
+	default:
+	}
+	select {
+	case err := <-runResult:
+		t.Fatalf("Run returned before its context was cancelled: %v", err)
+	default:
+	}
+
+	stopRun()
+	select {
+	case err := <-runResult:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after its context was cancelled")
+	}
+	// The reservation held the dead session through the idle stretch, so a round must have failed
+	// on it before the fresh connection renewed.
+	if !strings.Contains(logs.String(), "heartbeat round failed; retrying") {
+		t.Fatalf("no heartbeat round failed on the terminated session, logged:\n%s", logs.String())
+	}
+}
