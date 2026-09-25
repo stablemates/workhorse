@@ -1101,6 +1101,11 @@ interface CompletionClaim {
   /** Tasks to claim, from 0 to 100. Zero completes without claiming. */
   limit: number;
   leaseMs?: number;
+  /**
+  * The worker's slot cohort (ADR 0076). Concurrent completions share one round trip only within
+  * one cohort, so each cohort's handlers keep running while another cohort's completion waits.
+  */
+  cohort?: number | undefined;
 }
 
 interface CompletionClaimResult<TPayload extends Json = Json> {
@@ -4692,6 +4697,8 @@ class WaitLimitExceededError extends WorkhorseError {
 
 class Worker {
   readonly concurrency: number;
+  /** Slot cohorts for fast-tier dispatch. One cohort keeps every slot in one group. */
+  readonly cohorts: number;
   /**
   * Identifies this Worker instance to the durable registry.
   *
@@ -4774,6 +4781,12 @@ interface WorkerOptions {
   workerId?: string;
   /** Maximum number of tasks this worker may execute concurrently. */
   concurrency?: number;
+  /**
+  * Groups that split the slots for fast-tier queues (ADR 0076). Each group batches its own
+  * completions, so its handlers run while another group's completion is in flight. Full-tier
+  * queues ignore it. Defaults to 2 at a concurrency of 8 or more, otherwise 1.
+  */
+  cohorts?: number;
   /** Ownership duration granted by claim and every accepted heartbeat. */
   leaseMs?: number;
   /** Local heartbeat interval. It must remain shorter than leaseMs. */

@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-23
+- **Amended by:** SM-919 (a worker that batches completions splits its slots into cohorts; see below)
 - **Related:** [ADR 0071](0071-give-every-worker-a-pool-and-a-dedicated-heartbeat-connection.md),
   [ADR 0072](0072-converge-the-worker-runtime-defaults.md),
   [ADR 0075](https://github.com/stablemates/workhorse/pull/236)
@@ -72,6 +73,40 @@ The shared runtime fixture `busy-worker-refills-slots-with-overlapping-batched-c
 in PostgreSQL's path and requires the claim limits 8, 1 and 2 with two claims in flight. It then
 requires fewer than one claim per task over the whole run. Each SDK adds unit tests for pause,
 drain at `stop`, the empty-poll wait and the release of unhandled task types.
+
+### Cohorts for batched completions
+
+_Amended by [SM-919](https://linear.app/stablemates/issue/SM-919)._ ADR 0077 lets a worker complete
+fast-tier tasks in batches. Concurrent completions share one `complete_many_and_claim_v1` round
+trip, and that round trip claims the tasks that refill their slots. A busy worker then settles into
+lockstep. Its handlers finish together, wait together for one completion round trip, and restart
+together, so every slot idles for the same round trip.
+
+A worker that batches completions therefore splits its slots into cohorts. Each cohort then waits
+on its own completion round trip while the other cohorts' handlers run.
+
+10. **Cohort shares.** The `cohorts` option splits `concurrency` into that many fixed shares. The
+    first cohorts take the remainder. Every claimed task belongs to one cohort for its whole run.
+11. **Default.** A worker has two cohorts when it batches completions and its concurrency is at
+    least 8. Otherwise it has one. One cohort is the dispatch described by rules 1 to 9.
+12. **Batched completions stay within a cohort.** Concurrent completions share a round trip only
+    within one cohort. A completion's fused claim asks for at most its cohort's free slots, and the
+    tasks it claims join that cohort.
+13. **Refill batch per cohort.** Rule 3 applies to a fused claim within its cohort. A claim in
+    flight for another cohort does not hold back a completion's claim for its own free slots.
+14. **Plain claims.** While no claim is in flight, a plain claim fills the cohort with the most
+    free slots. The next cohort's claim starts when that claim returns. The first claim asks for one
+    cohort's share, which starts the cohorts out of phase. It still reserves every free slot until
+    it learns the tier, so a queue that answers on the full tier fills every slot as before.
+15. **Full-tier queues.** A worker ignores cohorts while any of its queues answers on the full tier,
+    and uses rules 1 to 9 unchanged. The shared fixture therefore still requires the claim limits 8,
+    1 and 2 at the default of two cohorts.
+
+More cohorts cost more round trips. Each completion batch is smaller, so statement time per task
+rises, and each cohort can hold one more pooled connection. At concurrency 16 on the fast tier, two
+cohorts ran about 1.2 times the throughput of one. They raised statement CPU per task from 0.029 ms
+to 0.040 ms, and pooled connections in use from 3 to 4. At concurrency 4, two cohorts did not beat
+the spread between repetitions. Four cohorts measured slower than two, so the default stops at two.
 
 ## Consequences
 
