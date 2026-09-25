@@ -175,6 +175,9 @@ type ClaimedTask struct {
 	// claimSentAt is when this worker sent the claim request. The lease watchdog measures from it,
 	// so a claim that took a long time to answer shortens the watchdog instead of overrunning it.
 	claimSentAt time.Time
+	// payloadError records a payload the worker could not decode. The attempt fails through the
+	// ordinary failure path, so one unreadable row never ends Run.
+	payloadError error
 }
 
 // Handler processes one claimed payload with fenced durable operations outside a transaction.
@@ -1264,6 +1267,11 @@ func (worker *Worker) execute(
 		Task: task, context: handlerContext, cancel: cancelHandler, executor: executor,
 		workerID: worker.workerID,
 	}
+	if task.payloadError != nil {
+		handler = func(context.Context, any, *HandlerContext) (any, error) {
+			return nil, fmt.Errorf(undecodablePayloadFormat, task.payloadError)
+		}
+	}
 	result, handlerError := callHandler(task.Type, handler, handlerContext, task.Payload, durability)
 	stopOwnership()
 	ownership := <-ownershipDone
@@ -2079,15 +2087,12 @@ func claimedTask(row Row, queue string) (ClaimedTask, error) {
 	if !priorityOK || !attemptOK || !maxAttemptsOK || !resultMaxBytesOK || !fenceOK || !leaseOK {
 		return ClaimedTask{}, errors.New(invalidClaimResultMessage)
 	}
-	payload, err := decodedJSON(row[rowPayloadField])
-	if err != nil {
-		return ClaimedTask{}, err
-	}
+	payload, payloadError := decodedJSON(row[rowPayloadField])
 	task := ClaimedTask{
 		ID: taskID, Queue: queue, Type: taskType, Priority: priority, Payload: payload,
 		ResultMaxBytes: resultMaxBytes, RedactErrorDetails: row[rowRedactErrorDetailsField] == true,
 		TraceContext: row[rowTraceContextField], Attempt: attempt, MaxAttempts: maxAttempts,
-		FenceToken: fenceToken, LeaseExpiresAt: leaseExpiresAt,
+		FenceToken: fenceToken, LeaseExpiresAt: leaseExpiresAt, payloadError: payloadError,
 	}
 	if value, ok := row[rowContractVersionField].(string); ok {
 		task.ContractVersion = &value
@@ -2107,23 +2112,18 @@ func claimedTask(row Row, queue string) (ClaimedTask, error) {
 	return task, nil
 }
 
+// decodedJSON reads a json or jsonb column. database/sql hands over the raw document as bytes,
+// while pgx has already decoded it, so a string is a JSON string value and is returned as is.
 func decodedJSON(value any) (any, error) {
-	switch value := value.(type) {
-	case []byte:
-		var decoded any
-		if err := json.Unmarshal(value, &decoded); err != nil {
-			return nil, err
-		}
-		return decoded, nil
-	case string:
-		var decoded any
-		if err := json.Unmarshal([]byte(value), &decoded); err != nil {
-			return nil, err
-		}
-		return decoded, nil
-	default:
+	encoded, ok := value.([]byte)
+	if !ok {
 		return value, nil
 	}
+	var decoded any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		return nil, err
+	}
+	return decoded, nil
 }
 
 func int64Value(value any) (int64, bool) {
