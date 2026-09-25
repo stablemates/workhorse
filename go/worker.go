@@ -213,6 +213,7 @@ type WorkerOptions struct {
 type Worker struct {
 	pool                *pgxpool.Pool
 	queues              []string
+	queueCursorMu       sync.Mutex
 	nextQueueIndex      int
 	workerID            string
 	concurrency         int
@@ -524,135 +525,26 @@ func (worker *Worker) Run(ctx context.Context) error {
 	executionContext, cancelExecutions := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancelExecutions()
 	executionResults := make(chan error, worker.concurrency)
-	consecutiveEmptyClaims := 0
-	pollTimer := time.NewTimer(workerPollDelay(worker.pollInterval, 0, false))
-	defer func() {
-		if !pollTimer.Stop() {
-			select {
-			case <-pollTimer.C:
-			default:
+	active, firstError := worker.dispatch(ctx, dispatchEnvironment{
+		// A claim may commit tasks before a later queue fails. The claim must finish even when the
+		// run context is cancelled, and every task it returned still needs to be executed before the
+		// error is surfaced.
+		claim: func(limit int) ([]ClaimedTask, error) {
+			return worker.claimNextMany(context.WithoutCancel(ctx), executor, limit)
+		},
+		execute: func(claimed ClaimedTask) error {
+			handler := worker.handlers[claimed.Type]
+			if handler == nil {
+				return worker.release(executionContext, executor, claimed)
 			}
-		}
-	}()
-	active := 0
-	stopping := false
-	var firstError error
-
-	for !stopping {
-		claimedInPass := false
-	fillSlots:
-		for {
-			if worker.remotelyPaused.Load() {
-				break fillSlots
-			}
-			freeSlots := worker.concurrency - active
-			if freeSlots == 0 {
-				break fillSlots
-			}
-			select {
-			case <-ctx.Done():
-				stopping = true
-			default:
-			}
-			if stopping {
-				break
-			}
-			// A claim may commit tasks before a later queue fails. The claim must
-			// finish even when the run context is cancelled, and every task it
-			// returned still needs to be executed before the error is surfaced.
-			tasks, err := worker.claimNextMany(context.WithoutCancel(ctx), executor, freeSlots)
-			if err != nil {
-				if ctx.Err() == nil {
-					firstError = err
-				}
-				// A claim that returned no task ends the run too. Otherwise a queue that
-				// fails every claim would poll on forever without surfacing its error.
-				stopping = true
-			}
-			if len(tasks) == 0 {
-				consecutiveEmptyClaims++
-				break
-			}
-			// A pass that claimed only task types this worker cannot run made no progress:
-			// every one of them goes straight back to its queue. Counting it as empty backs
-			// off instead of spinning on a task no worker in this release can run.
-			runnable := false
-			for _, task := range tasks {
-				if worker.handlers[task.Type] != nil {
-					runnable = true
-					break
-				}
-			}
-			if runnable {
-				claimedInPass = true
-				consecutiveEmptyClaims = 0
-			} else {
-				consecutiveEmptyClaims++
-			}
-			for _, task := range tasks {
-				worker.handlerSlots <- struct{}{}
-				active++
-				worker.activeSlots.Add(1)
-				go func(claimed ClaimedTask) {
-					handler := worker.handlers[claimed.Type]
-					var err error
-					if handler == nil {
-						err = worker.release(executionContext, executor, claimed)
-					} else {
-						err = worker.execute(executionContext, executor, claimed, handler)
-					}
-					<-worker.handlerSlots
-					worker.activeSlots.Add(-1)
-					executionResults <- err
-				}(task)
-			}
-			if stopping {
-				break
-			}
-		}
-		if stopping {
-			break
-		}
-		if claimedInPass {
-			consecutiveEmptyClaims = 0
-		}
-		resetTimer(
-			pollTimer,
-			workerPollDelay(worker.pollInterval, consecutiveEmptyClaims, !notificationListening.Load()),
-		)
-
-		select {
-		case <-ctx.Done():
-			stopping = true
-		case err := <-maintenanceErrors:
-			if err != nil {
-				if ctx.Err() == nil {
-					firstError = err
-				}
-				stopping = true
-			} else {
-				maintenanceErrors = nil
-			}
-		case err := <-executionResults:
-			active--
-			if err != nil {
-				firstError = err
-				stopping = true
-			}
-		case <-pollTimer.C:
-		case <-notificationWake:
-			delay := time.NewTimer(time.Duration(pseudorand.Int64N(int64(notificationClaimDelay) + 1)))
-			select {
-			case <-ctx.Done():
-				if !delay.Stop() {
-					<-delay.C
-				}
-				stopping = true
-			case <-delay.C:
-			}
-		case <-registryWake:
-		}
-	}
+			return worker.execute(executionContext, executor, claimed, handler)
+		},
+		executionResults:  executionResults,
+		notificationWake:  notificationWake,
+		registryWake:      registryWake,
+		maintenanceErrors: maintenanceErrors,
+		listening:         notificationListening.Load,
+	})
 
 	worker.draining.Store(true)
 	worker.refreshRegistration(context.WithoutCancel(ctx), executor, true)
@@ -715,6 +607,226 @@ func (worker *Worker) Run(ctx context.Context) error {
 		return errors.Join(firstError, incomplete)
 	}
 	return firstError
+}
+
+// dispatchRefillBatch is how many free slots let a second claim start while one is in flight: a
+// quarter of the concurrency, rounded up.
+func dispatchRefillBatch(concurrency int) int {
+	return (concurrency + 3) / 4
+}
+
+// dispatchEnvironment carries what the dispatch loop needs from Run. A test replaces the claim and
+// the execution with fakes and drives the loop without PostgreSQL.
+type dispatchEnvironment struct {
+	claim             func(limit int) ([]ClaimedTask, error)
+	execute           func(task ClaimedTask) error
+	executionResults  chan error
+	notificationWake  <-chan struct{}
+	registryWake      <-chan struct{}
+	maintenanceErrors <-chan error
+	listening         func() bool
+}
+
+// claimSettlement is one finished claim. skipped reports a claim that was never sent because the
+// worker stopped or paused during the notification delay.
+type claimSettlement struct {
+	limit       int
+	wakeVersion int
+	skipped     bool
+	tasks       []ClaimedTask
+	err         error
+}
+
+// dispatch keeps the slots full without one serial claim round trip per task (ADR 0076). A claim
+// reserves the slots it asks for, so claimed tasks never exceed the concurrency. With no claim in
+// flight, any free slot starts one. While one is in flight, another starts only once the unreserved
+// free slots reach the refill batch, so a busy worker claims in batches and its claims overlap.
+//
+// dispatch returns when the context ends, an execution fails, a claim fails, or maintenance fails.
+// It first waits for every claim still in flight and launches the tasks those claims returned. It
+// returns the executions still running and the first error; the caller drains the executions.
+func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironment) (int, error) {
+	refillBatch := dispatchRefillBatch(worker.concurrency)
+	claimResults := make(chan claimSettlement, worker.concurrency)
+	active := 0
+	reserved := 0
+	claimsInFlight := 0
+	consecutiveEmptyClaims := 0
+	wakeVersion := 0
+	notificationDelayPending := false
+	stopping := false
+	var firstError error
+	// Set by a claim that found nothing to run. No claim starts until its deadline or a wake that
+	// arrived after that claim started.
+	var emptyWait *struct {
+		deadline    time.Time
+		wakeVersion int
+	}
+	maintenanceErrors := environment.maintenanceErrors
+	waitTimer := time.NewTimer(time.Hour)
+	stopTimer := func() {
+		if !waitTimer.Stop() {
+			select {
+			case <-waitTimer.C:
+			default:
+			}
+		}
+	}
+	stopTimer()
+	defer stopTimer()
+
+	pollDelay := func() time.Duration {
+		return workerPollDelay(worker.pollInterval, consecutiveEmptyClaims, !environment.listening())
+	}
+	launch := func(task ClaimedTask) {
+		worker.handlerSlots <- struct{}{}
+		active++
+		worker.activeSlots.Add(1)
+		go func() {
+			err := environment.execute(task)
+			<-worker.handlerSlots
+			worker.activeSlots.Add(-1)
+			environment.executionResults <- err
+		}()
+	}
+	startClaim := func(limit int) {
+		reserved += limit
+		claimsInFlight++
+		delayed := notificationDelayPending
+		notificationDelayPending = false
+		startedVersion := wakeVersion
+		go func() {
+			settlement := claimSettlement{limit: limit, wakeVersion: startedVersion}
+			if delayed {
+				delay := time.NewTimer(time.Duration(pseudorand.Int64N(int64(notificationClaimDelay) + 1)))
+				select {
+				case <-ctx.Done():
+					delay.Stop()
+					settlement.skipped = true
+				case <-delay.C:
+					settlement.skipped = worker.remotelyPaused.Load()
+				}
+				if settlement.skipped {
+					claimResults <- settlement
+					return
+				}
+			}
+			settlement.tasks, settlement.err = environment.claim(limit)
+			claimResults <- settlement
+		}()
+	}
+	settleClaim := func(settlement claimSettlement) {
+		claimsInFlight--
+		reserved -= settlement.limit
+		if settlement.skipped {
+			return
+		}
+		// A claim that claimed only task types this worker cannot run made no progress: every one
+		// of them goes straight back to its queue. Counting it as empty backs off instead of
+		// spinning on a task no worker in this release can run. The check runs before the launch,
+		// so reading the handlers happens before any execution the claim starts.
+		runnable := false
+		for _, task := range settlement.tasks {
+			if worker.handlers[task.Type] != nil {
+				runnable = true
+				break
+			}
+		}
+		// A claimed task holds a lease, so it runs even when the loop is stopping or has failed.
+		for _, task := range settlement.tasks {
+			launch(task)
+		}
+		if settlement.err != nil {
+			if firstError == nil && ctx.Err() == nil {
+				firstError = settlement.err
+			}
+			// A claim that returned no task ends the run too. Otherwise a queue that fails every
+			// claim would poll on forever without surfacing its error.
+			stopping = true
+			return
+		}
+		if runnable {
+			consecutiveEmptyClaims = 0
+			emptyWait = nil
+			return
+		}
+		consecutiveEmptyClaims++
+		if emptyWait == nil {
+			emptyWait = &struct {
+				deadline    time.Time
+				wakeVersion int
+			}{time.Now().Add(pollDelay()), settlement.wakeVersion}
+		}
+	}
+
+	for !stopping {
+		select {
+		case <-ctx.Done():
+			stopping = true
+			continue
+		default:
+		}
+		// A nil channel never fires, so the loop waits only on executions and claims.
+		var wakeAfter <-chan time.Time
+		if worker.remotelyPaused.Load() {
+			// A paused worker starts no claim but keeps observing its executions and claims.
+			resetTimer(waitTimer, pollDelay())
+			wakeAfter = waitTimer.C
+		} else {
+			if emptyWait != nil {
+				remaining := time.Until(emptyWait.deadline)
+				if remaining <= 0 || wakeVersion != emptyWait.wakeVersion {
+					emptyWait = nil
+				} else {
+					resetTimer(waitTimer, remaining)
+					wakeAfter = waitTimer.C
+				}
+			}
+			if emptyWait == nil {
+				for {
+					free := worker.concurrency - active - reserved
+					if free <= 0 || (claimsInFlight > 0 && free < refillBatch) {
+						break
+					}
+					startClaim(free)
+				}
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			stopping = true
+		case err := <-maintenanceErrors:
+			if err != nil {
+				if firstError == nil && ctx.Err() == nil {
+					firstError = err
+				}
+				stopping = true
+			} else {
+				maintenanceErrors = nil
+			}
+		case err := <-environment.executionResults:
+			active--
+			if err != nil {
+				if firstError == nil {
+					firstError = err
+				}
+				stopping = true
+			}
+		case settlement := <-claimResults:
+			settleClaim(settlement)
+		case <-wakeAfter:
+		case <-environment.notificationWake:
+			wakeVersion++
+			notificationDelayPending = true
+		case <-environment.registryWake:
+		}
+	}
+
+	for claimsInFlight > 0 {
+		settleClaim(<-claimResults)
+	}
+	return active, firstError
 }
 
 // RunOnce claims and processes at most one task.
@@ -1007,14 +1119,22 @@ func (worker *Worker) claimNext(ctx context.Context, executor Executor) (*Claime
 	return &tasks[0], err
 }
 
+// nextClaimQueue advances the round-robin cursor. Claims overlap, so the cursor is shared state.
+func (worker *Worker) nextClaimQueue() string {
+	worker.queueCursorMu.Lock()
+	defer worker.queueCursorMu.Unlock()
+	queue := worker.queues[worker.nextQueueIndex]
+	worker.nextQueueIndex = (worker.nextQueueIndex + 1) % len(worker.queues)
+	return queue
+}
+
 // claimNextMany fills up to limit slots from the configured queues in round-robin order.
 // Promotion of due scheduled rows belongs to the maintenance tick, which every worker runs on
 // its maintenance interval, so the claim path issues only claim_many_v1.
 func (worker *Worker) claimNextMany(ctx context.Context, executor Executor, limit int) ([]ClaimedTask, error) {
 	tasks := make([]ClaimedTask, 0, limit)
 	for range worker.queues {
-		queue := worker.queues[worker.nextQueueIndex]
-		worker.nextQueueIndex = (worker.nextQueueIndex + 1) % len(worker.queues)
+		queue := worker.nextClaimQueue()
 		startedAt := time.Now()
 		rows, err := executor.Query(
 			ctx,

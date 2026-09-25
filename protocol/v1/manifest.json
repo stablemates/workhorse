@@ -71,6 +71,7 @@
     "non-overlapping-heartbeats",
     "empty-claim-backoff",
     "graceful-drain",
+    "batched-slot-refill",
     "enqueue-trace-propagation",
     "budget-admission-serialization",
     "missing-handler-release",

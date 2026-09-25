@@ -85,6 +85,9 @@ type workerRuntimeFixture struct {
 	RenewalTimeoutMS                     int                               `json:"renewalTimeoutMs"`
 	ExpectedCancellations                int                               `json:"expectedCancellations"`
 	ExpectedPhase                        string                            `json:"expectedPhase"`
+	ExpectedClaimLimits                  []int                             `json:"expectedClaimLimits"`
+	ExpectedOverlappingClaims            int                               `json:"expectedOverlappingClaims"`
+	ExpectedMaximumClaimsPerTask         float64                           `json:"expectedMaximumClaimsPerTask"`
 }
 
 // workerFixtureInjection replaces one installed function with a raising body, so a fixture can

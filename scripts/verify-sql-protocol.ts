@@ -183,6 +183,21 @@ export interface GracefulDrainRuntimeFixture extends RuntimeFixtureBase {
   expectedReady: number;
 }
 
+/**
+ * A busy worker refills its slots in overlapping batched claims (ADR 0076). The claim limits pin
+ * the refill rule: the first claim fills every slot, one free slot claims at once while no claim is
+ * in flight, and a second claim overlaps the first once the refill batch of free slots is reached.
+ */
+export interface SlotRefillRuntimeFixture extends RuntimeFixtureBase {
+  kind: "slot-refill";
+  concurrency: number;
+  taskCount: number;
+  settleCheckMs: number;
+  expectedClaimLimits: number[];
+  expectedOverlappingClaims: number;
+  expectedMaximumClaimsPerTask: number;
+}
+
 export interface TracePropagationRuntimeFixture extends RuntimeFixtureBase {
   kind: "trace-propagation";
 }
@@ -277,6 +292,7 @@ export type RuntimeFixture =
   | HeartbeatCadenceRuntimeFixture
   | PollCadenceRuntimeFixture
   | GracefulDrainRuntimeFixture
+  | SlotRefillRuntimeFixture
   | TracePropagationRuntimeFixture
   | BudgetAdmissionRaceRuntimeFixture
   | MissingHandlerRuntimeFixture

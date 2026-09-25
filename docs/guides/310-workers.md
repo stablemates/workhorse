@@ -29,9 +29,12 @@ await worker.run()
 A worker has a fixed number of slots, set by `concurrency`. One slot runs one task. The
 default is conservative, and you can raise it.
 
-Each pass, the worker asks PostgreSQL to fill its free slots in one claim batch. PostgreSQL
-still checks every task independently, so ordering and admission policies apply to each one.
-The worker stops asking when its slots are full or the queue has nothing left. One worker
+The worker asks PostgreSQL to fill its free slots in claim batches. PostgreSQL still checks
+every task independently, so ordering and admission policies apply to each one. A busy worker
+does not wait for one claim to return before it sends the next. When enough slots free up, it
+sends another batch while the first is still out. That keeps slots full without one round trip
+per task. The worker never claims more tasks than it has slots, because each claimed task holds a
+lease. It stops asking when its slots are full or the queue has nothing left. One worker
 timer submits every running lease in one heartbeat batch. Each accepted result renews its
 task. Every task still has its own abort signal and final write, so cancellation and settlement
 remain independent.

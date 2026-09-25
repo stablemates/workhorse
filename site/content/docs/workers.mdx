@@ -161,7 +161,9 @@ accidentally write as a stale owner after the task moves on.
 </Tabs>
 
 - **`concurrency`** caps simultaneous handlers in this one `Worker`. Replicas multiply that
-  capacity. When the fleet must share one budget, use
+  capacity. A busy worker refills freed slots with batched claims that overlap in flight, so
+  throughput rises with `concurrency` instead of waiting on one claim per task. It never claims
+  more tasks than it has free slots. When the fleet must share one budget, use
   [concurrency policies](/docs/concurrency-policies); for a shared start rate, use
   [rate limits](/docs/rate-limits).
 - **`leaseMs`** is how long a claim owns a task before the database may recover it. One

@@ -403,8 +403,10 @@ child to the parent. The methods
 map `stale`, `conflict`, `limit_exceeded`, and `result_too_large` to the corresponding child errors.
 `ChildResultLimitExceededError` retains `result_bytes` and `result_limit_bytes`.
 
-`concurrency` accepts integers from 1 through 100 and defaults to 1. The dispatcher calls
-`claim_many_v1` with its free-slot count until all slots are occupied or a sweep is empty. Each claim
+`concurrency` accepts integers from 1 through 100 and defaults to 1. The dispatcher refills slots
+with overlapping batched `claim_many_v1` calls under the rules that
+[ADR 0076](decisions/0076-keep-overlapping-batched-claims-in-flight-to-fill-worker-slots.md) sets for
+every SDK, described under the TypeScript worker's claim passes. Each claim
 uses a 30000 millisecond default lease. `lease_ms` accepts 100 through 86400000. `heartbeat_ms`
 defaults to the greater of 100 or one third of `lease_ms`; it must be positive and less than
 `lease_ms`. `maintenance_routine_poll_ms` bounds how often the worker offers the slow retention
@@ -2411,11 +2413,27 @@ entry while preserving first occurrence order. `WorkerOptions.queue` remains the
 compatibility option. Supplying both options throws. Omitting both uses `WorkerQueueApi.defaultQueue`.
 One worker identity, pause state, and `concurrency` budget cover the complete configured queue set.
 
-One claim pass requests its currently free slots through `claim_many_v1`. PostgreSQL still performs each
+Each claim requests a number of slots through `claim_many_v1`. PostgreSQL still performs each
 `claim_v1` transition serially inside that call, so every member independently passes ordering, policy,
 rate-token, and fence checks. The worker advances the queue cursor after every batched queue attempt.
-Each successful claim starts one independent per-task handler task; the fill loop stops when all free
-slots are occupied or every configured queue returns no row.
+Each claimed task starts one independent per-task handler task.
+
+`dispatchLoop` in `typescript/core/src/worker.ts` keeps more than one claim in flight, as
+[ADR 0076](decisions/0076-keep-overlapping-batched-claims-in-flight-to-fill-worker-slots.md) decides
+for every SDK. A claim in flight reserves its limit, and the free slots are `concurrency` minus the
+running handlers minus the reserved slots. With no claim in flight, any free slot starts a claim for
+all free slots. With a claim in flight, another starts only when the free slots reach
+`dispatchRefillBatch(concurrency)`, which is `ceil(concurrency / 4)`, so at most four claims are in
+flight. The loop waits for the first finished handler, returned claim, or wake, and never awaits a
+claim inline. A claim that returns no row, or only rows of unhandled types that it releases through
+`release_owned_v1`, counts as empty. After an empty claim the loop starts no claim until the poll
+deadline or a dispatch wake newer than that claim. The notification claim delay of
+`NOTIFICATION_CLAIM_DELAY_MS` runs inside the claim, and a claim whose worker paused or stopped
+during the delay is never sent. Tasks that a claim returns after `stop`, `pause`, a handler failure,
+or a claim error still run, because each holds a lease. On stop the loop drains every claim in
+flight, runs the tasks they return, and then awaits every handler. The runtime fixture
+`busy-worker-refills-slots-with-overlapping-batched-claims` pins the claim limits 8, 1, and 2 at
+concurrency 8, two claims in flight, and at most 0.75 claims per task in every SDK.
 This bounds claim and connection pressure without serializing user handlers. A handler slot remains active
 through completion, retry/failure handling, or durable-wait suspension, and every active task owns its own
 worker heartbeat registration, abort controller, fence checks, and final transition.

@@ -43,6 +43,7 @@ import type {
   MaintenancePhaseErrorRuntimeFixture,
   MissingHandlerRuntimeFixture,
   PollCadenceRuntimeFixture,
+  SlotRefillRuntimeFixture,
   RuntimeFunctionInjection,
   RuntimeWriteOperation,
   SuspensionReplayRuntimeFixture,
@@ -667,6 +668,116 @@ async function executeGracefulDrainRuntimeFixture(
   }
 }
 
+async function executeSlotRefillRuntimeFixture(
+  database: Queryable,
+  admin: Admin,
+  fixture: SlotRefillRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  // Records every claim's limit, and can hold a claim before it reaches PostgreSQL so the next one
+  // is observed while the first is still in flight.
+  const limits: number[] = [];
+  let claimsWithTasks = 0;
+  let inFlight = 0;
+  let maximumInFlight = 0;
+  let holding = false;
+  const held: Array<() => void> = [];
+  let claimArrived = deferred<void>();
+  const claimingDatabase = {
+    async query(text: string, values?: readonly unknown[]) {
+      if (!text.includes("claim_many_v1")) return database.query(text, values);
+      limits.push(Number(values?.[2]));
+      inFlight += 1;
+      maximumInFlight = Math.max(maximumInFlight, inFlight);
+      claimArrived.resolve();
+      try {
+        if (holding) {
+          await new Promise<void>((resolve) => {
+            held.push(resolve);
+          });
+        }
+        const result = await database.query(text, values);
+        if (result.rows.length > 0) claimsWithTasks += 1;
+        return result;
+      } finally {
+        inFlight -= 1;
+      }
+    },
+  } as Queryable;
+  const queue = new Queue(claimingDatabase);
+  const ids = await Promise.all(
+    Array.from({ length: fixture.taskCount }, (_, sequence) =>
+      queue.enqueue(fixture.taskType, { sequence }, { queue: queueName }),
+    ),
+  );
+  // Handlers block until the fixture finishes them in the order they started.
+  const started: Array<() => void> = [];
+  let openHandlers = false;
+  const worker = new Worker(queue, {
+    sharedHeartbeats: true,
+    workerId: `runtime-${fixture.id}`,
+    queue: queueName,
+    concurrency: fixture.concurrency,
+    registryIntervalMs: 0,
+  }).handle(fixture.taskType, async () => {
+    if (openHandlers) return null;
+    await new Promise<void>((resolve) => {
+      started.push(resolve);
+    });
+    return null;
+  });
+  const claimsReceived = async (count: number): Promise<void> => {
+    while (limits.length < count) {
+      await claimArrived.promise;
+      claimArrived = deferred<void>();
+    }
+  };
+
+  const running = worker.run();
+  try {
+    await waitForCondition(
+      () => started.length === fixture.concurrency,
+      `${fixture.id} did not fill its slots`,
+    );
+    holding = true;
+    started.shift()!();
+    await claimsReceived(2);
+    // One more free slot is below the refill batch while the first refill is held.
+    started.shift()!();
+    await sleep(fixture.settleCheckMs);
+    expect(limits).toHaveLength(2);
+    started.shift()!();
+    await claimsReceived(3);
+    expect(limits).toEqual(fixture.expectedClaimLimits);
+    expect(maximumInFlight).toBe(fixture.expectedOverlappingClaims);
+
+    holding = false;
+    openHandlers = true;
+    for (const release of held.splice(0)) release();
+    for (const finish of started.splice(0)) finish();
+    await waitForCondition(
+      () => worker.runtimeState().activeSlots === 0 && inFlight === 0,
+      `${fixture.id} did not settle`,
+    );
+    await expect
+      .poll(async () => {
+        const states = await Promise.all(ids.map(async (id) => (await admin.getTask(id))?.state));
+        return states.filter((state) => state === "succeeded").length;
+      })
+      .toBe(fixture.taskCount);
+    expect(claimsWithTasks / fixture.taskCount).toBeLessThanOrEqual(
+      fixture.expectedMaximumClaimsPerTask,
+    );
+  } finally {
+    holding = false;
+    openHandlers = true;
+    for (const release of held.splice(0)) release();
+    for (const finish of started.splice(0)) finish();
+    worker.stop();
+    await running;
+  }
+}
+
 async function releaseEvidence(
   database: Queryable,
   taskId: string,
@@ -1200,6 +1311,9 @@ describe("SQL protocol conformance fixtures", () => {
             break;
           case "graceful-drain":
             await executeGracefulDrainRuntimeFixture(queue, admin, fixture);
+            break;
+          case "slot-refill":
+            await executeSlotRefillRuntimeFixture(runtimeDatabase.pool, admin, fixture);
             break;
           case "trace-propagation":
             await executeTracePropagationRuntimeFixture(queue, runtimeDatabase.pool, fixture);

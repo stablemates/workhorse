@@ -68,6 +68,14 @@ const DEFAULT_NOTIFICATION_FALLBACK_POLL_MS = 5_000;
 const MAX_EMPTY_POLL_MS = 5_000;
 const NOTIFICATION_CLAIM_DELAY_MS = 50;
 
+/**
+ * Free slots that let a second claim start while one is in flight: a quarter of the concurrency,
+ * rounded up. Exported for the runtime conformance fixture.
+ */
+export function dispatchRefillBatch(concurrency: number): number {
+  return Math.ceil(concurrency / 4);
+}
+
 /** Tasks one claim pass leased, and the error that ended the pass early, if any. */
 interface ClaimAttempt {
   claimed: ClaimedTask[];
@@ -1558,16 +1566,36 @@ export class Worker {
     }
   }
 
+  // Keeps the slots full without one serial claim round trip per task (ADR 0076). A claim reserves
+  // the slots it asks for, so claimed tasks never exceed the concurrency. With no claim in flight,
+  // any free slot starts one. While one is in flight, another starts only once the unreserved free
+  // slots reach the refill batch, so a busy worker claims in batches and its claims overlap.
   private async dispatchLoop(shouldStop: () => boolean, signal?: AbortSignal): Promise<void> {
     type DispatchSettlement = {
+      kind: "execution";
       executionId: number;
       settlement: PromiseSettledResult<void>;
     };
+    type ClaimSettlement = {
+      kind: "claim";
+      claimId: number;
+      limit: number;
+      wakeVersion: number;
+      // Set when the loop stopped or paused during the notification delay, so no claim was sent.
+      attempt: ClaimAttempt | null;
+    };
 
+    const refillBatch = dispatchRefillBatch(this.concurrency);
     const active = new Map<number, Promise<DispatchSettlement>>();
+    const claims = new Map<number, Promise<ClaimSettlement>>();
+    let reserved = 0;
     let nextExecutionId = 0;
+    let nextClaimId = 0;
     let firstFailure: { executionId: number; reason: unknown } | undefined;
     let claimError: unknown;
+    // Set by a claim that found nothing to run. No claim starts until its deadline or a wake.
+    let emptyWait: { deadline: number; wakeVersion: number } | undefined;
+
     const observe = ({ executionId, settlement }: DispatchSettlement): void => {
       active.delete(executionId);
       if (settlement.status !== "rejected") return;
@@ -1580,78 +1608,93 @@ export class Worker {
       nextExecutionId += 1;
       active.set(
         executionId,
-        this.startExecution(task).then((settlement) => ({ executionId, settlement })),
+        this.startExecution(task).then((settlement) => ({
+          kind: "execution" as const,
+          executionId,
+          settlement,
+        })),
       );
     };
-    const waitForOne = async (): Promise<void> => {
-      observe(await Promise.race(active.values()));
+    const startClaim = (limit: number): void => {
+      const claimId = nextClaimId;
+      nextClaimId += 1;
+      reserved += limit;
+      const delayed = this.notificationClaimDelayPending;
+      this.notificationClaimDelayPending = false;
+      const wakeVersion = this.dispatchWakeVersion;
+      this.lastClaimAt = Date.now();
+      claims.set(
+        claimId,
+        (async (): Promise<ClaimSettlement> => {
+          if (delayed) {
+            await sleep(Math.random() * NOTIFICATION_CLAIM_DELAY_MS);
+            if (shouldStop() || this.paused) {
+              return { kind: "claim", claimId, limit, wakeVersion, attempt: null };
+            }
+          }
+          const attempt = await this.claimNextMany(limit);
+          return { kind: "claim", claimId, limit, wakeVersion, attempt };
+        })(),
+      );
     };
-    const waitThroughEmptyPoll = async (observedWakeVersion: number): Promise<void> => {
-      const deadline = Date.now() + this.nextDispatchPollMs();
-      while (true) {
-        if (shouldStop() || this.paused || firstFailure) return;
-        if (this.dispatchWakeVersion !== observedWakeVersion) return;
-        const remainingMs = deadline - Date.now();
-        if (remainingMs <= 0) return;
-        const wake = this.waitForDispatchWake(remainingMs, signal, observedWakeVersion).then(
-          () => null,
-        );
-        const result = await Promise.race<DispatchSettlement | null>([...active.values(), wake]);
-        if (result === null) return;
-        observe(result);
+    const settleClaim = ({ claimId, limit, wakeVersion, attempt }: ClaimSettlement): void => {
+      claims.delete(claimId);
+      reserved -= limit;
+      if (attempt === null) return;
+      // A claimed task holds a lease, so it runs even when the loop is stopping or has failed.
+      for (const task of attempt.claimed) launch(task);
+      if ("error" in attempt) {
+        if (claimError === undefined) claimError = attempt.error;
+        return;
       }
+      // A claim that only handed its tasks back made no progress, so it backs off like an empty
+      // one. Claiming again at once would spin on a task no handler here can run.
+      if (attempt.claimed.some((task) => this.handlers.has(task.type))) {
+        this.previousPassWorked = true;
+        this.consecutiveEmptyClaims = 0;
+        emptyWait = undefined;
+        return;
+      }
+      this.previousPassWorked = false;
+      this.consecutiveEmptyClaims += 1;
+      emptyWait ??= { deadline: Date.now() + this.nextDispatchPollMs(), wakeVersion };
+    };
+    const freeSlots = (): number => this.concurrency - active.size - reserved;
+    const nextEvent = async (wakeMs?: number, wakeVersion?: number): Promise<void> => {
+      const pending: Array<Promise<DispatchSettlement | ClaimSettlement | null>> = [
+        ...active.values(),
+        ...claims.values(),
+      ];
+      if (wakeMs !== undefined) {
+        pending.push(this.waitForDispatchWake(wakeMs, signal, wakeVersion).then(() => null));
+      }
+      const event = await Promise.race(pending);
+      if (event?.kind === "execution") observe(event);
+      else if (event?.kind === "claim") settleClaim(event);
     };
 
     while (true) {
       if (shouldStop() || firstFailure || claimError !== undefined) break;
       if (this.paused) {
-        if (active.size === 0) {
-          await this.waitForDispatchWake(this.nextDispatchPollMs(), signal);
-        } else {
-          const wake = this.waitForDispatchWake(this.nextDispatchPollMs(), signal).then(() => null);
-          const result = await Promise.race<DispatchSettlement | null>([...active.values(), wake]);
-          if (result) observe(result);
-        }
+        await nextEvent(this.nextDispatchPollMs());
         continue;
       }
-
-      let empty = false;
-      let emptyWakeVersion = this.dispatchWakeVersion;
-      while (active.size < this.concurrency && !shouldStop() && !this.paused) {
-        if (this.notificationClaimDelayPending) {
-          this.notificationClaimDelayPending = false;
-          await sleep(Math.random() * NOTIFICATION_CLAIM_DELAY_MS);
-          if (shouldStop() || this.paused) break;
+      if (emptyWait) {
+        const remainingMs = emptyWait.deadline - Date.now();
+        if (remainingMs <= 0 || this.dispatchWakeVersion !== emptyWait.wakeVersion) {
+          emptyWait = undefined;
+          continue;
         }
-        this.lastClaimAt = Date.now();
-        const claimWakeVersion = this.dispatchWakeVersion;
-        const claim = await this.claimNextMany(this.concurrency - active.size);
-        const tasks = claim.claimed;
-        if ("error" in claim) {
-          for (const task of tasks) launch(task);
-          claimError = claim.error;
-          break;
-        }
-        if (tasks.length === 0) {
-          this.previousPassWorked = false;
-          this.consecutiveEmptyClaims += 1;
-          empty = true;
-          emptyWakeVersion = claimWakeVersion;
-          break;
-        }
-        this.previousPassWorked = true;
-        this.consecutiveEmptyClaims = 0;
-        for (const task of tasks) launch(task);
+        await nextEvent(remainingMs, emptyWait.wakeVersion);
+        continue;
       }
-
-      if (shouldStop() || this.paused || firstFailure || claimError !== undefined) continue;
-      if (empty) {
-        await waitThroughEmptyPoll(emptyWakeVersion);
-      } else if (active.size >= this.concurrency) {
-        await waitForOne();
+      while (freeSlots() > 0 && (claims.size === 0 || freeSlots() >= refillBatch)) {
+        startClaim(freeSlots());
       }
+      await nextEvent();
     }
 
+    while (claims.size > 0) settleClaim(await Promise.race(claims.values()));
     const remaining = await Promise.all(active.values());
     for (const settlement of remaining) observe(settlement);
     if (firstFailure) throw firstFailure.reason;
