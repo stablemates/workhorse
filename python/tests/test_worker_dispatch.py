@@ -36,6 +36,13 @@ def task_row(sequence: int, task_type: str) -> dict[str, object]:
     }
 
 
+class FullTierRejection(Exception):
+    """The error a full-tier queue raises for a fast claim, as a driver reports it."""
+
+    sqlstate = "P1007"
+    detail = '{"queue": "default", "feature": "batched completion"}'
+
+
 class ScriptedClaims:
     """Answer claim_many from a backlog, record each limit, and optionally hold claims open."""
 
@@ -50,6 +57,8 @@ class ScriptedClaims:
         self.holding = False
 
     def rows(self, statement: DriverStatement, parameters: Sequence[object] = ()) -> list[Any]:
+        if statement is STATEMENTS.complete_many_and_claim:
+            raise FullTierRejection
         if statement is not STATEMENTS.claim_many:
             return []
         release = Event()

@@ -807,6 +807,24 @@ export interface ClaimedTask<TPayload extends Json = Json> {
   leaseExpiresAt: Date;
 }
 
+/**
+ * Replacement tasks a fast-tier completion claims in the same round trip (ADR 0077). The claim
+ * draws from one fast-tier queue. A full-tier queue rejects it with `FastTierUnsupportedError`.
+ */
+export interface CompletionClaim {
+  queue: string;
+  /** Tasks to claim, from 0 to 100. Zero completes without claiming. */
+  limit: number;
+  leaseMs?: number;
+}
+
+/** The outcome of a fast-tier completion and the tasks its claim leased. */
+export interface CompletionClaimResult<TPayload extends Json = Json> {
+  /** False when the lease was stale or expired, so another owner decides the outcome. */
+  accepted: boolean;
+  claimed: ClaimedTask<TPayload>[];
+}
+
 /** Ordered claims that one worker coordinator delivers to a shared batch callback. */
 export interface BatchExecutionRecord {
   batchId: string;
@@ -965,8 +983,11 @@ export interface RetentionPolicyImpact {
   };
 }
 
-/** The history relations cold export copies, one UTC day per segment. */
-export type ColdExportDataset = "task_event" | "attempt_history";
+/**
+ * The relations cold export copies, one UTC day per segment. A fast-tier task keeps its attempts in
+ * its `fast_task_outcome` row, so that row is its archived history.
+ */
+export type ColdExportDataset = "task_event" | "attempt_history" | "fast_task_outcome";
 
 /**
  * Turn cold export on or off. Enabling starts each dataset at the UTC day of its oldest retained

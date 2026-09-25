@@ -4,11 +4,11 @@ package workhorse
 
 const (
 	// ProtocolVersion is the SQL protocol version implemented by this module.
-	ProtocolVersion        = 4
-	minimumProtocolVersion = 1
-	maximumProtocolVersion = 4
-	minimumSchemaVersion   = 18
-	maximumSchemaVersion   = 24
+	ProtocolVersion        = 5
+	minimumProtocolVersion = 5
+	maximumProtocolVersion = 5
+	minimumSchemaVersion   = 25
+	maximumSchemaVersion   = 25
 	// MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
 	MaxEnqueueBatchSize      = 1000
 	defaultTaskValueMaxBytes = 1048576
@@ -257,7 +257,10 @@ var internalStatementRegistry = map[string]string{
               workhorse.redact_top_level_keys_v1(j.payload, j.payload_redact_keys) AS payload,
               j.contract_version, j.tags, j.retry_policy,
               j.deadline_at, j.execution_timeout_ms::text,
-              COALESCE(r.state, o.state) AS state,
+              COALESCE(r.state,
+                CASE WHEN fr.state = 'ready' AND fr.run_at > statement_timestamp()
+                  THEN 'scheduled' ELSE fr.state END,
+                o.state, fo.state) AS state,
               dependency.prerequisite_task_id,
               dependency.prerequisite_task_ids,
               dependency.on_success AS dependency_on_success,
@@ -265,20 +268,23 @@ var internalStatementRegistry = map[string]string{
               dependency.on_cancellation AS dependency_on_cancellation,
               CASE WHEN r.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
               parent_edge.parent_task_id, children.child_task_ids,
-              COALESCE(r.current_attempt, o.current_attempt) AS current_attempt,
-              j.max_attempts, COALESCE(r.fence_token, o.fence_token) AS version,
-              COALESCE(r.run_at, o.run_at) AS run_at,
-              workhorse.redact_top_level_keys_v1(o.result, j.result_redact_keys) AS result,
-              COALESCE(r.error, o.error) AS error, r.cancel_requested_at,
-              r.cancel_requested_by, r.cancel_reason,
+              COALESCE(r.current_attempt, fr.attempt, o.current_attempt, fo.attempt) AS current_attempt,
+              j.max_attempts, COALESCE(r.fence_token, fr.fence_token, o.fence_token, fo.fence_token) AS version,
+              COALESCE(r.run_at, fr.run_at, o.run_at, fo.claimed_at, fo.enqueued_at) AS run_at,
+              workhorse.redact_top_level_keys_v1(COALESCE(o.result, fo.result), j.result_redact_keys) AS result,
+              COALESCE(r.error, fr.errors -> -1 -> 'error', o.error, fo.error) AS error, COALESCE(r.cancel_requested_at, fr.cancel_requested_at) AS cancel_requested_at,
+              COALESCE(r.cancel_requested_by, fr.cancel_requested_by) AS cancel_requested_by,
+              COALESCE(r.cancel_reason, fr.cancel_reason) AS cancel_reason,
               p.progress_value, p.revision::text AS progress_revision,
               p.attempt AS progress_attempt, p.fence_token::text AS progress_fence_token,
               p.worker_id AS progress_worker_id, p.created_at AS progress_created_at,
               p.updated_at AS progress_updated_at, j.created_at,
-              COALESCE(r.updated_at, o.updated_at) AS updated_at
+              COALESCE(r.updated_at, fr.claimed_at, fr.run_at, o.updated_at, fo.finished_at) AS updated_at
          FROM workhorse.task j
          LEFT JOIN workhorse.task_runtime r ON r.task_id = j.id
          LEFT JOIN workhorse.task_outcome o ON o.task_id = j.id
+         LEFT JOIN workhorse.fast_task_runtime fr ON fr.task_id = j.id
+         LEFT JOIN workhorse.fast_task_outcome fo ON fo.task_id = j.id
          LEFT JOIN LATERAL (
            SELECT CASE WHEN count(*) = 1
                     THEN (array_agg(edge.prerequisite_task_id))[1] END AS prerequisite_task_id,
@@ -300,6 +306,8 @@ var internalStatementRegistry = map[string]string{
         WHERE j.id = $1::uuid`,
 	"promote_v1__queue_administration":          `SELECT workhorse.promote_v1($1::integer) AS count`,
 	"set_queue_paused_v1":                       `SELECT workhorse.set_queue_paused_v1($1::text, true, $2::text, $3::text, $4::text)`,
+	"set_queue_tier_v1":                         `SELECT workhorse.set_queue_tier_v1($1::text, $2::text, $3::text, $4::text) AS tier`,
+	"set_queue_history_v1":                      `SELECT record_attempts, record_claims FROM workhorse.set_queue_history_v1($1::text, $2::boolean, $3::boolean)`,
 	"set_queue_paused_v1__queue_administration": `SELECT workhorse.set_queue_paused_v1($1::text, false, $2::text, $3::text, $4::text)`,
 	"prepare_history_partitions_v1":             `SELECT * FROM workhorse.prepare_history_partitions_v1($1::boolean, $2::timestamptz)`,
 	"rollup_stats_v1":                           `SELECT * FROM workhorse.rollup_stats_v1($1::boolean, $2::timestamptz, $3::integer)`,
@@ -321,7 +329,11 @@ var internalStatementRegistry = map[string]string{
 	"retention_policy_preview": `SELECT
         (SELECT count(*)::integer FROM (
           SELECT 1 FROM workhorse.task task
-          JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
+          JOIN (
+            SELECT task_id, finished_at FROM workhorse.task_outcome
+            UNION ALL
+            SELECT task_id, finished_at FROM workhorse.fast_task_outcome
+          ) outcome ON outcome.task_id = task.id
           WHERE $1::integer IS NOT NULL AND $2::integer IS NOT NULL
             AND task.created_at < clock_timestamp() - make_interval(days => $1)
             AND outcome.finished_at < clock_timestamp() - make_interval(days => $2)
@@ -659,6 +671,7 @@ var protocolStatementRegistry = map[string]string{
 	"acknowledge_cancel_v1":        `SELECT workhorse.acknowledge_cancel_v1($1::uuid, $2::text, $3::bigint) AS accepted`,
 	"cancel_v1":                    `SELECT status, state, current_attempt, requested_at, requested_by, reason, finished_at FROM workhorse.cancel_v1($1::uuid, $2::text, $3::text)`,
 	"claim_many_v1":                `SELECT * FROM workhorse.claim_many_v1($1::text, $2::text, $3::integer, $4::integer)`,
+	"complete_many_and_claim_v1":   `SELECT * FROM workhorse.complete_many_and_claim_v1($1::text, $2::uuid[], $3::bigint[], $4::jsonb[], $5::text, $6::integer, $7::integer)`,
 	"claim_v1":                     `SELECT * FROM workhorse.claim_v1($1::text, $2::text, $3::integer)`,
 	"complete_human_wait_v1":       `SELECT status, result, completed_at, completed_by FROM workhorse.complete_human_wait_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,
 	"complete_v1":                  `SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted`,
@@ -692,26 +705,32 @@ var adminStatementRegistry = map[string]string{
 	"get_task": `SELECT j.id::text AS id, j.queue_name, j.task_type, j.concurrency_key, j.priority,
               workhorse.redact_top_level_keys_v1(j.payload, j.payload_redact_keys) AS payload,
               j.contract_version, j.tags, j.retry_policy, j.deadline_at,
-              j.execution_timeout_ms::text, COALESCE(r.state, o.state) AS state,
+              j.execution_timeout_ms::text, COALESCE(r.state,
+                CASE WHEN fr.state = 'ready' AND fr.run_at > statement_timestamp()
+                  THEN 'scheduled' ELSE fr.state END,
+                o.state, fo.state) AS state,
               dependency.prerequisite_task_id, dependency.prerequisite_task_ids,
               dependency.on_success AS dependency_on_success,
               dependency.on_failure AS dependency_on_failure,
               dependency.on_cancellation AS dependency_on_cancellation,
               CASE WHEN r.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
               parent_edge.parent_task_id, children.child_task_ids,
-              COALESCE(r.current_attempt, o.current_attempt) AS current_attempt, j.max_attempts,
-              COALESCE(r.fence_token, o.fence_token)::text AS version,
-              COALESCE(r.run_at, o.run_at) AS run_at,
-              workhorse.redact_top_level_keys_v1(o.result, j.result_redact_keys) AS result,
-              COALESCE(r.error, o.error) AS error, r.cancel_requested_at,
-              r.cancel_requested_by, r.cancel_reason, p.progress_value,
+              COALESCE(r.current_attempt, fr.attempt, o.current_attempt, fo.attempt) AS current_attempt, j.max_attempts,
+              COALESCE(r.fence_token, fr.fence_token, o.fence_token, fo.fence_token)::text AS version,
+              COALESCE(r.run_at, fr.run_at, o.run_at, fo.claimed_at, fo.enqueued_at) AS run_at,
+              workhorse.redact_top_level_keys_v1(COALESCE(o.result, fo.result), j.result_redact_keys) AS result,
+              COALESCE(r.error, fr.errors -> -1 -> 'error', o.error, fo.error) AS error, COALESCE(r.cancel_requested_at, fr.cancel_requested_at) AS cancel_requested_at,
+              COALESCE(r.cancel_requested_by, fr.cancel_requested_by) AS cancel_requested_by,
+              COALESCE(r.cancel_reason, fr.cancel_reason) AS cancel_reason, p.progress_value,
               p.revision::text AS progress_revision, p.attempt AS progress_attempt,
               p.fence_token::text AS progress_fence_token, p.worker_id AS progress_worker_id,
               p.created_at AS progress_created_at, p.updated_at AS progress_updated_at,
-              j.created_at, COALESCE(r.updated_at, o.updated_at) AS updated_at
+              j.created_at, COALESCE(r.updated_at, fr.claimed_at, fr.run_at, o.updated_at, fo.finished_at) AS updated_at
          FROM workhorse.task j
          LEFT JOIN workhorse.task_runtime r ON r.task_id = j.id
          LEFT JOIN workhorse.task_outcome o ON o.task_id = j.id
+         LEFT JOIN workhorse.fast_task_runtime fr ON fr.task_id = j.id
+         LEFT JOIN workhorse.fast_task_outcome fo ON fo.task_id = j.id
          LEFT JOIN LATERAL (
            SELECT CASE WHEN count(*) = 1 THEN (array_agg(edge.prerequisite_task_id))[1] END
                     AS prerequisite_task_id,
@@ -796,5 +815,7 @@ var adminStatementRegistry = map[string]string{
 	"set_queue_paused": `SELECT workhorse.set_queue_paused_v1($1::text,$2::boolean,$3::text,$4::text,$5::text)`,
 	"set_worker_paused": `SELECT * FROM workhorse.set_worker_paused_v1(
          $1::text, $2::boolean, $3::text, $4::text, $5::text)`,
-	"current_database": `SELECT current_database() AS database`,
+	"set_queue_tier":    `SELECT workhorse.set_queue_tier_v1($1::text,$2::text,$3::text,$4::text) AS tier`,
+	"set_queue_history": `SELECT record_attempts, record_claims FROM workhorse.set_queue_history_v1($1::text,$2::boolean,$3::boolean)`,
+	"current_database":  `SELECT current_database() AS database`,
 }

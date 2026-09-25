@@ -33,6 +33,7 @@ impl HandlerContext {
     ///
     /// Until then PostgreSQL releases the task and the handler stops with a suspension.
     pub async fn sleep(&self, name: &str, duration: Duration) -> Result<(), Error> {
+        self.fast_tier_guard("durable waits")?;
         validate_name(name, "wait")?;
         let millis = whole_millis(duration, MAX_SLEEP, "sleep duration")?;
         let key = format!("wait:{name}");
@@ -45,6 +46,7 @@ impl HandlerContext {
 
     /// Returns once `wake_at` has passed; a time already past returns without suspending.
     pub async fn sleep_until(&self, name: &str, wake_at: DateTime<Utc>) -> Result<(), Error> {
+        self.fast_tier_guard("durable waits")?;
         validate_name(name, "wait")?;
         if (wake_at - Utc::now()).to_std().is_ok_and(|ahead| ahead > MAX_SLEEP) {
             return Err(Error::invalid("sleep_until wake time must be at most 365 days ahead"));
@@ -83,6 +85,7 @@ impl HandlerContext {
         name: &str,
         timeout: Option<Duration>,
     ) -> Result<SignalOutcome<T>, Error> {
+        self.fast_tier_guard("signal waits")?;
         validate_wait_name(name, "signal")?;
         let timeout = wait_timeout(timeout)?;
         let key = format!("signal:{name}");
@@ -113,6 +116,7 @@ impl HandlerContext {
         context: &C,
         timeout: Option<Duration>,
     ) -> Result<HumanOutcome<T>, Error> {
+        self.fast_tier_guard("human waits")?;
         validate_wait_name(name, "human wait")?;
         let timeout = wait_timeout(timeout)?;
         let context = serde_json::to_value(context)?;

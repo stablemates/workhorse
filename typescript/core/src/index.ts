@@ -10,6 +10,7 @@ export {
 export {
   databaseErrorCode,
   expectOneRow,
+  FastTierUnsupportedError,
   MissingRowError,
   SchemaCompatibilityError,
   WorkhorseError,
@@ -91,6 +92,7 @@ export type {
   RunTaskNowResult,
   RunTaskNowStatus,
 } from "./admin.js";
+export type { QueueHistorySettings, QueueTier } from "./queue/queue-administration.js";
 export {
   CheckpointConflictError,
   CheckpointLeaseLostError,
@@ -185,6 +187,8 @@ export type {
 export type {
   BatchExecutionRecord,
   ClaimedTask,
+  CompletionClaim,
+  CompletionClaimResult,
   ChildTask,
   ChildTaskRequest,
   ChildOutcome,

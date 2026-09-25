@@ -26,6 +26,9 @@ A committed task therefore has one runtime row or one outcome row, never both. N
 a task as live and terminal at the same time. Terminal tasks leave the indexes workers search. This
 isolates the ready scan from lifetime completed work, so dispatch is designed to scale with live work.
 
+A task on a [fast-tier queue](/docs/fast-tier) keeps the same rule with two leaner tables in place
+of `task_runtime` and `task_outcome`, and writes history only when its queue opts in.
+
 ## The seven states
 
 ```

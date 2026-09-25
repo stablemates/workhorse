@@ -1057,6 +1057,35 @@ type DependencyLimitExceededError struct {
 	Details DependencyLimitDetails
 }
 
+// ErrFastTierUnsupported matches a request that a queue's tier does not support.
+var ErrFastTierUnsupported = errors.New(fastTierUnsupportedMessage)
+
+// FastTierUnsupportedError reports a fast-tier queue refusing a feature only the full tier provides,
+// or a fast-tier-only call that named a full-tier queue.
+type FastTierUnsupportedError struct {
+	Queue   string `json:"queue"`
+	Feature string `json:"feature"`
+	// Ordinal is the 1-based position of the rejected request in an enqueue batch, or zero.
+	Ordinal int `json:"ordinal"`
+}
+
+func (err *FastTierUnsupportedError) Error() string {
+	return fmt.Sprintf(fastTierUnsupportedFormat, err.Queue, err.Feature)
+}
+
+func (err *FastTierUnsupportedError) Unwrap() error { return ErrFastTierUnsupported }
+
+// fastTierRejection returns PostgreSQL's P1007 diagnosis, or nil for any other error.
+func fastTierRejection(err error) *FastTierUnsupportedError {
+	var databaseError *pgconn.PgError
+	if !errors.As(err, &databaseError) || databaseError.Code != fastTierUnsupportedSQLState {
+		return nil
+	}
+	rejection := &FastTierUnsupportedError{}
+	_ = json.Unmarshal([]byte(databaseError.Detail), rejection)
+	return rejection
+}
+
 func translateEnqueueError(err error) error {
 	var databaseError *pgconn.PgError
 	if !errors.As(err, &databaseError) {
@@ -1077,6 +1106,8 @@ func translateEnqueueError(err error) error {
 			protocolError: protocolError{dependencyCycleMessage, ErrDependencyCycle},
 			Details:       details,
 		}
+	case fastTierUnsupportedSQLState:
+		return fastTierRejection(err)
 	case dependencyLimitExceededSQLState:
 		details := DependencyLimitDetails{}
 		_ = json.Unmarshal([]byte(databaseError.Detail), &details)

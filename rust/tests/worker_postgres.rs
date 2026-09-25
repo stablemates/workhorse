@@ -1,7 +1,8 @@
 //! The worker runtime against a real PostgreSQL schema, one scratch database per test.
 //!
 //! The first seven tests each failed against the interim `workhorse-worker` crate that SM-878
-//! replaced. The rest cover the bounded drain and the capabilities `docs/parity.md` cites.
+//! replaced. The rest cover the bounded drain, the fast task tier, and the capabilities
+//! `docs/parity.md` cites.
 mod support;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,9 +15,10 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::{Client, NoTls};
 use uuid::Uuid;
 use workhorse::{
-    Admin, AdminAudit, BatchItem, BatchOptions, BatchResult, CancelReason, EnqueueOptions, Error,
-    HandlerContext, HandlerError, Queue, ScheduleCatchupPolicy, ScheduleDefinition, ScheduledTask,
-    TaskState, Worker, WorkerOptions,
+    Admin, AdminAudit, BatchItem, BatchOptions, BatchResult, CancelReason, ChildTaskRequest,
+    Debounce, DebounceSchedule, EnqueueOptions, EnqueueRequest, Error, HandlerContext,
+    HandlerError, Queue, QueueHistory, QueueTier, ScheduleCatchupPolicy, ScheduleDefinition,
+    ScheduledTask, TaskState, Worker, WorkerOptions,
 };
 
 const QUEUE: &str = "rust-worker";
@@ -530,4 +532,352 @@ async fn heartbeats_resume_after_postgres_terminates_the_idle_reserved_connectio
 
     stop.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(5), running).await.unwrap().unwrap().unwrap();
+}
+
+// The fast task tier (ADR 0077): one runtime row while a task is live and one outcome row after.
+
+fn on(queue: &str) -> EnqueueOptions {
+    EnqueueOptions { queue: Some(queue.into()), ..Default::default() }
+}
+
+fn serving(queue: &str) -> WorkerOptions {
+    WorkerOptions { queues: vec![queue.into()], ..options() }
+}
+
+impl Harness {
+    async fn make_fast(&self, queue: &str) {
+        let tier = self.admin.set_queue_tier(queue, QueueTier::Fast, &audit()).await.unwrap();
+        assert_eq!(tier, QueueTier::Fast);
+    }
+
+    /// Each settled fast task's outcome state and attempt, by task.
+    async fn fast_outcomes(&self, ids: &[Uuid]) -> Vec<(Uuid, String, i32)> {
+        let rows = self
+            .database
+            .connect()
+            .await
+            .query(
+                "SELECT task_id, state, attempt FROM workhorse.fast_task_outcome
+                  WHERE task_id = ANY($1::uuid[])",
+                &[&ids],
+            )
+            .await
+            .unwrap();
+        rows.iter().map(|row| (row.get(0), row.get(1), row.get(2))).collect()
+    }
+
+    async fn wait_for_outcomes(&self, ids: &[Uuid]) {
+        tokio::time::timeout(WAIT, async {
+            while self.fast_outcomes(ids).await.len() < ids.len() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("every fast task settles");
+    }
+
+    async fn runtime_rows(&self, queue: &str) -> i64 {
+        self.database
+            .connect()
+            .await
+            .query_one(
+                "SELECT count(*) FROM workhorse.fast_task_runtime WHERE queue_name = $1",
+                &[&queue],
+            )
+            .await
+            .unwrap()
+            .get(0)
+    }
+}
+
+#[tokio::test]
+async fn a_fast_queue_rejects_full_tier_enqueue_features_by_ordinal() {
+    let Some(harness) = harness("fast_enqueue").await else { return };
+    harness.make_fast("fast-enqueue").await;
+    let keyed = EnqueueOptions { concurrency_key: Some("tenant-a".into()), ..on("fast-enqueue") };
+    let error = harness.queue.enqueue("keyed", &json!({}), keyed).await.unwrap_err();
+    assert!(
+        matches!(&error, Error::FastTierUnsupported { queue, feature, .. }
+            if queue == "fast-enqueue" && feature == "concurrency keys"),
+        "{error:?}"
+    );
+
+    let debounced = EnqueueOptions {
+        debounce: Some(Debounce::new("k", 1_000, DebounceSchedule::Reset)),
+        ..on("fast-enqueue")
+    };
+    let requests = vec![
+        EnqueueRequest { options: on("fast-enqueue"), ..EnqueueRequest::new("plain", json!({})) },
+        EnqueueRequest { options: debounced, ..EnqueueRequest::new("debounced", json!({})) },
+    ];
+    let error = harness.queue.enqueue_many(requests).await.unwrap_err();
+    assert!(
+        matches!(&error, Error::FastTierUnsupported { feature, ordinal: Some(2), .. }
+            if feature == "debounce"),
+        "{error:?}"
+    );
+
+    // A plain request is admitted into the fast runtime table.
+    let task = harness.enqueue("plain", json!({}), on("fast-enqueue")).await;
+    assert_eq!(harness.state(task).await, TaskState::Ready);
+    assert_eq!(harness.runtime_rows("fast-enqueue").await, 1);
+}
+
+#[tokio::test]
+async fn a_tier_change_waits_for_an_empty_queue() {
+    let Some(harness) = harness("fast_tier_change").await else { return };
+    harness.enqueue("live", json!({}), on("tier-change")).await;
+    let error =
+        harness.admin.set_queue_tier("tier-change", QueueTier::Fast, &audit()).await.unwrap_err();
+    assert!(
+        matches!(&error, Error::FastTierUnsupported { queue, feature, ordinal: None }
+            if queue == "tier-change" && feature == "tier change"),
+        "{error:?}"
+    );
+
+    harness.admin.purge_queue("tier-change", &audit()).await.unwrap();
+    harness.make_fast("tier-change").await;
+    let tier = harness.admin.set_queue_tier("tier-change", QueueTier::Full, &audit()).await;
+    assert_eq!(tier.unwrap(), QueueTier::Full);
+}
+
+#[tokio::test]
+async fn a_fast_queue_records_attempt_history_only_when_it_opts_in() {
+    let Some(harness) = harness("fast_history").await else { return };
+    harness.make_fast("fast-history").await;
+    let history = harness.admin.set_queue_history("fast-history", Some(true), None).await.unwrap();
+    assert_eq!(history, QueueHistory { record_attempts: true, record_claims: false });
+    let task = harness.enqueue("recorded", json!({}), on("fast-history")).await;
+    let worker = harness.worker(serving("fast-history"));
+    worker.handle("recorded", |_: Value, _| async { Ok(json!({"ok": true})) });
+    assert!(worker.run_once().await.unwrap());
+    let attempts = harness
+        .database
+        .connect()
+        .await
+        .query(
+            "SELECT attempt, outcome FROM workhorse.dashboard_attempt_history_v1
+              WHERE task_id = $1",
+            &[&task],
+        )
+        .await
+        .unwrap();
+    let attempts: Vec<(i32, String)> =
+        attempts.iter().map(|row| (row.get(0), row.get(1))).collect();
+    assert_eq!(attempts, [(1, "succeeded".to_owned())]);
+    // Leaving a setting out keeps it.
+    let history = harness.admin.set_queue_history("fast-history", None, Some(true)).await.unwrap();
+    assert_eq!(history, QueueHistory { record_attempts: true, record_claims: true });
+}
+
+#[tokio::test]
+async fn fast_tasks_run_within_the_concurrency_and_leave_one_outcome_each() {
+    let Some(harness) = harness("fast_run").await else { return };
+    harness.make_fast("fast-run").await;
+    let requests = (0..40)
+        .map(|sequence| EnqueueRequest {
+            options: on("fast-run"),
+            ..EnqueueRequest::new("square", json!({ "sequence": sequence }))
+        })
+        .collect();
+    let ids: Vec<Uuid> = harness
+        .queue
+        .enqueue_many(requests)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|result| result.task_id)
+        .collect();
+    let concurrency = 4;
+    let worker = harness.worker(WorkerOptions { concurrency, ..serving("fast-run") });
+    let running = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let (counter, highest) = (Arc::clone(&running), Arc::clone(&peak));
+    worker.handle("square", move |payload: Value, _| {
+        let (running, peak) = (Arc::clone(&counter), Arc::clone(&highest));
+        async move {
+            let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+            peak.fetch_max(now, Ordering::SeqCst);
+            let sequence = payload["sequence"].as_i64().unwrap();
+            tokio::time::sleep(Duration::from_millis(sequence as u64 % 3)).await;
+            running.fetch_sub(1, Ordering::SeqCst);
+            Ok(json!({ "square": sequence * sequence }))
+        }
+    });
+    let (stop, run) = run(&worker);
+    harness.wait_for_outcomes(&ids).await;
+    stop.send(()).unwrap();
+    run.await.unwrap().unwrap();
+
+    assert!(peak.load(Ordering::SeqCst) <= concurrency, "peak {peak:?}");
+    let outcomes = harness.fast_outcomes(&ids).await;
+    assert_eq!(outcomes.len(), ids.len());
+    assert!(outcomes.iter().all(|(_, state, attempt)| state == "succeeded" && *attempt == 1));
+    let snapshot = harness.admin.get_task(ids[7]).await.unwrap().unwrap();
+    assert_eq!(snapshot.state, TaskState::Succeeded);
+    assert_eq!(snapshot.result, Some(json!({ "square": 49 })));
+    assert_eq!(harness.runtime_rows("fast-run").await, 0);
+}
+
+#[tokio::test]
+async fn a_fast_task_fails_when_it_asks_for_durable_execution_state() {
+    let Some(harness) = harness("fast_guard").await else { return };
+    harness.make_fast("fast-guard").await;
+    let worker = harness.worker(serving("fast-guard"));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let record = Arc::clone(&seen);
+    worker.handle("guarded", move |operation: String, context: HandlerContext| {
+        let record = Arc::clone(&record);
+        async move {
+            let child = || ChildTaskRequest::new("child", "leaf", &json!({})).unwrap();
+            let rejection = match operation.as_str() {
+                "checkpoint" => {
+                    context
+                        .checkpoint("step", || async { Ok(1) })
+                        .await
+                        .map(drop)
+                        .unwrap_err()
+                        .message
+                }
+                "progress" => {
+                    context.set_progress(&json!({"done": 1})).await.unwrap_err().to_string()
+                }
+                "sleep" => {
+                    context.sleep("pause", Duration::from_millis(10)).await.unwrap_err().to_string()
+                }
+                "sleep_until" => {
+                    context.sleep_until("pause", chrono::Utc::now()).await.unwrap_err().to_string()
+                }
+                "signal" => {
+                    context.wait_for_signal::<Value>("approve", None).await.unwrap_err().to_string()
+                }
+                "human" => context
+                    .wait_for_human::<_, Value>("review", &json!({}), None)
+                    .await
+                    .unwrap_err()
+                    .to_string(),
+                "run_child" => context
+                    .run_child::<_, Value>("child", "leaf", &json!({}), on("fast-guard"))
+                    .await
+                    .unwrap_err()
+                    .to_string(),
+                "run_children" => {
+                    context.run_children(vec![child()]).await.unwrap_err().to_string()
+                }
+                "run_children_all" => {
+                    context.run_children_all(vec![child()]).await.unwrap_err().to_string()
+                }
+                other => panic!("unknown operation {other}"),
+            };
+            record.lock().unwrap().push(rejection.clone());
+            Err::<Value, _>(HandlerError::named("FastTierUnsupportedError", rejection))
+        }
+    });
+    let cases = [
+        ("checkpoint", "checkpoints"),
+        ("progress", "progress"),
+        ("sleep", "durable waits"),
+        ("sleep_until", "durable waits"),
+        ("signal", "signal waits"),
+        ("human", "human waits"),
+        ("run_child", "child tasks"),
+        ("run_children", "child tasks"),
+        ("run_children_all", "child tasks"),
+    ];
+    for (operation, feature) in cases {
+        let options = EnqueueOptions { max_attempts: 1, ..on("fast-guard") };
+        let task = harness.enqueue("guarded", json!(operation), options).await;
+        assert!(worker.run_once().await.unwrap());
+        let rejection = seen.lock().unwrap().pop().expect("the handler ran");
+        assert_eq!(
+            rejection,
+            format!("Fast-tier queue fast-guard does not support {feature}"),
+            "{operation}"
+        );
+        let snapshot = harness.admin.get_task(task).await.unwrap().unwrap();
+        assert_eq!(snapshot.state, TaskState::Failed, "{operation}");
+        assert_eq!(snapshot.error.unwrap()["name"], "FastTierUnsupportedError", "{operation}");
+    }
+    // No rejected call created a child task.
+    let children: i64 = harness
+        .database
+        .connect()
+        .await
+        .query_one("SELECT count(*) FROM workhorse.task WHERE task_type = 'leaf'", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(children, 0);
+}
+
+#[tokio::test]
+async fn a_full_tier_queue_is_claimed_after_its_fast_claim_is_rejected() {
+    let Some(harness) = harness("fast_probe").await else { return };
+    let worker = harness.worker(serving("full-queue"));
+    worker.handle("full-work", |_: Value, _| async { Ok(json!({"ok": true})) });
+    // The second claim reuses the remembered tier instead of probing again.
+    for _ in 0..2 {
+        let task = harness.enqueue("full-work", json!({}), on("full-queue")).await;
+        assert!(worker.run_once().await.unwrap());
+        assert_eq!(harness.state(task).await, TaskState::Succeeded);
+    }
+    assert_eq!(harness.runtime_rows("full-queue").await, 0);
+}
+
+#[tokio::test]
+async fn a_crashed_fast_worker_loses_no_task_and_records_one_outcome_each() {
+    let Some(harness) = harness("fast_crash").await else { return };
+    harness.make_fast("fast-crash").await;
+    let mut ids = Vec::new();
+    for sequence in 0..3 {
+        let options = EnqueueOptions { max_attempts: 3, ..on("fast-crash") };
+        ids.push(harness.enqueue("effect", json!({ "sequence": sequence }), options).await);
+    }
+    // A worker claims every task and vanishes before its lease runs out.
+    let observer = harness.database.connect().await;
+    let claimed = observer
+        .query(
+            "SELECT task_id, fence_token FROM workhorse.claim_many_v1('fast-crash', 'crashed', 3, 100)",
+            &[],
+        )
+        .await
+        .unwrap();
+    let claimed: Vec<(Uuid, i64)> = claimed.iter().map(|row| (row.get(0), row.get(1))).collect();
+    assert_eq!(claimed.len(), 3);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    observer
+        .query("SELECT * FROM workhorse.recover_expired_telemetry_v1(100, 0)", &[])
+        .await
+        .unwrap();
+
+    let effects = Arc::new(Mutex::new(std::collections::HashMap::<Uuid, usize>::new()));
+    let record = Arc::clone(&effects);
+    let worker = harness.worker(serving("fast-crash"));
+    worker.handle("effect", move |_: Value, context: HandlerContext| {
+        *record.lock().unwrap().entry(context.task().id).or_default() += 1;
+        async { Ok(json!({"ok": true})) }
+    });
+    let (stop, run) = run(&worker);
+    harness.wait_for_outcomes(&ids).await;
+    stop.send(()).unwrap();
+    run.await.unwrap().unwrap();
+
+    let outcomes = harness.fast_outcomes(&ids).await;
+    assert_eq!(outcomes.len(), 3, "one outcome row per task");
+    assert!(outcomes.iter().all(|(_, state, _)| state == "succeeded"));
+    let effects = effects.lock().unwrap().clone();
+    assert!(ids.iter().all(|id| effects.get(id) == Some(&1)), "{effects:?}");
+
+    // The crashed worker's late completion carries a stale fence, so PostgreSQL accepts none.
+    let (task, fence) = claimed[0];
+    let accepted: Option<Vec<Uuid>> = observer
+        .query_one(
+            "SELECT accepted FROM workhorse.complete_many_and_claim_v1(
+               'crashed', ARRAY[$1::uuid], ARRAY[$2::bigint], ARRAY['{}'::jsonb], 'fast-crash', 0, 1000)",
+            &[&task, &fence],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(accepted, Some(Vec::new()));
 }

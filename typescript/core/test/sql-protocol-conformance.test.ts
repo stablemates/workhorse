@@ -1161,7 +1161,10 @@ describe("SQL protocol conformance fixtures", () => {
         minimumVersion: MINIMUM_SCHEMA_VERSION,
         maximumVersion: WORKHORSE_SCHEMA_VERSION,
       },
-      supportedClientProtocol: { minimumVersion: 1, maximumVersion: PROTOCOL_VERSION },
+      supportedClientProtocol: {
+        minimumVersion: PROTOCOL_VERSION,
+        maximumVersion: PROTOCOL_VERSION,
+      },
       views: [
         expect.objectContaining({ name: "dashboard_signal_wait_v1" }),
         expect.objectContaining({ name: "dashboard_human_wait_v1" }),

@@ -30,11 +30,18 @@ import type {
   WorkerPauseResult,
   WorkerRegistryEntry,
 } from "./types.js";
-import { databaseErrorCode, databaseErrorDetails, expectOneRow, WorkhorseError } from "./errors.js";
+import {
+  databaseErrorCode,
+  databaseErrorDetails,
+  expectOneRow,
+  fastTierRejection,
+  WorkhorseError,
+} from "./errors.js";
 import { MAX_TASK_QUERY_PAGE_SIZE, MAX_REDRIVE_BATCH_SIZE } from "./types.js";
 import type { BudgetMetricSnapshot, QueueMetricSnapshot } from "./telemetry.js";
 import { logInfo } from "./telemetry.js";
 import { createQueueModuleContext } from "./queue/module-context.js";
+import type { QueueHistorySettings, QueueTier } from "./queue/queue-administration.js";
 import { createQueueModules, type QueueModules } from "./queue/modules.js";
 import { validateQueueOptions } from "./queue/enqueue-contracts.js";
 import type { ExternalWaitQuery } from "./queue/external-waits.js";
@@ -286,6 +293,31 @@ export class Admin {
   async resumeQueue(queueName: string, audit: AdminAudit): Promise<void> {
     validateAdminAudit(audit);
     return this.modules.queueAdministration.resumeQueue(queueName, audit);
+  }
+
+  /**
+   * Move a queue between the full and fast tiers. Workhorse refuses the change while the queue
+   * holds a live task, so a task never changes tier.
+   */
+  async setQueueTier(queueName: string, tier: QueueTier, audit: AdminAudit): Promise<QueueTier> {
+    validateAdminAudit(audit);
+    if (tier !== "fast" && tier !== "full") throw new RangeError("tier must be fast or full");
+    try {
+      return await this.modules.queueAdministration.setQueueTier(queueName, tier, audit);
+    } catch (error) {
+      throw fastTierRejection(error) ?? error;
+    }
+  }
+
+  /**
+   * Choose the history a fast-tier queue writes. An omitted setting keeps its current value, and
+   * the result reports both settings after the change.
+   */
+  async setQueueHistory(
+    queueName: string,
+    settings: Partial<QueueHistorySettings>,
+  ): Promise<QueueHistorySettings> {
+    return this.modules.queueAdministration.setQueueHistory(queueName, settings);
   }
 
   async purgeQueue(queueName: string, audit: AdminAudit): Promise<number> {

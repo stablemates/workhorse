@@ -86,6 +86,7 @@ impl HandlerContext {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<T, HandlerError>>,
     {
+        self.fast_tier_guard("checkpoints").map_err(named)?;
         validate_name(name, "checkpoint")?;
         let value = self
             .inner
@@ -128,6 +129,7 @@ impl HandlerContext {
 
     /// Replaces the task's latest progress under this handler's fenced lease.
     pub async fn set_progress<T: Serialize>(&self, progress: &T) -> Result<(), Error> {
+        self.fast_tier_guard("progress")?;
         let value = serde_json::to_value(progress)?;
         self.check(Operation::Progress)?;
         let row = self.call(sql::UPDATE_PROGRESS_V1, "update_progress_v1", &[&value]).await?;
@@ -142,6 +144,22 @@ impl HandlerContext {
             }
             other => Err(self.refusal(Operation::Progress, "progress", other)),
         }
+    }
+
+    /// Refuses durable execution state on a fast-tier task before any round trip.
+    ///
+    /// A fast-tier task has no checkpoints, progress, waits or children (ADR 0077). Refusing
+    /// locally fails the attempt with a clear error instead of a PostgreSQL refusal.
+    pub(crate) fn fast_tier_guard(&self, feature: &str) -> Result<(), Error> {
+        let task = &self.inner.task;
+        if !task.fast_tier {
+            return Ok(());
+        }
+        Err(Error::FastTierUnsupported {
+            queue: task.queue.clone(),
+            feature: feature.into(),
+            ordinal: None,
+        })
     }
 
     /// Fails fast once the handler no longer owns its task.
@@ -249,10 +267,14 @@ impl BatchHandlerContext {
     }
 }
 
-/// Keeps a lost lease recognisable once a checkpoint error becomes a [`HandlerError`].
+/// Keeps a lost lease and a fast-tier refusal recognisable once a checkpoint error becomes a
+/// [`HandlerError`].
 fn named(error: Error) -> HandlerError {
     match error {
         Error::LeaseLost { .. } => HandlerError::named("LeaseLostError", error.to_string()),
+        Error::FastTierUnsupported { .. } => {
+            HandlerError::named("FastTierUnsupportedError", error.to_string())
+        }
         other => other.into(),
     }
 }
@@ -376,5 +398,81 @@ fn share<E: Shared>(result: &Result<Value, E>) -> Result<Value, E> {
     match result {
         Ok(value) => Ok(value.clone()),
         Err(error) => Err(error.share()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use serde_json::json;
+
+    use super::*;
+    use crate::{ChildTaskRequest, EnqueueOptions};
+
+    /// A pool over a database that does not exist, so any round trip fails with a pool error.
+    fn unreachable_pool() -> deadpool_postgres::Pool {
+        let mut config = deadpool_postgres::Config::new();
+        config.dbname = Some("unused".into());
+        config.create_pool(Some(deadpool_postgres::Runtime::Tokio1), tokio_postgres::NoTls).unwrap()
+    }
+
+    fn fast_context() -> HandlerContext {
+        let task = ClaimedTask {
+            id: uuid::Uuid::new_v4(),
+            task_type: "fast".into(),
+            queue: "fast-queue".into(),
+            priority: 0,
+            payload: json!({}),
+            contract_version: None,
+            result_max_bytes: None,
+            redact_error_details: false,
+            trace_context: None,
+            attempt: 1,
+            max_attempts: 1,
+            retry_policy: json!({}),
+            deadline_at: None,
+            execution_timeout: None,
+            attempt_timeout_at: None,
+            fence_token: 1,
+            lease_expires_at: Utc::now(),
+            claim_sent_at: tokio::time::Instant::now(),
+            fast_tier: true,
+        };
+        let cancellation = CancellationToken::default();
+        HandlerContext::new(Arc::new(task), cancellation, unreachable_pool(), "worker".into())
+    }
+
+    fn refused(error: Error, expected: &str) {
+        match error {
+            Error::FastTierUnsupported { queue, feature, ordinal: None } => {
+                assert_eq!((queue.as_str(), feature.as_str()), ("fast-queue", expected));
+            }
+            other => panic!("expected a fast-tier refusal for {expected}, got {other:?}"),
+        }
+    }
+
+    // Each refusal must come before a round trip: a call that reached the unreachable pool would
+    // fail with a pool error instead.
+    #[tokio::test]
+    async fn a_fast_task_is_refused_durable_state_without_a_round_trip() {
+        let context = fast_context();
+        let child = || ChildTaskRequest::new("child", "leaf", &json!({})).unwrap();
+        refused(context.set_progress(&json!({})).await.unwrap_err(), "progress");
+        refused(context.sleep("pause", Duration::from_secs(1)).await.unwrap_err(), "durable waits");
+        refused(context.sleep_until("pause", Utc::now()).await.unwrap_err(), "durable waits");
+        let signal = context.wait_for_signal::<Value>("go", None).await.unwrap_err();
+        refused(signal, "signal waits");
+        let human = context.wait_for_human::<_, Value>("review", &json!({}), None).await;
+        refused(human.unwrap_err(), "human waits");
+        let child_run = context
+            .run_child::<_, Value>("child", "leaf", &json!({}), EnqueueOptions::default())
+            .await;
+        refused(child_run.unwrap_err(), "child tasks");
+        refused(context.run_children(vec![child()]).await.unwrap_err(), "child tasks");
+        refused(context.run_children_all(vec![child()]).await.unwrap_err(), "child tasks");
+
+        let checkpoint = context.checkpoint("step", || async { Ok(1) }).await.unwrap_err();
+        assert_eq!(checkpoint.name.as_deref(), Some("FastTierUnsupportedError"));
+        assert_eq!(checkpoint.message, "Fast-tier queue fast-queue does not support checkpoints");
     }
 }

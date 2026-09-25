@@ -294,7 +294,13 @@ describe("schema installation", () => {
         "last_completed_at",
         "last_completed_local_date",
       ],
-      dashboard_queue_control_v1: ["queue_name", "paused"],
+      dashboard_queue_control_v1: [
+        "queue_name",
+        "paused",
+        "tier",
+        "record_attempts",
+        "record_claims",
+      ],
       dashboard_rate_limit_policy_v1: ["queue_name"],
       dashboard_retention_policy_v1: [
         "singleton",
@@ -422,7 +428,11 @@ describe("schema installation", () => {
           )
         ORDER BY successor.name`,
     );
-    expect(orphaned.rows).toEqual([]);
+    // Protocol 5 retired the _v1 predecessors of these two, so they have no predecessor to find.
+    expect(orphaned.rows).toEqual([
+      { name: "fire_due_schedules_v2" },
+      { name: "sync_schedule_definitions_v2" },
+    ]);
   });
 
   it("gives every function and view a version suffix", async () => {
@@ -476,17 +486,13 @@ describe("schema installation", () => {
       { version: 22, description: "history staging through pg_temp" },
       { version: 23, description: "a canceled dependent releases its edges" },
       { version: 24, description: "row retention lag waits for history retention" },
+      { version: 25, description: "add a fast task tier" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
       "SELECT version FROM workhorse.protocol_version ORDER BY version",
     );
-    expect(protocols.rows).toEqual([
-      { version: 1 },
-      { version: 2 },
-      { version: 3 },
-      { version: 4 },
-    ]);
+    expect(protocols.rows).toEqual([{ version: 5 }]);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;

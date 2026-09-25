@@ -41,6 +41,9 @@ describe("parsing the installed schema", () => {
     expect([...(schema.relations.get("dashboard_queue_control_v1")?.columns ?? [])]).toEqual([
       ["queue_name", "text"],
       ["paused", "boolean"],
+      ["tier", "text"],
+      ["record_attempts", "boolean"],
+      ["record_claims", "boolean"],
     ]);
   });
 
@@ -87,6 +90,9 @@ describe("deriving the governed set", () => {
     expect(derived.relations.dashboard_queue_control_v1?.columns).toEqual({
       paused: "boolean",
       queue_name: "text",
+      record_attempts: "boolean",
+      record_claims: "boolean",
+      tier: "text",
     });
   });
 

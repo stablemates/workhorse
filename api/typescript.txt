@@ -49,6 +49,8 @@ interface ColdExportStatus
 type CompleteHumanWaitRequest
 type CompleteHumanWaitResult
 type CompleteHumanWaitStatus
+interface CompletionClaim
+interface CompletionClaimResult
 interface ConcurrencyPolicy
 interface ConcurrencyPolicyDefinition
 interface ContractSchemaOptions
@@ -92,6 +94,7 @@ interface ExternalWaitDeliveryRequest
 type ExternalWaitListOptions
 interface ExternalWaitOptions
 interface ExternalWaitQuery
+class FastTierUnsupportedError
 const HEALTH_HISTORY_SCAN_LIMIT
 type Handler
 interface HandlerContext
@@ -173,9 +176,11 @@ interface QueueHealthObservations
 interface QueueHealthReason
 type QueueHealthReasonCode
 interface QueueHealthStatus
+interface QueueHistorySettings
 interface QueueMetricSnapshot
 interface QueueMetricSource
 interface QueueOptions
+type QueueTier
 interface RateLimit
 interface RateLimitPolicy
 interface RateLimitPolicyDefinition
@@ -806,6 +811,16 @@ class Admin {
   runTaskNow(taskId: string, audit: AdminAudit): Promise<RunTaskNowResult>;
   pauseQueue(queueName: string, audit: AdminAudit): Promise<void>;
   resumeQueue(queueName: string, audit: AdminAudit): Promise<void>;
+  /**
+  * Move a queue between the full and fast tiers. Workhorse refuses the change while the queue
+  * holds a live task, so a task never changes tier.
+  */
+  setQueueTier(queueName: string, tier: QueueTier, audit: AdminAudit): Promise<QueueTier>;
+  /**
+  * Choose the history a fast-tier queue writes. An omitted setting keeps its current value, and
+  * the result reports both settings after the change.
+  */
+  setQueueHistory(queueName: string, settings: Partial<QueueHistorySettings>): Promise<QueueHistorySettings>;
   purgeQueue(queueName: string, audit: AdminAudit): Promise<number>;
   queueMetricSnapshot(): Promise<QueueMetricSnapshot[]>;
   budgetMetricSnapshot(): Promise<BudgetMetricSnapshot[]>;
@@ -1046,7 +1061,7 @@ interface ClaimedTask<TPayload extends Json = Json> {
   leaseExpiresAt: Date;
 }
 
-type ColdExportDataset = "task_event" | "attempt_history";
+type ColdExportDataset = "task_event" | "attempt_history" | "fast_task_outcome";
 
 interface ColdExportDatasetStatus {
   /** Exclusive, UTC-day-aligned. Every history day below it has a complete segment. */
@@ -1080,6 +1095,19 @@ type CompleteHumanWaitRequest = ExternalWaitDeliveryRequest;
 type CompleteHumanWaitResult<TResult extends Json = Json> = HumanWaitCompletionResult<TResult>;
 
 type CompleteHumanWaitStatus = HumanWaitCompletionStatus;
+
+interface CompletionClaim {
+  queue: string;
+  /** Tasks to claim, from 0 to 100. Zero completes without claiming. */
+  limit: number;
+  leaseMs?: number;
+}
+
+interface CompletionClaimResult<TPayload extends Json = Json> {
+  /** False when the lease was stale or expired, so another owner decides the outcome. */
+  accepted: boolean;
+  claimed: ClaimedTask<TPayload>[];
+}
 
 interface ConcurrencyPolicy {
   namespace: string;
@@ -3006,6 +3034,16 @@ interface ExternalWaitRecord {
 
 type FailureStatus = "ready" | "scheduled" | "failed" | "cancel_requested" | "deadline_exceeded" | "timeout_exceeded" | "stale";
 
+class FastTierUnsupportedError extends WorkhorseError {
+  readonly queue: string;
+  readonly feature: string;
+  /** The 1-based position of the rejected request in an enqueue batch. */
+  readonly ordinal?: number | undefined;
+  constructor(queue: string, feature: string, 
+  /** The 1-based position of the rejected request in an enqueue batch. */
+  ordinal?: number | undefined);
+}
+
 const HEALTH_HISTORY_SCAN_LIMIT = 100000;
 
 type Handler<TPayload extends Json = Json, TResult extends Json = Json> = (payload: TPayload, context: HandlerContext<TPayload>) => Promise<TResult> | TResult;
@@ -3140,9 +3178,9 @@ interface LiveProtocolWorker {
   readonly lastHeartbeatAt: Date;
 }
 
-const MAXIMUM_PROTOCOL_VERSION = 4;
+const MAXIMUM_PROTOCOL_VERSION = 5;
 
-const MAXIMUM_SCHEMA_VERSION = 24;
+const MAXIMUM_SCHEMA_VERSION = 25;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -3210,9 +3248,9 @@ const MINIMUM_NODE_MAJOR = 22;
 
 const MINIMUM_POSTGRES_MAJOR = 15;
 
-const MINIMUM_PROTOCOL_VERSION = 1;
+const MINIMUM_PROTOCOL_VERSION = 5;
 
-const MINIMUM_SCHEMA_VERSION = 18;
+const MINIMUM_SCHEMA_VERSION = 25;
 
 const MIN_PROGRESS_UPDATE_INTERVAL_MS = 100;
 
@@ -3290,7 +3328,7 @@ class MissingRowError extends WorkhorseError {
 
 type OptionalDashboardProcedure = "runTaskNow" | "enqueueTest" | "redriveTask" | "redriveDeadLetters";
 
-const PROTOCOL_VERSION = 4;
+const PROTOCOL_VERSION = 5;
 
 interface ParsedHumanWaitResult {
   value: Json;
@@ -3531,7 +3569,21 @@ class Queue {
   createChildren<TResult extends Record<string, Json> = Record<string, Json>>(parent: ClaimedTask, workerId: string, children: readonly ChildTaskRequest[]): Promise<CreateChildrenResult<ChildOutcomes<TResult>>>;
   createChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(parent: ClaimedTask, workerId: string, children: readonly ChildTaskRequest[]): Promise<CreateChildrenResult<TResult>>;
   complete<TResult extends Json>(task: ClaimedTask, workerId: string, result: TResult): Promise<boolean>;
-  [workerCompletionPrepare](task: ClaimedTask, workerId: string, result: Json): Promise<() => Promise<boolean>>;
+  /**
+  * Completes a fast-tier attempt and claims up to `claim.limit` replacements from `claim.queue` in
+  * the same round trip (ADR 0077). Rejects with `FastTierUnsupportedError` when that queue is
+  * full-tier. Concurrent calls from one worker for one queue share one statement.
+  */
+  completeAndClaim<TResult extends Json, TPayload extends Json = Json>(task: ClaimedTask, workerId: string, result: TResult, claim: CompletionClaim): Promise<CompletionClaimResult<TPayload>>;
+  /**
+  * Claims up to `limit` tasks from a fast-tier queue. Rejects with `FastTierUnsupportedError` when
+  * the queue is full-tier; `claimMany` claims from either tier.
+  */
+  claimFast<TPayload extends Json = Json>(workerId: string, limit: number, options?: {
+    queue?: string;
+    leaseMs?: number;
+  }): Promise<ClaimedTask<TPayload>[]>;
+  [workerCompletionPrepare](task: ClaimedTask, workerId: string, result: Json): Promise<(claim?: CompletionClaim) => Promise<CompletionClaimResult>>;
   [workerHeartbeatReservationProblem](): string | undefined;
   [workerHeartbeatReservation](): WorkerHeartbeatChannel | undefined;
   /** Seed immutable JSON Schema contracts and the application-selected current versions. */
@@ -3764,6 +3816,13 @@ interface QueueHealthStatus {
   reasons: QueueHealthReason[];
 }
 
+interface QueueHistorySettings {
+  /** Write one attempt history row for every closed attempt. */
+  recordAttempts: boolean;
+  /** Write one claimed event for every claim. */
+  recordClaims: boolean;
+}
+
 interface QueueMetricSnapshot {
   queue: string;
   readyDepth: number;
@@ -3802,6 +3861,8 @@ interface QueueOptions {
 }
 
 type QueueRateLimitPolicy = Awaited<ReturnType<Queue["health"]>>["rateLimitPolicies"]["policies"][number];
+
+type QueueTier = "fast" | "full";
 
 interface RateLimit {
   /** Tokens added during each interval. One token admits one task start. */
@@ -4593,7 +4654,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
 
-const WORKHORSE_SCHEMA_VERSION = 24;
+const WORKHORSE_SCHEMA_VERSION = 25;
 
 const WORKHORSE_VERSION = "0.4.0";
 
@@ -4831,6 +4892,16 @@ interface WorkerQueueApi {
     queue?: string;
     leaseMs?: number;
   }): Promise<ClaimedTask[]>;
+  /**
+  * Claims from a fast-tier queue (ADR 0077) and rejects with `FastTierUnsupportedError` for a
+  * full-tier one. A worker uses it to learn which of its queues are fast-tier.
+  */
+  claimFast?(workerId: string, limit: number, options?: {
+    queue?: string;
+    leaseMs?: number;
+  }): Promise<ClaimedTask[]>;
+  /** Completes a fast-tier attempt and claims replacements in the same round trip. */
+  completeAndClaim?(task: ClaimedTask, workerId: string, result: Json, claim: CompletionClaim): Promise<CompletionClaimResult>;
   recordBatchDispatch?(batch: BatchExecutionRecord): Promise<void>;
   recordBatchFailure?(batch: BatchExecutionRecord): Promise<void>;
   heartbeatStatus(task: ClaimedTask, workerId: string, leaseMs?: number): Promise<HeartbeatStatus>;
@@ -4948,7 +5019,7 @@ class WorkhorseError extends Error {
   constructor(message: string, options?: ErrorOptions);
 }
 
-type WorkhorseLogEvent = "workhorse.handler.batch_dispatched" | "workhorse.handler.batch_evidence_failed" | "workhorse.handler.finished" | "workhorse.handler.missing" | "workhorse.handler.registered" | "workhorse.handler.signal_swallowed" | "workhorse.handler.started" | "workhorse.task.cancellation_acknowledged" | "workhorse.task.cancellation_processed" | "workhorse.task.checkpoint_saved" | "workhorse.task.child_processed" | "workhorse.task.debounce_rejected" | "workhorse.task.debounced" | "workhorse.task.claimed" | "workhorse.task.completed" | "workhorse.task.completion_rejected" | "workhorse.task.enqueue_replayed" | "workhorse.task.enqueued" | "workhorse.task.throttled" | "workhorse.task.execution_finished" | "workhorse.task.failure_processed" | "workhorse.task.heartbeat_accepted" | "workhorse.task.heartbeat_rejected" | "workhorse.task.ownership_expired" | "workhorse.task.progress_updated" | "workhorse.task.redrive_processed" | "workhorse.task.release_processed" | "workhorse.task.run_now_requested" | "workhorse.task.signal_processed" | "workhorse.task.human_wait_processed" | "workhorse.task.wait_processed" | "workhorse.tasks.promoted" | "workhorse.tasks.redrive_processed" | "workhorse.leases.recovered" | "workhorse.cold_export_policy.synchronized" | "workhorse.maintenance.completed" | "workhorse.maintenance_policy.synchronized" | "workhorse.queue.paused" | "workhorse.queue.purged" | "workhorse.queue.resumed" | "workhorse.retention_policy.synchronized" | "workhorse.schedule.fire_replayed" | "workhorse.schedule.fired" | "workhorse.schedules.synchronized" | "workhorse.worker.deregistered" | "workhorse.worker.paused" | "workhorse.worker.polling_only" | "workhorse.worker.registered" | "workhorse.worker.registration_failed" | "workhorse.worker.resumed" | "workhorse.worker.started" | "workhorse.worker.stop_requested" | "workhorse.worker.stopped" | "workhorse.worker_registry.pruned";
+type WorkhorseLogEvent = "workhorse.handler.batch_dispatched" | "workhorse.handler.batch_evidence_failed" | "workhorse.handler.finished" | "workhorse.handler.missing" | "workhorse.handler.registered" | "workhorse.handler.signal_swallowed" | "workhorse.handler.started" | "workhorse.task.cancellation_acknowledged" | "workhorse.task.cancellation_processed" | "workhorse.task.checkpoint_saved" | "workhorse.task.child_processed" | "workhorse.task.debounce_rejected" | "workhorse.task.debounced" | "workhorse.task.claimed" | "workhorse.task.completed" | "workhorse.task.completion_rejected" | "workhorse.task.enqueue_replayed" | "workhorse.task.enqueued" | "workhorse.task.throttled" | "workhorse.task.execution_finished" | "workhorse.task.failure_processed" | "workhorse.task.heartbeat_accepted" | "workhorse.task.heartbeat_rejected" | "workhorse.task.ownership_expired" | "workhorse.task.progress_updated" | "workhorse.task.redrive_processed" | "workhorse.task.release_processed" | "workhorse.task.run_now_requested" | "workhorse.task.signal_processed" | "workhorse.task.human_wait_processed" | "workhorse.task.wait_processed" | "workhorse.tasks.promoted" | "workhorse.tasks.redrive_processed" | "workhorse.leases.recovered" | "workhorse.cold_export_policy.synchronized" | "workhorse.maintenance.completed" | "workhorse.maintenance_policy.synchronized" | "workhorse.queue.paused" | "workhorse.queue.purged" | "workhorse.queue.resumed" | "workhorse.queue.tier_set" | "workhorse.retention_policy.synchronized" | "workhorse.schedule.fire_replayed" | "workhorse.schedule.fired" | "workhorse.schedules.synchronized" | "workhorse.worker.deregistered" | "workhorse.worker.paused" | "workhorse.worker.polling_only" | "workhorse.worker.registered" | "workhorse.worker.registration_failed" | "workhorse.worker.resumed" | "workhorse.worker.started" | "workhorse.worker.stop_requested" | "workhorse.worker.stopped" | "workhorse.worker_registry.pruned";
 
 class WorkhorseMetricsObserver {
   constructor(database: Queryable, options?: {

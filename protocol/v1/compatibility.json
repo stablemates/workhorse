@@ -1,23 +1,23 @@
 [
   {
     "id": "current",
-    "installedSchemaVersion": 18,
-    "clientProtocolVersion": 4,
-    "servedProtocolVersions": [1, 2, 3, 4],
+    "installedSchemaVersion": 25,
+    "clientProtocolVersion": 5,
+    "servedProtocolVersions": [5],
     "compatible": true
   },
   {
     "id": "schema-newer-inside-major-line",
-    "installedSchemaVersion": 19,
-    "clientProtocolVersion": 4,
-    "servedProtocolVersions": [1, 2, 3, 4],
+    "installedSchemaVersion": 26,
+    "clientProtocolVersion": 5,
+    "servedProtocolVersions": [5],
     "compatible": true,
     "note": "Inside a major line a migration only adds, so a newer schema still serves this client. Refusing it would make every rolling deployment an outage."
   },
   {
     "id": "served-protocol-undeclared",
-    "installedSchemaVersion": 18,
-    "clientProtocolVersion": 4,
+    "installedSchemaVersion": 25,
+    "clientProtocolVersion": 5,
     "servedProtocolVersions": [],
     "compatible": true,
     "note": "A schema that declares no served protocol has made no statement to enforce."
@@ -25,35 +25,36 @@
   {
     "id": "schema-not-installed",
     "installedSchemaVersion": null,
-    "clientProtocolVersion": 4,
+    "clientProtocolVersion": 5,
     "servedProtocolVersions": [],
     "compatible": false,
     "refusalCode": "schema-not-installed",
     "refusal": "Refuse every mutation because workhorse.schema_version cannot be read."
   },
   {
-    "id": "schema-too-old",
-    "installedSchemaVersion": 16,
-    "clientProtocolVersion": 4,
+    "id": "schema-before-the-fast-tier-contract",
+    "installedSchemaVersion": 24,
+    "clientProtocolVersion": 5,
     "servedProtocolVersions": [1, 2, 3, 4],
     "compatible": false,
     "refusalCode": "schema-too-old",
-    "refusal": "Refuse every mutation until the database is migrated: the release calls functions a schema below its minimum does not carry."
+    "refusal": "Refuse every mutation until the contract step is applied: the release calls fast-tier functions schema 24 does not carry.",
+    "note": "This is the state `workhorse schema migrate` leaves behind, because it stops before the contract step that adds protocol 5."
   },
   {
-    "id": "schema-below-the-dashboard-reads",
-    "installedSchemaVersion": 5,
-    "clientProtocolVersion": 4,
-    "servedProtocolVersions": [1, 2, 3, 4],
+    "id": "schema-serves-only-older-protocols",
+    "installedSchemaVersion": 25,
+    "clientProtocolVersion": 5,
+    "servedProtocolVersions": [4],
     "compatible": false,
     "refusalCode": "schema-too-old",
-    "refusal": "Refuse every mutation because the release's dashboard reads functions schema 5 does not carry.",
-    "note": "Schema 4 and schema 5 declare protocol 4 and pass every protocol test, so only the schema floor refuses them. Without it the process starts and fails later with SQLSTATE 42883."
+    "refusal": "Refuse every mutation because the schema declares no protocol as new as this client's.",
+    "note": "The schema version alone passes the floor, so only the served protocol set refuses this client."
   },
   {
     "id": "schema-below-the-statement-catalogues",
     "installedSchemaVersion": 4,
-    "clientProtocolVersion": 4,
+    "clientProtocolVersion": 5,
     "servedProtocolVersions": [1, 2, 3, 4],
     "compatible": false,
     "refusalCode": "schema-too-old",
@@ -61,27 +62,28 @@
   },
   {
     "id": "schema-no-longer-serves-client",
-    "installedSchemaVersion": 18,
-    "clientProtocolVersion": 4,
-    "servedProtocolVersions": [5],
+    "installedSchemaVersion": 25,
+    "clientProtocolVersion": 5,
+    "servedProtocolVersions": [6],
     "compatible": false,
     "refusalCode": "schema-too-new",
     "refusal": "Refuse every mutation because a major release stopped serving this client's protocol."
   },
   {
     "id": "client-protocol-too-old",
-    "installedSchemaVersion": 18,
-    "clientProtocolVersion": 0,
-    "servedProtocolVersions": [1],
+    "installedSchemaVersion": 25,
+    "clientProtocolVersion": 4,
+    "servedProtocolVersions": [5],
     "compatible": false,
     "refusalCode": "client-protocol-too-old",
-    "refusal": "Refuse every mutation because the client protocol is below the supported range."
+    "refusal": "Refuse every mutation because the client protocol is below the supported range.",
+    "note": "The fast-tier contract step retired protocols 1 to 4, so a protocol-4 client is refused rather than served."
   },
   {
     "id": "client-protocol-too-new",
-    "installedSchemaVersion": 18,
-    "clientProtocolVersion": 5,
-    "servedProtocolVersions": [1, 2, 3, 4],
+    "installedSchemaVersion": 25,
+    "clientProtocolVersion": 6,
+    "servedProtocolVersions": [5],
     "compatible": false,
     "refusalCode": "client-protocol-too-new",
     "refusal": "Refuse every mutation because the client protocol is outside the supported range."

@@ -1,4 +1,10 @@
-import type { ClaimedTask, HeartbeatStatus, Json } from "./types.js";
+import type {
+  ClaimedTask,
+  CompletionClaim,
+  CompletionClaimResult,
+  HeartbeatStatus,
+  Json,
+} from "./types.js";
 
 /** Package-internal Queue capabilities used to build one handler activation snapshot. */
 export const workerCheckpointsRead = Symbol("workhorse.worker.checkpoints-read");
@@ -7,7 +13,8 @@ export const workerWaitsRead = Symbol("workhorse.worker.waits-read");
 
 /**
  * Validates a handler result and returns the fenced write that completes the task. The worker
- * charges a validation error to the handler and treats a write error as a settlement failure.
+ * charges a validation error to the handler and treats a write error as a settlement failure. With
+ * a claim, the write is the fast tier's fused completion and also returns the tasks it claimed.
  */
 export const workerCompletionPrepare = Symbol("workhorse.worker.completion-prepare");
 
@@ -16,7 +23,7 @@ export interface WorkerCompletionPreparation {
     task: ClaimedTask,
     workerId: string,
     result: Json,
-  ): Promise<() => Promise<boolean>>;
+  ): Promise<(claim?: CompletionClaim) => Promise<CompletionClaimResult>>;
 }
 
 /**

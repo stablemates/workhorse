@@ -200,3 +200,35 @@ export class ExecutionTimeoutError extends WorkhorseError {
     this.name = "ExecutionTimeoutError";
   }
 }
+
+/**
+ * A request and a queue's tier disagree. Either a fast-tier queue refused a full-tier feature, or
+ * a call that only the fast tier supports named a full-tier queue.
+ */
+export class FastTierUnsupportedError extends WorkhorseError {
+  constructor(
+    readonly queue: string,
+    readonly feature: string,
+    /** The 1-based position of the rejected request in an enqueue batch. */
+    readonly ordinal?: number,
+  ) {
+    super(`Fast-tier queue ${queue} does not support ${feature}`);
+    this.name = "FastTierUnsupportedError";
+  }
+}
+
+/** Translate PostgreSQL's P1007 into {@link FastTierUnsupportedError}, or return null. */
+export function fastTierRejection(error: unknown): FastTierUnsupportedError | null {
+  if (databaseErrorCode(error) !== "P1007") return null;
+  for (const detail of databaseErrorDetails(error)) {
+    try {
+      const parsed = JSON.parse(detail) as Record<string, unknown>;
+      if (typeof parsed.queue !== "string" || typeof parsed.feature !== "string") continue;
+      const ordinal = typeof parsed.ordinal === "number" ? parsed.ordinal : undefined;
+      return new FastTierUnsupportedError(parsed.queue, parsed.feature, ordinal);
+    } catch {
+      // PostgreSQL's DETAIL may sit behind an adapter wrapper's own detail string.
+    }
+  }
+  return new FastTierUnsupportedError("unknown", "unknown");
+}

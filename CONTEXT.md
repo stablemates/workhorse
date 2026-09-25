@@ -17,6 +17,25 @@ The unit of work Workhorse enqueues, claims, retries, and records: one row in `w
 with an identity that survives retries, waits, and worker changes.
 _Avoid_: Job, message, work item, activity
 
+**Tier**:
+The per-queue setting that decides how much Workhorse records for each of the queue's tasks. It
+belongs to the queue, never to a task or a worker, and changes only while the queue holds no live
+task.
+_Avoid_: Mode, lane, class, execution profile
+
+**Full tier**:
+The default tier. A task keeps its live state in `workhorse.task_runtime` and its final state in
+`workhorse.task_outcome`, writes events and attempt history, and may use every feature, including
+durable execution.
+_Avoid_: Durable tier, standard queue, slow tier
+
+**Fast tier**:
+The opt-in tier for queues whose handlers never suspend. A task keeps its live state in
+`workhorse.fast_task_runtime` and closes into one `workhorse.fast_task_outcome` row. It writes
+history only when the queue opts in, and Workhorse rejects durable execution and per-task
+coordination features for it.
+_Avoid_: Lightweight queue, ephemeral task, non-durable task, fire-and-forget
+
 **Handler**:
 The function a worker runs for a task type. A handler restarts from the top after a retry, a
 crash, or a durable wait.

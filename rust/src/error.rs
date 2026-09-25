@@ -125,6 +125,14 @@ pub struct RedriveConflictDetails {
     pub rejected_request_digest: String,
 }
 
+/// PostgreSQL's fast-tier refusal, SQLSTATE `P1007`.
+#[derive(Deserialize)]
+struct FastTierDetails {
+    queue: String,
+    feature: String,
+    ordinal: Option<i64>,
+}
+
 /// PostgreSQL's retained-request conflict diagnosis for a queue purge, SQLSTATE `P1006`.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
@@ -165,6 +173,11 @@ pub enum Error {
     RedriveIdempotencyConflict { details: Box<RedriveConflictDetails> },
     #[error("PostgreSQL rejected a materially different idempotent queue purge")]
     PurgeIdempotencyConflict { details: Box<PurgeConflictDetails> },
+    /// A request and a queue's tier disagree (ADR 0077). Either a fast-tier queue refused a
+    /// full-tier feature, or a call that only the fast tier supports named a full-tier queue.
+    /// `ordinal` is the 1-based position of the rejected request in an enqueue batch.
+    #[error("Fast-tier queue {queue} does not support {feature}")]
+    FastTierUnsupported { queue: String, feature: String, ordinal: Option<i64> },
     #[error("{task_type} payload does not satisfy contract version {version}")]
     ContractValidation { task_type: String, version: String },
     #[error("{task_type} contract version {version} is unavailable")]
@@ -226,6 +239,11 @@ impl Error {
             Self::UnexpectedStatus { operation, status } => {
                 Self::UnexpectedStatus { operation: *operation, status: status.clone() }
             }
+            Self::FastTierUnsupported { queue, feature, ordinal } => Self::FastTierUnsupported {
+                queue: queue.clone(),
+                feature: feature.clone(),
+                ordinal: *ordinal,
+            },
             Self::Cancelled(reason) => Self::Cancelled(*reason),
             Self::Suspended => Self::Suspended,
             other => Self::InvalidArgument(other.to_string()),
@@ -243,7 +261,37 @@ impl Error {
         }
     }
 
-    /// Maps SQLSTATE `P1001`, `P1003` and `P1005` to their structured variants.
+    /// The structured variant for SQLSTATE `P1007`; a DETAIL that does not parse still names the
+    /// refusal, so a caller can branch on the variant.
+    fn fast_tier(detail: &str) -> Self {
+        let details = serde_json::from_str::<FastTierDetails>(detail).unwrap_or(FastTierDetails {
+            queue: "unknown".into(),
+            feature: "unknown".into(),
+            ordinal: None,
+        });
+        Self::FastTierUnsupported {
+            queue: details.queue,
+            feature: details.feature,
+            ordinal: details.ordinal,
+        }
+    }
+
+    /// Maps SQLSTATE `P1007` to [`Error::FastTierUnsupported`] and leaves every other error as is.
+    pub(crate) fn translate_fast_tier(self) -> Self {
+        let database = match &self {
+            Self::Postgres(error) => error.as_db_error(),
+            Self::Pool(deadpool_postgres::PoolError::Backend(error)) => error.as_db_error(),
+            _ => None,
+        };
+        match database {
+            Some(database) if database.code().code() == "P1007" => {
+                Self::fast_tier(database.detail().unwrap_or("{}"))
+            }
+            _ => self,
+        }
+    }
+
+    /// Maps SQLSTATE `P1001`, `P1003`, `P1005` and `P1007` to their structured variants.
     pub(crate) fn translate_enqueue(error: tokio_postgres::Error) -> Self {
         let Some(database) = error.as_db_error() else {
             return error.into();
@@ -259,11 +307,12 @@ impl Error {
             "P1005" => Self::DependencyLimitExceeded {
                 details: Box::new(serde_json::from_str(detail).unwrap_or_default()),
             },
+            "P1007" => Self::fast_tier(detail),
             _ => error.into(),
         }
     }
 
-    /// Maps SQLSTATE `P1002` and `P1006` to their structured variants.
+    /// Maps SQLSTATE `P1002`, `P1006` and `P1007` to their structured variants.
     pub(crate) fn translate_admin(self) -> Self {
         let database = match &self {
             Self::Postgres(error) => error.as_db_error(),
@@ -282,6 +331,7 @@ impl Error {
             "P1006" => Self::PurgeIdempotencyConflict {
                 details: Box::new(serde_json::from_str(detail).unwrap_or_default()),
             },
+            "P1007" => Self::fast_tier(detail),
             _ => self,
         }
     }

@@ -12,6 +12,7 @@ import {
 } from "../../../scripts/sql-released-signatures.js";
 import { randomUUID } from "node:crypto";
 import {
+  contractSchema,
   migrateSchema,
   readWorkerClientProtocols,
   SCHEMA_MIGRATIONS,
@@ -23,6 +24,7 @@ import {
   parseSchemaMigrationMetadata,
   planSchemaContract,
 } from "../src/schema-migrations.js";
+import type { Queryable } from "../src/types.js";
 import { createDatabaseTestHarness } from "./support/db.js";
 import {
   createHistoryFixtureDay,
@@ -46,6 +48,19 @@ const releaseDatabase = createDatabaseTestHarness(new URL("?release", import.met
 const lockDatabase = createDatabaseTestHarness(new URL("?lock", import.meta.url).href, {
   schemaProvisioning: "install",
 });
+/**
+ * Bring a database to the current schema the way an operator does across a contract step: migrate,
+ * apply the pending contract step once confirmed, and migrate again until nothing is pending.
+ */
+async function migrateThroughContracts(database: Queryable): Promise<void> {
+  for (;;) {
+    const { contractStop } = await migrateSchema(database);
+    if (contractStop === null) return;
+    const outcome = await contractSchema(database, { confirmed: true });
+    if (outcome.kind !== "applied") throw new Error(`expected ${contractStop.file} to apply`);
+  }
+}
+
 const contractDatabase = createDatabaseTestHarness(new URL("?contract", import.meta.url).href, {
   schemaProvisioning: "install",
 });
@@ -539,7 +554,7 @@ describe("schema migrations", () => {
       ])
         expect(populated).toContain(table);
 
-      await migrateSchema(releaseDatabase.pool);
+      await migrateThroughContracts(releaseDatabase.pool);
 
       expect(await readSeededRows(releaseDatabase.pool, seeded)).toEqual(seeded);
 
@@ -553,12 +568,7 @@ describe("schema migrations", () => {
       const protocols = await releaseDatabase.pool.query<{ version: number }>(
         "SELECT version FROM workhorse.protocol_version ORDER BY version",
       );
-      expect(protocols.rows).toEqual([
-        { version: 1 },
-        { version: 2 },
-        { version: 3 },
-        { version: 4 },
-      ]);
+      expect(protocols.rows).toEqual([{ version: 5 }]);
       const migrations = await releaseDatabase.pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_migration ORDER BY version",
       );
@@ -617,7 +627,7 @@ describe("schema migrations", () => {
       await readFile(path.join(repository, "sql", "releases", newest), "utf8"),
     );
     await seedReleasedSchema(releaseDatabase.pool);
-    await migrateSchema(releaseDatabase.pool);
+    await migrateThroughContracts(releaseDatabase.pool);
     const migrated = await readShapes();
 
     await releaseDatabase.pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");

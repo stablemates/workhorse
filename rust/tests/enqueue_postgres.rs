@@ -448,7 +448,7 @@ async fn incompatible_schema_refuses_before_the_first_write() {
     assert_eq!(task_count(&observer).await, 0, "the refusal wrote no row");
 
     // The refusal is cached per Queue, so every mutation refuses without asking again.
-    observer.batch_execute("UPDATE workhorse.schema_version SET version = 23").await.unwrap();
+    observer.batch_execute("UPDATE workhorse.schema_version SET version = 25").await.unwrap();
     let cached = queue.enqueue("email.send", &json!({}), EnqueueOptions::default()).await;
     assert!(matches!(cached, Err(Error::Compatibility { code }) if code == expected));
     assert!(matches!(

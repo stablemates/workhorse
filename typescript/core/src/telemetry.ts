@@ -177,6 +177,7 @@ export type WorkhorseLogEvent =
   | "workhorse.queue.paused"
   | "workhorse.queue.purged"
   | "workhorse.queue.resumed"
+  | "workhorse.queue.tier_set"
   | "workhorse.retention_policy.synchronized"
   | "workhorse.schedule.fire_replayed"
   | "workhorse.schedule.fired"

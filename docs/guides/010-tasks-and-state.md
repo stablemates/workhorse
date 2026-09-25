@@ -29,6 +29,9 @@ instant where a task looks both alive and finished, and no instant where it look
 
 This is why you'll see the reference talk about "lifecycle exclusivity". That's the rule.
 
+A task on a [fast-tier queue](305-fast-tier.md) keeps the same rule with two leaner tables in place
+of `task_runtime` and `task_outcome`, and writes history only when its queue opts in.
+
 ## Why bother
 
 Because `task_runtime` is the table the dispatcher searches. It asks "what's ready to run in

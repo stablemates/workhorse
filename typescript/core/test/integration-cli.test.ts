@@ -2,7 +2,11 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
-import { MINIMUM_SCHEMA_VERSION, WORKHORSE_SCHEMA_VERSION } from "../src/schema.js";
+import {
+  MINIMUM_SCHEMA_VERSION,
+  PROTOCOL_VERSION,
+  WORKHORSE_SCHEMA_VERSION,
+} from "../src/schema.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const repository = path.resolve(import.meta.dirname, "../../..");
@@ -37,7 +41,7 @@ describe("database CLI output", () => {
         installedVersion: WORKHORSE_SCHEMA_VERSION,
         expectedVersion: WORKHORSE_SCHEMA_VERSION,
         state: "current",
-        installedProtocolVersions: [1, 2, 3, 4],
+        installedProtocolVersions: [PROTOCOL_VERSION],
         pendingContractSteps: [],
       },
       postgres: {

@@ -25,6 +25,8 @@ class Admin(_AdminOperations)
   def redrive(self, source_task_id: str, audit: AdminAudit) -> RedriveResult
   def redrive_many(self, filter: DeadLetterFilter, audit: AdminAudit, options: BulkRedriveOptions | None = None) -> BulkRedrivePage
   def resume_queue(self, queue_name: str, audit: AdminAudit) -> None
+  def set_queue_history(self, queue_name: str, *, record_attempts: bool | None = None, record_claims: bool | None = None) -> QueueHistory
+  def set_queue_tier(self, queue_name: str, tier: QueueTier, audit: AdminAudit) -> QueueTier
   def set_worker_paused(self, worker_id: str, paused: bool, audit: AdminAudit) -> WorkerPauseResult | None
 
 class AdminAudit
@@ -54,6 +56,8 @@ class AsyncAdmin(_AdminOperations)
   async def redrive(self, source_task_id: str, audit: AdminAudit) -> RedriveResult
   async def redrive_many(self, filter: DeadLetterFilter, audit: AdminAudit, options: BulkRedriveOptions | None = None) -> BulkRedrivePage
   async def resume_queue(self, queue_name: str, audit: AdminAudit) -> None
+  async def set_queue_history(self, queue_name: str, *, record_attempts: bool | None = None, record_claims: bool | None = None) -> QueueHistory
+  async def set_queue_tier(self, queue_name: str, tier: QueueTier, audit: AdminAudit) -> QueueTier
   async def set_worker_paused(self, worker_id: str, paused: bool, audit: AdminAudit) -> WorkerPauseResult | None
 
 type AsyncBatchHandler = Callable[[Sequence[AsyncBatchHandlerItem]], Awaitable[Sequence[BatchHandlerOutcome]]]
@@ -491,6 +495,9 @@ class ExternalWaitPage
   items: tuple[ExternalWait, ...]
   next_cursor: ExternalWaitCursor | None
 
+class FastTierUnsupportedError(WorkhorseError)
+  def __init__(self, queue: str, feature: str, ordinal: int | None = None) -> None
+
 type Handler = Callable[[Any, HandlerContext], Json]
 
 class HandlerContext
@@ -599,6 +606,13 @@ class Queue
   def sync_schedules(self, namespace: str, definitions: Sequence[ScheduleDefinition], *, prune: bool = True) -> None
 
 type QueueHealth = dict[str, Json]
+
+class QueueHistory
+  def __init__(self, record_attempts: bool, record_claims: bool) -> None
+  record_attempts: bool
+  record_claims: bool
+
+type QueueTier = Literal['fast', 'full']
 
 class RateLimit
   def __init__(self, limit: int, interval_ms: int, burst: int) -> None
@@ -958,6 +972,8 @@ class Admin(_AdminOperations)
   def redrive(self, source_task_id: str, audit: AdminAudit) -> RedriveResult
   def redrive_many(self, filter: DeadLetterFilter, audit: AdminAudit, options: BulkRedriveOptions | None = None) -> BulkRedrivePage
   def resume_queue(self, queue_name: str, audit: AdminAudit) -> None
+  def set_queue_history(self, queue_name: str, *, record_attempts: bool | None = None, record_claims: bool | None = None) -> QueueHistory
+  def set_queue_tier(self, queue_name: str, tier: QueueTier, audit: AdminAudit) -> QueueTier
   def set_worker_paused(self, worker_id: str, paused: bool, audit: AdminAudit) -> WorkerPauseResult | None
 
 class AdminAudit
@@ -987,6 +1003,8 @@ class AsyncAdmin(_AdminOperations)
   async def redrive(self, source_task_id: str, audit: AdminAudit) -> RedriveResult
   async def redrive_many(self, filter: DeadLetterFilter, audit: AdminAudit, options: BulkRedriveOptions | None = None) -> BulkRedrivePage
   async def resume_queue(self, queue_name: str, audit: AdminAudit) -> None
+  async def set_queue_history(self, queue_name: str, *, record_attempts: bool | None = None, record_claims: bool | None = None) -> QueueHistory
+  async def set_queue_tier(self, queue_name: str, tier: QueueTier, audit: AdminAudit) -> QueueTier
   async def set_worker_paused(self, worker_id: str, paused: bool, audit: AdminAudit) -> WorkerPauseResult | None
 
 class BulkRedriveOptions
@@ -1090,6 +1108,13 @@ class HumanWaitPage
   def __init__(self, items: tuple[HumanWait, ...], next_cursor: ExternalWaitCursor | None) -> None
   items: tuple[HumanWait, ...]
   next_cursor: ExternalWaitCursor | None
+
+class QueueHistory
+  def __init__(self, record_attempts: bool, record_claims: bool) -> None
+  record_attempts: bool
+  record_claims: bool
+
+type QueueTier = Literal['fast', 'full']
 
 class RedriveResult
   def __init__(self, status: Literal['redriven', 'replayed', 'eligible', 'not_found', 'not_failed'], source_task_id: str, target_task_id: str | None, source_state: TaskState | None, target_state: TaskState | None, requested_at: datetime | None) -> None
@@ -5500,6 +5525,9 @@ class EnqueueIdempotencyConflictError(WorkhorseError)
 
 class ExecutionTimeoutError(WorkhorseError)
   def __init__(self, task_id: str, attempt: int) -> None
+
+class FastTierUnsupportedError(WorkhorseError)
+  def __init__(self, queue: str, feature: str, ordinal: int | None = None) -> None
 
 class HumanWaitAlreadyWaitingError(WorkhorseError)
   def __init__(self, task_id: str, wait_name: str) -> None
