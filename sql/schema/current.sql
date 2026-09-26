@@ -8370,6 +8370,11 @@ $$;
 -- The generic plan keeps the primary-key plan: a custom plan per call cost more to plan than
 -- the statement costs to run. The history insert joins queue_control once instead of calling
 -- fast_records_attempts_v1 per completed row.
+--
+-- Before the DELETE, the function locks the worker's rows in task ID order, as
+-- fast_heartbeat_many_v1 does. The DELETE's plan locks rows in input order, and a heartbeat's plan
+-- can lock them in index order. Without the shared order, a worker's completion and its own
+-- heartbeat could each hold a row the other needs, and PostgreSQL rolled one back with 40P01.
 CREATE OR REPLACE FUNCTION workhorse.fast_complete_many_v1(
   p_worker_id text, p_task_ids uuid[], p_fence_tokens bigint[], p_results jsonb[]
 ) RETURNS uuid[]
@@ -8388,6 +8393,12 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'result exceeds its configured size limit';
   END IF;
+  PERFORM 1 FROM (
+    SELECT FROM workhorse.fast_task_runtime runtime
+     WHERE runtime.task_id = ANY (p_task_ids) AND runtime.worker_id = p_worker_id
+     ORDER BY runtime.task_id
+       FOR UPDATE
+  ) locked;
   WITH input AS (
     SELECT * FROM unnest(p_task_ids, p_fence_tokens, p_results)
       AS input(task_id, fence_token, result)
@@ -8613,6 +8624,9 @@ BEGIN
 END;
 $$;
 
+-- Extend a batch of fast-tier leases in one statement. Before the UPDATE, the function locks the
+-- worker's rows in task ID order, the order fast_complete_many_v1 locks them in, so a heartbeat
+-- and a batched completion of the same worker never wait on each other in a cycle.
 CREATE OR REPLACE FUNCTION workhorse.fast_heartbeat_many_v1(
   p_worker_id text, p_task_ids uuid[], p_fence_tokens bigint[], p_lease_ms integer[]
 ) RETURNS TABLE (ordinal bigint, task_id uuid, status text)
@@ -8622,6 +8636,12 @@ AS $$
 DECLARE
   v_now timestamptz := clock_timestamp();
 BEGIN
+  PERFORM 1 FROM (
+    SELECT FROM workhorse.fast_task_runtime runtime
+     WHERE runtime.task_id = ANY (p_task_ids) AND runtime.worker_id = p_worker_id
+     ORDER BY runtime.task_id
+       FOR NO KEY UPDATE
+  ) locked;
   RETURN QUERY
   WITH leases AS MATERIALIZED (
     SELECT input.ordinal, input.task_id, input.fence_token, input.lease_ms
@@ -10091,7 +10111,7 @@ AS $$
 DECLARE
   v_now timestamptz := clock_timestamp();
   v_fast_count bigint;
-  v_total bigint;
+  v_full_count bigint;
 BEGIN
   IF p_worker_id IS NULL OR p_worker_id = '' THEN RAISE EXCEPTION 'worker_id must not be empty'; END IF;
   IF p_leases IS NULL OR jsonb_typeof(p_leases) <> 'array'
@@ -10105,13 +10125,20 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'each lease requires taskId, fenceToken, and leaseMs between 100 and 86400000';
   END IF;
-  -- A batch that names no fast-tier task takes the full-tier path below unchanged. An all-fast
-  -- batch takes the fast set-based path. A mixed batch goes one lease at a time.
-  SELECT count(*) FILTER (WHERE fast.task_id IS NOT NULL), count(*)
-    INTO v_fast_count, v_total
+  -- A batch that names no fast-tier task takes the full-tier path below unchanged. A batch that
+  -- names no full-tier task takes the fast set-based path, which reports a task that has left
+  -- fast_task_runtime as stale. Counting such a task as full-tier would send a worker's heartbeat
+  -- one lease at a time whenever it raced that worker's own completion, and that path does not
+  -- lock in task ID order. A mixed batch goes one lease at a time, in task ID order.
+  SELECT count(*) FILTER (WHERE fast.task_id IS NOT NULL),
+         count(*) FILTER (WHERE fast.task_id IS NULL AND EXISTS (
+           SELECT 1 FROM workhorse.task_runtime runtime
+            WHERE runtime.task_id = (item->>'taskId')::uuid
+         ))
+    INTO v_fast_count, v_full_count
     FROM jsonb_array_elements(p_leases) item
     LEFT JOIN workhorse.fast_task_runtime fast ON fast.task_id = (item->>'taskId')::uuid;
-  IF v_fast_count = v_total THEN
+  IF v_fast_count > 0 AND v_full_count = 0 THEN
     RETURN QUERY SELECT * FROM workhorse.fast_heartbeat_many_v1(
       p_worker_id,
       ARRAY(SELECT (item->>'taskId')::uuid FROM jsonb_array_elements(p_leases) WITH ORDINALITY input(item, n) ORDER BY n),
@@ -10121,13 +10148,19 @@ BEGIN
     RETURN;
   ELSIF v_fast_count > 0 THEN
     RETURN QUERY
-      SELECT input.n, (input.item->>'taskId')::uuid,
-             workhorse.heartbeat_v1(
-               (input.item->>'taskId')::uuid, p_worker_id, (input.item->>'fenceToken')::bigint,
-               (input.item->>'leaseMs')::integer
-             )
-        FROM jsonb_array_elements(p_leases) WITH ORDINALITY input(item, n)
-       ORDER BY input.n;
+      WITH beats AS MATERIALIZED (
+        SELECT sorted.n, sorted.task_id,
+               workhorse.heartbeat_v1(sorted.task_id, p_worker_id, sorted.fence_token, sorted.lease_ms)
+                 AS status
+          FROM (
+            SELECT input.n, (input.item->>'taskId')::uuid AS task_id,
+                   (input.item->>'fenceToken')::bigint AS fence_token,
+                   (input.item->>'leaseMs')::integer AS lease_ms
+              FROM jsonb_array_elements(p_leases) WITH ORDINALITY input(item, n)
+             ORDER BY 2
+          ) sorted
+      )
+      SELECT beats.n, beats.task_id, beats.status FROM beats ORDER BY beats.n;
     RETURN;
   END IF;
   RETURN QUERY
@@ -18222,10 +18255,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (27, 'write full-tier enqueue rows set-based'),
   (28, 'release dependents per statement'),
   (29, 'claim policy limited tasks as a set'),
-  (30, 'release dependents through a pending-prerequisite counter')
+  (30, 'release dependents through a pending-prerequisite counter'),
+  (31, 'lock a worker''s fast-tier rows in task ID order')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (30) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (31) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

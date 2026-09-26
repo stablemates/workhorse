@@ -68,7 +68,7 @@ function or reinterpret that suffix.
 ## SQL protocol conformance
 
 `protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 5. It accepts installed
-schema versions 25 through 29 and client protocol 5 only. `protocol/v1/compatibility.json` distinguishes an absent,
+schema versions 25 through 31 and client protocol 5 only. `protocol/v1/compatibility.json` distinguishes an absent,
 older, current, or newer installed schema from the client's protocol version. Every incompatible
 case requires refusal before a mutating function runs.
 
@@ -2913,6 +2913,23 @@ carries a pending cancellation, is left alone and missing from the result. A res
 build a custom plan for the statement on every call. The history insert joins `queue_control` on
 `record_attempts` instead of calling `fast_records_attempts_v1` per completed row.
 
+Before the `DELETE`, the function locks the caller's rows with `SELECT ... ORDER BY task_id FOR
+UPDATE`, filtered on `task_id = ANY (p_task_ids)` and `worker_id = p_worker_id`.
+`fast_heartbeat_many_v1` takes `FOR NO KEY UPDATE` locks in the same order before its `UPDATE`. The
+`DELETE` plan locks rows in input order, and the heartbeat plan can lock them in
+`fast_task_runtime_active_due_idx` order. Without the shared order, a worker's completion and its
+own heartbeat round could each hold a row the other waits for, and PostgreSQL rolled one back with
+SQLSTATE `40P01`. The fused claim held the completion's locks longer and made that more likely. A
+caller may therefore name its tasks and leases in any order. The full-tier `heartbeat_many_v1`
+branch takes no such lock, because a full-tier completion settles one task per statement.
+
+`heartbeat_many_v1` sends a batch to `fast_heartbeat_many_v1` when the batch names at least one
+`fast_task_runtime` row and no `task_runtime` row. A named task in neither table counts as neither,
+so a heartbeat round that races its worker's own completion keeps the ordered path and reports that
+task `stale`. A batch naming no fast-tier task takes the full-tier `UPDATE ... FROM` unchanged. A
+batch naming both tiers calls `heartbeat_v1` once per lease in `task_id` order, then returns rows in
+input order.
+
 `complete_many_and_claim_v1(p_worker_id, p_task_ids, p_fence_tokens, p_results, p_queue_name,
 p_limit, p_lease_ms)` completes up to 100 tasks and claims up to `p_limit` more from one fast-tier
 queue in one round trip. `p_limit` is 0 through 100 and `p_lease_ms` is 100 through 86,400,000,
@@ -2924,7 +2941,9 @@ nothing. The function raises `P1007` with feature `batched completion` for a ful
 `CompletionClaimResult { accepted, claimed }`. Concurrent calls from one worker for one queue and
 lease fuse into one statement at `setImmediate`, chunked at 100 completions and a total claim limit
 of 100. `Queue.claimFast(workerId, limit, { queue?, leaseMs? })` claims through the same function
-with empty arrays and rejects with `FastTierUnsupportedError` for a full-tier queue.
+with empty arrays and rejects with `FastTierUnsupportedError` for a full-tier queue. When PostgreSQL
+rolls the statement back with SQLSTATE `40P01`, `completeManyAndClaim` sends it again, up to
+`COMPLETION_DEADLOCK_ATTEMPTS` (3) times in total, because nothing in it committed.
 
 ### Retry, timeout, heartbeat, and release
 
@@ -3072,9 +3091,11 @@ unless `PollingOnly` is set, minus 1 for the heartbeat connection unless `Shared
 An explicit `Cohorts` is never capped. The worker's `completionBatcher` groups concurrent fast-tier
 completions by queue and cohort, and keeps one `complete_many_and_claim_v1` call in flight per group.
 A call carries at most `completionBatchLimit` (100) completions, and its claim limits sum to at most 100. The call names its tasks in task ID order, and `heartbeat_many_v1` names its leases in the
-same order. A plan can still lock the shared runtime rows in another order. When PostgreSQL rolls
-the call back with SQLSTATE `40P01`, the worker sends it again, up to `completionDeadlockAttempts`
-(3) times in total.
+same order. The fused claim's `FOR UPDATE SKIP LOCKED` can still keep a lock on a candidate that
+another worker leased and committed first, because the recheck of `state = 'ready'` fails after the
+lock is taken. That worker's completion or heartbeat can then wait on the claim, and PostgreSQL can
+roll one statement back with SQLSTATE `40P01`. The worker sends it again, up to
+`completionDeadlockAttempts` (3) times in total.
 
 The Rust worker follows the same rules. Its `default_cohorts` caps the default at the pool's
 `max_size`, minus 1 for the heartbeat connection unless `shared_heartbeats` is true; its listener

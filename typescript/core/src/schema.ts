@@ -214,6 +214,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "release dependents through a pending-prerequisite counter",
     kind: "additive",
   },
+  {
+    fromVersion: 30,
+    toVersion: 31,
+    file: "0031-lock-a-workers-fast-tier-rows-in-task-id-order.sql",
+    description: "lock a worker's fast-tier rows in task ID order",
+    kind: "additive",
+  },
 ];
 
 /**
