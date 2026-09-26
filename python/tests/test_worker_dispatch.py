@@ -1,4 +1,4 @@
-"""Dispatch loop behavior over a scripted executor: batched slot refill and claim backoff."""
+"""Dispatch loop behavior over a scripted executor: slot refill, cohorts, and claim backoff."""
 
 from __future__ import annotations
 
@@ -8,8 +8,11 @@ from threading import Event, Lock, Thread
 from time import monotonic, sleep
 from typing import Any
 
+import pytest
+
 from workhorse import ClaimedTask, Worker
 from workhorse._statements import STATEMENTS, DriverStatement
+from workhorse.worker import _dispatch_cohorts
 
 HANDLED = "dispatch.handled"
 UNHANDLED = "dispatch.unhandled"
@@ -141,12 +144,149 @@ class Executions:
             return len(self._waiting)
 
 
-def scripted_worker(claims: ScriptedClaims, *, concurrency: int, poll_ms: int = 5_000) -> Worker:
+class FastClaims:
+    """Answer complete_many_and_claim from a backlog as a fast-tier queue does.
+
+    Each call records its completion count and claim limit, and calls can be held open. With
+    full_tier set, the queue rejects the batched statement and answers claim_many and complete.
+    """
+
+    def __init__(self, rows: Sequence[dict[str, object]] = ()) -> None:
+        self._lock = Lock()
+        self._backlog = list(rows)
+        self._held: list[Event] = []
+        self.calls: list[tuple[int, int]] = []
+        self.plain_claims: list[int] = []
+        self.single_completions: list[str] = []
+        self.in_flight = 0
+        self.maximum_in_flight = 0
+        self.holding = False
+        self.full_tier = False
+
+    def rows(self, statement: DriverStatement, parameters: Sequence[object] = ()) -> list[Any]:
+        if statement is STATEMENTS.complete:
+            with self._lock:
+                self.single_completions.append(str(parameters[0]))
+            return [{"accepted": True}]
+        if statement is STATEMENTS.claim_many:
+            limit = parameters[2]
+            assert isinstance(limit, int)
+            with self._lock:
+                self.plain_claims.append(limit)
+                claimed, self._backlog = self._backlog[:limit], self._backlog[limit:]
+            return claimed
+        if statement is not STATEMENTS.complete_many_and_claim:
+            return []
+        if self.full_tier:
+            raise FullTierRejection
+        task_ids, limit = parameters[1], parameters[5]
+        assert isinstance(task_ids, list)
+        assert isinstance(limit, int)
+        release = Event()
+        with self._lock:
+            self.calls.append((len(task_ids), limit))
+            self.in_flight += 1
+            self.maximum_in_flight = max(self.maximum_in_flight, self.in_flight)
+            if self.holding:
+                self._held.append(release)
+            else:
+                release.set()
+        try:
+            assert release.wait(timeout=5), "held statement was never released"
+            with self._lock:
+                claimed, self._backlog = self._backlog[:limit], self._backlog[limit:]
+        finally:
+            with self._lock:
+                self.in_flight -= 1
+        # Only the first row carries the accepted completions, and a statement that claims
+        # nothing still returns it.
+        rows: list[dict[str, object]] = [dict(row) for row in claimed] or [
+            dict.fromkeys(task_row(0, HANDLED))
+        ]
+        rows[0]["accepted"] = list(task_ids)
+        return rows
+
+    def release_held(self) -> None:
+        with self._lock:
+            self.holding = False
+            held, self._held = self._held, []
+        for release in held:
+            release.set()
+
+    def claim_limits(self) -> list[int]:
+        with self._lock:
+            return [limit for completions, limit in self.calls if completions == 0]
+
+    def fused(self) -> list[tuple[int, int]]:
+        with self._lock:
+            return [call for call in self.calls if call[0] > 0]
+
+
+class FastExecutions:
+    """Stand in for fast-tier handlers: each task blocks until finished, then completes batched."""
+
+    def __init__(self, worker: Worker) -> None:
+        self._worker = worker
+        self._lock = Lock()
+        self._waiting: dict[str, Event] = {}
+        self.open = False
+        self.started: list[str] = []
+        self.accepted: list[str] = []
+        self.running_now = 0
+        self.maximum_running = 0
+
+    def execute(self, task: ClaimedTask, _claim_sent_at: float) -> None:
+        finished = Event()
+        with self._lock:
+            self.started.append(task.id)
+            self.running_now += 1
+            self.maximum_running = max(self.maximum_running, self.running_now)
+            if self.open:
+                finished.set()
+            else:
+                self._waiting[task.id] = finished
+        assert finished.wait(timeout=5)
+        with self._lock:
+            self.running_now -= 1
+        worker = self._worker
+        with worker._state_lock:
+            fast_tier = task.id in worker._fast_task_ids
+            worker._fast_task_ids.discard(task.id)
+        assert fast_tier
+        if worker._complete_fast_task(task, '"ok"'):
+            with self._lock:
+                self.accepted.append(task.id)
+
+    def finish(self, task_id: str) -> None:
+        with self._lock:
+            finished = self._waiting.pop(task_id)
+        finished.set()
+
+    def open_all(self) -> None:
+        with self._lock:
+            self.open = True
+            waiting, self._waiting = list(self._waiting.values()), {}
+        for finished in waiting:
+            finished.set()
+
+    def running(self) -> int:
+        with self._lock:
+            return len(self._waiting)
+
+
+def scripted_worker(
+    claims: ScriptedClaims | FastClaims,
+    *,
+    concurrency: int,
+    poll_ms: int = 5_000,
+    cohorts: int | None = None,
+) -> Worker:
     worker = Worker(
         object(),  # type: ignore[arg-type]
         queue="dispatch",
         worker_id="python-dispatch",
         concurrency=concurrency,
+        cohorts=cohorts,
         poll_ms=poll_ms,
         registry_interval_ms=0,
         shared_heartbeats=True,
@@ -159,7 +299,9 @@ def scripted_worker(claims: ScriptedClaims, *, concurrency: int, poll_ms: int = 
 
 
 @contextmanager
-def running(worker: Worker, executions: Executions) -> Iterator[list[BaseException]]:
+def running(
+    worker: Worker, executions: Executions | FastExecutions
+) -> Iterator[list[BaseException]]:
     worker._execute_claimed_task = executions.execute  # type: ignore[method-assign]
     errors: list[BaseException] = []
 
@@ -266,3 +408,133 @@ def test_claim_of_only_unhandled_tasks_backs_off_like_an_empty_claim() -> None:
         assert claims.claims() == 1
         assert len(executions.released) == 1
     assert errors == []
+
+
+def handled_rows(count: int) -> list[dict[str, object]]:
+    return [task_row(sequence, HANDLED) for sequence in range(count)]
+
+
+def test_default_cohorts_follow_concurrency_and_spare_connections() -> None:
+    assert [_dispatch_cohorts(c) for c in (1, 7, 8, 16, 17, 64, 65, 200)] == [
+        1,
+        1,
+        2,
+        2,
+        3,
+        8,
+        8,
+        8,
+    ]
+    assert _dispatch_cohorts(64, spare_connections=3) == 3
+    assert _dispatch_cohorts(64, spare_connections=0) == 1
+
+    class SizedPool:
+        max_size = 5
+
+    # The listener and the heartbeat connection leave three pooled connections for cohorts.
+    capped = Worker(SizedPool(), queue="dispatch", concurrency=64)  # type: ignore[arg-type]
+    assert capped.cohorts == 3
+    explicit = Worker(SizedPool(), queue="dispatch", concurrency=64, cohorts=6)  # type: ignore[arg-type]
+    assert explicit.cohorts == 6
+    for invalid in (0, 65, True):
+        with pytest.raises(ValueError, match="cohorts must be an integer"):
+            Worker(
+                object(), queue="dispatch", concurrency=64, cohorts=invalid, shared_heartbeats=True
+            )  # type: ignore[arg-type]
+
+
+def test_cohort_shares_give_the_remainder_to_the_first_cohorts() -> None:
+    claims = FastClaims()
+    worker = scripted_worker(claims, concurrency=10, cohorts=3)
+    executions = FastExecutions(worker)
+    with running(worker, executions) as errors:
+        wait_for(lambda: worker._dispatch_slots is not None, "the worker did not start")
+        slots = worker._dispatch_slots
+        assert slots is not None
+        assert slots.cohort_capacity == [4, 3, 3]
+    assert errors == []
+
+
+def test_fused_claims_stay_within_their_cohort() -> None:
+    claims = FastClaims(handled_rows(30))
+    worker = scripted_worker(claims, concurrency=8, cohorts=2)
+    executions = FastExecutions(worker)
+    with running(worker, executions) as errors:
+        wait_for(lambda: executions.running() == 8, "the worker did not fill its slots")
+        # A claim before the tier is known reserves every free slot but asks for one cohort's.
+        assert claims.claim_limits() == [4, 4]
+        claims.holding = True
+        first_cohort, second_cohort = executions.started[0], executions.started[4]
+        executions.finish(first_cohort)
+        wait_for(lambda: len(claims.fused()) == 1, "the completion did not send a statement")
+        executions.finish(second_cohort)
+        wait_for(lambda: len(claims.fused()) == 2, "the second cohort waited on the first")
+        # Each full cohort refills only the slot its task leaves.
+        assert claims.fused() == [(1, 1), (1, 1)]
+        assert claims.maximum_in_flight == 2
+
+        claims.release_held()
+        executions.open_all()
+        wait_for(lambda: len(executions.accepted) == 30, "the worker did not complete every task")
+    assert errors == []
+    assert sorted(executions.accepted) == sorted(str(row["task_id"]) for row in handled_rows(30))
+    assert executions.maximum_running <= 8
+    assert all(limit <= 4 for _completions, limit in claims.calls)
+    assert claims.plain_claims == []
+
+
+def test_queue_that_leaves_the_fast_tier_completes_through_complete() -> None:
+    claims = FastClaims(handled_rows(2))
+    worker = scripted_worker(claims, concurrency=2)
+    executions = FastExecutions(worker)
+    with running(worker, executions) as errors:
+        wait_for(lambda: executions.running() == 2, "the worker did not fill its slots")
+        claims.full_tier = True
+        executions.open_all()
+        wait_for(lambda: len(executions.accepted) == 2, "the fallback did not complete the tasks")
+        assert sorted(claims.single_completions) == sorted(executions.accepted)
+        # The worker claims the full-tier queue through claim_many from then on.
+        wait_for(
+            lambda: len(claims.plain_claims) >= 1, "the worker did not claim through claim_many"
+        )
+    assert errors == []
+
+
+def test_paused_worker_completes_without_a_fused_claim() -> None:
+    claims = FastClaims(handled_rows(4))
+    worker = scripted_worker(claims, concurrency=2)
+    executions = FastExecutions(worker)
+    with running(worker, executions) as errors:
+        wait_for(lambda: executions.running() == 2, "the worker did not fill its slots")
+        worker.pause()
+        executions.finish(executions.started[0])
+        wait_for(lambda: len(executions.accepted) == 1, "the paused worker did not complete")
+        assert claims.fused() == [(1, 0)]
+        sleep(0.05)
+        assert len(executions.started) == 2
+        worker.resume()
+        wait_for(lambda: len(executions.started) == 3, "a resumed worker did not claim")
+    assert errors == []
+
+
+def test_stop_runs_the_tasks_an_in_flight_fused_claim_returns() -> None:
+    claims = FastClaims(handled_rows(4))
+    worker = scripted_worker(claims, concurrency=2)
+    executions = FastExecutions(worker)
+    with running(worker, executions) as errors:
+        wait_for(lambda: executions.running() == 2, "the worker did not fill its slots")
+        claims.holding = True
+        executions.finish(executions.started[0])
+        wait_for(lambda: len(claims.fused()) == 1, "the completion did not send a statement")
+        worker.stop()
+        claims.release_held()
+        wait_for(lambda: len(executions.started) == 3, "the fused claim's task did not run")
+        executions.open_all()
+        wait_for(lambda: len(executions.accepted) == 3, "the drain did not complete the tasks")
+    assert errors == []
+    # The stop started no claim after the held one, so later completions claim nothing.
+    fused = claims.fused()
+    assert fused[0] == (1, 1)
+    assert all(limit == 0 for _completions, limit in fused[1:])
+    assert sum(completions for completions, _limit in fused) == 3
+    assert claims.claim_limits() == [2]
