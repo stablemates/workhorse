@@ -5659,9 +5659,19 @@ BEGIN
       ) THEN
         RAISE EXCEPTION 'dependency prerequisiteTaskIds must be unique';
       END IF;
+      -- Every terminal transition deletes the runtime row before it records the outcome that
+      -- resolves dependents. Holding the runtime row makes that transition wait until this edge
+      -- commits, so its resolver sees the edge. A transition that committed first has already
+      -- deleted the row, and the outcome reads below see its outcome. Key-share locks do not
+      -- block the non-key updates that claims and heartbeats make. The runtime rows are locked
+      -- before the task rows, in the order completion and purge lock them, so neither side can
+      -- hold one row while it waits for the other.
+      PERFORM 1 FROM workhorse.task_runtime runtime
+       WHERE runtime.task_id = ANY(v_prerequisite_task_ids)
+       ORDER BY runtime.task_id FOR KEY SHARE;
       PERFORM 1 FROM workhorse.task prerequisite
        WHERE prerequisite.id = ANY(v_prerequisite_task_ids)
-       ORDER BY prerequisite.id FOR UPDATE;
+       ORDER BY prerequisite.id FOR KEY SHARE;
       GET DIAGNOSTICS v_pending_prerequisites = ROW_COUNT;
       IF v_pending_prerequisites <> cardinality(v_prerequisite_task_ids) THEN
         RAISE EXCEPTION 'prerequisite task does not exist';
@@ -8809,7 +8819,7 @@ BEGIN
           WHERE control.queue_name = p_queue_name AND control.paused
        )
      ORDER BY runtime.priority DESC, runtime.sequence, runtime.task_id
-     FOR UPDATE OF runtime SKIP LOCKED
+     FOR NO KEY UPDATE OF runtime SKIP LOCKED
      LIMIT 1;
     IF v_candidate_budget IS NOT NULL THEN RETURN; END IF;
   ELSE
@@ -8862,7 +8872,7 @@ BEGIN
       JOIN workhorse.task_runtime runtime ON runtime.task_id = admissible.task_id
      WHERE runtime.state = 'ready'
      ORDER BY admissible.priority DESC, admissible.sequence, admissible.task_id
-     FOR UPDATE OF runtime SKIP LOCKED
+     FOR NO KEY UPDATE OF runtime SKIP LOCKED
      LIMIT 1;
   END IF;
   IF v_task_id IS NULL THEN RETURN; END IF;
@@ -17319,10 +17329,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (22, 'history staging through pg_temp'),
   (23, 'a canceled dependent releases its edges'),
   (24, 'row retention lag waits for history retention'),
-  (25, 'add a fast task tier')
+  (25, 'add a fast task tier'),
+  (26, 'a dependent enqueue holds its prerequisites against completion')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (25) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (26) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

@@ -179,6 +179,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     kind: "contract",
     retiresProtocolVersions: [1, 2, 3, 4],
   },
+  {
+    fromVersion: 25,
+    toVersion: 26,
+    file: "0026-a-dependent-enqueue-holds-its-prerequisites.sql",
+    description: "a dependent enqueue holds its prerequisites against completion",
+    kind: "additive",
+  },
 ];
 
 /**

@@ -2,7 +2,7 @@
 
 ## Current policy
 
-Schema version 6 is the migration baseline and schema version 25 is current. `sql/schema/current.sql` is the tracked source and
+Schema version 6 is the migration baseline and schema version 26 is current. `sql/schema/current.sql` is the tracked source and
 `sql/schema.sql` is a build artifact for published packages. `sql/releases/` holds the frozen
 clean-install artifact of every supported published release: `0006.sql` is 0.2.0, `0009.sql` is
 0.2.1, `0023.sql` is 0.3.0, and `0024.sql` is 0.4.0.

@@ -16,9 +16,10 @@ artifact, which is the 0.2.0 schema. The chain began at 1 and was pruned to this
 reporting that step in `MigrateSchemaResult.contractStop`. `contractSchema` applies the one
 contract step pending at the installed version through `workhorse schema contract`, which requires
 `--yes` and first names every worker still live on a retiring protocol. The current migration plan
-ends with one contract step: `0025-add-a-fast-task-tier.sql` moves schema 24 to 25 and retires
+has one contract step: `0025-add-a-fast-task-tier.sql` moves schema 24 to 25 and retires
 protocols 1 through 4. `migrateSchema` therefore stops at schema 24 on an older installation, and
-`contractSchema` applies step 25. That step ships without the usual retention window, as
+`contractSchema` applies step 25. The additive step 26 follows, so a second `migrateSchema` run
+completes the plan. That step ships without the usual retention window, as
 [ADR 0077](decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) §6 records.
 
 A clean installation records `(6, 'baseline')` in `workhorse.schema_migration`, then one row per
@@ -67,7 +68,7 @@ function or reinterpret that suffix.
 ## SQL protocol conformance
 
 `protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 5. It accepts installed
-schema version 25 only and client protocol 5 only. `protocol/v1/compatibility.json` distinguishes an absent,
+schema versions 25 through 26 and client protocol 5 only. `protocol/v1/compatibility.json` distinguishes an absent,
 older, current, or newer installed schema from the client's protocol version. Every incompatible
 case requires refusal before a mutating function runs.
 
@@ -191,7 +192,7 @@ bytes, and `requested_by` contains 1 through 200 characters.
 
 Every non-empty Python mutation first executes `SELECT version FROM workhorse.schema_version ORDER
 BY version`. `Queue` and `AsyncQueue` enqueue through a per-queue cached check instead, so a warm
-enqueue issues only `enqueue_many_v1`. `python/src/workhorse/_protocol.py` accepts schema version 25 and client protocol 5.
+enqueue issues only `enqueue_many_v1`. `python/src/workhorse/_protocol.py` accepts schema version 25 or newer and client protocol 5.
 It refuses an unreadable, missing, older, or newer schema before the mutating statement. Enqueue
 batches contain at most 1000 requests. Default priority is 0, default attempt budget is 25, default
 payload and result limits are 1048576 bytes, and default idempotency retention is 86400000
@@ -1460,7 +1461,7 @@ Each prerequisite may reach at most 100 distinct dependents through unresolved e
 includes direct and transitive descendants. PostgreSQL checks every affected ancestor while the
 touched-component advisory locks keep the pending graph stable.
 
-`EnqueueOptions.dependencies` accepts 1 through 100 unique stable identities plus success, failure, and cancellation policies. `EnqueueOptions.prerequisiteTaskId` remains a deprecated success-oriented shorthand. The TypeScript union rejects both fields on one request. `enqueue_batch_v1` keeps runtime validation for direct SQL and untyped JavaScript callers. It sorts and locks every prerequisite identity inside the caller's transaction. A request which declares no prerequisite runs none of that: `enqueue_batch_v1` guards the prerequisite lock, both outcome scans, the `task_dependency` insert, and dependent resolution on a prerequisite count above zero, so no statement reaches `task_dependency` and its statement trigger never fires. A live prerequisite creates a `blocked` runtime plus `dependency_blocked`. Each terminal prerequisite resolves its edge according to policy. After every edge resolves, `fail` precedes `cancel`, which precedes `release`.
+`EnqueueOptions.dependencies` accepts 1 through 100 unique stable identities plus success, failure, and cancellation policies. `EnqueueOptions.prerequisiteTaskId` remains a deprecated success-oriented shorthand. The TypeScript union rejects both fields on one request. `enqueue_batch_v1` keeps runtime validation for direct SQL and untyped JavaScript callers. It locks every prerequisite inside the caller's transaction with `FOR KEY SHARE`, first the `task_runtime` rows in identity order and then the `task` rows. Every terminal transition deletes the runtime row before it inserts the outcome whose trigger resolves dependents. The runtime lock therefore makes a concurrent completion, failure, or cancellation wait until the enqueue commits, so its resolver sees the new edge. A transition that committed first has already deleted the row, and the enqueue's outcome reads see its outcome. Key-share locks do not conflict with the non-key updates that claims and heartbeats make, so an open dependent enqueue does not delay dispatch of its prerequisite. The runtime-then-task order matches `complete_v1` and `purge_queue_internal_v1`, so neither side holds one row while it waits for the other. A request which declares no prerequisite runs none of that: `enqueue_batch_v1` guards the prerequisite lock, both outcome scans, the `task_dependency` insert, and dependent resolution on a prerequisite count above zero, so no statement reaches `task_dependency` and its statement trigger never fires. A live prerequisite creates a `blocked` runtime plus `dependency_blocked`. Each terminal prerequisite resolves its edge according to policy. After every edge resolves, `fail` precedes `cancel`, which precedes `release`.
 
 `resolve_task_outcome_dependencies_v1` runs after every `task_outcome` insert. It first calls `workhorse.release_own_dependencies_v1(task_id)`, which sets `released_at` and a `release` resolution on every still-pending edge that enters the terminal task, and returns the number of edges it released. A task settled while it was still blocked would otherwise leave those edges pending forever, and a pending edge is neither a prune candidate nor a removable `prerequisite_task_id`, so it held its prerequisite identity against retention until the dependent identity was purged. Cancellation and deadline materialization are the paths that reach it; a dependent released into dispatch has no pending edge left, so the statement matches nothing on the ordinary path. The resolution is `release` because no prerequisite outcome selected an action: the dependent was already terminal, so the edge changes nothing about it. The trigger then calls `resolve_dependents_v1`. That function locks at most 100 direct dependents in identity order and records each edge's `released_at` plus `resolution`. The dependent stays blocked until every edge resolves. It then chooses `fail`, `cancel`, or `release` by fixed precedence. Release moves the blocked runtime to ready or scheduled, appends one `dependency_released`, and notifies a queue that gained ready work. `dependency_released.details.reason` is `prerequisite_succeeded` after success. It is `prerequisite_failed_policy` when `on_failure` selects `release`. It is `prerequisite_canceled_policy` when `on_cancellation` selects `release`. The enqueue-time terminal short circuit uses `prerequisite_already_succeeded` after success. It uses `prerequisite_terminal_policy` after a failure or cancellation policy release. Failure or cancellation removes the runtime and inserts a synthetic terminal outcome with `DependencyFailed` or `DependencyCanceled`. The outcome trigger applies the same policy recursively to downstream tasks. One outcome transaction can recurse through at most 100 unresolved descendants. It can invoke at most 101 resolver calls. Those calls can inspect at most 10,100 direct pending-edge slots. Runtime locks serialize concurrent prerequisite outcomes at the one state transition, so evidence, FIFO allocation, and notification happen once.
 
@@ -2395,7 +2396,7 @@ runtime update selects a candidate. Competing worker processes serialize on the 
 one durable token admits one start even when claims overlap. Returning null after exhausting the
 window enters the Worker's normal bounded empty-claim wait instead of a claim loop.
 
-That window reads without locking. `claim_one_v1` takes a row lock, with `FOR UPDATE SKIP LOCKED`,
+That window reads without locking. `claim_one_v1` takes a row lock, with `FOR NO KEY UPDATE SKIP LOCKED`,
 only on the candidate it admits, so a claim that admits nothing leaves every row it read lockable by
 another claim. The admission decision cannot go stale between the read and the lock, because every
 rule that passes over a row holds a lock until the claim transaction ends: `max_active_per_key`
