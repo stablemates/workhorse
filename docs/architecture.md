@@ -2970,6 +2970,19 @@ completion with a refill claim, for `freeSlots() + 1` tasks under the refill-bat
 the slot over directly. The Python, Go, and Rust workers complete with a zero claim limit and claim
 separately.
 
+The TypeScript worker splits its slots into cohorts so that fused completions do not run in
+lockstep ([ADR 0076](decisions/0076-keep-overlapping-batched-claims-in-flight-to-fill-worker-slots.md#cohorts-for-batched-completions)).
+`WorkerOptions.cohorts` is a safe integer from 1 through `concurrency`. Without it,
+`defaultDispatchCohorts(concurrency)` returns 1 below concurrency 8, and otherwise
+`ceil(concurrency / 8)` clamped to 2 through 8. Cohort `i` owns `floor(concurrency / cohorts)`
+slots, plus one when `i < concurrency % cohorts`. `ClaimLeaseFenceModule` batches concurrent
+completions by worker, queue, lease, and `CompletionClaim.cohort`, so a batch never spans cohorts.
+A fused claim asks for at most its cohort's free slots, and the tasks it leases join that cohort.
+While no claim is in flight, a plain claim fills the cohort with the most free slots, and the
+first claim asks for one cohort's share. While any configured queue answers full-tier, the worker
+ignores cohorts and dispatches as one group. The Python, Go, and Rust workers complete one task per
+statement, never share a completion round trip, and have no cohorts.
+
 A fast-tier handler context rejects durable execution locally with `FastTierUnsupportedError` for
 the task's queue:
 
