@@ -87,8 +87,9 @@ on its own completion round trip while the other cohorts' handlers run.
 
 10. **Cohort shares.** The `cohorts` option splits `concurrency` into that many fixed shares. The
     first cohorts take the remainder. Every claimed task belongs to one cohort for its whole run.
-11. **Default.** A worker has two cohorts when it batches completions and its concurrency is at
-    least 8. Otherwise it has one. One cohort is the dispatch described by rules 1 to 9.
+11. **Default.** A worker that batches completions has one cohort per 8 slots, rounded up, with
+    at least 2 and at most 8. Below concurrency 8 it has one. One cohort is the dispatch described
+    by rules 1 to 9.
 12. **Batched completions stay within a cohort.** Concurrent completions share a round trip only
     within one cohort. A completion's fused claim asks for at most its cohort's free slots, and the
     tasks it claims join that cohort.
@@ -106,7 +107,15 @@ More cohorts cost more round trips. Each completion batch is smaller, so stateme
 rises, and each cohort can hold one more pooled connection. At concurrency 16 on the fast tier, two
 cohorts ran about 1.2 times the throughput of one. They raised statement CPU per task from 0.029 ms
 to 0.040 ms, and pooled connections in use from 3 to 4. At concurrency 4, two cohorts did not beat
-the spread between repetitions. Four cohorts measured slower than two, so the default stops at two.
+the spread between repetitions.
+
+The best count grows with the round trip between the worker and PostgreSQL. A cohort idles for one
+round trip per batch, so a longer round trip needs more cohorts to keep slots busy. At concurrency
+64 with 1 ms added to each round trip, eight cohorts ran about 1.23 times the throughput of two.
+With no added round trip, eight cohorts ran about 0.94 times the throughput of two. Sixteen or more
+cohorts ran slower than eight at both delays, because every cohort adds claims that contend in
+PostgreSQL. The default therefore grows one cohort per 8 slots and stops at 8. That contention
+depends on the database's CPU, so a worker can set `cohorts` for its deployment.
 
 ## Consequences
 

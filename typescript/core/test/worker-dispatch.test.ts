@@ -351,12 +351,12 @@ describe("worker dispatch", () => {
     await running;
   });
 
-  it("defaults to two cohorts from concurrency 8 and validates an explicit count", () => {
+  it("defaults to one cohort per 8 slots from concurrency 8 and validates an explicit count", () => {
     const fake = fakeQueue();
-    const cohorts = [1, 4, 7, 8, 16].map(
+    const cohorts = [1, 4, 7, 8, 16, 17, 32, 64, 65, 100].map(
       (concurrency) => new Worker(fake.queue, { concurrency, registryIntervalMs: 0 }).cohorts,
     );
-    expect(cohorts).toEqual([1, 1, 1, 2, 2]);
+    expect(cohorts).toEqual([1, 1, 1, 2, 2, 3, 4, 8, 8, 8]);
     expect(
       new Worker(fake.queue, { concurrency: 4, cohorts: 4, registryIntervalMs: 0 }).cohorts,
     ).toBe(4);

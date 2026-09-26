@@ -4784,7 +4784,8 @@ interface WorkerOptions {
   /**
   * Groups that split the slots for fast-tier queues (ADR 0076). Each group batches its own
   * completions, so its handlers run while another group's completion is in flight. Full-tier
-  * queues ignore it. Defaults to 2 at a concurrency of 8 or more, otherwise 1.
+  * queues ignore it. Defaults to 1 below a concurrency of 8, otherwise one per 8 slots, rounded
+  * up, from 2 to 8.
   */
   cohorts?: number;
   /** Ownership duration granted by claim and every accepted heartbeat. */

@@ -87,7 +87,7 @@ const TIER_PROBE_INTERVAL_MS = 30_000;
 
 /** Slot cohorts a worker without a `cohorts` option uses (ADR 0076, SM-919 addendum). */
 function defaultDispatchCohorts(concurrency: number): number {
-  return concurrency >= 8 ? 2 : 1;
+  return concurrency < 8 ? 1 : Math.min(8, Math.max(2, Math.ceil(concurrency / 8)));
 }
 
 /** Slots the dispatch loop set aside for the tasks one fused completion claims. */
@@ -381,7 +381,8 @@ export interface WorkerOptions {
   /**
    * Groups that split the slots for fast-tier queues (ADR 0076). Each group batches its own
    * completions, so its handlers run while another group's completion is in flight. Full-tier
-   * queues ignore it. Defaults to 2 at a concurrency of 8 or more, otherwise 1.
+   * queues ignore it. Defaults to 1 below a concurrency of 8, otherwise one per 8 slots, rounded
+   * up, from 2 to 8.
    */
   cohorts?: number;
   /** Ownership duration granted by claim and every accepted heartbeat. */
