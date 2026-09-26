@@ -193,6 +193,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "write full-tier enqueue rows set-based",
     kind: "additive",
   },
+  {
+    fromVersion: 27,
+    toVersion: 28,
+    file: "0028-release-dependents-per-statement.sql",
+    description: "release dependents per statement",
+    kind: "additive",
+  },
 ];
 
 /**
