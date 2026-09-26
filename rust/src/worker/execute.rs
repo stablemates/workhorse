@@ -9,11 +9,10 @@ use serde_json::{json, Value};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken as StopToken;
 use tracing::Instrument;
-use uuid::Uuid;
 
 use super::handler::{ErasedHandler, HandlerResult};
 use super::heartbeat::Beat;
-use super::{exactly_one, lock, millis_i32, sql, Inner, OwnershipStatus};
+use super::{exactly_one, lock, millis_i32, sql, ActiveSlot, Inner, OwnershipStatus};
 use crate::telemetry::{self, Attribute, Counter, Histogram};
 use crate::{
     CancelReason, CancellationToken, ClaimedTask, Error, Executor, HandlerContext, HandlerError,
@@ -62,6 +61,7 @@ impl Inner {
         task: ClaimedTask,
         handler: ErasedHandler,
         shutdown: StopToken,
+        slot: Option<&ActiveSlot>,
     ) -> Result<(), Error> {
         let started = Instant::now();
         let span = telemetry::handler_span(&task);
@@ -137,7 +137,7 @@ impl Inner {
         let settled = if context.suspended() {
             Ok("suspended")
         } else {
-            self.settle(&task, result, expired, rejected, token.reason()).await
+            self.settle(&task, result, expired, rejected, token.reason(), slot).await
         };
         let settled = match settled {
             Err(Error::LeaseLost { .. }) => Ok("lease_lost"),
@@ -169,12 +169,13 @@ impl Inner {
     }
 
     async fn settle(
-        &self,
+        self: &Arc<Self>,
         task: &ClaimedTask,
         result: HandlerResult,
         expired: Option<Result<OwnershipStatus, Error>>,
         rejected: Option<OwnershipStatus>,
         reason: Option<CancelReason>,
+        slot: Option<&ActiveSlot>,
     ) -> Result<Outcome, Error> {
         let (status, already_expired) = match expired {
             Some(Err(error)) => return Err(error),
@@ -208,7 +209,7 @@ impl Inner {
             _ => {}
         }
         match result {
-            Ok(value) => self.complete(task, value).await,
+            Ok(value) => self.complete(task, value, slot).await,
             Err(error) => self.fail_with_state(task, error).await,
         }
     }
@@ -289,14 +290,19 @@ impl Inner {
         }
     }
 
-    async fn complete(&self, task: &ClaimedTask, result: Value) -> Result<Outcome, Error> {
+    async fn complete(
+        self: &Arc<Self>,
+        task: &ClaimedTask,
+        result: Value,
+        slot: Option<&ActiveSlot>,
+    ) -> Result<Outcome, Error> {
         if let Some(version) = &task.contract_version {
             if let Err(error) = self.validate_result(task, version, &result).await {
                 return self.fail_with_state(task, error).await;
             }
         }
         let accepted = if task.fast_tier {
-            self.complete_fast(task, &result).await?
+            self.complete_fast(task, result, slot).await?
         } else {
             self.complete_full(task, &result).await?
         };
@@ -328,40 +334,38 @@ impl Inner {
         accepted(&rows, "complete_v1")
     }
 
-    /// Completes a fast-tier attempt through the batched statement, claiming nothing.
+    /// Completes a fast-tier attempt through the batched statement, which may also claim the
+    /// successors this task's slot and its cohort's free slots can run (ADR 0076, rules 3, 12
+    /// and 14).
     ///
     /// A queue that left the fast tier after the claim rejects that statement, so the attempt
-    /// completes through `complete_v1` instead.
-    async fn complete_fast(&self, task: &ClaimedTask, result: &Value) -> Result<bool, Error> {
-        let rows = self
-            .pool
-            .rows(
-                sql::COMPLETE_MANY_AND_CLAIM_V1,
-                &[
-                    &self.worker_id,
-                    &vec![task.id],
-                    &vec![task.fence_token],
-                    &vec![result.clone()],
-                    &task.queue,
-                    &0_i32,
-                    &millis_i32(self.options.lease_duration),
-                ],
-            )
-            .await
-            .map_err(Error::translate_fast_tier);
-        let rows = match rows {
-            Ok(rows) => rows,
-            Err(Error::FastTierUnsupported { .. }) => {
-                return self.complete_full(task, result).await
+    /// completes through `complete_v1` instead and claims nothing.
+    async fn complete_fast(
+        self: &Arc<Self>,
+        task: &ClaimedTask,
+        result: Value,
+        slot: Option<&ActiveSlot>,
+    ) -> Result<bool, Error> {
+        let reservation = slot.and_then(|slot| slot.ticket.reserve());
+        let (limit, cohort) = reservation
+            .as_ref()
+            .map_or((0, 0), |reservation| (reservation.limit(), reservation.cohort()));
+        match self.complete_batched(task, result.clone(), limit, cohort).await {
+            Ok((accepted, claimed)) => {
+                if let (Some(reservation), Some(slot)) = (reservation, slot) {
+                    if reservation.settle(Some(claimed)) {
+                        slot.hand_over();
+                    }
+                }
+                Ok(accepted)
             }
-            Err(error) => return Err(error),
-        };
-        // The first row carries every accepted id; a stale fence leaves this task out of it.
-        let accepted = match rows.first() {
-            Some(row) => row.try_get::<_, Option<Vec<Uuid>>>("accepted")?.unwrap_or_default(),
-            None => Vec::new(),
-        };
-        Ok(accepted.contains(&task.id))
+            Err(Error::FastTierUnsupported { .. }) => {
+                // The fused claim never ran, so it hands nothing over and backs nothing off.
+                drop(reservation);
+                self.complete_full(task, &result).await
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Checks a result against the task's pinned contract, caching each compiled schema.
