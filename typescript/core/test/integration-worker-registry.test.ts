@@ -1349,8 +1349,8 @@ describe("worker registry", () => {
         `SELECT pid
            FROM pg_stat_activity
           WHERE datname = current_database()
-            AND pid <> pg_backend_pid()
-            AND query LIKE '%workhorse.heartbeat_many_v1%'`,
+            AND query LIKE '%workhorse.heartbeat_many_v1%'
+            AND query NOT LIKE '%pg_stat_activity%'`,
       );
       return backends.rows.map((row) => row.pid);
     };
