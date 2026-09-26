@@ -492,6 +492,7 @@ describe("schema installation", () => {
         description: "a dependent enqueue holds its prerequisites against completion",
       },
       { version: 27, description: "write full-tier enqueue rows set-based" },
+      { version: 28, description: "release dependents per statement" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

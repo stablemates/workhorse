@@ -35,6 +35,9 @@ const within = <T>(work: Promise<T>) =>
     }),
   ]);
 
+const byTaskId = (left: { task_id: string }, right: { task_id: string }) =>
+  left.task_id < right.task_id ? -1 : 1;
+
 describe("task dependencies", () => {
   it("maps dependency cycle diagnostics through the public enqueue API", async () => {
     const details = {
@@ -677,7 +680,8 @@ describe("task dependencies", () => {
 
       await follower.query("BEGIN");
       await follower.query("SET LOCAL lock_timeout = '100ms'");
-      await expect(insertDependency(follower, lowerId, fourthId)).rejects.toMatchObject({
+      // A new sink below the merged component walks its upstream cone, which the waiter holds.
+      await expect(insertDependency(follower, fourthId, lowerId)).rejects.toMatchObject({
         code: "55P03",
       });
     } finally {
@@ -753,6 +757,176 @@ describe("task dependencies", () => {
         [dependentId],
       ),
     ).resolves.toMatchObject({ rows: [{ count: 1 }] });
+  });
+
+  it("settles one dependency level per statement and records each cause before its effects", async () => {
+    const rootId = await queue.enqueue("level-root", null);
+    const policies = { onSuccess: "release", onFailure: "fail", onCancellation: "cancel" } as const;
+    const middleIds = await queue.enqueueMany(
+      Array.from({ length: 3 }, (_unused, index) => ({
+        type: "level-middle",
+        payload: { index },
+        options: { dependencies: { prerequisiteTaskIds: [rootId], ...policies } },
+      })),
+    );
+    const leafIds = await queue.enqueueMany(
+      middleIds.map((middleId, index) => ({
+        type: "level-leaf",
+        payload: { index },
+        options: { dependencies: { prerequisiteTaskIds: [middleId], ...policies } },
+      })),
+    );
+
+    await expect(queue.cancel(rootId)).resolves.toMatchObject({ status: "canceled" });
+
+    const events = await pool.query<{ task_id: string; prerequisite_task_id: string }>(
+      `SELECT task_id, details->>'prerequisite_task_id' AS prerequisite_task_id
+         FROM workhorse.task_event
+        WHERE task_id = ANY($1::uuid[]) AND event_type = 'dependency_canceled'
+        ORDER BY event_id`,
+      [[...middleIds, ...leafIds]],
+    );
+    // Each level settles in dependent id order, and every middle event precedes every leaf event.
+    const middleEvents = middleIds.map((taskId) => ({
+      task_id: taskId,
+      prerequisite_task_id: rootId,
+    }));
+    const leafEvents = leafIds.map((taskId, index) => ({
+      task_id: taskId,
+      prerequisite_task_id: middleIds[index],
+    }));
+    // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+    expect(events.rows).toEqual([...middleEvents.sort(byTaskId), ...leafEvents.sort(byTaskId)]);
+  });
+
+  it("resolves overlapping fan-in without deadlock while dependents are canceled and extended", async () => {
+    // Every round races two completions, a failure or a cancellation, two dependent cancellations,
+    // and two dependent enqueues over one shared fan-in, within the ten pooled connections.
+    const rounds = 12;
+    const dependentIds: string[] = [];
+    for (let round = 0; round < rounds; round += 1) {
+      const claimedIds = await queue.enqueueMany(
+        Array.from({ length: 3 }, (_unused, index) => ({
+          type: "overlap-prerequisite",
+          payload: { round, index },
+          options: { queue: "overlap-prerequisites", maxAttempts: 1 },
+        })),
+      );
+      const claimed = await queue.claimMany("overlap-worker", 3, {
+        queue: "overlap-prerequisites",
+      });
+      expect(new Set(claimed.map(({ id }) => id))).toEqual(new Set(claimedIds));
+      const canceledId = await queue.enqueue("overlap-canceled-prerequisite", null, {
+        queue: "overlap-canceled-prerequisites",
+      });
+      const prerequisiteTaskIds = [...claimedIds, canceledId];
+      const dependents = await queue.enqueueMany(
+        Array.from({ length: 8 }, (_unused, index) => ({
+          type: "overlap-dependent",
+          payload: { round, index },
+          options: {
+            queue: "overlap-dependents",
+            dependencies: {
+              // Each dependent waits on a different subset, so the resolvers' sets overlap.
+              prerequisiteTaskIds: prerequisiteTaskIds.filter(
+                (_prerequisiteId, position) => position !== index % 4,
+              ),
+              onSuccess: "release",
+              onFailure: round % 2 === 0 ? "release" : "fail",
+              onCancellation: "release",
+            },
+          },
+        })),
+      );
+      dependentIds.push(...dependents);
+      const [first, second, third] = claimed;
+      const settled = await Promise.allSettled([
+        queue.complete(first!, "overlap-worker", null),
+        queue.complete(second!, "overlap-worker", null),
+        queue.fail(third!, "overlap-worker", new Error("overlap")),
+        queue.cancel(canceledId),
+        queue.cancel(dependents[0]!),
+        queue.cancel(dependents[5]!),
+        queue.enqueue("overlap-grandchild", null, {
+          queue: "overlap-grandchildren",
+          prerequisiteTaskId: dependents[2]!,
+        }),
+        queue.enqueue("overlap-grandchild", null, {
+          queue: "overlap-grandchildren",
+          prerequisiteTaskId: dependents[7]!,
+        }),
+      ]);
+      expect(settled.filter(({ status }) => status === "rejected")).toEqual([]);
+    }
+
+    const unsettled = await pool.query<{ task_id: string }>(
+      `SELECT runtime.task_id FROM workhorse.task_runtime runtime
+        WHERE runtime.task_id = ANY($1::uuid[]) AND runtime.state = 'blocked'`,
+      [dependentIds],
+    );
+    expect(unsettled.rows).toEqual([]);
+    await expect(
+      pool.query<{ count: number }>(
+        `SELECT count(*)::integer AS count FROM workhorse.task_event
+          WHERE task_id = ANY($1::uuid[])
+            AND event_type IN ('dependency_released', 'dependency_failed')
+          GROUP BY task_id HAVING count(*) > 1`,
+        [dependentIds],
+      ),
+    ).resolves.toMatchObject({ rows: [] });
+  });
+
+  it("bounds the unresolved cascade when an edge extends an existing dependent", async () => {
+    const rootId = await queue.enqueue("extended-root", null);
+    let bottomId = rootId;
+    for (let index = 1; index < MAX_TASK_DEPENDENTS; index += 1) {
+      bottomId = await queue.enqueue("extended-chain", { index }, { prerequisiteTaskId: bottomId });
+    }
+    const headId = await queue.enqueue("extended-head", null);
+    await queue.enqueue("extended-tail", null, { prerequisiteTaskId: headId });
+
+    // The head already has a dependent, so this edge takes the full component check.
+    const client = await pool.connect();
+    try {
+      const error = (await insertDependency(client, headId, bottomId).catch(
+        (caught: unknown) => caught,
+      )) as { code?: string; detail?: string };
+      expect(error.code).toBe("P1005");
+      expect(JSON.parse(error.detail ?? "null")).toEqual({
+        max: 100,
+        limit: "unresolved_dependents",
+        taskId: rootId,
+      });
+    } finally {
+      client.release();
+    }
+  });
+
+  it("accepts a sink whose prerequisites together exceed the cascade bound", async () => {
+    const chains = await Promise.all(
+      [0, 1].map(async (chain) => {
+        const rootId = await queue.enqueue("union-root", { chain });
+        let bottomId = rootId;
+        for (let index = 1; index < 60; index += 1) {
+          bottomId = await queue.enqueue(
+            "union-chain",
+            { chain, index },
+            { prerequisiteTaskId: bottomId },
+          );
+        }
+        return bottomId;
+      }),
+    );
+
+    const sinkId = await queue.enqueue("union-sink", null, {
+      dependencies: {
+        prerequisiteTaskIds: chains,
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+    await expect(admin.getTask(sinkId)).resolves.toMatchObject({ state: "blocked" });
   });
 
   it("settles a dependent deterministically when cancellation races completion", async () => {
@@ -1028,10 +1202,25 @@ describe("task dependencies", () => {
 
     const transaction = await pool.connect();
     await transaction.query("BEGIN");
-    await transaction.query("SELECT id FROM workhorse.task WHERE id = $1 FOR UPDATE", [
-      prerequisiteId,
-    ]);
+    // Take the enqueue's first prerequisite lock before the completion starts, then wait until the
+    // completion queues behind it. A lock the enqueue does not take would order the two
+    // transactions differently from production and can deadlock with the completion.
+    const locked = await transaction.query<{ pid: number }>(
+      `SELECT pg_backend_pid() AS pid FROM workhorse.task_runtime
+        WHERE task_id = $1 FOR KEY SHARE`,
+      [prerequisiteId],
+    );
+    expect(locked.rows).toHaveLength(1);
+    const pid = locked.rows[0]!.pid;
     const completion = queue.complete(claimed!, "racing-dependency-worker", null);
+    for (;;) {
+      const waiting = await pool.query(
+        "SELECT 1 FROM pg_stat_activity WHERE $1::integer = ANY(pg_blocking_pids(pid))",
+        [pid],
+      );
+      if (waiting.rowCount) break;
+      await sleep(5);
+    }
     const dependentId = await queue.enqueue(
       "racing-dependent",
       null,

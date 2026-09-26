@@ -1614,6 +1614,7 @@
       "release_dependents_v1",
       "release_own_dependencies_v1",
       "resolve_cron_wall_clock_v1",
+      "resolve_dependents_many_v1",
       "resolve_dependents_v1",
       "resolve_task_outcome_dependencies_v1",
       "retire_history_day_v1",
