@@ -274,60 +274,65 @@ describe("fast task tier", () => {
     ).resolves.toMatchObject({ eligible: { terminalTasks: 1 } });
   });
 
-  it("loses no task and records one outcome each after a worker crash", async () => {
-    await makeFast("fast-crash");
-    const total = 60;
-    const concurrency = 4;
-    const ids = await queue.enqueueMany(
-      Array.from({ length: total }, (_, sequence) => ({
-        type: "effect",
-        payload: { sequence },
-        options: { queue: "fast-crash", maxAttempts: 3 },
-      })),
-    );
-    const effects = new Map<string, number>();
-    const handler = (_payload: unknown, context: { task: { id: string } }) => {
-      effects.set(context.task.id, (effects.get(context.task.id) ?? 0) + 1);
-      return { ok: true };
-    };
+  // Concurrency 4 has one cohort; 16 has two and 64 has eight, so a crash drops every cohort's
+  // unwritten outcomes at once.
+  it.each([4, 16, 64])(
+    "loses no task and records one outcome each after a worker crash at concurrency %i",
+    async (concurrency) => {
+      const queueName = `fast-crash-${concurrency}`;
+      await makeFast(queueName);
+      const total = concurrency * 15;
+      const ids = await queue.enqueueMany(
+        Array.from({ length: total }, (_, sequence) => ({
+          type: "effect",
+          payload: { sequence },
+          options: { queue: queueName, maxAttempts: 3 },
+        })),
+      );
+      const effects = new Map<string, number>();
+      const handler = (_payload: unknown, context: { task: { id: string } }) => {
+        effects.set(context.task.id, (effects.get(context.task.id) ?? 0) + 1);
+        return { ok: true };
+      };
 
-    // After twenty completions, every execution that reaches its completion write crashes, which
-    // models the process vanishing with its handlers done and their outcomes unwritten.
-    let completions = 0;
-    const crashing = new Worker(queue, {
-      workerId: "crashing",
-      queue: "fast-crash",
-      concurrency,
-      leaseMs: 500,
-      heartbeatMs: 100,
-      pollMs: 5,
-      failpoint: (point) => {
-        if (point !== "beforeComplete") return false;
-        completions += 1;
-        return completions > 20;
-      },
-    }).handle("effect", handler);
-    await expect(crashing.run()).rejects.toBeInstanceOf(InjectedCrashError);
+      // After a third of the tasks complete, every execution that reaches its completion write crashes, which
+      // models the process vanishing with its handlers done and their outcomes unwritten.
+      let completions = 0;
+      const crashing = new Worker(queue, {
+        workerId: `crashing-${concurrency}`,
+        queue: queueName,
+        concurrency,
+        leaseMs: 500,
+        heartbeatMs: 100,
+        pollMs: 5,
+        failpoint: (point) => {
+          if (point !== "beforeComplete") return false;
+          completions += 1;
+          return completions > total / 3;
+        },
+      }).handle("effect", handler);
+      await expect(crashing.run()).rejects.toBeInstanceOf(InjectedCrashError);
 
-    await sleep(600);
-    await queue.recoverExpired();
-    const survivor = new Worker(queue, {
-      workerId: "survivor",
-      queue: "fast-crash",
-      concurrency,
-      pollMs: 5,
-    }).handle("effect", handler);
-    await runUntil(survivor, async () => (await outcomeCounts(ids)).length === total);
+      await sleep(600);
+      await queue.recoverExpired();
+      const survivor = new Worker(queue, {
+        workerId: `survivor-${concurrency}`,
+        queue: queueName,
+        concurrency,
+        pollMs: 5,
+      }).handle("effect", handler);
+      await runUntil(survivor, async () => (await outcomeCounts(ids)).length === total);
 
-    const outcomes = await outcomeCounts(ids);
-    expect(new Set(outcomes.map((row) => row.task_id)).size).toBe(total);
-    expect(outcomes.every((row) => row.state === "succeeded")).toBe(true);
-    expect(ids.every((id) => (effects.get(id) ?? 0) >= 1)).toBe(true);
-    const rerun = ids.filter((id) => (effects.get(id) ?? 0) > 1);
-    expect(rerun.length).toBeGreaterThan(0);
-    expect(rerun.length).toBeLessThanOrEqual(concurrency);
-    expect(Math.max(...effects.values())).toBe(2);
-  });
+      const outcomes = await outcomeCounts(ids);
+      expect(new Set(outcomes.map((row) => row.task_id)).size).toBe(total);
+      expect(outcomes.every((row) => row.state === "succeeded")).toBe(true);
+      expect(ids.every((id) => (effects.get(id) ?? 0) >= 1)).toBe(true);
+      const rerun = ids.filter((id) => (effects.get(id) ?? 0) > 1);
+      expect(rerun.length).toBeGreaterThan(0);
+      expect(rerun.length).toBeLessThanOrEqual(concurrency);
+      expect(Math.max(...effects.values())).toBe(2);
+    },
+  );
 });
 
 type CheckpointContext = Parameters<Parameters<Worker["handle"]>[1]>[1];
