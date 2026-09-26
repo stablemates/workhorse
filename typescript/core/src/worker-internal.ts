@@ -53,3 +53,9 @@ export interface WorkerHeartbeatReservation {
 export const workerHeartbeatReservationProblem = Symbol(
   "workhorse.worker.heartbeat-reservation-problem",
 );
+
+/**
+ * Returns the size of the pool that runs the queue's statements, or undefined when it is unknown.
+ * The worker caps its default cohorts to the connections that pool has left for them.
+ */
+export const workerStatementPoolCapacity = Symbol("workhorse.worker.statement-pool-capacity");

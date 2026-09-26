@@ -816,6 +816,11 @@ export interface CompletionClaim {
   /** Tasks to claim, from 0 to 100. Zero completes without claiming. */
   limit: number;
   leaseMs?: number;
+  /**
+   * The worker's slot cohort (ADR 0076). Concurrent completions share one round trip only within
+   * one cohort, so each cohort's handlers keep running while another cohort's completion waits.
+   */
+  cohort?: number | undefined;
 }
 
 /** The outcome of a fast-tier completion and the tasks its claim leased. */

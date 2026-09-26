@@ -473,9 +473,9 @@ export class ClaimLeaseFenceModule extends QueueModule {
     });
   }
 
-  // Completions of one worker that target the same queue and lease share one round trip. They
-  // collect until the current turn of the event loop ends, so a batch never delays a completion by
-  // more than the work already queued behind it.
+  // Completions of one worker that target the same queue, lease and cohort share one round trip.
+  // They collect until the current turn of the event loop ends, so a batch never delays a
+  // completion by more than the work already queued behind it.
   private readonly pendingCompletions = new Map<string, PendingCompletionBatch>();
 
   /**
@@ -490,7 +490,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
   ): Promise<CompletionClaimResult> {
     const leaseMs = claim.leaseMs ?? 30_000;
     const limit = Math.max(0, Math.min(COMPLETION_BATCH_LIMIT, Math.floor(claim.limit)));
-    const key = JSON.stringify([workerId, claim.queue, leaseMs]);
+    const key = JSON.stringify([workerId, claim.queue, leaseMs, claim.cohort ?? null]);
     let batch = this.pendingCompletions.get(key);
     if (!batch) {
       batch = { workerId, queue: claim.queue, leaseMs, entries: [] };

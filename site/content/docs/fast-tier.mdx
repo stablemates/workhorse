@@ -83,6 +83,12 @@ correctness.
 On a fast-tier queue, the TypeScript worker combines each completion with the next claim in one
 statement. The other SDK workers complete and claim in separate statements.
 
+Handlers that finish together would then wait together for that statement. The TypeScript worker
+therefore splits a busy worker's slots into cohorts, and each cohort combines only its own
+completions. One cohort's handlers run while another cohort waits on PostgreSQL. The worker picks
+more cohorts for more slots and fewer for a small pool, since each cohort wants its own pooled
+connection. The `cohorts` worker option overrides the count.
+
 ## Turn on history where you need it
 
 The dashboard still shows every fast-tier task. It derives the timeline and attempt list from the

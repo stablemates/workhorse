@@ -38,3 +38,13 @@ export function connectionPoolOf(database: Queryable): ConnectionPool | undefine
   if (source !== undefined) return asPool(typeof source === "function" ? source() : source);
   return asPool(database);
 }
+
+/**
+ * The size of the pool that runs a database's statements, or undefined when it is unknown. An
+ * attached pool lends only dedicated connections, so a database that carries one reports nothing.
+ */
+export function statementPoolCapacity(database: Queryable): number | undefined {
+  if ((database as PoolCarrier)[attachedPool] !== undefined) return undefined;
+  const capacity = asPool(database)?.options?.max;
+  return Number.isSafeInteger(capacity) && capacity! > 0 ? capacity : undefined;
+}

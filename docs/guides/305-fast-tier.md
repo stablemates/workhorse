@@ -72,6 +72,13 @@ On a fast-tier queue, the TypeScript worker also combines a completion with the 
 statement closes the finished tasks and hands their slots new work, which saves a round trip per
 task.
 
+Combining has a cost. Handlers that finish together wait together for that one statement, and
+their slots idle during the round trip. The TypeScript worker therefore splits a busy worker's
+slots into cohorts. Each cohort combines only its own completions, so one cohort's handlers run
+while another cohort waits on PostgreSQL. A worker with more slots gets more cohorts, up to a cap.
+Each cohort wants its own pooled connection, so on a small pool the worker picks fewer. The
+`cohorts` option overrides that count when the database is far away or short of CPU.
+
 ## History is opt-in
 
 Without history, the dashboard still shows every fast-tier task. It derives the timeline and the

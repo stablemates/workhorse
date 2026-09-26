@@ -138,11 +138,13 @@ import {
   workerCompletionPrepare,
   workerHeartbeatReservation,
   workerHeartbeatReservationProblem,
+  workerStatementPoolCapacity,
   workerProgressRead,
   workerWaitsRead,
   type WorkerHeartbeatChannel,
 } from "./worker-internal.js";
 import { heartbeatReservationProblem, holdHeartbeatConnection } from "./heartbeat-connection.js";
+import { statementPoolCapacity } from "./connection-pool.js";
 import { FastTierUnsupportedError } from "./errors.js";
 
 export type { MaintenancePhase, MaintenancePhaseResult } from "./queue/retention-maintenance.js";
@@ -815,6 +817,10 @@ export class Queue {
 
   [workerHeartbeatReservationProblem](): string | undefined {
     return heartbeatReservationProblem(this.database);
+  }
+
+  [workerStatementPoolCapacity](): number | undefined {
+    return statementPoolCapacity(this.database);
   }
 
   [workerHeartbeatReservation](): WorkerHeartbeatChannel | undefined {

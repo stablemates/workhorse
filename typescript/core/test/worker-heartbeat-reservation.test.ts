@@ -113,6 +113,32 @@ describe("worker heartbeat reservation", () => {
   });
 });
 
+describe("worker default cohorts on a sized pool", () => {
+  it("leaves one pooled connection per cohort after the listener and the heartbeat", () => {
+    const cohorts = [3, 4, 6, 10, 32].map(
+      (max) => new Worker(new Queue(fakePool(max)), { concurrency: 64 }).cohorts,
+    );
+
+    expect(cohorts).toEqual([1, 2, 4, 8, 8]);
+  });
+
+  it("counts the heartbeat connection only when the worker reserves it", () => {
+    const worker = new Worker(new Queue(fakePool(3)), { concurrency: 64, sharedHeartbeats: true });
+
+    expect(worker.cohorts).toBe(2);
+  });
+
+  it("keeps an explicit cohort count on a small pool", () => {
+    expect(new Worker(new Queue(fakePool(3)), { concurrency: 64, cohorts: 8 }).cohorts).toBe(8);
+  });
+
+  it("leaves the default uncapped when the pool size is unknown", () => {
+    const unsized = new Queue(fakePool(undefined));
+    expect(new Worker(unsized, { concurrency: 64, sharedHeartbeats: true }).cohorts).toBe(8);
+    expect(providerAdapter(() => fakePool(3)).createWorker({ concurrency: 64 }).cohorts).toBe(8);
+  });
+});
+
 describe("worker listener warning", () => {
   let unregister: (() => void) | undefined;
   afterEach(() => unregister?.());

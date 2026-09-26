@@ -1,6 +1,6 @@
 import { setImmediate as nextTurn, setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
-import type { ClaimedTask } from "../src/types.js";
+import type { ClaimedTask, CompletionClaim, Json } from "../src/types.js";
 import { Worker, dispatchRefillBatch, type WorkerQueueApi } from "../src/worker.js";
 
 // SM-909: a busy run() loop keeps its slots full with overlapping batched claims instead of one
@@ -99,6 +99,44 @@ function fakeQueue(options: FakeQueueOptions = {}) {
   return { queue, limits, held, completed, released, claimsReceived };
 }
 
+interface FastQueueOptions {
+  // Tasks a fused completion claims for its limit. Without it a completion claims nothing.
+  refill?: (limit: number) => ClaimedTask[];
+  // Answers a plain claim immediately. Without it every plain claim is held.
+  answer?: (limit: number) => ClaimedTask[];
+}
+
+// A fast-tier queue: plain claims go through claimFast, and each completion carries its claim.
+function fastQueue(options: FastQueueOptions = {}) {
+  const base = fakeQueue();
+  const completions: CompletionClaim[] = [];
+  const queue = {
+    ...base.queue,
+    claimMany: unsupportedWorkerQueueOperation,
+    claimFast: async (_workerId: string, limit: number) => {
+      if (options.answer) {
+        base.limits.push(limit);
+        return options.answer(limit);
+      }
+      return (base.queue.claimMany as (workerId: string, limit: number) => Promise<ClaimedTask[]>)(
+        _workerId,
+        limit,
+      );
+    },
+    completeAndClaim: async (
+      task: ClaimedTask,
+      _workerId: string,
+      _result: Json,
+      claim: CompletionClaim,
+    ) => {
+      completions.push(claim);
+      base.completed.push(task.id);
+      return { accepted: true, claimed: options.refill?.(claim.limit) ?? [] };
+    },
+  } as unknown as WorkerQueueApi;
+  return { ...base, queue, completions };
+}
+
 // Lets every settled promise run its continuations, so the worker reaches its next decision.
 async function settle(): Promise<void> {
   for (let turn = 0; turn < 20; turn += 1) await nextTurn();
@@ -142,6 +180,8 @@ describe("worker dispatch", () => {
       "dispatch",
       handler,
     );
+    // Concurrency 8 defaults to two cohorts, but a full-tier queue keeps whole-worker claims.
+    expect(worker.cohorts).toBe(2);
     const running = worker.run();
 
     await fake.claimsReceived(1);
@@ -199,6 +239,7 @@ describe("worker dispatch", () => {
       running -= 1;
       return null;
     });
+    expect(worker.cohorts).toBe(2);
     const done = worker.run();
     while (fake.completed.length < 200) await sleep(5);
     worker.stop();
@@ -248,6 +289,7 @@ describe("worker dispatch", () => {
       "dispatch",
       handler,
     );
+    expect(worker.cohorts).toBe(1);
     let stopped = false;
     const running = worker.run().then(() => {
       stopped = true;
@@ -307,5 +349,121 @@ describe("worker dispatch", () => {
 
     worker.stop();
     await running;
+  });
+
+  it("defaults to one cohort per 8 slots from concurrency 8 and validates an explicit count", () => {
+    const fake = fakeQueue();
+    const cohorts = [1, 4, 7, 8, 16, 17, 32, 64, 65, 100].map(
+      (concurrency) => new Worker(fake.queue, { concurrency, registryIntervalMs: 0 }).cohorts,
+    );
+    expect(cohorts).toEqual([1, 1, 1, 2, 2, 3, 4, 8, 8, 8]);
+    expect(
+      new Worker(fake.queue, { concurrency: 4, cohorts: 4, registryIntervalMs: 0 }).cohorts,
+    ).toBe(4);
+    for (const count of [0, 1.5, 9]) {
+      expect(
+        () => new Worker(fake.queue, { concurrency: 8, cohorts: count, registryIntervalMs: 0 }),
+      ).toThrow("cohorts must be a safe integer between 1 and concurrency");
+    }
+  });
+
+  it("claims one cohort at a time on a fast-tier queue and refills each cohort on its own", async () => {
+    const fake = fastQueue({ refill: (limit) => tasks(`refill-${limit}`, 0) });
+    const { handler, finish, finishAll } = gatedHandlers();
+    const worker = new Worker(fake.queue, { concurrency: 8, registryIntervalMs: 0 }).handle(
+      "dispatch",
+      handler,
+    );
+    const running = worker.run();
+
+    // The first claim still has to learn the tier, so it asks a fast-tier queue for one cohort.
+    await fake.claimsReceived(1);
+    expect(fake.limits).toEqual([4]);
+    await settle();
+    expect(fake.limits).toEqual([4]);
+
+    // The second cohort's claim leaves only once the first returns, which offsets the cohorts.
+    fake.held[0]!.answer.resolve(tasks("first", 4));
+    await fake.claimsReceived(2);
+    expect(fake.limits).toEqual([4, 4]);
+
+    // A claim for the other cohort does not hold back a completion's claim for its own slot.
+    finish("first-0");
+    await settle();
+    expect(fake.completions).toEqual([{ queue: "dispatch", limit: 1, leaseMs: 30_000, cohort: 0 }]);
+
+    fake.held[1]!.answer.resolve(tasks("second", 4));
+    await settle();
+    finish("second-0");
+    await settle();
+    expect(fake.completions.at(-1)).toEqual({
+      queue: "dispatch",
+      limit: 1,
+      leaseMs: 30_000,
+      cohort: 1,
+    });
+
+    worker.stop();
+    for (const claim of fake.held.slice(2)) claim.answer.resolve([]);
+    finishAll();
+    await running;
+  });
+
+  it("keeps whole-worker claims on a fast-tier queue with one cohort", async () => {
+    const fake = fastQueue();
+    const { handler, finish, finishAll } = gatedHandlers();
+    const worker = new Worker(fake.queue, {
+      concurrency: 8,
+      cohorts: 1,
+      registryIntervalMs: 0,
+    }).handle("dispatch", handler);
+    const running = worker.run();
+
+    await fake.claimsReceived(1);
+    expect(fake.limits).toEqual([8]);
+    fake.held[0]!.answer.resolve(tasks("first", 8));
+    await settle();
+
+    finish("first-0");
+    await settle();
+    expect(fake.completions).toEqual([{ queue: "dispatch", limit: 1, leaseMs: 30_000, cohort: 0 }]);
+
+    worker.stop();
+    finishAll();
+    await running;
+  });
+
+  it("keeps every cohort within its share of the slots under load", async () => {
+    const total = 400;
+    let supplied = 0;
+    let running = 0;
+    let peak = 0;
+    const supply = (limit: number): ClaimedTask[] => {
+      const batch = tasks(`batch-${supplied}`, Math.min(limit, total - supplied));
+      supplied += batch.length;
+      return batch;
+    };
+    const fake = fastQueue({ answer: supply, refill: supply });
+    const worker = new Worker(fake.queue, {
+      concurrency: 16,
+      registryIntervalMs: 0,
+      pollMs: 10,
+    }).handle("dispatch", async () => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await sleep(Math.random() * 3);
+      running -= 1;
+      return null;
+    });
+    const done = worker.run();
+    while (fake.completed.length < total) await sleep(5);
+    worker.stop();
+    await done;
+
+    expect(peak).toBeLessThanOrEqual(16);
+    expect(new Set(fake.completed).size).toBe(total);
+    // Each completion refills at most its own cohort's eight slots, and both cohorts take part.
+    expect(Math.max(...fake.completions.map((claim) => claim.limit))).toBeLessThanOrEqual(8);
+    expect(new Set(fake.completions.map((claim) => claim.cohort))).toEqual(new Set([0, 1]));
   });
 });
