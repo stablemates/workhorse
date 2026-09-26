@@ -173,6 +173,9 @@ type humanWaitCall struct {
 
 // WaitForSignal suspends the task until a named signal is delivered, then returns its JSON payload.
 func (handler *HandlerContext) WaitForSignal(name string, options ...ExternalWaitOptions) (any, error) {
+	if err := handler.rejectOnFastTier(fastTierSignalWaitsFeature); err != nil {
+		return nil, err
+	}
 	timeoutMS, err := validateExternalWait(name, signalLabelValue, options)
 	if err != nil {
 		return nil, err
@@ -245,6 +248,9 @@ func (handler *HandlerContext) WaitForHuman(
 	waitContext any,
 	options ...ExternalWaitOptions,
 ) (any, error) {
+	if err := handler.rejectOnFastTier(fastTierHumanWaitsFeature); err != nil {
+		return nil, err
+	}
 	timeoutMS, err := validateExternalWait(name, humanWaitLabelValue, options)
 	if err != nil {
 		return nil, err

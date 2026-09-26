@@ -25,6 +25,7 @@ import { Queue } from "../src/queue.js";
 import type { ClaimedTask, Queryable } from "../src/types.js";
 import { Worker } from "../src/worker.js";
 import { registerQueueMetrics, type QueueMetricSource } from "../src/telemetry.js";
+import { fullTierProbeRejection } from "./support/full-tier.js";
 
 registerOpenTelemetry();
 
@@ -187,6 +188,7 @@ describe("OpenTelemetry", () => {
         if (sql.includes("tick_v1") || sql.includes("run_maintenance_v1")) {
           return { rows: [] };
         }
+        if (sql.includes("complete_many_and_claim_v1")) throw fullTierProbeRejection();
         if (sql.includes("claim_many_v1")) {
           if (claimed) return { rows: [] };
           claimed = true;
@@ -323,6 +325,7 @@ describe("OpenTelemetry", () => {
         if (sql.includes("tick_v1") || sql.includes("run_maintenance_v1")) {
           return { rows: [] };
         }
+        if (sql.includes("complete_many_and_claim_v1")) throw fullTierProbeRejection();
         if (sql.includes("claim_many_v1")) {
           if (claimed) return { rows: [] };
           claimed = true;

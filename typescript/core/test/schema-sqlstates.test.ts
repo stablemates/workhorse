@@ -15,13 +15,21 @@ const registry = {
     "a task accepts at most 100 unresolved transitive dependent tasks",
   ],
   P1006: ["queue purge request conflict with a retained request"],
+  P1007: [
+    "fast-tier queue %s does not support %s",
+    "fast-tier task %s cannot be a prerequisite",
+    "queue %s has live tasks, so its tier cannot change",
+    "queue %s is not a fast-tier queue",
+  ],
 } as const;
 
 describe("Workhorse SQLSTATE registry", () => {
   it("assigns each declared SQLSTATE to exactly one registered failure meaning", async () => {
     const schema = await readFile(path.join(repository, "sql", "schema", "current.sql"), "utf8");
     const declarations = [
-      ...schema.matchAll(/ERRCODE\s*=\s*'(P\d{4})'\s*,\s*MESSAGE\s*=\s*(?:'([^']+)'|([a-z_]+))/g),
+      ...schema.matchAll(
+        /ERRCODE\s*=\s*'(P\d{4})'\s*,\s*MESSAGE\s*=\s*(?:(?:format\()?'([^']+)'|([a-z_]+))/g,
+      ),
     ];
     const rawDeclarations = [...schema.matchAll(/ERRCODE\s*=\s*'P\d{4}'/g)];
     expect(declarations).toHaveLength(rawDeclarations.length);

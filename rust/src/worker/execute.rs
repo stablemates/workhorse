@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken as StopToken;
 use tracing::Instrument;
+use uuid::Uuid;
 
 use super::handler::{ErasedHandler, HandlerResult};
 use super::heartbeat::Beat;
@@ -294,11 +295,12 @@ impl Inner {
                 return self.fail_with_state(task, error).await;
             }
         }
-        let rows = self
-            .pool
-            .rows(sql::COMPLETE_V1, &[&task.id, &self.worker_id, &task.fence_token, &result])
-            .await?;
-        if !accepted(&rows, "complete_v1")? {
+        let accepted = if task.fast_tier {
+            self.complete_fast(task, &result).await?
+        } else {
+            self.complete_full(task, &result).await?
+        };
+        if !accepted {
             return self.reconcile(task, Operation::Complete).await;
         }
         self.metrics.add(
@@ -316,6 +318,50 @@ impl Inner {
             "Task completed"
         );
         Ok("succeeded")
+    }
+
+    async fn complete_full(&self, task: &ClaimedTask, result: &Value) -> Result<bool, Error> {
+        let rows = self
+            .pool
+            .rows(sql::COMPLETE_V1, &[&task.id, &self.worker_id, &task.fence_token, result])
+            .await?;
+        accepted(&rows, "complete_v1")
+    }
+
+    /// Completes a fast-tier attempt through the batched statement, claiming nothing.
+    ///
+    /// A queue that left the fast tier after the claim rejects that statement, so the attempt
+    /// completes through `complete_v1` instead.
+    async fn complete_fast(&self, task: &ClaimedTask, result: &Value) -> Result<bool, Error> {
+        let rows = self
+            .pool
+            .rows(
+                sql::COMPLETE_MANY_AND_CLAIM_V1,
+                &[
+                    &self.worker_id,
+                    &vec![task.id],
+                    &vec![task.fence_token],
+                    &vec![result.clone()],
+                    &task.queue,
+                    &0_i32,
+                    &millis_i32(self.options.lease_duration),
+                ],
+            )
+            .await
+            .map_err(Error::translate_fast_tier);
+        let rows = match rows {
+            Ok(rows) => rows,
+            Err(Error::FastTierUnsupported { .. }) => {
+                return self.complete_full(task, result).await
+            }
+            Err(error) => return Err(error),
+        };
+        // The first row carries every accepted id; a stale fence leaves this task out of it.
+        let accepted = match rows.first() {
+            Some(row) => row.try_get::<_, Option<Vec<Uuid>>>("accepted")?.unwrap_or_default(),
+            None => Vec::new(),
+        };
+        Ok(accepted.contains(&task.id))
     }
 
     /// Checks a result against the task's pinned contract, caching each compiled schema.

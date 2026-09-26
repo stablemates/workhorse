@@ -253,6 +253,23 @@ type WorkerPauseResult struct {
 	Reason      string
 }
 
+// QueueTier names the storage and feature set a queue's tasks use.
+type QueueTier string
+
+const (
+	// QueueTierFull keeps every task feature and its full history.
+	QueueTierFull QueueTier = "full"
+	// QueueTierFast stores each task as one runtime row and one outcome row, and rejects durable
+	// features such as checkpoints, waits, child tasks, and keyed enqueue.
+	QueueTierFast QueueTier = "fast"
+)
+
+// QueueHistory reports which optional history a queue records for its tasks.
+type QueueHistory struct {
+	RecordAttempts bool
+	RecordClaims   bool
+}
+
 func validateAdminAudit(audit AdminAudit) error {
 	actorLength := utf8.RuneCountInString(audit.Actor)
 	if !utf8.ValidString(audit.Actor) || actorLength < 1 || actorLength > 200 {
@@ -612,6 +629,41 @@ func (admin *Admin) PurgeQueue(ctx context.Context, queue string, audit AdminAud
 		return 0, fmt.Errorf("purge_queue_v1 returned %d rows", len(rows))
 	}
 	return intValue(rows[0]["deleted_count"]), nil
+}
+
+// SetQueueTier moves a queue between the fast and full tiers. PostgreSQL refuses the change with a
+// FastTierUnsupportedError while the queue still holds live tasks.
+func (admin *Admin) SetQueueTier(ctx context.Context, queue string, tier QueueTier, audit AdminAudit) (QueueTier, error) {
+	if tier != QueueTierFast && tier != QueueTierFull {
+		return "", fmt.Errorf("tier must be %q or %q", QueueTierFast, QueueTierFull)
+	}
+	if err := validateAdminAudit(audit); err != nil {
+		return "", err
+	}
+	rows, err := admin.query(ctx, adminStatementRegistry["set_queue_tier"], queue, string(tier), audit.Actor, audit.Reason)
+	if rejection := fastTierRejection(err); rejection != nil {
+		return "", rejection
+	}
+	if err != nil {
+		return "", err
+	}
+	if len(rows) != 1 {
+		return "", fmt.Errorf("set_queue_tier_v1 returned %d rows", len(rows))
+	}
+	return QueueTier(stringValue(rows[0]["tier"])), nil
+}
+
+// SetQueueHistory opts a queue in to or out of attempt and claim history. A nil value leaves that
+// setting unchanged, and the result reports both settings after the change.
+func (admin *Admin) SetQueueHistory(ctx context.Context, queue string, recordAttempts, recordClaims *bool) (QueueHistory, error) {
+	rows, err := admin.query(ctx, adminStatementRegistry["set_queue_history"], queue, recordAttempts, recordClaims)
+	if err != nil {
+		return QueueHistory{}, err
+	}
+	if len(rows) != 1 {
+		return QueueHistory{}, fmt.Errorf("set_queue_history_v1 returned %d rows", len(rows))
+	}
+	return QueueHistory{RecordAttempts: boolValue(rows[0]["record_attempts"]), RecordClaims: boolValue(rows[0]["record_claims"])}, nil
 }
 
 func (admin *Admin) ListWorkers(ctx context.Context) ([]WorkerRegistryEntry, error) {

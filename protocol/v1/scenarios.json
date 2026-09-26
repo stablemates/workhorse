@@ -1057,7 +1057,7 @@
             },
             "keyDigest": "b0fd606eefe8",
             "keyLength": 17,
-            "keyPreview": "protocol\u2026lict",
+            "keyPreview": "protocol…lict",
             "ordinal": 1,
             "rejectedRequestDigest": "d5fdb44699fa0aec5063a464465be8690df99a41cfe56f19fde6f15cab76a9df",
             "scope": "protocol",
@@ -1896,7 +1896,7 @@
             {
               "value": {
                 "promotionLagMs": 10000,
-                "schemaVersion": 24
+                "schemaVersion": 25
               }
             }
           ]
@@ -2448,6 +2448,231 @@
                 "attempt": 1,
                 "result": {
                   "ran": true
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "fast-tier",
+    "steps": [
+      {
+        "id": "claim-before-tier",
+        "sql": "SELECT jsonb_build_object('accepted', to_jsonb(accepted), 'taskId', task_id, 'taskType', task_type, 'payload', payload, 'attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.complete_many_and_claim_v1($1::text, ARRAY(SELECT jsonb_array_elements_text($2::jsonb)::uuid), ARRAY(SELECT jsonb_array_elements_text($3::jsonb)::bigint), ARRAY(SELECT jsonb_array_elements($4::jsonb)), $5::text, $6::integer, $7::integer)",
+        "parameters": ["protocol-fast-worker", [], [], [], "protocol-fast", 1, 30000],
+        "error": {
+          "code": "P1007",
+          "message": "queue protocol-fast is not a fast-tier queue",
+          "detail": {
+            "queue": "protocol-fast",
+            "feature": "batched completion"
+          }
+        }
+      },
+      {
+        "id": "set-tier",
+        "sql": "SELECT workhorse.set_queue_tier_v1($1::text, $2::text, $3::text, $4::text) AS tier",
+        "parameters": ["protocol-fast", "fast", "protocol-operator", "conformance"],
+        "expect": {
+          "rows": [
+            {
+              "tier": "fast"
+            }
+          ]
+        }
+      },
+      {
+        "id": "reject-concurrency-key",
+        "sql": "SELECT * FROM workhorse.enqueue_many_v1($1::jsonb)",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-fast",
+              "type": "protocol.fast",
+              "payload": {},
+              "concurrencyKey": "tenant"
+            }
+          ]
+        ],
+        "error": {
+          "code": "P1007",
+          "message": "fast-tier queue protocol-fast does not support concurrency keys",
+          "detail": {
+            "queue": "protocol-fast",
+            "feature": "concurrency keys",
+            "ordinal": 1
+          }
+        }
+      },
+      {
+        "id": "enqueue",
+        "covers": ["enqueue"],
+        "sql": "SELECT jsonb_build_object('ordinal', ordinal, 'taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-fast",
+              "type": "protocol.fast",
+              "payload": {
+                "index": 1
+              }
+            },
+            {
+              "queue": "protocol-fast",
+              "type": "protocol.fast",
+              "payload": {
+                "index": 2
+              }
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$type": "uuid"
+                },
+                "ordinal": 1,
+                "outcome": "accepted"
+              }
+            },
+            {
+              "value": {
+                "taskId": {
+                  "$type": "uuid"
+                },
+                "ordinal": 2,
+                "outcome": "accepted"
+              }
+            }
+          ]
+        },
+        "capture": {
+          "firstFastTask": "0.value.taskId",
+          "secondFastTask": "1.value.taskId"
+        }
+      },
+      {
+        "id": "claim",
+        "covers": ["claim"],
+        "sql": "SELECT jsonb_build_object('accepted', to_jsonb(accepted), 'taskId', task_id, 'taskType', task_type, 'payload', payload, 'attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.complete_many_and_claim_v1($1::text, ARRAY(SELECT jsonb_array_elements_text($2::jsonb)::uuid), ARRAY(SELECT jsonb_array_elements_text($3::jsonb)::bigint), ARRAY(SELECT jsonb_array_elements($4::jsonb)), $5::text, $6::integer, $7::integer)",
+        "parameters": ["protocol-fast-worker", [], [], [], "protocol-fast", 2, 30000],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "accepted": [],
+                "taskId": {
+                  "$ref": "firstFastTask"
+                },
+                "taskType": "protocol.fast",
+                "payload": {
+                  "index": 1
+                },
+                "attempt": 1,
+                "fenceToken": {
+                  "$type": "integer"
+                }
+              }
+            },
+            {
+              "value": {
+                "accepted": null,
+                "taskId": {
+                  "$ref": "secondFastTask"
+                },
+                "taskType": "protocol.fast",
+                "payload": {
+                  "index": 2
+                },
+                "attempt": 1,
+                "fenceToken": {
+                  "$type": "integer"
+                }
+              }
+            }
+          ]
+        },
+        "capture": {
+          "firstFastFence": "0.value.fenceToken",
+          "secondFastFence": "1.value.fenceToken"
+        }
+      },
+      {
+        "id": "complete",
+        "covers": ["completion"],
+        "sql": "SELECT jsonb_build_object('accepted', to_jsonb(accepted), 'taskId', task_id, 'taskType', task_type, 'payload', payload, 'attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.complete_many_and_claim_v1($1::text, ARRAY(SELECT jsonb_array_elements_text($2::jsonb)::uuid), ARRAY(SELECT jsonb_array_elements_text($3::jsonb)::bigint), ARRAY(SELECT jsonb_array_elements($4::jsonb)), $5::text, $6::integer, $7::integer)",
+        "parameters": [
+          "protocol-fast-worker",
+          [
+            {
+              "$ref": "firstFastTask"
+            },
+            {
+              "$ref": "secondFastTask"
+            }
+          ],
+          [
+            {
+              "$ref": "firstFastFence"
+            },
+            {
+              "$ref": "secondFastFence"
+            }
+          ],
+          [
+            {
+              "index": 1
+            },
+            {
+              "index": 2
+            }
+          ],
+          "protocol-fast",
+          0,
+          30000
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "accepted": [
+                  {
+                    "$ref": "firstFastTask"
+                  },
+                  {
+                    "$ref": "secondFastTask"
+                  }
+                ],
+                "taskId": null,
+                "taskType": null,
+                "payload": null,
+                "attempt": null,
+                "fenceToken": null
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "read-outcome",
+        "sql": "SELECT jsonb_build_object('state', outcome.state, 'result', workhorse.dashboard_task_result_v1(outcome.task_id)) AS value FROM workhorse.dashboard_task_outcome_v1 outcome WHERE outcome.task_id = $1::uuid",
+        "parameters": [
+          {
+            "$ref": "firstFastTask"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "state": "succeeded",
+                "result": {
+                  "index": 1
                 }
               }
             }

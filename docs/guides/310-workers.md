@@ -56,6 +56,9 @@ const worker = new Worker(queue, {
 Use `queue` for one name or `queues` for several. If you omit both, the worker uses the queue
 client's default. A batch callback still receives tasks from only one queue at a time.
 
+A worker discovers each queue's [tier](305-fast-tier.md) on its own, so a fast-tier queue needs no
+worker option.
+
 ## Tasks this worker cannot run
 
 A claim does not filter by task type. A worker can therefore be handed a task whose type it has no

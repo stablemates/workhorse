@@ -55,6 +55,9 @@ const RECOVER_LIMIT: i32 = 100;
 const UNWIND_WINDOW: Duration = Duration::from_millis(250);
 /// The heartbeat connection plus one claim and one settlement.
 const MIN_DEDICATED_POOL: usize = 3;
+/// How long a worker claims a queue that rejected a fast claim through `claim_many_v1` before
+/// probing it again. A queue can change tier only while it holds no live tasks (ADR 0077).
+const TIER_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 
 /// The ownership outcome PostgreSQL reports for a heartbeat, expiration or release.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -298,6 +301,8 @@ pub(crate) struct Inner {
     last_routine: Mutex<Option<Instant>>,
     next_queue: AtomicUsize,
     contracts: Mutex<HashMap<String, Arc<ContractSchema>>>,
+    /// Queues that rejected a fast claim, with the instant to probe them again.
+    full_tier_until: Mutex<HashMap<String, Instant>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -362,6 +367,7 @@ impl Worker {
             active: AtomicUsize::new(0),
             last_routine: Mutex::new(None),
             next_queue: AtomicUsize::new(0),
+            full_tier_until: Mutex::new(HashMap::new()),
             contracts: Mutex::default(),
         })))
     }
@@ -863,12 +869,8 @@ impl Inner {
             }
             let queue = &queues[self.next_queue.fetch_add(1, Ordering::SeqCst) % queues.len()];
             let sent_at = Instant::now();
-            let rows = match self
-                .pool
-                .rows(sql::CLAIM_MANY_V1, &[queue, &self.worker_id, &(remaining as i32), &lease])
-                .await
-            {
-                Ok(rows) => rows,
+            let (rows, fast_tier) = match self.claim_queue(queue, remaining, lease, sent_at).await {
+                Ok(claimed) => claimed,
                 Err(error) => return (tasks, Some(error)),
             };
             let result = if rows.is_empty() { "empty" } else { "claimed" };
@@ -882,7 +884,8 @@ impl Inner {
             );
             for row in &rows {
                 match claimed_task(row, queue, sent_at) {
-                    Ok(task) => {
+                    Ok(mut task) => {
+                        task.fast_tier = fast_tier;
                         tracing::debug!(
                             event.name = "workhorse.task.claimed",
                             workhorse.task.id = %task.id,
@@ -906,6 +909,63 @@ impl Inner {
             }
         }
         (tasks, None)
+    }
+
+    /// Claims one queue through the fast-tier path, or through `claim_many_v1` when the queue is
+    /// full-tier, and reports which path answered.
+    ///
+    /// The fast claim is `complete_many_and_claim_v1` with no completions. A full-tier queue
+    /// rejects it, and the worker then claims that queue through `claim_many_v1` until the next
+    /// probe.
+    async fn claim_queue(
+        &self,
+        queue: &str,
+        limit: usize,
+        lease: i32,
+        sent_at: Instant,
+    ) -> Result<(Vec<tokio_postgres::Row>, bool), Error> {
+        let limit = limit as i32;
+        let probe_due =
+            lock(&self.full_tier_until).get(queue).is_none_or(|until| sent_at >= *until);
+        if probe_due {
+            let claimed = self
+                .pool
+                .rows(
+                    sql::COMPLETE_MANY_AND_CLAIM_V1,
+                    &[
+                        &self.worker_id,
+                        &Vec::<Uuid>::new(),
+                        &Vec::<i64>::new(),
+                        &Vec::<Value>::new(),
+                        &queue,
+                        &limit,
+                        &lease,
+                    ],
+                )
+                .await
+                .map_err(Error::translate_fast_tier);
+            match claimed {
+                Ok(rows) => {
+                    lock(&self.full_tier_until).remove(queue);
+                    // A claim that finds nothing still returns one row, with every claim column
+                    // null.
+                    let mut claimed = Vec::with_capacity(rows.len());
+                    for row in rows {
+                        if row.try_get::<_, Option<Uuid>>("task_id")?.is_some() {
+                            claimed.push(row);
+                        }
+                    }
+                    return Ok((claimed, true));
+                }
+                Err(Error::FastTierUnsupported { .. }) => {
+                    lock(&self.full_tier_until).insert(queue.into(), sent_at + TIER_PROBE_INTERVAL);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        let rows =
+            self.pool.rows(sql::CLAIM_MANY_V1, &[&queue, &self.worker_id, &limit, &lease]).await?;
+        Ok((rows, false))
     }
 }
 
@@ -936,6 +996,7 @@ fn claimed_task(
         fence_token: row.try_get("fence_token")?,
         lease_expires_at: row.try_get("lease_expires_at")?,
         claim_sent_at,
+        fast_tier: false,
     })
 }
 

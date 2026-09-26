@@ -1,6 +1,6 @@
 # Rust conformance evidence
 
-Generated from `protocol/v1` at protocol version 4 and from
+Generated from `protocol/v1` at protocol version 5 and from
 `rust/tests/conformance/expected-unsupported.json`.
 
 `rust/tests/protocol_conformance.rs` executes every `protocol/v1` fixture through the Rust
@@ -19,7 +19,7 @@ fixture does not pass, and when a listed fixture passes. `pnpm rust:integration`
 | `interpreter.json`      |        1 |       1 |                    0 |
 | `requests.json`         |        2 |       2 |                    0 |
 | `runtime.json`          |       17 |      17 |                    0 |
-| `scenarios.json`        |       15 |      15 |                    0 |
+| `scenarios.json`        |       16 |      16 |                    0 |
 | `schedules.json`        |        2 |       2 |                    0 |
 
 ## Expected unsupported fixtures

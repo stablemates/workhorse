@@ -166,6 +166,9 @@ func (handler *HandlerContext) RunChild(
 	payload any,
 	options ...EnqueueOptions,
 ) (any, error) {
+	if err := handler.rejectOnFastTier(fastTierChildTasksFeature); err != nil {
+		return nil, err
+	}
 	if len(options) > 1 {
 		return nil, fmt.Errorf(tooManyChildOptionsMessage, ErrInvalidEnqueueOptions)
 	}
@@ -264,6 +267,9 @@ func (handler *HandlerContext) RunChildrenAll(children []ChildTaskRequest) ([]Ch
 }
 
 func (handler *HandlerContext) createChildSet(children []ChildTaskRequest, mode childJoinMode) (any, error) {
+	if err := handler.rejectOnFastTier(fastTierChildTasksFeature); err != nil {
+		return nil, err
+	}
 	if len(children) > MaxChildTasks {
 		return nil, &ChildLimitExceededError{ParentTaskID: handler.Task.ID}
 	}

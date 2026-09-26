@@ -86,12 +86,12 @@ describe("schema compatibility refusals", () => {
     });
     expect(
       schemaCompatibilityRefusal(
-        { schemaVersion: MINIMUM_SCHEMA_VERSION, servedProtocolVersions: [2] },
-        1,
+        { schemaVersion: MINIMUM_SCHEMA_VERSION, servedProtocolVersions: [6] },
+        5,
       ),
     ).toMatchObject({
       code: "schema-too-new",
-      message: expect.stringContaining("no longer serves protocol 1"),
+      message: expect.stringContaining("no longer serves protocol 5"),
     });
     expect(schemaCompatibilityRefusal({ schemaVersion: null, servedProtocolVersions: [] })).toEqual(
       {

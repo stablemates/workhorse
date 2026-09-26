@@ -52,6 +52,9 @@ const (
 	// ceiling between empty claims. A worker that cannot subscribe starts at the shorter interval
 	// and backs off toward the same ceiling.
 	defaultNotificationPollInterval = maximumEmptyPollInterval
+	// A queue whose fast claim was refused is claimed through claim_many_v1 for this long before
+	// the worker tries the fast claim again, so a tier change reaches running workers.
+	fastTierProbeInterval = 30 * time.Second
 )
 
 func workerPollDelay(base time.Duration, consecutiveEmpty int, backoff bool) time.Duration {
@@ -178,6 +181,9 @@ type ClaimedTask struct {
 	// payloadError records a payload the worker could not decode. The attempt fails through the
 	// ordinary failure path, so one unreadable row never ends Run.
 	payloadError error
+	// fastTier marks a task claimed from a fast-tier queue. Its handler context rejects durable
+	// features, and its completion goes through the batched statement.
+	fastTier bool
 }
 
 // Handler processes one claimed payload with fenced durable operations outside a transaction.
@@ -214,10 +220,14 @@ type WorkerOptions struct {
 
 // Worker claims and settles tasks through a caller-owned pool.
 type Worker struct {
-	pool                *pgxpool.Pool
-	queues              []string
-	queueCursorMu       sync.Mutex
-	nextQueueIndex      int
+	pool           *pgxpool.Pool
+	queues         []string
+	queueCursorMu  sync.Mutex
+	nextQueueIndex int
+	// fullTierUntil holds, per queue, when the worker next tries a fast claim after PostgreSQL
+	// refused one. fullTierMu guards it because claims overlap.
+	fullTierMu          sync.Mutex
+	fullTierUntil       map[string]time.Time
 	workerID            string
 	concurrency         int
 	leaseDuration       time.Duration
@@ -1139,14 +1149,7 @@ func (worker *Worker) claimNextMany(ctx context.Context, executor Executor, limi
 	for range worker.queues {
 		queue := worker.nextClaimQueue()
 		startedAt := time.Now()
-		rows, err := executor.Query(
-			ctx,
-			protocolStatementRegistry[claimManyStatementName],
-			queue,
-			worker.workerID,
-			limit-len(tasks),
-			int(worker.leaseDuration/time.Millisecond),
-		)
+		rows, fast, err := worker.claimQueue(ctx, executor, queue, limit-len(tasks))
 		if err != nil {
 			return tasks, err
 		}
@@ -1173,6 +1176,7 @@ func (worker *Worker) claimNextMany(ctx context.Context, executor Executor, limi
 				return tasks, err
 			}
 			task.claimSentAt = startedAt
+			task.fastTier = fast
 			logWorkerEvent(
 				ctx,
 				worker.logger,
@@ -1191,6 +1195,130 @@ func (worker *Worker) claimNextMany(ctx context.Context, executor Executor, limi
 		}
 	}
 	return tasks, nil
+}
+
+// writeCompletion records a success and reports whether the fence still held. A fast task completes
+// through the batched statement without claiming. If its queue left the fast tier after the claim,
+// PostgreSQL refuses that statement and complete_v1 settles the task instead.
+func (worker *Worker) writeCompletion(
+	ctx context.Context,
+	executor Executor,
+	task ClaimedTask,
+	encoded []byte,
+) (bool, error) {
+	if task.fastTier {
+		rows, err := executor.Query(
+			ctx,
+			protocolStatementRegistry[completeManyAndClaimStatementName],
+			worker.workerID,
+			[]string{task.ID},
+			[]int64{task.FenceToken},
+			[]json.RawMessage{encoded},
+			task.Queue,
+			0,
+			int(worker.leaseDuration/time.Millisecond),
+		)
+		if err == nil {
+			if len(rows) == 0 {
+				return false, errors.New(invalidCompletionResultMessage)
+			}
+			accepted, ok := rows[0][rowAcceptedField].([]any)
+			if !ok {
+				return false, errors.New(invalidCompletionResultMessage)
+			}
+			for _, id := range accepted {
+				if accepted, _ := uuidString(id); accepted == task.ID {
+					return true, nil
+				}
+			}
+			return false, nil
+		}
+		rejection := fastTierRejection(err)
+		if rejection == nil || rejection.Feature != fastTierBatchedCompletionFeature {
+			return false, err
+		}
+	}
+	arguments := append(worker.fencedLease(task).parameters(), encoded)
+	rows, err := executor.Query(ctx, protocolStatementRegistry[completeStatementName], arguments...)
+	if err != nil {
+		return false, err
+	}
+	if len(rows) != 1 {
+		return false, errors.New(invalidCompletionResultMessage)
+	}
+	accepted, ok := rows[0][rowAcceptedField].(bool)
+	if !ok {
+		return false, errors.New(invalidCompletionResultMessage)
+	}
+	return accepted, nil
+}
+
+// claimQueue claims from one queue. It tries the fast claim first, because only PostgreSQL knows a
+// queue's tier. A refusal marks the queue as full tier until the next probe, and the worker then
+// claims through claim_many_v1.
+func (worker *Worker) claimQueue(
+	ctx context.Context,
+	executor Executor,
+	queue string,
+	limit int,
+) ([]Row, bool, error) {
+	leaseMS := int(worker.leaseDuration / time.Millisecond)
+	if worker.probesFastTier(queue) {
+		rows, err := executor.Query(
+			ctx,
+			protocolStatementRegistry[completeManyAndClaimStatementName],
+			worker.workerID,
+			[]string{},
+			[]int64{},
+			[]json.RawMessage{},
+			queue,
+			limit,
+			leaseMS,
+		)
+		if err == nil {
+			return claimedFastRows(rows), true, nil
+		}
+		if fastTierRejection(err) == nil {
+			return nil, false, err
+		}
+		worker.markFullTier(queue)
+	}
+	rows, err := executor.Query(
+		ctx,
+		protocolStatementRegistry[claimManyStatementName],
+		queue,
+		worker.workerID,
+		limit,
+		leaseMS,
+	)
+	return rows, false, err
+}
+
+func (worker *Worker) probesFastTier(queue string) bool {
+	worker.fullTierMu.Lock()
+	defer worker.fullTierMu.Unlock()
+	until, known := worker.fullTierUntil[queue]
+	return !known || !time.Now().Before(until)
+}
+
+func (worker *Worker) markFullTier(queue string) {
+	worker.fullTierMu.Lock()
+	defer worker.fullTierMu.Unlock()
+	if worker.fullTierUntil == nil {
+		worker.fullTierUntil = make(map[string]time.Time)
+	}
+	worker.fullTierUntil[queue] = time.Now().Add(fastTierProbeInterval)
+}
+
+// claimedFastRows drops the placeholder row the batched statement returns when it claims nothing.
+func claimedFastRows(rows []Row) []Row {
+	claimed := rows[:0]
+	for _, row := range rows {
+		if row[rowTaskIDField] != nil {
+			claimed = append(claimed, row)
+		}
+	}
+	return claimed
 }
 
 type ownershipResult struct {
@@ -1836,18 +1964,9 @@ func (worker *Worker) complete(ctx context.Context, executor Executor, task Clai
 	if err := worker.validateResultContract(ctx, executor, task, normalizedResult); err != nil {
 		return worker.fail(ctx, executor, task, err)
 	}
-	lease := worker.fencedLease(task)
-	arguments := append(lease.parameters(), encoded)
-	rows, err := executor.Query(ctx, protocolStatementRegistry[completeStatementName], arguments...)
+	accepted, err := worker.writeCompletion(ctx, executor, task, encoded)
 	if err != nil {
 		return err
-	}
-	if len(rows) != 1 {
-		return errors.New(invalidCompletionResultMessage)
-	}
-	accepted, ok := rows[0][rowAcceptedField].(bool)
-	if !ok {
-		return errors.New(invalidCompletionResultMessage)
 	}
 	if !accepted {
 		return &StaleLeaseError{TaskID: task.ID}

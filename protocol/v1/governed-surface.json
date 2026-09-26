@@ -107,6 +107,29 @@
         "status": "text"
       }
     },
+    "complete_many_and_claim_v1": {
+      "arguments": ["text", "uuid[]", "bigint[]", "jsonb[]", "text", "integer", "integer?"],
+      "returns": "table",
+      "returnsColumns": {
+        "accepted": "uuid[]",
+        "attempt": "integer",
+        "attempt_timeout_at": "timestamptz",
+        "contract_version": "text",
+        "deadline_at": "timestamptz",
+        "execution_timeout_ms": "bigint",
+        "fence_token": "bigint",
+        "lease_expires_at": "timestamptz",
+        "max_attempts": "integer",
+        "payload": "jsonb",
+        "priority": "integer",
+        "redact_error_details": "boolean",
+        "result_max_bytes": "integer",
+        "retry_policy": "jsonb",
+        "task_id": "uuid",
+        "task_type": "text",
+        "trace_context": "jsonb"
+      }
+    },
     "complete_v1": {
       "arguments": ["uuid", "text", "bigint", "jsonb?"],
       "returns": "boolean"
@@ -231,16 +254,6 @@
     "fail_v1": {
       "arguments": ["uuid", "text", "bigint", "jsonb", "integer?"],
       "returns": "text"
-    },
-    "fire_due_schedules_v1": {
-      "arguments": ["text[]", "timestamptz", "integer"],
-      "returns": "table",
-      "returnsColumns": {
-        "namespace": "text",
-        "occurrence_at": "timestamptz",
-        "schedule_name": "text",
-        "task_id": "uuid"
-      }
     },
     "fire_due_schedules_v2": {
       "arguments": ["text[]", "timestamptz", "integer", "bigint"],
@@ -627,9 +640,21 @@
         "updated_at": "timestamptz"
       }
     },
+    "set_queue_history_v1": {
+      "arguments": ["text", "boolean", "boolean"],
+      "returns": "table",
+      "returnsColumns": {
+        "record_attempts": "boolean",
+        "record_claims": "boolean"
+      }
+    },
     "set_queue_paused_v1": {
       "arguments": ["text", "boolean", "text", "text", "text"],
       "returns": "boolean"
+    },
+    "set_queue_tier_v1": {
+      "arguments": ["text", "text", "text", "text"],
+      "returns": "text"
     },
     "set_schedule_paused_v1": {
       "arguments": ["text", "text", "boolean", "text", "text", "timestamptz?"],
@@ -743,10 +768,6 @@
         "boolean?"
       ],
       "returns": "workhorse.retention_policy"
-    },
-    "sync_schedule_definitions_v1": {
-      "arguments": ["text", "jsonb", "boolean?"],
-      "returns": "void"
     },
     "sync_schedule_definitions_v2": {
       "arguments": ["text", "jsonb", "boolean?"],
@@ -924,7 +945,10 @@
       "kind": "view",
       "columns": {
         "paused": "boolean",
-        "queue_name": "text"
+        "queue_name": "text",
+        "record_attempts": "boolean",
+        "record_claims": "boolean",
+        "tier": "text"
       }
     },
     "dashboard_rate_limit_policy_v1": {
@@ -1162,6 +1186,53 @@
         "worker_id": "text"
       }
     },
+    "fast_task_outcome": {
+      "kind": "table",
+      "columns": {
+        "attempt": "integer",
+        "claimed_at": "timestamptz",
+        "enqueued_at": "timestamptz",
+        "error": "jsonb",
+        "errors": "jsonb",
+        "fence_token": "bigint",
+        "finished_at": "timestamptz",
+        "queue_name": "text",
+        "result": "jsonb",
+        "state": "text",
+        "task_id": "uuid",
+        "task_type": "text",
+        "worker_id": "text"
+      }
+    },
+    "fast_task_runtime": {
+      "kind": "table",
+      "columns": {
+        "attempt": "integer",
+        "attempt_timeout_at": "timestamptz",
+        "cancel_reason": "text",
+        "cancel_requested_at": "timestamptz",
+        "cancel_requested_by": "text",
+        "claimed_at": "timestamptz",
+        "contract_version": "text",
+        "deadline_at": "timestamptz",
+        "enqueued_at": "timestamptz",
+        "errors": "jsonb",
+        "execution_timeout_ms": "bigint",
+        "expires_at": "timestamptz",
+        "fence_token": "bigint",
+        "max_attempts": "integer",
+        "payload": "jsonb",
+        "priority": "integer",
+        "queue_name": "text",
+        "retry_policy": "jsonb",
+        "run_at": "timestamptz",
+        "sequence": "bigint",
+        "state": "text",
+        "task_id": "uuid",
+        "task_type": "text",
+        "worker_id": "text"
+      }
+    },
     "protocol_version": {
       "kind": "table",
       "columns": {
@@ -1174,6 +1245,9 @@
         "paused": "boolean",
         "queue_name": "text",
         "reason": "text",
+        "record_attempts": "boolean",
+        "record_claims": "boolean",
+        "tier": "text",
         "updated_at": "timestamptz"
       }
     },
@@ -1497,10 +1571,26 @@
       "expand_cron_macro_v1",
       "expand_hashed_cron_field_v1",
       "expire_owned_v1",
+      "fast_acknowledge_cancel_v1",
+      "fast_cancel_v1",
+      "fast_claim_v1",
+      "fast_complete_many_v1",
+      "fast_complete_v1",
+      "fast_expire_owned_v1",
+      "fast_fail_v1",
+      "fast_finish_v1",
+      "fast_heartbeat_many_v1",
+      "fast_records_attempts_v1",
+      "fast_recover_expired_v1",
+      "fast_release_owned_v1",
+      "fast_retry_v1",
+      "fast_terminalize_deadline_v1",
+      "fast_timeout_owned_v1",
       "get_queue_health_policy_v1",
       "history_partition_horizon_days_v1",
       "history_retention_complete_v1",
       "idempotency_key_hash_v1",
+      "lock_queue_tiers_v1",
       "normalize_retry_policy_v1",
       "notify_budget_capacity_v1",
       "notify_concurrency_capacity_v1",
@@ -1519,6 +1609,7 @@
       "recover_expired_v1",
       "redact_error_details_v1",
       "reject_contract_definition_mutation_v1",
+      "reject_fast_feature_v1",
       "reject_self_task_dependency_v1",
       "release_dependents_v1",
       "release_own_dependencies_v1",
@@ -1537,6 +1628,7 @@
       "stat_sketch_percentile_v1",
       "stat_window_tier_v1",
       "sync_queue_health_policy_v1",
+      "sync_schedule_definitions_internal_v1",
       "terminalize_deadline_v1",
       "timeout_envelope_v1",
       "timeout_owned_v1",

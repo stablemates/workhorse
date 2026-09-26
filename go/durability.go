@@ -169,8 +169,20 @@ func (handler *HandlerContext) GetProgress() (*TaskProgress, error) {
 	return handler.progressValue, handler.progressError
 }
 
+// rejectOnFastTier refuses a durable feature for a fast-tier task before any round trip. A fast
+// task keeps no state beyond its runtime row, so PostgreSQL has nowhere to store the feature.
+func (handler *HandlerContext) rejectOnFastTier(feature string) error {
+	if !handler.Task.fastTier {
+		return nil
+	}
+	return &FastTierUnsupportedError{Queue: handler.Task.Queue, Feature: feature}
+}
+
 // SetProgress replaces the latest progress under this handler's fenced lease.
 func (handler *HandlerContext) SetProgress(value any) (*TaskProgress, error) {
+	if err := handler.rejectOnFastTier(fastTierProgressFeature); err != nil {
+		return nil, err
+	}
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		return nil, err
@@ -253,6 +265,9 @@ func (handler *HandlerContext) Checkpoint(
 	name string,
 	operation func() (any, error),
 ) (any, error) {
+	if err := handler.rejectOnFastTier(fastTierCheckpointsFeature); err != nil {
+		return nil, err
+	}
 	if err := validateDurableName(name, durableCheckpointKindValue); err != nil {
 		return nil, err
 	}
@@ -339,6 +354,9 @@ func (handler *HandlerContext) runCheckpoint(
 
 // Sleep suspends the task without consuming its logical attempt until duration elapses.
 func (handler *HandlerContext) Sleep(name string, duration time.Duration) error {
+	if err := handler.rejectOnFastTier(fastTierDurableWaitsFeature); err != nil {
+		return err
+	}
 	if duration < time.Millisecond || duration > maximumWaitDuration || duration%time.Millisecond != 0 {
 		return fmt.Errorf(waitDurationRangeFormat, time.Millisecond, maximumWaitDuration)
 	}
@@ -348,6 +366,9 @@ func (handler *HandlerContext) Sleep(name string, duration time.Duration) error 
 
 // SleepUntil suspends the task without consuming its logical attempt until wakeAt.
 func (handler *HandlerContext) SleepUntil(name string, wakeAt time.Time) error {
+	if err := handler.rejectOnFastTier(fastTierDurableWaitsFeature); err != nil {
+		return err
+	}
 	if wakeAt.IsZero() || time.Until(wakeAt) > maximumWaitDuration {
 		return errors.New(waitTargetRangeMessage)
 	}

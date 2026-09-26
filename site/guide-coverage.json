@@ -23,6 +23,7 @@
     "240-concurrency-policies": "concurrency-policies",
     "250-rate-limits": "rate-limits",
     "260-multi-tenancy": "multi-tenancy",
+    "305-fast-tier": "fast-tier",
     "310-workers": "workers",
     "315-batch-handlers": "batch-handlers",
     "320-statistics": "operations",

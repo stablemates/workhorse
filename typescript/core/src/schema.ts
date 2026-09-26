@@ -171,6 +171,14 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "row retention lag waits for history retention",
     kind: "additive",
   },
+  {
+    fromVersion: 24,
+    toVersion: 25,
+    file: "0025-add-a-fast-task-tier.sql",
+    description: "add a fast task tier",
+    kind: "contract",
+    retiresProtocolVersions: [1, 2, 3, 4],
+  },
 ];
 
 /**

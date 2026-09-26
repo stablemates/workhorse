@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { FastTierUnsupportedError } from "./errors.js";
 import { ChildConflictError } from "./queue/child-tasks.js";
 import type { ExternalWaitOptions } from "./queue/external-waits.js";
 import type { TaskAttempt } from "./task-attempt.js";
@@ -19,8 +20,36 @@ import type { HandlerContext, WorkerQueueApi } from "./worker.js";
  * Each operation caches what it read for the rest of the activation, and joins a concurrent call
  * with the same name instead of repeating it. Every write first asks `attempt` to confirm that the
  * attempt still owns the task.
+ *
+ * A fast-tier task has no durable execution state (ADR 0077). Its context rejects every operation
+ * that would write that state before any round trip, so the attempt fails with a clear error.
  */
 export function createHandlerContext(
+  queue: WorkerQueueApi,
+  workerId: string,
+  task: ClaimedTask,
+  attempt: TaskAttempt,
+  fastTier = false,
+): HandlerContext {
+  const context = createDurableHandlerContext(queue, workerId, task, attempt);
+  if (!fastTier) return context;
+  const reject = (feature: string) => (): Promise<never> =>
+    Promise.reject(new FastTierUnsupportedError(task.queue, feature));
+  return {
+    ...context,
+    setProgress: reject("progress"),
+    checkpoint: reject("checkpoints"),
+    sleep: reject("durable waits"),
+    sleepUntil: reject("durable waits"),
+    waitForSignal: reject("signal waits"),
+    waitForHuman: reject("human waits"),
+    runChild: reject("child tasks"),
+    runChildren: reject("child tasks"),
+    runChildrenAll: reject("child tasks"),
+  };
+}
+
+function createDurableHandlerContext(
   queue: WorkerQueueApi,
   workerId: string,
   task: ClaimedTask,

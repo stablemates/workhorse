@@ -737,7 +737,7 @@
         },
         {
           "id": "sync-schedule",
-          "sql": "SELECT workhorse.sync_schedule_definitions_v1($1::text, $2::jsonb, $3::boolean) AS synced",
+          "sql": "SELECT workhorse.sync_schedule_definitions_v2($1::text, $2::jsonb, $3::boolean) AS synced",
           "parameters": [
             "conformance",
             [

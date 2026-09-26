@@ -1,5 +1,5 @@
 import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
-import { expectOneRow } from "../errors.js";
+import { expectOneRow, FastTierUnsupportedError, fastTierRejection } from "../errors.js";
 import {
   taskMetricAttributes,
   taskSpanAttributes,
@@ -16,6 +16,8 @@ import type {
   CancelResult,
   BatchExecutionRecord,
   ClaimedTask,
+  CompletionClaim,
+  CompletionClaimResult,
   ExpireOwnedStatus,
   HeartbeatStatus,
   Json,
@@ -44,6 +46,32 @@ type ClaimRow = {
   fence_token: string;
   lease_expires_at: Date | string;
 };
+
+// The first row carries the accepted ids. A call that claims nothing returns one row whose claim
+// columns are all null.
+type CompletionClaimRow = Omit<ClaimRow, "task_id"> & {
+  accepted: string[] | null;
+  task_id: string | null;
+};
+
+/** One completion waiting for the next fused `complete_many_and_claim_v1` round trip. */
+interface PendingCompletion {
+  task: ClaimedTask;
+  serializedResult: string;
+  limit: number;
+  resolve(result: CompletionClaimResult): void;
+  reject(error: unknown): void;
+}
+
+interface PendingCompletionBatch {
+  workerId: string;
+  queue: string;
+  leaseMs: number;
+  entries: PendingCompletion[];
+}
+
+/** complete_many_and_claim_v1 takes at most this many completions and claims per call. */
+const COMPLETION_BATCH_LIMIT = 100;
 
 type CancelRow = {
   status: CancelResult["status"];
@@ -440,18 +468,185 @@ export class ClaimLeaseFenceModule extends QueueModule {
       );
       const accepted = expectOneRow(query, "workhorse.complete_v1").accepted;
       span.setAttribute("workhorse.complete.accepted", accepted);
-      if (accepted) telemetryMetrics.completed.add(1, taskMetricAttributes(task));
-      logInfo(
-        accepted ? "workhorse.task.completed" : "workhorse.task.completion_rejected",
-        accepted ? "Task completed" : "Stale task completion rejected",
-        {
-          ...taskSpanAttributes(task),
-          "workhorse.complete.accepted": accepted,
-          "workhorse.worker.id": workerId,
-        },
-      );
+      this.recordCompletion(task, workerId, accepted);
       return accepted;
     });
+  }
+
+  // Completions of one worker that target the same queue and lease share one round trip. They
+  // collect until the current turn of the event loop ends, so a batch never delays a completion by
+  // more than the work already queued behind it.
+  private readonly pendingCompletions = new Map<string, PendingCompletionBatch>();
+
+  /**
+   * Completes a fast-tier attempt and claims up to `claim.limit` replacements in the same round
+   * trip. Concurrent calls from one worker for one queue are fused into one statement.
+   */
+  completeAndClaim(
+    task: ClaimedTask,
+    workerId: string,
+    serializedResult: string,
+    claim: CompletionClaim,
+  ): Promise<CompletionClaimResult> {
+    const leaseMs = claim.leaseMs ?? 30_000;
+    const limit = Math.max(0, Math.min(COMPLETION_BATCH_LIMIT, Math.floor(claim.limit)));
+    const key = JSON.stringify([workerId, claim.queue, leaseMs]);
+    let batch = this.pendingCompletions.get(key);
+    if (!batch) {
+      batch = { workerId, queue: claim.queue, leaseMs, entries: [] };
+      this.pendingCompletions.set(key, batch);
+      setImmediate(() => {
+        this.pendingCompletions.delete(key);
+        void this.flushCompletions(batch!);
+      });
+    }
+    const entries = batch.entries;
+    return new Promise((resolve, reject) => {
+      entries.push({ task, serializedResult, limit, resolve, reject });
+    });
+  }
+
+  /**
+   * Claims from a fast-tier queue through the fused completion statement with no completions. A
+   * full-tier queue rejects the call with `FastTierUnsupportedError`, which is how a worker learns
+   * the queue's tier.
+   */
+  async claimFast<TPayload extends Json = Json>(
+    workerId: string,
+    limit: number,
+    options: { queue?: string; leaseMs?: number } = {},
+  ): Promise<ClaimedTask<TPayload>[]> {
+    const queueName = options.queue ?? this.context.defaultQueue;
+    const startedAt = performance.now();
+    // A full-tier answer is the probe working, so it ends the span without an error status.
+    const outcome = await withSpan(
+      "workhorse.claim",
+      { "workhorse.queue.name": queueName },
+      async (span) => {
+        try {
+          const { claimed } = await this.completeManyAndClaim(
+            workerId,
+            queueName,
+            options.leaseMs ?? 30_000,
+            [],
+            limit,
+          );
+          this.recordClaims(span, claimed, queueName, workerId, startedAt);
+          return { claimed: claimed as ClaimedTask<TPayload>[] };
+        } catch (error) {
+          if (!(error instanceof FastTierUnsupportedError)) throw error;
+          span.setAttribute("workhorse.queue.tier", "full");
+          return { rejection: error };
+        }
+      },
+    );
+    if ("rejection" in outcome) throw outcome.rejection;
+    return outcome.claimed;
+  }
+
+  // Splits the batch into statements within the per-call limits. Each statement's claimed tasks go
+  // to its entries in order, up to each entry's own limit. A failed statement rejects only its own
+  // entries, and none of them is known to have completed.
+  private async flushCompletions(batch: PendingCompletionBatch): Promise<void> {
+    const chunks: PendingCompletion[][] = [];
+    let chunk: PendingCompletion[] = [];
+    let chunkLimit = 0;
+    for (const entry of batch.entries) {
+      if (
+        chunk.length === COMPLETION_BATCH_LIMIT ||
+        chunkLimit + entry.limit > COMPLETION_BATCH_LIMIT
+      ) {
+        chunks.push(chunk);
+        chunk = [];
+        chunkLimit = 0;
+      }
+      chunk.push(entry);
+      chunkLimit += entry.limit;
+    }
+    chunks.push(chunk);
+    await Promise.all(chunks.map((entries) => this.flushCompletionChunk(batch, entries)));
+  }
+
+  private async flushCompletionChunk(
+    batch: PendingCompletionBatch,
+    entries: readonly PendingCompletion[],
+  ): Promise<void> {
+    const startedAt = performance.now();
+    const limit = entries.reduce((total, entry) => total + entry.limit, 0);
+    let outcome: { accepted: ReadonlySet<string>; claimed: ClaimedTask[] };
+    try {
+      outcome = await withSpan(
+        "workhorse.complete",
+        { "workhorse.queue.name": batch.queue, "workhorse.complete.batch_size": entries.length },
+        async (span) => {
+          const result = await this.completeManyAndClaim(
+            batch.workerId,
+            batch.queue,
+            batch.leaseMs,
+            entries,
+            limit,
+          );
+          this.recordClaims(span, result.claimed, batch.queue, batch.workerId, startedAt);
+          return result;
+        },
+      );
+    } catch (error) {
+      for (const entry of entries) entry.reject(error);
+      return;
+    }
+    let next = 0;
+    for (const entry of entries) {
+      const accepted = outcome.accepted.has(entry.task.id);
+      this.recordCompletion(entry.task, batch.workerId, accepted);
+      const claimed = outcome.claimed.slice(next, next + entry.limit);
+      next += claimed.length;
+      entry.resolve({ accepted, claimed });
+    }
+  }
+
+  private async completeManyAndClaim(
+    workerId: string,
+    queueName: string,
+    leaseMs: number,
+    entries: readonly Pick<PendingCompletion, "task" | "serializedResult">[],
+    limit: number,
+  ): Promise<{ accepted: ReadonlySet<string>; claimed: ClaimedTask[] }> {
+    let result: { rows: CompletionClaimRow[] };
+    try {
+      result = await this.context.database.query<CompletionClaimRow>(
+        SQL_STATEMENTS["complete_many_and_claim_v1"],
+        [
+          workerId,
+          entries.map((entry) => entry.task.id),
+          entries.map((entry) => entry.task.fenceToken.toString()),
+          entries.map((entry) => entry.serializedResult),
+          queueName,
+          limit,
+          leaseMs,
+        ],
+      );
+    } catch (error) {
+      throw fastTierRejection(error) ?? error;
+    }
+    const first = expectOneRow(result, "workhorse.complete_many_and_claim_v1");
+    const claimed: ClaimedTask[] = [];
+    for (const row of result.rows) {
+      if (row.task_id !== null) claimed.push(this.claimedTask(row as ClaimRow, queueName));
+    }
+    return { accepted: new Set(first.accepted ?? []), claimed };
+  }
+
+  private recordCompletion(task: ClaimedTask, workerId: string, accepted: boolean): void {
+    if (accepted) telemetryMetrics.completed.add(1, taskMetricAttributes(task));
+    logInfo(
+      accepted ? "workhorse.task.completed" : "workhorse.task.completion_rejected",
+      accepted ? "Task completed" : "Stale task completion rejected",
+      {
+        ...taskSpanAttributes(task),
+        "workhorse.complete.accepted": accepted,
+        "workhorse.worker.id": workerId,
+      },
+    );
   }
 
   async fail(

@@ -5,6 +5,7 @@ import {
   CancellationRequestedError,
   DeadlineExceededError,
   ExecutionTimeoutError,
+  FastTierUnsupportedError,
   WorkhorseError,
 } from "./errors.js";
 import { Queue } from "./queue.js";
@@ -38,6 +39,8 @@ import type {
   ChildTaskRequest,
   BatchExecutionRecord,
   ClaimedTask,
+  CompletionClaim,
+  CompletionClaimResult,
   CreateChildResult,
   CreateChildrenResult,
   ExpireOwnedStatus,
@@ -74,6 +77,19 @@ const NOTIFICATION_CLAIM_DELAY_MS = 50;
  */
 export function dispatchRefillBatch(concurrency: number): number {
   return Math.ceil(concurrency / 4);
+}
+
+/**
+ * How long a worker treats a queue that rejected a fast claim as full-tier before it probes again.
+ * A tier change reaches a running worker within this interval.
+ */
+const TIER_PROBE_INTERVAL_MS = 30_000;
+
+/** Slots the dispatch loop set aside for the tasks one fused completion claims. */
+interface CompletionReservation {
+  claim: CompletionClaim;
+  /** Hands the claimed tasks to the loop, or null when the completion failed. */
+  settle(claimed: readonly ClaimedTask[] | null): void;
 }
 
 /** Tasks one claim pass leased, and the error that ended the pass early, if any. */
@@ -220,6 +236,22 @@ export interface WorkerQueueApi {
     limit: number,
     options?: { queue?: string; leaseMs?: number },
   ): Promise<ClaimedTask[]>;
+  /**
+   * Claims from a fast-tier queue (ADR 0077) and rejects with `FastTierUnsupportedError` for a
+   * full-tier one. A worker uses it to learn which of its queues are fast-tier.
+   */
+  claimFast?(
+    workerId: string,
+    limit: number,
+    options?: { queue?: string; leaseMs?: number },
+  ): Promise<ClaimedTask[]>;
+  /** Completes a fast-tier attempt and claims replacements in the same round trip. */
+  completeAndClaim?(
+    task: ClaimedTask,
+    workerId: string,
+    result: Json,
+    claim: CompletionClaim,
+  ): Promise<CompletionClaimResult>;
   recordBatchDispatch?(batch: BatchExecutionRecord): Promise<void>;
   recordBatchFailure?(batch: BatchExecutionRecord): Promise<void>;
   heartbeatStatus(task: ClaimedTask, workerId: string, leaseMs?: number): Promise<HeartbeatStatus>;
@@ -499,6 +531,18 @@ export class Worker {
   private batchDispatchRecording: Promise<void> = Promise.resolve();
   // When each claimed task's claim request left, which starts its first local lease window.
   private readonly claimSentAt = new WeakMap<ClaimedTask, number>();
+  // Tasks claimed from a queue that answered as fast-tier (ADR 0077). Their handlers get the
+  // fast-tier context, and their completions take the fused path.
+  private readonly fastTasks = new WeakSet<ClaimedTask>();
+  // Queues that rejected a fast claim, with the time to probe them again. A stale entry is safe:
+  // PostgreSQL routes every claim and completion by the queue's current tier.
+  private readonly fullTierUntil = new Map<string, number>();
+  // Executions whose slot a fused completion already gave to a task it claimed.
+  private readonly slotHandedOver = new WeakSet<ClaimedTask>();
+  // Set while the dispatch loop runs, so a fused completion can claim into the slots it frees.
+  private reserveCompletionClaim:
+    | ((task: ClaimedTask) => CompletionReservation | undefined)
+    | undefined;
   private readonly heartbeatLeases = new Map<
     string,
     {
@@ -988,19 +1032,33 @@ export class Worker {
       ) {
         const queueName = this.queueNames[this.nextQueueIndex]!;
         this.nextQueueIndex = (this.nextQueueIndex + 1) % this.queueNames.length;
-        const remaining = limit - tasks.length;
-        const sentAt = Date.now();
-        const claimed = await this.queue.claimMany(this.workerId, remaining, {
-          queue: queueName,
-          leaseMs: this.leaseMs,
-        });
-        for (const task of claimed) this.claimSentAt.set(task, sentAt);
-        tasks.push(...claimed);
+        tasks.push(...(await this.claimFromQueue(queueName, limit - tasks.length)));
       }
       return { claimed: tasks };
     } catch (error) {
       return { claimed: tasks, error };
     }
+  }
+
+  // Claims through the fast-tier path first. A full-tier queue rejects that claim, and the worker
+  // then claims from it through claim_many_v1 until the next probe.
+  private async claimFromQueue(queueName: string, limit: number): Promise<ClaimedTask[]> {
+    const options = { queue: queueName, leaseMs: this.leaseMs };
+    const sentAt = Date.now();
+    let claimed: ClaimedTask[] | undefined;
+    if (this.queue.claimFast && (this.fullTierUntil.get(queueName) ?? 0) <= sentAt) {
+      try {
+        claimed = await this.queue.claimFast(this.workerId, limit, options);
+        this.fullTierUntil.delete(queueName);
+        for (const task of claimed) this.fastTasks.add(task);
+      } catch (error) {
+        if (!(error instanceof FastTierUnsupportedError)) throw error;
+        this.fullTierUntil.set(queueName, sentAt + TIER_PROBE_INTERVAL_MS);
+      }
+    }
+    claimed ??= await this.queue.claimMany!(this.workerId, limit, options);
+    for (const task of claimed) this.claimSentAt.set(task, sentAt);
+    return claimed;
   }
 
   private async runBatch(
@@ -1049,7 +1107,8 @@ export class Worker {
         (reason: unknown) => ({ status: "rejected", reason }),
       )
       .finally(() => {
-        this.activeSlots -= 1;
+        // A fused completion that claimed replacements already gave this slot to one of them.
+        if (!this.slotHandedOver.delete(task)) this.activeSlots -= 1;
         if (!this.running && this.activeSlots === 0) this.draining = false;
       });
   }
@@ -1112,7 +1171,7 @@ export class Worker {
       this.claimSentAt.get(task) ?? Date.now(),
     );
     try {
-      let writeCompletion: () => Promise<boolean>;
+      let writeCompletion: (claim?: CompletionClaim) => Promise<CompletionClaimResult>;
       try {
         // afterClaim is outside the committed claim transaction. Throwing here leaves the lease
         // exactly as a killed process would, which allows deterministic expiry-recovery testing.
@@ -1139,7 +1198,7 @@ export class Worker {
         await this.inject("beforeHandler", task);
         const result = await handler(
           task.payload,
-          createHandlerContext(this.queue, this.workerId, task, attempt),
+          createHandlerContext(this.queue, this.workerId, task, attempt, this.fastTasks.has(task)),
         );
         await this.inject("afterHandler", task);
         if (attempt.arbiter.isSuspended()) {
@@ -1172,7 +1231,7 @@ export class Worker {
       }
       // The write runs outside the handler's try. A database error here is a settlement failure,
       // not the handler's, so it propagates like a failing fail_v1 instead of charging the attempt.
-      const accepted = await writeCompletion();
+      const accepted = await this.writeCompletion(task, writeCompletion);
       if (!accepted) {
         if (await attempt.acknowledgeCancellation()) {
           span.setAttribute("workhorse.handler.outcome", "canceled");
@@ -1201,10 +1260,40 @@ export class Worker {
   private async prepareCompletion(
     task: ClaimedTask,
     result: Json,
-  ): Promise<() => Promise<boolean>> {
+  ): Promise<(claim?: CompletionClaim) => Promise<CompletionClaimResult>> {
     const prepare = (this.queue as Partial<WorkerCompletionPreparation>)[workerCompletionPrepare];
     if (prepare) return prepare(task, this.workerId, result);
-    return () => this.queue.complete(task, this.workerId, result);
+    return async (claim) => {
+      if (claim && this.queue.completeAndClaim) {
+        return this.queue.completeAndClaim(task, this.workerId, result, claim);
+      }
+      return { accepted: await this.queue.complete(task, this.workerId, result), claimed: [] };
+    };
+  }
+
+  // A fast-tier completion goes through the fused statement. When the dispatch loop can use them,
+  // it also claims tasks for the slot it frees and for any other free slot.
+  private async writeCompletion(
+    task: ClaimedTask,
+    write: (claim?: CompletionClaim) => Promise<CompletionClaimResult>,
+  ): Promise<boolean> {
+    if (!this.fastTasks.has(task)) return (await write()).accepted;
+    const reservation = this.reserveCompletionClaim?.(task);
+    const sentAt = Date.now();
+    let claimed: readonly ClaimedTask[] | null = null;
+    try {
+      const outcome = await write(
+        reservation?.claim ?? { queue: task.queue, limit: 0, leaseMs: this.leaseMs },
+      );
+      for (const next of outcome.claimed) {
+        this.fastTasks.add(next);
+        this.claimSentAt.set(next, sentAt);
+      }
+      claimed = outcome.claimed;
+      return outcome.accepted;
+    } finally {
+      reservation?.settle(claimed);
+    }
   }
 
   // Settles an attempt whose handler, hooks, or completion threw.
@@ -1570,6 +1659,10 @@ export class Worker {
   // the slots it asks for, so claimed tasks never exceed the concurrency. With no claim in flight,
   // any free slot starts one. While one is in flight, another starts only once the unreserved free
   // slots reach the refill batch, so a busy worker claims in batches and its claims overlap.
+  //
+  // A fast-tier completion can claim in the same round trip. It reserves the free slots and its own,
+  // and a claimed task takes over the completing execution's slot before that execution ends. The
+  // loop counts such an execution as handed over, so running handlers never exceed the concurrency.
   private async dispatchLoop(shouldStop: () => boolean, signal?: AbortSignal): Promise<void> {
     type DispatchSettlement = {
       kind: "execution";
@@ -1587,8 +1680,12 @@ export class Worker {
 
     const refillBatch = dispatchRefillBatch(this.concurrency);
     const active = new Map<number, Promise<DispatchSettlement>>();
+    const executionTasks = new Map<number, ClaimedTask>();
+    const handedOver = new Set<ClaimedTask>();
     const claims = new Map<number, Promise<ClaimSettlement>>();
     let reserved = 0;
+    // Resolves the loop's current wait when a fused completion settles outside any tracked promise.
+    let wakeLoop: (() => void) | undefined;
     let nextExecutionId = 0;
     let nextClaimId = 0;
     let firstFailure: { executionId: number; reason: unknown } | undefined;
@@ -1598,6 +1695,9 @@ export class Worker {
 
     const observe = ({ executionId, settlement }: DispatchSettlement): void => {
       active.delete(executionId);
+      const task = executionTasks.get(executionId);
+      executionTasks.delete(executionId);
+      if (task) handedOver.delete(task);
       if (settlement.status !== "rejected") return;
       if (!firstFailure || executionId < firstFailure.executionId) {
         firstFailure = { executionId, reason: settlement.reason };
@@ -1606,6 +1706,7 @@ export class Worker {
     const launch = (task: ClaimedTask): void => {
       const executionId = nextExecutionId;
       nextExecutionId += 1;
+      executionTasks.set(executionId, task);
       active.set(
         executionId,
         this.startExecution(task).then((settlement) => ({
@@ -1659,11 +1760,50 @@ export class Worker {
       this.consecutiveEmptyClaims += 1;
       emptyWait ??= { deadline: Date.now() + this.nextDispatchPollMs(), wakeVersion };
     };
-    const freeSlots = (): number => this.concurrency - active.size - reserved;
+    const freeSlots = (): number => this.concurrency - active.size + handedOver.size - reserved;
+    // The refill-batch rule applies to a fused claim as well: while a claim is in flight, a
+    // completion claims only when that would fill at least a refill batch of slots.
+    this.reserveCompletionClaim = (task) => {
+      if (shouldStop() || this.paused || firstFailure || claimError !== undefined || emptyWait) {
+        return undefined;
+      }
+      const limit = freeSlots() + 1;
+      if (claims.size > 0 && limit < refillBatch) return undefined;
+      const wakeVersion = this.dispatchWakeVersion;
+      reserved += limit;
+      handedOver.add(task);
+      this.lastClaimAt = Date.now();
+      return {
+        claim: { queue: task.queue, limit, leaseMs: this.leaseMs },
+        settle: (claimed) => {
+          reserved -= limit;
+          if (claimed && claimed.length > 0) {
+            this.slotHandedOver.add(task);
+            this.activeSlots -= 1;
+          } else {
+            handedOver.delete(task);
+          }
+          for (const next of claimed ?? []) launch(next);
+          if (claimed?.some((next) => this.handlers.has(next.type))) {
+            this.previousPassWorked = true;
+            this.consecutiveEmptyClaims = 0;
+          } else if (claimed?.length === 0 && this.queueNames.length === 1) {
+            // Another queue may still have work, so only a single-queue worker backs off here.
+            this.previousPassWorked = false;
+            this.consecutiveEmptyClaims += 1;
+            emptyWait ??= { deadline: Date.now() + this.nextDispatchPollMs(), wakeVersion };
+          }
+          wakeLoop?.();
+        },
+      };
+    };
     const nextEvent = async (wakeMs?: number, wakeVersion?: number): Promise<void> => {
       const pending: Array<Promise<DispatchSettlement | ClaimSettlement | null>> = [
         ...active.values(),
         ...claims.values(),
+        new Promise<null>((resolve) => {
+          wakeLoop = () => resolve(null);
+        }),
       ];
       if (wakeMs !== undefined) {
         pending.push(this.waitForDispatchWake(wakeMs, signal, wakeVersion).then(() => null));
@@ -1694,9 +1834,11 @@ export class Worker {
       await nextEvent();
     }
 
+    this.reserveCompletionClaim = undefined;
     while (claims.size > 0) settleClaim(await Promise.race(claims.values()));
-    const remaining = await Promise.all(active.values());
-    for (const settlement of remaining) observe(settlement);
+    // An execution settles its fused completion before it ends, so every task that completion
+    // claimed is already active when the execution's own settlement arrives.
+    while (active.size > 0) observe(await Promise.race(active.values()));
     if (firstFailure) throw firstFailure.reason;
     if (claimError !== undefined) throw claimError;
   }

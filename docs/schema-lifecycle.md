@@ -2,7 +2,7 @@
 
 ## Current policy
 
-Schema version 6 is the migration baseline and schema version 24 is current. `sql/schema/current.sql` is the tracked source and
+Schema version 6 is the migration baseline and schema version 25 is current. `sql/schema/current.sql` is the tracked source and
 `sql/schema.sql` is a build artifact for published packages. `sql/releases/` holds the frozen
 clean-install artifact of every supported published release: `0006.sql` is 0.2.0, `0009.sql` is
 0.2.1, `0023.sql` is 0.3.0, and `0024.sql` is 0.4.0.
@@ -20,7 +20,8 @@ a change adds a migration step and applies the same change to the tracked source
 an index. It may not rename, drop, or change the meaning of anything a supported release reads or
 writes. A function is superseded by adding the next `_vN` beside it and retaining the old one; the
 old one is removed at the next major release, never before. Every function already carries a
-suffix, so every one of them can be superseded this way.
+suffix, so every one of them can be superseded this way. Migration 0025 is the one exception; see
+[The fast-tier cutover](#the-fast-tier-cutover).
 
 That rule is what makes a rolling deployment safe. A pipeline migrates the database before any
 process from the new release starts, and every still-running process keeps working, because the
@@ -303,7 +304,8 @@ statement that reads the schema version.
 **1.0.0 is not that boundary** ([ADR 0054](decisions/0054-define-what-1-0-0-promises.md)). It removes
 no superseded function and narrows `workhorse.protocol_version` by nothing, so a 0.x client keeps
 working against a 1.0.0 schema and the upgrade is an ordinary rolling deployment. Removals
-accumulated during 0.x wait for the first contract step of the 2.x line. A breaking change to this
+accumulated during 0.x wait for the first contract step of the 2.x line, except the removals
+[migration 0025](#the-fast-tier-cutover) made. A breaking change to this
 surface is a narrowing of `workhorse.protocol_version`, not a schema-version bump.
 
 A superseded function is retained until a major release has shipped that supersedes it **and**
@@ -360,6 +362,38 @@ artifact. `typescript/core/test/schema-migrations.test.ts` requires every frozen
 to a schema byte-identical to a clean installation, which is what catches drift in any release, not
 only this one. No baseline digest is pinned.
 
+## The fast-tier cutover
+
+Migration `0025-add-a-fast-task-tier.sql` adds the fast tier and SQL protocol version 5. It is also
+a contract step, although it ships in a minor release. Its first line declares
+`{"kind":"contract","retiresProtocolVersions":[1,2,3,4]}`.
+
+The step narrows `workhorse.protocol_version` from versions 1 through 4 to exactly 5. It drops
+`fire_due_schedules_v1` and `sync_schedule_definitions_v1`, which protocol 2 superseded with their
+`_v2` forms. It retains no shim, so a client built for protocol 4 fails its compatibility check at
+startup instead of calling a missing function. `MINIMUM_PROTOCOL_VERSION` and `PROTOCOL_VERSION` are
+both 5, and `protocol/v1/manifest.json` sets `schema.minimumVersion` to 25.
+
+[ADR 0077](decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) §6 allows
+this for one release. It amends
+[ADR 0057](decisions/0057-retain-superseded-functions-and-contract-on-the-operators-schedule.md) in
+timing only: the step ships without the major boundary and without the twelve-month retention
+window. The exception rests on the premise of
+[ADR 0073](decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md) that the Workhorse
+demo is the only installed instance, so one offline cutover replaces a rolling one. From the next
+release, ADR 0053 and ADR 0057 apply unchanged.
+
+The cutover is offline:
+
+1. Stop every worker and every producer.
+2. Run `workhorse schema migrate`. It applies nothing past schema version 24 and reports the pending
+   contract step.
+3. Run `workhorse schema contract --yes`, which applies migration 0025.
+4. Start the new release.
+
+Every queue starts full-tier, so live tasks stay where they are and no history needs a backfill.
+Nothing changes until an operator moves an empty queue to the fast tier.
+
 ## Contract steps and the major boundary
 
 A major release adds; it does not remove. Its migrations are additive like every other migration,
@@ -369,7 +403,9 @@ rolling deployment and a fleet on the previous major keeps running while the new
 Removal is a **contract step**: a separate migration, shipped by the new major line, that drops
 superseded functions and narrows `workhorse.protocol_version`. Its `SCHEMA_MIGRATIONS` entry and
 the file's first line both declare `kind: "contract"` and name the retiring protocol versions, and
-`workhorse schema migrate` stops before it and reports the step rather than applying it.
+`workhorse schema migrate` stops before it and reports the step rather than applying it. Migration
+0025 is the one contract step shipped outside a major line; see
+[The fast-tier cutover](#the-fast-tier-cutover).
 
 The operator applies it with `workhorse schema contract --yes`, once their own fleet is entirely on
 the new major. The command applies exactly one pending contract step under the same advisory lock,

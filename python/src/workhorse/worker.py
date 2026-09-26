@@ -73,6 +73,7 @@ from .errors import (
     ChildResultLimitExceededError,
     DeadlineExceededError,
     ExecutionTimeoutError,
+    FastTierUnsupportedError,
     HumanWaitAlreadyWaitingError,
     HumanWaitConflictError,
     HumanWaitLeaseLostError,
@@ -88,6 +89,7 @@ from .errors import (
     WaitConflictError,
     WaitLeaseLostError,
     WaitLimitExceededError,
+    _translate_database_error,
 )
 from .types import (
     BatchHandlerItem,
@@ -220,6 +222,10 @@ class _DurableWaitSuspension(BaseException):
 
 _MAX_WAIT_DURATION_MS = 31_536_000_000
 
+# How long a worker claims a queue that rejected a fast claim through claim_many before probing it
+# again. A queue can move to the fast tier only while it holds no live tasks (ADR 0077).
+_TIER_PROBE_INTERVAL_SECONDS = 30.0
+
 
 class _HandlerDurability:
     def __init__(
@@ -229,9 +235,11 @@ class _HandlerDurability:
         worker_id: str,
         cancellation: CancellationToken,
         arbiter: _AttemptOutcomeArbiter,
+        fast_tier: bool = False,
     ) -> None:
         self._executor = executor
         self._task = task
+        self._fast_tier = fast_tier
         self._worker_id = worker_id
         self._cancellation = cancellation
         self._arbiter = arbiter
@@ -261,6 +269,8 @@ class _HandlerDurability:
         return suspension
 
     def context(self) -> HandlerContext:
+        if self._fast_tier:
+            return self._fast_tier_context()
         return HandlerContext(
             self._task,
             self._cancellation,
@@ -276,6 +286,37 @@ class _HandlerDurability:
             self.run_child,
             self.run_children,
             self.run_children_all,
+        )
+
+    def _fast_tier_context(self) -> HandlerContext:
+        """Build a context that rejects durable execution state before any round trip.
+
+        A fast-tier task has no checkpoints, progress, waits, or children (ADR 0077). Rejecting
+        locally fails the attempt with a clear error instead of a PostgreSQL refusal.
+        """
+        queue = self._task.queue
+
+        def reject(feature: str) -> Callable[..., Any]:
+            def rejected(*_arguments: object) -> Any:
+                raise FastTierUnsupportedError(queue, feature)
+
+            return rejected
+
+        return HandlerContext(
+            self._task,
+            self._cancellation,
+            self.get_checkpoint,
+            self.get_wait,
+            self.get_progress,
+            reject("progress"),
+            reject("checkpoints"),
+            reject("durable waits"),
+            reject("durable waits"),
+            reject("signal waits"),
+            reject("human waits"),
+            reject("child tasks"),
+            reject("child tasks"),
+            reject("child tasks"),
         )
 
     def _load_checkpoints(self) -> dict[str, TaskCheckpoint]:
@@ -910,6 +951,11 @@ class Worker:
         self._hostname = socket.gethostname() or "python-worker"
         self._registered = False
         self._next_queue_index = 0
+        # Queues that rejected a fast claim, with the monotonic time to probe them again.
+        self._full_tier_until: dict[str, float] = {}
+        # Tasks claimed from a queue that answered as fast-tier. Their handlers get the fast-tier
+        # context, and their completions take the batched path.
+        self._fast_task_ids: set[str] = set()
         self._state_lock = Lock()
         self._contract_validators: dict[tuple[str, str], Any] = {}
         self._execution_lock = Lock()
@@ -1573,10 +1619,13 @@ class Worker:
                 "workhorse.claim",
                 {"workhorse.queue.name": queue_name},
             ) as claim_span:
-                rows = self._executor.rows(
-                    _STATEMENTS.claim_many,
-                    (queue_name, self.worker_id, limit - len(claimed), self.lease_ms),
-                )
+                rows = self._claim_queue(queue_name, limit - len(claimed), claim_started_at)
+                if rows is None:
+                    claim_span.set_attribute("workhorse.queue.tier", "full")
+                    rows = self._executor.rows(
+                        _STATEMENTS.claim_many,
+                        (queue_name, self.worker_id, limit - len(claimed), self.lease_ms),
+                    )
                 claimed_tasks = tuple(_claimed_task(row, queue_name) for row in rows)
                 _record_claim(
                     queue_name,
@@ -1598,6 +1647,67 @@ class Worker:
                     },
                 )
                 claimed.append((task, claim_started_at))
+
+    def _claim_queue(self, queue_name: str, limit: int, sent_at: float) -> list[_Row] | None:
+        """Claim through the fast-tier path, or return None when the queue is full-tier.
+
+        The fast claim is complete_many_and_claim_v1 with no completions. A full-tier queue
+        rejects it, and the worker then claims that queue through claim_many until the next probe.
+        """
+        with self._state_lock:
+            if self._full_tier_until.get(queue_name, float("-inf")) > sent_at:
+                return None
+        try:
+            rows = self._executor.rows(
+                _STATEMENTS.complete_many_and_claim,
+                (self.worker_id, [], [], [], queue_name, limit, self.lease_ms),
+            )
+        except Exception as error:
+            if not isinstance(_translate_database_error(error), FastTierUnsupportedError):
+                raise
+            with self._state_lock:
+                self._full_tier_until[queue_name] = sent_at + _TIER_PROBE_INTERVAL_SECONDS
+            return None
+        # A claim that finds nothing still returns one row, with every claim column null.
+        claimed = [row for row in rows if row["task_id"] is not None]
+        with self._state_lock:
+            self._full_tier_until.pop(queue_name, None)
+            self._fast_task_ids.update(str(row["task_id"]) for row in claimed)
+        return claimed
+
+    def _complete_fast_task(self, task: ClaimedTask, encoded_result: str) -> bool:
+        """Complete a fast-tier attempt through the batched statement, claiming nothing.
+
+        A queue that left the fast tier after the claim rejects that statement, so the attempt
+        completes through complete_v1 instead.
+        """
+        try:
+            rows = self._executor.rows(
+                _STATEMENTS.complete_many_and_claim,
+                (
+                    self.worker_id,
+                    [task.id],
+                    [task.fence_token],
+                    [encoded_result],
+                    task.queue,
+                    0,
+                    self.lease_ms,
+                ),
+            )
+        except Exception as error:
+            if not isinstance(_translate_database_error(error), FastTierUnsupportedError):
+                raise
+            return (
+                _require_lifecycle_row(
+                    self._executor.rows(
+                        _STATEMENTS.complete,
+                        (task.id, self.worker_id, task.fence_token, encoded_result),
+                    )
+                )["accepted"]
+                is True
+            )
+        accepted = _require_lifecycle_row(rows)["accepted"]
+        return isinstance(accepted, list) and task.id in {str(value) for value in accepted}
 
     def _due_for_maintenance_routines(self, now_monotonic: float) -> bool:
         """Report whether this pass offers the slow routines, and claim the offer when it does."""
@@ -1910,6 +2020,7 @@ class Worker:
             with self._state_lock:
                 self._active_threads.discard(current_thread())
                 self._dispatch_order.pop(task.id, None)
+                self._fast_task_ids.discard(task.id)
             self._wake.set()
 
     def _drain_active_threads(self) -> None:
@@ -2068,12 +2179,15 @@ class Worker:
         )
         expiration_thread = Thread(target=watch_expiration, name=f"workhorse-expiration-{task.id}")
         expiration_thread.start()
+        with self._state_lock:
+            fast_tier = task.id in self._fast_task_ids
         durability = _HandlerDurability(
             self._executor,
             task,
             self.worker_id,
             cancellation,
             arbiter,
+            fast_tier,
         )
 
         ownership_released = False
@@ -2134,12 +2248,16 @@ class Worker:
                 )
             return
         with _start_span("workhorse.complete", _task_span_attributes(task)) as completion_span:
-            accepted = _require_lifecycle_row(
-                self._executor.rows(
-                    _STATEMENTS.complete,
-                    (task.id, self.worker_id, task.fence_token, encoded_result),
-                )
-            )["accepted"]
+            accepted = (
+                self._complete_fast_task(task, encoded_result)
+                if fast_tier
+                else _require_lifecycle_row(
+                    self._executor.rows(
+                        _STATEMENTS.complete,
+                        (task.id, self.worker_id, task.fence_token, encoded_result),
+                    )
+                )["accepted"]
+            )
             completion_span.set_attribute("workhorse.complete.accepted", accepted is True)
             _emit_log(
                 "INFO",

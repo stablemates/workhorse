@@ -17,6 +17,9 @@ idle in between, however long the wait lasts.
 The synchronous Python worker uses `context.sleep` for a duration and `context.sleep_until` for a
 wake time. Both release the slot and replay the handler without consuming the attempt.
 
+A handler on a [fast-tier queue](305-fast-tier.md) cannot wait, because that tier keeps no durable
+execution state.
+
 ## The catch: your handler restarts from the top
 
 This is the part that surprises people, so get it clear.

@@ -79,6 +79,7 @@ impl HandlerContext {
         payload: &P,
         options: EnqueueOptions,
     ) -> Result<R, Error> {
+        self.fast_tier_guard("child tasks")?;
         validate_name(name, "child")?;
         let request =
             child_request(self.task(), task_type, serde_json::to_value(payload)?, &options)?;
@@ -134,6 +135,7 @@ impl HandlerContext {
         children: Vec<ChildTaskRequest>,
         mode: &'static str,
     ) -> Result<BTreeMap<String, Value>, Error> {
+        self.fast_tier_guard("child tasks")?;
         if children.len() > MAX_CHILDREN {
             let name = "children".to_owned();
             return Err(Error::LimitExceeded { operation: Operation::RunChildren, name });

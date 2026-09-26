@@ -1,5 +1,10 @@
 import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
-import { databaseErrorCode, databaseErrorDetails, WorkhorseError } from "../errors.js";
+import {
+  databaseErrorCode,
+  databaseErrorDetails,
+  fastTierRejection,
+  WorkhorseError,
+} from "../errors.js";
 import { injectTraceContext, logDebug, telemetryMetrics, withSpan } from "../telemetry.js";
 import type {
   ClaimedTask,
@@ -880,7 +885,13 @@ export class EnqueueContractsModule extends QueueModule {
           }
           return enqueueResults;
         } catch (error) {
-          throw enqueueConflict(error) ?? dependencyCycle(error) ?? dependencyLimit(error) ?? error;
+          throw (
+            enqueueConflict(error) ??
+            dependencyCycle(error) ??
+            dependencyLimit(error) ??
+            fastTierRejection(error) ??
+            error
+          );
         }
       },
     );

@@ -50,11 +50,15 @@ describe("dashboard procedure plans", () => {
          FROM workhorse.task
         WHERE queue_name = 'dashboard-plan'`,
     );
+    // The harness truncates between files, which discards the empty statistics the schema records
+    // for the fast-tier tables. Without them the planner probes both tables once per seeded row.
     await database.pool.query(
       `ANALYZE workhorse.task;
        ANALYZE workhorse.task_outcome;
        ANALYZE workhorse.task_event;
-       ANALYZE workhorse.attempt_history;`,
+       ANALYZE workhorse.attempt_history;
+       ANALYZE workhorse.fast_task_runtime;
+       ANALYZE workhorse.fast_task_outcome;`,
     );
   });
 
