@@ -406,6 +406,14 @@ func TestHandlerContextReturnsTypedProgressFenceAndRateLimitErrors(t *testing.T)
 		if _, firstProgressError = handlerContext.SetProgress(map[string]any{"step": 1}); firstProgressError != nil {
 			return nil, nil
 		}
+		// The window must not depend on how long the first write took on a loaded runner.
+		if _, err := pool.Exec(
+			ctx,
+			"UPDATE workhorse.task_progress SET updated_at = clock_timestamp() + interval '1 second' WHERE task_id = $1",
+			taskID,
+		); err != nil {
+			return nil, err
+		}
 		_, rateLimitError = handlerContext.SetProgress(map[string]any{"step": 2})
 		var accepted bool
 		if err := pool.QueryRow(

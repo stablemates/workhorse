@@ -306,17 +306,26 @@ async fn run_children_all_returns_every_result_by_name() {
 async fn progress_round_trips_and_a_quick_change_is_rate_limited() {
     let Some(harness) = harness("durable_progress").await else { return };
     let task = harness.enqueue("report", Value::Null).await;
-    harness.worker.handle("report", |_: Value, context: HandlerContext| async move {
-        assert_eq!(context.get_progress::<Value>().await?, None);
-        context.set_progress(&json!({ "done": 1 })).await?;
-        // An identical value is unchanged, so it is never rate limited.
-        context.set_progress(&json!({ "done": 1 })).await?;
-        let limited = context.set_progress(&json!({ "done": 2 })).await;
-        let Err(Error::ProgressRateLimited { retry_after }) = limited else {
-            panic!("a quick change returned {limited:?}")
-        };
-        assert!(retry_after > Duration::ZERO);
-        Ok(context.get_progress::<Value>().await?)
+    const RESTAMP: &str = "UPDATE workhorse.task_progress
+                              SET updated_at = clock_timestamp() + interval '1 second'
+                            WHERE task_id = $1";
+    let restamp = Arc::new(harness.database.connect().await);
+    harness.worker.handle("report", move |_: Value, context: HandlerContext| {
+        let restamp = Arc::clone(&restamp);
+        async move {
+            assert_eq!(context.get_progress::<Value>().await?, None);
+            context.set_progress(&json!({ "done": 1 })).await?;
+            // An identical value is unchanged, so it is never rate limited.
+            context.set_progress(&json!({ "done": 1 })).await?;
+            // The window must not depend on how long the calls above took on a loaded runner.
+            restamp.execute(RESTAMP, &[&context.task().id]).await.unwrap();
+            let limited = context.set_progress(&json!({ "done": 2 })).await;
+            let Err(Error::ProgressRateLimited { retry_after }) = limited else {
+                panic!("a quick change returned {limited:?}")
+            };
+            assert!(retry_after > Duration::ZERO);
+            Ok(context.get_progress::<Value>().await?)
+        }
     });
     harness.run_once().await;
     assert_eq!(harness.result(task).await, Some(json!({ "done": 1 })));
