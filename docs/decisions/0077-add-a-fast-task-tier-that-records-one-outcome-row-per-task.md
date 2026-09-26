@@ -65,6 +65,7 @@ and every SDK moves to the new protocol version in the same release train.**
    - The claim is per queue. One tier per queue lets the claim read one table in one priority
      order.
    - Concurrency and rate-limit policies are per queue, and the fast tier excludes them.
+     They need a claim that admits one task at a time, and the fast claim takes a whole batch.
    - The opt-in history settings below are per queue too.
 4. The claim already reads `queue_control` to check `paused`. It reads the tier from the same row,
    so choosing the claim path costs no extra lookup.
