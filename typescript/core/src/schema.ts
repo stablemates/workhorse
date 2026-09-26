@@ -186,6 +186,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "a dependent enqueue holds its prerequisites against completion",
     kind: "additive",
   },
+  {
+    fromVersion: 26,
+    toVersion: 27,
+    file: "0027-claim-policy-limited-tasks-as-a-set.sql",
+    description: "claim policy limited tasks as a set",
+    kind: "additive",
+  },
 ];
 
 /**

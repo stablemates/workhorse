@@ -18,8 +18,8 @@ contract step pending at the installed version through `workhorse schema contrac
 `--yes` and first names every worker still live on a retiring protocol. The current migration plan
 has one contract step: `0025-add-a-fast-task-tier.sql` moves schema 24 to 25 and retires
 protocols 1 through 4. `migrateSchema` therefore stops at schema 24 on an older installation, and
-`contractSchema` applies step 25. The additive step 26 follows, so a second `migrateSchema` run
-completes the plan. That step ships without the usual retention window, as
+`contractSchema` applies step 25. The additive steps 26 and 27 follow, so a second `migrateSchema`
+run completes the plan. Step 25 ships without the usual retention window, as
 [ADR 0077](decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) §6 records.
 
 A clean installation records `(6, 'baseline')` in `workhorse.schema_migration`, then one row per
@@ -68,7 +68,7 @@ function or reinterpret that suffix.
 ## SQL protocol conformance
 
 `protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 5. It accepts installed
-schema versions 25 through 26 and client protocol 5 only. `protocol/v1/compatibility.json` distinguishes an absent,
+schema versions 25 through 27 and client protocol 5 only. `protocol/v1/compatibility.json` distinguishes an absent,
 older, current, or newer installed schema from the client's protocol version. Every incompatible
 case requires refusal before a mutating function runs.
 
@@ -1920,8 +1920,9 @@ fingerprint only when present, so a request accepted before schema version 3 kee
 `enqueue_debounce_v1` updates it on replacement and `redrive_v1` copies it. A task whose budget has
 no row admits freely, the way a queue with no policy row has no limit.
 
-`claim_v1` delegates to `claim_one_v1(queue, worker, lease_ms, wait_for_budgets)` with waiting
-allowed. Before it reads the clock, the claim samples the first 100 ready rows of its queue in
+`claim_v1` is `claim_many_v1` with a limit of 1. On a queue with no concurrency or rate-limit policy,
+`claim_many_v1` calls `claim_one_v1(queue, worker, lease_ms, wait_for_budgets)` and lets only its
+first call wait. Before it reads the clock, the claim samples the first 100 ready rows of its queue in
 priority order. It takes the exclusive transaction advisory lock `workhorse:budget:<budget_name>`
 for each distinct budget name in that sample, in name order, so two claims that share budgets
 cannot deadlock. It then inspects the 100-row priority window and calls
@@ -1932,7 +1933,9 @@ count it reads includes every start another claim committed before the lock was 
 `claim_many_v1` lets only its first claim wait for a budget lock. Each later claim in the batch uses
 `pg_try_advisory_xact_lock` and skips any budget it cannot lock at once, because the batch already
 holds budget locks and waiting on another could deadlock against a batch that holds them in a
-different order. Admission counts active rows through `task_runtime_active_budget_expiry_idx`
+different order. On a queue with a concurrency or rate-limit policy, `claim_many_v1` admits in rounds
+([Claim](#claim)); only its first round waits, and it computes each locked budget's room from the same
+count and bucket instead of calling `budget_admission_v1`. Admission counts active rows through `task_runtime_active_budget_expiry_idx`
 whose `expires_at` is later than now, and probes `budget_bucket_v1(budget_name, now, false)`
 without consuming. After the runtime update selects a candidate,
 `budget_bucket_v1(budget_name, now, true)` consumes one token. `budget_bucket` holds one row per
@@ -2407,7 +2410,38 @@ it has no bound. `pnpm benchmark:saturated-claim` measures a claim on a queue wh
 saturated: it writes no row lock and one WAL record, where the window lock wrote 100 row locks and
 101 WAL records.
 
-One runtime update changes the selected row to active and installs worker, global fence, acquisition, heartbeat, and expiry data. The same transaction appends the claim event before returning identity, payload, normalized `retryPolicy`, contract version, result limit, and error-redaction flag. No transaction remains open while user code runs. `Queue.claim` uses `claim_v1`. `claim_many_v1(queue, worker, limit, lease_ms)` accepts a limit from 1 through 100. It invokes the same transition, `claim_one_v1`, repeatedly inside one database call until it reaches the limit or a claim returns no row. Only the first claim of the batch waits for a budget lock. On a fast-tier queue both functions branch to `fast_claim_v1` instead ([Fast claim](#fast-claim)).
+One runtime update changes the selected row to active and installs worker, global fence, acquisition, heartbeat, and expiry data. The same transaction appends the claim event before returning identity, payload, normalized `retryPolicy`, contract version, result limit, and error-redaction flag. No transaction remains open while user code runs. `Queue.claim` uses `claim_v1`, which is `claim_many_v1` with a limit of 1. `claim_many_v1(queue, worker, limit, lease_ms)` accepts a limit from 1 through 100. On a queue with no concurrency or rate-limit policy row, it invokes `claim_one_v1` repeatedly inside one database call until it reaches the limit or a claim returns no row. Only the first claim of the batch waits for a budget lock. On a fast-tier queue it branches to `fast_claim_v1` instead ([Fast claim](#fast-claim)).
+
+On a queue with a concurrency or rate-limit policy row, `claim_many_v1` admits the batch as a set
+instead of calling `claim_one_v1` once per task. It takes the same shared advisory locks and policy
+row locks once for the whole batch. The policy row locks serialize every policy claim on the queue,
+so no other claim changes the counts and buckets the batch reads until it commits. The batch then
+runs rounds. Each round:
+
+1. Locks the budgets named by the first 100 ready rows, in name order. The first round waits for
+   each lock; a later round uses `pg_try_advisory_xact_lock` and skips a budget it cannot lock.
+2. Reads the clock once. The first round also prunes up to 100 fully refilled key buckets, as
+   `claim_one_v1` does.
+3. Computes the queue's room: the remaining limit, `max_active` minus the unexpired active count,
+   and the whole tokens in the queue bucket, whichever is smallest. A round with no room ends the
+   batch.
+4. Reads the first 100 admissible ready rows without locking, in priority, sequence, and task-identity
+   order. It computes each key's room from `max_active_per_key` and the key bucket, and each locked
+   budget's room from `budget.max_active` and `budget_bucket`. A budget the claim never locked has no
+   room. A row fits when its rank within its key and its rank within its budget are both within that
+   room.
+5. Locks up to the queue's room of fitting rows with `FOR UPDATE SKIP LOCKED`. It allocates their
+   fences from `fence_token_seq` in ascending order, activates them in one update, and appends one
+   claim event per row.
+6. Charges the queue bucket, each key bucket, and each budget bucket once for the starts it admitted.
+   A missing bucket starts full, and refill never runs from a clock ahead of the claim.
+
+A round returns its rows in fence order. The batch stops once it fills the limit or the queue's own
+room. It also stops when the window held every ready row and the round activated every fitting row,
+unless some row had both a limited key and a limited budget. Only that mix can leave a greedy
+admission unrealized within one round, so the batch runs another round then. A policy created after
+the unlocked policy check is still enforced, because the plain path's `claim_one_v1` locks and applies
+it.
 
 ### Worker concurrency and lifecycle
 
@@ -2421,9 +2455,9 @@ entry while preserving first occurrence order. `WorkerOptions.queue` remains the
 compatibility option. Supplying both options throws. Omitting both uses `WorkerQueueApi.defaultQueue`.
 One worker identity, pause state, and `concurrency` budget cover the complete configured queue set.
 
-Each claim requests a number of slots through `claim_many_v1`. PostgreSQL still performs each
-`claim_v1` transition serially inside that call, so every member independently passes ordering, policy,
-rate-token, and fence checks. The worker advances the queue cursor after every batched queue attempt.
+Each claim requests a number of slots through `claim_many_v1`. Every member passes ordering, policy,
+rate-token, and fence checks inside that call. On a queue without a policy it passes them in its own
+`claim_one_v1` transition; on a policy queue the batch admits its members in rounds ([Claim](#claim)). The worker advances the queue cursor after every batched queue attempt.
 Each claimed task starts one independent per-task handler task. On a queue whose tier probe answers fast, the worker claims and completes through
 `complete_many_and_claim_v1` instead ([Workers on a fast-tier queue](#workers-on-a-fast-tier-queue)).
 
@@ -2464,7 +2498,7 @@ member's failure through its persisted retry policy and remaining attempt budget
 return, wrong outcome count, or invalid outcome rejects every member. Each per-task execution path still
 submits that failure under its own fence.
 
-PostgreSQL admits each member through an independent `claim_v1` transition inside `claim_many_v1` before the process-local rendezvous.
+PostgreSQL admits each member inside `claim_many_v1` before the process-local rendezvous.
 The batch is not an atomic admission unit. Every admitted member consumes one worker slot, one queue or
 keyed active count, one queue rate token, and one keyed rate token when the matching policy applies. A
 policy can therefore produce a partial batch. Linger time continues to consume each admitted member's
