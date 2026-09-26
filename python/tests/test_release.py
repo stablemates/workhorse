@@ -11,6 +11,7 @@ from typing import Any
 import psycopg
 import tomli
 
+import workhorse
 from workhorse._version import WORKHORSE_VERSION
 
 
@@ -41,6 +42,15 @@ def test_sdk_version_constant_matches_the_release_manifest() -> None:
     manifest = _repository_toml("python", "pyproject.toml")
 
     assert manifest["project"]["version"] == WORKHORSE_VERSION
+
+
+def test_public_version_attribute_matches_the_release_manifest() -> None:
+    # `pnpm release:verify python` reads `workhorse.__version__` after every publish, so the
+    # attribute is public API and must name the version PyPI serves.
+    manifest = _repository_toml("python", "pyproject.toml")
+
+    assert "__version__" in workhorse.__all__
+    assert workhorse.__version__ == manifest["project"]["version"]
 
 
 def test_python_support_contract_matches_repository_declarations(database_url: str) -> None:
@@ -143,7 +153,24 @@ def test_built_distributions_run_the_documented_examples(
     assert async_result.returncode == 0, async_result.stderr
     assert async_result.stdout.strip() == "Python async driver example completed"
 
+    version = _repository_toml("python", "pyproject.toml")["project"]["version"]
     for distribution in ("wheel", "sdist"):
+        version_result = subprocess.run(
+            [
+                str(installed_distribution_interpreters[distribution]),
+                "-c",
+                "import workhorse; print(workhorse.__version__)",
+            ],
+            check=False,
+            cwd=tmp_path,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        assert version_result.returncode == 0, version_result.stderr
+        assert version_result.stdout.strip() == version
+
         for driver in ("psycopg", "asyncpg"):
             interpreter = installed_distribution_interpreters[f"{distribution}-{driver}"]
             import_result = subprocess.run(
