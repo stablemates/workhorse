@@ -7,6 +7,7 @@ import { Queue } from "../src/queue.js";
 import { Worker } from "../src/worker.js";
 import { readDashboardTaskDetail } from "../../dashboard-server/src/server/read-model.js";
 import { dashboardDatabase } from "../../dashboard-server/src/server/sql.js";
+import { readDependencyCounterDrift } from "./support/dependency-counter.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 registerOpenTelemetry();
@@ -57,6 +58,14 @@ describe("child tasks", () => {
 
     expect(await worker.runOnce()).toBe(true);
     await expect(admin.getTask(parentId)).resolves.toMatchObject({ state: "blocked" });
+    await expect(
+      pool.query(
+        `SELECT pending_prerequisites, dependency_rejected
+           FROM workhorse.task_runtime WHERE task_id = $1`,
+        [parentId],
+      ),
+    ).resolves.toMatchObject({ rows: [{ pending_prerequisites: 2, dependency_rejected: false }] });
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
     const lineage = await admin.getChildLineage(parentId);
     expect(new Set(lineage.records.map((record) => record.name))).toEqual(
       new Set(["first", "second"]),
@@ -480,6 +489,14 @@ describe("child tasks", () => {
       childTaskIds: [created.child.childTaskId],
       parentTaskId: null,
     });
+    await expect(
+      pool.query(
+        `SELECT pending_prerequisites, dependency_rejected
+           FROM workhorse.task_runtime WHERE task_id = $1`,
+        [parentId],
+      ),
+    ).resolves.toMatchObject({ rows: [{ pending_prerequisites: 1, dependency_rejected: false }] });
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
     await expect(admin.getTask(created.child.childTaskId)).resolves.toMatchObject({
       state: "ready",
       childTaskIds: [],

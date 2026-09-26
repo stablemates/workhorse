@@ -9,6 +9,7 @@ import {
   MAX_TASK_DEPENDENTS,
   type Queryable,
 } from "../src/index.js";
+import { readDependencyCounterDrift } from "./support/dependency-counter.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { defaultRetentionPolicy, pool, queue, admin } = createIntegrationTestContext(
@@ -1333,6 +1334,259 @@ describe("task dependencies", () => {
       [dependentIds],
     );
     expect(stranded.rows).toEqual([]);
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+  });
+
+  it("counts the prerequisites still pending when one finishes while a fan-in enqueue is in flight", async () => {
+    // Each race holds two pooled connections, and the test pool has ten.
+    const rounds = 10;
+    const races: { dependentId: string; pendingId: string; expected: string }[] = [];
+    for (let round = 0; round < rounds; round += 1) {
+      await queue.enqueueMany(
+        Array.from({ length: 2 }, () => ({
+          type: "fan-in-race-prerequisite",
+          payload: null,
+          options: { queue: "fan-in-race-prerequisites", maxAttempts: 1 },
+        })),
+      );
+      const claimed = await queue.claimMany("fan-in-race-worker", 2, {
+        queue: "fan-in-race-prerequisites",
+      });
+      expect(claimed).toHaveLength(2);
+      const [unclaimedId, ...pendingIds] = await queue.enqueueMany(
+        Array.from({ length: 4 }, (_unused, index) => ({
+          type: "fan-in-race-other",
+          payload: null,
+          options: {
+            queue: index === 0 ? "fan-in-race-unclaimed" : "fan-in-race-pending",
+            maxAttempts: 1,
+          },
+        })),
+      );
+      // One prerequisite of each dependent finishes during its enqueue, through every terminal
+      // transition, and the other stays pending. The finished one either commits first or waits.
+      const finishers = [
+        {
+          prerequisiteId: claimed[0]!.id,
+          finished: "completed",
+          settled: "ready",
+          finish: async () =>
+            (await queue.complete(claimed[0]!, "fan-in-race-worker", null)) ? "completed" : "stale",
+        },
+        {
+          prerequisiteId: claimed[1]!.id,
+          finished: "failed",
+          settled: "failed",
+          finish: () => queue.fail(claimed[1]!, "fan-in-race-worker", new Error("done")),
+        },
+        {
+          prerequisiteId: unclaimedId!,
+          finished: "canceled",
+          settled: "canceled",
+          finish: async () => (await queue.cancel(unclaimedId!)).status,
+        },
+      ];
+      const results = await Promise.all(
+        finishers.map(async ({ prerequisiteId, finish }, index) => {
+          const transaction = await pool.connect();
+          try {
+            await transaction.query("BEGIN");
+            const enqueue = async () => {
+              const dependentId = await queue.enqueue(
+                "fan-in-race-dependent",
+                null,
+                {
+                  queue: "fan-in-race-dependents",
+                  dependencies: {
+                    prerequisiteTaskIds: [prerequisiteId, pendingIds[index]!],
+                    onSuccess: "release",
+                    onFailure: "fail",
+                    onCancellation: "cancel",
+                  },
+                },
+                transaction,
+              );
+              await sleep(5);
+              await transaction.query("COMMIT");
+              return dependentId;
+            };
+            const [dependentId, finished] = await Promise.all([
+              enqueue(),
+              sleep((index + round) % 2 === 0 ? 0 : 2).then(finish),
+            ]);
+            return { dependentId, finished };
+          } catch (error) {
+            await transaction.query("ROLLBACK").catch(() => undefined);
+            throw error;
+          } finally {
+            transaction.release();
+          }
+        }),
+      );
+      expect(results.map(({ finished }) => finished)).toEqual(
+        finishers.map(({ finished }) => finished),
+      );
+      const counters = await pool.query<{
+        pending_prerequisites: number;
+        dependency_rejected: boolean;
+      }>(
+        `SELECT runtime.pending_prerequisites, runtime.dependency_rejected
+           FROM unnest($1::uuid[]) WITH ORDINALITY dependent(task_id, position)
+           JOIN workhorse.task_runtime runtime ON runtime.task_id = dependent.task_id
+          WHERE runtime.state = 'blocked'
+          ORDER BY dependent.position`,
+        [results.map(({ dependentId }) => dependentId)],
+      );
+      expect(counters.rows).toEqual([
+        { pending_prerequisites: 1, dependency_rejected: false },
+        { pending_prerequisites: 1, dependency_rejected: true },
+        { pending_prerequisites: 1, dependency_rejected: true },
+      ]);
+      races.push(
+        ...results.map(({ dependentId }, index) => ({
+          dependentId,
+          pendingId: pendingIds[index]!,
+          expected: finishers[index]!.settled,
+        })),
+      );
+    }
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+
+    // The last pending prerequisite brings each counter to zero, and the recorded verdict settles it.
+    const pending = await queue.claimMany("fan-in-race-worker", races.length, {
+      queue: "fan-in-race-pending",
+    });
+    expect(pending).toHaveLength(races.length);
+    for (const task of pending)
+      expect(await queue.complete(task, "fan-in-race-worker", null)).toBe(true);
+    const settled = await pool.query<{ state: string }>(
+      `SELECT coalesce(runtime.state, outcome.state) AS state
+         FROM unnest($1::uuid[]) WITH ORDINALITY dependent(task_id, position)
+         LEFT JOIN workhorse.task_runtime runtime ON runtime.task_id = dependent.task_id
+         LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = dependent.task_id
+        ORDER BY dependent.position`,
+      [races.map(({ dependentId }) => dependentId)],
+    );
+    expect(settled.rows.map(({ state }) => state)).toEqual(races.map(({ expected }) => expected));
+  });
+
+  it("settles every terminal prerequisite of an enqueue in one pass", async () => {
+    const [succeededId, failedId, pendingId] = await queue.enqueueMany(
+      ["one-pass-succeeded", "one-pass-failed", "one-pass-pending"].map((type) => ({
+        type,
+        payload: null,
+        options: { queue: type, maxAttempts: 1 },
+      })),
+    );
+    const succeeded = await queue.claim("one-pass-worker", { queue: "one-pass-succeeded" });
+    expect(await queue.complete(succeeded!, "one-pass-worker", null)).toBe(true);
+    const failed = await queue.claim("one-pass-worker", { queue: "one-pass-failed" });
+    expect(await queue.fail(failed!, "one-pass-worker", new Error("done"))).toBe("failed");
+
+    const policies = {
+      onSuccess: "release",
+      onFailure: "release",
+      onCancellation: "cancel",
+    } as const;
+    const releasedId = await queue.enqueue("one-pass-released", null, {
+      dependencies: { prerequisiteTaskIds: [succeededId!, failedId!], ...policies },
+    });
+    const blockedId = await queue.enqueue("one-pass-blocked", null, {
+      dependencies: { prerequisiteTaskIds: [succeededId!, failedId!, pendingId!], ...policies },
+    });
+
+    await expect(admin.getTask(releasedId)).resolves.toMatchObject({ state: "ready" });
+    await expect(
+      pool.query(
+        `SELECT state, pending_prerequisites, dependency_rejected
+           FROM workhorse.task_runtime WHERE task_id = $1`,
+        [blockedId],
+      ),
+    ).resolves.toMatchObject({
+      rows: [{ state: "blocked", pending_prerequisites: 1, dependency_rejected: false }],
+    });
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+
+    const pending = await queue.claim("one-pass-worker", { queue: "one-pass-pending" });
+    expect(await queue.complete(pending!, "one-pass-worker", null)).toBe(true);
+    await expect(admin.getTask(blockedId)).resolves.toMatchObject({ state: "ready" });
+    const released = await pool.query<{ details: unknown }>(
+      `SELECT details FROM workhorse.task_event
+        WHERE task_id = $1 AND event_type = 'dependency_released' AND details->>'state' = 'ready'`,
+      [blockedId],
+    );
+    expect(released.rows).toEqual([
+      {
+        details: {
+          prerequisite_task_id: pendingId,
+          state: "ready",
+          reason: "prerequisite_succeeded",
+        },
+      },
+    ]);
+  });
+
+  it("holds a rejection until the last edge resolves and cascades it downstream", async () => {
+    const [failingId, pendingId] = await queue.enqueueMany(
+      ["held-rejection-failing", "held-rejection-pending"].map((type) => ({
+        type,
+        payload: null,
+        options: { queue: type, maxAttempts: 1 },
+      })),
+    );
+    const policies = { onSuccess: "release", onFailure: "fail", onCancellation: "cancel" } as const;
+    const dependentId = await queue.enqueue("held-rejection-dependent", null, {
+      dependencies: { prerequisiteTaskIds: [failingId!, pendingId!], ...policies },
+    });
+    const downstreamId = await queue.enqueue("held-rejection-downstream", null, {
+      dependencies: { prerequisiteTaskIds: [dependentId], ...policies },
+    });
+
+    const failing = await queue.claim("held-rejection-worker", { queue: "held-rejection-failing" });
+    expect(await queue.fail(failing!, "held-rejection-worker", new Error("nope"))).toBe("failed");
+    await expect(
+      pool.query(
+        `SELECT state, pending_prerequisites, dependency_rejected
+           FROM workhorse.task_runtime WHERE task_id = $1`,
+        [dependentId],
+      ),
+    ).resolves.toMatchObject({
+      rows: [{ state: "blocked", pending_prerequisites: 1, dependency_rejected: true }],
+    });
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+
+    const pending = await queue.claim("held-rejection-worker", { queue: "held-rejection-pending" });
+    expect(await queue.complete(pending!, "held-rejection-worker", null)).toBe(true);
+    await expect(admin.getTask(dependentId)).resolves.toMatchObject({
+      state: "failed",
+      error: expect.objectContaining({ name: "DependencyFailed", prerequisite_task_id: failingId }),
+    });
+    await expect(admin.getTask(downstreamId)).resolves.toMatchObject({
+      state: "failed",
+      error: expect.objectContaining({
+        name: "DependencyFailed",
+        prerequisite_task_id: dependentId,
+      }),
+    });
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+  });
+
+  it("refuses to drive a pending-prerequisite counter below zero", async () => {
+    const prerequisiteId = await queue.enqueue("underflow-prerequisite", null);
+    const dependentId = await queue.enqueue("underflow-dependent", null, {
+      prerequisiteTaskId: prerequisiteId,
+    });
+    await pool.query(
+      `UPDATE workhorse.task_runtime SET pending_prerequisites = 0 WHERE task_id = $1`,
+      [dependentId],
+    );
+    await expect(
+      pool.query(`SELECT workhorse.resolve_dependents_v1($1::uuid, 'succeeded')`, [prerequisiteId]),
+    ).rejects.toThrow(/task_runtime_pending_prerequisites_check/);
+    await pool.query(
+      `UPDATE workhorse.task_runtime SET pending_prerequisites = 1 WHERE task_id = $1`,
+      [dependentId],
+    );
   });
 
   it("lets a prerequisite be claimed and heartbeated while a dependent enqueue is in flight", async () => {

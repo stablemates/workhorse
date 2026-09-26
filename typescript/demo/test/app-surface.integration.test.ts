@@ -989,7 +989,8 @@ describe("Workhorse demo", () => {
               ready_at = NULL, sequence = NULL, worker_id = NULL, acquired_at = NULL,
               heartbeat_at = NULL, expires_at = NULL, attempt_timeout_at = NULL,
               fence_token = 0, wait_name = NULL, attempt_started_at = NULL,
-              cancel_requested_at = NULL, cancel_requested_by = NULL, cancel_reason = NULL`,
+              cancel_requested_at = NULL, cancel_requested_by = NULL, cancel_reason = NULL,
+              pending_prerequisites = 0, dependency_rejected = false`,
     );
     await pool.query(
       `UPDATE workhorse.task_runtime

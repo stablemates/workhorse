@@ -26,6 +26,7 @@ import {
 } from "../src/schema-migrations.js";
 import type { Queryable } from "../src/types.js";
 import { createDatabaseTestHarness } from "./support/db.js";
+import { readDependencyCounterDrift } from "./support/dependency-counter.js";
 import {
   createHistoryFixtureDay,
   readSeededRows,
@@ -557,6 +558,13 @@ describe("schema migrations", () => {
       await migrateThroughContracts(releaseDatabase.pool);
 
       expect(await readSeededRows(releaseDatabase.pool, seeded)).toEqual(seeded);
+      // The counter migration backfills every blocked row from the edges it summarizes.
+      expect(await readDependencyCounterDrift(releaseDatabase.pool)).toEqual([]);
+      const counted = await releaseDatabase.pool.query<{ count: number }>(
+        `SELECT count(*)::integer AS count
+           FROM workhorse.task_runtime WHERE pending_prerequisites > 0`,
+      );
+      expect(counted.rows[0]?.count).toBeGreaterThan(0);
 
       expect(await dumpNormalizedSchema(releaseDatabase.databaseUrl)).toBe(
         await dumpNormalizedSchema(cleanDatabase.databaseUrl),
