@@ -55,8 +55,8 @@ console.log(task?.state, task?.currentAttempt, task?.result);
 
 ## Who owns active work
 
-When a `Worker` has free slots, it calls `claim_many_v1` with that count. PostgreSQL applies the
-`claim_v1` queue-policy transition to each member, then records the worker ID, a lease expiry, and a fence token on `task_runtime`. The worker
+When a `Worker` has free slots, it calls `claim_many_v1` with that count. Workhorse admits the
+members that the queue's policies allow, then records the worker ID, a lease expiry, and a fence token on `task_runtime`. The worker
 sends every active lease through `heartbeat_many_v1` while handlers run.
 
 If heartbeats stop, recovery closes the old attempt and makes the task eligible again. Every

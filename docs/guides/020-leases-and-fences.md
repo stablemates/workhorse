@@ -5,8 +5,8 @@ guarantees it, because almost every other rule in Workhorse depends on it.
 
 ## Claiming a task
 
-When a worker has free slots, it calls `claim_many_v1`. PostgreSQL applies `claim_v1` to each
-admissible ready task and stamps its `task_runtime` row with three things:
+When a worker has free slots, it calls `claim_many_v1`. Workhorse admits the ready tasks that the
+queue's order and policies allow. It stamps each admitted task's `task_runtime` row with three things:
 
 - **the worker's id** — who owns it
 - **`expires_at`** — until when

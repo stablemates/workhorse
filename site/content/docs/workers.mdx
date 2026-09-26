@@ -317,8 +317,9 @@ A worker that dies stops refreshing and goes stale in the registry. Automatic ma
 removes that row. Its tasks are not lost: their leases expire and
 recovery makes them claimable again.
 
-The protocol names make this lifecycle greppable. `claim_many_v1` applies `claim_v1` to each
-selected task and writes its `task_runtime` lease. `heartbeat_many_v1` submits every active lease
+The protocol names make this lifecycle greppable. `claim_many_v1` admits the
+tasks that the queue's policies allow and writes each one's `task_runtime` lease; `claim_v1` is the
+same call with a limit of one. `heartbeat_many_v1` submits every active lease
 and extends the accepted `expires_at` values. `recover_expired_v1` makes abandoned work ready.
 Workers claim from `workhorse_tasks`, TypeScript configures fallback polling with `pollMs`, and
 processes commonly begin graceful drain after `SIGINT`.

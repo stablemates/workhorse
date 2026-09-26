@@ -491,6 +491,7 @@ describe("schema installation", () => {
         version: 26,
         description: "a dependent enqueue holds its prerequisites against completion",
       },
+      { version: 27, description: "claim policy limited tasks as a set" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

@@ -1549,6 +1549,165 @@ describe("claim lease fence", () => {
     await expect(queue.claim("atomic-rate-worker-c", { queue: queueName })).resolves.not.toBeNull();
   });
 
+  it("keeps competing batch claims within every concurrency and rate cap", async () => {
+    // Policy queues admit a batch as a set, so this contends batch claims with single claims and
+    // checks each cap against what the database holds afterwards.
+    const suffix = randomUUID();
+    const concurrencyQueue = `set-concurrency-${suffix}`;
+    const perKeyQueue = `set-per-key-${suffix}`;
+    const rateQueue = `set-rate-${suffix}`;
+    const budgetQueue = `set-budget-${suffix}`;
+    const budget = `set-budget-${suffix}`;
+    await queue.syncConcurrencyPolicies("test", [
+      { queue: concurrencyQueue, maxActive: 3 },
+      { queue: perKeyQueue, maxActive: 50, maxActivePerKey: 2 },
+    ]);
+    await queue.syncRateLimitPolicies("test", [
+      { queue: rateQueue, rate: { limit: 1, intervalMs: 3_600_000, burst: 4 } },
+    ]);
+    await queue.syncBudgets("test", [{ name: budget, maxActive: 5 }]);
+    await queue.enqueueMany([
+      ...Array.from({ length: 20 }, (_, ordinal) => ({
+        type: "set-limited",
+        payload: { ordinal },
+        options: { queue: concurrencyQueue },
+      })),
+      ...Array.from({ length: 20 }, (_, ordinal) => ({
+        type: "set-limited",
+        payload: { ordinal },
+        options: { queue: perKeyQueue, concurrencyKey: `key-${ordinal % 3}` },
+      })),
+      ...Array.from({ length: 20 }, (_, ordinal) => ({
+        type: "set-limited",
+        payload: { ordinal },
+        options: { queue: rateQueue },
+      })),
+      ...Array.from({ length: 20 }, (_, ordinal) => ({
+        type: "set-limited",
+        payload: { ordinal },
+        options: { queue: budgetQueue, budget },
+      })),
+    ]);
+
+    const contend = async (queueName: string) => {
+      const claims = await Promise.all(
+        Array.from({ length: 6 }, async (_, index) =>
+          index % 3 === 2
+            ? [await queue.claim(`set-worker-${index}`, { queue: queueName })].filter(
+                (claim) => claim !== null,
+              )
+            : await queue.claimMany(`set-worker-${index}`, 10, { queue: queueName }),
+        ),
+      );
+      return claims.flat();
+    };
+    const [concurrencyClaims, perKeyClaims, rateClaims, budgetClaims] = await Promise.all([
+      contend(concurrencyQueue),
+      contend(perKeyQueue),
+      contend(rateQueue),
+      contend(budgetQueue),
+    ]);
+
+    // Nothing else holds these queues, so a free slot left unclaimed would also be a defect.
+    expect(concurrencyClaims).toHaveLength(3);
+    expect(perKeyClaims).toHaveLength(6);
+    expect(rateClaims).toHaveLength(4);
+    expect(budgetClaims).toHaveLength(5);
+    for (const claims of [concurrencyClaims, perKeyClaims, rateClaims, budgetClaims]) {
+      expect(new Set(claims.map((claim) => claim.id)).size).toBe(claims.length);
+    }
+
+    const active = await pool.query<{
+      queue_name: string;
+      concurrency_key: string | null;
+      n: number;
+    }>(
+      `SELECT queue_name, concurrency_key, count(*)::int AS n
+         FROM workhorse.task_runtime
+        WHERE queue_name = ANY($1) AND state = 'active'
+        GROUP BY 1, 2`,
+      [[concurrencyQueue, perKeyQueue, rateQueue, budgetQueue]],
+    );
+    const activeIn = (queueName: string) =>
+      active.rows
+        .filter((row) => row.queue_name === queueName)
+        .reduce((sum, row) => sum + row.n, 0);
+    expect(activeIn(concurrencyQueue)).toBe(3);
+    expect(activeIn(rateQueue)).toBe(4);
+    expect(activeIn(budgetQueue)).toBe(5);
+    expect(active.rows.filter((row) => row.queue_name === perKeyQueue).map((row) => row.n)).toEqual(
+      [2, 2, 2],
+    );
+  });
+
+  it("publishes concurrency capacity only when a release leaves a full queue or key", async () => {
+    // A release below every cap cannot unblock a claim, so it must not wake a busy worker.
+    const suffix = randomUUID();
+    const totalQueue = `capacity-total-${suffix}`;
+    const keyQueue = `capacity-key-${suffix}`;
+    await queue.syncConcurrencyPolicies("test", [
+      { queue: totalQueue, maxActive: 3 },
+      { queue: keyQueue, maxActive: 50, maxActivePerKey: 1 },
+    ]);
+    await queue.enqueueMany([
+      ...Array.from({ length: 6 }, (_, ordinal) => ({
+        type: "capacity",
+        payload: { ordinal },
+        options: { queue: totalQueue },
+      })),
+      ...Array.from({ length: 2 }, (_, ordinal) => ({
+        type: "capacity",
+        payload: { ordinal },
+        options: { queue: keyQueue, concurrencyKey: "only-key" },
+      })),
+    ]);
+    const listener = await pool.connect();
+    const notifications: string[] = [];
+    listener.on("notification", (message) => notifications.push(message.payload ?? ""));
+    const published = async (queueName: string): Promise<number> => {
+      await sleep(100);
+      const count = notifications.filter((payload) => payload === queueName).length;
+      notifications.length = 0;
+      return count;
+    };
+    try {
+      await listener.query("LISTEN workhorse_tasks");
+      const full = await queue.claimMany("capacity-worker", 3, { queue: totalQueue });
+      expect(full).toHaveLength(3);
+      await published(totalQueue);
+
+      await expect(queue.complete(full[0]!, "capacity-worker", null)).resolves.toBe(true);
+      await expect(published(totalQueue)).resolves.toBe(1);
+
+      await expect(queue.complete(full[1]!, "capacity-worker", null)).resolves.toBe(true);
+      await expect(published(totalQueue)).resolves.toBe(0);
+
+      // One statement releases every row of a full queue, and its first row still sees the cap.
+      await expect(
+        queue.claimMany("capacity-worker", 2, { queue: totalQueue }),
+      ).resolves.toHaveLength(2);
+      await published(totalQueue);
+      await pool.query(
+        `DELETE FROM workhorse.task
+          WHERE id IN (
+            SELECT task_id FROM workhorse.task_runtime WHERE queue_name = $1 AND state = 'active'
+          )`,
+        [totalQueue],
+      );
+      await expect(published(totalQueue)).resolves.toBe(1);
+
+      // The queue is far below max_active, but the task's concurrency key was full.
+      const keyed = await queue.claim("capacity-worker", { queue: keyQueue });
+      expect(keyed).not.toBeNull();
+      await published(keyQueue);
+      await expect(queue.complete(keyed!, "capacity-worker", null)).resolves.toBe(true);
+      await expect(published(keyQueue)).resolves.toBe(1);
+    } finally {
+      await listener.query("UNLISTEN workhorse_tasks");
+      listener.release();
+    }
+  });
+
   it("refills continuously between interval boundaries", async () => {
     const queueName = `rate-limit-continuous-${randomUUID()}`;
     await queue.syncRateLimitPolicies("test", [
