@@ -2965,13 +2965,16 @@ worker claims through `claim_many_v1` until the next probe. The interval is
 current tier.
 
 A fast-tier completion uses the fused statement. A `batched completion` rejection means the queue
-left the fast tier, so the worker falls back to `complete_v1`. Only the TypeScript worker fuses a
-completion with a refill claim, for `freeSlots() + 1` tasks under the refill-batch rule, and hands
-the slot over directly. The Python, Go, and Rust workers complete with a zero claim limit and claim
+left the fast tier, so the worker falls back to `complete_v1`. The TypeScript and Python workers
+fuse a completion with a refill claim, for `freeSlots() + 1` tasks under the refill-batch rule, and
+hand the slot over directly. In Python, `Worker._reserve_completion_claim` reserves those slots and
+`Worker._send_batched_completion` sends one statement per queue and cohort at a time. Completions
+that arrive while it is in flight share the next statement, split into chunks of at most 100 tasks
+and 100 claimed slots. The Go and Rust workers complete with a zero claim limit and claim
 separately.
 
-The TypeScript worker splits its slots into cohorts so that fused completions do not run in
-lockstep ([ADR 0076](decisions/0076-keep-overlapping-batched-claims-in-flight-to-fill-worker-slots.md#cohorts-for-batched-completions)).
+The TypeScript and Python workers split their slots into cohorts so that fused completions do not
+run in lockstep ([ADR 0076](decisions/0076-keep-overlapping-batched-claims-in-flight-to-fill-worker-slots.md#cohorts-for-batched-completions)).
 `WorkerOptions.cohorts` is a safe integer from 1 through `concurrency`. Without it,
 `defaultDispatchCohorts(concurrency, spareConnections)` returns 1 below concurrency 8, and otherwise
 `ceil(concurrency / 8)` clamped to 2 through 8. When the queue's database is itself a pool with a
@@ -2981,13 +2984,17 @@ minus 1 for the heartbeat connection unless `sharedHeartbeats` is true. The defa
 at `spareConnections`, and never below 1: pools of 3, 4, 6 and 10 connections give a
 concurrency-64 worker 1, 2, 4 and 8 cohorts. A database with an attached pool, such as a Prisma or
 Kysely adapter, runs statements outside that pool, so its default is not capped. An explicit
-`cohorts` is never capped. Cohort `i` owns `floor(concurrency / cohorts)`
+`cohorts` is never capped. Python's `Worker(cohorts=...)` takes an integer from 1 through
+`concurrency`, and `_dispatch_cohorts(concurrency, spare_connections)` applies the same default.
+`spare_connections` is the pool's `max_size`, or its `get_max_size()`, minus 1 for the listener,
+minus 1 for the heartbeat connection unless `shared_heartbeats` is true. A pool whose size is
+unknown leaves the default uncapped. Cohort `i` owns `floor(concurrency / cohorts)`
 slots, plus one when `i < concurrency % cohorts`. `ClaimLeaseFenceModule` batches concurrent
 completions by worker, queue, lease, and `CompletionClaim.cohort`, so a batch never spans cohorts.
 A fused claim asks for at most its cohort's free slots, and the tasks it leases join that cohort.
 While no claim is in flight, a plain claim fills the cohort with the most free slots, and the
 first claim asks for one cohort's share. While any configured queue answers full-tier, the worker
-ignores cohorts and dispatches as one group. The Python, Go, and Rust workers complete one task per
+ignores cohorts and dispatches as one group. The Go and Rust workers complete one task per
 statement, never share a completion round trip, and have no cohorts.
 
 A fast-tier handler context rejects durable execution locally with `FastTierUnsupportedError` for

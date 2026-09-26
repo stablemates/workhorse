@@ -9,8 +9,9 @@ from bisect import insort
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from itertools import islice
 from queue import SimpleQueue
 from threading import Event, Lock, Thread, current_thread
 from time import monotonic, sleep
@@ -163,6 +164,98 @@ def _dispatch_refill_batch(concurrency: int) -> int:
     A quarter of the concurrency, rounded up.
     """
     return -(-concurrency // 4)
+
+
+def _dispatch_cohorts(concurrency: int, spare_connections: int | None = None) -> int:
+    """Slot cohorts a worker without a cohorts option uses (ADR 0076, rule 11).
+
+    With a known pool size, it keeps one pooled connection per cohort after the listener and the
+    heartbeat connection take theirs.
+    """
+    cohorts = 1 if concurrency < 8 else min(8, max(2, -(-concurrency // 8)))
+    return cohorts if spare_connections is None else max(1, min(cohorts, spare_connections))
+
+
+# Completions and claimed tasks one batched statement carries at most. complete_many_and_claim_v1
+# rejects longer arrays and a larger claim limit.
+_COMPLETION_BATCH_LIMIT = 100
+
+
+@dataclass(eq=False, slots=True)
+class _DispatchSlots:
+    """Slot accounting one run shares between its dispatch loop and its handler threads.
+
+    Every field is read and written under the worker's state lock. A handler thread reserves slots
+    for its completion's fused claim, so the loop's own claims cannot count them free.
+    """
+
+    concurrency: int
+    refill_batch: int
+    cohort_capacity: list[int]
+    listener: _TaskNotificationListener | None
+    cohort_active: list[int]
+    cohort_handed_over: list[int]
+    cohort_reserved: list[int]
+    cohort_claims: list[int]
+    # Plain claims in flight that reserve slots across every cohort.
+    whole_claims: int = 0
+    reserved: int = 0
+    # Handler threads whose completion claimed a task into their slot, with their cohort. A handed
+    # over slot counts free: the tasks the fused claim returned already hold it.
+    handed_over: dict[Thread, int] = field(default_factory=dict)
+    # The cohort of every handler thread this run started.
+    thread_cohorts: dict[Thread, int] = field(default_factory=dict)
+    # Set by a claim that found nothing to run: no claim starts until its deadline, or until a
+    # dispatch wake newer than that claim's start.
+    empty_wait: tuple[float, int] | None = None
+    consecutive_empty_claims: int = 0
+    claimed_any: bool = False
+    # A single pass ends at its first claim that made no progress.
+    pass_ended: bool = False
+    claim_error: BaseException | None = None
+    # Closed once the loop stops starting claims, so no completion claims for it either.
+    open: bool = True
+
+    def free_slots(self, active: int) -> int:
+        return self.concurrency - active + len(self.handed_over) - self.reserved
+
+    def cohort_free(self, cohort: int) -> int:
+        return (
+            self.cohort_capacity[cohort]
+            - self.cohort_active[cohort]
+            + self.cohort_handed_over[cohort]
+            - self.cohort_reserved[cohort]
+        )
+
+    def roomiest_cohort(self) -> int:
+        free = [self.cohort_free(cohort) for cohort in range(len(self.cohort_capacity))]
+        return free.index(max(free))
+
+
+@dataclass(eq=False, slots=True)
+class _CompletionClaim:
+    """Slots one fused completion claim reserved, or none when its limit is zero."""
+
+    cohort: int
+    limit: int
+    wake_version: int
+
+
+@dataclass(eq=False, slots=True)
+class _PendingCompletion:
+    """One fast-tier completion waiting for the batched statement of its queue and cohort."""
+
+    task: ClaimedTask
+    encoded_result: str
+    limit: int
+    done: Event
+    # Set on the waiting completion that sends the next statement for its batch key.
+    lead: bool = False
+    accepted: bool = False
+    claimed: list[tuple[ClaimedTask, float]] | None = None
+    # The queue left the fast tier, so this completion goes through complete_v1 instead.
+    full_tier: bool = False
+    error: BaseException | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -841,6 +934,7 @@ class Worker:
         queues: Sequence[str] | None = None,
         worker_id: str | None = None,
         concurrency: int = 1,
+        cohorts: int | None = None,
         poll_ms: int | None = None,
         lease_ms: int = 30_000,
         heartbeat_ms: int | None = None,
@@ -881,6 +975,20 @@ class Worker:
             or not 1 <= concurrency <= 100
         ):
             raise ValueError("concurrency must be an integer between 1 and 100")
+        if cohorts is None:
+            # The listener and the heartbeat connection each hold a pooled connection.
+            cohorts = _dispatch_cohorts(
+                concurrency,
+                capacity - 1 - (0 if shared_heartbeats else 1)
+                if isinstance(capacity, int) and not isinstance(capacity, bool)
+                else None,
+            )
+        elif (
+            isinstance(cohorts, bool)
+            or not isinstance(cohorts, int)
+            or not 1 <= cohorts <= concurrency
+        ):
+            raise ValueError("cohorts must be an integer between 1 and concurrency")
         resolved_poll_ms = poll_ms if poll_ms is not None else 250
         if (
             isinstance(resolved_poll_ms, bool)
@@ -895,6 +1003,8 @@ class Worker:
         self.queue = unique_queues[0]
         self.worker_id = worker_id or _default_worker_id()
         self.concurrency = concurrency
+        # Slot cohorts for fast-tier dispatch (ADR 0076). One cohort keeps every slot in one group.
+        self.cohorts = cohorts
         self.poll_ms = resolved_poll_ms
         self._notification_poll_ms = poll_ms if poll_ms is not None else 5_000
         self._pool = pool
@@ -956,6 +1066,15 @@ class Worker:
         # Tasks claimed from a queue that answered as fast-tier. Their handlers get the fast-tier
         # context, and their completions take the batched path.
         self._fast_task_ids: set[str] = set()
+        # Queues whose last claim answered on the fast tier. A cohort claim asks them for one
+        # cohort's share only once every queue is known here.
+        self._fast_tier_queues: set[str] = set()
+        # The slot accounting of the active run, shared with its handler threads.
+        self._dispatch_slots: _DispatchSlots | None = None
+        # Fast-tier completions waiting per queue and cohort. A key is present while one of its
+        # statements is in flight, and its list holds the completions that arrived meanwhile.
+        self._completion_lock = Lock()
+        self._pending_completions: dict[tuple[str, int], list[_PendingCompletion]] = {}
         self._state_lock = Lock()
         self._contract_validators: dict[tuple[str, str], Any] = {}
         self._execution_lock = Lock()
@@ -1422,8 +1541,6 @@ class Worker:
         with self._state_lock:
             self._stopping = self._stop_version != requested_stop_version
             self._run_errors.clear()
-        claimed_any = False
-        consecutive_empty_claims = 0
         listener = self._start_notification_listener() if continuous else None
         self._refresh_registration(force=True)
         _emit_log(
@@ -1441,73 +1558,105 @@ class Worker:
         # claim in flight, any free slot starts one. While one is in flight, another starts only
         # once the unreserved free slots reach the refill batch, so a busy worker claims in
         # batches and its claims overlap. Claims run on their own threads and report back here.
-        refill_batch = _dispatch_refill_batch(self.concurrency)
-        claims: dict[int, int] = {}
+        # A fast-tier completion claims too, and its slots come from the same accounting. On the
+        # fast tier the slots split into cohorts, and plain claims leave one at a time, each for
+        # the cohort with the most free slots.
+        cohorts = self.cohorts
+        slots = _DispatchSlots(
+            concurrency=self.concurrency,
+            refill_batch=_dispatch_refill_batch(self.concurrency),
+            # The first cohorts take the remainder of an uneven split.
+            cohort_capacity=[
+                self.concurrency // cohorts + (1 if cohort < self.concurrency % cohorts else 0)
+                for cohort in range(cohorts)
+            ],
+            listener=listener,
+            cohort_active=[0] * cohorts,
+            cohort_handed_over=[0] * cohorts,
+            cohort_reserved=[0] * cohorts,
+            cohort_claims=[0] * cohorts,
+        )
+        with self._state_lock:
+            self._dispatch_slots = slots
+        # Each claim in flight, with its limit, its cohort (None for the whole worker), and the
+        # slots it reserved in that cohort.
+        claims: dict[int, tuple[int, int | None, int]] = {}
         results: SimpleQueue[_ClaimOutcome] = SimpleQueue()
-        reserved = 0
         next_claim_id = 0
-        claim_error: BaseException | None = None
-        # Set by a claim that found nothing to run: no claim starts until its deadline, or until
-        # a dispatch wake newer than that claim's start.
-        empty_wait: tuple[float, int] | None = None
-        # A single pass ends at its first claim that made no progress.
-        pass_ended = False
 
         def settle(outcome: _ClaimOutcome) -> None:
-            nonlocal reserved, claim_error, claimed_any, consecutive_empty_claims
-            nonlocal empty_wait, pass_ended
-            claims.pop(outcome.claim_id)
-            reserved -= outcome.limit
-            if outcome.claimed is None:
-                return
-            # A claimed task holds a lease, so it runs even when the loop is stopping or failed.
-            for task, claim_started_at in outcome.claimed:
-                self._start_claimed_task(task, claim_started_at)
-            if outcome.error is not None:
-                if claim_error is None:
-                    claim_error = outcome.error
-                return
-            # A claim that only handed its tasks back made no progress: every one of them goes
-            # straight back to its queue. It backs off like an empty claim instead of spinning on
-            # a task no handler here can run, and a caller looping run_once backs off too.
-            if any(task.type in self._handlers for task, _ in outcome.claimed):
-                consecutive_empty_claims = 0
-                claimed_any = True
-                empty_wait = None
-                return
-            consecutive_empty_claims += 1
-            pass_ended = True
-            if empty_wait is None:
-                empty_wait = (
-                    monotonic() + self._dispatch_wait_seconds(listener, consecutive_empty_claims),
-                    outcome.wake_version,
-                )
+            limit, cohort, cohort_limit = claims.pop(outcome.claim_id)
+            threads: list[Thread] = []
+            with self._state_lock:
+                slots.reserved -= limit
+                if cohort is None:
+                    slots.whole_claims -= 1
+                else:
+                    slots.cohort_claims[cohort] -= 1
+                    slots.cohort_reserved[cohort] -= cohort_limit
+                if outcome.claimed is not None:
+                    # A claimed task holds a lease, so it runs even when the loop is stopping or
+                    # failed.
+                    threads = [
+                        self._admit_claimed_task(task, claim_started_at, cohort)
+                        for task, claim_started_at in outcome.claimed
+                    ]
+                    self._settle_claim_progress(slots, outcome)
+            for thread in threads:
+                thread.start()
 
         def settle_returned() -> None:
             while not results.empty():
                 settle(results.get())
 
-        def start_claim(limit: int) -> None:
-            nonlocal reserved, next_claim_id
+        def start_claim(limit: int, cohort: int | None, cohort_limit: int) -> None:
+            nonlocal next_claim_id
             claim_id = next_claim_id
             next_claim_id += 1
-            reserved += limit
-            claims[claim_id] = limit
+            claims[claim_id] = (limit, cohort, cohort_limit)
             delayed = self._notification_wake.is_set()
             self._notification_wake.clear()
             with self._state_lock:
+                slots.reserved += limit
+                if cohort is None:
+                    slots.whole_claims += 1
+                else:
+                    slots.cohort_claims[cohort] += 1
+                    slots.cohort_reserved[cohort] += cohort_limit
                 wake_version = self._dispatch_wake_version
             Thread(
                 target=self._run_dispatch_claim,
-                args=(claim_id, limit, wake_version, delayed, results),
+                args=(
+                    claim_id,
+                    limit,
+                    limit if cohort is None else cohort_limit,
+                    wake_version,
+                    delayed,
+                    results,
+                ),
                 name=f"workhorse-claim-{claim_id}",
                 daemon=True,
             ).start()
 
-        def free_slots() -> int:
+        def next_claim() -> tuple[int, int | None, int] | None:
+            """Plan the next plain claim: its limit, its cohort, and its slots in that cohort."""
             with self._state_lock:
-                active = len(self._active_threads)
-            return self.concurrency - active - reserved
+                free = slots.free_slots(len(self._active_threads))
+                if free <= 0:
+                    return None
+                if cohorts == 1 or self._full_tier_until:
+                    if claims and free < slots.refill_batch:
+                        return None
+                    return free, None, free
+                if claims:
+                    return None
+                cohort = slots.roomiest_cohort()
+                cohort_limit = min(free, slots.cohort_free(cohort))
+                # A claim that still has to learn a queue's tier reserves every free slot, so a
+                # queue that answers on the full tier fills them all as before.
+                if all(queue in self._fast_tier_queues for queue in self.queues):
+                    return (cohort_limit, cohort, cohort_limit) if cohort_limit > 0 else None
+                return free, cohort, max(0, cohort_limit)
 
         try:
             try:
@@ -1521,7 +1670,11 @@ class Worker:
                         stopping = self._stopping or bool(self._run_errors)
                         paused = self._locally_paused or self._remotely_paused
                         wake_version = self._dispatch_wake_version
-                    if stopping or claim_error is not None:
+                        failed = slots.claim_error is not None
+                        pass_ended = slots.pass_ended
+                        consecutive_empty_claims = slots.consecutive_empty_claims
+                        empty_wait = slots.empty_wait
+                    if stopping or failed:
                         break
                     if not continuous and pass_ended:
                         break
@@ -1536,21 +1689,23 @@ class Worker:
                     if empty_wait is not None:
                         remaining = empty_wait[0] - monotonic()
                         if remaining <= 0 or wake_version != empty_wait[1]:
-                            empty_wait = None
+                            with self._state_lock:
+                                if slots.empty_wait is empty_wait:
+                                    slots.empty_wait = None
                             continue
                         self._wake.wait(remaining)
                         continue
-                    free = free_slots()
-                    if free > 0 and (not claims or free >= refill_batch):
+                    if next_claim() is not None:
                         # tick_v1 promotes and recovers, so a claim between ticks only claims.
                         self._run_maintenance_if_due()
-                        free = free_slots()
-                        while free > 0 and (not claims or free >= refill_batch):
-                            start_claim(free)
-                            free = free_slots()
+                        while (claim := next_claim()) is not None:
+                            start_claim(*claim)
                     self._wake.wait(self._dispatch_wait_seconds(listener, consecutive_empty_claims))
             finally:
-                # Tasks an in-flight claim returns hold leases, so they run before the drain.
+                # Completions stop claiming with the loop. Tasks an in-flight claim returns hold
+                # leases, so they run before the drain.
+                with self._state_lock:
+                    slots.open = False
                 while claims:
                     settle(results.get())
         finally:
@@ -1562,6 +1717,7 @@ class Worker:
             self._deregister()
             with self._state_lock:
                 self._stopping = False
+                self._dispatch_slots = None
                 errors = list(self._run_errors)
                 self._run_errors.clear()
                 active_slots = len(self._active_threads)
@@ -1577,14 +1733,39 @@ class Worker:
             )
         if errors:
             raise errors[0]
-        if claim_error is not None:
-            raise claim_error
-        return claimed_any
+        if slots.claim_error is not None:
+            raise slots.claim_error
+        return slots.claimed_any
+
+    def _settle_claim_progress(self, slots: _DispatchSlots, outcome: _ClaimOutcome) -> None:
+        """Record whether a returned plain claim made progress. The caller holds the state lock."""
+        assert outcome.claimed is not None
+        if outcome.error is not None:
+            if slots.claim_error is None:
+                slots.claim_error = outcome.error
+            return
+        # A claim that only handed its tasks back made no progress: every one of them goes
+        # straight back to its queue. It backs off like an empty claim instead of spinning on
+        # a task no handler here can run, and a caller looping run_once backs off too.
+        if any(task.type in self._handlers for task, _ in outcome.claimed):
+            slots.consecutive_empty_claims = 0
+            slots.claimed_any = True
+            slots.empty_wait = None
+            return
+        slots.consecutive_empty_claims += 1
+        slots.pass_ended = True
+        if slots.empty_wait is None:
+            slots.empty_wait = (
+                monotonic()
+                + self._dispatch_wait_seconds(slots.listener, slots.consecutive_empty_claims),
+                outcome.wake_version,
+            )
 
     def _run_dispatch_claim(
         self,
         claim_id: int,
         limit: int,
+        fast_limit: int,
         wake_version: int,
         delayed: bool,
         results: SimpleQueue[_ClaimOutcome],
@@ -1598,7 +1779,7 @@ class Worker:
                 sleep(random.uniform(0, _NOTIFICATION_CLAIM_DELAY_SECONDS))
                 if self._claims_halted():
                     return
-            self._claim_across_queues(limit, claimed)
+            self._claim_across_queues(limit, claimed, fast_limit)
             outcome = _ClaimOutcome(claim_id, limit, wake_version, tuple(claimed))
         except BaseException as error:
             outcome = _ClaimOutcome(claim_id, limit, wake_version, tuple(claimed), error)
@@ -1606,8 +1787,18 @@ class Worker:
             results.put(outcome)
             self._wake.set()
 
-    def _claim_across_queues(self, limit: int, claimed: list[tuple[ClaimedTask, float]]) -> None:
-        """Claim up to limit tasks, checking each queue at most once in rotation order."""
+    def _claim_across_queues(
+        self,
+        limit: int,
+        claimed: list[tuple[ClaimedTask, float]],
+        fast_limit: int | None = None,
+    ) -> None:
+        """Claim up to limit tasks, checking each queue at most once in rotation order.
+
+        Fast-tier queues together give at most fast_limit of them, the free slots of one cohort.
+        """
+        if fast_limit is None:
+            fast_limit = limit
         for _ in range(len(self.queues)):
             if len(claimed) >= limit:
                 return
@@ -1619,7 +1810,12 @@ class Worker:
                 "workhorse.claim",
                 {"workhorse.queue.name": queue_name},
             ) as claim_span:
-                rows = self._claim_queue(queue_name, limit - len(claimed), claim_started_at)
+                rows = self._claim_queue(
+                    queue_name,
+                    limit - len(claimed),
+                    claim_started_at,
+                    fast_limit - len(claimed),
+                )
                 if rows is None:
                     claim_span.set_attribute("workhorse.queue.tier", "full")
                     rows = self._executor.rows(
@@ -1648,55 +1844,64 @@ class Worker:
                 )
                 claimed.append((task, claim_started_at))
 
-    def _claim_queue(self, queue_name: str, limit: int, sent_at: float) -> list[_Row] | None:
+    def _claim_queue(
+        self, queue_name: str, limit: int, sent_at: float, fast_limit: int | None = None
+    ) -> list[_Row] | None:
         """Claim through the fast-tier path, or return None when the queue is full-tier.
 
-        The fast claim is complete_many_and_claim_v1 with no completions. A full-tier queue
-        rejects it, and the worker then claims that queue through claim_many until the next probe.
+        The fast claim is complete_many_and_claim_v1 with no completions, and asks for at most
+        fast_limit tasks. A full-tier queue rejects it, and the worker then claims that queue
+        through claim_many until the next probe.
         """
         with self._state_lock:
             if self._full_tier_until.get(queue_name, float("-inf")) > sent_at:
                 return None
+        fast_limit = limit if fast_limit is None else min(limit, fast_limit)
+        if fast_limit <= 0:
+            return []
         try:
             rows = self._executor.rows(
                 _STATEMENTS.complete_many_and_claim,
-                (self.worker_id, [], [], [], queue_name, limit, self.lease_ms),
+                (self.worker_id, [], [], [], queue_name, fast_limit, self.lease_ms),
             )
         except Exception as error:
             if not isinstance(_translate_database_error(error), FastTierUnsupportedError):
                 raise
-            with self._state_lock:
-                self._full_tier_until[queue_name] = sent_at + _TIER_PROBE_INTERVAL_SECONDS
+            self._mark_full_tier(queue_name, sent_at)
             return None
         # A claim that finds nothing still returns one row, with every claim column null.
         claimed = [row for row in rows if row["task_id"] is not None]
         with self._state_lock:
             self._full_tier_until.pop(queue_name, None)
+            self._fast_tier_queues.add(queue_name)
             self._fast_task_ids.update(str(row["task_id"]) for row in claimed)
         return claimed
 
-    def _complete_fast_task(self, task: ClaimedTask, encoded_result: str) -> bool:
-        """Complete a fast-tier attempt through the batched statement, claiming nothing.
+    def _mark_full_tier(self, queue_name: str, sent_at: float) -> None:
+        """Claim a queue that rejected a fast-tier statement through claim_many until the probe."""
+        with self._state_lock:
+            self._full_tier_until[queue_name] = sent_at + _TIER_PROBE_INTERVAL_SECONDS
+            self._fast_tier_queues.discard(queue_name)
 
-        A queue that left the fast tier after the claim rejects that statement, so the attempt
-        completes through complete_v1 instead.
+    def _complete_fast_task(self, task: ClaimedTask, encoded_result: str) -> bool:
+        """Complete a fast-tier attempt through the batched statement, and refill its slot.
+
+        Completions of one queue and cohort that arrive while its statement is in flight share
+        the next one. The statement also claims tasks into the slots the dispatch loop set aside
+        for it. A queue that left the fast tier after the claim rejects that statement, so the
+        attempt completes through complete_v1 instead.
         """
+        reservation = self._reserve_completion_claim()
+        pending = _PendingCompletion(task, encoded_result, reservation.limit, Event())
         try:
-            rows = self._executor.rows(
-                _STATEMENTS.complete_many_and_claim,
-                (
-                    self.worker_id,
-                    [task.id],
-                    [task.fence_token],
-                    [encoded_result],
-                    task.queue,
-                    0,
-                    self.lease_ms,
-                ),
+            self._send_batched_completion(pending, (task.queue, reservation.cohort))
+        finally:
+            self._settle_completion_claim(
+                reservation, None if pending.error is not None else pending.claimed
             )
-        except Exception as error:
-            if not isinstance(_translate_database_error(error), FastTierUnsupportedError):
-                raise
+        if pending.error is not None:
+            raise pending.error
+        if pending.full_tier:
             return (
                 _require_lifecycle_row(
                     self._executor.rows(
@@ -1706,8 +1911,204 @@ class Worker:
                 )["accepted"]
                 is True
             )
-        accepted = _require_lifecycle_row(rows)["accepted"]
-        return isinstance(accepted, list) and task.id in {str(value) for value in accepted}
+        return pending.accepted
+
+    def _reserve_completion_claim(self) -> _CompletionClaim:
+        """Set aside the slots a completion's fused claim may fill (ADR 0076, rules 12 and 13).
+
+        The claim asks for the free slots of the task's cohort plus the slot the task leaves. It
+        claims nothing while the worker stops, pauses, or waits after an empty claim, and it waits
+        for the cohort's refill batch while another claim for the cohort is in flight.
+        """
+        running = current_thread()
+        with self._state_lock:
+            slots = self._dispatch_slots
+            wake_version = self._dispatch_wake_version
+            if slots is None:
+                return _CompletionClaim(0, 0, wake_version)
+            cohort = slots.thread_cohorts.get(running, 0)
+            if (
+                not slots.open
+                or self._stopping
+                or self._run_errors
+                or self._locally_paused
+                or self._remotely_paused
+                or slots.claim_error is not None
+                or slots.empty_wait is not None
+            ):
+                return _CompletionClaim(cohort, 0, wake_version)
+            limit = min(slots.free_slots(len(self._active_threads)), slots.cohort_free(cohort)) + 1
+            if (
+                slots.whole_claims > 0 or slots.cohort_claims[cohort] > 0
+            ) and limit < slots.refill_batch:
+                return _CompletionClaim(cohort, 0, wake_version)
+            slots.reserved += limit
+            slots.cohort_reserved[cohort] += limit
+            slots.handed_over[running] = cohort
+            slots.cohort_handed_over[cohort] += 1
+            return _CompletionClaim(cohort, limit, wake_version)
+
+    def _settle_completion_claim(
+        self,
+        reservation: _CompletionClaim,
+        claimed: list[tuple[ClaimedTask, float]] | None,
+    ) -> None:
+        """Release a fused claim's reservation and start the tasks it claimed in its cohort.
+
+        claimed is None when the completion failed.
+        """
+        if reservation.limit == 0:
+            return
+        running = current_thread()
+        threads: list[Thread] = []
+        with self._state_lock:
+            slots = self._dispatch_slots
+            if slots is None:
+                return
+            slots.reserved -= reservation.limit
+            slots.cohort_reserved[reservation.cohort] -= reservation.limit
+            # A claimed task took over this handler's slot. Without one, the slot stays this
+            # handler's until it exits.
+            if not claimed and slots.handed_over.pop(running, None) is not None:
+                slots.cohort_handed_over[reservation.cohort] -= 1
+            threads = [
+                self._admit_claimed_task(next_task, claim_sent_at, reservation.cohort)
+                for next_task, claim_sent_at in claimed or ()
+            ]
+            if claimed and any(next_task.type in self._handlers for next_task, _ in claimed):
+                slots.claimed_any = True
+                slots.consecutive_empty_claims = 0
+            elif claimed is not None and not claimed and len(self.queues) == 1:
+                # The fused claim asks one queue only, so it proves that queue empty when this
+                # worker has no other.
+                slots.consecutive_empty_claims += 1
+                slots.pass_ended = True
+                if slots.empty_wait is None:
+                    slots.empty_wait = (
+                        monotonic()
+                        + self._dispatch_wait_seconds(
+                            slots.listener, slots.consecutive_empty_claims
+                        ),
+                        reservation.wake_version,
+                    )
+        for thread in threads:
+            thread.start()
+        self._wake.set()
+
+    def _send_batched_completion(self, pending: _PendingCompletion, key: tuple[str, int]) -> None:
+        """Send a completion in the next statement of its batch key, and wait for its result.
+
+        One statement per key is in flight. The first completion sends its own at once. Those
+        that arrive meanwhile wait, and the first of them sends them all together when it returns.
+        """
+        with self._completion_lock:
+            waiting = self._pending_completions.get(key)
+            if waiting is None:
+                self._pending_completions[key] = []
+                batch = [pending]
+            else:
+                waiting.append(pending)
+                batch = None
+        if batch is None:
+            pending.done.wait()
+            if not pending.lead:
+                return
+            with self._completion_lock:
+                batch = self._pending_completions[key]
+                self._pending_completions[key] = []
+        try:
+            self._flush_completions(key[0], batch)
+        finally:
+            with self._completion_lock:
+                waiting = self._pending_completions[key]
+                if waiting:
+                    waiting[0].lead = True
+                    waiting[0].done.set()
+                else:
+                    del self._pending_completions[key]
+
+    def _flush_completions(self, queue_name: str, batch: list[_PendingCompletion]) -> None:
+        """Complete a batch in statements within the protocol's array and claim limits.
+
+        A failed statement fails only the completions it carried.
+        """
+        start = 0
+        while start < len(batch):
+            end = start
+            claim_limit = 0
+            while (
+                end < len(batch)
+                and end - start < _COMPLETION_BATCH_LIMIT
+                and claim_limit + batch[end].limit <= _COMPLETION_BATCH_LIMIT
+            ):
+                claim_limit += batch[end].limit
+                end += 1
+            chunk = batch[start:end]
+            start = end
+            try:
+                self._send_completion_chunk(queue_name, chunk, claim_limit)
+            except BaseException as error:
+                for pending in chunk:
+                    pending.error = error
+            finally:
+                for pending in chunk:
+                    pending.done.set()
+
+    def _send_completion_chunk(
+        self, queue_name: str, chunk: list[_PendingCompletion], claim_limit: int
+    ) -> None:
+        sent_at = monotonic()
+        try:
+            rows = self._executor.rows(
+                _STATEMENTS.complete_many_and_claim,
+                (
+                    self.worker_id,
+                    [pending.task.id for pending in chunk],
+                    [pending.task.fence_token for pending in chunk],
+                    [pending.encoded_result for pending in chunk],
+                    queue_name,
+                    claim_limit,
+                    self.lease_ms,
+                ),
+            )
+        except Exception as error:
+            if not isinstance(_translate_database_error(error), FastTierUnsupportedError):
+                raise
+            self._mark_full_tier(queue_name, sent_at)
+            for pending in chunk:
+                pending.full_tier = True
+            return
+        # Only the first row carries the accepted completions. A statement that claims nothing
+        # still returns that row, with every claim column null.
+        accepted = (
+            {str(value) for value in cast(list[object], rows[0]["accepted"] or [])}
+            if rows
+            else set()
+        )
+        claimed_rows = [row for row in rows if row["task_id"] is not None]
+        claimed_tasks = [_claimed_task(row, queue_name) for row in claimed_rows]
+        with self._state_lock:
+            self._full_tier_until.pop(queue_name, None)
+            self._fast_tier_queues.add(queue_name)
+            self._fast_task_ids.update(task.id for task in claimed_tasks)
+        if claim_limit > 0:
+            _record_claim(queue_name, (monotonic() - sent_at) * 1_000, claimed_tasks)
+        for task in claimed_tasks:
+            _emit_log(
+                "DEBUG",
+                "workhorse.task.claimed",
+                "Task claimed",
+                {
+                    **_task_span_attributes(task),
+                    "workhorse.queue.name": queue_name,
+                    "workhorse.worker.id": self.worker_id,
+                },
+            )
+        # Claimed tasks go to the completions in order, each up to the slots it reserved.
+        remaining = iter(claimed_tasks)
+        for pending in chunk:
+            pending.accepted = pending.task.id in accepted
+            pending.claimed = [(task, sent_at) for task in islice(remaining, pending.limit)]
 
     def _due_for_maintenance_routines(self, now_monotonic: float) -> bool:
         """Report whether this pass offers the slow routines, and claim the offer when it does."""
@@ -1986,20 +2387,33 @@ class Worker:
         listener.start()
         return listener
 
-    def _start_claimed_task(self, task: ClaimedTask, claim_sent_at: float) -> None:
+    def _admit_claimed_task(
+        self, task: ClaimedTask, claim_sent_at: float, cohort: int | None
+    ) -> Thread:
+        """Give a claimed task a slot and its handler thread, which the caller starts.
+
+        The caller holds the state lock, so the slot and the reservation it came from change
+        together. The task joins cohort while that cohort has a free slot, and the roomiest cohort
+        otherwise.
+        """
         thread = Thread(
             target=self._run_claimed_task,
             args=(task, claim_sent_at),
             name=f"workhorse-handler-{task.id}",
         )
-        with self._state_lock:
-            # The dispatcher assigns this on the claiming thread, in claim order. A batch
-            # coordinator cannot read arrival order off its own lock instead, because handler
-            # threads start concurrently and reach that lock in scheduler order, not claim order.
-            self._dispatch_order[task.id] = self._dispatch_sequence
-            self._dispatch_sequence += 1
-            self._active_threads.add(thread)
-        thread.start()
+        # The dispatcher assigns this in claim order. A batch coordinator cannot read arrival
+        # order off its own lock instead, because handler threads start concurrently and reach
+        # that lock in scheduler order, not claim order.
+        self._dispatch_order[task.id] = self._dispatch_sequence
+        self._dispatch_sequence += 1
+        self._active_threads.add(thread)
+        slots = self._dispatch_slots
+        if slots is not None:
+            if cohort is None or slots.cohort_free(cohort) <= 0:
+                cohort = slots.roomiest_cohort()
+            slots.cohort_active[cohort] += 1
+            slots.thread_cohorts[thread] = cohort
+        return thread
 
     def _claim_order(self, task: ClaimedTask) -> int:
         with self._state_lock:
@@ -2017,10 +2431,18 @@ class Worker:
                 self._run_errors.append(error)
                 self._stopping = True
         finally:
+            running = current_thread()
             with self._state_lock:
-                self._active_threads.discard(current_thread())
+                self._active_threads.discard(running)
                 self._dispatch_order.pop(task.id, None)
                 self._fast_task_ids.discard(task.id)
+                slots = self._dispatch_slots
+                if slots is not None:
+                    cohort = slots.thread_cohorts.pop(running, None)
+                    if cohort is not None:
+                        slots.cohort_active[cohort] -= 1
+                        if slots.handed_over.pop(running, None) is not None:
+                            slots.cohort_handed_over[cohort] -= 1
             self._wake.set()
 
     def _drain_active_threads(self) -> None:

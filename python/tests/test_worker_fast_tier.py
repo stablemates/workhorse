@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import time
 from collections import Counter
-from collections.abc import Callable
-from threading import Lock, Thread
+from collections.abc import Callable, Sequence
+from contextlib import suppress
+from threading import Event, Lock, Thread
+from typing import Any
 from uuid import uuid4
 
 import asyncpg
@@ -25,6 +27,8 @@ from workhorse import (
     QueueHistory,
     Worker,
 )
+from workhorse._drivers import PooledSyncExecutor
+from workhorse._statements import STATEMENTS, DriverStatement
 
 pytestmark = pytest.mark.integration
 
@@ -273,6 +277,109 @@ def test_expired_fast_claim_reruns_once_and_rejects_the_stale_completion(
         ).fetchone()
     assert stale is not None and stale[0] == []
     assert recorded == (1,)
+
+
+class _CrashAfterCompletions:
+    """Run statements until some completions are written, then fail every statement.
+
+    From the crash on, nothing the worker sends reaches PostgreSQL. That models the process
+    vanishing with its handlers done and their outcomes unwritten.
+    """
+
+    dialect = "psycopg"
+
+    def __init__(self, pool: ConnectionPool, completions: int) -> None:
+        self._inner = PooledSyncExecutor(pool)
+        self._lock = Lock()
+        self._remaining = completions
+        self.crashed = Event()
+
+    def rows(self, statement: DriverStatement, parameters: Sequence[object] = ()) -> list[Any]:
+        with self._lock:
+            if statement is STATEMENTS.complete_many_and_claim and parameters[1]:
+                task_ids = parameters[1]
+                assert isinstance(task_ids, list)
+                self._remaining -= len(task_ids)
+                if self._remaining < 0:
+                    self.crashed.set()
+            if self.crashed.is_set():
+                raise psycopg.OperationalError("the worker process vanished")
+        return self._inner.rows(statement, parameters)
+
+
+# Concurrency 4 has one cohort and 16 has two, so the crash drops every cohort's batch at once.
+@pytest.mark.parametrize("concurrency", [4, 16])
+def test_crash_mid_batch_loses_no_task_and_records_one_outcome_each(
+    database_url: str, concurrency: int
+) -> None:
+    queue_name = f"fast-batch-crash-{concurrency}"
+    _make_fast(database_url, queue_name)
+    total = concurrency * 15
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        task_ids = Queue(connection).enqueue_many(
+            [
+                EnqueueRequest("effect", {"n": n}, EnqueueOptions(queue=queue_name, max_attempts=3))
+                for n in range(total)
+            ]
+        )
+
+    effects: Counter[str] = Counter()
+    lock = Lock()
+
+    def effect(_payload: object, context: HandlerContext) -> Json:
+        with lock:
+            effects[context.task.id] += 1
+        return {"ok": True}
+
+    # Six connections leave four for cohorts, so concurrency 16 keeps its default of two.
+    with ConnectionPool(
+        database_url, min_size=1, max_size=6, kwargs={"autocommit": True}, open=True
+    ) as pool:
+        executor = _CrashAfterCompletions(pool, total // 3)
+        crashing = Worker(
+            pool,
+            worker_id=f"python-crashing-{concurrency}",
+            queue=queue_name,
+            concurrency=concurrency,
+            lease_ms=500,
+            heartbeat_ms=100,
+            poll_ms=5,
+            _executor=executor,
+        ).handle("effect", effect)
+        assert crashing.cohorts == (1 if concurrency < 8 else 2)
+        thread = Thread(target=lambda: _run_and_ignore(crashing))
+        thread.start()
+        assert executor.crashed.wait(timeout=20), "the worker never reached the crash"
+        crashing.stop()
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+
+        time.sleep(0.6)
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute("SELECT * FROM workhorse.recover_expired_telemetry_v1(100, 0)")
+        survivor = Worker(
+            pool,
+            worker_id=f"python-survivor-{concurrency}",
+            queue=queue_name,
+            concurrency=concurrency,
+            poll_ms=5,
+        ).handle("effect", effect)
+        _run_until(survivor, lambda: len(_outcomes(database_url, task_ids)) == total)
+
+    outcomes = _outcomes(database_url, task_ids)
+    assert len({task_id for task_id, _, _ in outcomes}) == total
+    assert len(outcomes) == total
+    assert all(state == "succeeded" for _, state, _ in outcomes)
+    assert all(effects[task_id] >= 1 for task_id in task_ids)
+    rerun = [task_id for task_id in task_ids if effects[task_id] > 1]
+    assert 0 < len(rerun) <= concurrency
+    assert max(effects.values()) == 2
+
+
+def _run_and_ignore(worker: Worker) -> None:
+    # The crash surfaces as a statement error. The test checks what reached the database.
+    with suppress(Exception):
+        worker.run()
 
 
 @pytest.mark.asyncio
