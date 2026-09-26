@@ -2973,8 +2973,15 @@ separately.
 The TypeScript worker splits its slots into cohorts so that fused completions do not run in
 lockstep ([ADR 0076](decisions/0076-keep-overlapping-batched-claims-in-flight-to-fill-worker-slots.md#cohorts-for-batched-completions)).
 `WorkerOptions.cohorts` is a safe integer from 1 through `concurrency`. Without it,
-`defaultDispatchCohorts(concurrency)` returns 1 below concurrency 8, and otherwise
-`ceil(concurrency / 8)` clamped to 2 through 8. Cohort `i` owns `floor(concurrency / cohorts)`
+`defaultDispatchCohorts(concurrency, spareConnections)` returns 1 below concurrency 8, and otherwise
+`ceil(concurrency / 8)` clamped to 2 through 8. When the queue's database is itself a pool with a
+positive `options.max`, `Queue[workerStatementPoolCapacity]()` reports that size, and
+`spareConnections` is `max` minus 1 for the listener when `supportsTaskNotifications()` holds,
+minus 1 for the heartbeat connection unless `sharedHeartbeats` is true. The default is then capped
+at `spareConnections`, and never below 1: pools of 3, 4, 6 and 10 connections give a
+concurrency-64 worker 1, 2, 4 and 8 cohorts. A database with an attached pool, such as a Prisma or
+Kysely adapter, runs statements outside that pool, so its default is not capped. An explicit
+`cohorts` is never capped. Cohort `i` owns `floor(concurrency / cohorts)`
 slots, plus one when `i < concurrency % cohorts`. `ClaimLeaseFenceModule` batches concurrent
 completions by worker, queue, lease, and `CompletionClaim.cohort`, so a batch never spans cohorts.
 A fused claim asks for at most its cohort's free slots, and the tasks it leases join that cohort.

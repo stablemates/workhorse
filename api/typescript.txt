@@ -3590,6 +3590,7 @@ class Queue {
   }): Promise<ClaimedTask<TPayload>[]>;
   [workerCompletionPrepare](task: ClaimedTask, workerId: string, result: Json): Promise<(claim?: CompletionClaim) => Promise<CompletionClaimResult>>;
   [workerHeartbeatReservationProblem](): string | undefined;
+  [workerStatementPoolCapacity](): number | undefined;
   [workerHeartbeatReservation](): WorkerHeartbeatChannel | undefined;
   /** Seed immutable JSON Schema contracts and the application-selected current versions. */
   syncContracts(): Promise<void>;
@@ -4785,7 +4786,8 @@ interface WorkerOptions {
   * Groups that split the slots for fast-tier queues (ADR 0076). Each group batches its own
   * completions, so its handlers run while another group's completion is in flight. Full-tier
   * queues ignore it. Defaults to 1 below a concurrency of 8, otherwise one per 8 slots, rounded
-  * up, from 2 to 8.
+  * up, from 2 to 8. When the queue's database is a pool, the default also leaves one connection
+  * per cohort after the listener and the heartbeat connection. An explicit value is not capped.
   */
   cohorts?: number;
   /** Ownership duration granted by claim and every accepted heartbeat. */

@@ -89,7 +89,9 @@ on its own completion round trip while the other cohorts' handlers run.
     first cohorts take the remainder. Every claimed task belongs to one cohort for its whole run.
 11. **Default.** A worker that batches completions has one cohort per 8 slots, rounded up, with
     at least 2 and at most 8. Below concurrency 8 it has one. One cohort is the dispatch described
-    by rules 1 to 9.
+    by rules 1 to 9. When the worker knows the size of the pool that runs its statements, the
+    default is also at most the connections left after the listener and the heartbeat connection,
+    and at least 1. An explicit `cohorts` is not capped.
 12. **Batched completions stay within a cohort.** Concurrent completions share a round trip only
     within one cohort. A completion's fused claim asks for at most its cohort's free slots, and the
     tasks it claims join that cohort.
@@ -119,6 +121,15 @@ With no added round trip, eight cohorts ran about 0.94 times the throughput of t
 cohorts ran slower than eight at both delays, because every cohort adds claims that contend in
 PostgreSQL. The default therefore grows one cohort per 8 slots and stops at 8. That contention
 depends on the database's CPU, so a worker can set `cohorts` for its deployment.
+
+Each cohort can have its own round trip in flight, so a worker at 8 cohorts peaked at 10 pooled
+connections: one per cohort, the listener and the heartbeat connection. A smaller pool makes the
+cohorts queue for connections. At concurrency 64, eight cohorts against one ran about 1.11 times the
+throughput on a 32-connection pool and about 1.2 times on a 10-connection pool. On a 4-connection
+pool the ratio fell to between 0.92 and 1.16, and on a 3-connection pool to about 0.6. Capping the
+count at the spare connections gave 4 cohorts on a 6-connection pool and 2 on a 4-connection pool,
+which ran about 1.4 times the throughput of one. Rule 11 therefore caps the default by the pool size
+when the worker can read it.
 
 ## Consequences
 

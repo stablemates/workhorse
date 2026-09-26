@@ -76,7 +76,8 @@ Combining has a cost. Handlers that finish together wait together for that one s
 their slots idle during the round trip. The TypeScript worker therefore splits a busy worker's
 slots into cohorts. Each cohort combines only its own completions, so one cohort's handlers run
 while another cohort waits on PostgreSQL. A worker with more slots gets more cohorts, up to a cap.
-The `cohorts` option overrides that count when the database is far away or short of CPU.
+Each cohort wants its own pooled connection, so on a small pool the worker picks fewer. The
+`cohorts` option overrides that count when the database is far away or short of CPU.
 
 ## History is opt-in
 

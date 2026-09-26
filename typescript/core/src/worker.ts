@@ -60,6 +60,7 @@ import {
   workerCompletionPrepare,
   workerHeartbeatReservation,
   workerHeartbeatReservationProblem,
+  workerStatementPoolCapacity,
   workerProgressRead,
   workerWaitsRead,
 } from "./worker-internal.js";
@@ -85,9 +86,16 @@ export function dispatchRefillBatch(concurrency: number): number {
  */
 const TIER_PROBE_INTERVAL_MS = 30_000;
 
-/** Slot cohorts a worker without a `cohorts` option uses (ADR 0076, SM-919 addendum). */
-function defaultDispatchCohorts(concurrency: number): number {
-  return concurrency < 8 ? 1 : Math.min(8, Math.max(2, Math.ceil(concurrency / 8)));
+/**
+ * Slot cohorts a worker without a `cohorts` option uses (ADR 0076, SM-919 addendum). With a known
+ * pool size, it keeps one pooled connection per cohort after the listener and the heartbeat
+ * connection take theirs.
+ */
+function defaultDispatchCohorts(concurrency: number, spareConnections?: number): number {
+  const cohorts = concurrency < 8 ? 1 : Math.min(8, Math.max(2, Math.ceil(concurrency / 8)));
+  return spareConnections === undefined
+    ? cohorts
+    : Math.max(1, Math.min(cohorts, spareConnections));
 }
 
 /** Slots the dispatch loop set aside for the tasks one fused completion claims. */
@@ -382,7 +390,8 @@ export interface WorkerOptions {
    * Groups that split the slots for fast-tier queues (ADR 0076). Each group batches its own
    * completions, so its handlers run while another group's completion is in flight. Full-tier
    * queues ignore it. Defaults to 1 below a concurrency of 8, otherwise one per 8 slots, rounded
-   * up, from 2 to 8.
+   * up, from 2 to 8. When the queue's database is a pool, the default also leaves one connection
+   * per cohort after the listener and the heartbeat connection. An explicit value is not capped.
    */
   cohorts?: number;
   /** Ownership duration granted by claim and every accepted heartbeat. */
@@ -689,11 +698,23 @@ export class Worker {
       throw new Error("queues must contain at least one non-empty queue name");
     }
     this.concurrency = options.concurrency ?? 1;
-    this.cohorts = options.cohorts ?? defaultDispatchCohorts(this.concurrency);
+    this.supportsNotifications = this.queue.supportsTaskNotifications?.() ?? false;
+    const poolCapacity = (queue as { [workerStatementPoolCapacity]?: () => number | undefined })[
+      workerStatementPoolCapacity
+    ]?.call(queue);
+    this.cohorts =
+      options.cohorts ??
+      defaultDispatchCohorts(
+        this.concurrency,
+        poolCapacity === undefined
+          ? undefined
+          : poolCapacity -
+              (this.supportsNotifications ? 1 : 0) -
+              (options.sharedHeartbeats === true ? 0 : 1),
+      );
     this.leaseMs = options.leaseMs ?? 30_000;
     this.heartbeatMs = options.heartbeatMs ?? Math.max(100, Math.floor(this.leaseMs / 3));
     this.pollMs = options.pollMs ?? DEFAULT_POLL_MS;
-    this.supportsNotifications = this.queue.supportsTaskNotifications?.() ?? false;
     this.dispatchPollMs =
       options.pollMs ??
       (this.supportsNotifications ? DEFAULT_NOTIFICATION_FALLBACK_POLL_MS : DEFAULT_POLL_MS);
