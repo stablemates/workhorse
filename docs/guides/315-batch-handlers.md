@@ -51,7 +51,7 @@ new Worker(queue, { concurrency: workerCapacity }).handleBatch(
 
 Batch capacity cannot exceed the worker's task concurrency because every member still occupies one active slot. Full groups dispatch immediately, while partial groups dispatch when their linger ends.
 
-PostgreSQL admits tasks one at a time before they enter the group. Priority, queue limits, keyed limits, and rate limits can therefore leave a partial batch waiting for its linger.
+Workhorse admits each task against the queue's policies before it enters the group. Priority, queue limits, keyed limits, and rate limits can therefore leave a partial batch waiting for its linger.
 
 Cancellation, timeouts, lost leases, and shutdown remain per-task decisions. One member can be canceled or lose its fence while peers complete normally.
 
