@@ -25,36 +25,46 @@ Workhorse deletes that row and writes a single row to `fast_task_outcome`. It wr
 `task_event` rows and no `attempt_history` rows unless the queue asks for them.
 
 The core guarantees do not change. A claim still takes a lease and a fence, so a stale worker still
-cannot overwrite a newer attempt ([leases and fences](020-leases-and-fences.md)). The fast tier
-still supports:
-
-- priority and delayed runs;
-- idempotency keys;
-- retry policies, deadlines, and execution timeouts;
-- heartbeats and cancellation;
-- pause, purge, run-now, and redrive.
+cannot overwrite a newer attempt ([leases and fences](020-leases-and-fences.md)).
 
 Failed attempts are not lost. The runtime row carries a short list of recent errors, and the
 outcome keeps it. When the list is full, Workhorse drops the oldest entry and counts the drop, so
 a reader knows the list is incomplete. When a lease, timeout, or deadline closes a task instead of
 the handler, the outcome's `closed_as` names that boundary.
 
-## What a fast-tier queue rejects
+## Which features each tier has
 
-The fast tier drops every feature that needs durable execution or per-task coordination state.
-If a producer asks for one on a fast-tier queue, PostgreSQL rejects the request with `P1007`. Every
-SDK surfaces it as `FastTierUnsupportedError`, naming the queue and the feature.
+The fast tier drops features that need durable execution or per-task coordination state. The
+table lists each feature, and says why the fast tier lacks it where it does.
 
-A producer cannot use these on a fast-tier queue:
+| Feature                                                           | Full   | Fast              | Why the fast tier does not have it                                                                                                         |
+| ----------------------------------------------------------------- | ------ | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Leases, fences, and heartbeats                                    | Yes    | Yes               |                                                                                                                                            |
+| Priority and delayed runs                                         | Yes    | Yes               |                                                                                                                                            |
+| Retry policies, `maxAttempts`, deadlines, and execution timeouts  | Yes    | Yes               |                                                                                                                                            |
+| Idempotency keys                                                  | Yes    | Yes               |                                                                                                                                            |
+| Cancellation, pause, purge, run-now, and redrive                  | Yes    | Yes               |                                                                                                                                            |
+| Combined completion and next claim                                | No     | TypeScript worker |                                                                                                                                            |
+| `claimed` events and attempt history                              | Always | Opt-in per queue  | Each write is part of the cost the tier removes.                                                                                           |
+| Checkpoints                                                       | Yes    | No                | A checkpoint is durable execution state, which a fast-tier task never keeps.                                                               |
+| Progress                                                          | Yes    | No                | A progress write checks the attempt against a `task_runtime` row. A fast-tier task has none.                                               |
+| Durable sleeps, signal waits, and human waits                     | Yes    | No                | A wait suspends the task. A fast-tier task is only ready or active, so it cannot suspend.                                                  |
+| Task dependencies, in either direction                            | Yes    | No                | A fast-tier task cannot wait blocked on a prerequisite. A finished fast-tier task never releases its dependents.                           |
+| Child tasks, as parent or child                                   | Yes    | No                | A parent waits for its children, and a fast-tier task cannot wait. A fast-tier child never releases its parent.                            |
+| Concurrency keys, budgets, and concurrency or rate-limit policies | Yes    | No                | The full claim admits one task at a time against each policy. The fast claim takes a whole batch in one statement, with no admission step. |
+| Debounce                                                          | Yes    | No                | While its window is open, debounce rewrites the pending task's `task_runtime` row. No fast-tier path rewrites a pending row.               |
+| Throttle                                                          | Yes    | No                | No reason is settled yet. Throttle only decides whether enqueue accepts a request.                                                         |
 
-- concurrency keys, budgets, and queue-level concurrency or rate-limit policies;
-- task dependencies, in either direction;
-- debounce and throttle;
-- child tasks.
+The full tier has no combined completion and claim yet. Only the fast tier's version has been
+measured.
 
-A handler cannot use these on a fast-tier queue: progress, checkpoints, durable sleeps, signal
-waits, human waits, and child tasks. The handler context rejects each call before it reaches
-PostgreSQL. That rejection is an ordinary handler failure, so the task's retry policy applies.
+If a producer asks a fast-tier queue for a feature it lacks, PostgreSQL rejects the request with
+`P1007`. Every SDK surfaces it as `FastTierUnsupportedError`, naming the queue and the feature.
+Adding a concurrency or rate-limit policy to a fast-tier queue fails the same way.
+
+A handler on a fast-tier queue gets the same error from its handler context. The context rejects
+the call before it reaches PostgreSQL. That rejection is an ordinary handler failure, so the task's
+retry policy applies.
 
 The rule of thumb is simple. If a handler only computes and returns, the fast tier fits. If it
 ever needs to pause and come back, keep the queue full-tier.
