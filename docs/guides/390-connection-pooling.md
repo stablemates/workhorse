@@ -46,10 +46,10 @@ instead, and accept that busy handlers can then delay renewal. The heartbeat con
 self-contained statements, so it works behind a transaction-mode pooler. Go names that opt-out
 `SharedHeartbeats`.
 
-On a fast-tier queue, a busy TypeScript, Python or Go worker splits its slots into cohorts, and each
-cohort can hold a connection of its own. When the pool states its size, the worker picks no more
-cohorts than the pool has connections left after the listener and the heartbeat. A larger pool
-therefore lets a busy worker overlap more round trips.
+On a fast-tier queue, a busy worker in any language splits its slots into cohorts, and each cohort
+can hold a connection of its own. When the pool states its size, the worker picks no more cohorts
+than the pool has connections left after the listener and the heartbeat. A larger pool therefore
+lets a busy worker overlap more round trips.
 
 ## What is unsafe?
 

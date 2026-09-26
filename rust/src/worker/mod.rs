@@ -3,6 +3,7 @@
 //! PostgreSQL owns every state transition. The worker supervises handler futures, renews their
 //! leases in one batched round, and runs the maintenance and registry loops ADR 0072 describes.
 mod batch;
+mod completion;
 mod dispatch;
 mod execute;
 mod handler;
@@ -10,7 +11,7 @@ mod heartbeat;
 mod notifications;
 mod process;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -116,6 +117,10 @@ pub struct WorkerOptions {
     pub worker_id: Option<String>,
     /// Concurrent handler executions, between 1 and 100.
     pub concurrency: usize,
+    /// Slot cohorts for fast-tier dispatch, between 1 and `concurrency` (ADR 0076, rules 10 to
+    /// 15). One cohort keeps every slot in one group. Defaults to one below concurrency 8, and
+    /// otherwise to one per 8 slots between 2 and 8, capped by the pool's spare connections.
+    pub cohorts: Option<usize>,
     /// Whole milliseconds between 100ms and 24h.
     pub lease_duration: Duration,
     /// Defaults to a third of the lease.
@@ -147,6 +152,7 @@ impl Default for WorkerOptions {
             queues: vec!["default".into()],
             worker_id: None,
             concurrency: 1,
+            cohorts: None,
             lease_duration: DEFAULT_LEASE,
             heartbeat_interval: None,
             poll_interval: None,
@@ -173,6 +179,7 @@ impl std::fmt::Debug for WorkerOptions {
             .field("queues", &self.queues)
             .field("worker_id", &self.worker_id)
             .field("concurrency", &self.concurrency)
+            .field("cohorts", &self.cohorts)
             .field("lease_duration", &self.lease_duration)
             .field("heartbeat_interval", &self.heartbeat_interval)
             .field("poll_interval", &self.poll_interval)
@@ -233,6 +240,9 @@ fn validate(
     if !(1..=MAX_CONCURRENCY).contains(&options.concurrency) {
         return invalid("worker concurrency must be between 1 and 100");
     }
+    if options.cohorts.is_some_and(|cohorts| !(1..=options.concurrency).contains(&cohorts)) {
+        return invalid("worker cohorts must be between 1 and concurrency");
+    }
     let lease = options.lease_duration;
     if !whole_millis(lease) || !(MIN_LEASE..=MAX_LEASE).contains(&lease) {
         return invalid("worker lease duration must be a whole number of milliseconds between 100ms and 24h0m0s");
@@ -281,6 +291,14 @@ fn validate(
     Ok(heartbeat)
 }
 
+/// The slot cohorts a worker without a `cohorts` option uses (ADR 0076, rule 11). It keeps one
+/// pooled connection per cohort after the heartbeat connection takes its own. The notification
+/// listener opens a connection outside the pool.
+fn default_cohorts(concurrency: usize, spare_connections: usize) -> usize {
+    let cohorts = if concurrency < 8 { 1 } else { concurrency.div_ceil(8).clamp(2, 8) };
+    cohorts.min(spare_connections).max(1)
+}
+
 pub(crate) struct Inner {
     options: WorkerOptions,
     pool: deadpool_postgres::Pool,
@@ -289,6 +307,7 @@ pub(crate) struct Inner {
     heartbeat_interval: Duration,
     poll_interval: Duration,
     listener_expected: bool,
+    cohorts: usize,
     heartbeats: heartbeat::Heartbeats,
     metrics: Metrics,
     handlers: RwLock<HashMap<String, ErasedHandler>>,
@@ -303,6 +322,9 @@ pub(crate) struct Inner {
     contracts: Mutex<HashMap<String, Arc<ContractSchema>>>,
     /// Queues that rejected a fast claim, with the instant to probe them again.
     full_tier_until: Mutex<HashMap<String, Instant>>,
+    /// Queues whose last claim answered on the fast tier.
+    fast_tier_queues: Mutex<HashSet<String>>,
+    completions: completion::Batcher,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -310,11 +332,29 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 /// Releases one active slot when an execution ends, including when shutdown aborts it.
-struct ActiveSlot(Arc<Inner>);
+///
+/// A fused claim that leases successors hands the slot over to them before the execution ends.
+struct ActiveSlot {
+    inner: Arc<Inner>,
+    ticket: dispatch::Ticket<ClaimedTask>,
+    counted: AtomicBool,
+}
+
+impl ActiveSlot {
+    /// Stops counting this execution as active, because the tasks its completion claimed
+    /// now hold its slot.
+    fn hand_over(&self) {
+        if self.counted.swap(false, Ordering::SeqCst) {
+            self.inner.active.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
 
 impl Drop for ActiveSlot {
     fn drop(&mut self) {
-        self.0.active.fetch_sub(1, Ordering::SeqCst);
+        if *self.counted.get_mut() {
+            self.inner.active.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -348,6 +388,11 @@ impl Worker {
         } else {
             POLLING_POLL
         });
+        let spare_connections =
+            pool.status().max_size.saturating_sub(usize::from(!options.shared_heartbeats));
+        let cohorts = options
+            .cohorts
+            .unwrap_or_else(|| default_cohorts(options.concurrency, spare_connections));
         Ok(Self(Arc::new(Inner {
             options,
             pool,
@@ -356,6 +401,7 @@ impl Worker {
             heartbeat_interval,
             poll_interval,
             listener_expected,
+            cohorts,
             heartbeats: heartbeat::Heartbeats::default(),
             metrics: Metrics::new(),
             handlers: RwLock::default(),
@@ -368,6 +414,8 @@ impl Worker {
             last_routine: Mutex::new(None),
             next_queue: AtomicUsize::new(0),
             full_tier_until: Mutex::new(HashMap::new()),
+            fast_tier_queues: Mutex::default(),
+            completions: completion::Batcher::default(),
             contracts: Mutex::default(),
         })))
     }
@@ -501,11 +549,11 @@ impl Worker {
                 return Ok(false);
             }
             inner.run_maintenance().await?;
-            let (mut tasks, error) = inner.claim(1).await;
+            let (mut tasks, error) = inner.claim(1, 1).await;
             let Some(task) = tasks.pop() else { return error.map_or(Ok(false), Err) };
             match inner.handler(&task.task_type) {
                 Some(handler) => {
-                    inner.execute(task, handler, StopToken::new()).await.map(|()| true)
+                    inner.execute(task, handler, StopToken::new(), None).await.map(|()| true)
                 }
                 None => inner.release(&task, true).await.map(|_| false),
             }
@@ -530,18 +578,38 @@ impl dispatch::Dispatch for WorkerDispatch {
         self.inner.options.concurrency
     }
 
+    fn cohorts(&self) -> usize {
+        self.inner.cohorts
+    }
+
+    fn queue_count(&self) -> usize {
+        self.inner.options.queues.len()
+    }
+
     fn paused(&self) -> bool {
         self.inner.paused.load(Ordering::SeqCst)
+    }
+
+    fn fast_tier_only(&self) -> bool {
+        lock(&self.inner.full_tier_until).is_empty()
+    }
+
+    fn tiers_known(&self) -> bool {
+        self.inner.tiers_known()
     }
 
     fn poll_delay(&self, consecutive_empty: u32) -> Duration {
         self.inner.poll_delay(consecutive_empty, self.listening.load(Ordering::SeqCst))
     }
 
-    fn claim(&self, limit: usize) -> impl Future<Output = Vec<ClaimedTask>> + Send + 'static {
+    fn claim(
+        &self,
+        limit: usize,
+        fast_limit: usize,
+    ) -> impl Future<Output = Vec<ClaimedTask>> + Send + 'static {
         let inner = Arc::clone(&self.inner);
         async move {
-            let (tasks, error) = inner.claim(limit).await;
+            let (tasks, error) = inner.claim(limit, fast_limit).await;
             if let Some(error) = error {
                 tracing::warn!(error = %error, workhorse.worker.id = %inner.worker_id, "task claim failed");
             }
@@ -549,10 +617,15 @@ impl dispatch::Dispatch for WorkerDispatch {
         }
     }
 
-    fn launch(&self, executions: &mut JoinSet<Result<(), Error>>, task: ClaimedTask) -> bool {
+    fn launch(
+        &self,
+        executions: &mut JoinSet<Result<(), Error>>,
+        task: ClaimedTask,
+        ticket: dispatch::Ticket<ClaimedTask>,
+    ) -> bool {
         let handler = self.inner.handler(&task.task_type);
         let handled = handler.is_some();
-        self.inner.spawn_execution(executions, task, handler, self.shutdown.clone());
+        self.inner.spawn_execution(executions, task, handler, ticket, self.shutdown.clone());
         handled
     }
 }
@@ -597,14 +670,15 @@ impl Inner {
         executions: &mut JoinSet<Result<(), Error>>,
         task: ClaimedTask,
         handler: Option<ErasedHandler>,
+        ticket: dispatch::Ticket<ClaimedTask>,
         shutdown: StopToken,
     ) {
         self.active.fetch_add(1, Ordering::SeqCst);
-        let slot = ActiveSlot(Arc::clone(self));
+        let slot = ActiveSlot { inner: Arc::clone(self), ticket, counted: AtomicBool::new(true) };
         executions.spawn(async move {
-            let inner = Arc::clone(&slot.0);
+            let inner = Arc::clone(&slot.inner);
             let result = match handler {
-                Some(handler) => inner.execute(task, handler, shutdown).await,
+                Some(handler) => inner.execute(task, handler, shutdown, Some(&slot)).await,
                 None => inner.release(&task, true).await.map(drop),
             };
             drop(slot);
@@ -855,10 +929,11 @@ impl Inner {
         Ok(())
     }
 
-    /// Claims up to `limit` tasks round-robin across the queues.
+    /// Claims up to `limit` tasks round-robin across the queues, and at most `fast_limit` of them
+    /// from fast-tier queues (ADR 0076, rule 13).
     ///
     /// Tasks claimed before an error are returned with it, so the caller still owns them.
-    async fn claim(&self, limit: usize) -> (Vec<ClaimedTask>, Option<Error>) {
+    async fn claim(&self, limit: usize, fast_limit: usize) -> (Vec<ClaimedTask>, Option<Error>) {
         let queues = &self.options.queues;
         let mut tasks = Vec::new();
         let lease = millis_i32(self.options.lease_duration);
@@ -869,65 +944,99 @@ impl Inner {
             }
             let queue = &queues[self.next_queue.fetch_add(1, Ordering::SeqCst) % queues.len()];
             let sent_at = Instant::now();
-            let (rows, fast_tier) = match self.claim_queue(queue, remaining, lease, sent_at).await {
+            let fast_remaining = fast_limit.saturating_sub(tasks.len());
+            let claimed = self.claim_queue(queue, remaining, fast_remaining, lease, sent_at).await;
+            let (rows, fast_tier) = match claimed {
                 Ok(claimed) => claimed,
                 Err(error) => return (tasks, Some(error)),
             };
-            let result = if rows.is_empty() { "empty" } else { "claimed" };
-            self.metrics.record(
-                Histogram::ClaimDuration,
-                sent_at.elapsed().as_secs_f64() * 1000.0,
-                &[
-                    ("workhorse.queue.name", Attribute::Text(queue)),
-                    ("workhorse.claim.result", Attribute::Text(result)),
-                ],
-            );
-            for row in &rows {
-                match claimed_task(row, queue, sent_at) {
-                    Ok(mut task) => {
-                        task.fast_tier = fast_tier;
-                        tracing::debug!(
-                            event.name = "workhorse.task.claimed",
-                            workhorse.task.id = %task.id,
-                            workhorse.task.type = %task.task_type,
-                            workhorse.queue.name = %queue,
-                            workhorse.worker.id = %self.worker_id,
-                            "Task claimed"
-                        );
-                        self.metrics.add(
-                            Counter::Claimed,
-                            1.0,
-                            &[
-                                ("workhorse.queue.name", Attribute::Text(queue)),
-                                ("workhorse.task.type", Attribute::Text(&task.task_type)),
-                            ],
-                        );
-                        tasks.push(task);
-                    }
-                    Err(error) => return (tasks, Some(error)),
-                }
+            if let Err(error) = self.claimed_tasks(&rows, queue, sent_at, fast_tier, &mut tasks) {
+                return (tasks, Some(error));
             }
         }
         (tasks, None)
     }
 
+    /// Converts the claimed rows of one claim statement, and records the claim's metrics.
+    fn claimed_tasks(
+        &self,
+        rows: &[tokio_postgres::Row],
+        queue: &str,
+        sent_at: Instant,
+        fast_tier: bool,
+        tasks: &mut Vec<ClaimedTask>,
+    ) -> Result<(), Error> {
+        let result = if rows.is_empty() { "empty" } else { "claimed" };
+        self.metrics.record(
+            Histogram::ClaimDuration,
+            sent_at.elapsed().as_secs_f64() * 1000.0,
+            &[
+                ("workhorse.queue.name", Attribute::Text(queue)),
+                ("workhorse.claim.result", Attribute::Text(result)),
+            ],
+        );
+        for row in rows {
+            let mut task = claimed_task(row, queue, sent_at)?;
+            task.fast_tier = fast_tier;
+            tracing::debug!(
+                event.name = "workhorse.task.claimed",
+                workhorse.task.id = %task.id,
+                workhorse.task.type = %task.task_type,
+                workhorse.queue.name = %queue,
+                workhorse.worker.id = %self.worker_id,
+                "Task claimed"
+            );
+            self.metrics.add(
+                Counter::Claimed,
+                1.0,
+                &[
+                    ("workhorse.queue.name", Attribute::Text(queue)),
+                    ("workhorse.task.type", Attribute::Text(&task.task_type)),
+                ],
+            );
+            tasks.push(task);
+        }
+        Ok(())
+    }
+
+    /// Records which tier answered a claim of `queue` sent at `sent_at`.
+    fn record_tier(&self, queue: &str, fast_tier: bool, sent_at: Instant) {
+        if fast_tier {
+            lock(&self.full_tier_until).remove(queue);
+            lock(&self.fast_tier_queues).insert(queue.into());
+        } else {
+            lock(&self.full_tier_until).insert(queue.into(), sent_at + TIER_PROBE_INTERVAL);
+            lock(&self.fast_tier_queues).remove(queue);
+        }
+    }
+
+    /// Whether every queue answered its last claim on the fast tier.
+    fn tiers_known(&self) -> bool {
+        let fast = lock(&self.fast_tier_queues);
+        self.options.queues.iter().all(|queue| fast.contains(queue))
+    }
+
     /// Claims one queue through the fast-tier path, or through `claim_many_v1` when the queue is
     /// full-tier, and reports which path answered.
     ///
-    /// The fast claim is `complete_many_and_claim_v1` with no completions. A full-tier queue
-    /// rejects it, and the worker then claims that queue through `claim_many_v1` until the next
-    /// probe.
+    /// The fast claim is `complete_many_and_claim_v1` with no completions, and claims at most
+    /// `fast_limit`. A full-tier queue rejects it, and the worker then claims that queue through
+    /// `claim_many_v1` until the next probe.
     async fn claim_queue(
         &self,
         queue: &str,
         limit: usize,
+        fast_limit: usize,
         lease: i32,
         sent_at: Instant,
     ) -> Result<(Vec<tokio_postgres::Row>, bool), Error> {
-        let limit = limit as i32;
         let probe_due =
             lock(&self.full_tier_until).get(queue).is_none_or(|until| sent_at >= *until);
         if probe_due {
+            if fast_limit == 0 {
+                return Ok((Vec::new(), true));
+            }
+            let fast_limit = limit.min(fast_limit) as i32;
             let claimed = self
                 .pool
                 .rows(
@@ -938,7 +1047,7 @@ impl Inner {
                         &Vec::<i64>::new(),
                         &Vec::<Value>::new(),
                         &queue,
-                        &limit,
+                        &fast_limit,
                         &lease,
                     ],
                 )
@@ -946,7 +1055,7 @@ impl Inner {
                 .map_err(Error::translate_fast_tier);
             match claimed {
                 Ok(rows) => {
-                    lock(&self.full_tier_until).remove(queue);
+                    self.record_tier(queue, true, sent_at);
                     // A claim that finds nothing still returns one row, with every claim column
                     // null.
                     let mut claimed = Vec::with_capacity(rows.len());
@@ -957,12 +1066,11 @@ impl Inner {
                     }
                     return Ok((claimed, true));
                 }
-                Err(Error::FastTierUnsupported { .. }) => {
-                    lock(&self.full_tier_until).insert(queue.into(), sent_at + TIER_PROBE_INTERVAL);
-                }
+                Err(Error::FastTierUnsupported { .. }) => self.record_tier(queue, false, sent_at),
                 Err(error) => return Err(error),
             }
         }
+        let limit = limit as i32;
         let rows =
             self.pool.rows(sql::CLAIM_MANY_V1, &[&queue, &self.worker_id, &limit, &lease]).await?;
         Ok((rows, false))
@@ -1063,6 +1171,46 @@ mod tests {
             WorkerOptions { shared_heartbeats: true, ..Default::default() }
         )
         .is_ok());
+    }
+
+    #[tokio::test]
+    async fn cohorts_default_to_an_eighth_of_the_concurrency_within_the_spare_connections() {
+        let cohorts = |max_size: usize, options: WorkerOptions| {
+            Worker::new(pool(max_size), options).unwrap().0.cohorts
+        };
+        let concurrency = |concurrency: usize| WorkerOptions { concurrency, ..Default::default() };
+        assert_eq!(cohorts(20, concurrency(1)), 1);
+        assert_eq!(cohorts(20, concurrency(7)), 1);
+        assert_eq!(cohorts(20, concurrency(8)), 2, "at least two cohorts from concurrency 8");
+        assert_eq!(cohorts(20, concurrency(16)), 2);
+        assert_eq!(cohorts(20, concurrency(40)), 5);
+        assert_eq!(cohorts(20, concurrency(100)), 8, "at most eight cohorts");
+        assert_eq!(cohorts(4, concurrency(100)), 3, "one pool connection is the heartbeat's");
+        assert_eq!(
+            cohorts(2, WorkerOptions { shared_heartbeats: true, ..concurrency(100) }),
+            2,
+            "shared heartbeats leave the whole pool spare"
+        );
+        assert_eq!(
+            cohorts(4, WorkerOptions { cohorts: Some(8), ..concurrency(100) }),
+            8,
+            "an explicit count is never capped"
+        );
+    }
+
+    #[tokio::test]
+    async fn cohorts_must_be_between_one_and_the_concurrency() {
+        for invalid in [0, 17] {
+            rejects(
+                WorkerOptions { concurrency: 16, cohorts: Some(invalid), ..Default::default() },
+                "worker cohorts must be between 1 and concurrency",
+            );
+        }
+        for valid in [1, 16] {
+            let options =
+                WorkerOptions { concurrency: 16, cohorts: Some(valid), ..Default::default() };
+            assert_eq!(Worker::new(pool(4), options).unwrap().0.cohorts, valid);
+        }
     }
 
     #[tokio::test]

@@ -3008,8 +3008,17 @@ completions by queue and cohort, and keeps one `complete_many_and_claim_v1` call
 A call carries at most `completionBatchLimit` (100) completions, and its claim limits sum to at most 100. The call names its tasks in task ID order, and `heartbeat_many_v1` names its leases in the
 same order. A plan can still lock the shared runtime rows in another order. When PostgreSQL rolls
 the call back with SQLSTATE `40P01`, the worker sends it again, up to `completionDeadlockAttempts`
-(3) times in total. The Rust worker completes one task per statement, never shares a completion
-round trip, and has no cohorts.
+(3) times in total.
+
+The Rust worker follows the same rules. Its `default_cohorts` caps the default at the pool's
+`max_size`, minus 1 for the heartbeat connection unless `shared_heartbeats` is true; its listener
+opens a connection outside the pool. `Inner::complete_batched` sends the completions of one queue
+and cohort that finish in the same scheduler turn as one `complete_many_and_claim_v1` statement of
+at most 100 completions. When that statement raises `FastTierUnsupported`, each completion falls
+back to `complete_v1`. The worker sorts each statement's task ids. A fused claim's `FOR UPDATE SKIP
+LOCKED` can still hold a row that another statement deletes, so PostgreSQL may roll one back with
+SQLSTATE `40P01`. The worker sends that statement again up to 3 more times, because nothing in it
+committed.
 
 A fast-tier handler context rejects durable execution locally with `FastTierUnsupportedError` for
 the task's queue:

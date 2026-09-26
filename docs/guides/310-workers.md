@@ -57,7 +57,7 @@ Use `queue` for one name or `queues` for several. If you omit both, the worker u
 client's default. A batch callback still receives tasks from only one queue at a time.
 
 A worker discovers each queue's [tier](305-fast-tier.md) on its own, so a fast-tier queue needs no
-worker option. On the fast tier, a busy TypeScript, Python or Go worker splits its slots into
+worker option. On the fast tier, a busy worker in any language splits its slots into
 [cohorts](305-fast-tier.md#workers-need-no-configuration) that complete separately.
 
 ## Tasks this worker cannot run

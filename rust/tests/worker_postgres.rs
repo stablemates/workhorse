@@ -881,3 +881,125 @@ async fn a_crashed_fast_worker_loses_no_task_and_records_one_outcome_each() {
         .get(0);
     assert_eq!(accepted, Some(Vec::new()));
 }
+
+#[tokio::test]
+async fn a_worker_serving_both_tiers_completes_each_task_in_its_own_tier() {
+    let Some(harness) = harness("fast_mixed").await else { return };
+    harness.make_fast("fast-mixed").await;
+    let mut fast = Vec::new();
+    let mut full = Vec::new();
+    for sequence in 0..24 {
+        fast.push(harness.enqueue("work", json!({ "sequence": sequence }), on("fast-mixed")).await);
+        full.push(harness.enqueue("work", json!({ "sequence": sequence }), on("full-mixed")).await);
+    }
+    // Four slots in two cohorts: fast completions batch, and the full-tier queue turns cohorts off.
+    let worker = harness.worker(WorkerOptions {
+        concurrency: 4,
+        cohorts: Some(2),
+        queues: vec!["fast-mixed".into(), "full-mixed".into()],
+        ..options()
+    });
+    worker.handle("work", |payload: Value, _| async move { Ok(payload) });
+    let (stop, run) = run(&worker);
+    harness.wait_for_outcomes(&fast).await;
+    tokio::time::timeout(WAIT, async {
+        for &task in &full {
+            while harness.state(task).await != TaskState::Succeeded {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+    })
+    .await
+    .expect("every full-tier task succeeds");
+    stop.send(()).unwrap();
+    run.await.unwrap().unwrap();
+
+    let outcomes = harness.fast_outcomes(&fast).await;
+    assert_eq!(outcomes.len(), fast.len());
+    assert!(outcomes.iter().all(|(_, state, attempt)| state == "succeeded" && *attempt == 1));
+    assert!(harness.fast_outcomes(&full).await.is_empty(), "a full-tier task has no outcome row");
+    assert_eq!(harness.runtime_rows("fast-mixed").await, 0);
+}
+
+#[tokio::test]
+async fn an_abandoned_batching_worker_reruns_no_more_tasks_than_its_concurrency() {
+    let Some(harness) = harness("fast_abandon").await else { return };
+    harness.make_fast("fast-abandon").await;
+    let requests = (0..60)
+        .map(|sequence| EnqueueRequest {
+            options: EnqueueOptions { max_attempts: 3, ..on("fast-abandon") },
+            ..EnqueueRequest::new("effect", json!({ "sequence": sequence }))
+        })
+        .collect();
+    let ids: Vec<Uuid> = harness
+        .queue
+        .enqueue_many(requests)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|result| result.task_id)
+        .collect();
+    let effects = Arc::new(Mutex::new(std::collections::HashMap::<Uuid, usize>::new()));
+    let concurrency = 8;
+
+    // The first worker completes 20 tasks in fused batches, then every handler hangs until the
+    // worker abandons them. Their leases lapse as if the process had died.
+    let started = Arc::new(AtomicUsize::new(0));
+    let (record, count) = (Arc::clone(&effects), Arc::clone(&started));
+    let crashing = harness.worker(WorkerOptions {
+        concurrency,
+        lease_duration: Duration::from_millis(500),
+        heartbeat_interval: Some(Duration::from_millis(100)),
+        shutdown_grace_period: Duration::from_millis(50),
+        ..serving("fast-abandon")
+    });
+    crashing.handle("effect", move |_: Value, context: HandlerContext| {
+        *record.lock().unwrap().entry(context.task().id).or_default() += 1;
+        let hang = count.fetch_add(1, Ordering::SeqCst) >= 20;
+        async move {
+            if hang {
+                std::future::pending::<()>().await;
+            }
+            Ok(json!({"ok": true}))
+        }
+    });
+    let (stop, run_crashing) = run(&crashing);
+    tokio::time::timeout(WAIT, async {
+        while started.load(Ordering::SeqCst) < 20 + concurrency {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the first worker fills every slot with a hung handler");
+    stop.send(()).unwrap();
+    assert!(matches!(run_crashing.await.unwrap(), Err(Error::ShutdownIncomplete { .. })));
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    harness
+        .database
+        .connect()
+        .await
+        .query("SELECT * FROM workhorse.recover_expired_telemetry_v1(100, 0)", &[])
+        .await
+        .unwrap();
+
+    let record = Arc::clone(&effects);
+    let worker = harness.worker(WorkerOptions { concurrency, ..serving("fast-abandon") });
+    worker.handle("effect", move |_: Value, context: HandlerContext| {
+        *record.lock().unwrap().entry(context.task().id).or_default() += 1;
+        async { Ok(json!({"ok": true})) }
+    });
+    let (stop, run) = run(&worker);
+    harness.wait_for_outcomes(&ids).await;
+    stop.send(()).unwrap();
+    run.await.unwrap().unwrap();
+
+    let outcomes = harness.fast_outcomes(&ids).await;
+    assert_eq!(outcomes.len(), ids.len(), "one outcome row per task");
+    assert!(outcomes.iter().all(|(_, state, _)| state == "succeeded"));
+    let effects = effects.lock().unwrap().clone();
+    assert!(ids.iter().all(|id| effects.contains_key(id)), "every task ran");
+    let reruns = effects.values().filter(|&&runs| runs > 1).count();
+    assert!(reruns > 0 && reruns <= concurrency, "{reruns} tasks ran twice");
+    assert!(effects.values().all(|&runs| runs <= 2), "{effects:?}");
+    assert_eq!(harness.runtime_rows("fast-abandon").await, 0);
+}
