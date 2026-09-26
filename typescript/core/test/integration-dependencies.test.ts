@@ -27,6 +27,14 @@ const insertDependency = (
     [dependentTaskId, prerequisiteTaskId],
   );
 
+const within = <T>(work: Promise<T>) =>
+  Promise.race([
+    work,
+    sleep(2_000).then(() => {
+      throw new Error("blocked behind the open dependent enqueue");
+    }),
+  ]);
+
 describe("task dependencies", () => {
   it("maps dependency cycle diagnostics through the public enqueue API", async () => {
     const details = {
@@ -1039,6 +1047,131 @@ describe("task dependencies", () => {
       prerequisiteTaskId: prerequisiteId,
       blockedReason: null,
     });
+  });
+
+  it("releases every dependent whose prerequisite finishes while its enqueue is in flight", async () => {
+    // Each race holds two pooled connections, and the test pool has ten.
+    const rounds = 20;
+    const width = 2;
+    const dependentIds: string[] = [];
+    for (let round = 0; round < rounds; round += 1) {
+      await queue.enqueueMany(
+        Array.from({ length: width }, () => ({
+          type: "in-flight-prerequisite",
+          payload: null,
+          options: { queue: "in-flight-prerequisites", maxAttempts: 1 },
+        })),
+      );
+      const claimed = await queue.claimMany("in-flight-worker", width, {
+        queue: "in-flight-prerequisites",
+      });
+      expect(claimed).toHaveLength(width);
+      const unclaimedIds = await queue.enqueueMany(
+        Array.from({ length: width }, () => ({
+          type: "in-flight-unclaimed-prerequisite",
+          payload: null,
+          options: { queue: "in-flight-unclaimed-prerequisites" },
+        })),
+      );
+      // Every terminal transition takes a turn: completion, final failure, and cancellation.
+      const finishers = [
+        ...claimed.map((task, index) =>
+          index % 2 === 0
+            ? {
+                prerequisiteId: task.id,
+                expected: "completed",
+                finish: async () =>
+                  (await queue.complete(task, "in-flight-worker", null)) ? "completed" : "stale",
+              }
+            : {
+                prerequisiteId: task.id,
+                expected: "failed",
+                finish: () => queue.fail(task, "in-flight-worker", new Error("done")),
+              },
+        ),
+        ...unclaimedIds.map((prerequisiteId) => ({
+          prerequisiteId,
+          expected: "canceled",
+          finish: async () => (await queue.cancel(prerequisiteId)).status,
+        })),
+      ];
+      // Each dependent enqueue holds its transaction open for a moment after it writes the edge,
+      // so a finish that does not wait for it resolves dependents on a snapshot without it.
+      const results = await Promise.all(
+        finishers.map(async ({ prerequisiteId, finish }, index) => {
+          const transaction = await pool.connect();
+          try {
+            await transaction.query("BEGIN");
+            const enqueue = async () => {
+              const dependentId = await queue.enqueue(
+                "in-flight-dependent",
+                null,
+                { queue: "in-flight-dependents", prerequisiteTaskId: prerequisiteId },
+                transaction,
+              );
+              await sleep(5);
+              await transaction.query("COMMIT");
+              return dependentId;
+            };
+            const [dependentId, finished] = await Promise.all([
+              enqueue(),
+              sleep(index % 2 === 0 ? 0 : 2).then(finish),
+            ]);
+            return { dependentId, finished };
+          } catch (error) {
+            await transaction.query("ROLLBACK").catch(() => undefined);
+            throw error;
+          } finally {
+            transaction.release();
+          }
+        }),
+      );
+      expect(results.map(({ finished }) => finished)).toEqual(
+        finishers.map(({ expected }) => expected),
+      );
+      dependentIds.push(...results.map(({ dependentId }) => dependentId));
+    }
+
+    const stranded = await pool.query<{ task_id: string }>(
+      `SELECT runtime.task_id FROM workhorse.task_runtime runtime
+        WHERE runtime.task_id = ANY($1::uuid[]) AND runtime.state = 'blocked'
+          AND NOT EXISTS (
+            SELECT 1 FROM workhorse.task_dependency dependency
+              LEFT JOIN workhorse.task_outcome outcome
+                ON outcome.task_id = dependency.prerequisite_task_id
+             WHERE dependency.dependent_task_id = runtime.task_id AND outcome.task_id IS NULL
+          )`,
+      [dependentIds],
+    );
+    expect(stranded.rows).toEqual([]);
+  });
+
+  it("lets a prerequisite be claimed and heartbeated while a dependent enqueue is in flight", async () => {
+    const prerequisiteId = await queue.enqueue("unblocked-prerequisite", null, {
+      queue: "unblocked-prerequisites",
+    });
+    const transaction = await pool.connect();
+    try {
+      await transaction.query("BEGIN");
+      await queue.enqueue(
+        "unblocked-dependent",
+        null,
+        { queue: "unblocked-dependents", prerequisiteTaskId: prerequisiteId },
+        transaction,
+      );
+      // The enqueue transaction stays open, so any lock it holds on the prerequisite is still held.
+      const claimed = await within(
+        queue.claim("unblocked-worker", { queue: "unblocked-prerequisites" }),
+      );
+      expect(claimed?.id).toBe(prerequisiteId);
+      await expect(within(queue.heartbeat(claimed!, "unblocked-worker"))).resolves.toBe(true);
+      await transaction.query("COMMIT");
+    } catch (error) {
+      await transaction.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      transaction.release();
+    }
   });
 
   it("validates dependency identity and keeps enqueue transactional and idempotent", async () => {

@@ -487,6 +487,10 @@ describe("schema installation", () => {
       { version: 23, description: "a canceled dependent releases its edges" },
       { version: 24, description: "row retention lag waits for history retention" },
       { version: 25, description: "add a fast task tier" },
+      {
+        version: 26,
+        description: "a dependent enqueue holds its prerequisites against completion",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

@@ -396,8 +396,9 @@ therefore makes this release one offline cutover. For this release only, deploy 
 3. From the same image, run `workhorse schema contract --yes` against each database. Each run
    applies 0025 and leaves the database at version 25. Without `--yes`, the command applies nothing
    and names any old worker that still heartbeated inside its lease.
-4. Deploy the new release as usual. Its pre-deploy hook finds version 25, installs the demo's own
-   tables, and verifies both workspaces before any container starts.
+4. Deploy the new release as usual. Its pre-deploy hook finds version 25, applies the additive
+   steps after it, installs the demo's own tables, and verifies both workspaces before any
+   container starts.
 
 The CLI reads the database from `--database-url`, `WORKHORSE_DATABASE_URL`, or `DATABASE_URL`. Pass
 the URL through the environment, as the role env file does, so no credential appears on a command
@@ -470,9 +471,10 @@ remember.
 
 ### Dashboard schema
 
-The current build ships Workhorse schema version 25; its packaged migrations carry a version 6
-baseline forward to it. Version 25 ends in a contract step, which the
-[fast-tier cutover](#the-fast-tier-release-needs-one-offline-cutover) applies. That baseline is the `0.2.0` clean install, and the schema step refuses a
+The current build ships Workhorse schema version 26; its packaged migrations carry a version 6
+baseline forward to it. Version 25 is a contract step, which the
+[fast-tier cutover](#the-fast-tier-release-needs-one-offline-cutover) applies. Version 26 is
+additive, so the ordinary schema step applies it to a database at version 25. That baseline is the `0.2.0` clean install, and the schema step refuses a
 database below it: the `0.1.x` line had no production install and is not carried forward
 ([ADR 0073](../../docs/decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)). A
 database below the baseline reaches it with Workhorse `0.2.1` first. The baseline includes custom
