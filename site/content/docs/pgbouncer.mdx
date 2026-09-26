@@ -60,10 +60,10 @@ that busy handlers can then delay renewal. The heartbeat connection runs only se
 statements, so it works in every pool mode. Go workers reserve one heartbeat connection from the shared pool (or opt out with `SharedHeartbeats`). A Python worker opens its own
 heartbeat connection from the supplied Psycopg or asyncpg pool.
 
-On a [fast-tier](/docs/fast-tier) queue, a busy TypeScript worker splits its slots into cohorts,
-and each cohort can hold a connection of its own. When the pool states its size, the worker picks
-no more cohorts than the pool has connections left after the listener and the heartbeat, so a
-larger pool lets a busy worker overlap more round trips.
+On a [fast-tier](/docs/fast-tier) queue, a busy TypeScript, Python or Go worker splits its slots
+into cohorts, and each cohort can hold a connection of its own. When the pool states its size, the
+worker picks no more cohorts than the pool has connections left after the listener and the
+heartbeat, so a larger pool lets a busy worker overlap more round trips.
 
 ## What is unsafe
 

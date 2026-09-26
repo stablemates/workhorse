@@ -12,7 +12,9 @@ import (
 	"os"
 	"reflect"
 	"runtime/debug"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -55,6 +57,12 @@ const (
 	// A queue whose fast claim was refused is claimed through claim_many_v1 for this long before
 	// the worker tries the fast claim again, so a tier change reaches running workers.
 	fastTierProbeInterval = 30 * time.Second
+	// completionBatchLimit bounds both the completions one complete_many_and_claim_v1 call settles
+	// and the tasks it claims, which is the statement's own per-call limit.
+	completionBatchLimit = 100
+	// completionDeadlockAttempts bounds how often a batched completion is sent again after
+	// PostgreSQL chose it as a deadlock victim.
+	completionDeadlockAttempts = 3
 )
 
 func workerPollDelay(base time.Duration, consecutiveEmpty int, backoff bool) time.Duration {
@@ -184,6 +192,8 @@ type ClaimedTask struct {
 	// fastTier marks a task claimed from a fast-tier queue. Its handler context rejects durable
 	// features, and its completion goes through the batched statement.
 	fastTier bool
+	// slot is the dispatch slot the task runs in. It is nil outside Run's dispatch loop.
+	slot *dispatchSlot
 }
 
 // Handler processes one claimed payload with fenced durable operations outside a transaction.
@@ -209,7 +219,11 @@ type WorkerOptions struct {
 	ShutdownGracePeriod        time.Duration
 	PollingOnly                bool
 	// SharedHeartbeats opts out of the dedicated heartbeat connection reservation.
-	SharedHeartbeats    bool
+	SharedHeartbeats bool
+	// Cohorts splits the slots into fixed shares for fast-tier dispatch (ADR 0076). It takes 1
+	// through Concurrency. Zero selects the default: one cohort below concurrency 8, otherwise one
+	// per 8 slots between 2 and 8, and never more than the pool connections the worker leaves spare.
+	Cohorts             int
 	Logger              *slog.Logger
 	OnRegistrationError func(error)
 	// RetryDelay overrides the delay the persisted retry policy would choose, for one failed
@@ -226,10 +240,13 @@ type Worker struct {
 	nextQueueIndex int
 	// fullTierUntil holds, per queue, when the worker next tries a fast claim after PostgreSQL
 	// refused one. fullTierMu guards it because claims overlap.
-	fullTierMu          sync.Mutex
-	fullTierUntil       map[string]time.Time
+	fullTierMu    sync.Mutex
+	fullTierUntil map[string]time.Time
+	// fastTierQueues holds the queues whose last claim PostgreSQL answered on the fast tier.
+	fastTierQueues      map[string]struct{}
 	workerID            string
 	concurrency         int
+	cohorts             int
 	leaseDuration       time.Duration
 	heartbeatInterval   time.Duration
 	pollInterval        time.Duration
@@ -265,6 +282,10 @@ type Worker struct {
 	heartbeatRunning           bool
 	heartbeatLease             *heartbeatConnectionLease
 	sharedHeartbeats           bool
+	// completionClaims is the running dispatch loop's handle for fused completion claims. It is
+	// nil outside Run, so a completion from RunOnce claims nothing.
+	completionClaims atomic.Pointer[completionClaimer]
+	completions      completionBatcher
 }
 
 type heartbeatMember struct {
@@ -412,6 +433,21 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 	if concurrency < 1 || concurrency > maximumWorkerConcurrency {
 		return nil, fmt.Errorf(workerConcurrencyRangeMessage, maximumWorkerConcurrency)
 	}
+	cohorts := options.Cohorts
+	if cohorts == 0 {
+		// The listener and the dedicated heartbeat connection each hold one pooled connection.
+		spare := int(pool.Config().MaxConns)
+		if !options.PollingOnly {
+			spare--
+		}
+		if !options.SharedHeartbeats {
+			spare--
+		}
+		cohorts = defaultDispatchCohorts(concurrency, spare)
+	}
+	if cohorts < 1 || cohorts > concurrency {
+		return nil, errors.New(workerCohortsRangeMessage)
+	}
 	shutdownGracePeriod := options.ShutdownGracePeriod
 	if shutdownGracePeriod == 0 {
 		shutdownGracePeriod = defaultShutdownGracePeriod
@@ -434,6 +470,7 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		queues:                     uniqueQueues,
 		workerID:                   workerID,
 		concurrency:                concurrency,
+		cohorts:                    cohorts,
 		leaseDuration:              leaseDuration,
 		heartbeatInterval:          heartbeatInterval,
 		pollInterval:               pollInterval,
@@ -537,13 +574,15 @@ func (worker *Worker) Run(ctx context.Context) error {
 	}()
 	executionContext, cancelExecutions := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancelExecutions()
-	executionResults := make(chan error, worker.concurrency)
+	// A fused completion hands its slot to a replacement before its execution ends, so up to twice
+	// the concurrency of executions can finish at once.
+	executionResults := make(chan executionResult, 2*worker.concurrency)
 	active, firstError := worker.dispatch(ctx, dispatchEnvironment{
 		// A claim may commit tasks before a later queue fails. The claim must finish even when the
 		// run context is cancelled, and every task it returned still needs to be executed before the
 		// error is surfaced.
-		claim: func(limit int) ([]ClaimedTask, error) {
-			return worker.claimNextMany(context.WithoutCancel(ctx), executor, limit)
+		claim: func(limit int, fastLimit int) ([]ClaimedTask, error) {
+			return worker.claimNextMany(context.WithoutCancel(ctx), executor, limit, fastLimit)
 		},
 		execute: func(claimed ClaimedTask) error {
 			handler := worker.handlers[claimed.Type]
@@ -566,10 +605,10 @@ func (worker *Worker) Run(ctx context.Context) error {
 	abandoned := 0
 	for active > 0 {
 		select {
-		case err := <-executionResults:
+		case result := <-executionResults:
 			active--
-			if err != nil && firstError == nil {
-				firstError = err
+			if result.err != nil && firstError == nil {
+				firstError = result.err
 			}
 			continue
 		case <-graceTimer.C:
@@ -628,26 +667,122 @@ func dispatchRefillBatch(concurrency int) int {
 	return (concurrency + 3) / 4
 }
 
+// defaultDispatchCohorts is the cohort count a worker without a Cohorts option uses (ADR 0076). It
+// keeps one pooled connection per cohort after the listener and the heartbeat take theirs.
+func defaultDispatchCohorts(concurrency int, spareConnections int) int {
+	cohorts := 1
+	if concurrency >= 8 {
+		cohorts = min(8, max(2, (concurrency+7)/8))
+	}
+	return max(1, min(cohorts, spareConnections))
+}
+
 // dispatchEnvironment carries what the dispatch loop needs from Run. A test replaces the claim and
 // the execution with fakes and drives the loop without PostgreSQL.
 type dispatchEnvironment struct {
-	claim             func(limit int) ([]ClaimedTask, error)
+	claim             func(limit int, fastLimit int) ([]ClaimedTask, error)
 	execute           func(task ClaimedTask) error
-	executionResults  chan error
+	executionResults  chan executionResult
 	notificationWake  <-chan struct{}
 	registryWake      <-chan struct{}
 	maintenanceErrors <-chan error
 	listening         func() bool
 }
 
+// executionResult is one finished execution and the slot it held.
+type executionResult struct {
+	slot *dispatchSlot
+	err  error
+}
+
+// dispatchSlot is the slot one execution holds. The loop owns cohort and handedOver. released
+// makes sure the handler slot returns exactly once: either the execution returns it when it ends,
+// or the loop returns it early when the execution's fused completion claimed replacements.
+type dispatchSlot struct {
+	cohort     int
+	handedOver bool
+	released   atomic.Bool
+}
+
+func (slot *dispatchSlot) release(worker *Worker) {
+	if slot.released.CompareAndSwap(false, true) {
+		<-worker.handlerSlots
+		worker.activeSlots.Add(-1)
+	}
+}
+
 // claimSettlement is one finished claim. skipped reports a claim that was never sent because the
-// worker stopped or paused during the notification delay.
+// worker stopped or paused during the notification delay. cohort is -1 for a claim for the whole
+// worker; a cohort claim reserves cohortLimit slots in that cohort.
 type claimSettlement struct {
 	limit       int
+	cohort      int
+	cohortLimit int
 	wakeVersion int
 	skipped     bool
 	tasks       []ClaimedTask
 	err         error
+}
+
+// completionClaimer connects a fast-tier completion to the dispatch loop that owns the slots. An
+// execution asks for a reservation before it writes its completion, and it settles the reservation
+// with the tasks the fused claim returned.
+type completionClaimer struct {
+	requests    chan completionRequest
+	settlements chan completionSettlement
+	// done closes when the loop stops granting reservations.
+	done chan struct{}
+}
+
+type completionRequest struct {
+	slot  *dispatchSlot
+	reply chan *completionReservation
+}
+
+// completionReservation is the slots the loop set aside for one fused completion claim: the
+// completing task's own slot and the free slots of its cohort.
+type completionReservation struct {
+	claimer     *completionClaimer
+	slot        *dispatchSlot
+	limit       int
+	cohort      int
+	wakeVersion int
+}
+
+type completionSettlement struct {
+	reservation *completionReservation
+	tasks       []ClaimedTask
+	// answered is false when the completion failed or fell back to complete_v1, so it says
+	// nothing about the queue's backlog.
+	answered bool
+}
+
+// reserve asks the loop for a fused claim. It returns nil when the task holds no dispatch slot,
+// the loop has stopped, or the loop declines.
+func (claimer *completionClaimer) reserve(task ClaimedTask) *completionReservation {
+	if claimer == nil || task.slot == nil {
+		return nil
+	}
+	reply := make(chan *completionReservation, 1)
+	select {
+	case claimer.requests <- completionRequest{slot: task.slot, reply: reply}:
+		return <-reply
+	case <-claimer.done:
+		return nil
+	}
+}
+
+// settle hands the claimed tasks to the loop. The loop waits for every reservation it granted, so
+// the send always finds a receiver.
+func (reservation *completionReservation) settle(tasks []ClaimedTask, answered bool) {
+	if reservation == nil {
+		return
+	}
+	reservation.claimer.settlements <- completionSettlement{
+		reservation: reservation,
+		tasks:       tasks,
+		answered:    answered,
+	}
 }
 
 // dispatch keeps the slots full without one serial claim round trip per task (ADR 0076). A claim
@@ -655,15 +790,47 @@ type claimSettlement struct {
 // flight, any free slot starts one. While one is in flight, another starts only once the unreserved
 // free slots reach the refill batch, so a busy worker claims in batches and its claims overlap.
 //
+// Every task belongs to one cohort, a fixed share of the slots. A fast-tier completion batches only
+// with its own cohort and claims replacements for only that cohort's slots. With more than one
+// cohort and no full-tier queue, plain claims leave one at a time, each for one cohort. The cohorts'
+// completion round trips then alternate, and one cohort's handlers run while another waits.
+//
 // dispatch returns when the context ends, an execution fails, a claim fails, or maintenance fails.
-// It first waits for every claim still in flight and launches the tasks those claims returned. It
-// returns the executions still running and the first error; the caller drains the executions.
+// It first waits for every claim and fused completion claim still in flight and launches the tasks
+// they returned. It returns the executions still running and the first error; the caller drains
+// the executions.
 func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironment) (int, error) {
 	refillBatch := dispatchRefillBatch(worker.concurrency)
+	cohorts := worker.cohorts
+	// The first cohorts take the remainder of an uneven split.
+	cohortCapacity := make([]int, cohorts)
+	for cohort := range cohortCapacity {
+		cohortCapacity[cohort] = worker.concurrency / cohorts
+		if cohort < worker.concurrency%cohorts {
+			cohortCapacity[cohort]++
+		}
+	}
+	// Per-cohort counterparts of active, handedOver and reserved, and the plain claims in flight
+	// for each cohort. A claim for the whole worker counts toward no cohort.
+	cohortActive := make([]int, cohorts)
+	cohortHandedOver := make([]int, cohorts)
+	cohortReserved := make([]int, cohorts)
+	cohortClaims := make([]int, cohorts)
+	wholeClaims := 0
 	claimResults := make(chan claimSettlement, worker.concurrency)
+	claimer := &completionClaimer{
+		requests:    make(chan completionRequest),
+		settlements: make(chan completionSettlement),
+		done:        make(chan struct{}),
+	}
+	worker.completionClaims.Store(claimer)
 	active := 0
+	// handedOver counts executions whose fused completion is in flight or claimed replacements:
+	// their slots already belong to the reservation or to the replacements.
+	handedOver := 0
 	reserved := 0
 	claimsInFlight := 0
+	completionClaimsInFlight := 0
 	consecutiveEmptyClaims := 0
 	wakeVersion := 0
 	notificationDelayPending := false
@@ -691,25 +858,96 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 	pollDelay := func() time.Duration {
 		return workerPollDelay(worker.pollInterval, consecutiveEmptyClaims, !environment.listening())
 	}
-	launch := func(task ClaimedTask) {
+	freeSlots := func() int {
+		return worker.concurrency - active + handedOver - reserved
+	}
+	cohortFree := func(cohort int) int {
+		return cohortCapacity[cohort] - cohortActive[cohort] + cohortHandedOver[cohort] - cohortReserved[cohort]
+	}
+	// The cohort with the most free slots, the first one on a tie.
+	roomiestCohort := func() int {
+		best := 0
+		for cohort := 1; cohort < cohorts; cohort++ {
+			if cohortFree(cohort) > cohortFree(best) {
+				best = cohort
+			}
+		}
+		return best
+	}
+	setEmptyWait := func(startedVersion int) {
+		consecutiveEmptyClaims++
+		if emptyWait == nil {
+			emptyWait = &struct {
+				deadline    time.Time
+				wakeVersion int
+			}{time.Now().Add(pollDelay()), startedVersion}
+		}
+	}
+	runnable := func(tasks []ClaimedTask) bool {
+		for _, task := range tasks {
+			if worker.handlers[task.Type] != nil {
+				return true
+			}
+		}
+		return false
+	}
+	// A task joins the cohort whose claim leased it. A claim for the whole worker, or one that
+	// returned more tasks than its cohort has room for, spreads the rest over the roomiest cohorts.
+	launch := func(task ClaimedTask, preferred int) {
+		cohort := preferred
+		if cohort < 0 || cohortFree(cohort) <= 0 {
+			cohort = roomiestCohort()
+		}
+		slot := &dispatchSlot{cohort: cohort}
+		task.slot = slot
 		worker.handlerSlots <- struct{}{}
 		active++
+		cohortActive[cohort]++
 		worker.activeSlots.Add(1)
 		go func() {
 			err := environment.execute(task)
-			<-worker.handlerSlots
-			worker.activeSlots.Add(-1)
-			environment.executionResults <- err
+			slot.release(worker)
+			environment.executionResults <- executionResult{slot: slot, err: err}
 		}()
 	}
-	startClaim := func(limit int) {
+	observe := func(result executionResult) {
+		active--
+		cohortActive[result.slot.cohort]--
+		if result.slot.handedOver {
+			handedOver--
+			cohortHandedOver[result.slot.cohort]--
+		}
+		if result.err != nil {
+			if firstError == nil {
+				firstError = result.err
+			}
+			stopping = true
+		}
+	}
+	startClaim := func(limit int, cohort int, cohortLimit int) {
 		reserved += limit
+		if cohort < 0 {
+			wholeClaims++
+		} else {
+			cohortClaims[cohort]++
+			cohortReserved[cohort] += cohortLimit
+		}
 		claimsInFlight++
 		delayed := notificationDelayPending
 		notificationDelayPending = false
 		startedVersion := wakeVersion
+		// A cohort claim takes only its cohort's share from a fast-tier queue.
+		fastLimit := limit
+		if cohort >= 0 {
+			fastLimit = cohortLimit
+		}
 		go func() {
-			settlement := claimSettlement{limit: limit, wakeVersion: startedVersion}
+			settlement := claimSettlement{
+				limit:       limit,
+				cohort:      cohort,
+				cohortLimit: cohortLimit,
+				wakeVersion: startedVersion,
+			}
 			if delayed {
 				delay := time.NewTimer(time.Duration(pseudorand.Int64N(int64(notificationClaimDelay) + 1)))
 				select {
@@ -724,13 +962,19 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 					return
 				}
 			}
-			settlement.tasks, settlement.err = environment.claim(limit)
+			settlement.tasks, settlement.err = environment.claim(limit, fastLimit)
 			claimResults <- settlement
 		}()
 	}
 	settleClaim := func(settlement claimSettlement) {
 		claimsInFlight--
 		reserved -= settlement.limit
+		if settlement.cohort < 0 {
+			wholeClaims--
+		} else {
+			cohortClaims[settlement.cohort]--
+			cohortReserved[settlement.cohort] -= settlement.cohortLimit
+		}
 		if settlement.skipped {
 			return
 		}
@@ -738,16 +982,10 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 		// of them goes straight back to its queue. Counting it as empty backs off instead of
 		// spinning on a task no worker in this release can run. The check runs before the launch,
 		// so reading the handlers happens before any execution the claim starts.
-		runnable := false
-		for _, task := range settlement.tasks {
-			if worker.handlers[task.Type] != nil {
-				runnable = true
-				break
-			}
-		}
+		progressed := runnable(settlement.tasks)
 		// A claimed task holds a lease, so it runs even when the loop is stopping or has failed.
 		for _, task := range settlement.tasks {
-			launch(task)
+			launch(task, settlement.cohort)
 		}
 		if settlement.err != nil {
 			if firstError == nil && ctx.Err() == nil {
@@ -758,17 +996,61 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 			stopping = true
 			return
 		}
-		if runnable {
+		if progressed {
 			consecutiveEmptyClaims = 0
 			emptyWait = nil
 			return
 		}
-		consecutiveEmptyClaims++
-		if emptyWait == nil {
-			emptyWait = &struct {
-				deadline    time.Time
-				wakeVersion int
-			}{time.Now().Add(pollDelay()), settlement.wakeVersion}
+		setEmptyWait(settlement.wakeVersion)
+	}
+	// The refill-batch rule applies to a fused claim as well: while a plain claim that can fill the
+	// completing task's cohort is in flight, a completion claims only when that would fill at least
+	// a refill batch of slots. A claim for another cohort does not hold a completion back.
+	reserveCompletionClaim := func(slot *dispatchSlot) *completionReservation {
+		if stopping || firstError != nil || emptyWait != nil || worker.remotelyPaused.Load() {
+			return nil
+		}
+		cohort := slot.cohort
+		limit := min(freeSlots(), cohortFree(cohort)) + 1
+		if (wholeClaims > 0 || cohortClaims[cohort] > 0) && limit < refillBatch {
+			return nil
+		}
+		reserved += limit
+		cohortReserved[cohort] += limit
+		slot.handedOver = true
+		handedOver++
+		cohortHandedOver[cohort]++
+		completionClaimsInFlight++
+		return &completionReservation{
+			claimer:     claimer,
+			slot:        slot,
+			limit:       limit,
+			cohort:      cohort,
+			wakeVersion: wakeVersion,
+		}
+	}
+	settleCompletionClaim := func(settlement completionSettlement) {
+		reservation := settlement.reservation
+		completionClaimsInFlight--
+		reserved -= reservation.limit
+		cohortReserved[reservation.cohort] -= reservation.limit
+		if len(settlement.tasks) > 0 {
+			// The completing execution's slot now belongs to the first replacement.
+			reservation.slot.release(worker)
+		} else {
+			reservation.slot.handedOver = false
+			handedOver--
+			cohortHandedOver[reservation.cohort]--
+		}
+		progressed := runnable(settlement.tasks)
+		for _, task := range settlement.tasks {
+			launch(task, reservation.cohort)
+		}
+		if progressed {
+			consecutiveEmptyClaims = 0
+		} else if settlement.answered && len(settlement.tasks) == 0 && len(worker.queues) == 1 {
+			// Another queue may still have work, so only a single-queue worker backs off here.
+			setEmptyWait(reservation.wakeVersion)
 		}
 	}
 
@@ -796,12 +1078,28 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 				}
 			}
 			if emptyWait == nil {
-				for {
-					free := worker.concurrency - active - reserved
-					if free <= 0 || (claimsInFlight > 0 && free < refillBatch) {
-						break
+				// Cohort claims need every queue to be fast tier, because only a fast-tier completion
+				// refills its cohort. A worker with a full-tier queue keeps whole-worker claims.
+				noFullTier, allFastTier := worker.tierState()
+				if cohorts == 1 || !noFullTier {
+					for {
+						free := freeSlots()
+						if free <= 0 || (claimsInFlight > 0 && free < refillBatch) {
+							break
+						}
+						startClaim(free, -1, 0)
 					}
-					startClaim(free)
+				} else if free := freeSlots(); claimsInFlight == 0 && free > 0 {
+					// One plain claim at a time: the next cohort's claim leaves when this one
+					// returns, which starts the cohorts out of phase. A claim that still has to learn
+					// a queue's tier reserves every free slot, so a full-tier answer claims them all.
+					cohort := roomiestCohort()
+					cohortLimit := min(free, cohortFree(cohort))
+					limit := free
+					if allFastTier {
+						limit = cohortLimit
+					}
+					startClaim(limit, cohort, cohortLimit)
 				}
 			}
 		}
@@ -818,16 +1116,14 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 			} else {
 				maintenanceErrors = nil
 			}
-		case err := <-environment.executionResults:
-			active--
-			if err != nil {
-				if firstError == nil {
-					firstError = err
-				}
-				stopping = true
-			}
+		case result := <-environment.executionResults:
+			observe(result)
 		case settlement := <-claimResults:
 			settleClaim(settlement)
+		case request := <-claimer.requests:
+			request.reply <- reserveCompletionClaim(request.slot)
+		case settlement := <-claimer.settlements:
+			settleCompletionClaim(settlement)
 		case <-wakeAfter:
 		case <-environment.notificationWake:
 			wakeVersion++
@@ -836,8 +1132,19 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 		}
 	}
 
-	for claimsInFlight > 0 {
-		settleClaim(<-claimResults)
+	// No reservation is granted from here on. Every claim and fused claim still in flight settles
+	// first, so the executions the caller drains include every task they leased.
+	worker.completionClaims.CompareAndSwap(claimer, nil)
+	close(claimer.done)
+	for claimsInFlight > 0 || completionClaimsInFlight > 0 {
+		select {
+		case settlement := <-claimResults:
+			settleClaim(settlement)
+		case settlement := <-claimer.settlements:
+			settleCompletionClaim(settlement)
+		case request := <-claimer.requests:
+			request.reply <- nil
+		}
 	}
 	return active, firstError
 }
@@ -1125,7 +1432,7 @@ func (worker *Worker) runOnce(ctx context.Context, executor Executor) (bool, err
 }
 
 func (worker *Worker) claimNext(ctx context.Context, executor Executor) (*ClaimedTask, error) {
-	tasks, err := worker.claimNextMany(ctx, executor, 1)
+	tasks, err := worker.claimNextMany(ctx, executor, 1, 1)
 	if len(tasks) == 0 {
 		return nil, err
 	}
@@ -1141,15 +1448,22 @@ func (worker *Worker) nextClaimQueue() string {
 	return queue
 }
 
-// claimNextMany fills up to limit slots from the configured queues in round-robin order.
+// claimNextMany fills up to limit slots from the configured queues in round-robin order. A
+// fast-tier queue takes at most fastLimit of them, which is how a cohort claim stays within its
+// cohort while a full-tier answer still fills every slot the claim reserved.
 // Promotion of due scheduled rows belongs to the maintenance tick, which every worker runs on
-// its maintenance interval, so the claim path issues only claim_many_v1.
-func (worker *Worker) claimNextMany(ctx context.Context, executor Executor, limit int) ([]ClaimedTask, error) {
+// its maintenance interval, so the claim path issues only the claim statements.
+func (worker *Worker) claimNextMany(
+	ctx context.Context,
+	executor Executor,
+	limit int,
+	fastLimit int,
+) ([]ClaimedTask, error) {
 	tasks := make([]ClaimedTask, 0, limit)
 	for range worker.queues {
 		queue := worker.nextClaimQueue()
 		startedAt := time.Now()
-		rows, fast, err := worker.claimQueue(ctx, executor, queue, limit-len(tasks))
+		rows, fast, err := worker.claimQueue(ctx, executor, queue, limit-len(tasks), fastLimit-len(tasks))
 		if err != nil {
 			return tasks, err
 		}
@@ -1167,28 +1481,9 @@ func (worker *Worker) claimNextMany(ctx context.Context, executor Executor, limi
 				),
 			)
 		}
-		if len(rows) == 0 {
-			continue
-		}
-		for _, row := range rows {
-			task, err := claimedTask(row, queue)
-			if err != nil {
-				return tasks, err
-			}
-			task.claimSentAt = startedAt
-			task.fastTier = fast
-			logWorkerEvent(
-				ctx,
-				worker.logger,
-				slog.LevelDebug,
-				taskClaimedEvent,
-				taskClaimedLogMessage,
-				func() []any { return taskLogAttributes(task, worker.workerID) },
-			)
-			if worker.metrics.enabled {
-				worker.metrics.claimed.Add(ctx, 1, taskMetricOptions(task))
-			}
-			tasks = append(tasks, task)
+		tasks, err = worker.appendClaimedTasks(ctx, tasks, rows, queue, startedAt, fast)
+		if err != nil {
+			return tasks, err
 		}
 		if len(tasks) == limit {
 			break
@@ -1197,9 +1492,42 @@ func (worker *Worker) claimNextMany(ctx context.Context, executor Executor, limi
 	return tasks, nil
 }
 
+// appendClaimedTasks decodes claimed rows into tasks that carry when their claim was sent.
+func (worker *Worker) appendClaimedTasks(
+	ctx context.Context,
+	tasks []ClaimedTask,
+	rows []Row,
+	queue string,
+	sentAt time.Time,
+	fast bool,
+) ([]ClaimedTask, error) {
+	for _, row := range rows {
+		task, err := claimedTask(row, queue)
+		if err != nil {
+			return tasks, err
+		}
+		task.claimSentAt = sentAt
+		task.fastTier = fast
+		logWorkerEvent(
+			ctx,
+			worker.logger,
+			slog.LevelDebug,
+			taskClaimedEvent,
+			taskClaimedLogMessage,
+			func() []any { return taskLogAttributes(task, worker.workerID) },
+		)
+		if worker.metrics.enabled {
+			worker.metrics.claimed.Add(ctx, 1, taskMetricOptions(task))
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks, nil
+}
+
 // writeCompletion records a success and reports whether the fence still held. A fast task completes
-// through the batched statement without claiming. If its queue left the fast tier after the claim,
-// PostgreSQL refuses that statement and complete_v1 settles the task instead.
+// through complete_many_and_claim_v1. Inside Run it joins the batch of its cohort, and the same
+// statement claims replacements for the slots the dispatch loop reserved. If its queue left the fast
+// tier after the claim, PostgreSQL refuses that statement and complete_v1 settles the task instead.
 func (worker *Worker) writeCompletion(
 	ctx context.Context,
 	executor Executor,
@@ -1207,36 +1535,12 @@ func (worker *Worker) writeCompletion(
 	encoded []byte,
 ) (bool, error) {
 	if task.fastTier {
-		rows, err := executor.Query(
-			ctx,
-			protocolStatementRegistry[completeManyAndClaimStatementName],
-			worker.workerID,
-			[]string{task.ID},
-			[]int64{task.FenceToken},
-			[]json.RawMessage{encoded},
-			task.Queue,
-			0,
-			int(worker.leaseDuration/time.Millisecond),
-		)
-		if err == nil {
-			if len(rows) == 0 {
-				return false, errors.New(invalidCompletionResultMessage)
-			}
-			accepted, ok := rows[0][rowAcceptedField].([]any)
-			if !ok {
-				return false, errors.New(invalidCompletionResultMessage)
-			}
-			for _, id := range accepted {
-				if accepted, _ := uuidString(id); accepted == task.ID {
-					return true, nil
-				}
-			}
-			return false, nil
-		}
+		accepted, err := worker.writeFastCompletion(ctx, executor, task, encoded)
 		rejection := fastTierRejection(err)
 		if rejection == nil || rejection.Feature != fastTierBatchedCompletionFeature {
-			return false, err
+			return accepted, err
 		}
+		worker.markFullTier(task.Queue)
 	}
 	arguments := append(worker.fencedLease(task).parameters(), encoded)
 	rows, err := executor.Query(ctx, protocolStatementRegistry[completeStatementName], arguments...)
@@ -1253,17 +1557,227 @@ func (worker *Worker) writeCompletion(
 	return accepted, nil
 }
 
+func (worker *Worker) writeFastCompletion(
+	ctx context.Context,
+	executor Executor,
+	task ClaimedTask,
+	encoded []byte,
+) (bool, error) {
+	entry := &completionEntry{
+		ctx:      ctx,
+		executor: executor,
+		task:     task,
+		encoded:  encoded,
+		answer:   make(chan completionAnswer, 1),
+	}
+	if task.slot == nil {
+		// Outside Run the executor may be a caller's transaction, so the completion goes alone.
+		worker.completeChunk(task.Queue, []*completionEntry{entry})
+		answer := <-entry.answer
+		return answer.accepted, answer.err
+	}
+	reservation := worker.completionClaims.Load().reserve(task)
+	if reservation != nil {
+		entry.limit = reservation.limit
+	}
+	answer := worker.completions.submit(worker, completionBatchKey{queue: task.Queue, cohort: task.slot.cohort}, entry)
+	if answer.err != nil {
+		reservation.settle(nil, false)
+		return false, answer.err
+	}
+	tasks, err := worker.appendClaimedTasks(ctx, nil, answer.rows, task.Queue, answer.sentAt, true)
+	// Every decoded task holds a lease, so it runs even when a later row failed to decode.
+	reservation.settle(tasks, true)
+	if err != nil {
+		return false, err
+	}
+	return answer.accepted, nil
+}
+
+// completionBatcher groups the fast-tier completions that finish while an earlier batch of the same
+// queue and cohort is in flight. One batch per key is in flight at a time, and the next one leaves
+// when it returns. A completion that finds its key idle leaves at once, so batching adds no delay.
+type completionBatcher struct {
+	mu       sync.Mutex
+	pending  map[completionBatchKey][]*completionEntry
+	flushing map[completionBatchKey]bool
+}
+
+type completionBatchKey struct {
+	queue  string
+	cohort int
+}
+
+type completionEntry struct {
+	ctx      context.Context
+	executor Executor
+	task     ClaimedTask
+	encoded  json.RawMessage
+	// limit is how many tasks this entry's reservation lets the statement claim.
+	limit  int
+	answer chan completionAnswer
+}
+
+type completionAnswer struct {
+	accepted bool
+	rows     []Row
+	sentAt   time.Time
+	err      error
+}
+
+func (batcher *completionBatcher) submit(
+	worker *Worker,
+	key completionBatchKey,
+	entry *completionEntry,
+) completionAnswer {
+	batcher.mu.Lock()
+	if batcher.pending == nil {
+		batcher.pending = make(map[completionBatchKey][]*completionEntry)
+		batcher.flushing = make(map[completionBatchKey]bool)
+	}
+	batcher.pending[key] = append(batcher.pending[key], entry)
+	start := !batcher.flushing[key]
+	batcher.flushing[key] = true
+	batcher.mu.Unlock()
+	if start {
+		go batcher.flush(worker, key)
+	}
+	return <-entry.answer
+}
+
+func (batcher *completionBatcher) flush(worker *Worker, key completionBatchKey) {
+	for {
+		batcher.mu.Lock()
+		entries := batcher.pending[key]
+		delete(batcher.pending, key)
+		if len(entries) == 0 {
+			delete(batcher.flushing, key)
+			batcher.mu.Unlock()
+			return
+		}
+		batcher.mu.Unlock()
+		chunks := completionChunks(entries)
+		var wait sync.WaitGroup
+		for _, chunk := range chunks {
+			wait.Add(1)
+			go func() {
+				defer wait.Done()
+				worker.completeChunk(key.queue, chunk)
+			}()
+		}
+		wait.Wait()
+	}
+}
+
+// completionChunks splits a batch so no statement settles more than completionBatchLimit tasks or
+// claims more than completionBatchLimit. An entry whose own limit exceeds the bound goes alone.
+func completionChunks(entries []*completionEntry) [][]*completionEntry {
+	var chunks [][]*completionEntry
+	var chunk []*completionEntry
+	limit := 0
+	for _, entry := range entries {
+		if len(chunk) > 0 && (len(chunk) == completionBatchLimit || limit+entry.limit > completionBatchLimit) {
+			chunks = append(chunks, chunk)
+			chunk, limit = nil, 0
+		}
+		chunk = append(chunk, entry)
+		limit += entry.limit
+	}
+	return append(chunks, chunk)
+}
+
+// completeChunk runs one complete_many_and_claim_v1 statement and answers every entry in it. The
+// claimed tasks go to the entries in order, each up to its own limit. A failed statement fails only
+// its own entries.
+//
+// The chunk names its tasks in task ID order, as the heartbeat names its leases, so the two
+// statements lock shared runtime rows in the same order. A plan that locks in another order can
+// still deadlock. PostgreSQL then rolls back the whole statement, so the chunk is sent again, up to
+// completionDeadlockAttempts times.
+func (worker *Worker) completeChunk(queue string, chunk []*completionEntry) {
+	slices.SortFunc(chunk, func(left, right *completionEntry) int {
+		return strings.Compare(left.task.ID, right.task.ID)
+	})
+	ids := make([]string, len(chunk))
+	fences := make([]int64, len(chunk))
+	results := make([]json.RawMessage, len(chunk))
+	limit := 0
+	for index, entry := range chunk {
+		ids[index] = entry.task.ID
+		fences[index] = entry.task.FenceToken
+		results[index] = entry.encoded
+		limit += entry.limit
+	}
+	var sentAt time.Time
+	var rows []Row
+	var err error
+	for attempt := 1; ; attempt++ {
+		sentAt = time.Now()
+		rows, err = chunk[0].executor.Query(
+			chunk[0].ctx,
+			protocolStatementRegistry[completeManyAndClaimStatementName],
+			worker.workerID,
+			ids,
+			fences,
+			results,
+			queue,
+			limit,
+			int(worker.leaseDuration/time.Millisecond),
+		)
+		if attempt == completionDeadlockAttempts || !hasSQLState(err, deadlockDetectedSQLState) {
+			break
+		}
+	}
+	var accepted []any
+	if err == nil {
+		ok := len(rows) > 0
+		if ok {
+			accepted, ok = rows[0][rowAcceptedField].([]any)
+		}
+		if !ok {
+			err = errors.New(invalidCompletionResultMessage)
+		}
+	}
+	if err != nil {
+		for _, entry := range chunk {
+			entry.answer <- completionAnswer{err: err}
+		}
+		return
+	}
+	acceptedIDs := make(map[string]struct{}, len(accepted))
+	for _, id := range accepted {
+		if id, ok := uuidString(id); ok {
+			acceptedIDs[id] = struct{}{}
+		}
+	}
+	claimed := claimedFastRows(rows)
+	for _, entry := range chunk {
+		take := min(entry.limit, len(claimed))
+		_, isAccepted := acceptedIDs[entry.task.ID]
+		entry.answer <- completionAnswer{
+			accepted: isAccepted,
+			rows:     claimed[:take:take],
+			sentAt:   sentAt,
+		}
+		claimed = claimed[take:]
+	}
+}
+
 // claimQueue claims from one queue. It tries the fast claim first, because only PostgreSQL knows a
 // queue's tier. A refusal marks the queue as full tier until the next probe, and the worker then
-// claims through claim_many_v1.
+// claims through claim_many_v1. A fast-tier queue takes at most fastLimit tasks.
 func (worker *Worker) claimQueue(
 	ctx context.Context,
 	executor Executor,
 	queue string,
 	limit int,
+	fastLimit int,
 ) ([]Row, bool, error) {
 	leaseMS := int(worker.leaseDuration / time.Millisecond)
 	if worker.probesFastTier(queue) {
+		if fastLimit <= 0 {
+			return nil, false, nil
+		}
 		rows, err := executor.Query(
 			ctx,
 			protocolStatementRegistry[completeManyAndClaimStatementName],
@@ -1272,10 +1786,11 @@ func (worker *Worker) claimQueue(
 			[]int64{},
 			[]json.RawMessage{},
 			queue,
-			limit,
+			min(limit, fastLimit),
 			leaseMS,
 		)
 		if err == nil {
+			worker.markFastTier(queue)
 			return claimedFastRows(rows), true, nil
 		}
 		if fastTierRejection(err) == nil {
@@ -1308,6 +1823,25 @@ func (worker *Worker) markFullTier(queue string) {
 		worker.fullTierUntil = make(map[string]time.Time)
 	}
 	worker.fullTierUntil[queue] = time.Now().Add(fastTierProbeInterval)
+	delete(worker.fastTierQueues, queue)
+}
+
+func (worker *Worker) markFastTier(queue string) {
+	worker.fullTierMu.Lock()
+	defer worker.fullTierMu.Unlock()
+	delete(worker.fullTierUntil, queue)
+	if worker.fastTierQueues == nil {
+		worker.fastTierQueues = make(map[string]struct{})
+	}
+	worker.fastTierQueues[queue] = struct{}{}
+}
+
+// tierState reports whether no queue is known to be full tier and whether every queue is known to
+// be fast tier. Cohort claims need the first; a claim sized to one cohort needs the second.
+func (worker *Worker) tierState() (noFullTier bool, allFastTier bool) {
+	worker.fullTierMu.Lock()
+	defer worker.fullTierMu.Unlock()
+	return len(worker.fullTierUntil) == 0, len(worker.fastTierQueues) == len(worker.queues)
 }
 
 // claimedFastRows drops the placeholder row the batched statement returns when it claims nothing.
@@ -1697,6 +2231,10 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
 	}
 	leaseMS := int(worker.leaseDuration / time.Millisecond)
 	requests := make([]lease, 0, len(members))
+	// Task ID order matches the order a batched completion locks its rows in.
+	slices.SortFunc(members, func(left, right *heartbeatMember) int {
+		return strings.Compare(left.task.ID, right.task.ID)
+	})
 	for _, member := range members {
 		requests = append(requests, lease{
 			TaskID: member.task.ID, FenceToken: strconv.FormatInt(member.task.FenceToken, 10),

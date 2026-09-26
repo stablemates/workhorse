@@ -87,14 +87,14 @@ The tier belongs to the queue, never to a worker. A worker probes a queue with a
 later. PostgreSQL routes every claim by the current tier, so a stale belief costs a round trip, not
 correctness.
 
-On a fast-tier queue, the TypeScript and Python workers combine each completion with the next claim
-in one statement. The Go and Rust workers complete and claim in separate statements.
+On a fast-tier queue, the TypeScript, Python and Go workers combine each completion with the next
+claim in one statement. The Rust worker completes and claims in separate statements.
 
-Handlers that finish together would then wait together for that statement. The TypeScript and
-Python workers therefore split a busy worker's slots into cohorts, and each cohort combines only its own
+Handlers that finish together would then wait together for that statement. These workers therefore
+split a busy worker's slots into cohorts, and each cohort combines only its own
 completions. One cohort's handlers run while another cohort waits on PostgreSQL. The worker picks
 more cohorts for more slots and fewer for a small pool, since each cohort wants its own pooled
-connection. The `cohorts` worker option overrides the count.
+connection. The `cohorts` worker option, `Cohorts` in Go, overrides the count.
 
 ## Turn on history where you need it
 

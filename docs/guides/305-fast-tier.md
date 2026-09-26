@@ -78,16 +78,17 @@ ordinary way and checks again later.
 A worker that believes the wrong tier is still safe. PostgreSQL routes every claim by the queue's
 current tier, so a stale belief costs a round trip, not correctness.
 
-On a fast-tier queue, the TypeScript and Python workers also combine a completion with the next
-claim. One statement closes the finished tasks and hands their slots new work, which saves a round
-trip per task.
+On a fast-tier queue, the TypeScript, Python and Go workers also combine a completion with the
+next claim. One statement closes the finished tasks and hands their slots new work, which saves a
+round trip per task.
 
 Combining has a cost. Handlers that finish together wait together for that one statement, and
-their slots idle during the round trip. The TypeScript and Python workers therefore split a busy
-worker's slots into cohorts. Each cohort combines only its own completions, so one cohort's
-handlers run while another cohort waits on PostgreSQL. A worker with more slots gets more cohorts, up to a cap.
+their slots idle during the round trip. These workers therefore split a busy worker's slots into
+cohorts. Each cohort combines only its own completions, so one cohort's handlers run while another
+cohort waits on PostgreSQL. A worker with more slots gets more cohorts, up to a cap.
 Each cohort wants its own pooled connection, so on a small pool the worker picks fewer. The
-`cohorts` option overrides that count when the database is far away or short of CPU.
+`cohorts` option, `Cohorts` in Go, overrides that count when the database is far away or short
+of CPU.
 
 ## History is opt-in
 
