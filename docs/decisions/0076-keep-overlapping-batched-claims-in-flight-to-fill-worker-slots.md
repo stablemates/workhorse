@@ -104,9 +104,9 @@ on its own completion round trip while the other cohorts' handlers run.
 15. **Full-tier queues.** A worker ignores cohorts while any of its queues answers on the full tier,
     and uses rules 1 to 9 unchanged. The shared fixture therefore still requires the claim limits 8,
     1 and 2 at the default of two cohorts.
-16. **Workers that do not batch.** The Rust worker completes each fast-tier task
-    in its own statement and claims separately. No two completions share a round trip, so no
-    handlers wait on one together, and this worker has no cohorts.
+16. **Every worker batches.** The TypeScript, Python, Go and Rust workers all follow rules 10 to
+    15 on the fast tier. Each groups its completions by queue and cohort into fused
+    `complete_many_and_claim_v1` statements.
 
 More cohorts cost more round trips. Each completion batch is smaller, so statement time per task
 rises, and each cohort can hold one more pooled connection. At concurrency 16 on the fast tier, two
