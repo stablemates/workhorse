@@ -599,6 +599,43 @@ describe("enqueue contracts", () => {
     expect(events.rows).toEqual(ids.map((taskId) => ({ task_id: taskId, event_type: "enqueued" })));
   });
 
+  it("writes a mixed batch in input order", async () => {
+    const prerequisite = await queue.enqueue("prerequisite", null, { queue: "buffer-other" });
+    const ids = await queue.enqueueMany([
+      { type: "first", payload: { order: 1 } },
+      { type: "keyed", payload: { order: 2 }, options: { idempotency: { key: "buffered" } } },
+      {
+        type: "expired",
+        payload: { order: 3 },
+        options: { deadline: new Date(Date.now() - 1_000), maxAttempts: 5 },
+      },
+      { type: "dependent", payload: { order: 4 }, options: { prerequisiteTaskId: prerequisite } },
+      { type: "keyed", payload: { order: 2 }, options: { idempotency: { key: "buffered" } } },
+      { type: "last", payload: { order: 5 } },
+    ]);
+
+    expect(ids[4]).toBe(ids[1]);
+    expect(new Set(ids).size).toBe(5);
+    expect((await admin.getTask(ids[2]!))?.state).toBe("failed");
+    expect((await admin.getTask(ids[3]!))?.state).toBe("blocked");
+    expect((await queue.claim("buffer-1"))?.id).toBe(ids[0]);
+    expect((await queue.claim("buffer-2"))?.id).toBe(ids[1]);
+    expect((await queue.claim("buffer-3"))?.id).toBe(ids[5]);
+    expect(await queue.claim("buffer-4")).toBeNull();
+
+    const events = await pool.query<{ task_id: string }>(
+      `SELECT task_id FROM workhorse.task_event
+        WHERE event_type = 'enqueued' AND task_id <> $1 ORDER BY occurred_at, event_id`,
+      [prerequisite],
+    );
+    expect(events.rows.map((row) => row.task_id)).toEqual([ids[0], ids[1], ids[2], ids[3], ids[5]]);
+    const projected = await pool.query<{ count: number }>(
+      "SELECT count(*)::integer AS count FROM workhorse.task_query WHERE task_id = ANY($1::uuid[])",
+      [ids],
+    );
+    expect(projected.rows[0]).toEqual({ count: 5 });
+  });
+
   it("persists bounded priority and claims higher priorities before FIFO peers", async () => {
     const ids = await queue.enqueueMany([
       { type: "normal", payload: { order: 1 } },

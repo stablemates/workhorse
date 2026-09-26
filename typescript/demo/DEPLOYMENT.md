@@ -471,10 +471,10 @@ remember.
 
 ### Dashboard schema
 
-The current build ships Workhorse schema version 26; its packaged migrations carry a version 6
+The current build ships Workhorse schema version 27; its packaged migrations carry a version 6
 baseline forward to it. Version 25 is a contract step, which the
-[fast-tier cutover](#the-fast-tier-release-needs-one-offline-cutover) applies. Version 26 is
-additive, so the ordinary schema step applies it to a database at version 25. That baseline is the `0.2.0` clean install, and the schema step refuses a
+[fast-tier cutover](#the-fast-tier-release-needs-one-offline-cutover) applies. Versions 26 and 27
+are additive, so the ordinary schema step applies them to a database at version 25. That baseline is the `0.2.0` clean install, and the schema step refuses a
 database below it: the `0.1.x` line had no production install and is not carried forward
 ([ADR 0073](../../docs/decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)). A
 database below the baseline reaches it with Workhorse `0.2.1` first. The baseline includes custom

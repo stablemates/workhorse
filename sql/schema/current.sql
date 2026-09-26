@@ -5419,6 +5419,15 @@ DECLARE
   v_fast_runtimes workhorse.fast_task_runtime[] := '{}';
   v_fast_past_deadline uuid[] := '{}';
   v_fast_task_id uuid;
+  v_full_task workhorse.task;
+  v_full_tasks workhorse.task[] := '{}';
+  v_full_runtime workhorse.task_runtime;
+  v_full_runtimes workhorse.task_runtime[] := '{}';
+  v_full_enqueued_details jsonb[] := '{}';
+  v_full_past_deadline uuid[] := '{}';
+  v_edge workhorse.task_dependency;
+  v_edges workhorse.task_dependency[] := '{}';
+  v_full_task_id uuid;
 BEGIN
   IF p_requests IS NULL OR jsonb_typeof(p_requests) <> 'array' THEN
     RAISE EXCEPTION 'requests must be a JSON array';
@@ -5652,7 +5661,7 @@ BEGIN
     END;
     -- Most requests carry no prerequisite. The prerequisite lock, the existence check and both
     -- outcome scans answer nothing for an empty set, so a request without prerequisites states
-    -- their answers directly and reaches the task insert without touching dependency relations.
+    -- their answers directly and reaches the buffer without touching dependency relations.
     IF cardinality(v_prerequisite_task_ids) > 0 THEN
       IF cardinality(v_prerequisite_task_ids) <> (
         SELECT count(DISTINCT prerequisite_id) FROM unnest(v_prerequisite_task_ids) prerequisite_id
@@ -5910,101 +5919,77 @@ BEGIN
         v_ready_queues := array_append(v_ready_queues, v_queue_name);
       END IF;
     ELSIF v_is_new THEN
-      INSERT INTO workhorse.task(
-        id, queue_name, task_type, concurrency_key, priority, payload, contract_version,
-        payload_max_bytes, result_max_bytes,
-        payload_redact_keys, result_redact_keys, trace_context, tags, max_attempts, retry_policy,
-        deadline_at, execution_timeout_ms, budget_name
-      ) VALUES (
-        task_id, v_queue_name, v_task_type, v_concurrency_key, v_priority::integer, v_payload, v_contract_version,
-        v_payload_max_bytes::integer, v_result_max_bytes::integer,
-        v_payload_redact_keys, v_result_redact_keys, v_trace_context, v_tags,
-        v_max_attempts, v_retry_policy,
-        v_deadline_at, v_execution_timeout_ms::bigint, v_budget_name
-      );
-      INSERT INTO workhorse.task_runtime(
-        task_id, queue_name, concurrency_key, priority, state, current_attempt, run_at, ready_at, sequence,
-        deadline_at, budget_name
-      ) VALUES (
-        task_id, v_queue_name, v_concurrency_key, v_priority::integer, v_state, 1, v_run_at,
-        CASE WHEN v_state = 'ready' THEN v_now END,
-        CASE WHEN v_state = 'ready' THEN nextval('workhorse.ready_sequence_seq') END,
-        v_deadline_at, v_budget_name
-      );
-      -- A request without prerequisites has no edge to write and no dependent to resolve. Running
-      -- the insert anyway would fire the statement trigger on `task_dependency`, and that trigger
-      -- walks the dependency graph recursively for a transition that cannot have occurred.
-      IF cardinality(v_prerequisite_task_ids) > 0 THEN
-        WITH prerequisites AS MATERIALIZED (
-          SELECT input.prerequisite_task_id, outcome.state,
-                 outcome.state IS NOT NULL AND (
-                   (outcome.state = 'succeeded' AND v_on_success = 'release')
-                   OR (outcome.state = 'failed' AND v_on_failure = 'release')
-                   OR (outcome.state = 'canceled' AND v_on_cancellation = 'release')
-                 ) AS releases_immediately
-            FROM unnest(v_prerequisite_task_ids) input(prerequisite_task_id)
-            LEFT JOIN workhorse.task_outcome outcome
-              ON outcome.task_id = input.prerequisite_task_id
-        ), inserted_edges AS (
-          INSERT INTO workhorse.task_dependency(
-            dependent_task_id, prerequisite_task_id, on_success, on_failure, on_cancellation,
-            created_at, released_at, resolution
+      -- Full-tier rows are collected here and written after the loop, one statement per table.
+      -- A prerequisite exists before this batch starts, because the batch generates every new task
+      -- identity, so no check or lock above needs a buffered row.
+      v_full_task := NULL;
+      v_full_task.id := task_id;
+      v_full_task.queue_name := v_queue_name;
+      v_full_task.task_type := v_task_type;
+      v_full_task.concurrency_key := v_concurrency_key;
+      v_full_task.priority := v_priority::integer;
+      v_full_task.payload := v_payload;
+      v_full_task.contract_version := v_contract_version;
+      v_full_task.payload_max_bytes := v_payload_max_bytes::integer;
+      v_full_task.result_max_bytes := v_result_max_bytes::integer;
+      v_full_task.payload_redact_keys := v_payload_redact_keys;
+      v_full_task.result_redact_keys := v_result_redact_keys;
+      v_full_task.trace_context := v_trace_context;
+      v_full_task.tags := v_tags;
+      v_full_task.max_attempts := v_max_attempts;
+      v_full_task.retry_policy := v_retry_policy;
+      v_full_task.deadline_at := v_deadline_at;
+      v_full_task.execution_timeout_ms := v_execution_timeout_ms::bigint;
+      v_full_task.budget_name := v_budget_name;
+      v_full_tasks := array_append(v_full_tasks, v_full_task);
+
+      v_full_runtime := NULL;
+      v_full_runtime.task_id := task_id;
+      v_full_runtime.queue_name := v_queue_name;
+      v_full_runtime.concurrency_key := v_concurrency_key;
+      v_full_runtime.priority := v_priority::integer;
+      v_full_runtime.state := v_state;
+      v_full_runtime.current_attempt := 1;
+      v_full_runtime.run_at := v_run_at;
+      v_full_runtime.ready_at := CASE WHEN v_state = 'ready' THEN v_now END;
+      v_full_runtime.sequence := CASE WHEN v_state = 'ready'
+        THEN nextval('workhorse.ready_sequence_seq') END;
+      v_full_runtime.deadline_at := v_deadline_at;
+      v_full_runtime.budget_name := v_budget_name;
+      v_full_runtimes := array_append(v_full_runtimes, v_full_runtime);
+
+      FOREACH v_prerequisite_task_id IN ARRAY v_prerequisite_task_ids LOOP
+        v_edge := NULL;
+        v_edge.dependent_task_id := task_id;
+        v_edge.prerequisite_task_id := v_prerequisite_task_id;
+        v_edge.on_success := v_on_success;
+        v_edge.on_failure := v_on_failure;
+        v_edge.on_cancellation := v_on_cancellation;
+        v_edges := array_append(v_edges, v_edge);
+      END LOOP;
+
+      v_full_enqueued_details := array_append(v_full_enqueued_details,
+        jsonb_build_object(
+          'state', v_state,
+          'priority', v_priority,
+          'run_at', v_run_at,
+          'deadline_at', v_deadline_at,
+          'execution_timeout_ms', v_execution_timeout_ms
+        ) ||
+        CASE WHEN v_is_keyed THEN jsonb_build_object(
+          'idempotency', jsonb_build_object(
+            'scope', v_scope,
+            'key_preview', v_key_preview,
+            'key_digest', v_key_digest,
+            'key_length', v_key_length,
+            'ttl_ms', v_ttl_ms,
+            'expires_at', v_expires_at,
+            'request_digest', v_request_digest
           )
-          SELECT task_id, prerequisites.prerequisite_task_id,
-                 v_on_success, v_on_failure, v_on_cancellation, v_now,
-                 CASE WHEN prerequisites.releases_immediately THEN v_now END,
-                 CASE WHEN prerequisites.releases_immediately THEN 'release' END
-            FROM prerequisites
-          RETURNING prerequisite_task_id, released_at
-        )
-        INSERT INTO workhorse.task_event(task_id, event_type, details)
-        SELECT task_id,
-               CASE WHEN inserted_edges.released_at IS NOT NULL
-                 THEN 'dependency_released' ELSE 'dependency_blocked' END,
-               jsonb_build_object(
-                 'prerequisite_task_id', inserted_edges.prerequisite_task_id,
-                 'state', v_state,
-                 'reason', CASE
-                   WHEN NOT prerequisites.releases_immediately THEN 'prerequisite_pending'
-                   WHEN prerequisites.state = 'succeeded' THEN 'prerequisite_already_succeeded'
-                   ELSE 'prerequisite_terminal_policy'
-                 END
-               )
-          FROM inserted_edges
-          JOIN prerequisites USING (prerequisite_task_id);
-        FOR v_terminal IN
-          SELECT outcome.task_id, outcome.state FROM workhorse.task_outcome outcome
-           WHERE outcome.task_id = ANY(v_prerequisite_task_ids)
-           ORDER BY outcome.task_id
-        LOOP
-          PERFORM workhorse.resolve_dependents_v1(v_terminal.task_id, v_terminal.state);
-        END LOOP;
-      END IF;
-      INSERT INTO workhorse.task_event(task_id, event_type, details)
-        VALUES (
-          task_id,
-          'enqueued',
-          jsonb_build_object(
-            'state', v_state,
-            'priority', v_priority,
-            'run_at', v_run_at,
-            'deadline_at', v_deadline_at,
-            'execution_timeout_ms', v_execution_timeout_ms
-          ) ||
-          CASE WHEN v_is_keyed THEN jsonb_build_object(
-            'idempotency', jsonb_build_object(
-              'scope', v_scope,
-              'key_preview', v_key_preview,
-              'key_digest', v_key_digest,
-              'key_length', v_key_length,
-              'ttl_ms', v_ttl_ms,
-              'expires_at', v_expires_at,
-              'request_digest', v_request_digest
-            )
-          ) ELSE '{}'::jsonb END
-        );
+        ) ELSE '{}'::jsonb END
+      );
       IF v_deadline_at IS NOT NULL AND v_deadline_at <= v_now THEN
-        PERFORM workhorse.terminalize_deadline_v1(task_id);
+        v_full_past_deadline := array_append(v_full_past_deadline, task_id);
       ELSIF v_state = 'ready' AND NOT v_queue_name = ANY(v_ready_queues) THEN
         v_ready_queues := array_append(v_ready_queues, v_queue_name);
       END IF;
@@ -6013,6 +5998,102 @@ BEGIN
     accepted := v_is_new;
     RETURN NEXT;
   END LOOP;
+
+  -- The buffered writes keep each task's evidence in the order the one-row writes produced: its
+  -- dependency events, the resolution of any terminal prerequisite, `enqueued`, then an expired
+  -- deadline. Omitted columns keep their per-row defaults, so created_at, updated_at and the event
+  -- identity advance with each row.
+  IF cardinality(v_full_tasks) > 0 THEN
+    INSERT INTO workhorse.task(
+      id, queue_name, task_type, concurrency_key, priority, payload, contract_version,
+      payload_max_bytes, result_max_bytes,
+      payload_redact_keys, result_redact_keys, trace_context, tags, max_attempts, retry_policy,
+      deadline_at, execution_timeout_ms, budget_name
+    )
+    SELECT buffered.id, buffered.queue_name, buffered.task_type, buffered.concurrency_key,
+           buffered.priority, buffered.payload, buffered.contract_version,
+           buffered.payload_max_bytes, buffered.result_max_bytes,
+           buffered.payload_redact_keys, buffered.result_redact_keys, buffered.trace_context,
+           buffered.tags, buffered.max_attempts, buffered.retry_policy,
+           buffered.deadline_at, buffered.execution_timeout_ms, buffered.budget_name
+      FROM unnest(v_full_tasks) WITH ORDINALITY buffered
+     ORDER BY buffered.ordinality;
+    INSERT INTO workhorse.task_runtime(
+      task_id, queue_name, concurrency_key, priority, state, current_attempt, run_at, ready_at,
+      sequence, deadline_at, budget_name
+    )
+    SELECT buffered.task_id, buffered.queue_name, buffered.concurrency_key, buffered.priority,
+           buffered.state, buffered.current_attempt, buffered.run_at, buffered.ready_at,
+           buffered.sequence, buffered.deadline_at, buffered.budget_name
+      FROM unnest(v_full_runtimes) WITH ORDINALITY buffered
+     ORDER BY buffered.ordinality;
+    -- A batch without prerequisites has no edge to write and no dependent to resolve. Running the
+    -- insert anyway would fire the statement trigger on `task_dependency`, and that trigger walks
+    -- the dependency graph recursively for a transition that cannot have occurred.
+    IF cardinality(v_edges) > 0 THEN
+      WITH edges AS MATERIALIZED (
+        SELECT edge.dependent_task_id, edge.prerequisite_task_id, edge.on_success,
+               edge.on_failure, edge.on_cancellation, edge.ordinality, outcome.state,
+               outcome.state IS NOT NULL AND (
+                 (outcome.state = 'succeeded' AND edge.on_success = 'release')
+                 OR (outcome.state = 'failed' AND edge.on_failure = 'release')
+                 OR (outcome.state = 'canceled' AND edge.on_cancellation = 'release')
+               ) AS releases_immediately
+          FROM unnest(v_edges) WITH ORDINALITY edge
+          LEFT JOIN workhorse.task_outcome outcome
+            ON outcome.task_id = edge.prerequisite_task_id
+      ), inserted_edges AS (
+        INSERT INTO workhorse.task_dependency(
+          dependent_task_id, prerequisite_task_id, on_success, on_failure, on_cancellation,
+          created_at, released_at, resolution
+        )
+        SELECT edges.dependent_task_id, edges.prerequisite_task_id,
+               edges.on_success, edges.on_failure, edges.on_cancellation, v_now,
+               CASE WHEN edges.releases_immediately THEN v_now END,
+               CASE WHEN edges.releases_immediately THEN 'release' END
+          FROM edges
+         ORDER BY edges.ordinality
+        RETURNING dependent_task_id, prerequisite_task_id
+      )
+      INSERT INTO workhorse.task_event(task_id, event_type, details)
+      SELECT edges.dependent_task_id,
+             CASE WHEN edges.releases_immediately
+               THEN 'dependency_released' ELSE 'dependency_blocked' END,
+             jsonb_build_object(
+               'prerequisite_task_id', edges.prerequisite_task_id,
+               'state', runtime.state,
+               'reason', CASE
+                 WHEN NOT edges.releases_immediately THEN 'prerequisite_pending'
+                 WHEN edges.state = 'succeeded' THEN 'prerequisite_already_succeeded'
+                 ELSE 'prerequisite_terminal_policy'
+               END
+             )
+        FROM edges
+        JOIN inserted_edges USING (dependent_task_id, prerequisite_task_id)
+        JOIN unnest(v_full_runtimes) runtime ON runtime.task_id = edges.dependent_task_id
+       ORDER BY edges.ordinality;
+      -- One resolver call per terminal prerequisite settles every dependent in the batch. A
+      -- dependent's fate depends only on the resolutions of its edges, so it matches the fate that
+      -- one call per dependent produced.
+      FOR v_terminal IN
+        SELECT DISTINCT outcome.task_id, outcome.state
+          FROM unnest(v_edges) edge
+          JOIN workhorse.task_outcome outcome ON outcome.task_id = edge.prerequisite_task_id
+         ORDER BY outcome.task_id
+      LOOP
+        PERFORM workhorse.resolve_dependents_v1(v_terminal.task_id, v_terminal.state);
+      END LOOP;
+    END IF;
+    INSERT INTO workhorse.task_event(task_id, event_type, details)
+    SELECT buffered.id, 'enqueued', event.details
+      FROM unnest(v_full_tasks) WITH ORDINALITY buffered
+      JOIN unnest(v_full_enqueued_details) WITH ORDINALITY event(details, ordinality)
+        ON event.ordinality = buffered.ordinality
+     ORDER BY buffered.ordinality;
+    FOREACH v_full_task_id IN ARRAY v_full_past_deadline LOOP
+      PERFORM workhorse.terminalize_deadline_v1(v_full_task_id);
+    END LOOP;
+  END IF;
 
   IF cardinality(v_fast_tasks) > 0 THEN
     INSERT INTO workhorse.task SELECT * FROM unnest(v_fast_tasks);
@@ -17330,10 +17411,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (23, 'a canceled dependent releases its edges'),
   (24, 'row retention lag waits for history retention'),
   (25, 'add a fast task tier'),
-  (26, 'a dependent enqueue holds its prerequisites against completion')
+  (26, 'a dependent enqueue holds its prerequisites against completion'),
+  (27, 'write full-tier enqueue rows set-based')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (26) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (27) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
