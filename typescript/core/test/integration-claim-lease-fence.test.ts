@@ -1640,6 +1640,74 @@ describe("claim lease fence", () => {
     );
   });
 
+  it("publishes concurrency capacity only when a release leaves a full queue or key", async () => {
+    // A release below every cap cannot unblock a claim, so it must not wake a busy worker.
+    const suffix = randomUUID();
+    const totalQueue = `capacity-total-${suffix}`;
+    const keyQueue = `capacity-key-${suffix}`;
+    await queue.syncConcurrencyPolicies("test", [
+      { queue: totalQueue, maxActive: 3 },
+      { queue: keyQueue, maxActive: 50, maxActivePerKey: 1 },
+    ]);
+    await queue.enqueueMany([
+      ...Array.from({ length: 6 }, (_, ordinal) => ({
+        type: "capacity",
+        payload: { ordinal },
+        options: { queue: totalQueue },
+      })),
+      ...Array.from({ length: 2 }, (_, ordinal) => ({
+        type: "capacity",
+        payload: { ordinal },
+        options: { queue: keyQueue, concurrencyKey: "only-key" },
+      })),
+    ]);
+    const listener = await pool.connect();
+    const notifications: string[] = [];
+    listener.on("notification", (message) => notifications.push(message.payload ?? ""));
+    const published = async (queueName: string): Promise<number> => {
+      await sleep(100);
+      const count = notifications.filter((payload) => payload === queueName).length;
+      notifications.length = 0;
+      return count;
+    };
+    try {
+      await listener.query("LISTEN workhorse_tasks");
+      const full = await queue.claimMany("capacity-worker", 3, { queue: totalQueue });
+      expect(full).toHaveLength(3);
+      await published(totalQueue);
+
+      await expect(queue.complete(full[0]!, "capacity-worker", null)).resolves.toBe(true);
+      await expect(published(totalQueue)).resolves.toBe(1);
+
+      await expect(queue.complete(full[1]!, "capacity-worker", null)).resolves.toBe(true);
+      await expect(published(totalQueue)).resolves.toBe(0);
+
+      // One statement releases every row of a full queue, and its first row still sees the cap.
+      await expect(
+        queue.claimMany("capacity-worker", 2, { queue: totalQueue }),
+      ).resolves.toHaveLength(2);
+      await published(totalQueue);
+      await pool.query(
+        `DELETE FROM workhorse.task
+          WHERE id IN (
+            SELECT task_id FROM workhorse.task_runtime WHERE queue_name = $1 AND state = 'active'
+          )`,
+        [totalQueue],
+      );
+      await expect(published(totalQueue)).resolves.toBe(1);
+
+      // The queue is far below max_active, but the task's concurrency key was full.
+      const keyed = await queue.claim("capacity-worker", { queue: keyQueue });
+      expect(keyed).not.toBeNull();
+      await published(keyQueue);
+      await expect(queue.complete(keyed!, "capacity-worker", null)).resolves.toBe(true);
+      await expect(published(keyQueue)).resolves.toBe(1);
+    } finally {
+      await listener.query("UNLISTEN workhorse_tasks");
+      listener.release();
+    }
+  });
+
   it("refills continuously between interval boundaries", async () => {
     const queueName = `rate-limit-continuous-${randomUUID()}`;
     await queue.syncRateLimitPolicies("test", [

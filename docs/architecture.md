@@ -2419,18 +2419,23 @@ so no other claim changes the counts and buckets the batch reads until it commit
 runs rounds. Each round:
 
 1. Locks the budgets named by the first 100 ready rows, in name order. The first round waits for
-   each lock; a later round uses `pg_try_advisory_xact_lock` and skips a budget it cannot lock.
+   each lock; a later round uses `pg_try_advisory_xact_lock` and skips a budget it cannot lock. A
+   queue with no ready row that names a budget skips this sample.
 2. Reads the clock once. The first round also prunes up to 100 fully refilled key buckets, as
    `claim_one_v1` does.
 3. Computes the queue's room: the remaining limit, `max_active` minus the unexpired active count,
-   and the whole tokens in the queue bucket, whichever is smallest. A round with no room ends the
-   batch.
+   and the whole tokens in the queue bucket, whichever is smallest. It locks the queue bucket row
+   `FOR UPDATE` to read its tokens. A round with no room ends the batch.
 4. Reads the first 100 admissible ready rows without locking, in priority, sequence, and task-identity
    order. It computes each key's room from `max_active_per_key` and the key bucket, and each locked
    budget's room from `budget.max_active` and `budget_bucket`. A budget the claim never locked has no
    room. A row fits when its rank within its key and its rank within its budget are both within that
    room.
-5. Locks up to the queue's room of fitting rows with `FOR UPDATE SKIP LOCKED`. It allocates their
+   A round with no `max_active_per_key`, no `per_key_limit`, and no locked budget skips the window.
+   It locks the first ready rows up to the queue's room with `FOR NO KEY UPDATE SKIP LOCKED`, keeps them up
+   to the first row that names a budget, and ends the batch after step 6.
+5. Locks up to the queue's room of fitting rows with `FOR NO KEY UPDATE SKIP LOCKED`, as
+   `claim_one_v1` does, so a dependent enqueue's key-share lock hides no ready row. It allocates their
    fences from `fence_token_seq` in ascending order, activates them in one update, and appends one
    claim event per row.
 6. Charges the queue bucket, each key bucket, and each budget bucket once for the starts it admitted.
@@ -2442,6 +2447,11 @@ unless some row had both a limited key and a limited budget. Only that mix can l
 admission unrealized within one round, so the batch runs another round then. A policy created after
 the unlocked policy check is still enforced, because the plain path's `claim_one_v1` locks and applies
 it.
+
+`claim_many_v1` is declared with `SET plan_cache_mode = force_generic_plan`. Its statements over the
+batch arrays have a pessimistic generic row estimate, so under the default mode PL/pgSQL replanned
+them on every call. That replanning doubled the latency of a limit-1 policy claim, and every such
+claim holds the policy row locks.
 
 ### Worker concurrency and lifecycle
 
@@ -2545,9 +2555,14 @@ controls do not impose queue weights. `concurrency_policy` enforces a durable ac
 `rate_limit_policy` enforces a durable start-rate budget across worker processes.
 
 An update that moves a governed runtime away from active, or deletes it, runs
-`notify_concurrency_capacity_v1`. The trigger publishes the queue on `workhorse_tasks`. Completion, failure,
-retry release, cancellation, durable wait, and recovery can therefore wake a worker in another process
-without waiting for its fallback poll.
+`notify_concurrency_capacity_v1` before the row changes. The trigger publishes the queue on `workhorse_tasks`
+only when the queue's active rows, counted up to `max_active`, reach `max_active`, or when the row's
+`concurrency_key` has `max_active_per_key` active rows. Only such a release can unblock a claim. Completion,
+failure, retry release, cancellation, durable wait, and recovery can therefore wake a worker in another process
+without waiting for its fallback poll. A release below every cap publishes nothing, because a worker that takes
+a notification delays its next claim. The count includes the row being released and every concurrent release
+that has not committed, so the first release from a full queue always publishes, even when one statement
+releases several rows.
 
 ### Heartbeat
 

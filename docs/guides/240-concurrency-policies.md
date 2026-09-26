@@ -44,7 +44,7 @@ The policy counts active tasks whose leases have not expired. If a worker disapp
 
 This makes the policy a dispatch budget, not a mutex. A stale handler can overlap its replacement after lease expiry. Fence tokens still prevent that stale generation from recording a result.
 
-When a task releases capacity normally, PostgreSQL wakes workers listening for that queue. Polling remains the correctness fallback if a notification is lost.
+When a task leaves a full queue or a full key, PostgreSQL wakes workers listening for that queue. A release below every cap wakes no worker, because no claim was waiting on it. Polling remains the correctness fallback if a notification is lost.
 
 ## Avoiding a blocked queue
 
