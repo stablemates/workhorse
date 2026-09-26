@@ -627,6 +627,23 @@ of the exact public version in a clean environment. It then runs a minimal enque
 test against a fresh PostgreSQL database. Any failure stops the release train: the defect is filed,
 the remaining stages stay blocked, and the fix ships as a new candidate.
 
+`pnpm release:verify <python|npm|crate|go> X.Y.Z` holds the version checks as exact commands and
+the output each must print. After each stage publishes, the handoff runs that stage's target
+instead of restating commands. Each target installs the public version into a fresh scratch
+directory:
+
+- `python` installs `stablemates-workhorse==X.Y.Z` into a virtual environment on the oldest
+  supported Python. It checks both `workhorse.__version__` and the installed distribution metadata.
+- `npm` checks every published package's version, then installs `@stablemates/workhorse` and runs
+  `npm audit signatures` and `workhorse --version`.
+- `crate` resolves `workhorse = "=X.Y.Z"` from crates.io and checks the locked package ID.
+- `go` resolves the module through `proxy.golang.org` with no direct fallback and runs
+  `go mod verify`.
+
+The script covers registry visibility, signatures or checksums, and clean installation. The
+maintainer still reviews provenance on each registry page and runs the enqueue-and-worker smoke
+test.
+
 A published version is never reused. An ordinary defect stays available and receives a higher
 fix. A security, secret, privacy, or legal exposure triggers credential rotation and removal where
 the registry permits it. The response also deprecates the npm release, yanks the PyPI release, or
@@ -675,8 +692,14 @@ pipeline.
 3. `pnpm python:release-check` validates the version and changelog, rebuilds the embedded dashboard
    bundle, checks Python format, lint, types, and dependencies, then runs every Python test against
    PostgreSQL. It builds the wheel and source distribution once and tests those exact files.
+   It then runs `pnpm release:verify python` against that wheel, so a post-publish check the
+   package cannot satisfy fails the rehearsal before `python/vX.Y.Z` is tagged.
 4. The `pypi` environment generates PEP 740 attestations for the unchanged artifacts, then
    publishes both distributions and their attestations through trusted publishing.
+
+`workhorse.__version__` is public Python API from the release after 0.4.0, and `api/python.txt`
+records it. The post-publish Python check therefore fails against 0.4.0, which predates the
+attribute. For 0.4.0, `importlib.metadata.version("stablemates-workhorse")` is the check.
 
 ### Go module
 

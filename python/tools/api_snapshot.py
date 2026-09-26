@@ -60,6 +60,10 @@ IMPLICIT_MEMBERS = frozenset(
     }
 )
 
+# Module attributes whose value moves with every release. The snapshot keeps their name and type,
+# because printing the value would make each version bump read as a removed line.
+RELEASE_VALUES = frozenset({"__version__"})
+
 
 def module_names(package: str) -> list[str]:
     """Public modules of a package, the package itself first, then depth-first by name."""
@@ -214,6 +218,8 @@ class Renderer:
             return [self.signature(name, obj)]
         if callable(obj) and not isinstance(obj, types.ModuleType):
             return [f"callable {name}: {self.annotation(type(obj))}"]
+        if name in RELEASE_VALUES:
+            return [f"{name}: {self.annotation(type(obj))}"]
         return [f"{name}: {self.annotation(type(obj))} = {self.value(obj)}"]
 
     def module(self, module_name: str) -> str:
