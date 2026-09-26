@@ -2966,12 +2966,13 @@ worker claims through `claim_many_v1` until the next probe. The interval is
 current tier.
 
 A fast-tier completion uses the fused statement. A `batched completion` rejection means the queue
-left the fast tier, so the worker falls back to `complete_v1`. The TypeScript and Python workers
+left the fast tier, so the worker falls back to `complete_v1`. The TypeScript, Python and Go workers
 fuse a completion with a refill claim, for `freeSlots() + 1` tasks under the refill-batch rule, and
 hand the slot over directly. In Python, `Worker._reserve_completion_claim` reserves those slots and
 `Worker._send_batched_completion` sends one statement per queue and cohort at a time. Completions
 that arrive while it is in flight share the next statement, split into chunks of at most 100 tasks
-and 100 claimed slots. The Go and Rust workers complete with a zero claim limit and claim
+and 100 claimed slots. The Go worker's limit is the free slots plus one, capped by the free slots of
+the completing task's cohort plus one. The Rust worker completes with a zero claim limit and claims
 separately.
 
 The TypeScript and Python workers split their slots into cohorts so that fused completions do not
@@ -2995,8 +2996,20 @@ completions by worker, queue, lease, and `CompletionClaim.cohort`, so a batch ne
 A fused claim asks for at most its cohort's free slots, and the tasks it leases join that cohort.
 While no claim is in flight, a plain claim fills the cohort with the most free slots, and the
 first claim asks for one cohort's share. While any configured queue answers full-tier, the worker
-ignores cohorts and dispatches as one group. The Go and Rust workers complete one task per
-statement, never share a completion round trip, and have no cohorts.
+ignores cohorts and dispatches as one group.
+
+The Go worker splits its slots the same way. `WorkerOptions.Cohorts` is an integer from 1 through
+`Concurrency`, and `NewWorker` rejects any other explicit value with `worker cohorts must be between
+1 and the concurrency`. Zero selects `defaultDispatchCohorts(concurrency, spareConnections)`, which
+uses the TypeScript rule. `spareConnections` is the pool's `MaxConns`, minus 1 for the listener
+unless `PollingOnly` is set, minus 1 for the heartbeat connection unless `SharedHeartbeats` is set.
+An explicit `Cohorts` is never capped. The worker's `completionBatcher` groups concurrent fast-tier
+completions by queue and cohort, and keeps one `complete_many_and_claim_v1` call in flight per group.
+A call carries at most `completionBatchLimit` (100) completions, and its claim limits sum to at most 100. The call names its tasks in task ID order, and `heartbeat_many_v1` names its leases in the
+same order. A plan can still lock the shared runtime rows in another order. When PostgreSQL rolls
+the call back with SQLSTATE `40P01`, the worker sends it again, up to `completionDeadlockAttempts`
+(3) times in total. The Rust worker completes one task per statement, never shares a completion
+round trip, and has no cohorts.
 
 A fast-tier handler context rejects durable execution locally with `FastTierUnsupportedError` for
 the task's queue:

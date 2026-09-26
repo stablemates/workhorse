@@ -2452,6 +2452,10 @@ class Worker:
             if not active:
                 return
             for thread in active:
+                # A fused completion admits a claimed task's thread under the state lock and
+                # starts it after releasing the lock, so the drain can see it before it starts.
+                while thread.ident is None:
+                    sleep(0.001)
                 thread.join()
 
     def _execute_claimed_task(self, task: ClaimedTask, claim_sent_at: float) -> None:

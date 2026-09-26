@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	workhorse "github.com/stablemates/workhorse/go"
 )
@@ -429,5 +432,134 @@ func TestExpiredFastClaimRerunsOnceAndRejectsTheStaleCompletion(t *testing.T) {
 	}
 	if len(accepted) != 0 || count != 1 {
 		t.Fatalf("stale completion accepted=%v outcomes=%d", accepted, count)
+	}
+}
+
+// crashingTracer makes every statement of one pool fail before it reaches PostgreSQL once crashed
+// is set. The worker on that pool then loses every write it has not sent, like a process that
+// vanished with its handlers done and their outcomes unwritten.
+type crashingTracer struct {
+	crashed atomic.Bool
+}
+
+func (tracer *crashingTracer) TraceQueryStart(
+	ctx context.Context,
+	_ *pgx.Conn,
+	_ pgx.TraceQueryStartData,
+) context.Context {
+	if !tracer.crashed.Load() {
+		return ctx
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	return cancelled
+}
+
+func (*crashingTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// Concurrency 4 has one cohort, 16 has two and 64 has eight, so a crash drops every cohort's
+// unwritten outcomes at once.
+func TestFastWorkerCrashLosesNoTaskAndRerunsAtMostItsConcurrency(t *testing.T) {
+	for _, concurrency := range []int{4, 16, 64} {
+		t.Run(strconv.Itoa(concurrency), func(t *testing.T) {
+			ctx := context.Background()
+			databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "fast-cohort-crash")
+			pool, err := pgxpool.New(ctx, databaseURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(pool.Close)
+			tracer := &crashingTracer{}
+			crashingConfig, err := pgxpool.ParseConfig(databaseURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			crashingConfig.ConnConfig.Tracer = tracer
+			crashingPool, err := pgxpool.NewWithConfig(ctx, crashingConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(crashingPool.Close)
+
+			queueName := "go-fast-crash-" + strconv.Itoa(concurrency)
+			makeFastQueue(t, pool, queueName)
+			total := concurrency * 15
+			requests := fastRequests(queueName, "effect", total)
+			for index := range requests {
+				requests[index].Options.MaxAttempts = 3
+			}
+			taskIDs, err := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName).EnqueueMany(ctx, requests)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var mu sync.Mutex
+			effects := map[string]int{}
+			handler := func(_ context.Context, _ any, handler *workhorse.HandlerContext) (any, error) {
+				mu.Lock()
+				effects[handler.Task.ID]++
+				ran := len(effects)
+				mu.Unlock()
+				// After a third of the tasks ran, no completion reaches PostgreSQL.
+				if ran > total/3 {
+					tracer.crashed.Store(true)
+				}
+				return map[string]any{"ok": true}, nil
+			}
+
+			crashing, err := workhorse.NewWorker(crashingPool, workhorse.WorkerOptions{
+				Queue: queueName, WorkerID: "go-crashing", Concurrency: concurrency,
+				LeaseDuration: 500 * time.Millisecond, HeartbeatInterval: 100 * time.Millisecond,
+				PollInterval: 5 * time.Millisecond, ShutdownGracePeriod: 100 * time.Millisecond,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			crashing.Handle("effect", handler)
+			runContext, stop := context.WithTimeout(ctx, 20*time.Second)
+			defer stop()
+			// The first lost write ends the run.
+			if err := crashing.Run(runContext); err == nil {
+				t.Fatal("the crashing worker stopped without an error")
+			}
+			if runContext.Err() != nil {
+				t.Fatal("the crashing worker did not stop after its writes failed")
+			}
+
+			time.Sleep(600 * time.Millisecond)
+			if _, err := pool.Exec(ctx, "SELECT * FROM workhorse.recover_expired_telemetry_v1(1000, 0)"); err != nil {
+				t.Fatal(err)
+			}
+			survivor, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+				Queue: queueName, WorkerID: "go-survivor", Concurrency: concurrency,
+				PollInterval: 5 * time.Millisecond,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			survivor.Handle("effect", handler)
+			runFastWorkerUntil(t, pool, survivor, taskIDs)
+
+			outcomes := fastOutcomes(t, pool, taskIDs)
+			if len(outcomes) != total {
+				t.Fatalf("recorded %d outcomes for %d tasks", len(outcomes), total)
+			}
+			for index, outcome := range outcomes {
+				if outcome.State != "succeeded" || (index > 0 && outcomes[index-1].TaskID == outcome.TaskID) {
+					t.Fatalf("unexpected fast outcome %#v", outcome)
+				}
+			}
+			reruns := 0
+			for _, taskID := range taskIDs {
+				switch runs := effects[taskID]; {
+				case runs == 0 || runs > 2:
+					t.Fatalf("task %s ran %d times", taskID, runs)
+				case runs == 2:
+					reruns++
+				}
+			}
+			if reruns == 0 || reruns > concurrency {
+				t.Fatalf("%d tasks ran twice, want between 1 and %d", reruns, concurrency)
+			}
+		})
 	}
 }
