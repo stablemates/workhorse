@@ -71,6 +71,8 @@ await queue.enqueue("contact.sync", { id: 2 }, { queue: "crm", budget: "vendor-a
 
 Capacity follows leases here too. An expired lease returns budget capacity, and a release wakes every queue holding ready work that names the budget. `claim_v1` passes over a saturated budget inside the same bounded window it uses for keys, so other work in the queue keeps flowing.
 
+A worker that asks for several tasks can receive fewer than every cap allows. Workhorse admits the batch in rounds, and each round ranks every ready task within its key and within its budget. A task that has both a limited key and a limited budget can take a key rank and still miss its budget rank. The round then leaves another task of that key waiting, although the key had room for it. Workhorse never admits past a cap, and a later round or claim takes the waiting task.
+
 `Queue.health()` reports each budget's active count, blocked ready work, and whether it is saturated under `budgetPolicies`, and `Queue.budgetStatuses` returns the same observation on its own. The budget name is the only label the OpenTelemetry gauges carry.
 
 ## Next

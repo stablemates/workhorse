@@ -198,6 +198,12 @@ task that names a budget nobody synchronized is not limited by it. An expired le
 capacity, a release wakes every queue holding ready work that names the budget, and `claim_v1`
 passes over a saturated budget inside the same bounded window it uses for keys.
 
+A worker that asks for several tasks can receive fewer than every cap allows. Workhorse admits the
+batch in rounds, ranking each ready task within its key and within its budget. A task with both a
+limited key and a limited budget can take a key rank and still miss its budget rank, which leaves
+another task of that key waiting although the key had room. Workhorse never admits past a cap, and
+a later round or claim takes the waiting task.
+
 ## Observe pressure
 
 `queue.health()` reports each policy's limit, active count, blocked ready work, and saturated-key
