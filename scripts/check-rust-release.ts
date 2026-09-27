@@ -24,6 +24,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Client } from "pg";
+import { dropLocalDatabase } from "../typescript/core/src/drop-local-database.js";
 import { verifyRelease } from "./verify-release.js";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -196,7 +197,7 @@ async function runTaskThroughConsumer(binary: string, sourceUrl: string): Promis
   const admin = new Client({ connectionString: sourceUrl });
   await admin.connect();
   try {
-    await admin.query(`DROP DATABASE IF EXISTS ${identifier} WITH (FORCE)`);
+    await dropLocalDatabase(admin, scratch);
     await admin.query(`CREATE DATABASE ${identifier}`);
     try {
       const database = new Client({ connectionString: scratchUrl });
@@ -231,7 +232,7 @@ async function runTaskThroughConsumer(binary: string, sourceUrl: string): Promis
         await database.end();
       }
     } finally {
-      await admin.query(`DROP DATABASE IF EXISTS ${identifier} WITH (FORCE)`);
+      await dropLocalDatabase(admin, scratch);
     }
   } finally {
     await admin.end();
