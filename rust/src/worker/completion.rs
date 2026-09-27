@@ -12,13 +12,11 @@ use tokio::time::Instant;
 use uuid::Uuid;
 
 use super::{lock, millis_i32, sql, ClaimedTask, Inner};
-use crate::{Error, Executor};
+use crate::fenced_write::fenced_rows;
+use crate::Error;
 
 /// The most completions, and the most claimed tasks, in one statement.
 const MAX_BATCH: usize = 100;
-
-/// How many times a statement that PostgreSQL chose as a deadlock victim is sent again.
-const DEADLOCK_RETRIES: usize = 3;
 
 /// Whether PostgreSQL accepted the completion, and the tasks its fused claim leased.
 type Answer = Result<(bool, Vec<ClaimedTask>), Error>;
@@ -102,18 +100,10 @@ impl Inner {
     async fn flush_chunk(&self, queue: &str, mut chunk: Vec<Entry>, limit: usize) {
         // Concurrent statements then delete their runtime rows in one order.
         chunk.sort_unstable_by_key(|entry| entry.id);
-        let mut answer = self.send_chunk(queue, &chunk, limit).await;
         // A fused claim can keep a lock on a row that a concurrent claim has just leased, so two
-        // statements can deadlock. PostgreSQL rolls the victim back whole, so it can be sent again.
-        for _ in 0..DEADLOCK_RETRIES {
-            match &answer {
-                Err(error) if error.sqlstate() == Some("40P01") => {
-                    answer = self.send_chunk(queue, &chunk, limit).await;
-                }
-                _ => break,
-            }
-        }
-        match answer {
+        // statements can deadlock. PostgreSQL rolls the victim back whole, so fenced_rows sends
+        // the chunk again.
+        match self.send_chunk(queue, &chunk, limit).await {
             Ok((accepted, claimed)) => {
                 let mut claimed = claimed.into_iter();
                 for entry in chunk {
@@ -139,22 +129,21 @@ impl Inner {
         let fences: Vec<i64> = chunk.iter().map(|entry| entry.fence).collect();
         let results: Vec<Value> = chunk.iter().map(|entry| entry.result.clone()).collect();
         let sent_at = Instant::now();
-        let rows = self
-            .pool
-            .rows(
-                sql::COMPLETE_MANY_AND_CLAIM_V1,
-                &[
-                    &self.worker_id,
-                    &ids,
-                    &fences,
-                    &results,
-                    &queue,
-                    &(limit as i32),
-                    &millis_i32(self.options.lease_duration),
-                ],
-            )
-            .await
-            .map_err(Error::translate_fast_tier)?;
+        let rows = fenced_rows(
+            &self.pool,
+            sql::COMPLETE_MANY_AND_CLAIM_V1,
+            &[
+                &self.worker_id,
+                &ids,
+                &fences,
+                &results,
+                &queue,
+                &(limit as i32),
+                &millis_i32(self.options.lease_duration),
+            ],
+        )
+        .await
+        .map_err(Error::translate_fast_tier)?;
         // The first row carries every accepted id; a stale fence leaves its task out of it.
         let accepted = match rows.first() {
             Some(row) => row.try_get::<_, Option<Vec<Uuid>>>("accepted")?.unwrap_or_default(),

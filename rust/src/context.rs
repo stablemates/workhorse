@@ -15,6 +15,7 @@ use serde_json::Value;
 use tokio::sync::watch;
 use tokio_postgres::Row;
 
+use crate::fenced_write::fenced_rows;
 use crate::queue::{exactly_one, Executor};
 use crate::sql_catalogue_generated as sql;
 use crate::{CancelReason, CancellationToken, ClaimedTask, Error, HandlerError, Operation};
@@ -194,7 +195,7 @@ impl HandlerContext {
         let mut all: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
             vec![&task.id, &self.inner.worker_id, &task.fence_token];
         all.extend_from_slice(params);
-        let mut rows = self.inner.pool.rows(statement, &all).await?;
+        let mut rows = fenced_rows(&self.inner.pool, statement, &all).await?;
         exactly_one(&rows, function)?;
         Ok(rows.remove(0))
     }

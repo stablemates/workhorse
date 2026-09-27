@@ -60,9 +60,6 @@ const (
 	// completionBatchLimit bounds both the completions one complete_many_and_claim_v1 call settles
 	// and the tasks it claims, which is the statement's own per-call limit.
 	completionBatchLimit = 100
-	// completionDeadlockAttempts bounds how often a batched completion is sent again after
-	// PostgreSQL chose it as a deadlock victim.
-	completionDeadlockAttempts = 3
 )
 
 func workerPollDelay(base time.Duration, consecutiveEmpty int, backoff bool) time.Duration {
@@ -1555,7 +1552,7 @@ func (worker *Worker) writeCompletion(
 		worker.markFullTier(task.Queue)
 	}
 	arguments := append(worker.fencedLease(task).parameters(), encoded)
-	rows, err := executor.Query(ctx, protocolStatementRegistry[completeStatementName], arguments...)
+	rows, err := queryFencedWrite(ctx, executor, protocolStatementRegistry[completeStatementName], arguments...)
 	if err != nil {
 		return false, err
 	}
@@ -1704,8 +1701,8 @@ func completionChunks(entries []*completionEntry) [][]*completionEntry {
 //
 // The chunk names its tasks in task ID order, as the heartbeat names its leases, so the two
 // statements lock shared runtime rows in the same order. A plan that locks in another order can
-// still deadlock. PostgreSQL then rolls back the whole statement, so the chunk is sent again, up to
-// completionDeadlockAttempts times.
+// still deadlock. PostgreSQL then rolls back the whole statement, so queryFencedWrite sends the
+// chunk again.
 func (worker *Worker) completeChunk(queue string, chunk []*completionEntry) {
 	slices.SortFunc(chunk, func(left, right *completionEntry) int {
 		return strings.Compare(left.task.ID, right.task.ID)
@@ -1720,26 +1717,19 @@ func (worker *Worker) completeChunk(queue string, chunk []*completionEntry) {
 		results[index] = entry.encoded
 		limit += entry.limit
 	}
-	var sentAt time.Time
-	var rows []Row
-	var err error
-	for attempt := 1; ; attempt++ {
-		sentAt = time.Now()
-		rows, err = chunk[0].executor.Query(
-			chunk[0].ctx,
-			protocolStatementRegistry[completeManyAndClaimStatementName],
-			worker.workerID,
-			ids,
-			fences,
-			results,
-			queue,
-			limit,
-			int(worker.leaseDuration/time.Millisecond),
-		)
-		if attempt == completionDeadlockAttempts || !hasSQLState(err, deadlockDetectedSQLState) {
-			break
-		}
-	}
+	sentAt := time.Now()
+	rows, err := queryFencedWrite(
+		chunk[0].ctx,
+		chunk[0].executor,
+		protocolStatementRegistry[completeManyAndClaimStatementName],
+		worker.workerID,
+		ids,
+		fences,
+		results,
+		queue,
+		limit,
+		int(worker.leaseDuration/time.Millisecond),
+	)
 	var accepted []any
 	if err == nil {
 		ok := len(rows) > 0
@@ -1790,8 +1780,9 @@ func (worker *Worker) claimQueue(
 		if fastLimit <= 0 {
 			return nil, false, nil
 		}
-		rows, err := executor.Query(
+		rows, err := queryFencedWrite(
 			ctx,
+			executor,
 			protocolStatementRegistry[completeManyAndClaimStatementName],
 			worker.workerID,
 			[]string{},
@@ -2269,8 +2260,9 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
 	sentAt := time.Now()
 	round := func(ctx context.Context, executor Executor) error {
 		var roundError error
-		rows, roundError = executor.Query(
+		rows, roundError = queryFencedWrite(
 			ctx,
+			executor,
 			protocolStatementRegistry[heartbeatManyStatementName],
 			worker.workerID,
 			string(payload),
@@ -2378,8 +2370,9 @@ func ownershipCause(task ClaimedTask, status ownershipStatus) error {
 func (worker *Worker) expireOwnership(ctx context.Context, task ClaimedTask) (ownershipStatus, error) {
 	deadline := time.Now().Add(expirationRetryBudget)
 	for {
-		rows, err := NewPGXExecutor(worker.pool).Query(
+		rows, err := queryFencedWrite(
 			ctx,
+			NewPGXExecutor(worker.pool),
 			protocolStatementRegistry[expireOwnedStatementName],
 			worker.fencedLease(task).parameters()...,
 		)
@@ -2484,8 +2477,9 @@ func (worker *Worker) cancellationAccepted(
 	executor Executor,
 	task ClaimedTask,
 ) (bool, error) {
-	rows, err := executor.Query(
+	rows, err := queryFencedWrite(
 		ctx,
+		executor,
 		protocolStatementRegistry[acknowledgeCancelStatementName],
 		worker.fencedLease(task).parameters()...,
 	)
@@ -2594,8 +2588,9 @@ func (worker *Worker) release(ctx context.Context, executor Executor, task Claim
 		func() []any { return taskLogAttributes(task, worker.workerID) },
 	)
 	lease := worker.fencedLease(task)
-	rows, err := executor.Query(
+	rows, err := queryFencedWrite(
 		ctx,
+		executor,
 		protocolStatementRegistry[releaseOwnedStatementName],
 		lease.parameters()...,
 	)
@@ -2680,7 +2675,7 @@ func (worker *Worker) failWithState(
 	}
 	lease := worker.fencedLease(task)
 	arguments := append(lease.parameters(), encoded, worker.retryDelayOverride(task))
-	rows, err := executor.Query(ctx, protocolStatementRegistry[failStatementName], arguments...)
+	rows, err := queryFencedWrite(ctx, executor, protocolStatementRegistry[failStatementName], arguments...)
 	if err != nil {
 		return emptyString, err
 	}

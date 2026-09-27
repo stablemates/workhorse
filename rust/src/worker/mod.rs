@@ -32,6 +32,7 @@ pub use handler::{
 pub use process::run_worker_process;
 
 use crate::contracts::ContractSchema;
+use crate::fenced_write::fenced_rows;
 use crate::queue::exactly_one;
 use crate::sql_catalogue_generated as sql;
 use crate::telemetry::{Attribute, Counter, Histogram, Metrics};
@@ -1037,22 +1038,21 @@ impl Inner {
                 return Ok((Vec::new(), true));
             }
             let fast_limit = limit.min(fast_limit) as i32;
-            let claimed = self
-                .pool
-                .rows(
-                    sql::COMPLETE_MANY_AND_CLAIM_V1,
-                    &[
-                        &self.worker_id,
-                        &Vec::<Uuid>::new(),
-                        &Vec::<i64>::new(),
-                        &Vec::<Value>::new(),
-                        &queue,
-                        &fast_limit,
-                        &lease,
-                    ],
-                )
-                .await
-                .map_err(Error::translate_fast_tier);
+            let claimed = fenced_rows(
+                &self.pool,
+                sql::COMPLETE_MANY_AND_CLAIM_V1,
+                &[
+                    &self.worker_id,
+                    &Vec::<Uuid>::new(),
+                    &Vec::<i64>::new(),
+                    &Vec::<Value>::new(),
+                    &queue,
+                    &fast_limit,
+                    &lease,
+                ],
+            )
+            .await
+            .map_err(Error::translate_fast_tier);
             match claimed {
                 Ok(rows) => {
                     self.record_tier(queue, true, sent_at);

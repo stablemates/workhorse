@@ -273,6 +273,7 @@ const (
 	dependencyLimitExceededSQLState     = "P1005"
 	fastTierUnsupportedSQLState         = "P1007"
 	deadlockDetectedSQLState            = "40P01"
+	inFailedSQLTransactionSQLState      = "25P02"
 	fastTierUnsupportedFormat           = "fast-tier queue %s does not support %s"
 	fastTierBatchedCompletionFeature    = "batched completion"
 	fastTierProgressFeature             = "progress"

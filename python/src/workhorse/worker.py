@@ -180,10 +180,40 @@ def _dispatch_cohorts(concurrency: int, spare_connections: int | None = None) ->
 # rejects longer arrays and a larger claim limit.
 _COMPLETION_BATCH_LIMIT = 100
 
-# Times one batched completion statement is sent at most when PostgreSQL rolls it back as a
-# deadlock victim.
-_COMPLETION_DEADLOCK_ATTEMPTS = 3
+# Times one fenced write is sent at most when PostgreSQL rolls it back as a deadlock victim.
+# Settling a task resolves its dependents inside the same statement, and the resolver locks each
+# level of that cascade only when it reaches it. Two settlements whose cascades meet at different
+# levels can therefore wait on each other.
+_FENCED_WRITE_DEADLOCK_ATTEMPTS = 3
 _DEADLOCK_DETECTED_SQLSTATE = "40P01"
+_IN_FAILED_SQL_TRANSACTION_SQLSTATE = "25P02"
+
+
+def _fenced_write_rows(
+    executor: _SyncRowExecutor, statement: _DriverStatement, parameters: Sequence[object]
+) -> list[Mapping[str, object]]:
+    """Send a fenced write, and send it again when PostgreSQL chose it as a deadlock victim.
+
+    PostgreSQL rolls back the whole statement, so nothing in it committed, and the fence decides
+    again whether a resend may still act. A caller-owned transaction is aborted by the deadlock, so
+    a resend there fails with 25P02, and the caller gets the original deadlock instead.
+    """
+    deadlock: Exception | None = None
+    attempt = 1
+    while True:
+        try:
+            return executor.rows(statement, parameters)
+        except Exception as error:
+            sqlstate = getattr(error, "sqlstate", None) or getattr(error, "code", None)
+            if deadlock is not None and sqlstate == _IN_FAILED_SQL_TRANSACTION_SQLSTATE:
+                raise deadlock from None
+            if (
+                attempt >= _FENCED_WRITE_DEADLOCK_ATTEMPTS
+                or sqlstate != _DEADLOCK_DETECTED_SQLSTATE
+            ):
+                raise
+            deadlock = error
+            attempt += 1
 
 
 @dataclass(eq=False, slots=True)
@@ -475,7 +505,8 @@ class _HandlerDurability:
         encoded = json.dumps(value, separators=(",", ":"), allow_nan=False)
         self._cancellation.raise_if_cancelled()
         row = _require_lifecycle_row(
-            self._executor.rows(
+            _fenced_write_rows(
+                self._executor,
                 _STATEMENTS.update_progress,
                 (self._task.id, self._worker_id, self._task.fence_token, encoded),
             )
@@ -524,7 +555,8 @@ class _HandlerDurability:
                 value = operation()
                 encoded = json.dumps(value, separators=(",", ":"), allow_nan=False)
                 row = _require_lifecycle_row(
-                    self._executor.rows(
+                    _fenced_write_rows(
+                        self._executor,
                         _STATEMENTS.save_checkpoint,
                         (
                             self._task.id,
@@ -606,7 +638,8 @@ class _HandlerDurability:
         try:
             self._cancellation.raise_if_cancelled()
             row = _require_lifecycle_row(
-                self._executor.rows(
+                _fenced_write_rows(
+                    self._executor,
                     _STATEMENTS.schedule_wait,
                     (
                         self._task.id,
@@ -669,7 +702,8 @@ class _HandlerDurability:
         try:
             self._cancellation.raise_if_cancelled()
             row = _require_lifecycle_row(
-                self._executor.rows(
+                _fenced_write_rows(
+                    self._executor,
                     _STATEMENTS.wait_for_signal,
                     (
                         self._task.id,
@@ -722,7 +756,8 @@ class _HandlerDurability:
         try:
             self._cancellation.raise_if_cancelled()
             row = _require_lifecycle_row(
-                self._executor.rows(
+                _fenced_write_rows(
+                    self._executor,
                     _STATEMENTS.wait_for_human,
                     (
                         self._task.id,
@@ -786,7 +821,8 @@ class _HandlerDurability:
         try:
             self._cancellation.raise_if_cancelled()
             row = _require_lifecycle_row(
-                self._executor.rows(
+                _fenced_write_rows(
+                    self._executor,
                     _STATEMENTS.create_child,
                     (self._task.id, self._worker_id, self._task.fence_token, name, encoded),
                 )
@@ -879,7 +915,8 @@ class _HandlerDurability:
         try:
             self._cancellation.raise_if_cancelled()
             row = _require_lifecycle_row(
-                self._executor.rows(
+                _fenced_write_rows(
+                    self._executor,
                     _STATEMENTS.create_children,
                     (self._task.id, self._worker_id, self._task.fence_token, encoded, mode),
                 )
@@ -1209,13 +1246,13 @@ class Worker:
 
     def _heartbeat_rows(self, parameters: Sequence[object]) -> list[Mapping[str, object]]:
         if self._heartbeat_executor_factory is None:
-            return self._executor.rows(_STATEMENTS.heartbeat_many, parameters)
+            return _fenced_write_rows(self._executor, _STATEMENTS.heartbeat_many, parameters)
         with self._heartbeat_connection_lock:
             if self._heartbeat_connection is None:
                 self._heartbeat_connection = self._heartbeat_executor_factory()
             executor, close = self._heartbeat_connection
             try:
-                return executor.rows(_STATEMENTS.heartbeat_many, parameters)
+                return _fenced_write_rows(executor, _STATEMENTS.heartbeat_many, parameters)
             except BaseException:
                 # Reconnect on the next beat rather than reuse a connection in an unknown state.
                 self._heartbeat_connection = None
@@ -1232,7 +1269,8 @@ class Worker:
 
     def _expire_owned_task(self, task: ClaimedTask, parent_context: object) -> object:
         expiration = _require_lifecycle_row(
-            self._executor.rows(
+            _fenced_write_rows(
+                self._executor,
                 _STATEMENTS.expire_owned,
                 (task.id, self.worker_id, task.fence_token),
             )
@@ -1335,7 +1373,8 @@ class Worker:
             tasks = [member.item.context.task for member in batch]
             try:
                 row = _require_lifecycle_row(
-                    self._executor.rows(
+                    _fenced_write_rows(
+                        self._executor,
                         statement,
                         (
                             batch_id,
@@ -1896,7 +1935,8 @@ class Worker:
         if fast_limit <= 0:
             return []
         try:
-            rows = self._executor.rows(
+            rows = _fenced_write_rows(
+                self._executor,
                 _STATEMENTS.complete_many_and_claim,
                 (self.worker_id, [], [], [], queue_name, fast_limit, self.lease_ms),
             )
@@ -1940,7 +1980,8 @@ class Worker:
         if pending.full_tier:
             return (
                 _require_lifecycle_row(
-                    self._executor.rows(
+                    _fenced_write_rows(
+                        self._executor,
                         _STATEMENTS.complete,
                         (task.id, self.worker_id, task.fence_token, encoded_result),
                     )
@@ -2098,7 +2139,7 @@ class Worker:
         The chunk names its tasks in task ID order, as a heartbeat names its leases, so the two
         statements lock shared runtime rows in the same order. The fused claim can still keep a
         lock on a row that another worker leased first. PostgreSQL then rolls back the whole
-        statement with 40P01, so the chunk is sent again, up to _COMPLETION_DEADLOCK_ATTEMPTS times.
+        statement with 40P01, and _fenced_write_rows sends the chunk again.
         """
         chunk.sort(key=lambda pending: pending.task.id)
         parameters = (
@@ -2110,26 +2151,18 @@ class Worker:
             claim_limit,
             self.lease_ms,
         )
-        attempt = 1
-        while True:
-            sent_at = monotonic()
-            try:
-                rows = self._executor.rows(_STATEMENTS.complete_many_and_claim, parameters)
-                break
-            except Exception as error:
-                sqlstate = getattr(error, "sqlstate", None) or getattr(error, "code", None)
-                if (
-                    attempt < _COMPLETION_DEADLOCK_ATTEMPTS
-                    and sqlstate == _DEADLOCK_DETECTED_SQLSTATE
-                ):
-                    attempt += 1
-                    continue
-                if not isinstance(_translate_database_error(error), FastTierUnsupportedError):
-                    raise
-                self._mark_full_tier(queue_name, sent_at)
-                for pending in chunk:
-                    pending.full_tier = True
-                return
+        sent_at = monotonic()
+        try:
+            rows = _fenced_write_rows(
+                self._executor, _STATEMENTS.complete_many_and_claim, parameters
+            )
+        except Exception as error:
+            if not isinstance(_translate_database_error(error), FastTierUnsupportedError):
+                raise
+            self._mark_full_tier(queue_name, sent_at)
+            for pending in chunk:
+                pending.full_tier = True
+            return
         # Only the first row carries the accepted completions. A statement that claims nothing
         # still returns that row, with every claim column null.
         accepted = (
@@ -2730,7 +2763,8 @@ class Worker:
                 self._complete_fast_task(task, encoded_result)
                 if fast_tier
                 else _require_lifecycle_row(
-                    self._executor.rows(
+                    _fenced_write_rows(
+                        self._executor,
                         _STATEMENTS.complete,
                         (task.id, self.worker_id, task.fence_token, encoded_result),
                     )
@@ -2774,7 +2808,8 @@ class Worker:
     def _acknowledge_cancel(self, task: ClaimedTask) -> bool:
         accepted = (
             _require_lifecycle_row(
-                self._executor.rows(
+                _fenced_write_rows(
+                    self._executor,
                     _STATEMENTS.acknowledge_cancel,
                     (task.id, self.worker_id, task.fence_token),
                 )
@@ -2814,7 +2849,8 @@ class Worker:
             attributes,
         )
         status = _require_lifecycle_row(
-            self._executor.rows(
+            _fenced_write_rows(
+                self._executor,
                 _STATEMENTS.release_owned,
                 (task.id, self.worker_id, task.fence_token),
             )
@@ -2845,7 +2881,8 @@ class Worker:
         envelope = _error_envelope(error, task.redact_error_details)
         with _start_span("workhorse.retry", _task_span_attributes(task)) as retry_span:
             state = _require_lifecycle_row(
-                self._executor.rows(
+                _fenced_write_rows(
+                    self._executor,
                     _STATEMENTS.fail,
                     (
                         task.id,

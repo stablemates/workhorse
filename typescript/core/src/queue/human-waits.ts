@@ -1,4 +1,5 @@
 import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
+import { queryFencedWrite } from "./fenced-write.js";
 import { expectOneRow, WorkhorseError } from "../errors.js";
 import { logInfo } from "../telemetry.js";
 import { MAX_EXTERNAL_WAITS_PER_TASK, type ClaimedTask, type Json } from "../types.js";
@@ -151,14 +152,18 @@ export class HumanWaitsModule extends QueueModule {
     if (typeof workerId !== "string" || workerId.length === 0) {
       throw new TypeError("Worker ID must be a non-empty string");
     }
-    const query = await this.context.database.query<WaitRow>(SQL_STATEMENTS["wait_for_human_v1"], [
-      task.id,
-      workerId,
-      task.fenceToken.toString(),
-      name,
-      encodeExternalWaitValue(context, "Human wait context"),
-      validateExternalWaitOptions(options),
-    ]);
+    const query = await queryFencedWrite<WaitRow>(
+      this.context.database,
+      SQL_STATEMENTS["wait_for_human_v1"],
+      [
+        task.id,
+        workerId,
+        task.fenceToken.toString(),
+        name,
+        encodeExternalWaitValue(context, "Human wait context"),
+        validateExternalWaitOptions(options),
+      ],
+    );
     const row = expectOneRow(query, "workhorse.wait_for_human_v1");
     if (row.status === "already_waiting") throw new HumanWaitAlreadyWaitingError(task.id, name);
     if (row.status === "stale") throw new HumanWaitLeaseLostError(task.id, name);

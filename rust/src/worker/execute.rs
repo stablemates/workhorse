@@ -13,6 +13,7 @@ use tracing::Instrument;
 use super::handler::{ErasedHandler, HandlerResult};
 use super::heartbeat::Beat;
 use super::{exactly_one, lock, millis_i32, sql, ActiveSlot, Inner, OwnershipStatus};
+use crate::fenced_write::fenced_rows;
 use crate::telemetry::{self, Attribute, Counter, Histogram};
 use crate::{
     CancelReason, CancellationToken, ClaimedTask, Error, Executor, HandlerContext, HandlerError,
@@ -221,13 +222,12 @@ impl Inner {
     ) -> Result<OwnershipStatus, Error> {
         let budget = Instant::now() + EXPIRATION_BUDGET;
         loop {
-            let rows = self
-                .pool
-                .rows(
-                    sql::EXPIRE_OWNED_TELEMETRY_V1,
-                    &[&task.id, &self.worker_id, &task.fence_token],
-                )
-                .await?;
+            let rows = fenced_rows(
+                &self.pool,
+                sql::EXPIRE_OWNED_TELEMETRY_V1,
+                &[&task.id, &self.worker_id, &task.fence_token],
+            )
+            .await?;
             let row = exactly_one(&rows, "expire_owned_telemetry_v1")?;
             let status =
                 OwnershipStatus::parse(row.try_get::<_, Option<String>>("status")?.as_deref())?;
@@ -262,10 +262,12 @@ impl Inner {
     }
 
     async fn acknowledge(&self, task: &ClaimedTask) -> Result<Outcome, Error> {
-        let rows = self
-            .pool
-            .rows(sql::ACKNOWLEDGE_CANCEL_V1, &[&task.id, &self.worker_id, &task.fence_token])
-            .await?;
+        let rows = fenced_rows(
+            &self.pool,
+            sql::ACKNOWLEDGE_CANCEL_V1,
+            &[&task.id, &self.worker_id, &task.fence_token],
+        )
+        .await?;
         if accepted(&rows, "acknowledge_cancel_v1")? {
             Ok("canceled")
         } else {
@@ -275,10 +277,12 @@ impl Inner {
 
     /// Explains a rejected settlement: a cancellation or expiration that won, or a lost lease.
     async fn reconcile(&self, task: &ClaimedTask, operation: Operation) -> Result<Outcome, Error> {
-        let rows = self
-            .pool
-            .rows(sql::ACKNOWLEDGE_CANCEL_V1, &[&task.id, &self.worker_id, &task.fence_token])
-            .await?;
+        let rows = fenced_rows(
+            &self.pool,
+            sql::ACKNOWLEDGE_CANCEL_V1,
+            &[&task.id, &self.worker_id, &task.fence_token],
+        )
+        .await?;
         if accepted(&rows, "acknowledge_cancel_v1")? {
             return Ok("canceled");
         }
@@ -327,10 +331,12 @@ impl Inner {
     }
 
     async fn complete_full(&self, task: &ClaimedTask, result: &Value) -> Result<bool, Error> {
-        let rows = self
-            .pool
-            .rows(sql::COMPLETE_V1, &[&task.id, &self.worker_id, &task.fence_token, result])
-            .await?;
+        let rows = fenced_rows(
+            &self.pool,
+            sql::COMPLETE_V1,
+            &[&task.id, &self.worker_id, &task.fence_token, result],
+        )
+        .await?;
         accepted(&rows, "complete_v1")
     }
 
@@ -431,10 +437,12 @@ impl Inner {
                 "No handler registered for the claimed task type"
             );
         }
-        let rows = self
-            .pool
-            .rows(sql::RELEASE_OWNED_V1, &[&task.id, &self.worker_id, &task.fence_token])
-            .await?;
+        let rows = fenced_rows(
+            &self.pool,
+            sql::RELEASE_OWNED_V1,
+            &[&task.id, &self.worker_id, &task.fence_token],
+        )
+        .await?;
         let status: Option<String> = exactly_one(&rows, "release_owned_v1")?.try_get("status")?;
         let outcome = match status.as_deref() {
             Some("released") => "released",
@@ -481,10 +489,12 @@ impl Inner {
             .as_ref()
             .and_then(|delay| delay(task.attempt, task))
             .map(millis_i32);
-        let rows = self
-            .pool
-            .rows(sql::FAIL_V1, &[&task.id, &self.worker_id, &task.fence_token, &envelope, &delay])
-            .await?;
+        let rows = fenced_rows(
+            &self.pool,
+            sql::FAIL_V1,
+            &[&task.id, &self.worker_id, &task.fence_token, &envelope, &delay],
+        )
+        .await?;
         let state: Option<String> = exactly_one(&rows, "fail_v1")?.try_get("state")?;
         let state = state.unwrap_or_default();
         let dimensions = [

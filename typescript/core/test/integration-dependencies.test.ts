@@ -7,8 +7,10 @@ import {
   DependencyCycleError,
   DependencyLimitExceededError,
   MAX_TASK_DEPENDENTS,
+  type ClaimedTask,
   type Queryable,
 } from "../src/index.js";
+import { SQL_STATEMENTS } from "../src/queue/sql-catalogue.generated.js";
 import { readDependencyCounterDrift } from "./support/dependency-counter.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
@@ -1564,6 +1566,248 @@ describe("task dependencies", () => {
       await Promise.allSettled([batch, failure]);
       blocker.release();
       enqueuer.release();
+    }
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+  });
+
+  // A resolver locks one cascade level at a time, and each level's rejected dependents settle before
+  // the trigger locks the next level. Two cascades that meet at different levels therefore lock the
+  // same rows in opposite orders. The first failure holds the upper dependent at its first level and
+  // needs the lower dependent at its second. The second failure holds the lower dependent at its
+  // first level and needs the upper one. A third transaction holds the first cascade at its first
+  // level until the second one has taken the lower dependent.
+  async function arrangeTwoLevelCascade(prefix: string) {
+    const policy = { onSuccess: "release", onFailure: "fail", onCancellation: "cancel" } as const;
+    // Task IDs are random, so an arrangement whose dependents come out in the other order is left
+    // behind and built again under new queue names.
+    for (let arrangement = 0; arrangement < 20; arrangement++) {
+      const name = `${prefix}-${arrangement}`;
+      const [firstRootId, secondRootId] = await queue.enqueueMany(
+        ["first", "second"].map((root) => ({
+          type: `${prefix}-root`,
+          payload: null,
+          options: { queue: `${name}-${root}-root`, maxAttempts: 1 },
+        })),
+      );
+      const firstRoot = await queue.claim(`${prefix}-worker`, { queue: `${name}-first-root` });
+      const secondRoot = await queue.claim(`${prefix}-worker`, { queue: `${name}-second-root` });
+      expect([firstRoot?.id, secondRoot?.id]).toEqual([firstRootId, secondRootId]);
+      const levelOneId = await queue.enqueue(`${prefix}-level-one`, null, {
+        dependencies: { prerequisiteTaskIds: [firstRootId!], ...policy },
+      });
+      const [lowerId, upperId] = await queue.enqueueMany([
+        {
+          type: `${prefix}-lower`,
+          payload: null,
+          options: {
+            dependencies: { prerequisiteTaskIds: [levelOneId, secondRootId!], ...policy },
+          },
+        },
+        {
+          type: `${prefix}-upper`,
+          payload: null,
+          options: {
+            dependencies: { prerequisiteTaskIds: [firstRootId!, secondRootId!], ...policy },
+          },
+        },
+      ]);
+      if (lowerId! < upperId!) {
+        return {
+          firstRoot: firstRoot!,
+          secondRoot: secondRoot!,
+          dependentIds: [levelOneId, lowerId!, upperId!],
+        };
+      }
+    }
+    throw new Error("no arrangement put the lower dependent's ID first");
+  }
+
+  const waitingSessions = async (count: number) =>
+    vi.waitFor(
+      async () => {
+        const waiting = await pool.query<{ count: number }>(
+          `SELECT count(*)::integer AS count FROM pg_stat_activity
+            WHERE datname = current_database() AND cardinality(pg_blocking_pids(pid)) > 0`,
+        );
+        expect(waiting.rows[0]!.count).toBe(count);
+      },
+      { timeout: 10_000, interval: 20 },
+    );
+
+  // Runs two failures against the arranged cascade and returns once the third transaction ends.
+  async function crossTwoLevelCascades(
+    levelOneId: string,
+    firstFailure: () => Promise<unknown>,
+    secondFailure: () => Promise<unknown>,
+  ) {
+    const blocker = await pool.connect();
+    let failures: Array<Promise<unknown>> = [];
+    try {
+      await blocker.query("BEGIN");
+      // A key-share lock lets the first cascade lock its first level but not delete it.
+      await blocker.query("SELECT FROM workhorse.task_runtime WHERE task_id = $1 FOR KEY SHARE", [
+        levelOneId,
+      ]);
+      failures = [firstFailure()];
+      await waitingSessions(1);
+      failures.push(secondFailure());
+      await waitingSessions(2);
+      await blocker.query("ROLLBACK");
+      return await Promise.race([
+        Promise.allSettled(failures),
+        sleep(10_000).then(() => {
+          throw new Error("the crossed cascades did not finish");
+        }),
+      ]);
+    } finally {
+      await blocker.query("ROLLBACK");
+      await Promise.allSettled(failures);
+      blocker.release();
+    }
+  }
+
+  it("deadlocks two fenced failures whose cascades meet at different levels", async () => {
+    const { firstRoot, secondRoot, dependentIds } = await arrangeTwoLevelCascade("crossed-raw");
+    const failRaw = (task: ClaimedTask) =>
+      pool.query(SQL_STATEMENTS["fail_v1"], [
+        task.id,
+        "crossed-raw-worker",
+        task.fenceToken.toString(),
+        JSON.stringify({ name: "Error", message: "crossed" }),
+        null,
+      ]);
+
+    const settled = await crossTwoLevelCascades(
+      dependentIds[0]!,
+      () => failRaw(firstRoot),
+      () => failRaw(secondRoot),
+    );
+
+    const rejected = settled.filter((result) => result.status === "rejected");
+    expect(rejected).toEqual([
+      { status: "rejected", reason: expect.objectContaining({ code: "40P01" }) },
+    ]);
+    // PostgreSQL rolled the whole victim statement back, so sending it again finishes the cascade.
+    const victim = settled[0]!.status === "rejected" ? firstRoot : secondRoot;
+    await expect(failRaw(victim)).resolves.toMatchObject({ rows: [{ state: "failed" }] });
+    for (const taskId of dependentIds) {
+      await expect(admin.getTask(taskId)).resolves.toMatchObject({
+        state: "failed",
+        error: expect.objectContaining({ name: "DependencyFailed" }),
+      });
+    }
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+  });
+
+  it("retries a fenced failure that PostgreSQL chose as a crossed cascade's deadlock victim", async () => {
+    const { firstRoot, secondRoot, dependentIds } = await arrangeTwoLevelCascade("crossed-sdk");
+    const codes: Array<string | undefined> = [];
+    const observed = queue.forDatabase({
+      query: (text, values) =>
+        pool.query(text, values as unknown[]).catch((error: unknown) => {
+          codes.push((error as { code?: string }).code);
+          throw error;
+        }),
+    });
+
+    const settled = await crossTwoLevelCascades(
+      dependentIds[0]!,
+      () => observed.fail(firstRoot, "crossed-sdk-worker", new Error("crossed")),
+      () => observed.fail(secondRoot, "crossed-sdk-worker", new Error("crossed")),
+    );
+
+    expect(codes).toEqual(["40P01"]);
+    expect(settled).toEqual([
+      { status: "fulfilled", value: "failed" },
+      { status: "fulfilled", value: "failed" },
+    ]);
+    for (const taskId of dependentIds) {
+      await expect(admin.getTask(taskId)).resolves.toMatchObject({
+        state: "failed",
+        error: expect.objectContaining({ name: "DependencyFailed" }),
+      });
+    }
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+  });
+
+  // The resolver deletes rejected dependents through a join, and a hash join visits them in heap
+  // order. The resolver must lock them in task ID order first, the order an enqueue batch uses. The
+  // resolver's session forbids the other join methods, and the higher dependent is moved in front
+  // of the lower one in the heap. While a third transaction holds the lower dependent, the higher
+  // one must still be free of the resolver's delete lock.
+  it("locks rejected dependents in task ID order before a hash join deletes them", async () => {
+    const rootId = await queue.enqueue("heap-order-root", null, {
+      queue: "heap-order-roots",
+      maxAttempts: 1,
+    });
+    const root = await queue.claim("heap-order-worker", { queue: "heap-order-roots" });
+    expect(root?.id).toBe(rootId);
+    const dependentIds = await queue.enqueueMany(
+      Array.from({ length: 2 }, () => ({
+        type: "heap-order-dependent",
+        payload: null,
+        options: {
+          dependencies: {
+            prerequisiteTaskIds: [rootId],
+            onSuccess: "release",
+            onFailure: "fail",
+            onCancellation: "cancel",
+          },
+        },
+      })),
+    );
+    const [lowest, highest] = dependentIds.toSorted() as [string, string];
+    const heapOrdered = async () =>
+      (
+        await pool.query<{ ordered: boolean }>(
+          `SELECT (SELECT ctid FROM workhorse.task_runtime WHERE task_id = $1)
+                < (SELECT ctid FROM workhorse.task_runtime WHERE task_id = $2) AS ordered`,
+          [highest, lowest],
+        )
+      ).rows[0]!.ordered;
+    for (let moves = 0; !(await heapOrdered()); moves++) {
+      if (moves === 10) throw new Error("could not move the lowest dependent behind the highest");
+      await pool.query(
+        "UPDATE workhorse.task_runtime SET updated_at = updated_at WHERE task_id = $1",
+        [lowest],
+      );
+    }
+
+    const blocker = await pool.connect();
+    const resolver = await pool.connect();
+    let failure: Promise<unknown> | undefined;
+    try {
+      await resolver.query(
+        `SET enable_nestloop = off; SET enable_mergejoin = off;
+         SET enable_indexscan = off; SET enable_bitmapscan = off`,
+      );
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT FROM workhorse.task_runtime WHERE task_id = $1 FOR KEY SHARE", [
+        lowest,
+      ]);
+
+      failure = queue.forDatabase(resolver).fail(root!, "heap-order-worker", new Error("reject"));
+      await waitingSessions(1);
+      const unlocked = await pool.query(
+        "SELECT FROM workhorse.task_runtime WHERE task_id = $1 FOR KEY SHARE SKIP LOCKED",
+        [highest],
+      );
+      expect(unlocked.rowCount).toBe(1);
+
+      await blocker.query("ROLLBACK");
+      await expect(within(failure)).resolves.toBe("failed");
+      for (const taskId of dependentIds) {
+        await expect(admin.getTask(taskId)).resolves.toMatchObject({
+          state: "failed",
+          error: expect.objectContaining({ name: "DependencyFailed" }),
+        });
+      }
+    } finally {
+      await blocker.query("ROLLBACK");
+      await Promise.allSettled([failure]);
+      await resolver.query("RESET ALL");
+      blocker.release();
+      resolver.release();
     }
     expect(await readDependencyCounterDrift(pool)).toEqual([]);
   });

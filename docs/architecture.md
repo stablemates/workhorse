@@ -1468,7 +1468,9 @@ touched-component advisory locks keep the pending graph stable.
 
 `resolve_dependents_many_v1` works in a fixed lock order. It first locks the `task_runtime` row of every `blocked` dependent reached by a pending edge from the given prerequisites, `FOR NO KEY UPDATE` in `task_id` order. Only then does it touch `task_dependency`. A dependent's own terminal transition also holds its runtime row before its outcome trigger releases the dependent's own edges, so a resolver and that transition cannot wait for each other. The lock does not conflict with the `FOR KEY SHARE` lock an enqueue takes on a prerequisite's runtime row; only the `DELETE` of a dependent that fails or is canceled waits for such an enqueue. Before that `DELETE`, the resolver locks the runtime rows of every rejected dependent `FOR UPDATE` in `task_id` order. An enqueue batch locks its prerequisites in the same order, so neither holds a row the other waits for. The `DELETE` plan alone could lock the rows in any order. Before schema version 33 a batch locked request by request, so one request could hold a row the resolver was about to delete while the next request waited on a row the resolver already held. The resolver then records `released_at` plus `resolution` on every locked dependent's pending edges from the given prerequisites with one `UPDATE`. A second statement subtracts each dependent's resolved edges from `task_runtime.pending_prerequisites` and records any `fail` or `cancel` resolution in `dependency_rejected`. A dependent stays blocked until its counter reaches zero, so a dependent with edges left costs one runtime update and no edge scan. At zero without a rejection it releases without reading its edges, and the counter write joins the release write. At zero after a rejection it reads only its `fail` and `cancel` edges and chooses `fail` before `cancel`, then the lowest prerequisite identity. A counter that would fall below zero violates `task_runtime_pending_prerequisites_check` and rolls the transaction back; a rejected dependent with no rejecting edge raises an exception. One statement deletes the runtime rows of every dependent that fails or is canceled, appends their `dependency_failed` or `dependency_canceled` events, and inserts their synthetic terminal outcomes in identity order with `DependencyFailed` or `DependencyCanceled`. A second statement moves every released dependent to ready or scheduled, allocates ready sequences in identity order, and appends one `dependency_released` each. The released event names the smallest prerequisite in the call that resolved one of the dependent's edges. The resolver then materializes an already-passed deadline for each released task and sends one `NOTIFY workhorse_tasks` per queue that gained ready work. `dependency_released.details.reason` is `prerequisite_succeeded` after success. It is `prerequisite_failed_policy` when `on_failure` selects `release`. It is `prerequisite_canceled_policy` when `on_cancellation` selects `release`. The enqueue-time terminal short circuit uses `prerequisite_already_succeeded` after success. It uses `prerequisite_terminal_policy` after a failure or cancellation policy release.
 
-Propagation advances one dependency level per statement. The synthetic outcomes of one level are the last write of their statement, so the statement trigger fires for them after that level's events exist, and resolves the next level as one set. Every event of a level therefore precedes every event of the level below it, and within a level the events follow dependent identity order. One outcome transaction can recurse through at most 100 unresolved descendants, so a cascade is at most 100 levels deep and invokes at most 101 resolver calls. Runtime locks serialize concurrent prerequisite outcomes at the one state transition, so evidence, FIFO allocation, and notification happen once. Two cascades that reach overlapping dependents at different levels can still lock them in different orders; PostgreSQL then aborts one transaction with SQLSTATE `40P01`.
+Propagation advances one dependency level per statement. The synthetic outcomes of one level are the last write of their statement, so the statement trigger fires for them after that level's events exist, and resolves the next level as one set. Every event of a level therefore precedes every event of the level below it, and within a level the events follow dependent identity order. One outcome transaction can recurse through at most 100 unresolved descendants, so a cascade is at most 100 levels deep and invokes at most 101 resolver calls. Runtime locks serialize concurrent prerequisite outcomes at the one state transition, so evidence, FIFO allocation, and notification happen once. The resolver locks a level only when it reaches it, so no single order covers a whole cascade. Two cascades that reach overlapping dependents at different levels can therefore lock them in different orders. PostgreSQL then aborts one statement with SQLSTATE `40P01`. The integration test `deadlocks two fenced failures whose cascades meet at different levels` in `typescript/core/test/integration-dependencies.test.ts` reproduces that cycle.
+
+Every SDK therefore sends a fenced write again when PostgreSQL rolls it back with `40P01`, up to 3 attempts in total. A fenced write is a statement that names a task, its worker, and its fence token. Nothing in the rolled-back statement committed, and the fence decides again whether the resend may still act. The retried statements are `complete_v1`, `fail_v1`, `release_owned_v1`, `acknowledge_cancel_v1`, `expire_owned_v1`, `expire_owned_telemetry_v1`, `heartbeat_v1`, `heartbeat_many_v1`, `complete_many_and_claim_v1`, `record_batch_dispatch_v1`, `record_batch_failure_v1`, `create_child_v1`, `create_children_v1`, `save_checkpoint_v1`, `update_progress_v1`, `schedule_wait_v1`, `wait_for_signal_v1`, and `wait_for_human_v1`. The helpers are `queryFencedWrite` with `FENCED_WRITE_DEADLOCK_ATTEMPTS` in TypeScript, `queryFencedWrite` with `fencedWriteDeadlockAttempts` in Go, `_fenced_write_rows` with `_FENCED_WRITE_DEADLOCK_ATTEMPTS` in Python, and `fenced_rows` with `FENCED_WRITE_DEADLOCK_ATTEMPTS` in Rust. A deadlock aborts a caller-owned transaction, so a resend inside one fails with SQLSTATE `25P02`; the helper then raises the original `40P01` instead. Any other error is raised after one send. Statements without a fence are sent once: `enqueue_batch_v1`, `cancel_v1`, `send_signal_v1`, `complete_human_wait_v1`, `claim_many_v1`, `recover_expired_v1`, and every administrative statement raise `40P01` to their caller.
 
 `reject_self_task_dependency_v1` rejects a direct self-edge before the table check and returns SQLSTATE `P1003`. After each insert statement, `validate_task_dependencies_v1` uses the statement transition table to validate all inserted edges together. It first locks the `task` row of both endpoints of every inserted edge `FOR NO KEY UPDATE` in identity order. That lock does not conflict with the `FOR KEY SHARE` locks that enqueue and foreign key checks take. It then checks whether any inserted dependent is already a prerequisite. When one is, validation takes the full path. It finds every pre-existing weakly connected component touched by either endpoint and locks each task identity in those components in UUID order with a transaction advisory lock. Inserts into disconnected components do not share a lock. Inserts which join or mutate the same component serialize before validation. Per-task component locks remain stable when a concurrent transaction merges two components.
 
@@ -2955,8 +2957,9 @@ nothing. The function raises `P1007` with feature `batched completion` for a ful
 lease fuse into one statement at `setImmediate`, chunked at 100 completions and a total claim limit
 of 100. `Queue.claimFast(workerId, limit, { queue?, leaseMs? })` claims through the same function
 with empty arrays and rejects with `FastTierUnsupportedError` for a full-tier queue. When PostgreSQL
-rolls the statement back with SQLSTATE `40P01`, `completeManyAndClaim` sends it again, up to
-`COMPLETION_DEADLOCK_ATTEMPTS` (3) times in total, because nothing in it committed.
+rolls the statement back with SQLSTATE `40P01`, `completeManyAndClaim` sends it again through
+`queryFencedWrite`, up to `FENCED_WRITE_DEADLOCK_ATTEMPTS` (3) times in total, because nothing in it
+committed.
 
 ### Retry, timeout, heartbeat, and release
 
@@ -3070,8 +3073,8 @@ hand the slot over directly. In Python, `Worker._reserve_completion_claim` reser
 `Worker._send_batched_completion` sends one statement per queue and cohort at a time. Completions
 that arrive while it is in flight share the next statement, split into chunks of at most 100 tasks
 and 100 claimed slots. `Worker._send_completion_chunk` names each chunk's tasks in task ID order.
-When PostgreSQL rolls the chunk back with SQLSTATE `40P01`, it sends the chunk again, up to
-`_COMPLETION_DEADLOCK_ATTEMPTS` (3) times in total, because nothing in it committed. The Go worker's
+When PostgreSQL rolls the chunk back with SQLSTATE `40P01`, `_fenced_write_rows` sends the chunk
+again, up to `_FENCED_WRITE_DEADLOCK_ATTEMPTS` (3) times in total, because nothing in it committed. The Go worker's
 limit is the free slots plus one, capped by the free slots of the completing task's cohort plus one.
 The Rust worker completes with a zero claim limit and claims separately.
 
@@ -3109,8 +3112,8 @@ A call carries at most `completionBatchLimit` (100) completions, and its claim l
 same order. The fused claim's `FOR UPDATE SKIP LOCKED` can still keep a lock on a candidate that
 another worker leased and committed first, because the recheck of `state = 'ready'` fails after the
 lock is taken. That worker's completion or heartbeat can then wait on the claim, and PostgreSQL can
-roll one statement back with SQLSTATE `40P01`. The worker sends it again, up to
-`completionDeadlockAttempts` (3) times in total.
+roll one statement back with SQLSTATE `40P01`. `queryFencedWrite` sends it again, up to
+`fencedWriteDeadlockAttempts` (3) times in total.
 
 The Rust worker follows the same rules. Its `default_cohorts` caps the default at the pool's
 `max_size`, minus 1 for the heartbeat connection unless `shared_heartbeats` is true; its listener
@@ -3119,8 +3122,8 @@ and cohort that finish in the same scheduler turn as one `complete_many_and_clai
 at most 100 completions. When that statement raises `FastTierUnsupported`, each completion falls
 back to `complete_v1`. The worker sorts each statement's task ids. A fused claim's `FOR UPDATE SKIP
 LOCKED` can still hold a row that another statement deletes, so PostgreSQL may roll one back with
-SQLSTATE `40P01`. The worker sends that statement again up to 3 more times, because nothing in it
-committed.
+SQLSTATE `40P01`. `fenced_rows` sends that statement again, up to `FENCED_WRITE_DEADLOCK_ATTEMPTS`
+(3) times in total, because nothing in it committed.
 
 A fast-tier handler context rejects durable execution locally with `FastTierUnsupportedError` for
 the task's queue:

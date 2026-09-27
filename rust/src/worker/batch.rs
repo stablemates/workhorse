@@ -17,10 +17,10 @@ use uuid::Uuid;
 
 use super::handler::{self, ErasedHandler};
 use super::{lock, sql, Inner, Worker};
+use crate::fenced_write::fenced_rows;
 use crate::telemetry::{Attribute, Histogram};
 use crate::{
-    BatchHandlerContext, BatchItem, BatchOptions, BatchResult, Executor, HandlerContext,
-    HandlerError,
+    BatchHandlerContext, BatchItem, BatchOptions, BatchResult, HandlerContext, HandlerError,
 };
 
 const MAX_BATCH_SIZE: usize = 100;
@@ -258,12 +258,9 @@ impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
             attempts.push(attempt);
             fences.push(fence);
         }
-        if let Err(error) = self
-            .worker
-            .pool
-            .rows(statement, &[&batch_id, &ids, &attempts, &fences, &self.worker.worker_id])
-            .await
-        {
+        let params: [&(dyn tokio_postgres::types::ToSql + Sync); 5] =
+            [&batch_id, &ids, &attempts, &fences, &self.worker.worker_id];
+        if let Err(error) = fenced_rows(&self.worker.pool, statement, &params).await {
             tracing::debug!(error = %error, "batch membership was not recorded");
         }
     }
