@@ -3064,8 +3064,8 @@ worker claims through `claim_many_v1` until the next probe. The interval is
 current tier.
 
 A fast-tier completion uses the fused statement. A `batched completion` rejection means the queue
-left the fast tier, so the worker falls back to `complete_v1`. The TypeScript, Python and Go workers
-fuse a completion with a refill claim, for `freeSlots() + 1` tasks under the refill-batch rule, and
+left the fast tier, so the worker falls back to `complete_v1`. Every SDK worker
+fuses a completion with a refill claim, for `freeSlots() + 1` tasks under the refill-batch rule, and
 hand the slot over directly. In Python, `Worker._reserve_completion_claim` reserves those slots and
 `Worker._send_batched_completion` sends one statement per queue and cohort at a time. Completions
 that arrive while it is in flight share the next statement, split into chunks of at most 100 tasks
@@ -3073,7 +3073,7 @@ and 100 claimed slots. `Worker._send_completion_chunk` names each chunk's tasks 
 When PostgreSQL rolls the chunk back with SQLSTATE `40P01`, it sends the chunk again, up to
 `_COMPLETION_DEADLOCK_ATTEMPTS` (3) times in total, because nothing in it committed. The Go worker's
 limit is the free slots plus one, capped by the free slots of the completing task's cohort plus one.
-The Rust worker completes with a zero claim limit and claims separately.
+The Rust worker's limit follows the Go rule.
 
 The TypeScript and Python workers split their slots into cohorts so that fused completions do not
 run in lockstep ([ADR 0076](decisions/0076-keep-overlapping-batched-claims-in-flight-to-fill-worker-slots.md#cohorts-for-batched-completions)).
