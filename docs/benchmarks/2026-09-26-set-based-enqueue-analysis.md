@@ -2,9 +2,10 @@
 
 Writing a batch's rows with one statement per table made a full-tier enqueue about two to five
 times faster. Migration 0027 moved the inserts out of the request loop. Before it, a batch of 1,000 tasks
-took a median of 222 ms. After it, the same batch took 68 ms. The gain grows with batch size, and it
-is largest for dependents, whose edges the dependency trigger used to validate once per request.
-The current schema, version 31, keeps the whole gain.
+took a median of 222 ms. After it, the same batch took 68 ms. The gain grows with batch size. For
+dependents, the change also removed an unstable cost: before it, the dependency trigger ran once
+per request, and its plan could make one batch of dependents 50 times slower. The current schema,
+version 31, keeps the whole gain.
 
 [SM-911](https://linear.app/stablemates/issue/SM-911) made the change and measured it ad hoc. This
 run repeats that comparison with the arms alternating in one invocation and a control on every
@@ -56,8 +57,8 @@ Median milliseconds per sample, with each arm's median divided by version 26's m
 The control medians stayed close across the arms. For the three plain scenarios they differed by
 at most 0.4 ms, and dividing each sample by its own control moved no ratio by more than 0.06. The
 dependents scenario's control ran slower in the version 26 arm, 1.46 ms against 1.07 to 1.11 ms.
-Its control-normalized ratios are 0.32 for version 27 and 0.27 for version 31, so read that
-scenario as a gain of three to five times. Every control-normalized ratio is in the JSON as
+Its control-normalized ratios are 0.32 for version 27 and 0.27 for version 31. The next section
+explains why that scenario's ratio is unstable anyway. Every control-normalized ratio is in the JSON as
 `relativeToBaseline.controlNormalized`.
 
 The table reports medians because the host stalled several times during the run. The slowest
@@ -65,9 +66,32 @@ sample of a series took up to 11.6 times its median, and a mean follows such a s
 extremes and 95 percent intervals are in the JSON.
 
 Three of the four ratios match SM-911's ad hoc figures of 0.54, 0.37 and 0.34. The dependents
-scenario came out faster here, at 0.21 to 0.32 against SM-911's 0.65. This run gives every sample its own
-prerequisite, so the difference may come from a different scenario shape rather than the change.
-The direction agrees either way.
+ratio does not: SM-911 measured 0.65. Both runs measured version 27 at 39 to 48 ms. They
+disagree on version 26, which took 74 ms in SM-911 and 182 ms here.
+
+## Why the dependents ratio is unstable
+
+`validate_task_dependencies_v1` is a statement trigger on `workhorse.task_dependency`. Each firing
+walks the component around every inserted edge. Version 26 inserts one edge per statement, so 100
+dependents fire the trigger 100 times. Version 27 fires it once per batch. The walk's plan depends
+on the table's size and on its statistics, so version 26 multiplies any change in that plan by the
+number of dependents.
+
+A follow-up probe showed this directly. It enqueued 100 dependents of one prerequisite in batches
+of 25, 15 times per series, on one arm without rebuilding it. It had no control and ran on a loaded
+host, so read its figures as direction only:
+
+| State of the arm                              |    Version 26 |  Version 31 |
+| --------------------------------------------- | ------------: | ----------: |
+| Freshly built                                 | 347 to 806 ms | 34 to 65 ms |
+| Later series, same statistics                 | 145 to 180 ms | 20 to 21 ms |
+| After `ANALYZE`, with 13,700 dependency edges |  8.0 to 8.6 s | 50 to 58 ms |
+
+Version 26's time for the same scenario spanned a factor of 60. Spreading the dependents over one
+prerequisite per batch did not reduce the spread. So a single ratio against version 26 describes the
+state of the arm, not the change. The durable result is that version 27 and later stay within tens
+of milliseconds in every state measured. [SM-952](https://linear.app/stablemates/issue/SM-952) tracks whether that holds for much larger
+dependency tables.
 
 ## What this does not measure
 
