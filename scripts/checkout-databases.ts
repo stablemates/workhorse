@@ -9,6 +9,7 @@ import {
   localDatabaseUrl,
   type LocalDatabasePurpose,
 } from "../typescript/core/src/local-database.js";
+import { dropLocalDatabase } from "../typescript/core/src/drop-local-database.js";
 import { installSchema } from "../typescript/core/src/schema.js";
 import { isMissing, parseEnvironment, updateEnvironment } from "./environment-file.js";
 
@@ -116,7 +117,7 @@ export async function provisionCheckoutDatabases(
         results.push({ purpose, database: name, action: "unchanged" });
         continue;
       }
-      if (exists) await admin.query(`DROP DATABASE ${identifier(name)} WITH (FORCE)`);
+      if (exists) await dropLocalDatabase(admin, name);
       await admin.query(`CREATE DATABASE ${identifier(name)}`);
     } finally {
       await admin.end();

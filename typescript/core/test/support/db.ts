@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { setTimeout as sleep } from "node:timers/promises";
 import { Pool } from "pg";
-import { databaseErrorCode, installSchema } from "../../src/index.js";
+import { dropLocalDatabase } from "../../src/drop-local-database.js";
+import { installSchema } from "../../src/index.js";
 import {
   assertLocalDatabasePurpose,
   databaseName,
@@ -11,9 +11,6 @@ import {
 } from "../../src/local-database.js";
 import { schemaTemplateName } from "./schema-template.js";
 
-const databaseDropAttempts = 40;
-const databaseDropRetryMs = 25;
-const databaseObjectInUseCode = "55006";
 const schemaUrl = new URL("../../../../sql/schema/current.sql", import.meta.url);
 
 /**
@@ -215,27 +212,7 @@ async function dropDatabase(databaseUrl: string, name: string): Promise<void> {
 }
 
 async function dropDatabaseWithAdmin(admin: Pool, name: string): Promise<void> {
-  // FORCE signals every connected role, which the local test role cannot do. Terminate only
-  // harness-owned sessions, then let short-lived foreign sessions finish before retrying.
-  for (let attempt = 1; attempt <= databaseDropAttempts; attempt++) {
-    try {
-      await admin.query(`DROP DATABASE IF EXISTS ${identifier(name)}`);
-      return;
-    } catch (error) {
-      if (databaseErrorCode(error) !== databaseObjectInUseCode || attempt === databaseDropAttempts)
-        throw error;
-    }
-
-    await admin.query(
-      `SELECT pg_terminate_backend(pid)
-         FROM pg_stat_activity
-        WHERE datname = $1
-          AND usename = current_user
-          AND pid <> pg_backend_pid()`,
-      [name],
-    );
-    await sleep(databaseDropRetryMs);
-  }
+  await dropLocalDatabase(admin, name, { attempts: 40, retryMs: 25 });
 }
 
 function adminPool(databaseUrl: string): Pool {
