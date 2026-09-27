@@ -11147,6 +11147,16 @@ BEGIN
         v_edge.child_task_id, 'parent_linked',
         jsonb_build_object('parent_task_id', p_parent_task_id, 'name', p_child_name)
       );
+    -- A child whose deadline had already passed reached its outcome inside the enqueue, before
+    -- its edge existed, so that outcome resolved nothing. Resolve the edge now that the parent
+    -- is blocked, or the parent waits for an outcome that will never fire again.
+    SELECT * INTO v_outcome FROM workhorse.task_outcome outcome
+     WHERE outcome.task_id = v_edge.child_task_id;
+    IF FOUND THEN
+      PERFORM workhorse.resolve_dependents_many_v1(
+        ARRAY[v_outcome.task_id], ARRAY[v_outcome.state]
+      );
+    END IF;
     RETURN QUERY VALUES (
       'created'::text, v_edge.child_task_id, p_request->>'type', v_edge.created_at,
       NULL::timestamptz, NULL::jsonb
@@ -11491,6 +11501,17 @@ BEGIN
           'fence_token', p_fence_token::text
         )
       );
+    -- A child whose deadline had already passed reached its outcome inside the enqueue, before
+    -- its edge existed. Resolve those edges together now that the parent is blocked.
+    PERFORM workhorse.resolve_dependents_many_v1(terminal.task_ids, terminal.states)
+       FROM (
+         SELECT array_agg(outcome.task_id ORDER BY outcome.task_id) AS task_ids,
+                array_agg(outcome.state ORDER BY outcome.task_id) AS states
+           FROM workhorse.task_child edge
+           JOIN workhorse.task_outcome outcome ON outcome.task_id = edge.child_task_id
+          WHERE edge.parent_task_id = p_parent_task_id
+       ) terminal
+      WHERE terminal.task_ids IS NOT NULL;
     RETURN QUERY VALUES (
       'created'::text, v_children, NULL::jsonb, NULL::integer, v_result_limit
     );
@@ -18256,10 +18277,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (28, 'release dependents per statement'),
   (29, 'claim policy limited tasks as a set'),
   (30, 'release dependents through a pending-prerequisite counter'),
-  (31, 'lock a worker''s fast-tier rows in task ID order')
+  (31, 'lock a worker''s fast-tier rows in task ID order'),
+  (32, 'a child terminal at creation settles its parent')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (31) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (32) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

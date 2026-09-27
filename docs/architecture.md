@@ -1531,6 +1531,9 @@ the exact active, unexpired parent generation. It calls `enqueue_many_v1`, inser
 adds a `task_dependency` edge from parent to child with success `release`, failure `fail`, and
 cancellation `cancel`. It then moves the parent from active to blocked, sets its
 `pending_prerequisites` to its pending edges, and clears ownership in the same transaction. A rollback removes the child, lineage, dependency, events, and suspension.
+A child whose `deadline` has already passed reaches its `task_outcome` inside `enqueue_many_v1`,
+before its edge exists. After the `parent_linked` event, the function therefore passes that outcome
+to `resolve_dependents_many_v1`, which settles the blocked parent in the same transaction.
 Coalescing and additional dependency options are rejected for child requests.
 
 `create_single_child_v1` retains that implementation. The public `create_child_v1` wrapper rejects
@@ -1548,7 +1551,9 @@ the ordinary completion path.
 `create_children_v1(parent_task_id, worker_id, fence_token, children, mode)` accepts zero through
 100 unique named requests and mode `settled` or `all_success`. A non-empty first call creates every
 child and dependency edge before it moves the parent to blocked and sets its
-`pending_prerequisites` to its pending edges. Replay requires the exact names,
+`pending_prerequisites` to its pending edges. After the `children_created` event it passes every
+child that already holds a `task_outcome`, such as one created past its deadline, to
+`resolve_dependents_many_v1` in one call. Replay requires the exact names,
 normalized requests, and mode. It returns only after every child reaches a terminal state. The
 joined object may not exceed the parent task's `result_max_bytes`; an oversized join returns
 `result_too_large` without copying the object to the client. `children_created` and
@@ -1612,7 +1617,9 @@ The flag is true when a resolved edge chose `fail` or `cancel`. Every other stat
 the counter when it blocks a dependent. `create_single_child_v1` and `create_children_v1` set it
 from the parent's pending edges when they block the parent. `resolve_dependents_many_v1` decrements it
 and releases or terminates the row at zero. Schema version 30 added both columns and backfilled
-them for blocked rows from their edges.
+them for blocked rows from their edges. Schema version 32 resolved every unreleased parent-to-child
+edge whose child already held an outcome, which releases or settles parents that an earlier
+version left blocked on a child created past its deadline.
 
 `task_runtime.priority` duplicates the accepted `task.priority` so claim can remain on the ready index.
 Pending debounce replaces both values in one transaction. Retry, recovery, durable waits, and

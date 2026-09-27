@@ -1,4 +1,7 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { context as otelContext, trace } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
@@ -464,6 +467,132 @@ describe("child tasks", () => {
     await expect(
       queue.claim("policy-rate-child-worker", { queue: "policy-rate-children" }),
     ).resolves.toBeNull();
+  });
+
+  it("settles a parent whose single child passed its deadline at creation", async () => {
+    const parentId = await queue.enqueue("expired-child-parent", null, {
+      queue: "expired-child-parents",
+    });
+    const parent = await queue.claim("expired-child-worker", { queue: "expired-child-parents" });
+    expect(parent?.id).toBe(parentId);
+
+    const created = await queue.createChild(
+      parent!,
+      "expired-child-worker",
+      "late",
+      "expired-child",
+      null,
+      { queue: "expired-children", deadline: new Date(Date.now() - 60_000) },
+    );
+
+    expect(created.status).toBe("created");
+    await expect(admin.getTask(created.child.childTaskId)).resolves.toMatchObject({
+      state: "failed",
+    });
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({ state: "failed" });
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+  });
+
+  it("counts a settled child set's expired children as already resolved", async () => {
+    const parentId = await queue.enqueue("expired-set-parent", null, {
+      queue: "expired-set-parents",
+    });
+    const worker = new Worker(queue, {
+      queue: "expired-set-parents",
+      workerId: "expired-set-worker",
+    });
+    const deadline = new Date(Date.now() - 60_000);
+    let joined: unknown = null;
+    worker.handle("expired-set-parent", async (_payload, context) => {
+      joined = await context.runChildren([
+        {
+          name: "late",
+          type: "expired-set-child",
+          payload: null,
+          options: { queue: "expired-set-children", deadline },
+        },
+        {
+          name: "live",
+          type: "expired-set-child",
+          payload: null,
+          options: { queue: "expired-set-children" },
+        },
+      ]);
+      return null;
+    });
+
+    expect(await worker.runOnce()).toBe(true);
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({ state: "blocked" });
+    await expect(
+      pool.query(`SELECT pending_prerequisites FROM workhorse.task_runtime WHERE task_id = $1`, [
+        parentId,
+      ]),
+    ).resolves.toMatchObject({ rows: [{ pending_prerequisites: 1 }] });
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+
+    const live = await queue.claim("expired-set-child-worker", { queue: "expired-set-children" });
+    expect(await queue.complete(live!, "expired-set-child-worker", null)).toBe(true);
+    expect(await worker.runOnce()).toBe(true);
+    expect(joined).toMatchObject({
+      late: { status: "failed" },
+      live: { status: "succeeded", result: null },
+    });
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({ state: "succeeded" });
+  });
+
+  it("releases a parent at once when every child in its set passed its deadline", async () => {
+    const parentId = await queue.enqueue("expired-all-parent", null, {
+      queue: "expired-all-parents",
+    });
+    const parent = await queue.claim("expired-all-worker", { queue: "expired-all-parents" });
+    const deadline = new Date(Date.now() - 60_000);
+
+    const created = await queue.createChildren(parent!, "expired-all-worker", [
+      { name: "first", type: "expired-all-child", payload: null, options: { deadline } },
+      { name: "second", type: "expired-all-child", payload: null, options: { deadline } },
+    ]);
+
+    expect(created.status).toBe("created");
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({ state: "ready" });
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+  });
+
+  it("repairs a parent left blocked on a child that was terminal at creation", async () => {
+    const migrations = fileURLToPath(new URL("../../../sql/migrations/", import.meta.url));
+    const before = await readFile(
+      path.join(migrations, "0030-release-dependents-through-a-pending-prerequisite-counter.sql"),
+      "utf8",
+    );
+    const start = before.indexOf("CREATE OR REPLACE FUNCTION workhorse.create_single_child_v1(");
+    const end = before.indexOf("\n$$;", start) + "\n$$;".length;
+    const repair = await readFile(
+      path.join(migrations, "0032-a-child-terminal-at-creation-settles-its-parent.sql"),
+      "utf8",
+    );
+
+    const parentId = await queue.enqueue("stuck-child-parent", null, {
+      queue: "stuck-child-parents",
+    });
+    const parent = await queue.claim("stuck-child-worker", { queue: "stuck-child-parents" });
+    // Reinstate the version-31 child path, which strands the parent this way.
+    await pool.query(before.slice(start, end));
+    try {
+      await queue.createChild(parent!, "stuck-child-worker", "late", "stuck-child", null, {
+        queue: "stuck-children",
+        deadline: new Date(Date.now() - 60_000),
+      });
+      await expect(admin.getTask(parentId)).resolves.toMatchObject({ state: "blocked" });
+      await expect(
+        pool.query(`SELECT pending_prerequisites FROM workhorse.task_runtime WHERE task_id = $1`, [
+          parentId,
+        ]),
+      ).resolves.toMatchObject({ rows: [{ pending_prerequisites: 1 }] });
+    } finally {
+      await pool.query(repair);
+    }
+
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({ state: "failed" });
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
   });
 
   it("creates one linked child and suspends its active parent atomically", async () => {
