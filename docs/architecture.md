@@ -2912,6 +2912,17 @@ timeout restarts on every claim, because the tier keeps no execution budget.
 `fast_claim_v1` picks one of two statements, so a queue that does not record claims pays for no
 `task_event` write.
 
+A delayed row stays in `fast_task_runtime_ready_idx`, and `run_at <= now` is an index condition, not
+a bound on the scan. The claim therefore reads past every delayed row whose priority is above the
+highest due row, and past the whole queue's backlog when nothing is due. On PostgreSQL 18 a btree
+skip scan makes one index descent per such priority, so the read is bounded by the 101 priorities.
+PostgreSQL 15 through 17 have no skip scan and read every such entry. `pnpm
+benchmark:fast-claim-backlog` measured a million delayed rows above the due work: 0.07 ms added on
+PostgreSQL 18, and a claim of 30 ms on 17 and 43 ms on 15 against about 0.4 ms for its control
+([analysis](benchmarks/2026-09-27-fast-claim-backlog-analysis.md)). [ADR
+0080](decisions/0080-keep-delayed-fast-tier-tasks-in-the-ready-index.md) keeps delayed rows in the
+ready index.
+
 ### Completion and fused completion
 
 `complete_v1` branches to `fast_complete_v1`, which calls `fast_complete_many_v1(p_worker_id,
