@@ -457,7 +457,10 @@ async fn worker_metrics_reach_the_global_meter_provider() {
 }
 
 /// The pid of a backend other than `observer`'s whose last statement was a heartbeat round.
-async fn heartbeat_backend(observer: &Client, except: Option<i32>) -> i32 {
+///
+/// With `idle`, the backend must also have finished that statement, which is how a connection the
+/// worker holds between tasks looks.
+async fn heartbeat_backend(observer: &Client, except: Option<i32>, idle: bool) -> i32 {
     tokio::time::timeout(WAIT, async {
         loop {
             let row = observer
@@ -465,8 +468,9 @@ async fn heartbeat_backend(observer: &Client, except: Option<i32>) -> i32 {
                     "SELECT pid FROM pg_stat_activity
                       WHERE datname = current_database() AND pid <> pg_backend_pid()
                         AND query LIKE '%heartbeat_many_v1%' AND pid IS DISTINCT FROM $1
+                        AND (NOT $2 OR state = 'idle')
                       LIMIT 1",
-                    &[&except],
+                    &[&except, &idle],
                 )
                 .await
                 .unwrap();
@@ -485,13 +489,17 @@ async fn heartbeat_backend(observer: &Client, except: Option<i32>) -> i32 {
 /// The worker holds that connection between tasks, so it learns of the termination only when the
 /// next task's round fails. The run must survive, the handler must keep running uncancelled, and
 /// heartbeats must resume on a fresh backend.
+///
+/// SM-951: a round that outlives the heartbeat interval discards the reserved connection, and the
+/// next round reserves another. The interval is long enough that a loaded host does not replace
+/// the connection, and the test names the reserved backend only once the worker is idle.
 #[tokio::test]
 async fn heartbeats_resume_after_postgres_terminates_the_idle_reserved_connection() {
     let Some(harness) = harness("worker_heartbeat_terminated").await else { return };
     let observer = harness.database.connect().await;
     let worker = harness.worker(WorkerOptions {
         lease_duration: Duration::from_secs(10),
-        heartbeat_interval: Some(Duration::from_millis(20)),
+        heartbeat_interval: Some(Duration::from_secs(1)),
         ..options()
     });
     let release = Arc::new(tokio::sync::Semaphore::new(0));
@@ -509,9 +517,11 @@ async fn heartbeats_resume_after_postgres_terminates_the_idle_reserved_connectio
 
     let before = harness.enqueue("rust.held", json!({}), EnqueueOptions::default()).await;
     running_handlers.recv().await.unwrap();
-    let reserved = heartbeat_backend(&observer, None).await;
+    // A round has reached PostgreSQL, so the worker holds a connection that ran one.
+    heartbeat_backend(&observer, None, false).await;
     release.add_permits(1);
     harness.wait_for(before, TaskState::Succeeded).await;
+    let reserved = heartbeat_backend(&observer, None, true).await;
 
     // The worker is idle and still holds the reserved connection when PostgreSQL ends it.
     let terminated: bool =
@@ -521,7 +531,7 @@ async fn heartbeats_resume_after_postgres_terminates_the_idle_reserved_connectio
 
     let after = harness.enqueue("rust.held", json!({}), EnqueueOptions::default()).await;
     running_handlers.recv().await.unwrap();
-    let fresh = heartbeat_backend(&observer, Some(reserved)).await;
+    let fresh = heartbeat_backend(&observer, Some(reserved), false).await;
     assert_ne!(fresh, reserved);
     assert!(!running.is_finished(), "the worker run ended after the termination");
     release.add_permits(1);
