@@ -162,15 +162,19 @@ Supply exactly one of `--payload-json` or `--payload-file`. Repeating the same i
 and payload returns a successful duplicate; a conflicting answer or unavailable wait fails.
 
 Guarded commands — `admin cancel`, `admin redrive`, `admin pause`, `admin resume`, `admin purge`,
-`admin pause-worker`, `admin resume-worker`, `admin redrive-many`, `admin signal`, and
-`admin complete-human` — refuse to run until the target database is named
+`admin set-tier`, `admin set-history`, `admin pause-worker`, `admin resume-worker`,
+`admin redrive-many`, `admin signal`, and `admin complete-human` — refuse to run until the target database is named
 explicitly with `--env`, verified against `current_database()` on the live connection, and the
 operation is confirmed interactively or with `--yes`. Attribution, redrive idempotency, and purge
 idempotency follow the same contracts as the programmatic APIs. `admin purge` deletes one queue's
 waiting tasks, leaves running ones alone, and reports the deleted count as `deletedCount` under
 `--json`. `admin pause-worker` and `admin resume-worker` write the durable `worker_registry` pause
 through `Admin.setWorkerPaused`, take a worker id from `admin workers`, and emit the stored row
-under `--json`.
+under `--json`. `admin queues` shows each queue's tier and recorded history, which is `none` for a fast-tier queue
+with every history switch off. `admin set-tier --tier`
+and `admin set-history --record-attempts/--record-claims` wrap `Admin.setQueueTier` and
+`Admin.setQueueHistory`, with the same refusals. `admin set-history` takes no reason, because
+Workhorse records no audit for it.
 
 To continue `admin tasks`, `admin timeline`, or `admin failures`, pass the returned `nextCursor`
 object through `--cursor` with the same filters. Tasks accept `--created-after` and `--created-before`;

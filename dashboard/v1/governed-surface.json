@@ -1371,6 +1371,12 @@
         "queues[].ready": {
           "type": "number"
         },
+        "queues[].recordAttempts": {
+          "type": "boolean"
+        },
+        "queues[].recordClaims": {
+          "type": "boolean"
+        },
         "queues[].scheduled": {
           "type": "number"
         },
@@ -1379,6 +1385,13 @@
         },
         "queues[].terminalCountsApproximate": {
           "type": "boolean"
+        },
+        "queues[].tier": {
+          "type": "enum",
+          "enum": [
+            "fast",
+            "full"
+          ]
         },
         "rateLimitPoliciesCapped": {
           "type": "boolean"

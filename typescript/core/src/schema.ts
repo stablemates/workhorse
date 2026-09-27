@@ -258,6 +258,14 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "plan dependency release once per session",
     kind: "additive",
   },
+  {
+    // The file number was reserved for this change; the version still steps by one.
+    fromVersion: 36,
+    toVersion: 37,
+    file: "0038-report-queue-tier-and-history-in-the-dashboard.sql",
+    description: "report queue tier and history in the dashboard",
+    kind: "additive",
+  },
 ];
 
 /**

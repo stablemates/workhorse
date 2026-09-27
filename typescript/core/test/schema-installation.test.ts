@@ -507,6 +507,7 @@ describe("schema installation", () => {
         description: "serialize the concurrency capacity notification with claims",
       },
       { version: 36, description: "plan dependency release once per session" },
+      { version: 37, description: "report queue tier and history in the dashboard" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
