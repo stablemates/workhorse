@@ -137,12 +137,12 @@ def _batch_member_order(member: _PendingBatchMember) -> tuple[int, int]:
 @dataclass(eq=False, slots=True)
 class _HeartbeatMember:
     task: ClaimedTask
-    deliver_status: Callable[[object], bool]
+    # Settles an expiration the round reported, then delivers the outcome to the attempt.
+    settle_status: Callable[[object], None]
     # Moves the attempt's lease watchdog to the moment the accepting round's request was sent.
     renew: Callable[[float], None]
     cancellation: CancellationToken
     errors: list[BaseException]
-    parent_context: object
 
 
 # What this client library is, reported to the registry on every registration refresh. An operator
@@ -1111,13 +1111,12 @@ class Worker:
     def _register_heartbeat(
         self,
         task: ClaimedTask,
-        deliver_status: Callable[[object], bool],
+        settle_status: Callable[[object], None],
         renew: Callable[[float], None],
         cancellation: CancellationToken,
         errors: list[BaseException],
-        parent_context: object,
     ) -> Callable[[], None]:
-        member = _HeartbeatMember(task, deliver_status, renew, cancellation, errors, parent_context)
+        member = _HeartbeatMember(task, settle_status, renew, cancellation, errors)
         with self._heartbeat_lock:
             self._heartbeat_members[task.id] = member
             if self._heartbeat_thread is None or not self._heartbeat_thread.is_alive():
@@ -1193,11 +1192,7 @@ class Worker:
                                 "workhorse.worker.id": self.worker_id,
                             },
                         )
-                    if status in {"deadline_exceeded", "timeout_exceeded"}:
-                        status = self._expire_owned_task(task, member.parent_context)
-                        if status == "not_due":
-                            continue
-                    member.deliver_status(status)
+                    member.settle_status(status)
             except BaseException as error:
                 for member in members:
                     task = member.task
@@ -2618,6 +2613,25 @@ class Worker:
             with renewal_lock:
                 return renewed_at + self.lease_ms / 1000
 
+        # The heartbeat thread and the expiration thread can both ask PostgreSQL to settle this
+        # attempt. Whichever asks second finds no active row and reads stale, and so does any round
+        # that lands after the settlement. They take turns, so a stale answer caused by this
+        # attempt's own settlement arrives after its outcome and cannot replace it.
+        settlement_lock = Lock()
+
+        def settle_expiration() -> object:
+            status = self._expire_owned_task(task, handler_parent_context)
+            if status != "not_due":
+                deliver_status(status)
+            return status
+
+        def settle_heartbeat_status(status: object) -> None:
+            with settlement_lock:
+                if status in {"deadline_exceeded", "timeout_exceeded"}:
+                    settle_expiration()
+                    return
+                deliver_status(status)
+
         def expire_lease_locally() -> None:
             arbiter.submit("lease_expired")
             unregister_heartbeat()
@@ -2641,11 +2655,11 @@ class Worker:
                 if heartbeat_stop.wait(wait_seconds):
                     return
                 try:
-                    status = self._expire_owned_task(task, handler_parent_context)
+                    with settlement_lock:
+                        status = settle_expiration()
                     if status == "not_due":
                         expiration_retry_at = monotonic() + 0.005
                         continue
-                    deliver_status(status)
                     return
                 except BaseException as error:
                     heartbeat_error.append(error)
@@ -2653,7 +2667,7 @@ class Worker:
                     return
 
         unregister_heartbeat = self._register_heartbeat(
-            task, deliver_status, renew_lease, cancellation, heartbeat_error, handler_parent_context
+            task, settle_heartbeat_status, renew_lease, cancellation, heartbeat_error
         )
         expiration_thread = Thread(target=watch_expiration, name=f"workhorse-expiration-{task.id}")
         expiration_thread.start()
