@@ -24,6 +24,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Client } from "pg";
+import { verifyRelease } from "./verify-release.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const consumerSource = path.join(root, "rust", "release-consumer", "main.rs");
@@ -302,6 +303,10 @@ async function checkRustRelease(argv: readonly string[]): Promise<void> {
 
     if (url) await runTaskThroughConsumer(binary, url);
     else console.log("SKIPPED the consumer task: DATABASE_URL_TEST is unset");
+
+    // The post-publish check, run now against the archive crates.io will receive. A check the
+    // crate cannot satisfy fails the rehearsal instead of halting the train after the tag.
+    await verifyRelease("crate", crate.version, { crate: unpacked });
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }
