@@ -213,8 +213,9 @@ func (handler *HandlerContext) createChild(name string, request []byte) (any, er
 	if err := context.Cause(handler.context); err != nil {
 		return nil, err
 	}
-	rows, err := handler.executor.Query(
+	rows, err := queryFencedWrite(
 		handler.context,
+		handler.executor,
 		protocolStatementRegistry[createChildStatementName],
 		handler.Task.ID,
 		handler.workerID,
@@ -321,8 +322,9 @@ func (handler *HandlerContext) createChildren(requests []byte, mode childJoinMod
 	if err := context.Cause(handler.context); err != nil {
 		return nil, err
 	}
-	rows, err := handler.executor.Query(
+	rows, err := queryFencedWrite(
 		handler.context,
+		handler.executor,
 		protocolStatementRegistry[createChildrenStatementName],
 		handler.Task.ID,
 		handler.workerID,

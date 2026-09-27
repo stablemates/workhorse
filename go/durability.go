@@ -192,8 +192,9 @@ func (handler *HandlerContext) SetProgress(value any) (*TaskProgress, error) {
 	if err := context.Cause(handler.context); err != nil {
 		return nil, err
 	}
-	rows, err := handler.executor.Query(
+	rows, err := queryFencedWrite(
 		handler.context,
+		handler.executor,
 		protocolStatementRegistry[updateProgressStatementName],
 		handler.Task.ID,
 		handler.workerID,
@@ -325,8 +326,9 @@ func (handler *HandlerContext) runCheckpoint(
 	if err != nil {
 		return nil, err
 	}
-	rows, err = handler.executor.Query(
+	rows, err = queryFencedWrite(
 		handler.context,
+		handler.executor,
 		protocolStatementRegistry[saveCheckpointStatementName],
 		handler.Task.ID,
 		handler.workerID,
@@ -412,8 +414,9 @@ func (handler *HandlerContext) runWait(name string, request waitRequest) error {
 	if request.wakeAt != nil {
 		wakeAt = *request.wakeAt
 	}
-	rows, err := handler.executor.Query(
+	rows, err := queryFencedWrite(
 		handler.context,
+		handler.executor,
 		protocolStatementRegistry[scheduleWaitStatementName],
 		handler.Task.ID,
 		handler.workerID,

@@ -209,8 +209,9 @@ func (handler *HandlerContext) runSignalWait(name string, timeoutMS *int64) (any
 	if timeoutMS != nil {
 		timeoutArgument = *timeoutMS
 	}
-	rows, err := handler.executor.Query(
+	rows, err := queryFencedWrite(
 		handler.context,
+		handler.executor,
 		protocolStatementRegistry[waitForSignalStatementName],
 		handler.Task.ID,
 		handler.workerID,
@@ -296,8 +297,9 @@ func (handler *HandlerContext) runHumanWait(name string, waitContext []byte, tim
 	if timeoutMS != nil {
 		timeoutArgument = *timeoutMS
 	}
-	rows, err := handler.executor.Query(
+	rows, err := queryFencedWrite(
 		handler.context,
+		handler.executor,
 		protocolStatementRegistry[waitForHumanStatementName],
 		handler.Task.ID,
 		handler.workerID,

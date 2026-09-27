@@ -574,10 +574,10 @@ func completionChunk(executor Executor, ids ...string) []*completionEntry {
 // order, and sends the chunk again when PostgreSQL rolled it back to break a deadlock.
 func TestBatchedCompletionNamesTasksInIDOrderAndRetriesADeadlock(t *testing.T) {
 	worker := newDefaultWorker(t, WorkerOptions{})
-	executor := &deadlockingExecutor{deadlocks: completionDeadlockAttempts - 1}
+	executor := &deadlockingExecutor{deadlocks: fencedWriteDeadlockAttempts - 1}
 	chunk := completionChunk(executor, "c", "a", "b")
 	worker.completeChunk("defaults", chunk)
-	if len(executor.sent) != completionDeadlockAttempts {
+	if len(executor.sent) != fencedWriteDeadlockAttempts {
 		t.Fatalf("sent the chunk %d times", len(executor.sent))
 	}
 	if fmt.Sprint(executor.sent[0]) != "[a b c]" {
@@ -589,13 +589,13 @@ func TestBatchedCompletionNamesTasksInIDOrderAndRetriesADeadlock(t *testing.T) {
 		}
 	}
 
-	executor = &deadlockingExecutor{deadlocks: completionDeadlockAttempts}
+	executor = &deadlockingExecutor{deadlocks: fencedWriteDeadlockAttempts}
 	chunk = completionChunk(executor, "a")
 	worker.completeChunk("defaults", chunk)
 	if answer := <-chunk[0].answer; !hasSQLState(answer.err, deadlockDetectedSQLState) {
 		t.Fatalf("a chunk that kept deadlocking answered %#v", answer)
 	}
-	if len(executor.sent) != completionDeadlockAttempts {
+	if len(executor.sent) != fencedWriteDeadlockAttempts {
 		t.Fatalf("sent the chunk %d times", len(executor.sent))
 	}
 }

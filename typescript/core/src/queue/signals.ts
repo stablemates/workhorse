@@ -1,4 +1,5 @@
 import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
+import { queryFencedWrite } from "./fenced-write.js";
 import { expectOneRow, WorkhorseError } from "../errors.js";
 import { logInfo } from "../telemetry.js";
 import { MAX_EXTERNAL_WAITS_PER_TASK, type ClaimedTask, type Json } from "../types.js";
@@ -137,7 +138,8 @@ export class SignalsModule extends QueueModule {
     if (typeof workerId !== "string" || workerId.length === 0) {
       throw new TypeError("Worker ID must be a non-empty string");
     }
-    const result = await this.context.database.query<WaitForSignalRow>(
+    const result = await queryFencedWrite<WaitForSignalRow>(
+      this.context.database,
       SQL_STATEMENTS["wait_for_signal_v1"],
       [task.id, workerId, task.fenceToken.toString(), name, validateExternalWaitOptions(options)],
     );

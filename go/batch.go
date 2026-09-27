@@ -306,8 +306,9 @@ func (coordinator *batchCoordinator) record(
 		task := member.item.Context.Task
 		taskIDs[index], attempts[index], fences[index] = task.ID, task.Attempt, task.FenceToken
 	}
-	rows, err := NewPGXExecutor(coordinator.worker.pool).Query(
+	rows, err := queryFencedWrite(
 		ctx,
+		NewPGXExecutor(coordinator.worker.pool),
 		protocolStatementRegistry[statement],
 		batchID,
 		taskIDs,

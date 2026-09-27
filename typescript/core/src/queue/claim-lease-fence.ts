@@ -1,10 +1,6 @@
 import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
-import {
-  databaseErrorCode,
-  expectOneRow,
-  FastTierUnsupportedError,
-  fastTierRejection,
-} from "../errors.js";
+import { queryFencedWrite } from "./fenced-write.js";
+import { expectOneRow, FastTierUnsupportedError, fastTierRejection } from "../errors.js";
 import {
   taskMetricAttributes,
   taskSpanAttributes,
@@ -77,12 +73,6 @@ interface PendingCompletionBatch {
 
 /** complete_many_and_claim_v1 takes at most this many completions and claims per call. */
 const COMPLETION_BATCH_LIMIT = 100;
-
-/**
- * complete_many_and_claim_v1 is sent at most this many times when PostgreSQL chooses it as a
- * deadlock victim.
- */
-const COMPLETION_DEADLOCK_ATTEMPTS = 3;
 
 type CancelRow = {
   status: CancelResult["status"];
@@ -319,7 +309,8 @@ export class ClaimLeaseFenceModule extends QueueModule {
   }
 
   async recordBatchDispatch(batch: BatchExecutionRecord): Promise<void> {
-    const result = await this.context.database.query<{ recorded: number }>(
+    const result = await queryFencedWrite<{ recorded: number }>(
+      this.context.database,
       SQL_STATEMENTS["record_batch_dispatch_v1"],
       this.batchEventParameters(batch),
     );
@@ -327,7 +318,8 @@ export class ClaimLeaseFenceModule extends QueueModule {
   }
 
   async recordBatchFailure(batch: BatchExecutionRecord): Promise<void> {
-    const result = await this.context.database.query<{ recorded: number }>(
+    const result = await queryFencedWrite<{ recorded: number }>(
+      this.context.database,
       SQL_STATEMENTS["record_batch_failure_v1"],
       this.batchEventParameters(batch),
     );
@@ -347,7 +339,8 @@ export class ClaimLeaseFenceModule extends QueueModule {
       const lease = FencedLease.from(task, workerId);
       // Cancellation and stale ownership both stop compatibility callers, while workers can use the
       // status API to deliver a distinct cooperative cancellation signal.
-      const result = await this.context.database.query<{ status: HeartbeatStatus }>(
+      const result = await queryFencedWrite<{ status: HeartbeatStatus }>(
+        this.context.database,
         SQL_STATEMENTS["heartbeat_v1"],
         [...lease.sqlParameters, leaseMs],
       );
@@ -380,10 +373,13 @@ export class ClaimLeaseFenceModule extends QueueModule {
       fenceToken: task.fenceToken.toString(),
       leaseMs,
     }));
-    const result = await this.context.database.query<{
+    const result = await queryFencedWrite<{
       task_id: string;
       status: HeartbeatStatus;
-    }>(SQL_STATEMENTS["heartbeat_many_v1"], [workerId, JSON.stringify(leases)]);
+    }>(this.context.database, SQL_STATEMENTS["heartbeat_many_v1"], [
+      workerId,
+      JSON.stringify(leases),
+    ]);
     const statuses = new Map(result.rows.map((row) => [row.task_id, row.status]));
     for (const task of tasks) {
       const status = statuses.get(task.id) ?? "stale";
@@ -406,10 +402,10 @@ export class ClaimLeaseFenceModule extends QueueModule {
 
   async expireOwned(task: ClaimedTask, workerId: string): Promise<ExpireOwnedStatus> {
     const lease = FencedLease.from(task, workerId);
-    const result = await this.context.database.query<{
+    const result = await queryFencedWrite<{
       status: ExpireOwnedStatus;
       retry_state: "ready" | "scheduled" | null;
-    }>(SQL_STATEMENTS["expire_owned_telemetry_v1"], lease.sqlParameters);
+    }>(this.context.database, SQL_STATEMENTS["expire_owned_telemetry_v1"], lease.sqlParameters);
     const expiration = expectOneRow(result, "workhorse.expire_owned_telemetry_v1");
     if (expiration.retry_state !== null) {
       await withSpan("workhorse.retry", taskSpanAttributes(task), async (span) => {
@@ -434,7 +430,8 @@ export class ClaimLeaseFenceModule extends QueueModule {
    */
   async releaseOwned(task: ClaimedTask, workerId: string): Promise<ReleaseOwnedStatus> {
     const lease = FencedLease.from(task, workerId);
-    const result = await this.context.database.query<{ status: ReleaseOwnedStatus }>(
+    const result = await queryFencedWrite<{ status: ReleaseOwnedStatus }>(
+      this.context.database,
       SQL_STATEMENTS["release_owned_v1"],
       lease.sqlParameters,
     );
@@ -449,7 +446,8 @@ export class ClaimLeaseFenceModule extends QueueModule {
 
   async acknowledgeCancel(task: ClaimedTask, workerId: string): Promise<boolean> {
     const lease = FencedLease.from(task, workerId);
-    const result = await this.context.database.query<{ accepted: boolean }>(
+    const result = await queryFencedWrite<{ accepted: boolean }>(
+      this.context.database,
       SQL_STATEMENTS["acknowledge_cancel_v1"],
       lease.sqlParameters,
     );
@@ -473,7 +471,8 @@ export class ClaimLeaseFenceModule extends QueueModule {
       const lease = FencedLease.from(task, workerId);
       // Completion is conditional on the exact unexpired lease and fence. A stale worker gets false
       // rather than overwriting the result of a recovered attempt.
-      const query = await this.context.database.query<{ accepted: boolean }>(
+      const query = await queryFencedWrite<{ accepted: boolean }>(
+        this.context.database,
         SQL_STATEMENTS["complete_v1"],
         [...lease.sqlParameters, serializedResult],
       );
@@ -631,21 +630,15 @@ export class ClaimLeaseFenceModule extends QueueModule {
       limit,
       leaseMs,
     ];
-    let result: { rows: CompletionClaimRow[] } | undefined;
     // The fused claim can keep a lock on a row that another worker leased first, so PostgreSQL can
     // roll this statement back with 40P01. Nothing in it committed, so it is sent again.
-    for (let attempt = 1; result === undefined; attempt++) {
-      try {
-        result = await this.context.database.query<CompletionClaimRow>(
-          SQL_STATEMENTS["complete_many_and_claim_v1"],
-          parameters,
-        );
-      } catch (error) {
-        if (attempt < COMPLETION_DEADLOCK_ATTEMPTS && databaseErrorCode(error) === "40P01")
-          continue;
-        throw fastTierRejection(error) ?? error;
-      }
-    }
+    const result = await queryFencedWrite<CompletionClaimRow>(
+      this.context.database,
+      SQL_STATEMENTS["complete_many_and_claim_v1"],
+      parameters,
+    ).catch((error: unknown) => {
+      throw fastTierRejection(error) ?? error;
+    });
     const first = expectOneRow(result, "workhorse.complete_many_and_claim_v1");
     const claimed: ClaimedTask[] = [];
     for (const row of result.rows) {
@@ -678,7 +671,8 @@ export class ClaimLeaseFenceModule extends QueueModule {
       // PostgreSQL decides whether retry budget remains and atomically closes the old attempt before
       // creating the next projection. Undefined selects SQL-owned backoff; a number explicitly
       // overrides it, including zero for an immediate retry.
-      const result = await this.context.database.query<{ state: FailureStatus }>(
+      const result = await queryFencedWrite<{ state: FailureStatus }>(
+        this.context.database,
         SQL_STATEMENTS["fail_v1"],
         [
           ...lease.sqlParameters,

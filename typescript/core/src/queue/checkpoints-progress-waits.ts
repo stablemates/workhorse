@@ -1,4 +1,5 @@
 import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
+import { queryFencedWrite } from "./fenced-write.js";
 import { expectOneRow, WorkhorseError } from "../errors.js";
 import { taskSpanAttributes, logDebug, logInfo } from "../telemetry.js";
 import type { ClaimedTask, TaskCheckpoint, TaskProgress, TaskWait, Json } from "../types.js";
@@ -210,7 +211,8 @@ export class CheckpointsProgressWaitsModule extends QueueModule {
     if (encodedValue === undefined) {
       throw new TypeError("Checkpoint value must be JSON serializable");
     }
-    const result = await this.context.database.query<SaveCheckpointRow>(
+    const result = await queryFencedWrite<SaveCheckpointRow>(
+      this.context.database,
       SQL_STATEMENTS["save_checkpoint_v1"],
       [task.id, workerId, task.fenceToken.toString(), name, encodedValue],
     );
@@ -248,7 +250,8 @@ export class CheckpointsProgressWaitsModule extends QueueModule {
     if (encodedValue === undefined) {
       throw new TypeError("Progress value must be JSON serializable");
     }
-    const result = await this.context.database.query<UpdateProgressRow>(
+    const result = await queryFencedWrite<UpdateProgressRow>(
+      this.context.database,
       SQL_STATEMENTS["update_progress_v1"],
       [task.id, workerId, task.fenceToken.toString(), encodedValue],
     );
@@ -325,7 +328,8 @@ export class CheckpointsProgressWaitsModule extends QueueModule {
       wakeAtWire = wakeAt.toISOString();
     }
 
-    const result = await this.context.database.query<ScheduleWaitRow>(
+    const result = await queryFencedWrite<ScheduleWaitRow>(
+      this.context.database,
       SQL_STATEMENTS["schedule_wait_v1"],
       [task.id, workerId, task.fenceToken.toString(), name, durationWire, wakeAtWire],
     );

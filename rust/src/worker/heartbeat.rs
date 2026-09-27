@@ -12,9 +12,10 @@ use tokio::time::{timeout, Instant};
 use uuid::Uuid;
 
 use super::{Inner, OwnershipStatus};
+use crate::fenced_write::fenced_rows;
 use crate::sql_catalogue_generated as sql;
 use crate::telemetry::{Attribute, Counter};
-use crate::{Error, Executor};
+use crate::Error;
 
 /// What one round reports to the supervising execution.
 pub(super) enum Beat {
@@ -120,7 +121,7 @@ impl Inner {
         // bounded by the interval, so a statement stalled on it cannot hold the next round.
         let expired = || Error::invalid("heartbeat round exceeded the heartbeat interval");
         let rows = if self.options.shared_heartbeats {
-            self.pool.rows(sql::HEARTBEAT_MANY_V1, &params).await?
+            fenced_rows(&self.pool, sql::HEARTBEAT_MANY_V1, &params).await?
         } else {
             let mut reserved = self.heartbeats.reserved.lock().await;
             // A replacement is borrowed like any other statement's connection, because opening one
@@ -129,10 +130,13 @@ impl Inner {
                 *reserved = Some(self.pool.get().await?);
             }
             let connection = reserved.as_ref().expect("reserved above");
-            match timeout(self.heartbeat_interval, connection.rows(sql::HEARTBEAT_MANY_V1, &params))
-                .await
-                .map_err(|_| expired())
-                .and_then(|rows| rows)
+            match timeout(
+                self.heartbeat_interval,
+                fenced_rows(connection, sql::HEARTBEAT_MANY_V1, &params),
+            )
+            .await
+            .map_err(|_| expired())
+            .and_then(|rows| rows)
             {
                 Ok(rows) => rows,
                 Err(error) => {
