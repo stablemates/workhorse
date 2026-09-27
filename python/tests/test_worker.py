@@ -1390,6 +1390,85 @@ def test_worker_classifies_an_absolute_deadline(
         assert outcome == ("failed", "DeadlineExceeded")
 
 
+def test_worker_reports_its_own_deadline_settlement_before_a_later_stale_heartbeat(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A heartbeat that finds the attempt already settled by its expiration thread reads stale.
+
+    The expiration thread settles the deadline and then stalls until that heartbeat has answered,
+    which a loaded host can do on its own. The handler must still see the deadline.
+    """
+    observed_reason: list[BaseException] = []
+    expiration_due = Event()
+    heartbeat_answered = Event()
+
+    def release_expiration(_expiration_at: datetime | None, _retry_at: float | None) -> float:
+        assert expiration_due.wait(timeout=5)
+        return 0
+
+    monkeypatch.setattr(worker_module, "_expiration_delay", release_expiration)
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+        psycopg.connect(database_url, autocommit=True) as deadline_connection,
+    ):
+        task_id = Queue(enqueue_connection).enqueue(
+            "deadline.stale-heartbeat",
+            {},
+            EnqueueOptions(deadline=datetime.now(UTC) + timedelta(seconds=30)),
+        )
+        enqueue_connection.commit()
+
+        def wait_for_deadline(_payload: object, context: HandlerContext) -> None:
+            deadline_connection.execute(
+                "UPDATE workhorse.task_runtime "
+                "SET deadline_at = clock_timestamp() - interval '1 millisecond' "
+                "WHERE task_id = %s",
+                (task_id,),
+            )
+            expiration_due.set()
+            assert context.cancellation.wait(timeout=5)
+            observed_reason.append(context.cancellation.reason)
+            context.cancellation.raise_if_cancelled()
+
+        worker = Worker(
+            worker_pool,
+            worker_id="python-stale-heartbeat-worker",
+            lease_ms=5000,
+            heartbeat_ms=200,
+            shared_heartbeats=True,
+        ).handle("deadline.stale-heartbeat", wait_for_deadline)
+        original_heartbeat_rows = worker._heartbeat_rows
+        original_expire = worker._expire_owned_task
+        heartbeat_statuses: list[object] = []
+
+        def observed_heartbeat_rows(parameters: Any) -> Any:
+            rows = original_heartbeat_rows(parameters)
+            heartbeat_statuses.extend(row["status"] for row in rows)
+            heartbeat_answered.set()
+            return rows
+
+        def stalled_expire(task: Any, parent_context: object) -> object:
+            status = original_expire(task, parent_context)
+            if status == "deadline_exceeded":
+                assert heartbeat_answered.wait(timeout=5)
+            return status
+
+        monkeypatch.setattr(worker, "_heartbeat_rows", observed_heartbeat_rows)
+        monkeypatch.setattr(worker, "_expire_owned_task", stalled_expire)
+
+        assert worker.run_once() is True
+        assert heartbeat_statuses[0] == "stale"
+        assert len(observed_reason) == 1
+        assert isinstance(observed_reason[0], DeadlineExceededError)
+        outcome = worker_connection.execute(
+            "SELECT state, error->>'name' FROM workhorse.task_outcome WHERE task_id = %s",
+            (task_id,),
+        ).fetchone()
+        assert outcome == ("failed", "DeadlineExceeded")
+
+
 def test_worker_classifies_an_execution_timeout(database_url: str) -> None:
     observed_reason: list[BaseException] = []
 
