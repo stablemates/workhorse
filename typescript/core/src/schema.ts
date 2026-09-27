@@ -207,6 +207,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "claim policy limited tasks as a set",
     kind: "additive",
   },
+  {
+    fromVersion: 29,
+    toVersion: 30,
+    file: "0030-release-dependents-through-a-pending-prerequisite-counter.sql",
+    description: "release dependents through a pending-prerequisite counter",
+    kind: "additive",
+  },
 ];
 
 /**

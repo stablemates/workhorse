@@ -494,6 +494,7 @@ describe("schema installation", () => {
       { version: 27, description: "write full-tier enqueue rows set-based" },
       { version: 28, description: "release dependents per statement" },
       { version: 29, description: "claim policy limited tasks as a set" },
+      { version: 30, description: "release dependents through a pending-prerequisite counter" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

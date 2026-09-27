@@ -72,8 +72,14 @@ cannot cascade through unlimited work in that transaction.
 ## When the prerequisite succeeds
 
 PostgreSQL records each success and satisfies its edge in the same database transaction. The
-dependent stays blocked while any edge remains unsatisfied. A
-dependent whose requested `runAt` has arrived becomes ready. A future dependent becomes scheduled
+dependent stays blocked while any edge remains unsatisfied.
+
+To decide that without rereading every edge, Workhorse keeps a counter on the blocked dependent.
+The `pending_prerequisites` column counts its unresolved edges. Settling an edge decrements it in
+the same statement that resolves the edge. The dependent leaves `blocked` once no unresolved edge
+remains, so a wide fan-in costs the same per prerequisite as a single edge.
+
+A dependent whose requested `runAt` has arrived becomes ready. A future dependent becomes scheduled
 and follows ordinary promotion later.
 
 The release appends `dependency_released`. Repeated completion cannot append another release or
@@ -87,6 +93,8 @@ accepts the dependent directly into its ordinary ready or scheduled state.
 `onSuccess`, `onFailure`, and `onCancellation` each accept `release`, `cancel`, or `fail`.
 `release` satisfies the edge. After every edge resolves, PostgreSQL applies `fail` before `cancel`
 before `release`, so concurrent outcomes cannot change the result.
+A resolved edge whose policy says `fail` or `cancel` sets the dependent's `dependency_rejected`
+flag. The final verdict then reads that flag instead of scanning the edges for a rejection.
 
 PostgreSQL applies the same policy when a prerequisite is already terminal at enqueue. If several
 terminal outcomes disagree, `fail` wins over `cancel`, which makes the result independent of input

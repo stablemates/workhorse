@@ -1118,6 +1118,9 @@ CREATE TABLE IF NOT EXISTS workhorse.task_runtime (
   budget_name text CONSTRAINT task_runtime_budget_name_check CHECK (
     budget_name IS NULL OR (budget_name <> '' AND octet_length(budget_name) <= 256)
   ),
+  pending_prerequisites integer NOT NULL DEFAULT 0
+    CONSTRAINT task_runtime_pending_prerequisites_check CHECK (pending_prerequisites >= 0),
+  dependency_rejected boolean NOT NULL DEFAULT false,
   CHECK (wait_name IS NULL OR (wait_name <> '' AND char_length(wait_name) <= 200)),
   CHECK (
     (cancel_requested_at IS NULL AND cancel_requested_by IS NULL AND cancel_reason IS NULL)
@@ -1144,6 +1147,9 @@ CREATE TABLE IF NOT EXISTS workhorse.task_runtime (
     (state = 'active' AND ready_at IS NULL AND sequence IS NULL AND worker_id IS NOT NULL
       AND acquired_at IS NOT NULL AND heartbeat_at IS NOT NULL AND expires_at IS NOT NULL
       AND fence_token > 0 AND wait_name IS NULL AND attempt_started_at IS NOT NULL)
+  ),
+  CONSTRAINT task_runtime_dependency_counter_check CHECK (
+    state = 'blocked' OR (pending_prerequisites = 0 AND NOT dependency_rejected)
   )
 ) WITH (fillfactor = 70);
 CREATE INDEX IF NOT EXISTS task_runtime_ready_idx
@@ -5534,10 +5540,10 @@ DECLARE
   v_on_failure text;
   v_on_cancellation text;
   v_pending_prerequisites integer;
+  v_pending_edges integer;
   v_terminal_prerequisite_id uuid;
   v_terminal_prerequisite_state text;
   v_terminal_action text;
-  v_terminal record;
   v_state text;
   v_idempotency jsonb;
   v_key text;
@@ -5853,10 +5859,19 @@ BEGIN
             'feature', 'dependencies', 'taskId', v_fast_task_id, 'ordinal', v_ordinal
           )::text;
       END IF;
-      SELECT count(*)::integer INTO v_pending_prerequisites
+      -- An edge starts pending unless its prerequisite is terminal and its policy releases. The
+      -- dependent's counter starts at that count and falls as the pending edges resolve.
+      SELECT count(*) FILTER (WHERE outcome.task_id IS NULL)::integer,
+             count(*) FILTER (
+               WHERE outcome.task_id IS NULL OR CASE outcome.state
+                 WHEN 'succeeded' THEN v_on_success
+                 WHEN 'failed' THEN v_on_failure
+                 WHEN 'canceled' THEN v_on_cancellation
+               END <> 'release'
+             )::integer
+        INTO v_pending_prerequisites, v_pending_edges
         FROM unnest(v_prerequisite_task_ids) prerequisite_id
-        LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = prerequisite_id
-       WHERE outcome.task_id IS NULL;
+        LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = prerequisite_id;
       SELECT outcome.task_id, outcome.state, action.policy_action
         INTO v_terminal_prerequisite_id, v_terminal_prerequisite_state, v_terminal_action
         FROM workhorse.task_outcome outcome
@@ -5874,6 +5889,7 @@ BEGIN
        LIMIT 1;
     ELSE
       v_pending_prerequisites := 0;
+      v_pending_edges := 0;
       v_terminal_prerequisite_id := NULL;
       v_terminal_prerequisite_state := NULL;
       v_terminal_action := NULL;
@@ -6104,6 +6120,8 @@ BEGIN
         THEN nextval('workhorse.ready_sequence_seq') END;
       v_full_runtime.deadline_at := v_deadline_at;
       v_full_runtime.budget_name := v_budget_name;
+      v_full_runtime.pending_prerequisites := v_pending_edges;
+      v_full_runtime.dependency_rejected := false;
       v_full_runtimes := array_append(v_full_runtimes, v_full_runtime);
 
       FOREACH v_prerequisite_task_id IN ARRAY v_prerequisite_task_ids LOOP
@@ -6168,11 +6186,12 @@ BEGIN
      ORDER BY buffered.ordinality;
     INSERT INTO workhorse.task_runtime(
       task_id, queue_name, concurrency_key, priority, state, current_attempt, run_at, ready_at,
-      sequence, deadline_at, budget_name
+      sequence, deadline_at, budget_name, pending_prerequisites, dependency_rejected
     )
     SELECT buffered.task_id, buffered.queue_name, buffered.concurrency_key, buffered.priority,
            buffered.state, buffered.current_attempt, buffered.run_at, buffered.ready_at,
-           buffered.sequence, buffered.deadline_at, buffered.budget_name
+           buffered.sequence, buffered.deadline_at, buffered.budget_name,
+           buffered.pending_prerequisites, buffered.dependency_rejected
       FROM unnest(v_full_runtimes) WITH ORDINALITY buffered
      ORDER BY buffered.ordinality;
     -- A batch without prerequisites has no edge to write and no dependent to resolve. Running the
@@ -6220,17 +6239,19 @@ BEGIN
         JOIN inserted_edges USING (dependent_task_id, prerequisite_task_id)
         JOIN unnest(v_full_runtimes) runtime ON runtime.task_id = edges.dependent_task_id
        ORDER BY edges.ordinality;
-      -- One resolver call per terminal prerequisite settles every dependent in the batch. A
+      -- One resolver call resolves the pending edges to every terminal prerequisite in the batch. A
       -- dependent's fate depends only on the resolutions of its edges, so it matches the fate that
       -- one call per dependent produced.
-      FOR v_terminal IN
-        SELECT DISTINCT outcome.task_id, outcome.state
-          FROM unnest(v_edges) edge
-          JOIN workhorse.task_outcome outcome ON outcome.task_id = edge.prerequisite_task_id
-         ORDER BY outcome.task_id
-      LOOP
-        PERFORM workhorse.resolve_dependents_v1(v_terminal.task_id, v_terminal.state);
-      END LOOP;
+      PERFORM workhorse.resolve_dependents_many_v1(terminal.task_ids, terminal.states)
+         FROM (
+           SELECT array_agg(outcome.task_id ORDER BY outcome.task_id) AS task_ids,
+                  array_agg(outcome.state ORDER BY outcome.task_id) AS states
+             FROM workhorse.task_outcome outcome
+            WHERE outcome.task_id IN (
+              SELECT edge.prerequisite_task_id FROM unnest(v_edges) edge
+            )
+         ) terminal
+        WHERE terminal.task_ids IS NOT NULL;
     END IF;
     INSERT INTO workhorse.task_event(task_id, event_type, details)
     SELECT buffered.id, 'enqueued', event.details
@@ -11060,7 +11081,12 @@ BEGIN
                0, floor(extract(epoch FROM v_now - runtime.acquired_at) * 1000)::bigint
              )
            ),
-           attempt_timeout_at = NULL, error = NULL, updated_at = v_now
+           attempt_timeout_at = NULL, error = NULL, updated_at = v_now,
+           pending_prerequisites = (
+             SELECT count(*)::integer FROM workhorse.task_dependency dependency
+              WHERE dependency.dependent_task_id = p_parent_task_id
+                AND dependency.released_at IS NULL
+           )
      WHERE runtime.task_id = p_parent_task_id
        AND runtime.state = 'active'
        AND runtime.worker_id = p_worker_id
@@ -11393,7 +11419,12 @@ BEGIN
                0, floor(extract(epoch FROM v_now - runtime.acquired_at) * 1000)::bigint
              )
            ),
-           attempt_timeout_at = NULL, error = NULL, updated_at = v_now
+           attempt_timeout_at = NULL, error = NULL, updated_at = v_now,
+           pending_prerequisites = (
+             SELECT count(*)::integer FROM workhorse.task_dependency dependency
+              WHERE dependency.dependent_task_id = p_parent_task_id
+                AND dependency.released_at IS NULL
+           )
      WHERE runtime.task_id = p_parent_task_id
        AND runtime.state = 'active'
        AND runtime.worker_id = p_worker_id
@@ -11446,6 +11477,13 @@ $$;
 -- not conflict with the key-share lock an enqueue takes on a prerequisite's runtime row. Only the
 -- delete of a dependent that fails or is canceled waits for such an enqueue, and that enqueue
 -- waits for nothing the resolver holds.
+--
+-- Each blocked dependent carries `pending_prerequisites`, the number of its edges still pending,
+-- and `dependency_rejected`, whether a resolved edge chose `fail` or `cancel`. The resolver
+-- subtracts the edges it resolved for a dependent from that counter. A dependent with edges left
+-- costs one runtime update and no edge scan. Only a dependent that settles after a rejection reads
+-- its edges, to name the prerequisite that decides its outcome. A counter that would fall below
+-- zero violates the runtime check instead of releasing a dependent early.
 CREATE OR REPLACE FUNCTION workhorse.resolve_dependents_many_v1(
   p_prerequisite_task_ids uuid[], p_prerequisite_states text[]
 )
@@ -11455,13 +11493,16 @@ AS $$
 DECLARE
   v_now timestamptz := clock_timestamp();
   v_dependents uuid[];
-  v_settled_task_ids uuid[];
-  v_settled_actions text[];
-  v_final_prerequisite_task_ids uuid[];
-  v_final_prerequisite_states text[];
+  v_resolved_task_ids uuid[];
+  v_decrements integer[];
+  v_rejections boolean[];
   v_releasing_prerequisite_task_ids uuid[];
   v_releasing_prerequisite_states text[];
-  v_terminated integer;
+  v_rejected_task_ids uuid[];
+  v_released_task_ids uuid[];
+  v_released_prerequisite_task_ids uuid[];
+  v_released_prerequisite_states text[];
+  v_terminated integer := 0;
   v_released integer;
   v_deadline_task_ids uuid[];
   v_queue_names text[];
@@ -11496,113 +11537,144 @@ BEGIN
     RETURN 0;
   END IF;
 
-  UPDATE workhorse.task_dependency dependency
-     SET released_at = v_now,
-         resolution = CASE prerequisite.state
-           WHEN 'succeeded' THEN dependency.on_success
-           WHEN 'failed' THEN dependency.on_failure
-           ELSE dependency.on_cancellation
-         END
-    FROM unnest(p_prerequisite_task_ids, p_prerequisite_states) prerequisite(task_id, state)
-   WHERE dependency.prerequisite_task_id = prerequisite.task_id
-     AND dependency.dependent_task_id = ANY(v_dependents)
-     AND dependency.released_at IS NULL;
-
-  -- A dependent settles once no edge stays pending. Its fate is the first resolution in the order
-  -- fail, cancel, release, with ties broken by prerequisite identity. A release names the
-  -- smallest prerequisite in this call that resolved one of the dependent's edges.
-  SELECT array_agg(final.dependent_task_id ORDER BY final.dependent_task_id),
-         array_agg(final.resolution ORDER BY final.dependent_task_id),
-         array_agg(final.prerequisite_task_id ORDER BY final.dependent_task_id),
-         array_agg(final.state ORDER BY final.dependent_task_id),
-         array_agg(releasing.task_id ORDER BY final.dependent_task_id),
-         array_agg(releasing.state ORDER BY final.dependent_task_id)
-    INTO v_settled_task_ids, v_settled_actions, v_final_prerequisite_task_ids,
-         v_final_prerequisite_states, v_releasing_prerequisite_task_ids,
+  -- A release names the smallest prerequisite in this call that resolved one of the dependent's
+  -- edges.
+  WITH resolved AS (
+    UPDATE workhorse.task_dependency dependency
+       SET released_at = v_now,
+           resolution = CASE prerequisite.state
+             WHEN 'succeeded' THEN dependency.on_success
+             WHEN 'failed' THEN dependency.on_failure
+             ELSE dependency.on_cancellation
+           END
+      FROM unnest(p_prerequisite_task_ids, p_prerequisite_states) prerequisite(task_id, state)
+     WHERE dependency.prerequisite_task_id = prerequisite.task_id
+       AND dependency.dependent_task_id = ANY(v_dependents)
+       AND dependency.released_at IS NULL
+    RETURNING dependency.dependent_task_id, dependency.prerequisite_task_id,
+              dependency.resolution, prerequisite.state
+  ), counted AS (
+    SELECT resolved.dependent_task_id,
+           count(*)::integer AS decrement,
+           bool_or(resolved.resolution IN ('fail', 'cancel')) AS rejected,
+           (array_agg(resolved.prerequisite_task_id
+              ORDER BY resolved.prerequisite_task_id))[1] AS prerequisite_task_id,
+           (array_agg(resolved.state ORDER BY resolved.prerequisite_task_id))[1] AS state
+      FROM resolved
+     GROUP BY resolved.dependent_task_id
+  )
+  SELECT array_agg(counted.dependent_task_id ORDER BY counted.dependent_task_id),
+         array_agg(counted.decrement ORDER BY counted.dependent_task_id),
+         array_agg(counted.rejected ORDER BY counted.dependent_task_id),
+         array_agg(counted.prerequisite_task_id ORDER BY counted.dependent_task_id),
+         array_agg(counted.state ORDER BY counted.dependent_task_id)
+    INTO v_resolved_task_ids, v_decrements, v_rejections, v_releasing_prerequisite_task_ids,
          v_releasing_prerequisite_states
-    FROM (
-      SELECT DISTINCT ON (dependency.dependent_task_id)
-             dependency.dependent_task_id, dependency.resolution,
-             dependency.prerequisite_task_id, outcome.state
-        FROM workhorse.task_dependency dependency
-        JOIN workhorse.task_outcome outcome ON outcome.task_id = dependency.prerequisite_task_id
-       WHERE dependency.dependent_task_id = ANY(v_dependents)
-         AND NOT EXISTS (
-           SELECT 1 FROM workhorse.task_dependency pending
-            WHERE pending.dependent_task_id = dependency.dependent_task_id
-              AND pending.released_at IS NULL
-         )
-       ORDER BY dependency.dependent_task_id,
-                CASE dependency.resolution WHEN 'fail' THEN 0 WHEN 'cancel' THEN 1 ELSE 2 END,
-                dependency.prerequisite_task_id
-    ) final
-    CROSS JOIN LATERAL (
-      SELECT prerequisite.task_id, prerequisite.state
-        FROM unnest(p_prerequisite_task_ids, p_prerequisite_states) prerequisite(task_id, state)
-        JOIN workhorse.task_dependency resolved
-          ON resolved.dependent_task_id = final.dependent_task_id
-         AND resolved.prerequisite_task_id = prerequisite.task_id
-       ORDER BY prerequisite.task_id
-       LIMIT 1
-    ) releasing;
-  IF v_settled_task_ids IS NULL THEN
+    FROM counted;
+  IF v_resolved_task_ids IS NULL THEN
     RETURN 0;
   END IF;
 
-  -- The terminal outcomes are this statement's last write, so their trigger resolves the next
-  -- level after this level's evidence exists.
-  WITH settled AS (
-    SELECT settled.task_id,
-           CASE WHEN settled.action = 'fail' THEN 'failed' ELSE 'canceled' END AS state,
-           CASE WHEN settled.action = 'fail'
-             THEN 'dependency_failed' ELSE 'dependency_canceled' END AS event_type,
-           jsonb_build_object(
-             'name', CASE WHEN settled.action = 'fail'
-               THEN 'DependencyFailed' ELSE 'DependencyCanceled' END,
-             'message', CASE WHEN settled.action = 'fail'
-               THEN 'a prerequisite reached a terminal outcome rejected by dependency policy'
-               ELSE 'a prerequisite reached a terminal outcome that canceled its dependent' END,
-             'prerequisite_task_id', settled.prerequisite_task_id,
-             'prerequisite_state', settled.prerequisite_state,
-             'policy_action', settled.action
-           ) AS error
+  -- A dependent settles once its counter reaches zero. Settled dependents keep their counters until
+  -- the statement that terminates or releases them, so each dependent takes one runtime write.
+  WITH counted AS MATERIALIZED (
+    SELECT runtime.task_id,
+           runtime.pending_prerequisites - resolved.decrement AS remaining,
+           runtime.dependency_rejected OR resolved.rejected AS rejected,
+           resolved.prerequisite_task_id, resolved.state
       FROM unnest(
-        v_settled_task_ids, v_settled_actions, v_final_prerequisite_task_ids,
-        v_final_prerequisite_states
-      ) settled(task_id, action, prerequisite_task_id, prerequisite_state)
-     WHERE settled.action IN ('fail', 'cancel')
-  ), removed AS (
-    DELETE FROM workhorse.task_runtime runtime
-     USING settled
-     WHERE runtime.task_id = settled.task_id
-       AND runtime.state = 'blocked'
-    RETURNING runtime.task_id, runtime.current_attempt, runtime.run_at
-  ), events AS (
-    INSERT INTO workhorse.task_event(task_id, event_type, details)
-    SELECT removed.task_id, settled.event_type, settled.error
+        v_resolved_task_ids, v_decrements, v_rejections, v_releasing_prerequisite_task_ids,
+        v_releasing_prerequisite_states
+      ) resolved(task_id, decrement, rejected, prerequisite_task_id, state)
+      JOIN workhorse.task_runtime runtime ON runtime.task_id = resolved.task_id
+  ), decremented AS (
+    UPDATE workhorse.task_runtime runtime
+       SET pending_prerequisites = counted.remaining, dependency_rejected = counted.rejected
+      FROM counted
+     WHERE runtime.task_id = counted.task_id
+       AND counted.remaining <> 0
+  )
+  SELECT array_agg(counted.task_id ORDER BY counted.task_id)
+           FILTER (WHERE counted.remaining = 0 AND counted.rejected),
+         array_agg(counted.task_id ORDER BY counted.task_id)
+           FILTER (WHERE counted.remaining = 0 AND NOT counted.rejected),
+         array_agg(counted.prerequisite_task_id ORDER BY counted.task_id)
+           FILTER (WHERE counted.remaining = 0 AND NOT counted.rejected),
+         array_agg(counted.state ORDER BY counted.task_id)
+           FILTER (WHERE counted.remaining = 0 AND NOT counted.rejected)
+    INTO v_rejected_task_ids, v_released_task_ids, v_released_prerequisite_task_ids,
+         v_released_prerequisite_states
+    FROM counted;
+
+  -- A rejected dependent's fate is the first rejecting resolution in the order fail, cancel, with
+  -- ties broken by prerequisite identity. The terminal outcomes are this statement's last write, so
+  -- their trigger resolves the next level after this level's evidence exists.
+  IF v_rejected_task_ids IS NOT NULL THEN
+    WITH settled AS (
+      SELECT rejected.task_id,
+             CASE WHEN final.resolution = 'fail' THEN 'failed' ELSE 'canceled' END AS state,
+             CASE WHEN final.resolution = 'fail'
+               THEN 'dependency_failed' ELSE 'dependency_canceled' END AS event_type,
+             jsonb_build_object(
+               'name', CASE WHEN final.resolution = 'fail'
+                 THEN 'DependencyFailed' ELSE 'DependencyCanceled' END,
+               'message', CASE WHEN final.resolution = 'fail'
+                 THEN 'a prerequisite reached a terminal outcome rejected by dependency policy'
+                 ELSE 'a prerequisite reached a terminal outcome that canceled its dependent' END,
+               'prerequisite_task_id', final.prerequisite_task_id,
+               'prerequisite_state', final.prerequisite_state,
+               'policy_action', final.resolution
+             ) AS error
+        FROM unnest(v_rejected_task_ids) rejected(task_id)
+        CROSS JOIN LATERAL (
+          SELECT dependency.resolution, dependency.prerequisite_task_id,
+                 outcome.state AS prerequisite_state
+            FROM workhorse.task_dependency dependency
+            JOIN workhorse.task_outcome outcome
+              ON outcome.task_id = dependency.prerequisite_task_id
+           WHERE dependency.dependent_task_id = rejected.task_id
+             AND dependency.resolution IN ('fail', 'cancel')
+           ORDER BY CASE dependency.resolution WHEN 'fail' THEN 0 ELSE 1 END,
+                    dependency.prerequisite_task_id
+           LIMIT 1
+        ) final
+    ), removed AS (
+      DELETE FROM workhorse.task_runtime runtime
+       USING settled
+       WHERE runtime.task_id = settled.task_id
+         AND runtime.state = 'blocked'
+      RETURNING runtime.task_id, runtime.current_attempt, runtime.run_at
+    ), events AS (
+      INSERT INTO workhorse.task_event(task_id, event_type, details)
+      SELECT removed.task_id, settled.event_type, settled.error
+        FROM removed
+        JOIN settled USING (task_id)
+       ORDER BY removed.task_id
+    )
+    INSERT INTO workhorse.task_outcome(
+      task_id, state, current_attempt, fence_token, run_at, error, finished_at, updated_at,
+      history_through_at
+    )
+    SELECT removed.task_id, settled.state, removed.current_attempt, 0, removed.run_at,
+           settled.error, v_now, v_now, v_now
       FROM removed
       JOIN settled USING (task_id)
-     ORDER BY removed.task_id
-  )
-  INSERT INTO workhorse.task_outcome(
-    task_id, state, current_attempt, fence_token, run_at, error, finished_at, updated_at,
-    history_through_at
-  )
-  SELECT removed.task_id, settled.state, removed.current_attempt, 0, removed.run_at,
-         settled.error, v_now, v_now, v_now
-    FROM removed
-    JOIN settled USING (task_id)
-   ORDER BY removed.task_id;
-  GET DIAGNOSTICS v_terminated = ROW_COUNT;
+     ORDER BY removed.task_id;
+    GET DIAGNOSTICS v_terminated = ROW_COUNT;
+    IF v_terminated <> cardinality(v_rejected_task_ids) THEN
+      RAISE EXCEPTION 'a rejected dependent has no rejecting edge';
+    END IF;
+  END IF;
+  IF v_released_task_ids IS NULL THEN
+    RETURN v_terminated;
+  END IF;
 
   -- Ready dependents take FIFO sequence numbers in identity order.
   WITH releasing AS (
     SELECT settled.task_id, settled.prerequisite_task_id, settled.prerequisite_state
       FROM unnest(
-        v_settled_task_ids, v_settled_actions, v_releasing_prerequisite_task_ids,
-        v_releasing_prerequisite_states
-      ) settled(task_id, action, prerequisite_task_id, prerequisite_state)
-     WHERE settled.action = 'release'
+        v_released_task_ids, v_released_prerequisite_task_ids, v_released_prerequisite_states
+      ) settled(task_id, prerequisite_task_id, prerequisite_state)
   ), ready AS (
     SELECT ordered.task_id, nextval('workhorse.ready_sequence_seq') AS sequence
       FROM (
@@ -11618,6 +11690,7 @@ BEGIN
        SET state = CASE WHEN ready.task_id IS NULL THEN 'scheduled' ELSE 'ready' END,
            ready_at = CASE WHEN ready.task_id IS NOT NULL THEN v_now END,
            sequence = ready.sequence,
+           pending_prerequisites = 0,
            updated_at = v_now
       FROM releasing
       LEFT JOIN ready ON ready.task_id = releasing.task_id
@@ -18148,10 +18221,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (26, 'a dependent enqueue holds its prerequisites against completion'),
   (27, 'write full-tier enqueue rows set-based'),
   (28, 'release dependents per statement'),
-  (29, 'claim policy limited tasks as a set')
+  (29, 'claim policy limited tasks as a set'),
+  (30, 'release dependents through a pending-prerequisite counter')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (29) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (30) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

@@ -75,6 +75,11 @@ The dependent remains `blocked` until every edge resolves. If policies disagree 
 `fail` wins over `cancel`, and `cancel` wins over `release`, so concurrent completion order cannot
 change the result.
 
+Workhorse keeps a counter of unresolved edges on each blocked dependent, in the
+`pending_prerequisites` column. Settling an edge decrements it, and a `fail` or `cancel` policy
+sets the `dependency_rejected` flag. The release reads those two columns instead of rescanning
+every edge, so a wide fan-in costs the same per prerequisite as a single edge.
+
 ## Inspect blocked work
 
 `Admin.getTask` and `Admin.listTasks` expose `prerequisiteTaskIds`, `dependencyPolicy`, and
