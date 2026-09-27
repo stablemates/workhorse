@@ -276,6 +276,156 @@ describe("fast task tier", () => {
 
   // Concurrency 4 has one cohort; 16 has two and 64 has eight, so a crash drops every cohort's
   // unwritten outcomes at once.
+  // A worker's batched completion and its heartbeat round name the same rows. Both must lock them
+  // in task ID order, or each can hold a row the other waits for. While another transaction holds
+  // the lowest ID, each call must wait for it before it locks any higher ID.
+  it.each([
+    [
+      "fast_heartbeat_many_v1",
+      "SELECT count(*)::integer AS count FROM workhorse.fast_heartbeat_many_v1($1, $2::uuid[], $3::bigint[], $4::integer[])",
+      60_000,
+    ],
+    [
+      "fast_complete_many_v1",
+      "SELECT cardinality(workhorse.fast_complete_many_v1($1, $2::uuid[], $3::bigint[], $4::jsonb[]))::integer AS count",
+      { ok: true },
+    ],
+  ] as const)("%s locks the worker's rows in task ID order", async (name, statement, value) => {
+    const queueName = `fast-lock-order-${name}`;
+    const workerId = `lock-order-${name}`;
+    await makeFast(queueName);
+    const ids = await queue.enqueueMany(
+      Array.from({ length: 3 }, () => ({
+        type: "held",
+        payload: {},
+        options: { queue: queueName },
+      })),
+    );
+    await pool.query(
+      `UPDATE workhorse.fast_task_runtime
+          SET state = 'active', worker_id = $2, claimed_at = clock_timestamp(),
+              expires_at = clock_timestamp() + interval '1 hour', fence_token = 1
+        WHERE task_id = ANY($1::uuid[])`,
+      [ids, workerId],
+    );
+    const [lowest, ...higher] = ids.toSorted();
+    const blocker = await pool.connect();
+    const caller = await pool.connect();
+    let call: Promise<unknown> | undefined;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT FROM workhorse.fast_task_runtime WHERE task_id = $1 FOR UPDATE", [
+        lowest,
+      ]);
+      const callerPid = (await caller.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
+        .rows[0]!.pid;
+      const descending = ids.toSorted().toReversed();
+      call = caller.query<{ count: number }>(statement, [
+        workerId,
+        descending,
+        descending.map(() => 1),
+        descending.map(() => value),
+      ]);
+      await vi.waitFor(
+        async () => {
+          const waiting = await pool.query<{ blocked: boolean }>(
+            "SELECT cardinality(pg_blocking_pids($1)) > 0 AS blocked",
+            [callerPid],
+          );
+          expect(waiting.rows[0]!.blocked).toBe(true);
+        },
+        { timeout: 10_000, interval: 20 },
+      );
+      const free = await pool.query<{ task_id: string }>(
+        `SELECT task_id::text FROM workhorse.fast_task_runtime
+          WHERE task_id = ANY($1::uuid[]) FOR UPDATE SKIP LOCKED`,
+        [higher],
+      );
+      expect(free.rows.map((row) => row.task_id).toSorted()).toEqual(higher);
+      await blocker.query("ROLLBACK");
+      await expect(call).resolves.toMatchObject({ rows: [{ count: 3 }] });
+    } finally {
+      await blocker.query("ROLLBACK");
+      await call?.catch(() => undefined);
+      blocker.release();
+      caller.release();
+    }
+  });
+
+  // A heartbeat can name a task that the worker's own completion has just removed. That task must
+  // not send the batch one lease at a time in input order, where it could deadlock the completion.
+  it("heartbeat_many_v1 keeps task ID order when a named task has just completed", async () => {
+    const queueName = "fast-lock-order-heartbeat-many";
+    const workerId = "lock-order-heartbeat-many";
+    await makeFast(queueName);
+    const ids = await queue.enqueueMany(
+      Array.from({ length: 4 }, () => ({
+        type: "held",
+        payload: {},
+        options: { queue: queueName },
+      })),
+    );
+    await pool.query(
+      `UPDATE workhorse.fast_task_runtime
+          SET state = 'active', worker_id = $2, claimed_at = clock_timestamp(),
+              expires_at = clock_timestamp() + interval '1 hour', fence_token = 1
+        WHERE task_id = ANY($1::uuid[])`,
+      [ids, workerId],
+    );
+    const [completed, ...held] = ids;
+    await pool.query("DELETE FROM workhorse.fast_task_runtime WHERE task_id = $1", [completed]);
+    const [lowest, ...higher] = held.toSorted();
+    const blocker = await pool.connect();
+    const caller = await pool.connect();
+    let call: Promise<{ rows: { task_id: string; status: string }[] }> | undefined;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT FROM workhorse.fast_task_runtime WHERE task_id = $1 FOR UPDATE", [
+        lowest,
+      ]);
+      const callerPid = (await caller.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
+        .rows[0]!.pid;
+      const leases = [...ids]
+        .toSorted()
+        .toReversed()
+        .map((taskId) => ({ taskId, fenceToken: 1, leaseMs: 60_000 }));
+      call = caller.query<{ task_id: string; status: string }>(
+        `SELECT task_id::text AS task_id, status
+           FROM workhorse.heartbeat_many_v1($1, $2::jsonb) ORDER BY ordinal`,
+        [workerId, JSON.stringify(leases)],
+      );
+      await vi.waitFor(
+        async () => {
+          const waiting = await pool.query<{ blocked: boolean }>(
+            "SELECT cardinality(pg_blocking_pids($1)) > 0 AS blocked",
+            [callerPid],
+          );
+          expect(waiting.rows[0]!.blocked).toBe(true);
+        },
+        { timeout: 10_000, interval: 20 },
+      );
+      const free = await pool.query<{ task_id: string }>(
+        `SELECT task_id::text FROM workhorse.fast_task_runtime
+          WHERE task_id = ANY($1::uuid[]) FOR UPDATE SKIP LOCKED`,
+        [higher],
+      );
+      expect(free.rows.map((row) => row.task_id).toSorted()).toEqual(higher);
+      await blocker.query("ROLLBACK");
+      const { rows } = await call;
+      expect(rows).toEqual(
+        leases.map(({ taskId }) => ({
+          task_id: taskId,
+          status: taskId === completed ? "stale" : "accepted",
+        })),
+      );
+    } finally {
+      await blocker.query("ROLLBACK");
+      await call?.catch(() => undefined);
+      blocker.release();
+      caller.release();
+    }
+  });
+
   it.each([4, 16, 64])(
     "loses no task and records one outcome each after a worker crash at concurrency %i",
     async (concurrency) => {

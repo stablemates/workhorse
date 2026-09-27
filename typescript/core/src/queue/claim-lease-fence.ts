@@ -1,5 +1,10 @@
 import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
-import { expectOneRow, FastTierUnsupportedError, fastTierRejection } from "../errors.js";
+import {
+  databaseErrorCode,
+  expectOneRow,
+  FastTierUnsupportedError,
+  fastTierRejection,
+} from "../errors.js";
 import {
   taskMetricAttributes,
   taskSpanAttributes,
@@ -72,6 +77,12 @@ interface PendingCompletionBatch {
 
 /** complete_many_and_claim_v1 takes at most this many completions and claims per call. */
 const COMPLETION_BATCH_LIMIT = 100;
+
+/**
+ * complete_many_and_claim_v1 is sent at most this many times when PostgreSQL chooses it as a
+ * deadlock victim.
+ */
+const COMPLETION_DEADLOCK_ATTEMPTS = 3;
 
 type CancelRow = {
   status: CancelResult["status"];
@@ -611,22 +622,29 @@ export class ClaimLeaseFenceModule extends QueueModule {
     entries: readonly Pick<PendingCompletion, "task" | "serializedResult">[],
     limit: number,
   ): Promise<{ accepted: ReadonlySet<string>; claimed: ClaimedTask[] }> {
-    let result: { rows: CompletionClaimRow[] };
-    try {
-      result = await this.context.database.query<CompletionClaimRow>(
-        SQL_STATEMENTS["complete_many_and_claim_v1"],
-        [
-          workerId,
-          entries.map((entry) => entry.task.id),
-          entries.map((entry) => entry.task.fenceToken.toString()),
-          entries.map((entry) => entry.serializedResult),
-          queueName,
-          limit,
-          leaseMs,
-        ],
-      );
-    } catch (error) {
-      throw fastTierRejection(error) ?? error;
+    const parameters = [
+      workerId,
+      entries.map((entry) => entry.task.id),
+      entries.map((entry) => entry.task.fenceToken.toString()),
+      entries.map((entry) => entry.serializedResult),
+      queueName,
+      limit,
+      leaseMs,
+    ];
+    let result: { rows: CompletionClaimRow[] } | undefined;
+    // The fused claim can keep a lock on a row that another worker leased first, so PostgreSQL can
+    // roll this statement back with 40P01. Nothing in it committed, so it is sent again.
+    for (let attempt = 1; result === undefined; attempt++) {
+      try {
+        result = await this.context.database.query<CompletionClaimRow>(
+          SQL_STATEMENTS["complete_many_and_claim_v1"],
+          parameters,
+        );
+      } catch (error) {
+        if (attempt < COMPLETION_DEADLOCK_ATTEMPTS && databaseErrorCode(error) === "40P01")
+          continue;
+        throw fastTierRejection(error) ?? error;
+      }
     }
     const first = expectOneRow(result, "workhorse.complete_many_and_claim_v1");
     const claimed: ClaimedTask[] = [];
