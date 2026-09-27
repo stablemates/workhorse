@@ -242,6 +242,14 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "reject an oversized fast-tier result per row",
     kind: "additive",
   },
+  {
+    // The file number was reserved for this change; the version still steps by one.
+    fromVersion: 34,
+    toVersion: 35,
+    file: "0036-serialize-the-capacity-notify-with-claims.sql",
+    description: "serialize the concurrency capacity notification with claims",
+    kind: "additive",
+  },
 ];
 
 /**

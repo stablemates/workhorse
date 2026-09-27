@@ -2594,6 +2594,23 @@ a notification while idle delays its next claim. The count includes the row bein
 that has not committed, so the first release from a full queue always publishes, even when one statement
 releases several rows.
 
+Before it counts, the trigger locks the queue's `concurrency_policy` row `FOR KEY SHARE`. `claim_one_v1` and
+`claim_many_v1` hold that row `FOR UPDATE` until they commit, so a release waits for an open claim and then
+counts its leases. Without the wait, a claim could fill the queue while a release was open. The release would
+count a queue below `max_active` and stay silent, and a claim that found the queue full would sleep until the
+fallback poll. `FOR KEY SHARE` does not conflict with another release, so releases still run in parallel. The
+count includes active rows whose lease has expired, although claim admission excludes them. A lease that expires
+after a claim finds the queue full therefore cannot hide the cap from a later release.
+
+The lock lasts until the releasing transaction commits, not until the trigger returns. A claim on the queue
+therefore waits for the whole release. Workhorse's own releases are single statements that commit at once.
+A TypeScript `Queue` bound to a caller's transaction through `forTransaction` can call `complete`, `fail`,
+`releaseOwned`, `scheduleWait`, or `recoverExpired` there, and claims on that capped queue then wait until the
+caller commits. When `sync_concurrency_policies_v1` prunes a policy, its `DELETE` conflicts with `FOR KEY SHARE`.
+It can therefore deadlock with one transaction that releases tasks from several capped queues, such as the
+tick's `recover_expired_v1`. PostgreSQL aborts one side with `40P01`; both are safe to repeat, because the sync
+writes the complete desired set and the next tick recovers the same leases.
+
 ### Heartbeat
 
 `heartbeat_v1` performs one `UPDATE` against the exact active `task_id`, `worker_id`, and `fence_token`. It takes no advisory or concurrency-policy row lock because renewal does not change admission counts. The function returns `accepted`, `cancel_requested`, `deadline_exceeded`, `timeout_exceeded`, or `stale`, and changes heartbeat, expiry, and `updated_at` only for `accepted`.

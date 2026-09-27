@@ -1193,12 +1193,20 @@ BEGIN
   IF OLD.state <> 'active' OR (TG_OP <> 'DELETE' AND NEW.state = 'active') THEN
     RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
   END IF;
+  -- A claim holds the policy row FOR UPDATE until it commits. Waiting for it here means the count
+  -- below sees every lease a committed or open claim took, so a claim that fills the queue while
+  -- this release is open cannot hide the cap. KEY SHARE does not conflict with another release, and
+  -- the count runs under a snapshot taken after the wait.
   SELECT * INTO v_policy FROM workhorse.concurrency_policy policy
-   WHERE policy.queue_name = OLD.queue_name;
+   WHERE policy.queue_name = OLD.queue_name
+   FOR KEY SHARE;
   -- Only a release from a full queue or key can unblock a waiting claim. Every other release would
   -- wake a worker that no cap held back, and a woken worker delays its claim. This runs before the
   -- row changes, so the first row a statement releases from a full queue still counts itself. A
   -- concurrent release that has not committed still counts as active, so it cannot hide the cap.
+  -- A claim counts only unexpired leases, but this count includes expired ones. It therefore counts
+  -- every lease a claim may have counted when it found the queue full: a lease that expired after
+  -- that claim must not hide the cap from this release.
   IF FOUND AND (
        (SELECT count(*) FROM (
           SELECT 1 FROM workhorse.task_runtime active
@@ -18351,10 +18359,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (31, 'lock a worker''s fast-tier rows in task ID order'),
   (32, 'a child terminal at creation settles its parent'),
   (33, 'lock an enqueue batch''s prerequisites before its first request'),
-  (34, 'reject an oversized fast-tier result per row')
+  (34, 'reject an oversized fast-tier result per row'),
+  (35, 'serialize the concurrency capacity notification with claims')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (34) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (35) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
