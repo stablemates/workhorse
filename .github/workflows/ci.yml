@@ -425,6 +425,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:reset:test
       - run: pnpm rust:gates
+      # The snapshot builds rustdoc JSON on the pinned toolchain, so it runs here, where that
+      # toolchain and the Cargo cache already are, rather than in the static job. See ADR 0079.
+      - run: pnpm rust-api:check
       - run: pnpm rust:integration
       - run: pnpm rust:package-check
 
