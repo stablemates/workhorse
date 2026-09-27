@@ -1,0 +1,753 @@
+{
+  "options": {
+    "versions": [
+      26,
+      27,
+      31
+    ],
+    "rounds": 8,
+    "samples": 10,
+    "warmupSamples": 2
+  },
+  "postgresVersion": "18.6 (Ubuntu 18.6-1.pgdg24.04+2)",
+  "cpuCount": 32,
+  "rounds": [
+    {
+      "round": 1,
+      "order": [
+        26,
+        27,
+        31
+      ],
+      "loadAverageStart": [
+        12.15,
+        11.67,
+        9.48
+      ],
+      "loadAverageEnd": [
+        15.71,
+        12.62,
+        9.87
+      ]
+    },
+    {
+      "round": 2,
+      "order": [
+        31,
+        27,
+        26
+      ],
+      "loadAverageStart": [
+        15.71,
+        12.62,
+        9.87
+      ],
+      "loadAverageEnd": [
+        13.19,
+        12.21,
+        9.78
+      ]
+    },
+    {
+      "round": 3,
+      "order": [
+        26,
+        27,
+        31
+      ],
+      "loadAverageStart": [
+        13.19,
+        12.21,
+        9.78
+      ],
+      "loadAverageEnd": [
+        12.58,
+        12.12,
+        9.79
+      ]
+    },
+    {
+      "round": 4,
+      "order": [
+        31,
+        27,
+        26
+      ],
+      "loadAverageStart": [
+        12.58,
+        12.12,
+        9.79
+      ],
+      "loadAverageEnd": [
+        12.15,
+        12.05,
+        9.8
+      ]
+    },
+    {
+      "round": 5,
+      "order": [
+        26,
+        27,
+        31
+      ],
+      "loadAverageStart": [
+        12.15,
+        12.05,
+        9.8
+      ],
+      "loadAverageEnd": [
+        10.91,
+        11.77,
+        9.76
+      ]
+    },
+    {
+      "round": 6,
+      "order": [
+        31,
+        27,
+        26
+      ],
+      "loadAverageStart": [
+        10.91,
+        11.77,
+        9.76
+      ],
+      "loadAverageEnd": [
+        11.66,
+        11.89,
+        9.83
+      ]
+    },
+    {
+      "round": 7,
+      "order": [
+        26,
+        27,
+        31
+      ],
+      "loadAverageStart": [
+        11.66,
+        11.89,
+        9.83
+      ],
+      "loadAverageEnd": [
+        23.04,
+        14.51,
+        10.73
+      ]
+    },
+    {
+      "round": 8,
+      "order": [
+        31,
+        27,
+        26
+      ],
+      "loadAverageStart": [
+        23.04,
+        14.51,
+        10.73
+      ],
+      "loadAverageEnd": [
+        20.65,
+        14.41,
+        10.75
+      ]
+    }
+  ],
+  "arms": [
+    {
+      "schemaVersion": 26,
+      "scenarios": {
+        "100 tasks in batches of 25": {
+          "enqueueMs": {
+            "count": 80,
+            "min": 23.45047799999884,
+            "max": 201.71655100000498,
+            "mean": 41.05159177499864,
+            "sampleStandardDeviation": 26.31220052496765,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 35.197422808361026,
+              "upper": 46.90576074163626,
+              "marginOfError": 5.854168966637615
+            },
+            "median": 30.718448999999964
+          },
+          "controlMs": {
+            "count": 80,
+            "min": 0.4972039999993285,
+            "max": 57.163692999994964,
+            "mean": 1.7742692000003586,
+            "sampleStandardDeviation": 6.292809125581442,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 0.3741898770643626,
+              "upper": 3.174348522936355,
+              "marginOfError": 1.400079322935996
+            },
+            "median": 0.9565670000010869
+          },
+          "enqueuePerControl": {
+            "count": 80,
+            "min": 1.8475352003590355,
+            "max": 90.70979922717618,
+            "mean": 38.65948130412149,
+            "sampleStandardDeviation": 14.965756923598459,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 35.329768547439016,
+              "upper": 41.98919406080397,
+              "marginOfError": 3.329712756682476
+            },
+            "median": 35.865342799131824
+          },
+          "relativeToBaseline": {
+            "elapsed": 1,
+            "controlNormalized": 1
+          }
+        },
+        "1,000 tasks in batches of 100": {
+          "enqueueMs": {
+            "count": 80,
+            "min": 202.05714000000444,
+            "max": 1648.5764789999994,
+            "mean": 368.0529907375006,
+            "sampleStandardDeviation": 293.1983371619836,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 302.8196551654828,
+              "upper": 433.28632630951836,
+              "marginOfError": 65.23333557201775
+            },
+            "median": 240.33486099999573
+          },
+          "controlMs": {
+            "count": 80,
+            "min": 2.395239000004949,
+            "max": 45.192857999994885,
+            "mean": 4.486625337500539,
+            "sampleStandardDeviation": 5.5678205219423,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 3.247847832729195,
+              "upper": 5.725402842271882,
+              "marginOfError": 1.2387775047713436
+            },
+            "median": 3.119667999999365
+          },
+          "enqueuePerControl": {
+            "count": 80,
+            "min": 9.809643284787644,
+            "max": 398.5445538762763,
+            "mean": 98.17131369540616,
+            "sampleStandardDeviation": 69.66497184004861,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 82.6716402332529,
+              "upper": 113.67098715755941,
+              "marginOfError": 15.499673462153249
+            },
+            "median": 80.82657525150073
+          },
+          "relativeToBaseline": {
+            "elapsed": 1,
+            "controlNormalized": 1
+          }
+        },
+        "1,000 tasks in one batch": {
+          "enqueueMs": {
+            "count": 80,
+            "min": 201.0648569999903,
+            "max": 448.9987650000021,
+            "mean": 243.31939916250062,
+            "sampleStandardDeviation": 58.021455471542005,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 230.41027726301004,
+              "upper": 256.2285210619912,
+              "marginOfError": 12.90912189949058
+            },
+            "median": 222.20386500000313
+          },
+          "controlMs": {
+            "count": 80,
+            "min": 2.7001619999937247,
+            "max": 45.333551000003354,
+            "mean": 6.461445575000289,
+            "sampleStandardDeviation": 8.017162980478554,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 4.677716894601325,
+              "upper": 8.245174255399252,
+              "marginOfError": 1.783728680398964
+            },
+            "median": 3.817190000001574
+          },
+          "enqueuePerControl": {
+            "count": 80,
+            "min": 4.989747108052134,
+            "max": 105.07329057684241,
+            "mean": 57.366511575993435,
+            "sampleStandardDeviation": 19.405766438258425,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 53.04894659130617,
+              "upper": 61.6840765606807,
+              "marginOfError": 4.317564984687267
+            },
+            "median": 61.46772334627536
+          },
+          "relativeToBaseline": {
+            "elapsed": 1,
+            "controlNormalized": 1
+          }
+        },
+        "100 dependents in batches of 25": {
+          "enqueueMs": {
+            "count": 80,
+            "min": 82.65121899999212,
+            "max": 631.323932000003,
+            "mean": 216.46432649999866,
+            "sampleStandardDeviation": 129.71221260755323,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 187.60481667221043,
+              "upper": 245.3238363277869,
+              "marginOfError": 28.859509827788226
+            },
+            "median": 181.96927900000446
+          },
+          "controlMs": {
+            "count": 80,
+            "min": 0.7771299999949406,
+            "max": 34.40327100000286,
+            "mean": 3.5986834750008256,
+            "sampleStandardDeviation": 7.564778734445983,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 1.9156052062467042,
+              "upper": 5.281761743754947,
+              "marginOfError": 1.6830782687541215
+            },
+            "median": 1.4622360000030312
+          },
+          "enqueuePerControl": {
+            "count": 80,
+            "min": 7.666513031672906,
+            "max": 400.46893934959127,
+            "mean": 135.36450621055712,
+            "sampleStandardDeviation": 89.51067782950928,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 115.44938615683995,
+              "upper": 155.2796262642743,
+              "marginOfError": 19.915120053717175
+            },
+            "median": 106.85624157891496
+          },
+          "relativeToBaseline": {
+            "elapsed": 1,
+            "controlNormalized": 1
+          }
+        }
+      }
+    },
+    {
+      "schemaVersion": 27,
+      "scenarios": {
+        "100 tasks in batches of 25": {
+          "enqueueMs": {
+            "count": 80,
+            "min": 10.630427000003692,
+            "max": 197.36675200000172,
+            "mean": 19.853595487499298,
+            "sampleStandardDeviation": 20.64964020983864,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 15.259282565098133,
+              "upper": 24.447908409900464,
+              "marginOfError": 4.594312922401166
+            },
+            "median": 16.95886499999324
+          },
+          "controlMs": {
+            "count": 80,
+            "min": 0.5101179999983287,
+            "max": 4.886098000002676,
+            "mean": 1.0708476375001736,
+            "sampleStandardDeviation": 0.5566690772526325,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 0.9469950226781313,
+              "upper": 1.1947002523222159,
+              "marginOfError": 0.12385261482204231
+            },
+            "median": 0.9624780000012834
+          },
+          "enqueuePerControl": {
+            "count": 80,
+            "min": 4.9949741081685035,
+            "max": 304.7542130840794,
+            "mean": 21.75165873015529,
+            "sampleStandardDeviation": 32.62776637055756,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 14.492347326079736,
+              "upper": 29.010970134230845,
+              "marginOfError": 7.2593114040755555
+            },
+            "median": 17.735322572644858
+          },
+          "relativeToBaseline": {
+            "elapsed": 0.5520742599990403,
+            "controlNormalized": 0.4944975061851122
+          }
+        },
+        "1,000 tasks in batches of 100": {
+          "enqueueMs": {
+            "count": 80,
+            "min": 67.9273600000015,
+            "max": 641.6826099999998,
+            "mean": 126.8103519874996,
+            "sampleStandardDeviation": 119.04685092326973,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 100.32376529591399,
+              "upper": 153.2969386790852,
+              "marginOfError": 26.486586691585615
+            },
+            "median": 87.68529300000228
+          },
+          "controlMs": {
+            "count": 80,
+            "min": 2.4424769999968703,
+            "max": 6.310739000007743,
+            "mean": 3.4418925000005856,
+            "sampleStandardDeviation": 0.8536879940731381,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 3.2519565135614497,
+              "upper": 3.6318284864397214,
+              "marginOfError": 0.18993598643913595
+            },
+            "median": 3.1513399999967078
+          },
+          "enqueuePerControl": {
+            "count": 80,
+            "min": 15.416051253119116,
+            "max": 197.49677586613242,
+            "mean": 37.95646466371975,
+            "sampleStandardDeviation": 37.5692918609127,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 29.59771936220048,
+              "upper": 46.31520996523902,
+              "marginOfError": 8.35874530151927
+            },
+            "median": 27.377934770170143
+          },
+          "relativeToBaseline": {
+            "elapsed": 0.3648463341321251,
+            "controlNormalized": 0.33872441935069875
+          }
+        },
+        "1,000 tasks in one batch": {
+          "enqueueMs": {
+            "count": 80,
+            "min": 59.87986400000227,
+            "max": 155.43034199999238,
+            "mean": 71.96794423750039,
+            "sampleStandardDeviation": 13.961349507577047,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 68.86170084512113,
+              "upper": 75.07418762987965,
+              "marginOfError": 3.1062433923792616
+            },
+            "median": 68.154085999995
+          },
+          "controlMs": {
+            "count": 80,
+            "min": 2.6542459999982384,
+            "max": 8.641482000006363,
+            "mean": 3.835483425000439,
+            "sampleStandardDeviation": 1.1133359257271958,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 3.5877786912344316,
+              "upper": 4.083188158766446,
+              "marginOfError": 0.24770473376600732
+            },
+            "median": 3.4321670000026643
+          },
+          "enqueuePerControl": {
+            "count": 80,
+            "min": 7.793274000911733,
+            "max": 27.01762079379488,
+            "mean": 19.440485713979562,
+            "sampleStandardDeviation": 3.35083490223985,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 18.69496259901224,
+              "upper": 20.186008828946886,
+              "marginOfError": 0.745523114967323
+            },
+            "median": 20.187215439260648
+          },
+          "relativeToBaseline": {
+            "elapsed": 0.3067187242669881,
+            "controlNormalized": 0.3284197679737864
+          }
+        },
+        "100 dependents in batches of 25": {
+          "enqueueMs": {
+            "count": 80,
+            "min": 23.389161999999487,
+            "max": 93.01530499999353,
+            "mean": 42.53168860000037,
+            "sampleStandardDeviation": 14.78365289955647,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 39.242491942502944,
+              "upper": 45.8208852574978,
+              "marginOfError": 3.2891966574974285
+            },
+            "median": 38.67905099999916
+          },
+          "controlMs": {
+            "count": 80,
+            "min": 0.5904089999967255,
+            "max": 3.7559350000083214,
+            "mean": 1.288831900000332,
+            "sampleStandardDeviation": 0.5891270470182544,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 1.1577577516109372,
+              "upper": 1.419906048389727,
+              "marginOfError": 0.13107414838939488
+            },
+            "median": 1.105507000000216
+          },
+          "enqueuePerControl": {
+            "count": 80,
+            "min": 14.583373527506184,
+            "max": 92.22116271262432,
+            "mean": 35.968325070196286,
+            "sampleStandardDeviation": 12.517022727492307,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 33.18342815758532,
+              "upper": 38.753221982807254,
+              "marginOfError": 2.784896912610971
+            },
+            "median": 33.99498165267718
+          },
+          "relativeToBaseline": {
+            "elapsed": 0.21255813735459278,
+            "controlNormalized": 0.3181375383446494
+          }
+        }
+      }
+    },
+    {
+      "schemaVersion": 31,
+      "scenarios": {
+        "100 tasks in batches of 25": {
+          "enqueueMs": {
+            "count": 80,
+            "min": 9.726890000001731,
+            "max": 32.73263200000292,
+            "mean": 17.40115791249991,
+            "sampleStandardDeviation": 4.8580798998669446,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 16.32028972132524,
+              "upper": 18.482026103674585,
+              "marginOfError": 1.080868191174672
+            },
+            "median": 16.154443999999785
+          },
+          "controlMs": {
+            "count": 80,
+            "min": 0.5165500000002794,
+            "max": 2.117605999999796,
+            "mean": 1.0077367125004457,
+            "sampleStandardDeviation": 0.35333752071744945,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 0.9291230843255627,
+              "upper": 1.0863503406753288,
+              "marginOfError": 0.07861362817488299
+            },
+            "median": 0.9496540000109235
+          },
+          "enqueuePerControl": {
+            "count": 80,
+            "min": 8.25412585805074,
+            "max": 37.78660475645954,
+            "mean": 18.52514554081689,
+            "sampleStandardDeviation": 5.993718753373598,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 17.191610465046303,
+              "upper": 19.858680616587478,
+              "marginOfError": 1.3335350757705868
+            },
+            "median": 17.511155283659754
+          },
+          "relativeToBaseline": {
+            "elapsed": 0.525887358440519,
+            "controlNormalized": 0.4882472581325401
+          }
+        },
+        "1,000 tasks in batches of 100": {
+          "enqueueMs": {
+            "count": 80,
+            "min": 74.5048850000021,
+            "max": 560.812082000004,
+            "mean": 102.1110522500006,
+            "sampleStandardDeviation": 80.38230077618557,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 84.22689352202379,
+              "upper": 119.99521097797741,
+              "marginOfError": 17.88415872797681
+            },
+            "median": 83.78085799999826
+          },
+          "controlMs": {
+            "count": 80,
+            "min": 2.3577990000012505,
+            "max": 8.222033000012743,
+            "mean": 3.2101151125002163,
+            "sampleStandardDeviation": 0.7201275216541321,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 3.049894830456951,
+              "upper": 3.3703353945434817,
+              "marginOfError": 0.16022028204326555
+            },
+            "median": 3.0576010000077076
+          },
+          "enqueuePerControl": {
+            "count": 80,
+            "min": 10.402266811610279,
+            "max": 181.2825535463395,
+            "mean": 32.74321507541007,
+            "sampleStandardDeviation": 26.498905280893794,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 26.847506398438107,
+              "upper": 38.638923752382034,
+              "marginOfError": 5.895708676971965
+            },
+            "median": 27.73683515293263
+          },
+          "relativeToBaseline": {
+            "elapsed": 0.34860052200250613,
+            "controlNormalized": 0.3431647953241423
+          }
+        },
+        "1,000 tasks in one batch": {
+          "enqueueMs": {
+            "count": 80,
+            "min": 63.96723099999872,
+            "max": 102.32089400000405,
+            "mean": 69.9367424249997,
+            "sampleStandardDeviation": 5.787454410083058,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 68.64909884797584,
+              "upper": 71.22438600202355,
+              "marginOfError": 1.2876435770238528
+            },
+            "median": 67.8870339999994
+          },
+          "controlMs": {
+            "count": 80,
+            "min": 2.677628999997978,
+            "max": 13.946536000003107,
+            "mean": 3.894715599999972,
+            "sampleStandardDeviation": 1.4768882633528235,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 3.5661245560731336,
+              "upper": 4.2233066439268105,
+              "marginOfError": 0.32859104392683824
+            },
+            "median": 3.564765000002808
+          },
+          "enqueuePerControl": {
+            "count": 80,
+            "min": 5.889795932121007,
+            "max": 25.23520139258747,
+            "mean": 19.087093653458158,
+            "sampleStandardDeviation": 3.656083338855795,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 18.273656191188106,
+              "upper": 19.90053111572821,
+              "marginOfError": 0.8134374622700525
+            },
+            "median": 19.427921286496147
+          },
+          "relativeToBaseline": {
+            "elapsed": 0.3055168909865652,
+            "controlNormalized": 0.3160670385829961
+          }
+        },
+        "100 dependents in batches of 25": {
+          "enqueueMs": {
+            "count": 80,
+            "min": 20.427267000006395,
+            "max": 66.95102600000246,
+            "mean": 33.009564087499214,
+            "sampleStandardDeviation": 6.967049649430738,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 31.459473823934264,
+              "upper": 34.55965435106416,
+              "marginOfError": 1.5500902635649494
+            },
+            "median": 33.50635599999805
+          },
+          "controlMs": {
+            "count": 80,
+            "min": 0.691318000001047,
+            "max": 6.215956000000006,
+            "mean": 1.3540299749994573,
+            "sampleStandardDeviation": 0.8903248516246295,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 1.155942699415594,
+              "upper": 1.5521172505833207,
+              "marginOfError": 0.19808727558386352
+            },
+            "median": 1.0691379999989294
+          },
+          "enqueuePerControl": {
+            "count": 80,
+            "min": 6.350923494310085,
+            "max": 48.331777822545206,
+            "mean": 28.872468444543824,
+            "sampleStandardDeviation": 9.625789865574781,
+            "confidenceInterval95": {
+              "confidenceLevel": 0.95,
+              "lower": 26.73083835712672,
+              "upper": 31.014098531960926,
+              "marginOfError": 2.1416300874171004
+            },
+            "median": 28.66713076985486
+          },
+          "relativeToBaseline": {
+            "elapsed": 0.18413193800694913,
+            "controlNormalized": 0.2682775507192413
+          }
+        }
+      }
+    }
+  ]
+}
