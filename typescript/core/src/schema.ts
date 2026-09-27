@@ -200,6 +200,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "release dependents per statement",
     kind: "additive",
   },
+  {
+    fromVersion: 28,
+    toVersion: 29,
+    file: "0029-claim-policy-limited-tasks-as-a-set.sql",
+    description: "claim policy limited tasks as a set",
+    kind: "additive",
+  },
 ];
 
 /**
