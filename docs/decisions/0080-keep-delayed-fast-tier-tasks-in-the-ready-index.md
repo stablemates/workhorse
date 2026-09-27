@@ -1,6 +1,6 @@
 # ADR 0080: Keep delayed fast-tier tasks in the ready index
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-27
 - **Related:** [ADR 0077](0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md),
   [SM-942](https://linear.app/stablemates/issue/SM-942)
