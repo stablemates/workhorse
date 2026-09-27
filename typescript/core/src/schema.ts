@@ -221,6 +221,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "lock a worker's fast-tier rows in task ID order",
     kind: "additive",
   },
+  {
+    fromVersion: 31,
+    toVersion: 32,
+    file: "0032-a-child-terminal-at-creation-settles-its-parent.sql",
+    description: "a child terminal at creation settles its parent",
+    kind: "additive",
+  },
 ];
 
 /**
