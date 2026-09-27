@@ -20,6 +20,7 @@ import {
   Worker,
   WORKHORSE_SCHEMA_VERSION,
 } from "../src/index.js";
+import { jsonbTextBytes } from "../src/queue/enqueue-contracts.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { pool, queue, safeKeyDigest, safeKeyPreview, admin, adminAudit } =
@@ -337,6 +338,56 @@ describe("enqueue contracts", () => {
         "DELETE FROM workhorse.contract_definition WHERE task_type = 'contract.policy' AND version = 'one'",
       ),
     ).rejects.toThrow(/contract documents are immutable/);
+  });
+
+  // PostgreSQL enforces a size limit on the value's jsonb text, which spaces its separators and
+  // expands exponent notation. The client must measure that text, not the compact JSON it sends.
+  it("measures a value as PostgreSQL's jsonb text", async () => {
+    const values: Json[] = [
+      null,
+      true,
+      false,
+      0,
+      -12.5,
+      1e21,
+      -1.5e-7,
+      1.2345678901234567e300,
+      5e-324,
+      Number.MAX_SAFE_INTEGER,
+      "",
+      'quote " slash \\ tab \t newline \n bell \u0007 delete \u007f',
+      "caf\u00e9 \u{1f40e} \u2028",
+      [],
+      {},
+      [1, [2, [3, []]], {}],
+      { a: 1, b: [true, null, "x"], c: { d: {}, e: [] } },
+      { "k:with,separators": "v, w: x", nested: [{ n: 1e-7 }, { n: 2e22 }] },
+    ];
+    const { rows } = await pool.query<{ bytes: number }>(
+      "SELECT octet_length(value::jsonb::text) AS bytes FROM unnest($1::text[]) WITH ORDINALITY AS input(value, ordinal) ORDER BY ordinal",
+      [values.map((value) => JSON.stringify(value))],
+    );
+    expect(values.map((value) => jsonbTextBytes(value))).toEqual(rows.map((row) => row.bytes));
+  });
+
+  it("rejects a value whose compact JSON fits but whose jsonb text does not", async () => {
+    const contractedQueue = new Queue(pool, "default", {
+      contracts: {
+        "list.sum": {
+          currentVersion: "1",
+          versions: { "1": { maxPayloadBytes: 18 } },
+        },
+      },
+    });
+    // The compact JSON is 17 bytes; PostgreSQL stores {"items": [1, 2, 3]}, which is 20.
+    await expect(contractedQueue.enqueue("list.sum", { items: [1, 2, 3] })).rejects.toMatchObject({
+      name: "TaskValueSizeLimitError",
+      actualBytes: 20,
+      maxBytes: 18,
+    });
+    await expect(contractedQueue.enqueue("list.sum", { items: [1] })).resolves.toEqual(
+      expect.any(String),
+    );
   });
 
   it("fails a handler attempt when its result violates the accepted contract", async () => {

@@ -1436,7 +1436,7 @@ to 0, and higher values dispatch first. Dispatch reads the raw payload only afte
 been claimed. The retry policy is one of fixed `{delayMs}`, exponential
 `{initialDelayMs,multiplier,maxDelayMs}`, or decorrelated jitter `{baseDelayMs,maxDelayMs}`.
 
-`contract_version` is null for an uncontracted task or contains the `TaskTypeContracts.currentVersion` selected at acceptance. `payload_max_bytes` and `result_max_bytes` default to 1,048,576 and accept configured values through 16,777,216. PostgreSQL measures `octet_length(value::text)` after JSONB canonicalization, and `enqueue_batch_v1` rejects an oversized payload before inserting `task`, `task_runtime`, history, idempotency, or notification effects. `complete_v1` checks the persisted result limit before deleting active runtime.
+`contract_version` is null for an uncontracted task or contains the `TaskTypeContracts.currentVersion` selected at acceptance. `payload_max_bytes` and `result_max_bytes` default to 1,048,576 and accept configured values through 16,777,216. PostgreSQL measures `octet_length(value::text)` after JSONB canonicalization. That text puts a space after each `:` and `,`, and it writes every number without an exponent, so it is never shorter than compact JSON. The TypeScript `Queue` and worker measure the same text with `jsonbTextBytes` in `typescript/core/src/queue/enqueue-contracts.ts`. They skip the exact measure when twice the compact UTF-8 length fits and the JSON has no exponent. `enqueue_batch_v1` rejects an oversized payload before inserting `task`, `task_runtime`, history, idempotency, or notification effects. `complete_v1` checks the persisted result limit before deleting active runtime.
 
 `payload_redact_keys` and `result_redact_keys` each contain at most 50 unique top-level object keys of 1 through 200 characters. When a worker claims a task, `claim_v1` returns the raw payload to its handler. A Go worker that cannot decode a claimed payload skips the handler and fails that attempt through the ordinary fenced failure and retry path, so `Worker.Run` keeps running. `workhorse.redact_top_level_keys_v1` removes persisted keys for `Admin.getTask`, `Admin.listTasks`, dead-letter listing, and dashboard task detail. Caller-supplied `TaskPayloadProjection.redactKeys` are added to the persisted payload keys. Scalar and array values pass through because top-level key redaction applies only to objects. If either persisted key array is non-empty, `workhorse.redact_error_details_v1` substitutes `RedactedTaskError` and a fixed message before `fail_v1` writes runtime, outcome, attempt, or event errors. `Worker` applies the same rule before recording a handler exception in OpenTelemetry.
 
@@ -2930,12 +2930,25 @@ p_task_ids, p_fence_tokens, p_results)` with one task. That function completes a
 statement: a fenced `DELETE` from `fast_task_runtime`, one `fast_task_outcome` insert, and one
 `attempt_history` insert per task when the queue records attempts. It returns the accepted task
 IDs. An attempt whose fence, worker, lease, deadline, or attempt timeout no longer matches, or that
-carries a pending cancellation, is left alone and missing from the result. A result larger than its
-`result_max_bytes` fails the whole batch. The `DELETE` finds each row by primary key and has no
+carries a pending cancellation, is left alone and missing from the result. The `DELETE` finds each row by primary key and has no
 `state` predicate, because `fast_task_runtime_state_shape_check` gives a ready row a null
 `worker_id`. The function runs with `plan_cache_mode = force_generic_plan`, so PL/pgSQL does not
 build a custom plan for the statement on every call. The history insert joins `queue_control` on
 `record_attempts` instead of calling `fast_records_attempts_v1` per completed row.
+
+An oversized result fails only its own attempt. After taking its locks, the function selects each
+input whose `octet_length(result::jsonb::text)` exceeds the row's `result_max_bytes`. It passes
+each one, in task ID order, to `fast_fail_v1` with the error `{"name": "TaskValueSizeLimitError",
+"message": "<task_type> result exceeds its configured size limit", "stack": null}` and a null
+retry delay. The task's retry policy then schedules another attempt or finishes it as failed. The
+function leaves those tasks out of the returned IDs and completes the rest of the batch.
+`complete_many_and_claim_v1` still runs its claim. The blast radius therefore differs by tier. On
+the full tier, `complete_v1` raises for an oversized result, and the caller's statement or
+transaction rolls back. On the fast tier, a batch of completions and its fused claim
+survive one oversized row. `fast_complete_v1` keeps the full tier's behavior: it raises for one
+oversized result before it calls `fast_complete_many_v1`. The TypeScript worker measures results
+before it calls, so it reaches this path only through a bug. The Python, Go, and Rust workers do
+not measure results, so for them this path is the enforcement.
 
 Before the `DELETE`, the function locks the caller's rows with `SELECT ... ORDER BY task_id FOR
 UPDATE`, filtered on `task_id = ANY (p_task_ids)` and `worker_id = p_worker_id`.

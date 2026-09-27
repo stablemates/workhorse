@@ -8395,8 +8395,14 @@ $$;
 -- Complete a batch of fast-tier attempts in one statement. Each accepted attempt deletes its
 -- runtime row and writes its outcome row. An attempt whose fence, lease, deadline, attempt timeout,
 -- or cancellation no longer allows completion is left alone and missing from the result, exactly
--- as complete_v1 returns false for it. The worker checks result sizes before it calls; an oversized
--- result that still arrives fails the whole batch, as it fails complete_v1.
+-- as complete_v1 returns false for it.
+--
+-- The worker checks result sizes before it calls, but not every SDK does, and a client measure can
+-- disagree with PostgreSQL's jsonb text. An oversized result therefore fails only its own attempt.
+-- The function passes it to fast_fail_v1 with a TaskValueSizeLimitError envelope, so the retry
+-- policy decides what happens next, and leaves it out of the result. The other completions in the
+-- batch, and the fused claim that follows them, are unaffected. fast_complete_v1 keeps raising for
+-- one oversized result, as complete_v1 does on the full tier.
 --
 -- The DELETE matches on the primary key, the fence, and the owning worker. It has no state
 -- predicate: fast_task_runtime_state_shape_check gives a ready row a NULL worker_id, so the
@@ -8410,6 +8416,7 @@ $$;
 -- fast_heartbeat_many_v1 does. The DELETE's plan locks rows in input order, and a heartbeat's plan
 -- can lock them in index order. Without the shared order, a worker's completion and its own
 -- heartbeat could each hold a row the other needs, and PostgreSQL rolled one back with 40P01.
+-- The oversized attempts fail after that lock, in task ID order, so they add no new lock order.
 CREATE OR REPLACE FUNCTION workhorse.fast_complete_many_v1(
   p_worker_id text, p_task_ids uuid[], p_fence_tokens bigint[], p_results jsonb[]
 ) RETURNS uuid[]
@@ -8419,24 +8426,37 @@ AS $$
 DECLARE
   v_now timestamptz := clock_timestamp();
   v_accepted uuid[];
+  v_oversized uuid[] := '{}'::uuid[];
+  v_rejection record;
 BEGIN
-  IF EXISTS (
-    SELECT 1
-      FROM unnest(p_task_ids, p_results) AS input(task_id, result)
-      JOIN workhorse.fast_task_runtime runtime ON runtime.task_id = input.task_id
-     WHERE octet_length(COALESCE(input.result, 'null'::jsonb)::text) > runtime.result_max_bytes
-  ) THEN
-    RAISE EXCEPTION 'result exceeds its configured size limit';
-  END IF;
   PERFORM 1 FROM (
     SELECT FROM workhorse.fast_task_runtime runtime
      WHERE runtime.task_id = ANY (p_task_ids) AND runtime.worker_id = p_worker_id
      ORDER BY runtime.task_id
        FOR UPDATE
   ) locked;
+  FOR v_rejection IN
+    SELECT input.task_id, input.fence_token, runtime.task_type
+      FROM unnest(p_task_ids, p_fence_tokens, p_results) AS input(task_id, fence_token, result)
+      JOIN workhorse.fast_task_runtime runtime ON runtime.task_id = input.task_id
+     WHERE octet_length(COALESCE(input.result, 'null'::jsonb)::text) > runtime.result_max_bytes
+     ORDER BY input.task_id
+  LOOP
+    v_oversized := v_oversized || v_rejection.task_id;
+    PERFORM workhorse.fast_fail_v1(
+      v_rejection.task_id, p_worker_id, v_rejection.fence_token,
+      jsonb_build_object(
+        'name', 'TaskValueSizeLimitError',
+        'message', v_rejection.task_type || ' result exceeds its configured size limit',
+        'stack', NULL
+      ),
+      NULL
+    );
+  END LOOP;
   WITH input AS (
     SELECT * FROM unnest(p_task_ids, p_fence_tokens, p_results)
       AS input(task_id, fence_token, result)
+     WHERE input.task_id <> ALL (v_oversized)
   ), done AS (
     DELETE FROM workhorse.fast_task_runtime runtime
      USING input
@@ -8472,14 +8492,25 @@ BEGIN
 END;
 $$;
 
+-- Complete one fast-tier attempt. An oversized result raises, as complete_v1 raises on the full
+-- tier, so a single completion keeps the same outcome on either tier.
 CREATE OR REPLACE FUNCTION workhorse.fast_complete_v1(
   p_task_id uuid, p_worker_id text, p_fence_token bigint, p_result jsonb
 ) RETURNS boolean
-LANGUAGE sql
+LANGUAGE plpgsql
 AS $$
-  SELECT cardinality(workhorse.fast_complete_many_v1(
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM workhorse.fast_task_runtime runtime
+     WHERE runtime.task_id = p_task_id
+       AND octet_length(COALESCE(p_result, 'null'::jsonb)::text) > runtime.result_max_bytes
+  ) THEN
+    RAISE EXCEPTION 'result exceeds its configured size limit';
+  END IF;
+  RETURN cardinality(workhorse.fast_complete_many_v1(
     p_worker_id, ARRAY[p_task_id], ARRAY[p_fence_token], ARRAY[p_result]
-  )) = 1
+  )) = 1;
+END;
 $$;
 
 -- Settle a fast-tier task whose deadline has passed. It mirrors terminalize_deadline_v1: a task
@@ -18319,10 +18350,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (30, 'release dependents through a pending-prerequisite counter'),
   (31, 'lock a worker''s fast-tier rows in task ID order'),
   (32, 'a child terminal at creation settles its parent'),
-  (33, 'lock an enqueue batch''s prerequisites before its first request')
+  (33, 'lock an enqueue batch''s prerequisites before its first request'),
+  (34, 'reject an oversized fast-tier result per row')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (33) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (34) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
