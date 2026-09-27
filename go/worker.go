@@ -687,6 +687,9 @@ type dispatchEnvironment struct {
 	registryWake      <-chan struct{}
 	maintenanceErrors <-chan error
 	listening         func() bool
+	// notificationDelay draws the delay before a claim that a notification woke from idle. Nil
+	// draws a random delay up to notificationClaimDelay.
+	notificationDelay func() time.Duration
 }
 
 // executionResult is one finished execution and the slot it held.
@@ -834,6 +837,13 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 	consecutiveEmptyClaims := 0
 	wakeVersion := 0
 	notificationDelayPending := false
+	// A short random delay spreads one notification's claims across workers.
+	notificationDelay := environment.notificationDelay
+	if notificationDelay == nil {
+		notificationDelay = func() time.Duration {
+			return time.Duration(pseudorand.Int64N(int64(notificationClaimDelay) + 1))
+		}
+	}
 	stopping := false
 	var firstError error
 	// Set by a claim that found nothing to run. No claim starts until its deadline or a wake that
@@ -933,7 +943,9 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 			cohortReserved[cohort] += cohortLimit
 		}
 		claimsInFlight++
-		delayed := notificationDelayPending
+		// The notification delay spreads idle workers that one notification woke together. A worker
+		// whose last claim found work would claim now anyway, so it claims without the delay.
+		delayed := notificationDelayPending && consecutiveEmptyClaims > 0
 		notificationDelayPending = false
 		startedVersion := wakeVersion
 		// A cohort claim takes only its cohort's share from a fast-tier queue.
@@ -949,7 +961,7 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 				wakeVersion: startedVersion,
 			}
 			if delayed {
-				delay := time.NewTimer(time.Duration(pseudorand.Int64N(int64(notificationClaimDelay) + 1)))
+				delay := time.NewTimer(notificationDelay())
 				select {
 				case <-ctx.Done():
 					delay.Stop()

@@ -1830,7 +1830,9 @@ export class Worker {
         cohortClaims[cohort]! += 1;
         cohortReserved[cohort]! += cohortLimit;
       }
-      const delayed = this.notificationClaimDelayPending;
+      // The notification delay spreads idle workers that one notification woke together. A worker
+      // whose last claim found work would claim now anyway, so it claims without the delay.
+      const delayed = this.notificationClaimDelayPending && this.consecutiveEmptyClaims > 0;
       this.notificationClaimDelayPending = false;
       const wakeVersion = this.dispatchWakeVersion;
       this.lastClaimAt = Date.now();

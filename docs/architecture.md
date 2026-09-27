@@ -612,8 +612,9 @@ It reports whether the pass ran a handler, so a pass that only released reports 
 one handler goroutine. The queue cursor advances after every claim attempt, so a busy queue cannot
 prevent another configured queue from being checked. An empty sweep waits for `PollInterval` or a
 matching PostgreSQL notification, whichever arrives first. Without an active listener, empty waits
-double through 5000 milliseconds with ±10% jitter. A notification waits a random 0 through 50
-milliseconds before the next claim.
+double through 5000 milliseconds with ±10% jitter. When the worker's last claim found nothing, a
+notification waits a random 0 through 50 milliseconds before the next claim. A worker whose last
+claim found work claims without that wait.
 
 If the pool permits at least two connections, `Worker.Run` acquires one dedicated connection and
 executes `LISTEN workhorse_tasks`. A payload equal to a configured queue name or `*` wakes the claim
@@ -2498,7 +2499,10 @@ flight. The loop waits for the first finished handler, returned claim, or wake, 
 claim inline. A claim that returns no row, or only rows of unhandled types that it releases through
 `release_owned_v1`, counts as empty. After an empty claim the loop starts no claim until the poll
 deadline or a dispatch wake newer than that claim. The notification claim delay of
-`NOTIFICATION_CLAIM_DELAY_MS` runs inside the claim, and a claim whose worker paused or stopped
+`NOTIFICATION_CLAIM_DELAY_MS` applies only while `consecutiveEmptyClaims` is above zero, so it spreads
+idle workers without slowing a busy one. A dependency release notifies on every completion, and a
+busy worker that paid the delay on each claim spent most of a chain or fan-in run asleep. The delay
+runs inside the claim, and a claim whose worker paused or stopped
 during the delay is never sent. Tasks that a claim returns after `stop`, `pause`, a handler failure,
 or a claim error still run, because each holds a lease. On stop the loop drains every claim in
 flight, runs the tasks they return, and then awaits every handler. The runtime fixture
@@ -2577,7 +2581,7 @@ only when the queue's active rows, counted up to `max_active`, reach `max_active
 `concurrency_key` has `max_active_per_key` active rows. Only such a release can unblock a claim. Completion,
 failure, retry release, cancellation, durable wait, and recovery can therefore wake a worker in another process
 without waiting for its fallback poll. A release below every cap publishes nothing, because a worker that takes
-a notification delays its next claim. The count includes the row being released and every concurrent release
+a notification while idle delays its next claim. The count includes the row being released and every concurrent release
 that has not committed, so the first release from a full queue always publishes, even when one statement
 releases several rows.
 
@@ -4299,7 +4303,8 @@ interactive stdin and stdout is refused with exit 1.
   That subscriber still observes an `UNLISTEN` failure. The listener keeps its `error` handler until
   release, and a throwing `onNotificationError` never stops the listener.
 - Notification-capable `Worker.run()` uses a 5,000 ms default fallback poll with ±10% jitter. A
-  notification adds a random delay from 0 through 50 ms before claiming. An explicit `pollMs`
+  notification that arrives after an empty claim adds a random delay from 0 through 50 ms before
+  claiming. An explicit `pollMs`
   replaces the fallback base. While no listener is active, consecutive empty waits double through a
   5,000 ms cap, with ±10% jitter. Query-only adapters start at 250 ms. `runOnce()` retains the 250 ms
   compatibility default and never opens a listener. Every pass uses authoritative `claim_many_v1`

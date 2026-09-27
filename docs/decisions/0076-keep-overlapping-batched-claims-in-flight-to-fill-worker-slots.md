@@ -51,7 +51,8 @@ Every SDK implements the same rules, including Ruby.
    dispatch wake arrives after that claim started. A claim that ran a handler resets the count and
    ends the wait.
 6. **Notification delay.** The random delay before a notification-triggered claim runs inside the
-   claim, so it never blocks the loop. If the worker paused or stopped during the delay, it sends no
+   claim, so it never blocks the loop. It applies only when the last claim found nothing (SM-933).
+   A busy worker would claim at once anyway, and a dependency release notifies on every completion. If the worker paused or stopped during the delay, it sends no
    claim and frees the reservation.
 7. **Pause.** A paused worker starts no claim. It keeps observing its handlers and its claims in
    flight.

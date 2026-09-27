@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -48,9 +49,11 @@ type dispatchHarness struct {
 	results      chan executionResult
 	notification chan struct{}
 	registry     chan struct{}
-	cancel       context.CancelFunc
-	outcome      chan dispatchOutcome
-	nextTask     int
+	// notificationDelay is the delay a notified claim waits when it waits. It defaults to none.
+	notificationDelay atomic.Int64
+	cancel            context.CancelFunc
+	outcome           chan dispatchOutcome
+	nextTask          int
 }
 
 type dispatchOutcome struct {
@@ -102,10 +105,11 @@ func startDispatchOn(t *testing.T, options WorkerOptions, paused bool, tier disp
 				harness.executions <- fakeExecution{task: task, finish: finish}
 				return <-finish
 			},
-			executionResults: harness.results,
-			notificationWake: harness.notification,
-			registryWake:     harness.registry,
-			listening:        func() bool { return true },
+			executionResults:  harness.results,
+			notificationWake:  harness.notification,
+			registryWake:      harness.registry,
+			listening:         func() bool { return true },
+			notificationDelay: func() time.Duration { return time.Duration(harness.notificationDelay.Load()) },
 		})
 		harness.outcome <- dispatchOutcome{active: active, err: err}
 	}()
@@ -255,6 +259,41 @@ func TestDispatchWaitsThePollIntervalAfterAnEmptyClaim(t *testing.T) {
 		t.Fatalf("a notification claimed after %s, want before the poll interval", waited)
 	}
 	if err := harness.stop([]fakeClaimCall{call}, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// testNotificationDelay is longer than any wait a test makes for a claim it expects at once.
+const testNotificationDelay = 300 * time.Millisecond
+
+// SM-933: a dependency release notifies the queue on every completion. A busy worker that paid the
+// notification delay on each of those claims spent most of its time asleep.
+func TestDispatchDelaysANotifiedClaimOnlyAfterAClaimThatFoundNothing(t *testing.T) {
+	harness := startDispatch(t, WorkerOptions{Concurrency: 2, PollInterval: time.Minute}, false)
+	harness.notificationDelay.Store(int64(testNotificationDelay))
+	harness.expectClaim(2).respond <- fakeClaimResponse{tasks: harness.tasks(2, dispatchTaskType)}
+	executions := harness.expectExecutions(2)
+
+	// The last claim found work, so the claim a notification precedes starts at once.
+	harness.notification <- struct{}{}
+	harness.expectNoClaim(50 * time.Millisecond)
+	freedAt := time.Now()
+	executions[0].finish <- nil
+	call := harness.expectClaim(1)
+	if waited := time.Since(freedAt); waited >= testNotificationDelay {
+		t.Fatalf("a busy worker claimed after %s, want no notification delay", waited)
+	}
+
+	// After an empty claim the worker is idle, so a notification ends its wait with the delay.
+	call.respond <- fakeClaimResponse{}
+	harness.expectNoClaim(50 * time.Millisecond)
+	notifiedAt := time.Now()
+	harness.notification <- struct{}{}
+	call = harness.expectClaim(1)
+	if waited := time.Since(notifiedAt); waited < testNotificationDelay {
+		t.Fatalf("an idle worker claimed after %s, want the %s notification delay", waited, testNotificationDelay)
+	}
+	if err := harness.stop([]fakeClaimCall{call}, executions[1:]); err != nil {
 		t.Fatal(err)
 	}
 }

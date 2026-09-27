@@ -1,5 +1,5 @@
 import { setImmediate as nextTurn, setTimeout as sleep } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ClaimedTask, CompletionClaim, Json } from "../src/types.js";
 import { Worker, dispatchRefillBatch, type WorkerQueueApi } from "../src/worker.js";
 
@@ -349,6 +349,56 @@ describe("worker dispatch", () => {
 
     worker.stop();
     await running;
+  });
+
+  // SM-933: a dependency release notifies the queue on every completion. A busy worker that paid
+  // the notification delay on each of those claims spent most of its time asleep.
+  it("delays a notified claim only after a claim that found nothing", async () => {
+    const fake = fakeQueue();
+    let notify: (() => void) | undefined;
+    const queue = {
+      ...fake.queue,
+      subscribeToTaskNotifications: async (_queue: string, onNotification: () => void) => {
+        notify = onNotification;
+        return { close: async () => {} };
+      },
+    } as unknown as WorkerQueueApi;
+    // The delay draws the longest spread, so a delayed claim cannot land within settle().
+    const random = vi.spyOn(Math, "random").mockReturnValue(0.999);
+    const { handler, finish, finishAll } = gatedHandlers();
+    const worker = new Worker(queue, {
+      concurrency: 2,
+      registryIntervalMs: 0,
+      pollMs: 60_000,
+    }).handle("dispatch", handler);
+    try {
+      const running = worker.run();
+      await fake.claimsReceived(1);
+      fake.held[0]!.answer.resolve(tasks("first", 2));
+      await settle();
+
+      // The last claim found work, so the claim a notification precedes starts at once.
+      notify?.();
+      finish("first-0");
+      await settle();
+      expect(fake.limits).toEqual([2, 1]);
+
+      // After an empty claim the worker is idle, so a notification ends its wait with the delay.
+      fake.held[1]!.answer.resolve([]);
+      await settle();
+      notify?.();
+      await settle();
+      expect(fake.limits).toEqual([2, 1]);
+      await fake.claimsReceived(3);
+      expect(fake.limits).toEqual([2, 1, 1]);
+
+      worker.stop();
+      fake.held[2]!.answer.resolve([]);
+      finishAll();
+      await running;
+    } finally {
+      random.mockRestore();
+    }
   });
 
   it("defaults to one cohort per 8 slots from concurrency 8 and validates an explicit count", () => {

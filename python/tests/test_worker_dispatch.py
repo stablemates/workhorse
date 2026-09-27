@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+import workhorse.worker as worker_module
 from workhorse import ClaimedTask, Worker
 from workhorse._statements import STATEMENTS, DriverStatement
 from workhorse.worker import _dispatch_cohorts
@@ -407,6 +408,38 @@ def test_claim_of_only_unhandled_tasks_backs_off_like_an_empty_claim() -> None:
         sleep(0.15)
         assert claims.claims() == 1
         assert len(executions.released) == 1
+    assert errors == []
+
+
+# SM-933: a dependency release notifies the queue on every completion. A busy worker that paid the
+# notification delay on each of those claims spent most of its time asleep.
+def test_notified_claim_waits_only_after_a_claim_that_found_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    delay = 0.3
+    monkeypatch.setattr(worker_module, "_NOTIFICATION_CLAIM_DELAY_SECONDS", delay)
+    # Every draw takes its upper bound, so a delayed claim waits the whole delay.
+    monkeypatch.setattr(worker_module.random, "uniform", lambda _low, high: high)
+    claims = ScriptedClaims([task_row(sequence, HANDLED) for sequence in range(2)])
+    executions = Executions(claims)
+    worker = scripted_worker(claims, concurrency=2, poll_ms=60_000)
+    with running(worker, executions) as errors:
+        wait_for(lambda: executions.running() == 2, "the worker did not fill its slots")
+
+        # The last claim found work, so the claim a notification precedes starts at once.
+        worker._wake_from_notification()
+        sleep(0.05)
+        freed_at = monotonic()
+        executions.finish_first()
+        wait_for(lambda: claims.claims() == 2, "the free slot did not start a claim")
+        assert claims.claimed_at[1] - freed_at < delay
+
+        # That claim found nothing, so the idle worker delays the claim a notification wakes.
+        sleep(0.05)
+        notified_at = monotonic()
+        worker._wake_from_notification()
+        wait_for(lambda: claims.claims() == 3, "the notification did not wake the worker")
+        assert claims.claimed_at[2] - notified_at >= delay
     assert errors == []
 
 
