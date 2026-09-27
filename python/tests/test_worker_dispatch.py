@@ -571,3 +571,42 @@ def test_stop_runs_the_tasks_an_in_flight_fused_claim_returns() -> None:
     assert all(limit == 0 for _completions, limit in fused[1:])
     assert sum(completions for completions, _limit in fused) == 3
     assert claims.claim_limits() == [2]
+
+
+class HeldTick(ScriptedClaims):
+    """Hold the startup tick open until released, or fail it, while claims answer as scripted."""
+
+    def __init__(self, rows: Sequence[dict[str, object]] = (), *, fail: bool = False) -> None:
+        super().__init__(rows)
+        self.fail = fail
+        self.tick_started = Event()
+        self.tick_released = Event()
+
+    def rows(self, statement: DriverStatement, parameters: Sequence[object] = ()) -> list[Any]:
+        if statement is STATEMENTS.tick:
+            self.tick_started.set()
+            if self.fail:
+                raise RuntimeError("tick failed")
+            assert self.tick_released.wait(timeout=5), "held tick was never released"
+            return []
+        return super().rows(statement, parameters)
+
+
+def test_worker_claims_before_its_startup_maintenance_pass_returns() -> None:
+    claims = HeldTick([task_row(0, HANDLED)])
+    executions = Executions(claims)
+    worker = scripted_worker(claims, concurrency=2)
+    with running(worker, executions) as errors:
+        assert claims.tick_started.wait(timeout=5), "the worker did not start maintenance"
+        wait_for(lambda: len(executions.started) == 1, "the first claim waited for maintenance")
+        claims.tick_released.set()
+    assert errors == []
+
+
+def test_failed_startup_maintenance_pass_ends_the_run_with_its_error() -> None:
+    claims = HeldTick(fail=True)
+    executions = Executions(claims)
+    worker = scripted_worker(claims, concurrency=2)
+    with running(worker, executions) as errors:
+        wait_for(lambda: len(errors) == 1, "the failed maintenance pass did not end the run")
+    assert [str(error) for error in errors] == ["tick failed"]
