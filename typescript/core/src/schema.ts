@@ -250,6 +250,14 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "serialize the concurrency capacity notification with claims",
     kind: "additive",
   },
+  {
+    // The file number was reserved for this change; the version still steps by one.
+    fromVersion: 35,
+    toVersion: 36,
+    file: "0037-plan-dependency-release-once-per-session.sql",
+    description: "plan dependency release once per session",
+    kind: "additive",
+  },
 ];
 
 /**

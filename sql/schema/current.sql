@@ -11614,11 +11614,16 @@ $$;
 -- costs one runtime update and no edge scan. Only a dependent that settles after a rejection reads
 -- its edges, to name the prerequisite that decides its outcome. A counter that would fall below
 -- zero violates the runtime check instead of releasing a dependent early.
+--
+-- The generic plan keeps every statement on a primary key or a pending-edge index that the arrays
+-- drive. A custom plan per call cost more to plan than the statements cost to run, and a singly
+-- released task paid that on every completion.
 CREATE OR REPLACE FUNCTION workhorse.resolve_dependents_many_v1(
   p_prerequisite_task_ids uuid[], p_prerequisite_states text[]
 )
 RETURNS integer
 LANGUAGE plpgsql
+SET plan_cache_mode = force_generic_plan
 AS $$
 DECLARE
   v_now timestamptz := clock_timestamp();
@@ -18360,10 +18365,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (32, 'a child terminal at creation settles its parent'),
   (33, 'lock an enqueue batch''s prerequisites before its first request'),
   (34, 'reject an oversized fast-tier result per row'),
-  (35, 'serialize the concurrency capacity notification with claims')
+  (35, 'serialize the concurrency capacity notification with claims'),
+  (36, 'plan dependency release once per session')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (35) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (36) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

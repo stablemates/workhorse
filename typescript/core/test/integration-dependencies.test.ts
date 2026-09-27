@@ -211,6 +211,19 @@ describe("task dependencies", () => {
     }
   });
 
+  it("keeps one plan per session for dependency release", async () => {
+    // A custom plan sees one-element arrays and always looks cheaper than the generic plan, so
+    // PL/pgSQL replanned every release statement on every completion.
+    const result = await pool.query<{ proconfig: string[] | null }>(
+      `SELECT routine.proconfig
+         FROM pg_proc routine
+         JOIN pg_namespace namespace ON namespace.oid = routine.pronamespace
+        WHERE namespace.nspname = 'workhorse' AND routine.proname = 'resolve_dependents_many_v1'`,
+    );
+
+    expect(result.rows).toEqual([{ proconfig: ["plan_cache_mode=force_generic_plan"] }]);
+  });
+
   it("runs no dependency statement when a request declares no prerequisites", async () => {
     // An AFTER INSERT statement trigger fires even for an insert which writes no row, so it
     // observes exactly what the guard removes: the statement itself, and with it the recursive
