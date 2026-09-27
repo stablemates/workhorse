@@ -1708,6 +1708,105 @@ describe("claim lease fence", () => {
     }
   });
 
+  it("wakes a waiting claimer when a release races a claim that fills the queue", async () => {
+    // A release that reads the queue while a claim has not committed must not miss the cap.
+    const queueName = `capacity-race-${randomUUID()}`;
+    await queue.syncConcurrencyPolicies("test", [{ queue: queueName, maxActive: 2 }]);
+    await queue.enqueueMany(
+      Array.from({ length: 3 }, (_, ordinal) => ({
+        type: "capacity",
+        payload: { ordinal },
+        options: { queue: queueName },
+      })),
+    );
+    const held = await queue.claim("race-holder", { queue: queueName });
+    expect(held).not.toBeNull();
+
+    const listener = await pool.connect();
+    const claimer = await pool.connect();
+    const completer = await pool.connect();
+    const notifications: string[] = [];
+    listener.on("notification", (message) => notifications.push(message.payload ?? ""));
+    try {
+      await listener.query("LISTEN workhorse_tasks");
+      await claimer.query("BEGIN");
+      await expect(
+        claimer.query(SQL_STATEMENTS.claim_many_v1, [queueName, "race-claimer", 1, 30_000]),
+      ).resolves.toMatchObject({ rowCount: 1 });
+
+      await completer.query("BEGIN");
+      const completion = completer.query(SQL_STATEMENTS.complete_v1, [
+        held!.id,
+        "race-holder",
+        held!.fenceToken.toString(),
+        null,
+      ]);
+      await sleep(50);
+      // The claim commits and fills the queue while the release is still open.
+      await claimer.query("COMMIT");
+      await sleep(50);
+
+      // The waiter reads the queue before the release commits.
+      const waiter = queue.claim("race-waiter", { queue: queueName });
+      await sleep(50);
+      await expect(completion).resolves.toMatchObject({ rows: [{ accepted: true }] });
+      await completer.query("COMMIT");
+
+      // The waiter either takes the freed slot or, having found the queue full, hears the release.
+      const claimed = await waiter;
+      const published =
+        claimed === null &&
+        (await waitForDatabaseCondition(async () => notifications.includes(queueName)).then(
+          () => true,
+          () => false,
+        ));
+      expect({ claimed: claimed !== null, published }).not.toEqual({
+        claimed: false,
+        published: false,
+      });
+    } finally {
+      await claimer.query("ROLLBACK").catch(() => undefined);
+      await completer.query("ROLLBACK").catch(() => undefined);
+      await listener.query("UNLISTEN workhorse_tasks");
+      listener.release();
+      claimer.release();
+      completer.release();
+    }
+  });
+
+  it("publishes capacity when an expired lease still fills the queue", async () => {
+    // A claim that found the queue full may have counted a lease that expired since.
+    const queueName = `capacity-expired-${randomUUID()}`;
+    await queue.syncConcurrencyPolicies("test", [{ queue: queueName, maxActive: 2 }]);
+    await queue.enqueueMany(
+      Array.from({ length: 3 }, (_, ordinal) => ({
+        type: "capacity",
+        payload: { ordinal },
+        options: { queue: queueName },
+      })),
+    );
+    const [expired, live] = await queue.claimMany("capacity-worker", 2, { queue: queueName });
+    expect(live).toBeDefined();
+    await pool.query(
+      "UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 second' WHERE task_id = $1",
+      [expired!.id],
+    );
+
+    const listener = await pool.connect();
+    const notifications: string[] = [];
+    listener.on("notification", (message) => notifications.push(message.payload ?? ""));
+    try {
+      await listener.query("LISTEN workhorse_tasks");
+      await expect(queue.complete(live!, "capacity-worker", null)).resolves.toBe(true);
+      await expect(
+        waitForDatabaseCondition(async () => notifications.includes(queueName)),
+      ).resolves.toBeUndefined();
+    } finally {
+      await listener.query("UNLISTEN workhorse_tasks");
+      listener.release();
+    }
+  });
+
   it("refills continuously between interval boundaries", async () => {
     const queueName = `rate-limit-continuous-${randomUUID()}`;
     await queue.syncRateLimitPolicies("test", [

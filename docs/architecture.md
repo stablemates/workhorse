@@ -2594,6 +2594,14 @@ a notification while idle delays its next claim. The count includes the row bein
 that has not committed, so the first release from a full queue always publishes, even when one statement
 releases several rows.
 
+Before it counts, the trigger locks the queue's `concurrency_policy` row `FOR KEY SHARE`. `claim_one_v1` and
+`claim_many_v1` hold that row `FOR UPDATE` until they commit, so a release waits for an open claim and then
+counts its leases. Without the wait, a claim could fill the queue while a release was open. The release would
+count a queue below `max_active` and stay silent, and a claim that found the queue full would sleep until the
+fallback poll. `FOR KEY SHARE` does not conflict with another release, so releases still run in parallel. The
+count includes active rows whose lease has expired, although claim admission excludes them. A lease that expires
+after a claim finds the queue full therefore cannot hide the cap from a later release.
+
 ### Heartbeat
 
 `heartbeat_v1` performs one `UPDATE` against the exact active `task_id`, `worker_id`, and `fence_token`. It takes no advisory or concurrency-policy row lock because renewal does not change admission counts. The function returns `accepted`, `cancel_requested`, `deadline_exceeded`, `timeout_exceeded`, or `stale`, and changes heartbeat, expiry, and `updated_at` only for `accepted`.
