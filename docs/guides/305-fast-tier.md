@@ -58,6 +58,11 @@ table lists each feature, and says why the fast tier lacks it where it does.
 The full tier has no combined completion and claim yet. Only the fast tier's version has been
 measured.
 
+A combined completion carries many results in one statement. If one result exceeds its size limit,
+Workhorse fails only that attempt with `TaskValueSizeLimitError`, and the retry policy applies. The
+other completions and the next claim still commit. On the full tier, an oversized result makes
+`complete_v1` raise, which rolls back the caller's statement.
+
 If a producer asks a fast-tier queue for a feature it lacks, PostgreSQL rejects the request with
 `P1007`. Every SDK surfaces it as `FastTierUnsupportedError`, naming the queue and the feature.
 Adding a concurrency or rate-limit policy to a fast-tier queue fails the same way.

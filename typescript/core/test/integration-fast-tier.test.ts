@@ -426,6 +426,89 @@ describe("fast task tier", () => {
     }
   });
 
+  // PostgreSQL measures a result as jsonb text, which spaces its separators. A result whose compact
+  // JSON fits can still be over the limit, and an SDK that does not measure can send one. Only that
+  // attempt fails: the rest of the batch completes and the fused claim still runs.
+  it("fails only the oversized attempt of a fused completion batch", async () => {
+    const queueName = "fast-oversized-result";
+    const workerId = "oversized-result";
+    await makeFast(queueName);
+    const ids = await queue.enqueueMany(
+      Array.from({ length: 3 }, () => ({
+        type: "sized",
+        payload: {},
+        options: { queue: queueName },
+      })),
+    );
+    await pool.query(
+      `UPDATE workhorse.fast_task_runtime
+          SET state = 'active', worker_id = $2, claimed_at = clock_timestamp(),
+              expires_at = clock_timestamp() + interval '1 hour', fence_token = 1,
+              result_max_bytes = 18
+        WHERE task_id = ANY($1::uuid[])`,
+      [ids, workerId],
+    );
+    const refill = await queue.enqueue("refill", {}, { queue: queueName });
+    const [first, oversized, last] = ids;
+    // {"items":[1,2,3]} is 17 bytes; its jsonb text {"items": [1, 2, 3]} is 20.
+    const results = [{ ok: true }, { items: [1, 2, 3] }, { ok: false }];
+
+    const { rows } = await pool.query<{ accepted: string[]; task_id: string | null }>(
+      `SELECT accepted::text[] AS accepted, task_id::text AS task_id
+         FROM workhorse.complete_many_and_claim_v1($1, $2::uuid[], $3::bigint[], $4::jsonb[], $5, 1)`,
+      [workerId, ids, [1, 1, 1], results.map((result) => JSON.stringify(result)), queueName],
+    );
+    expect(rows.map((row) => row.task_id)).toEqual([refill]);
+    expect(rows[0]!.accepted.toSorted()).toEqual([first, last].toSorted());
+    expect(
+      (await outcomeCounts(ids)).toSorted((a, b) => a.task_id.localeCompare(b.task_id)),
+    ).toEqual(
+      [first!, last!].toSorted().map((task_id) => ({ task_id, state: "succeeded", attempt: 1 })),
+    );
+    const retried = await pool.query(
+      `SELECT state, attempt, worker_id, errors->0->'error' AS error
+         FROM workhorse.fast_task_runtime WHERE task_id = $1`,
+      [oversized],
+    );
+    expect(retried.rows).toEqual([
+      {
+        state: "ready",
+        attempt: 2,
+        worker_id: null,
+        error: {
+          name: "TaskValueSizeLimitError",
+          message: "sized result exceeds its configured size limit",
+          stack: null,
+        },
+      },
+    ]);
+  });
+
+  it("raises for an oversized result of a single fast completion", async () => {
+    const queueName = "fast-oversized-single";
+    const workerId = "oversized-single";
+    await makeFast(queueName);
+    const id = await queue.enqueue("sized", {}, { queue: queueName });
+    await pool.query(
+      `UPDATE workhorse.fast_task_runtime
+          SET state = 'active', worker_id = $2, claimed_at = clock_timestamp(),
+              expires_at = clock_timestamp() + interval '1 hour', fence_token = 1,
+              result_max_bytes = 18
+        WHERE task_id = $1`,
+      [id, workerId],
+    );
+    await expect(
+      pool.query("SELECT workhorse.complete_v1($1, $2, 1, $3::jsonb)", [
+        id,
+        workerId,
+        JSON.stringify({ items: [1, 2, 3] }),
+      ]),
+    ).rejects.toThrow(/result exceeds its configured size limit/);
+    await expect(
+      pool.query("SELECT state, attempt FROM workhorse.fast_task_runtime WHERE task_id = $1", [id]),
+    ).resolves.toMatchObject({ rows: [{ state: "active", attempt: 1 }] });
+  });
+
   it.each([4, 16, 64])(
     "loses no task and records one outcome each after a worker crash at concurrency %i",
     async (concurrency) => {

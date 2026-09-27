@@ -501,6 +501,7 @@ describe("schema installation", () => {
         version: 33,
         description: "lock an enqueue batch's prerequisites before its first request",
       },
+      { version: 34, description: "reject an oversized fast-tier result per row" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

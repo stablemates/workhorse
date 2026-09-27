@@ -235,6 +235,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "lock an enqueue batch's prerequisites before its first request",
     kind: "additive",
   },
+  {
+    fromVersion: 33,
+    toVersion: 34,
+    file: "0034-reject-an-oversized-fast-tier-result-per-row.sql",
+    description: "reject an oversized fast-tier result per row",
+    kind: "additive",
+  },
 ];
 
 /**
