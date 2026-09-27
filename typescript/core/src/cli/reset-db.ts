@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Pool } from "pg";
+import { dropLocalDatabase } from "../drop-local-database.js";
 import {
   assertLocalDatabasePurpose,
   databaseName,
@@ -9,7 +10,7 @@ import {
 import { installSchema } from "../schema.js";
 
 // This command is intentionally harder to invoke than normal development commands because it
-// terminates connections and drops a database. Keep every guard when extending it.
+// terminates its own role's connections and drops a database. Keep every guard when extending it.
 if (!process.argv.includes("--yes")) throw new Error("Pass --yes to confirm the destructive reset");
 const purposeIndex = process.argv.indexOf("--database");
 const purpose = purposeIndex === -1 ? undefined : process.argv[purposeIndex + 1];
@@ -43,9 +44,9 @@ console.log(
 );
 const admin = new Pool({ connectionString: adminUrl.toString(), max: 1 });
 try {
-  // FORCE terminates other sessions. The purpose suffix, confirmation, and host guard above are the
-  // safety boundary around this destructive operation.
-  await admin.query(`DROP DATABASE IF EXISTS ${identifier(targetDatabaseName)} WITH (FORCE)`);
+  // The drop terminates this role's sessions and waits out others, such as autovacuum. The purpose
+  // suffix, confirmation, and host guard above are the safety boundary around this operation.
+  await dropLocalDatabase(admin, targetDatabaseName);
   await admin.query(`CREATE DATABASE ${identifier(targetDatabaseName)}`);
 } finally {
   await admin.end();

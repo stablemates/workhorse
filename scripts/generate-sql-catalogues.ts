@@ -244,7 +244,11 @@ async function emit(relative: string, contents: string): Promise<void> {
 
 async function assertNoInlineTypeScriptSql(): Promise<void> {
   const sourceRoot = path.join(repository, "typescript/core/src");
-  const allowedDynamicSql = new Set(["cli/reset-db.ts", "notifications.ts"]);
+  const allowedDynamicSql = new Set([
+    "cli/reset-db.ts",
+    "drop-local-database.ts",
+    "notifications.ts",
+  ]);
   const violations: string[] = [];
 
   async function inspect(directory: string): Promise<void> {
