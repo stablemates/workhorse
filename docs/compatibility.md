@@ -342,8 +342,8 @@ environment publishes those artifacts through PyPI trusted publishing with `id-t
 Before publication, the publish task generates a PEP 740 attestation beside each distribution.
 
 The Go module releases from its own `go/vX.Y.Z` tag. `scripts/release-go.sh X.Y.Z` requires
-a clean worktree and a matching `go/CHANGELOG.md` heading. It resets the test database, runs
-`pnpm check`, creates an annotated tag, and pushes that tag to `origin`.
+a clean worktree and a matching `go/CHANGELOG.md` heading. It rehearses the module release, resets
+the test database, runs `pnpm check`, creates an annotated tag, and pushes that tag to `origin`.
 
 ## What SemVer governs
 
@@ -644,6 +644,19 @@ The script covers registry visibility, signatures or checksums, and clean instal
 maintainer still reviews provenance on each registry page and runs the enqueue-and-worker smoke
 test.
 
+Every release check also runs its target before anything is tagged or published. Each rehearsal
+substitutes the artifact about to ship for the registry release:
+
+- `--wheel <file>` installs the dry-run wheel.
+- `--tarballs <directory>` installs all nine packed tarballs and checks each installed version.
+  It skips `npm view` and `npm audit signatures`, which only the registry can answer.
+- `--crate <directory>` depends on the unpacked `.crate` archive by path and checks its package ID.
+- `--go-proxy <directory>` serves a file module proxy ahead of `proxy.golang.org`. It skips the
+  checksum database for this module only, which has never seen the unpublished version, and uses a
+  scratch module cache.
+
+A check the artifact cannot satisfy therefore fails the rehearsal, not the train after the tag.
+
 A published version is never reused. An ordinary defect stays available and receives a higher
 fix. A security, secret, privacy, or legal exposure triggers credential rotation and removal where
 the registry permits it. The response also deprecates the npm release, yanks the PyPI release, or
@@ -665,7 +678,8 @@ those commits.
    a tag that disagrees with any manifest or lacks a `CHANGELOG.md` entry.
 3. `pnpm npm:release-check` validates generated package assets, lint, dependencies, types, and unit
    behavior. It builds every tarball once, then installs and exercises those exact files in clean
-   consumers against PostgreSQL.
+   consumers against PostgreSQL. It then runs `pnpm release:verify npm` against those tarballs, so
+   a post-publish check the packages cannot satisfy fails before anything is published.
 4. The build job uploads the unchanged tarballs without publication credentials. It runs on Depot
    like the rest of CI; the publish task that follows does not. npm verifies the Sigstore provenance
    bundle against the runner environment and rejects anything it reads as `self-hosted`, which is
@@ -705,7 +719,10 @@ attribute. For 0.4.0, `importlib.metadata.version("stablemates-workhorse")` is t
 
 1. Add the intended version to `go/CHANGELOG.md` and commit the release candidate.
 2. Run `scripts/release-go.sh X.Y.Z` from a clean worktree.
-3. The script runs `pnpm check`, creates `go/vX.Y.Z`, and pushes the tag only after the gate passes.
+3. The script runs `pnpm go:release-check X.Y.Z`, which validates the changelog entry and stages a
+   file module proxy that serves `HEAD:go` as `vX.Y.Z`. It then runs `pnpm release:verify go`
+   against that proxy, so a post-publish check the module cannot satisfy fails before the tag.
+4. The script runs `pnpm check`, creates `go/vX.Y.Z`, and pushes the tag only after the gate passes.
 
 ### Rust crate
 
@@ -717,7 +734,9 @@ release, crates.io held only the `0.0.0` placeholder that reserved the name.
 1. Set `version` in `rust/Cargo.toml` to the release version and commit it with the candidate.
 2. Tag `vX.Y.Z`. The build job of `.github/workflows/release.yml` runs `pnpm rust:release-check`.
    It packages the crate with verification and builds a clean consumer from the packaged archive.
-   With PostgreSQL available, that consumer enqueues one task.
+   With PostgreSQL available, that consumer enqueues one task. It then runs
+   `pnpm release:verify crate` against the unpacked archive, so a post-publish check the crate
+   cannot satisfy fails before anything is published.
 3. After npm publishes, the `crates-io` job compares the crate version with the tag. A mismatch
    writes a notice and publishes nothing, so a release that leaves the crate behind still succeeds.
 4. On a match, the job exchanges its OIDC identity for a crates.io token and runs

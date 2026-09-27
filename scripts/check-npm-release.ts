@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { checkRelease } from "./check-release.js";
 import { publishedPackages } from "./packages.js";
+import { verifyRelease } from "./verify-release.js";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const releaseDirectory = path.join(repositoryRoot, "dist-tarballs");
@@ -76,6 +77,9 @@ export async function checkNpmRelease(): Promise<void> {
 
     await run("pnpm", ["db:reset:test-packed"]);
     await run("pnpm", ["npm:test:packed"], { WORKHORSE_NPM_TARBALLS: stagedTarballs });
+    // The post-publish check, run now against the tarballs npm will receive. A check the
+    // packages cannot satisfy fails the rehearsal instead of halting the train after the tag.
+    await verifyRelease("npm", version, { tarballs: stagedTarballs });
 
     await rm(releaseDirectory, { force: true, recursive: true });
     await mkdir(releaseDirectory, { recursive: true });

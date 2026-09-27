@@ -114,6 +114,7 @@
     "go:test:database": "pnpm go:test",
     "go:build": "pnpm dashboard-bundle:fetch && go -C go build ./...",
     "go:test:race": "tsx scripts/with-env.ts go -C go test -race ./...",
+    "go:release-check": "tsx scripts/check-go-release.ts",
     "release:check": "tsx scripts/check-release.ts",
     "release:verify": "tsx scripts/verify-release.ts",
     "hooks:install": "lefthook install",

@@ -19,8 +19,8 @@ require_clean_worktree() {
 }
 
 tag="go/v$1"
-pnpm release:check go "$tag"
 
+# The rehearsal stages the module from HEAD, so it runs only on a clean worktree.
 require_clean_worktree "Refusing to release from a dirty worktree."
 if git rev-parse --quiet --verify "refs/tags/$tag" >/dev/null; then
   echo "$tag already exists locally." >&2
@@ -30,6 +30,8 @@ if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; the
   echo "$tag already exists on origin." >&2
   exit 1
 fi
+
+pnpm go:release-check "$1"
 
 pnpm db:reset:test
 pnpm db:reset:test-packed
