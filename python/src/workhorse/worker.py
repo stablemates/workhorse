@@ -1583,6 +1583,18 @@ class Worker:
         claims: dict[int, tuple[int, int | None, int]] = {}
         results: SimpleQueue[_ClaimOutcome] = SimpleQueue()
         next_claim_id = 0
+        # A long-running worker does not wait for its first maintenance pass: that pass runs on
+        # its own thread beside the first claim. A failed pass still ends the run.
+        startup_maintenance: Thread | None = None
+        maintenance_errors: list[BaseException] = []
+
+        def run_startup_maintenance() -> None:
+            try:
+                self._run_maintenance_if_due()
+            except BaseException as error:
+                maintenance_errors.append(error)
+            finally:
+                self._wake.set()
 
         def settle(outcome: _ClaimOutcome) -> None:
             limit, cohort, cohort_limit = claims.pop(outcome.claim_id)
@@ -1662,6 +1674,16 @@ class Worker:
                     return (cohort_limit, cohort, cohort_limit) if cohort_limit > 0 else None
                 return free, cohort, max(0, cohort_limit)
 
+        with self._state_lock:
+            stopping_at_start = self._stopping
+        if continuous and not stopping_at_start:
+            startup_maintenance = Thread(
+                target=run_startup_maintenance,
+                name="workhorse-startup-maintenance",
+                daemon=True,
+            )
+            startup_maintenance.start()
+
         try:
             try:
                 while True:
@@ -1678,7 +1700,7 @@ class Worker:
                         pass_ended = slots.pass_ended
                         consecutive_empty_claims = slots.consecutive_empty_claims
                         empty_wait = slots.empty_wait
-                    if stopping or failed:
+                    if stopping or failed or maintenance_errors:
                         break
                     if not continuous and pass_ended:
                         break
@@ -1701,7 +1723,8 @@ class Worker:
                         continue
                     if next_claim() is not None:
                         # tick_v1 promotes and recovers, so a claim between ticks only claims.
-                        self._run_maintenance_if_due()
+                        if startup_maintenance is None or not startup_maintenance.is_alive():
+                            self._run_maintenance_if_due()
                         while (claim := next_claim()) is not None:
                             start_claim(*claim)
                     self._wake.wait(self._dispatch_wait_seconds(listener, consecutive_empty_claims))
@@ -1713,6 +1736,8 @@ class Worker:
                 while claims:
                     settle(results.get())
         finally:
+            if startup_maintenance is not None:
+                startup_maintenance.join()
             if listener is not None:
                 listener.close()
             self._refresh_registration(force=True, draining=True)
@@ -1735,6 +1760,8 @@ class Worker:
                     "workhorse.worker.queues": self.queues,
                 },
             )
+        if maintenance_errors:
+            raise maintenance_errors[0]
         if errors:
             raise errors[0]
         if slots.claim_error is not None:

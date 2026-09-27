@@ -3,6 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-09-23
 - **Amended by:** SM-919 (a worker that batches completions splits its slots into cohorts; see below)
+- **Amended by:** [ADR 0078](0078-start-a-long-running-workers-first-claim-beside-its-startup-maintenance-pass.md)
+  (a long-running worker starts its first claim beside its startup maintenance pass)
 - **Related:** [ADR 0071](0071-give-every-worker-a-pool-and-a-dedicated-heartbeat-connection.md),
   [ADR 0072](0072-converge-the-worker-runtime-defaults.md),
   [ADR 0075](https://github.com/stablemates/workhorse/pull/236)
