@@ -1614,9 +1614,13 @@ class Worker:
             claim_id = next_claim_id
             next_claim_id += 1
             claims[claim_id] = (limit, cohort, cohort_limit)
-            delayed = self._notification_wake.is_set()
+            notified = self._notification_wake.is_set()
             self._notification_wake.clear()
             with self._state_lock:
+                # The notification delay spreads idle workers that one notification woke
+                # together. A worker whose last claim found work would claim now anyway, so it
+                # skips the delay.
+                delayed = notified and slots.consecutive_empty_claims > 0
                 slots.reserved += limit
                 if cohort is None:
                     slots.whole_claims += 1

@@ -38,6 +38,12 @@ pub(super) trait Dispatch: Send + Sync + 'static {
     fn tiers_known(&self) -> bool;
     /// The wait after `consecutive_empty` claims found nothing to run.
     fn poll_delay(&self, consecutive_empty: u32) -> Duration;
+    /// The delay before a claim that a notification woke from idle. A short random delay spreads
+    /// one notification's claims across workers.
+    fn notification_delay(&self) -> Duration {
+        let spread = (random_fraction() * (MAX_NOTIFICATION_DELAY_MS + 1) as f64) as u64;
+        Duration::from_millis(spread)
+    }
     /// Claims up to `limit` tasks, at most `fast_limit` of them from fast-tier queues. A failed
     /// claim reports it and returns what it leased first.
     fn claim(
@@ -391,15 +397,16 @@ impl<D: Dispatch> Dispatcher<D> {
                 None => slots.whole_claims += 1,
             }
         }
-        let delayed = std::mem::take(&mut self.notification_delay_pending);
+        // The notification delay spreads idle workers that one notification woke together. A worker
+        // whose last claim found work would claim now anyway, so it claims without the delay.
+        let delayed =
+            std::mem::take(&mut self.notification_delay_pending) && self.consecutive_empty > 0;
         let wake_version = self.wake_version;
         let worker = Arc::clone(&self.worker);
         let stopping = Arc::clone(&self.stopping);
         let handle = self.claims.spawn(async move {
             if delayed {
-                // A short random delay spreads one notification's claims across workers.
-                let spread = (random_fraction() * (MAX_NOTIFICATION_DELAY_MS + 1) as f64) as u64;
-                tokio::time::sleep(Duration::from_millis(spread)).await;
+                tokio::time::sleep(worker.notification_delay()).await;
                 if stopping.load(Ordering::SeqCst) || worker.paused() {
                     return Claimed { wake_version, tasks: None };
                 }
@@ -568,6 +575,8 @@ mod tests {
     use super::*;
 
     const WAIT: Duration = Duration::from_secs(5);
+    /// Longer than any wait a test makes for a claim it expects at once.
+    const NOTIFICATION_DELAY: Duration = Duration::from_millis(300);
 
     /// A claimed task. `gate` holds its handler until the test finishes it. A `fuse` task then
     /// completes on the fast tier and asks for a fused claim.
@@ -634,6 +643,10 @@ mod tests {
 
         fn poll_delay(&self, _: u32) -> Duration {
             self.poll
+        }
+
+        fn notification_delay(&self) -> Duration {
+            NOTIFICATION_DELAY
         }
 
         fn claim(
@@ -900,6 +913,37 @@ mod tests {
         harness.notification.notify_one();
         let (_, _, answer) = harness.next_claim().await;
         let _ = answer.send(Vec::new());
+        harness.stop().await;
+    }
+
+    // SM-933: a dependency release notifies the queue on every completion. A busy worker that paid
+    // the notification delay on each of those claims spent most of its time asleep.
+    #[tokio::test]
+    async fn a_notified_claim_waits_only_after_a_claim_that_found_nothing() {
+        let mut harness = Harness::start_plain(2, Duration::from_secs(60), false);
+        let (_, _, answer) = harness.next_claim().await;
+        let (tasks, mut finishers) = gated(2);
+        let _ = answer.send(tasks);
+        settled().await;
+
+        // The last claim found work, so the claim a notification precedes starts at once.
+        harness.notification.notify_one();
+        settled().await;
+        let freed = Instant::now();
+        let _ = finishers.remove(0).send(());
+        let (limit, _, answer) = harness.next_claim().await;
+        assert_eq!(limit, 1);
+        assert!(freed.elapsed() < NOTIFICATION_DELAY, "a busy worker waited out the delay");
+
+        // After an empty claim the worker is idle, so a notification ends its wait with the delay.
+        let _ = answer.send(Vec::new());
+        settled().await;
+        let notified = Instant::now();
+        harness.notification.notify_one();
+        let (_, _, answer) = harness.next_claim().await;
+        assert!(notified.elapsed() >= NOTIFICATION_DELAY, "an idle worker skipped the delay");
+        let _ = answer.send(Vec::new());
+        drop(finishers);
         harness.stop().await;
     }
 

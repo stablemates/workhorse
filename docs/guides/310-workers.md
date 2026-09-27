@@ -90,8 +90,9 @@ The notification is only a hint. If PostgreSQL drops the listener or a message i
 worker reconnects and still checks through `pollMs`. This keeps the database state authoritative:
 a missing notification can delay a claim, but it cannot strand the task.
 
-Workers add a small random delay before a notification-triggered claim, so one enqueue does not
-make every process query at the same instant. Without a listener, consecutive empty checks back off
+An idle worker adds a small random delay before a notification-triggered claim, so one enqueue does
+not make every process query at the same instant. A busy worker claims at once, because a dependency
+release notifies on every completion and the delay would otherwise slow every claim. Without a listener, consecutive empty checks back off
 to a cap and reset as soon as a claim succeeds.
 
 ## Running workers in their own process
