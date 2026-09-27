@@ -217,6 +217,47 @@ describe("worker dispatch", () => {
     expect(fake.completed).toEqual(expect.arrayContaining(["second-0", "third-0", "third-1"]));
   });
 
+  it("claims before its startup maintenance pass returns", async () => {
+    const fake = fakeQueue({ answer: () => [] });
+    const maintenance = deferred<[]>();
+    let maintenanceCalls = 0;
+    const queue = {
+      ...fake.queue,
+      runMaintenance: async () => {
+        maintenanceCalls += 1;
+        return maintenance.promise;
+      },
+    } as unknown as WorkerQueueApi;
+    const worker = new Worker(queue, { registryIntervalMs: 0 }).handle(
+      "dispatch",
+      async () => null,
+    );
+    const running = worker.run();
+
+    await fake.claimsReceived(1);
+    expect(maintenanceCalls).toBe(1);
+
+    worker.stop();
+    maintenance.resolve([]);
+    await running;
+  });
+
+  it("ends the run with the error of a failed startup maintenance pass", async () => {
+    const fake = fakeQueue({ answer: () => [] });
+    const queue = {
+      ...fake.queue,
+      runMaintenance: async () => {
+        throw new Error("startup maintenance failed");
+      },
+    } as unknown as WorkerQueueApi;
+    const worker = new Worker(queue, { registryIntervalMs: 0 }).handle(
+      "dispatch",
+      async () => null,
+    );
+
+    await expect(worker.run()).rejects.toThrow("startup maintenance failed");
+  });
+
   it("never holds more claimed tasks than its concurrency", async () => {
     let supplied = 0;
     let running = 0;

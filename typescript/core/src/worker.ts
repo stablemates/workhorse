@@ -1623,7 +1623,7 @@ export class Worker {
     this.reservedHeartbeatChannel()?.reserve();
     const runFailure = await (async () => {
       if (shouldStop()) return;
-      await this.runMaintenance();
+      await this.refreshRegistration();
       if (shouldStop()) return;
 
       const subscribeToTaskNotifications = this.queue.subscribeToTaskNotifications;
@@ -1650,7 +1650,10 @@ export class Worker {
         );
       }
 
-      const maintenance = this.maintenanceLoop(shouldStop, signal).catch(fail);
+      // The first claim does not wait for the startup maintenance pass.
+      const maintenance = this.runMaintenance()
+        .then(() => this.maintenanceLoop(shouldStop, signal))
+        .catch(fail);
       const registration = this.registrationLoop(shouldStop, signal).catch(fail);
       const dispatch = this.dispatchLoop(shouldStop, signal).catch(fail);
       await Promise.all([maintenance, registration, dispatch]);
