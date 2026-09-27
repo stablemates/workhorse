@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { PoolClient } from "pg";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readDashboardTaskDetail } from "../../dashboard-server/src/server/read-model.js";
 import { dashboardDatabase } from "../../dashboard-server/src/server/sql.js";
 import {
@@ -1468,6 +1468,104 @@ describe("task dependencies", () => {
       [races.map(({ dependentId }) => dependentId)],
     );
     expect(settled.rows.map(({ state }) => state)).toEqual(races.map(({ expected }) => expected));
+  });
+
+  // A batch and a resolver can both need the same two prerequisites: the batch to hold them against
+  // completion, and the resolver to delete them as rejected dependents. Each must lock them in task
+  // ID order, or each can hold one row while it waits for the other. While a third transaction
+  // holds the lowest ID, both must wait for it before they lock the highest.
+  it("does not deadlock a two-request batch with a resolver rejecting both prerequisites", async () => {
+    const rootId = await queue.enqueue("rejecting-root", null, {
+      queue: "rejecting-roots",
+      maxAttempts: 1,
+    });
+    const root = await queue.claim("rejecting-root-worker", { queue: "rejecting-roots" });
+    expect(root?.id).toBe(rootId);
+    const dependencies = {
+      prerequisiteTaskIds: [rootId],
+      onSuccess: "release",
+      onFailure: "fail",
+      onCancellation: "cancel",
+    } as const;
+    const prerequisiteIds = await queue.enqueueMany(
+      Array.from({ length: 2 }, () => ({
+        type: "rejected-prerequisite",
+        payload: null,
+        options: { queue: "rejected-prerequisites", dependencies },
+      })),
+    );
+    const [lowest, highest] = prerequisiteIds.toSorted() as [string, string];
+
+    const blocker = await pool.connect();
+    const enqueuer = await pool.connect();
+    let batch: Promise<string[]> | undefined;
+    let failure: Promise<unknown> | undefined;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", [
+        lowest,
+      ]);
+      const blockerPid = (await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
+        .rows[0]!.pid;
+      const waitingBehindBlocker = async (count: number) =>
+        vi.waitFor(
+          async () => {
+            const waiting = await pool.query<{ count: number }>(
+              `SELECT count(*)::integer AS count FROM pg_stat_activity
+                WHERE datname = current_database() AND $1::integer = ANY(pg_blocking_pids(pid))`,
+              [blockerPid],
+            );
+            expect(waiting.rows[0]!.count).toBe(count);
+          },
+          { timeout: 10_000, interval: 20 },
+        );
+
+      // The first request names the highest prerequisite, so a batch that locks request by
+      // request would hold it while it waits for the lowest.
+      batch = queue.enqueueMany(
+        [highest, lowest].map((prerequisiteTaskId) => ({
+          type: "rejected-dependent",
+          payload: null,
+          options: {
+            queue: "rejected-dependents",
+            dependencies: { ...dependencies, prerequisiteTaskIds: [prerequisiteTaskId] },
+          },
+        })),
+        enqueuer,
+      );
+      await waitingBehindBlocker(1);
+      const unlocked = await pool.query(
+        "SELECT FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE SKIP LOCKED",
+        [highest],
+      );
+      expect(unlocked.rowCount).toBe(1);
+
+      // The root's failure rejects both prerequisites. A resolver that deletes them in any order
+      // could lock the highest before it waits for the lowest.
+      failure = queue.fail(root!, "rejecting-root-worker", new Error("reject both"));
+      await waitingBehindBlocker(2);
+      const shared = await pool.query(
+        "SELECT FROM workhorse.task_runtime WHERE task_id = $1 FOR KEY SHARE SKIP LOCKED",
+        [highest],
+      );
+      expect(shared.rowCount).toBe(1);
+
+      await blocker.query("ROLLBACK");
+      const [dependentIds, failed] = await within(Promise.all([batch, failure]));
+      expect(failed).toBe("failed");
+      for (const taskId of [...prerequisiteIds, ...dependentIds]) {
+        await expect(admin.getTask(taskId)).resolves.toMatchObject({
+          state: "failed",
+          error: expect.objectContaining({ name: "DependencyFailed" }),
+        });
+      }
+    } finally {
+      await blocker.query("ROLLBACK");
+      await Promise.allSettled([batch, failure]);
+      blocker.release();
+      enqueuer.release();
+    }
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
   });
 
   it("settles every terminal prerequisite of an enqueue in one pass", async () => {

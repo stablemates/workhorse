@@ -5535,6 +5535,7 @@ DECLARE
   v_execution_timeout_ms numeric;
   v_dependencies jsonb;
   v_prerequisite_task_ids uuid[];
+  v_batch_prerequisite_task_ids uuid[];
   v_prerequisite_task_id uuid;
   v_on_success text;
   v_on_failure text;
@@ -5641,6 +5642,44 @@ BEGIN
       FROM jsonb_array_elements(p_requests) input(request)
      WHERE COALESCE(request->>'queue', '') <> ''
   ));
+
+  -- Every terminal transition deletes the runtime row before it records the outcome that resolves
+  -- dependents. Holding the runtime row makes that transition wait until this batch's edges commit,
+  -- so its resolver sees them. A transition that committed first has already deleted the row, and
+  -- the outcome reads in the loop see its outcome. Key-share locks do not block the non-key updates
+  -- that claims and heartbeats make.
+  --
+  -- The batch locks the prerequisites of all its requests before the first request, in identity
+  -- order. A resolver locks the dependents it deletes in the same order, so neither can hold a row
+  -- the other waits for. Locking request by request let one request hold a row that a resolver was
+  -- about to delete while the next request waited on a row that resolver had already locked. The
+  -- runtime rows are locked before the task rows, in the order completion and purge lock them.
+  -- A value that is not a UUID is left to the per-request validation, which raises its usual
+  -- error. Every new task identity is random, so no request can name a task this batch creates.
+  v_batch_prerequisite_task_ids := ARRAY(
+    SELECT DISTINCT prerequisite.value::uuid
+      FROM jsonb_array_elements(p_requests) input(request)
+      CROSS JOIN LATERAL (
+        SELECT input.request->>'prerequisiteTaskId' AS value
+         WHERE jsonb_typeof(input.request->'prerequisiteTaskId') = 'string'
+        UNION ALL
+        SELECT item.value
+          FROM jsonb_array_elements_text(
+            CASE WHEN jsonb_typeof(input.request->'dependencies') = 'object'
+                  AND jsonb_typeof(input.request->'dependencies'->'prerequisiteTaskIds') = 'array'
+              THEN input.request->'dependencies'->'prerequisiteTaskIds' ELSE '[]'::jsonb END
+          ) item(value)
+      ) prerequisite
+     WHERE prerequisite.value ~* '^(\{[0-9a-f]{4}(-?[0-9a-f]{4}){7}\}|[0-9a-f]{4}(-?[0-9a-f]{4}){7})$'
+  );
+  IF cardinality(v_batch_prerequisite_task_ids) > 0 THEN
+    PERFORM 1 FROM workhorse.task_runtime runtime
+     WHERE runtime.task_id = ANY(v_batch_prerequisite_task_ids)
+     ORDER BY runtime.task_id FOR KEY SHARE;
+    PERFORM 1 FROM workhorse.task prerequisite
+     WHERE prerequisite.id = ANY(v_batch_prerequisite_task_ids)
+     ORDER BY prerequisite.id FOR KEY SHARE;
+  END IF;
 
   FOR v_request, v_ordinal IN
     SELECT request, ordinality::integer
@@ -5822,13 +5861,9 @@ BEGIN
       ) THEN
         RAISE EXCEPTION 'dependency prerequisiteTaskIds must be unique';
       END IF;
-      -- Every terminal transition deletes the runtime row before it records the outcome that
-      -- resolves dependents. Holding the runtime row makes that transition wait until this edge
-      -- commits, so its resolver sees the edge. A transition that committed first has already
-      -- deleted the row, and the outcome reads below see its outcome. Key-share locks do not
-      -- block the non-key updates that claims and heartbeats make. The runtime rows are locked
-      -- before the task rows, in the order completion and purge lock them, so neither side can
-      -- hold one row while it waits for the other.
+      -- The batch already holds these rows, so locking them again waits for nothing. The lock
+      -- still counts the prerequisites that exist, and it covers a spelling of a UUID that the
+      -- batch pattern missed.
       PERFORM 1 FROM workhorse.task_runtime runtime
        WHERE runtime.task_id = ANY(v_prerequisite_task_ids)
        ORDER BY runtime.task_id FOR KEY SHARE;
@@ -11529,8 +11564,10 @@ $$;
 -- before it touches any edge. A dependent's own terminal transition also holds its runtime row
 -- before it releases the dependent's edges, so the two cannot wait for each other. The lock does
 -- not conflict with the key-share lock an enqueue takes on a prerequisite's runtime row. Only the
--- delete of a dependent that fails or is canceled waits for such an enqueue, and that enqueue
--- waits for nothing the resolver holds.
+-- delete of a dependent that fails or is canceled waits for such an enqueue. Before that delete,
+-- the resolver locks every rejected dependent for update in identity order, the order in which an
+-- enqueue batch locks all its prerequisites. The delete's plan would otherwise lock them in any
+-- order, and a batch holding one could wait for another that the resolver already held.
 --
 -- Each blocked dependent carries `pending_prerequisites`, the number of its edges still pending,
 -- and `dependency_rejected`, whether a resolved edge chose `fail` or `cancel`. The resolver
@@ -11664,6 +11701,9 @@ BEGIN
   -- ties broken by prerequisite identity. The terminal outcomes are this statement's last write, so
   -- their trigger resolves the next level after this level's evidence exists.
   IF v_rejected_task_ids IS NOT NULL THEN
+    PERFORM 1 FROM workhorse.task_runtime runtime
+     WHERE runtime.task_id = ANY(v_rejected_task_ids)
+     ORDER BY runtime.task_id FOR UPDATE;
     WITH settled AS (
       SELECT rejected.task_id,
              CASE WHEN final.resolution = 'fail' THEN 'failed' ELSE 'canceled' END AS state,
@@ -18278,10 +18318,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (29, 'claim policy limited tasks as a set'),
   (30, 'release dependents through a pending-prerequisite counter'),
   (31, 'lock a worker''s fast-tier rows in task ID order'),
-  (32, 'a child terminal at creation settles its parent')
+  (32, 'a child terminal at creation settles its parent'),
+  (33, 'lock an enqueue batch''s prerequisites before its first request')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (32) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (33) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

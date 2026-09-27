@@ -228,6 +228,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "a child terminal at creation settles its parent",
     kind: "additive",
   },
+  {
+    fromVersion: 32,
+    toVersion: 33,
+    file: "0033-lock-an-enqueue-batchs-prerequisites-before-its-first-request.sql",
+    description: "lock an enqueue batch's prerequisites before its first request",
+    kind: "additive",
+  },
 ];
 
 /**
