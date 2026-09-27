@@ -180,6 +180,11 @@ def _dispatch_cohorts(concurrency: int, spare_connections: int | None = None) ->
 # rejects longer arrays and a larger claim limit.
 _COMPLETION_BATCH_LIMIT = 100
 
+# Times one batched completion statement is sent at most when PostgreSQL rolls it back as a
+# deadlock victim.
+_COMPLETION_DEADLOCK_ATTEMPTS = 3
+_DEADLOCK_DETECTED_SQLSTATE = "40P01"
+
 
 @dataclass(eq=False, slots=True)
 class _DispatchSlots:
@@ -2061,27 +2066,43 @@ class Worker:
     def _send_completion_chunk(
         self, queue_name: str, chunk: list[_PendingCompletion], claim_limit: int
     ) -> None:
-        sent_at = monotonic()
-        try:
-            rows = self._executor.rows(
-                _STATEMENTS.complete_many_and_claim,
-                (
-                    self.worker_id,
-                    [pending.task.id for pending in chunk],
-                    [pending.task.fence_token for pending in chunk],
-                    [pending.encoded_result for pending in chunk],
-                    queue_name,
-                    claim_limit,
-                    self.lease_ms,
-                ),
-            )
-        except Exception as error:
-            if not isinstance(_translate_database_error(error), FastTierUnsupportedError):
-                raise
-            self._mark_full_tier(queue_name, sent_at)
-            for pending in chunk:
-                pending.full_tier = True
-            return
+        """Send one complete_many_and_claim_v1 statement and answer every completion in it.
+
+        The chunk names its tasks in task ID order, as a heartbeat names its leases, so the two
+        statements lock shared runtime rows in the same order. The fused claim can still keep a
+        lock on a row that another worker leased first. PostgreSQL then rolls back the whole
+        statement with 40P01, so the chunk is sent again, up to _COMPLETION_DEADLOCK_ATTEMPTS times.
+        """
+        chunk.sort(key=lambda pending: pending.task.id)
+        parameters = (
+            self.worker_id,
+            [pending.task.id for pending in chunk],
+            [pending.task.fence_token for pending in chunk],
+            [pending.encoded_result for pending in chunk],
+            queue_name,
+            claim_limit,
+            self.lease_ms,
+        )
+        attempt = 1
+        while True:
+            sent_at = monotonic()
+            try:
+                rows = self._executor.rows(_STATEMENTS.complete_many_and_claim, parameters)
+                break
+            except Exception as error:
+                sqlstate = getattr(error, "sqlstate", None) or getattr(error, "code", None)
+                if (
+                    attempt < _COMPLETION_DEADLOCK_ATTEMPTS
+                    and sqlstate == _DEADLOCK_DETECTED_SQLSTATE
+                ):
+                    attempt += 1
+                    continue
+                if not isinstance(_translate_database_error(error), FastTierUnsupportedError):
+                    raise
+                self._mark_full_tier(queue_name, sent_at)
+                for pending in chunk:
+                    pending.full_tier = True
+                return
         # Only the first row carries the accepted completions. A statement that claims nothing
         # still returns that row, with every claim column null.
         accepted = (

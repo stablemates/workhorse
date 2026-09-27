@@ -3060,9 +3060,11 @@ fuse a completion with a refill claim, for `freeSlots() + 1` tasks under the ref
 hand the slot over directly. In Python, `Worker._reserve_completion_claim` reserves those slots and
 `Worker._send_batched_completion` sends one statement per queue and cohort at a time. Completions
 that arrive while it is in flight share the next statement, split into chunks of at most 100 tasks
-and 100 claimed slots. The Go worker's limit is the free slots plus one, capped by the free slots of
-the completing task's cohort plus one. The Rust worker completes with a zero claim limit and claims
-separately.
+and 100 claimed slots. `Worker._send_completion_chunk` names each chunk's tasks in task ID order.
+When PostgreSQL rolls the chunk back with SQLSTATE `40P01`, it sends the chunk again, up to
+`_COMPLETION_DEADLOCK_ATTEMPTS` (3) times in total, because nothing in it committed. The Go worker's
+limit is the free slots plus one, capped by the free slots of the completing task's cohort plus one.
+The Rust worker completes with a zero claim limit and claims separately.
 
 The TypeScript and Python workers split their slots into cohorts so that fused completions do not
 run in lockstep ([ADR 0076](decisions/0076-keep-overlapping-batched-claims-in-flight-to-fill-worker-slots.md#cohorts-for-batched-completions)).
