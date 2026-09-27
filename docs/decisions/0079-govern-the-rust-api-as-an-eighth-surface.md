@@ -93,6 +93,12 @@ The earliest qualifying pair is 0.5.0 and 0.6.0.
 The Rust clock runs beside the others and does not replace them. The tag needs every clock to have
 run out.
 
+### The cold install covers Rust
+
+Gate 3 of ADR 0056 needs a fresh host to install the candidate from the published registries in all
+three languages. That gate now covers four. The fresh host also adds the `workhorse` crate from
+crates.io, following only the site's installation page, and runs a job end to end.
+
 ### The crate rides the train and floats afterwards
 
 The Rust crate joins the one 1.0.0 release train of ADR 0054. It publishes 1.0.0 from the same source
@@ -102,6 +108,7 @@ floats independently, like the other three, and a Rust 2.0.0 does not move them.
 ## Consequences
 
 - Gate 1 has eight checks, and the Rust API holds its one before 1.0.0.
+- Gate 3's cold install needs a Rust job to run on the fresh host.
 - A change to the crate's public surface updates `api/rust.txt` in the same commit. Review reads a
   gone line as a break.
 - The snapshot reads rustdoc JSON, whose format moves with the toolchain. The reader,

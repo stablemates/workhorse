@@ -538,7 +538,8 @@ Six gates hold the tag, and each is met with evidence rather than with an assert
    ([ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md)).
 3. The migration rehearsals ADR 0055 placed have run, the recovery procedure has been executed
    against a deliberate mid-migration failure, and a fresh host has installed the candidate from the
-   registries in all three languages.
+   registries in all four languages, Rust from crates.io included
+   ([ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md)).
 4. One database has run 30 consecutive days under continuous work without being reinstalled, across
    daily partition rollover, a retention pass that dropped a partition, and an ungraceful worker
    kill with clean recovery.

@@ -105,7 +105,7 @@ protocols the installed schema serves. A release ships it; the operator applies 
 _Avoid_: Cleanup migration, breaking migration, down migration
 
 **Release train**:
-The staged publication of Python, npm, and Go artifacts from one source commit within one
+The staged publication of Python, npm, Go, and Rust artifacts from one source commit within one
 controlled release window.
 _Avoid_: Simultaneous release, coordinated release
 
