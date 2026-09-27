@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   DEFAULT_IDEMPOTENCY_SCOPE,
   DEFAULT_IDEMPOTENCY_TTL_MS,
+  DependencyLimitExceededError,
   EnqueueIdempotencyConflictError,
   type EnqueueOptions,
   installSchema,
@@ -11,6 +12,7 @@ import {
   MAX_IDEMPOTENCY_KEY_BYTES,
   MAX_IDEMPOTENCY_SCOPE_BYTES,
   MAX_IDEMPOTENCY_TTL_MS,
+  MAX_TASK_DEPENDENTS,
   MAX_THROTTLE_WINDOW_MS,
   TaskContractValidationError,
   Queue,
@@ -634,6 +636,96 @@ describe("enqueue contracts", () => {
       [ids],
     );
     expect(projected.rows[0]).toEqual({ count: 5 });
+  });
+
+  describe("a batch with more than one invalid member", () => {
+    // The request loop rejects a member as it reaches it, so the first such member in input order
+    // decides the error. Dependency limits are checked once, after the loop, by the statement
+    // trigger on task_dependency. It sees every edge of the batch and names the lowest task ID.
+
+    /** Fills a new prerequisite with MAX_TASK_DEPENDENTS dependents, so one more edge overflows. */
+    async function fullPrerequisite(label: string): Promise<string> {
+      const prerequisiteId = await queue.enqueue(`multi-invalid-${label}`, null);
+      await queue.enqueueMany(
+        Array.from({ length: MAX_TASK_DEPENDENTS }, (_unused, index) => ({
+          type: `multi-invalid-${label}-dependent`,
+          payload: { index },
+          options: { prerequisiteTaskId: prerequisiteId },
+        })),
+      );
+      return prerequisiteId;
+    }
+
+    async function batchTaskCount(): Promise<number> {
+      const counted = await pool.query<{ count: number }>(
+        "SELECT count(*)::integer AS count FROM workhorse.task WHERE task_type LIKE 'batch-%'",
+      );
+      return counted.rows[0]!.count;
+    }
+
+    it("reports the first member the request loop rejects", async () => {
+      await queue.enqueue("keyed", { version: 1 }, { idempotency: { key: "multi-invalid" } });
+      const missing = { prerequisiteTaskId: "00000000-0000-7000-8000-000000000000" };
+      const conflicting = { idempotency: { key: "multi-invalid" } };
+
+      await expect(
+        queue.enqueueMany([
+          { type: "batch-valid", payload: null },
+          { type: "batch-missing", payload: null, options: missing },
+          { type: "keyed", payload: { version: 2 }, options: conflicting },
+        ]),
+      ).rejects.toThrow(/prerequisite task does not exist/);
+      await expect(
+        queue.enqueueMany([
+          { type: "batch-valid", payload: null },
+          { type: "keyed", payload: { version: 2 }, options: conflicting },
+          { type: "batch-missing", payload: null, options: missing },
+        ]),
+      ).rejects.toBeInstanceOf(EnqueueIdempotencyConflictError);
+      expect(await batchTaskCount()).toBe(0);
+    });
+
+    it("reports a later loop rejection before an earlier dependency limit", async () => {
+      const full = await fullPrerequisite("full");
+
+      await expect(
+        queue.enqueueMany([
+          { type: "batch-overflow", payload: null, options: { prerequisiteTaskId: full } },
+          {
+            type: "batch-missing",
+            payload: null,
+            options: { prerequisiteTaskId: "00000000-0000-7000-8000-000000000000" },
+          },
+        ]),
+      ).rejects.toThrow(/prerequisite task does not exist/);
+      expect(await batchTaskCount()).toBe(0);
+    });
+
+    it("names the lowest prerequisite ID when members overflow different prerequisites", async () => {
+      const [lower, higher] = [await fullPrerequisite("a"), await fullPrerequisite("b")].toSorted();
+
+      for (const order of [
+        [higher!, lower!],
+        [lower!, higher!],
+      ]) {
+        const error = await queue
+          .enqueueMany(
+            order.map((prerequisiteTaskId) => ({
+              type: "batch-overflow",
+              payload: null,
+              options: { prerequisiteTaskId },
+            })),
+          )
+          .catch((caught: unknown) => caught);
+        expect(error).toBeInstanceOf(DependencyLimitExceededError);
+        expect(error).toMatchObject({
+          taskId: lower,
+          limit: "dependents",
+          max: MAX_TASK_DEPENDENTS,
+        });
+      }
+      expect(await batchTaskCount()).toBe(0);
+    });
   });
 
   it("persists bounded priority and claims higher priorities before FIFO peers", async () => {

@@ -77,6 +77,7 @@
     "benchmark:dashboard-read-surface": "tsx scripts/with-env.ts tsx scripts/benchmark-dashboard-read-surface.ts",
     "benchmark:statistics-tiers": "tsx scripts/with-env.ts tsx scripts/benchmark-statistics-tiers.ts",
     "benchmark:saturated-claim": "tsx scripts/with-env.ts tsx scripts/benchmark-saturated-claim.ts",
+    "benchmark:set-based-enqueue": "tsx scripts/with-env.ts tsx scripts/benchmark-set-based-enqueue.ts",
     "benchmark:tenant-cardinality": "tsx scripts/with-env.ts tsx scripts/benchmark-tenant-cardinality.ts",
     "soak:observe": "tsx scripts/soak/observe.ts",
     "soak:report": "tsx scripts/soak/report.ts",
