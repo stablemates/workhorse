@@ -292,8 +292,8 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
         "SELECT namespace, queue_name, max_active, max_active_per_key, updated_at\n         FROM workhorse.concurrency_policy\n        WHERE cardinality($1::text[]) = 0 OR queue_name = ANY($1::text[])\n        ORDER BY queue_name",
     ),
     "queue_control": (
-        "SELECT queue_name, paused FROM workhorse.queue_control",
-        "SELECT queue_name, paused FROM workhorse.queue_control",
+        "SELECT queue_name, paused, tier, record_attempts, record_claims FROM workhorse.queue_control",
+        "SELECT queue_name, paused, tier, record_attempts, record_claims FROM workhorse.queue_control",
     ),
     "schedule_definition": (
         "SELECT DISTINCT namespace FROM workhorse.schedule_definition ORDER BY namespace",

@@ -13,6 +13,9 @@ function queueStatus(overrides: Partial<AdminQueueStatus> = {}): AdminQueueStatu
   return {
     queue: "default",
     paused: false,
+    tier: "full",
+    recordAttempts: false,
+    recordClaims: false,
     readyDepth: 3,
     scheduledDepth: 1,
     activeLeases: 2,
@@ -40,8 +43,25 @@ describe("admin formatting", () => {
 
   it("renders queue pressure and pause state in one row", () => {
     const rows = queuesTableRows([queueStatus({ paused: true })]);
-    expect(rows).toEqual([["default", "yes", "3", "1", "2", "0", "42s", "2/8", "-"]]);
+    expect(rows).toEqual([
+      ["default", "yes", "full", "all", "3", "1", "2", "0", "42s", "2/8", "-"],
+    ]);
     expect(rows[0]).toHaveLength(QUEUES_TABLE_HEADERS.length);
+  });
+
+  it("lists a fast-tier queue's opt-in history instead of full history", () => {
+    const rows = queuesTableRows([
+      queueStatus({ queue: "bare", tier: "fast", concurrencyLimit: null }),
+      queueStatus({ queue: "claims", tier: "fast", recordClaims: true, concurrencyLimit: null }),
+      queueStatus({ queue: "both", tier: "fast", recordAttempts: true, recordClaims: true }),
+      queueStatus({ queue: "ignored", tier: "full", recordAttempts: true }),
+    ]);
+    expect(rows.map((row) => row.slice(0, 4))).toEqual([
+      ["bare", "no", "fast", "none"],
+      ["claims", "no", "fast", "claims"],
+      ["both", "no", "fast", "attempts,claims"],
+      ["ignored", "no", "full", "all"],
+    ]);
   });
 
   it("formats durations into compact operator units", () => {

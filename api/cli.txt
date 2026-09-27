@@ -40,6 +40,8 @@ complete-human <task-id>  mutates
 pause <queue>  mutates
 resume <queue>  mutates
 purge <queue>  mutates
+set-tier <queue>  mutates
+set-history <queue>  mutates
 pause-worker <worker-id>  mutates
 resume-worker <worker-id>  mutates
 
@@ -71,10 +73,13 @@ resume-worker <worker-id>  mutates
 --payload-json <string>
 --queue <string>
 --reason <string>
+--record-attempts <string>
+--record-claims <string>
 --request-id <string>
 --signal-cursor <string>
 --state <string>  (repeatable)
 --tag <string>  (repeatable)
+--tier <string>
 --type <string>
 --yes
 
@@ -177,6 +182,8 @@ admin complete-human  HumanWaitCompletionResult
 admin pause           AdminQueuePauseReport
 admin resume          AdminQueuePauseReport
 admin purge           AdminQueuePurgeReport
+admin set-tier        AdminQueueTierReport
+admin set-history     AdminQueueHistoryReport
 admin pause-worker    WorkerPauseResult
 admin resume-worker   WorkerPauseResult
 
@@ -192,6 +199,12 @@ interface AdminMaintenanceState {
   retentionPolicy: RetentionPolicy;
 }
 
+interface AdminQueueHistoryReport {
+  readonly queue: string;
+  readonly recordAttempts: boolean;
+  readonly recordClaims: boolean;
+}
+
 interface AdminQueuePauseReport {
   readonly queue: string;
   readonly paused: boolean;
@@ -205,6 +218,9 @@ interface AdminQueuePurgeReport {
 interface AdminQueueStatus {
   queue: string;
   paused: boolean;
+  tier: QueueTier;
+  recordAttempts: boolean;
+  recordClaims: boolean;
   readyDepth: number;
   scheduledDepth: number;
   activeLeases: number;
@@ -214,6 +230,11 @@ interface AdminQueueStatus {
   concurrencyActive: number;
   rateLimitPerSecond: number | null;
   rateLimitThrottledReadyDepth: number;
+}
+
+interface AdminQueueTierReport {
+  readonly queue: string;
+  readonly tier: QueueTier;
 }
 
 interface Budget {
@@ -597,6 +618,8 @@ interface QueueHealthStatus {
   level: "healthy" | "degraded" | "critical";
   reasons: QueueHealthReason[];
 }
+
+type QueueTier = "fast" | "full";
 
 interface RateLimit {
   /** Tokens added during each interval. One token admits one task start. */

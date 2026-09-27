@@ -338,7 +338,7 @@ pub const CONCURRENCY_POLICY: &str = r#"SELECT namespace, queue_name, max_active
         ORDER BY queue_name"#;
 
 /// `queue_control` (internal)
-pub const QUEUE_CONTROL: &str = r#"SELECT queue_name, paused FROM workhorse.queue_control"#;
+pub const QUEUE_CONTROL: &str = r#"SELECT queue_name, paused, tier, record_attempts, record_claims FROM workhorse.queue_control"#;
 
 /// `schedule_definition` (internal)
 pub const SCHEDULE_DEFINITION: &str =

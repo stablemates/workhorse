@@ -671,7 +671,7 @@
     {
       "name": "queue_control",
       "arity": 0,
-      "contract": "SELECT queue_name, paused FROM workhorse.queue_control",
+      "contract": "SELECT queue_name, paused, tier, record_attempts, record_claims FROM workhorse.queue_control",
       "catalogues": ["internal"]
     },
     {
