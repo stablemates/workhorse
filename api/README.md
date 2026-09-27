@@ -3,7 +3,8 @@
 Each file here records one governed surface as it stands on this commit. A pull request
 that removes a name, renames one, or narrows a type changes a file here, so the change is visible in
 review and the check names it. [ADR 0054](../docs/decisions/0054-define-what-1-0-0-promises.md)
-defines the surfaces, and Gate 1 of
+and [ADR 0079](../docs/decisions/0079-govern-the-rust-api-as-an-eighth-surface.md) define the
+surfaces, and Gate 1 of
 [ADR 0056](../docs/decisions/0056-set-the-1-0-0-exit-criteria.md) requires the checks.
 
 | File             | Surface                                                            | Check                          | Generator                         |
@@ -11,6 +12,7 @@ defines the surfaces, and Gate 1 of
 | `typescript.txt` | Every published package's `exports` map and shipped `.d.ts`        | `pnpm typescript-api:check`    | `pnpm typescript-api:generate`    |
 | `python.txt`     | Every public `workhorse` module's `__all__`                        | `pnpm python-api:check`        | `pnpm python-api:generate`        |
 | `go.txt`         | Exported identifiers of the Go module's non-`internal` packages    | `pnpm go-api:check`            | `pnpm go-api:generate`            |
+| `rust.txt`       | Every public item of the `workhorse` crate, per feature            | `pnpm rust-api:check`          | `pnpm rust-api:generate`          |
 | `cli.txt`        | The `workhorse` commands, flags, exit codes, and `--json` payloads | `pnpm cli-surface:check`       | `pnpm cli-surface:generate`       |
 | `telemetry.txt`  | Every instrument, span, and attribute name Workhorse emits         | `pnpm telemetry-surface:check` | `pnpm telemetry-surface:generate` |
 
@@ -36,6 +38,18 @@ The baseline is pinned as data rather than looked up because CI checks out witho
 generator is the only half that reads Git, and it refuses to write a file with no baseline: a
 comparison against nothing would pass every removal silently, which is what these checks exist to
 prevent.
+
+## How the Rust file handles features
+
+A Cargo feature can put a public item into the build, so no single build shows the whole surface.
+`rust.txt` lists the crate's feature names first, then every item of a build with no features, then
+one section per feature. Each line in a feature's section is an item that feature adds, prefixed with
+its `#[cfg(feature = "…")]`. Moving an existing item behind a feature therefore changes its line, and
+the check reports the old line as gone. A feature that adds no item says so in one line.
+
+The generator reads rustdoc JSON through `rust/tools/api-snapshot` on the pinned toolchain. Blanket
+impls are left out, because each follows from a bound the file already lists. Auto-trait impls stay
+in, because a type that stops being `Send` breaks callers without any signature changing.
 
 ## Where the last two read from
 

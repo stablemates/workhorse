@@ -348,27 +348,29 @@ the test database, runs `pnpm check`, creates an annotated tag, and pushes that 
 ## What SemVer governs
 
 SemVer says a major release may break the public API. It does not say which artifact is the public
-API, and Workhorse ships seven of them. Each surface below is governed, and each states in one
+API, and Workhorse ships eight of them. Each surface below is governed, and each states in one
 sentence what a breaking change is for it. Anything not on this list is internal and may change in
-any release. [ADR 0054](decisions/0054-define-what-1-0-0-promises.md) records the decision.
+any release. [ADR 0054](decisions/0054-define-what-1-0-0-promises.md) records the decision, and
+[ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md) adds the Rust API.
 
-| Governed surface                                    | A breaking change is                                                                                                                                                                   | Enforced by                                                 |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| SQL protocol and schema                             | A narrowing of `workhorse.protocol_version`, which is how a superseded `_vN` function is removed. A schema-version bump is not one, because inside a major line a migration only adds. | `sql-catalogues:check`, which classifies the change         |
-| TypeScript API                                      | A change that makes caller code stop compiling or behave differently, across the names and types reachable through a package's `exports` map and shipped `.d.ts`.                      | `typescript-api:check`, against `api/typescript.txt`        |
-| Python API                                          | The same, across the names in a public module's `__all__`. Underscore-prefixed modules such as `workhorse._protocol` are private.                                                      | `python-api:check`, against `api/python.txt`                |
-| Go API                                              | The same, across the exported identifiers of the module's non-`internal` packages. Go's own standard applies: what `apidiff` calls an incompatible change.                             | `go-api:check`, `apidiff` against the tag `api/go.txt` pins |
-| `workhorse` CLI                                     | Removing or renaming a command or flag, changing what an exit code means, or removing or retyping a field in `--json` output.                                                          | `cli-surface:check`, against `api/cli.txt`                  |
-| `dashboard/v1` wire contract                        | Removing a procedure, removing or retyping a response field, or tightening request validation.                                                                                         | `dashboard-spec:check`, which classifies the change         |
-| OpenTelemetry instrument, span, and attribute names | Renaming or removing an instrument, span, or attribute, or changing an instrument's unit or kind.                                                                                      | `telemetry-surface:check`, against `api/telemetry.txt`      |
+| Governed surface                                    | A breaking change is                                                                                                                                                                                                       | Enforced by                                                 |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| SQL protocol and schema                             | A narrowing of `workhorse.protocol_version`, which is how a superseded `_vN` function is removed. A schema-version bump is not one, because inside a major line a migration only adds.                                     | `sql-catalogues:check`, which classifies the change         |
+| TypeScript API                                      | A change that makes caller code stop compiling or behave differently, across the names and types reachable through a package's `exports` map and shipped `.d.ts`.                                                          | `typescript-api:check`, against `api/typescript.txt`        |
+| Python API                                          | The same, across the names in a public module's `__all__`. Underscore-prefixed modules such as `workhorse._protocol` are private.                                                                                          | `python-api:check`, against `api/python.txt`                |
+| Go API                                              | The same, across the exported identifiers of the module's non-`internal` packages. Go's own standard applies: what `apidiff` calls an incompatible change.                                                                 | `go-api:check`, `apidiff` against the tag `api/go.txt` pins |
+| Rust API                                            | The same, across the public items reachable from the `workhorse` crate root under any published feature, auto and derived traits included. Removing or renaming a feature, or moving an item behind one, is also breaking. | `rust-api:check`, against `api/rust.txt`                    |
+| `workhorse` CLI                                     | Removing or renaming a command or flag, changing what an exit code means, or removing or retyping a field in `--json` output.                                                                                              | `cli-surface:check`, against `api/cli.txt`                  |
+| `dashboard/v1` wire contract                        | Removing a procedure, removing or retyping a response field, or tightening request validation.                                                                                                                             | `dashboard-spec:check`, which classifies the change         |
+| OpenTelemetry instrument, span, and attribute names | Renaming or removing an instrument, span, or attribute, or changing an instrument's unit or kind.                                                                                                                          | `telemetry-surface:check`, against `api/telemetry.txt`      |
 
 The right-hand column is Gate 1 of
 [ADR 0056](decisions/0056-set-the-1-0-0-exit-criteria.md): every governed surface holds a mechanical
-check in the CI `required` task, so no promise rests on review alone. Five of them read the committed
+check in the CI `required` task, so no promise rests on review alone. Six of them read the committed
 snapshots in [`api/`](../api/README.md), which that directory's own README explains. Each has a
 generator, so a legitimate addition costs one command: `pnpm typescript-api:generate`,
-`pnpm python-api:generate`, `pnpm go-api:generate`, `pnpm cli-surface:generate`, or
-`pnpm telemetry-surface:generate`.
+`pnpm python-api:generate`, `pnpm go-api:generate`, `pnpm rust-api:generate`,
+`pnpm cli-surface:generate`, or `pnpm telemetry-surface:generate`.
 
 A snapshot is only as good as where it reads from, so neither of the two newest reads a table kept
 beside the code. `api/cli.txt` reads `typescript/core/src/cli/surface.ts`, which the CLI itself
@@ -393,8 +395,8 @@ The release notes announce a `dashboard/v2` transition and give its upgrade step
 backend serves one bound contract rather than negotiating concurrent versions, so `Deprecation`
 and `Sunset` response headers do not apply.
 
-The three language lines float independently, and each is governed on its own surfaces: a Go `/v2`
-does not move the TypeScript or Python major. Only a protocol break moves all three at once.
+The four language lines float independently, and each is governed on its own surfaces: a Go `/v2`
+does not move the TypeScript, Python, or Rust major. Only a protocol break moves all four at once.
 
 The runtime support matrix and the declared dependency ranges are not on this list. They move by
 their own rule, in a minor and only on upstream end of life; see [Raising a floor](#raising-a-floor).
@@ -404,7 +406,7 @@ their own rule, in a minor and only on upstream end of life; see [Raising a floo
 `sql-catalogues:check` and `dashboard-spec:check` regenerate an artifact and diff it. A diff alone
 says only that something moved, because regenerating rewrites the artifact whether a procedure was
 added or removed. Each check therefore compares against a separate promise file that accumulates:
-the generator may add an entry and may never drop one. The three language checks need no such file,
+the generator may add an entry and may never drop one. The four language checks need no such file,
 because their snapshots in [`api/`](../api/README.md) are not regenerated from the surface they
 describe.
 
@@ -480,10 +482,11 @@ and changes nothing. The last 0.x minor carries the final schema change before t
 the command anyway is the point: the procedure is the same one every other release uses. See
 `docs/schema-lifecycle.md`.
 
-The nine npm packages, the Python distribution, and the Go module publish 1.0.0 from one source
-commit as one release train. A line that cannot clear the parity bar slips the train rather than
-being left behind. That synchronisation happens once; afterwards the three version lines float again
-as they do today.
+The nine npm packages, the Python distribution, the Go module, and the Rust crate publish 1.0.0
+from one source commit as one release train
+([ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md)). A line that
+cannot clear the parity bar slips the train rather than being left behind. That synchronisation
+happens once; afterwards the four version lines float again as they do today.
 
 At 1.0.0 the “public beta” label retires and “stable” replaces it.
 
@@ -525,14 +528,18 @@ dashboard release inside a major line.
 Six gates hold the tag, and each is met with evidence rather than with an assertion
 ([ADR 0056](decisions/0056-set-the-1-0-0-exit-criteria.md)):
 
-1. Every governed surface above has a mechanical check in the CI `required` task. Seven checks, one
-   per surface. None of them exists yet.
+1. Every governed surface above has a mechanical check in the CI `required` task. Eight checks, one
+   per surface.
 2. Six weeks and two published 0.x minors separate the last non-additive change to a governed
    surface from the tag, and no outside-filed defect against a governed surface is open and
-   unaccepted.
+   unaccepted. The Rust API's clock starts at the later of the commit that first landed
+   `api/rust.txt` and the last one that removed a line from it. Both minors must publish the crate
+   from a commit at or after that start, so 0.4.0 does not count
+   ([ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md)).
 3. The migration rehearsals ADR 0055 placed have run, the recovery procedure has been executed
    against a deliberate mid-migration failure, and a fresh host has installed the candidate from the
-   registries in all three languages.
+   registries in all four languages, Rust from crates.io included
+   ([ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md)).
 4. One database has run 30 consecutive days under continuous work without being reinstalled, across
    daily partition rollover, a retention pass that dropped a partition, and an ungraceful worker
    kill with clean recovery.

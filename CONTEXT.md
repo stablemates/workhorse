@@ -85,8 +85,8 @@ It is the absence of a qualifier, not a tier above one.
 _Avoid as a stability label_: GA, general availability, production-ready, battle-tested
 
 **Governed surface**:
-One of the seven artifacts SemVer covers: the SQL protocol and schema, the TypeScript, Python, and
-Go APIs, the `workhorse` CLI, the `dashboard/v1` wire contract, and the OpenTelemetry instrument,
+One of the eight artifacts SemVer covers: the SQL protocol and schema, the TypeScript, Python, Go,
+and Rust APIs, the `workhorse` CLI, the `dashboard/v1` wire contract, and the OpenTelemetry instrument,
 span, and attribute names. Everything else is internal and may change in any release.
 _Avoid_: Public API, public interface, stable API
 
@@ -105,7 +105,7 @@ protocols the installed schema serves. A release ships it; the operator applies 
 _Avoid_: Cleanup migration, breaking migration, down migration
 
 **Release train**:
-The staged publication of Python, npm, and Go artifacts from one source commit within one
+The staged publication of Python, npm, Go, and Rust artifacts from one source commit within one
 controlled release window.
 _Avoid_: Simultaneous release, coordinated release
 
