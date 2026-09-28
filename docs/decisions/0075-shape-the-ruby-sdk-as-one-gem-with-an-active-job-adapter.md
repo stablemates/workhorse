@@ -32,7 +32,7 @@ Four facts shape the design more than the SDK itself does.
   chooses a backend with `config.active_job.queue_adapter`. A Ruby SDK that offers no adapter asks
   a Rails team to rewrite every job. An adapter alone cannot express most of what Workhorse adds,
   as the Active Job section below shows.
-- **ADR 0056 gate 2 freezes the shape early.** After 0.5.0 the Ruby API must change only
+- **ADR 0056 gate 2 freezes the shape early.** After 0.6.0 the Ruby API must change only
   additively. So this record settles the public API now, not after the first release.
 - **A Rails team compares throughput with Solid Queue and GoodJob.** Both run jobs on a thread pool
   inside forked processes. A Ruby worker that falls behind them on the same host gives a Rails team
@@ -805,14 +805,14 @@ observe only worker shutdown, and a cancelled job must not resume itself.
 
 Recurring Active Job jobs are the most likely later extension, because Solid Queue and GoodJob
 both offer them. They would add a schedule whose payload is a serialized job. That is additive, so
-this record defers it past 0.5.0.
+this record defers it past 0.6.0.
 
 ### Governed surface and release
 
 SM-904 records the public surface in `api/ruby.txt`. It covers every public constant, method
 signature, keyword, and `Data` member under `Stablemates::Workhorse`, plus the adapter constant.
-Constants marked `:nodoc:` stay out. The first release is 0.5.0. Gate 2 then needs six weeks and two
-published minors, 0.5 and 0.6, without a non-additive change before 1.0.0.
+Constants marked `:nodoc:` stay out. The first release is 0.6.0. Gate 2 then needs six weeks and two
+published minors, 0.6 and 0.7, without a non-additive change before 1.0.0.
 
 SM-903 adds a `rubygems` job to `.github/workflows/release.yml` on the Rust crate's pattern.
 
