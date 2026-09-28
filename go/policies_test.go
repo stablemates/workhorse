@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -260,5 +262,109 @@ func TestPolicyReadsRejectMalformedDatabaseRows(t *testing.T) {
 	_, err := queue.ListConcurrencyPolicies(context.Background(), nil)
 	if !errors.Is(err, workhorse.ErrInvalidPolicyResult) {
 		t.Fatalf("unexpected malformed-result error: %v", err)
+	}
+}
+
+// syncFailureExecutor replaces the first forced sync statements with one that PostgreSQL rejects
+// with code. The replacement really fails, so inside a transaction it aborts that transaction
+// exactly as a deadlock would. codes records the SQLSTATE of each sync statement, or "" on success.
+type syncFailureExecutor struct {
+	executor workhorse.Executor
+	code     string
+	forced   int
+	codes    []string
+}
+
+func (executor *syncFailureExecutor) Query(
+	ctx context.Context,
+	statement string,
+	arguments ...any,
+) ([]workhorse.Row, error) {
+	if !strings.Contains(statement, "workhorse.sync_concurrency_policies_v1(") {
+		return executor.executor.Query(ctx, statement, arguments...)
+	}
+	var rows []workhorse.Row
+	var err error
+	if len(executor.codes) < executor.forced {
+		rows, err = executor.executor.Query(ctx, fmt.Sprintf(
+			"DO $$ BEGIN RAISE EXCEPTION 'forced sync failure' USING ERRCODE = '%s'; END $$",
+			executor.code,
+		))
+	} else {
+		rows, err = executor.executor.Query(ctx, statement, arguments...)
+	}
+	var databaseError *pgconn.PgError
+	if errors.As(err, &databaseError) {
+		executor.codes = append(executor.codes, databaseError.Code)
+	} else {
+		executor.codes = append(executor.codes, "")
+	}
+	return rows, err
+}
+
+func TestSyncConcurrencyPoliciesResendsADeadlockVictim(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "go-policy-sync-deadlock")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	definitions := []workhorse.ConcurrencyPolicyDefinition{{Queue: "mail", MaxActive: 2}}
+
+	executor := &syncFailureExecutor{executor: workhorse.NewPGXExecutor(pool), code: "40P01", forced: 1}
+	policies, err := workhorse.NewQueue(executor, "default").
+		SyncConcurrencyPolicies(ctx, "go-deadlock", definitions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(policies) != 1 || policies[0].Queue != "mail" || policies[0].MaxActive != 2 {
+		t.Fatalf("unexpected synchronized policies: %#v", policies)
+	}
+	if strings.Join(executor.codes, ",") != "40P01," {
+		t.Fatalf("sync statements answered %q", executor.codes)
+	}
+
+	executor = &syncFailureExecutor{executor: workhorse.NewPGXExecutor(pool), code: "40P01", forced: 3}
+	_, err = workhorse.NewQueue(executor, "default").SyncConcurrencyPolicies(ctx, "go-deadlock", definitions)
+	var databaseError *pgconn.PgError
+	if !errors.As(err, &databaseError) || databaseError.Code != "40P01" || len(executor.codes) != 3 {
+		t.Fatalf("persistent deadlock answered %v after %q", err, executor.codes)
+	}
+
+	executor = &syncFailureExecutor{executor: workhorse.NewPGXExecutor(pool), code: "40001", forced: 1}
+	_, err = workhorse.NewQueue(executor, "default").SyncConcurrencyPolicies(ctx, "go-deadlock", definitions)
+	if !errors.As(err, &databaseError) || databaseError.Code != "40001" || len(executor.codes) != 1 {
+		t.Fatalf("another error answered %v after %q", err, executor.codes)
+	}
+}
+
+func TestSyncConcurrencyPoliciesReportsTheDeadlockThatAbortedACallerTransaction(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "go-policy-sync-deadlock-tx")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	transaction, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = transaction.Rollback(ctx) })
+
+	executor := &syncFailureExecutor{executor: workhorse.NewPGXExecutor(transaction), code: "40P01", forced: 1}
+	_, err = workhorse.NewQueue(executor, "default").SyncConcurrencyPolicies(
+		ctx,
+		"go-deadlock",
+		[]workhorse.ConcurrencyPolicyDefinition{{Queue: "mail", MaxActive: 1}},
+	)
+	var databaseError *pgconn.PgError
+	if !errors.As(err, &databaseError) || databaseError.Code != "40P01" ||
+		databaseError.Message != "forced sync failure" {
+		t.Fatalf("aborted transaction answered %v", err)
+	}
+	if strings.Join(executor.codes, ",") != "40P01,25P02" {
+		t.Fatalf("sync statements answered %q", executor.codes)
 	}
 }

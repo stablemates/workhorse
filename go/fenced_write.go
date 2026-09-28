@@ -8,6 +8,9 @@ import "context"
 // Settling a task resolves its dependents inside the same statement, and the resolver locks each
 // level of that cascade only when it reaches it. Two settlements whose cascades meet at different
 // levels can therefore wait on each other, and PostgreSQL then raises 40P01 in one of them.
+//
+// The concurrency policy sync is sent through the same helper. Its prune can deadlock with a release
+// over several capped queues, and a resend writes the same complete desired set.
 const fencedWriteDeadlockAttempts = 3
 
 // queryFencedWrite sends a fenced write and sends it again when PostgreSQL chose it as a deadlock

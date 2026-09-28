@@ -10,8 +10,9 @@ from typing import Any
 import psycopg.errors
 
 from workhorse import ClaimedTask, Worker
+from workhorse._fenced_write import FENCED_WRITE_DEADLOCK_ATTEMPTS
 from workhorse._statements import STATEMENTS, DriverStatement
-from workhorse.worker import _FENCED_WRITE_DEADLOCK_ATTEMPTS, _PendingCompletion
+from workhorse.worker import _PendingCompletion
 
 
 def claimed(sequence: int) -> ClaimedTask:
@@ -74,20 +75,20 @@ def deadlock() -> Exception:
 
 
 def test_sends_the_statement_again_after_postgresql_chooses_it_as_a_deadlock_victim() -> None:
-    executor = ScriptedCompletions([deadlock()] * (_FENCED_WRITE_DEADLOCK_ATTEMPTS - 1))
+    executor = ScriptedCompletions([deadlock()] * (FENCED_WRITE_DEADLOCK_ATTEMPTS - 1))
     batch = complete(executor, 3, 1, 2)
 
-    assert len(executor.sent) == _FENCED_WRITE_DEADLOCK_ATTEMPTS
+    assert len(executor.sent) == FENCED_WRITE_DEADLOCK_ATTEMPTS
     # Every attempt names the tasks in task ID order, as a heartbeat names its leases.
     assert all(sent == [claimed(n).id for n in (1, 2, 3)] for sent in executor.sent)
     assert all(p.done.is_set() and p.error is None and p.accepted for p in batch)
 
 
 def test_fails_the_chunk_after_three_deadlocks() -> None:
-    executor = ScriptedCompletions([deadlock()] * _FENCED_WRITE_DEADLOCK_ATTEMPTS)
+    executor = ScriptedCompletions([deadlock()] * FENCED_WRITE_DEADLOCK_ATTEMPTS)
     batch = complete(executor, 1)
 
-    assert _FENCED_WRITE_DEADLOCK_ATTEMPTS == 3
+    assert FENCED_WRITE_DEADLOCK_ATTEMPTS == 3
     assert len(executor.sent) == 3
     error = batch[0].error
     assert isinstance(error, psycopg.errors.DeadlockDetected)

@@ -30,6 +30,10 @@ from ._external_waits import (
     validate_requested_by as _validate_requested_by,
     validate_wait_name as _validate_wait_name,
 )
+from ._fenced_write import (
+    async_fenced_write_rows as _async_fenced_write_rows,
+    fenced_write_rows as _fenced_write_rows,
+)
 from ._protocol import (
     encode_request_values as _encode_request_values,
     serialize_request_values as _serialize_request_values,
@@ -180,7 +184,8 @@ class Queue:
         prune: bool = True,
     ) -> list[ConcurrencyPolicy]:
         _assert_sync_compatible(self._executor)
-        rows = self._executor.rows(
+        rows = _fenced_write_rows(
+            self._executor,
             _STATEMENTS.sync_concurrency_policies,
             (namespace, _concurrency_policy_payload(definitions), prune),
         )
@@ -400,7 +405,8 @@ class AsyncQueue:
         prune: bool = True,
     ) -> list[ConcurrencyPolicy]:
         await _assert_async_compatible(self._executor)
-        rows = await self._executor.rows(
+        rows = await _async_fenced_write_rows(
+            self._executor,
             _STATEMENTS.sync_concurrency_policies,
             (namespace, _concurrency_policy_payload(definitions), prune),
         )

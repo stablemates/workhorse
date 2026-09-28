@@ -8,6 +8,9 @@ import type { Queryable } from "../types.js";
  * A write that settles a task fires the dependency resolver, which locks each cascade level only
  * when it reaches it. Two cascades that meet at different levels can lock the same rows in opposite
  * orders, and PostgreSQL then aborts one of them with SQLSTATE 40P01.
+ *
+ * The concurrency policy sync is sent through the same helper. Its prune can deadlock with a release
+ * over several capped queues, and a resend writes the same complete desired set.
  */
 const FENCED_WRITE_DEADLOCK_ATTEMPTS = 3;
 

@@ -77,6 +77,7 @@ type Budget struct {
 
 // SyncConcurrencyPolicies atomically reconciles one namespace of concurrency policies.
 // Omitted definitions are removed unless options explicitly set Prune to false.
+// A sync that PostgreSQL aborts as a deadlock victim is sent again, as a fenced write is.
 func (queue *Queue) SyncConcurrencyPolicies(
 	ctx context.Context,
 	namespace string,
@@ -97,8 +98,9 @@ func (queue *Queue) SyncConcurrencyPolicies(
 	if err := AssertSchemaCompatible(ctx, queue.executor); err != nil {
 		return nil, err
 	}
-	rows, err := queue.executor.Query(
+	rows, err := queryFencedWrite(
 		ctx,
+		queue.executor,
 		internalStatementRegistry[syncConcurrencyPoliciesStatementName],
 		namespace,
 		payload,
