@@ -3516,6 +3516,13 @@ statement builds each response section from its own named CTE. The sections cove
 lineage, policy, waits, progress, current state, batch executions, attempts, checkpoints, and
 events. Dependency and redrive lineage read 101 rows and return 100; child lineage reads 102 rows
 and returns 101. The extra row sets each section's `truncated` flag without a separate count.
+The final select cross joins every section with the task row, so the `task` CTE carries a
+`LIMIT 1` planner hint. The identity is a primary key, so the hint changes no result. Before schema
+version 42 the planner estimated nine task rows and multiplied that estimate through the joins. The
+plan then cost about 1.2 billion, and PostgreSQL compiled it with JIT on every call. Compiling took
+two to five seconds on a loaded host; executing took about one millisecond. The function also
+disables JIT for itself, because its attempt, checkpoint, and event reads still grow their
+estimates with history.
 The concurrency utilization of a live task comes from the supplied `health` document, or from
 `queue_health_v1()` when the caller supplied none. The function returns SQL `NULL` when `id` does
 not exist. TypeScript replaces the returned `durability: null` with
@@ -4434,7 +4441,7 @@ interactive stdin and stdout is refused with exit 1.
 - The health snapshot and the dashboard reads that embed it disable JIT for themselves, because
   compiling their plan costs far more than executing them. Their remaining cost tracks live
   `task_runtime` depth: roughly tens of milliseconds at a few thousand ready rows and a few hundred
-  at 200,000.
+  at 200,000. `dashboard_task_detail_v1` disables JIT for the same reason; it reads one task.
 - Schedules have one-second precision; cron expressions are evaluated in the definition's validated IANA timezone.
 - Runtime updates centralize churn in one relation and require vacuum and HOT-update validation under sustained heartbeat load.
 - `NOTIFY` is a wake hint. Polling remains the correctness mechanism.
