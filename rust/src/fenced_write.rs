@@ -12,6 +12,9 @@ use crate::{Error, Executor};
 
 /// How many times a fenced write is sent in total when PostgreSQL keeps choosing it as a deadlock
 /// victim.
+///
+/// The concurrency policy sync is sent through the same helper. Its prune can deadlock with a
+/// release over several capped queues, and a resend writes the same complete desired set.
 const FENCED_WRITE_DEADLOCK_ATTEMPTS: usize = 3;
 
 const DEADLOCK_DETECTED: &str = "40P01";

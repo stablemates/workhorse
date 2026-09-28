@@ -146,6 +146,7 @@ import {
 import { heartbeatReservationProblem, holdHeartbeatConnection } from "./heartbeat-connection.js";
 import { statementPoolCapacity } from "./connection-pool.js";
 import { FastTierUnsupportedError } from "./errors.js";
+import { queryFencedWrite } from "./queue/fenced-write.js";
 
 export type { MaintenancePhase, MaintenancePhaseResult } from "./queue/retention-maintenance.js";
 
@@ -397,7 +398,8 @@ export class Queue {
       maxActive: definition.maxActive,
       maxActivePerKey: definition.maxActivePerKey ?? null,
     }));
-    const result = await this.database.query<ConcurrencyPolicyRow>(
+    const result = await queryFencedWrite<ConcurrencyPolicyRow>(
+      this.database,
       SQL_STATEMENTS["sync_concurrency_policies_v1"],
       [namespace, JSON.stringify(input), options.prune ?? true],
     );

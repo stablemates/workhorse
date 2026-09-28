@@ -35,6 +35,7 @@ from ._external_waits import (
     validate_wait_name as _validate_wait_name,
     validate_wait_timeout as _validate_wait_timeout,
 )
+from ._fenced_write import fenced_write_rows as _fenced_write_rows
 from ._notifications import (
     NotificationConnectionFactory as _NotificationConnectionFactory,
     TaskNotificationListener as _TaskNotificationListener,
@@ -179,41 +180,6 @@ def _dispatch_cohorts(concurrency: int, spare_connections: int | None = None) ->
 # Completions and claimed tasks one batched statement carries at most. complete_many_and_claim_v1
 # rejects longer arrays and a larger claim limit.
 _COMPLETION_BATCH_LIMIT = 100
-
-# Times one fenced write is sent at most when PostgreSQL rolls it back as a deadlock victim.
-# Settling a task resolves its dependents inside the same statement, and the resolver locks each
-# level of that cascade only when it reaches it. Two settlements whose cascades meet at different
-# levels can therefore wait on each other.
-_FENCED_WRITE_DEADLOCK_ATTEMPTS = 3
-_DEADLOCK_DETECTED_SQLSTATE = "40P01"
-_IN_FAILED_SQL_TRANSACTION_SQLSTATE = "25P02"
-
-
-def _fenced_write_rows(
-    executor: _SyncRowExecutor, statement: _DriverStatement, parameters: Sequence[object]
-) -> list[Mapping[str, object]]:
-    """Send a fenced write, and send it again when PostgreSQL chose it as a deadlock victim.
-
-    PostgreSQL rolls back the whole statement, so nothing in it committed, and the fence decides
-    again whether a resend may still act. A caller-owned transaction is aborted by the deadlock, so
-    a resend there fails with 25P02, and the caller gets the original deadlock instead.
-    """
-    deadlock: Exception | None = None
-    attempt = 1
-    while True:
-        try:
-            return executor.rows(statement, parameters)
-        except Exception as error:
-            sqlstate = getattr(error, "sqlstate", None) or getattr(error, "code", None)
-            if deadlock is not None and sqlstate == _IN_FAILED_SQL_TRANSACTION_SQLSTATE:
-                raise deadlock from None
-            if (
-                attempt >= _FENCED_WRITE_DEADLOCK_ATTEMPTS
-                or sqlstate != _DEADLOCK_DETECTED_SQLSTATE
-            ):
-                raise
-            deadlock = error
-            attempt += 1
 
 
 @dataclass(eq=False, slots=True)

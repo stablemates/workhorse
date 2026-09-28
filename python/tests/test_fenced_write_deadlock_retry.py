@@ -8,8 +8,8 @@ from typing import Any
 import psycopg.errors
 import pytest
 
+from workhorse._fenced_write import FENCED_WRITE_DEADLOCK_ATTEMPTS, fenced_write_rows
 from workhorse._statements import STATEMENTS, DriverStatement
-from workhorse.worker import _FENCED_WRITE_DEADLOCK_ATTEMPTS, _fenced_write_rows
 
 
 class ScriptedWrites:
@@ -37,18 +37,18 @@ def deadlock() -> Exception:
     [STATEMENTS.complete, STATEMENTS.fail, STATEMENTS.heartbeat_many, STATEMENTS.update_progress],
 )
 def test_sends_a_deadlock_victim_again(statement: DriverStatement) -> None:
-    executor = ScriptedWrites([deadlock()] * (_FENCED_WRITE_DEADLOCK_ATTEMPTS - 1))
+    executor = ScriptedWrites([deadlock()] * (FENCED_WRITE_DEADLOCK_ATTEMPTS - 1))
 
-    assert _fenced_write_rows(executor, statement, ()) == [{"accepted": True}]
-    assert executor.sent == [statement] * _FENCED_WRITE_DEADLOCK_ATTEMPTS
+    assert fenced_write_rows(executor, statement, ()) == [{"accepted": True}]
+    assert executor.sent == [statement] * FENCED_WRITE_DEADLOCK_ATTEMPTS
 
 
 def test_raises_the_last_deadlock_after_every_attempt() -> None:
-    deadlocks = [deadlock() for _ in range(_FENCED_WRITE_DEADLOCK_ATTEMPTS)]
+    deadlocks = [deadlock() for _ in range(FENCED_WRITE_DEADLOCK_ATTEMPTS)]
     executor = ScriptedWrites(deadlocks)
 
     with pytest.raises(psycopg.errors.DeadlockDetected) as raised:
-        _fenced_write_rows(executor, STATEMENTS.complete, ())
+        fenced_write_rows(executor, STATEMENTS.complete, ())
     assert raised.value is deadlocks[-1]
     assert len(executor.sent) == 3
 
@@ -60,7 +60,7 @@ def test_raises_the_deadlock_that_aborted_a_caller_transaction() -> None:
     )
 
     with pytest.raises(psycopg.errors.DeadlockDetected) as raised:
-        _fenced_write_rows(executor, STATEMENTS.fail, ())
+        fenced_write_rows(executor, STATEMENTS.fail, ())
     assert raised.value is original
     assert len(executor.sent) == 2
 
@@ -76,6 +76,6 @@ def test_sends_other_failures_once(failure: Exception) -> None:
     executor = ScriptedWrites([failure])
 
     with pytest.raises(type(failure)) as raised:
-        _fenced_write_rows(executor, STATEMENTS.complete, ())
+        fenced_write_rows(executor, STATEMENTS.complete, ())
     assert raised.value is failure
     assert len(executor.sent) == 1

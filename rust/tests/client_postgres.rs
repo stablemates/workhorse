@@ -278,6 +278,93 @@ async fn sync_concurrency_policies_stores_lists_and_prunes() {
     assert_eq!(queues, ["reports"]);
 }
 
+/// Makes the first `forced` syncs fail with `code` at their first write to `concurrency_policy`.
+/// The sequence counts each sync transaction that reached the table once, and a rollback does not
+/// undo it.
+async fn force_sync_failures(client: &Client, code: &str, forced: i64) {
+    client
+        .batch_execute(&format!(
+            "CREATE SEQUENCE forced_sync_attempts;
+             CREATE FUNCTION force_sync_failure() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN
+               IF current_setting('forced_sync.counted', true) IS DISTINCT FROM 'yes' THEN
+                 PERFORM set_config('forced_sync.counted', 'yes', true);
+                 IF nextval('forced_sync_attempts') <= {forced} THEN
+                   RAISE EXCEPTION 'forced sync failure' USING ERRCODE = '{code}';
+                 END IF;
+               END IF;
+               RETURN NULL;
+             END $$;
+             CREATE TRIGGER force_sync_failure BEFORE INSERT OR UPDATE OR DELETE
+               ON workhorse.concurrency_policy
+               FOR EACH STATEMENT EXECUTE FUNCTION force_sync_failure();"
+        ))
+        .await
+        .unwrap();
+}
+
+async fn sync_attempts(client: &Client) -> i64 {
+    client.query_one("SELECT last_value FROM forced_sync_attempts", &[]).await.unwrap().get(0)
+}
+
+fn mail_policy() -> [ConcurrencyPolicyDefinition; 1] {
+    [ConcurrencyPolicyDefinition { queue: "mail".into(), max_active: 2, max_active_per_key: None }]
+}
+
+#[tokio::test]
+async fn sync_concurrency_policies_resends_a_deadlock_victim() {
+    let Some(database) = scratch_database("client_policy_sync_deadlock").await else { return };
+    let observer = database.connect().await;
+    force_sync_failures(&observer, "40P01", 1).await;
+    let queue = Queue::connect(database.url(), "rust-policies").await.unwrap();
+
+    let stored = queue.sync_concurrency_policies("app", &mail_policy(), true).await.unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].max_active, 2);
+    assert_eq!(sync_attempts(&observer).await, 2, "one deadlock, then the resend succeeds");
+}
+
+#[tokio::test]
+async fn sync_concurrency_policies_raises_the_last_deadlock_after_three_attempts() {
+    let Some(database) = scratch_database("client_policy_sync_deadlocks").await else { return };
+    let observer = database.connect().await;
+    force_sync_failures(&observer, "40P01", 3).await;
+    let queue = Queue::connect(database.url(), "rust-policies").await.unwrap();
+
+    let error = queue.sync_concurrency_policies("app", &mail_policy(), true).await.unwrap_err();
+    assert_eq!(error.sqlstate(), Some("40P01"));
+    assert_eq!(sync_attempts(&observer).await, 3);
+}
+
+#[tokio::test]
+async fn sync_concurrency_policies_sends_once_on_another_error() {
+    let Some(database) = scratch_database("client_policy_sync_conflict").await else { return };
+    let observer = database.connect().await;
+    force_sync_failures(&observer, "40001", 1).await;
+    let queue = Queue::connect(database.url(), "rust-policies").await.unwrap();
+
+    let error = queue.sync_concurrency_policies("app", &mail_policy(), true).await.unwrap_err();
+    assert_eq!(error.sqlstate(), Some("40001"));
+    assert_eq!(sync_attempts(&observer).await, 1);
+}
+
+#[tokio::test]
+async fn sync_concurrency_policies_reports_the_deadlock_that_aborted_a_caller_transaction() {
+    let Some(database) = scratch_database("client_policy_sync_transaction").await else { return };
+    let observer = database.connect().await;
+    force_sync_failures(&observer, "40P01", 1).await;
+    let mut caller = database.connect().await;
+    let transaction = caller.transaction().await.unwrap();
+    let queue = Queue::new(&transaction, "rust-policies");
+
+    let error = queue.sync_concurrency_policies("app", &mail_policy(), true).await.unwrap_err();
+    assert_eq!(error.sqlstate(), Some("40P01"), "the original deadlock, not 25P02: {error:?}");
+    // The resend failed with 25P02 before it reached the table, so only the deadlock counted.
+    assert_eq!(sync_attempts(&observer).await, 1);
+    drop(queue);
+    transaction.rollback().await.unwrap();
+}
+
 #[tokio::test]
 async fn sync_rate_limit_policies_stores_lists_and_prunes() {
     let Some(database) = scratch_database("client_rate_limit_policies").await else { return };
