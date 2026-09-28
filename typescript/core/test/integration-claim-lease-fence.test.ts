@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { Pool, type PoolClient } from "pg";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CancellationRequestedError,
   DeadlineExceededError,
@@ -9,6 +9,7 @@ import {
   type Json,
   Queue,
   Worker,
+  type WorkerMaintenanceTelemetry,
 } from "../src/index.js";
 import { SQL_STATEMENTS } from "../src/queue/sql-catalogue.generated.js";
 import { createIntegrationTestContext } from "./support/integration.js";
@@ -1804,6 +1805,84 @@ describe("claim lease fence", () => {
     } finally {
       await listener.query("UNLISTEN workhorse_tasks");
       listener.release();
+    }
+  });
+
+  it("finds capacity from an expired lease at recovery, not when the lease expires", async () => {
+    // An expiring lease changes no row, so no trigger publishes the capacity it returns.
+    const queueName = `capacity-lease-expiry-${randomUUID()}`;
+    const waiterId = "lease-expiry-waiter";
+    const pollMs = 60_000;
+    await queue.syncConcurrencyPolicies("test", [{ queue: queueName, maxActive: 2 }]);
+    await queue.enqueueMany(
+      Array.from({ length: 3 }, (_, ordinal) => ({
+        type: "capacity",
+        payload: { ordinal },
+        options: { queue: queueName },
+      })),
+    );
+    const [expiring, live] = await queue.claimMany("capacity-holder", 2, { queue: queueName });
+    expect(live).toBeDefined();
+
+    const claimMany = vi.spyOn(queue, "claimMany");
+    const waiterClaims = () => claimMany.mock.calls.filter(([id]) => id === waiterId).length;
+    const recoveries: WorkerMaintenanceTelemetry[] = [];
+    const started = deferred<number>();
+    const worker = new Worker(queue, {
+      workerId: waiterId,
+      queue: queueName,
+      pollMs,
+      maintenanceIntervalMs: pollMs,
+      maintenanceRoutinePollMs: pollMs,
+      registryIntervalMs: 0,
+      onMaintenance: (telemetry) => {
+        if (telemetry.phase === "recover") recoveries.push(telemetry);
+      },
+    }).handle("capacity", async () => {
+      started.resolve(Date.now());
+      return null;
+    });
+    const running = worker.run();
+    const probe = await pool.connect();
+    try {
+      // The worker found the queue full and its startup recovery ran before the lease expired.
+      await vi.waitFor(() => {
+        expect(waiterClaims()).toBeGreaterThan(0);
+        expect(recoveries).toHaveLength(1);
+      });
+      await sleep(200);
+      const idleClaims = waiterClaims();
+      for (const result of claimMany.mock.results) {
+        await expect(result.value).resolves.toEqual([]);
+      }
+
+      await pool.query(
+        "UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 second' WHERE task_id = $1",
+        [expiring!.id],
+      );
+      // A claim would succeed now. The probe rolls back so the slot stays free.
+      await probe.query("BEGIN");
+      await expect(
+        probe.query(SQL_STATEMENTS.claim_many_v1, [queueName, "lease-expiry-probe", 1, 30_000]),
+      ).resolves.toMatchObject({ rowCount: 1 });
+      await probe.query("ROLLBACK");
+
+      // The sleeping worker does not claim the free slot before its fallback poll.
+      await sleep(1_000);
+      expect(waiterClaims()).toBe(idleClaims);
+
+      // Recovery releases the expired row while it still counts toward the cap, so it publishes.
+      const recoveredAt = Date.now();
+      await queue.tick();
+      const claimedAt = await started.promise;
+      expect(claimedAt - recoveredAt).toBeLessThan(pollMs / 4);
+      expect(waiterClaims()).toBeGreaterThan(idleClaims);
+    } finally {
+      await probe.query("ROLLBACK").catch(() => undefined);
+      probe.release();
+      worker.stop();
+      await running;
+      claimMany.mockRestore();
     }
   });
 

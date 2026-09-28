@@ -2620,6 +2620,17 @@ fallback poll. `FOR KEY SHARE` does not conflict with another release, so releas
 count includes active rows whose lease has expired, although claim admission excludes them. A lease that expires
 after a claim finds the queue full therefore cannot hide the cap from a later release.
 
+An expiring lease changes no row, so neither `notify_concurrency_capacity_v1` nor
+`notify_budget_capacity_v1` runs when a lease expires. Claim admission sees the returned capacity at
+once, but a worker whose claim found the queue full keeps sleeping. It finds the capacity at its next
+fallback poll or when `recover_expired_v1` releases the expired row, whichever comes first. That
+release still counts the expired row toward `max_active`, so it publishes the queue, and the budget
+trigger wakes every queue waiting on the budget. Every worker offers `tick_v1` once per maintenance
+interval, one second by default, and each tick recovers a bounded batch of expired rows. The wake
+therefore follows expiry by about one maintenance interval unless more expired leases are waiting
+than one tick recovers. PostgreSQL has no event that fires at a stored timestamp,
+so Workhorse leaves this wake to recovery instead of adding one.
+
 The lock lasts until the releasing transaction commits, not until the trigger returns. A claim on the queue
 therefore waits for the whole release. Workhorse's own releases are single statements that commit at once.
 A TypeScript `Queue` bound to a caller's transaction through `forTransaction` can call `complete`, `fail`,
