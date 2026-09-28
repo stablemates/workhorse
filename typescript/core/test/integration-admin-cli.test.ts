@@ -495,7 +495,10 @@ describe("admin CLI guarded operations", () => {
       "--yes",
     ]);
     expect(refused.code).toBe(1);
-    expect(refused.stderr).toContain(`Refused: Fast-tier queue ${queueName} does not support`);
+    expect(refused.stderr).toContain(
+      `Refused: Queue ${queueName} has live tasks, so its tier cannot change.`,
+    );
+    expect(refused.stderr).not.toContain("Fast-tier queue");
     expect(JSON.parse(runAdmin(["queues", "--json"]).stdout)).toEqual(
       expect.arrayContaining([expect.objectContaining({ queue: queueName, tier: "full" })]),
     );
@@ -534,6 +537,18 @@ describe("admin CLI guarded operations", () => {
 
   it("changes one history setting at a time and keeps the other", async () => {
     const queueName = "cli-history";
+    const fast = runAdmin([
+      "set-tier",
+      queueName,
+      "--tier",
+      "fast",
+      "--env",
+      databaseName,
+      "--reason",
+      "history test",
+      "--yes",
+    ]);
+    expect(fast.code).toBe(0);
     const setHistory = (...flags: string[]) =>
       runAdmin(["set-history", queueName, ...flags, "--env", databaseName, "--yes", "--json"]);
 
@@ -541,13 +556,17 @@ describe("admin CLI guarded operations", () => {
     expect(claims.code).toBe(0);
     expect(JSON.parse(claims.stdout)).toEqual({
       queue: queueName,
+      tier: "fast",
       recordAttempts: false,
       recordClaims: true,
     });
+    // A known fast-tier queue needs neither the full-tier note nor the unknown-queue warning.
+    expect(claims.stderr).toBe("");
 
     const attempts = setHistory("--record-attempts", "on");
     expect(JSON.parse(attempts.stdout)).toEqual({
       queue: queueName,
+      tier: "fast",
       recordAttempts: true,
       recordClaims: true,
     });
@@ -570,6 +589,46 @@ describe("admin CLI guarded operations", () => {
     ]);
     expect(off.code).toBe(0);
     expect(off.stdout).toContain(`Queue ${queueName} records attempts off, claims off.`);
+  });
+
+  it("notes that a full-tier queue records all history", async () => {
+    const queueName = "cli-history-full";
+    await queue.enqueue("live", {}, { queue: queueName });
+    const result = runAdmin([
+      "set-history",
+      queueName,
+      "--record-claims",
+      "on",
+      "--env",
+      databaseName,
+      "--yes",
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain(`Queue ${queueName} records attempts off, claims on.`);
+    expect(result.stderr).toContain(
+      `Note: queue ${queueName} is on the full tier, which records all history.`,
+    );
+    // The live task makes the queue known, so no misspelling warning follows.
+    expect(result.stderr).not.toContain("Warning:");
+  });
+
+  it("warns when the history change names an unknown queue", () => {
+    const queueName = "cli-history-typo";
+    const result = runAdmin([
+      "set-history",
+      queueName,
+      "--record-attempts",
+      "on",
+      "--env",
+      databaseName,
+      "--yes",
+      "--json",
+    ]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ queue: queueName, tier: "full" });
+    expect(result.stderr).toContain(
+      `Warning: queue ${queueName} had no control row and no live tasks; check the name.`,
+    );
   });
 
   it("refuses history flags it cannot apply or record", () => {

@@ -125,6 +125,17 @@ interface QueueControlRow {
   record_claims: boolean;
 }
 
+/**
+ * A history change and the context an operator needs to read it.
+ *
+ * `tier` is the queue's tier, which the history change leaves alone. `knownBefore` is false when
+ * the queue had neither a control row nor a live task, which usually means a misspelled name.
+ */
+export interface AdminHistoryChange extends QueueHistorySettings {
+  tier: QueueTier;
+  knownBefore: boolean;
+}
+
 function isDefaultControl(row: QueueControlRow): boolean {
   return !row.paused && row.tier === "full" && !row.record_attempts && !row.record_claims;
 }
@@ -428,14 +439,28 @@ export class WorkhorseAdminClient {
     });
   }
 
-  /** Changes a fast-tier queue's history settings and answers both settings after the change. */
-  setQueueHistory(
+  /**
+   * Changes a queue's history settings and answers both settings after the change.
+   *
+   * The database accepts any queue name and creates its control row, so the answer also carries the
+   * queue's tier and whether the queue existed before. A full-tier queue records all history, and
+   * its settings take effect only if it moves to the fast tier.
+   */
+  async setQueueHistory(
     environment: ConfirmedEnvironment,
     queueName: string,
     settings: Partial<QueueHistorySettings>,
-  ): Promise<QueueHistorySettings> {
+  ): Promise<AdminHistoryChange> {
     void environment;
-    return this.admin.setQueueHistory(queueName, settings);
+    const [snapshots, control] = await Promise.all([
+      this.admin.queueMetricSnapshot(),
+      this.pool.query<QueueControlRow>(SQL_STATEMENTS["queue_control"]),
+    ]);
+    const row = control.rows.find((candidate) => candidate.queue_name === queueName);
+    const knownBefore =
+      row !== undefined || snapshots.some((snapshot) => snapshot.queue === queueName);
+    const changed = await this.admin.setQueueHistory(queueName, settings);
+    return { ...changed, tier: row?.tier ?? "full", knownBefore };
   }
 
   /** Deletes one queue's non-active tasks and answers how many rows went. */

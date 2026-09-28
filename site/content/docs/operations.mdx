@@ -174,7 +174,8 @@ under `--json`. `admin queues` shows each queue's tier and recorded history, whi
 with every history switch off. `admin set-tier --tier`
 and `admin set-history --record-attempts/--record-claims` wrap `Admin.setQueueTier` and
 `Admin.setQueueHistory`, with the same refusals. `admin set-history` takes no reason, because
-Workhorse records no audit for it.
+Workhorse records no audit for it. It notes when the queue is on the full tier, where the switches
+have no effect yet, and warns when the queue name matches no known queue.
 
 To continue `admin tasks`, `admin timeline`, or `admin failures`, pass the returned `nextCursor`
 object through `--cursor` with the same filters. Tasks accept `--created-after` and `--created-before`;

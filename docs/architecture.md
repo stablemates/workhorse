@@ -4294,12 +4294,19 @@ JSON output is `SignalDeliveryResult` or `HumanWaitCompletionResult`, with dates
 
 `admin set-tier <queue> --tier <fast|full>` calls `Admin.setQueueTier` with `--actor` and
 `--reason` and emits `{queue, tier}` under `--json`. It rejects `--request-id` with exit 64, because
-`set_queue_tier_v1` records none. A `P1007` refusal from `set_queue_tier_v1` — live tasks, or a
-policy on a move to `fast` — prints `Refused:` and exits 1.
+`set_queue_tier_v1` records none. A `P1007` refusal from `set_queue_tier_v1` prints `Refused:` and
+exits 1. The command words the refusal itself instead of printing the `FastTierUnsupportedError`
+message, which calls every refused queue fast-tier. Feature `tier change` prints that the queue has
+live tasks; a policy feature prints that the queue cannot move to the fast tier.
 `admin set-history <queue>` takes `--record-attempts <on|off>`, `--record-claims <on|off>`, or both,
 and calls `Admin.setQueueHistory`; an omitted flag keeps its setting. It emits
-`{queue, recordAttempts, recordClaims}` under `--json`. Because `set_queue_history_v1` records no
+`{queue, tier, recordAttempts, recordClaims}` under `--json`. Because `set_queue_history_v1` records no
 audit, the command rejects `--actor`, `--reason`, and `--request-id` with exit 64.
+`set_queue_history_v1` accepts any queue name and upserts its `queue_control` row, so the command
+reads `queue_control` and `Admin.queueMetricSnapshot` before the change. It writes a `Note:` to
+stderr when the queue is on the full tier, whose history the switches do not change. It writes a
+`Warning:` to stderr when the queue had neither a control row nor a live task, which usually means a
+misspelled name. Neither message changes the exit code.
 `admin queues` reads `tier`, `record_attempts`, and `record_claims` from `queue_control` into
 `AdminQueueStatus`. A queue without a control row reports `full` with both switches off. Its table
 adds `TIER` and `HISTORY` columns, which the TUI queues view shares. `HISTORY` is `all` for a

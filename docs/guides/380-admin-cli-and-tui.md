@@ -120,6 +120,9 @@ workhorse admin set-tier emails --tier fast --reason "handlers never suspend" \
 
 `admin set-history` turns `--record-attempts` or `--record-claims` on or off, and a flag you omit
 keeps its setting. Workhorse records no audit for this change, so the command takes no reason.
+A full-tier queue already records everything, so the command notes that the switches wait for a
+move to the fast tier. Workhorse also accepts a queue name it has never seen, so the command warns
+when the name matches no known queue.
 [The fast tier](305-fast-tier.md) explains what each switch writes.
 
 ## Recovering a failed backlog

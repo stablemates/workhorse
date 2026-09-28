@@ -256,6 +256,17 @@ function parseSwitch(value: string | undefined, flag: string): boolean | undefin
   throw new CliUsageError(`${flag} must be on or off, not ${value}`);
 }
 
+/**
+ * States why the database refused a tier change. The generic fast-tier message names the queue as
+ * fast-tier, which is wrong for a full-tier queue and drops the live-task cause.
+ */
+function tierRefusal(error: FastTierUnsupportedError, tier: QueueTier): string {
+  if (error.feature === "tier change") {
+    return `Queue ${error.queue} has live tasks, so its tier cannot change.`;
+  }
+  return `Queue ${error.queue} cannot move to the ${tier} tier: the fast tier does not support ${error.feature}.`;
+}
+
 function requirePositional(positionals: readonly string[], command: string, name: string): string {
   const target = positionals[0];
   if (target === undefined) throw new CliUsageError(`admin ${command} requires a <${name}>`);
@@ -705,10 +716,18 @@ export async function runAdminCommand(
       }
       const environment = await confirmMutation(client, io, values, command, queueName);
       if (environment === null) return;
-      const changed = await client.setQueueTier(environment, queueName, tier, {
-        requestedBy: actor,
-        reason: values.reason,
-      });
+      let changed: QueueTier;
+      try {
+        changed = await client.setQueueTier(environment, queueName, tier, {
+          requestedBy: actor,
+          reason: values.reason,
+        });
+      } catch (error) {
+        if (!(error instanceof FastTierUnsupportedError)) throw error;
+        io.error(`Refused: ${tierRefusal(error, tier)}\n`);
+        process.exitCode = 1;
+        return;
+      }
       if (json) io.out(toAdminJson("admin set-tier", { queue: queueName, tier: changed }));
       else io.out(`Queue ${queueName} is on the ${changed} tier.\n`);
       return;
@@ -730,15 +749,27 @@ export async function runAdminCommand(
       }
       const environment = await confirmMutation(client, io, values, command, queueName);
       if (environment === null) return;
-      const settings = await client.setQueueHistory(environment, queueName, {
+      const { knownBefore, ...change } = await client.setQueueHistory(environment, queueName, {
         recordAttempts,
         recordClaims,
       });
-      if (json) io.out(toAdminJson("admin set-history", { queue: queueName, ...settings }));
+      if (json) io.out(toAdminJson("admin set-history", { queue: queueName, ...change }));
       else {
         io.out(
-          `Queue ${queueName} records attempts ${settings.recordAttempts ? "on" : "off"}, ` +
-            `claims ${settings.recordClaims ? "on" : "off"}.\n`,
+          `Queue ${queueName} records attempts ${change.recordAttempts ? "on" : "off"}, ` +
+            `claims ${change.recordClaims ? "on" : "off"}.\n`,
+        );
+      }
+      if (change.tier === "full") {
+        io.error(
+          `Note: queue ${queueName} is on the full tier, which records all history. ` +
+            "These settings take effect if the queue moves to the fast tier.\n",
+        );
+      }
+      if (!knownBefore) {
+        io.error(
+          `Warning: queue ${queueName} had no control row and no live tasks; check the name. ` +
+            "This command created its control row.\n",
         );
       }
       return;

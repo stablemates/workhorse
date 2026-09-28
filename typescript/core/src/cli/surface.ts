@@ -253,6 +253,8 @@ interface AdminQueueTierReport {
 /** What `admin set-history` prints under `--json`. */
 interface AdminQueueHistoryReport {
   readonly queue: string;
+  /** The queue's tier. A full-tier queue records all history whatever the settings say. */
+  readonly tier: QueueTier;
   readonly recordAttempts: boolean;
   readonly recordClaims: boolean;
 }
