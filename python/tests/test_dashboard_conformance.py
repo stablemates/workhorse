@@ -110,10 +110,9 @@ def test_python_dashboard_read_procedures_match_the_shared_contract(database_url
                        per_key_burst=excluded.per_key_burst"""
             )
             connection.execute(
-                """INSERT INTO workhorse.rate_limit_bucket(
-                       queue_name,bucket_scope,bucket_key,tokens,refilled_at)
-                     VALUES ('conformance-demo','queue','',0.5,clock_timestamp()+interval '1 hour')
-                     ON CONFLICT(queue_name,bucket_scope,bucket_key) DO UPDATE
+                """INSERT INTO workhorse.admission_shard(queue_name,shard,tokens,refilled_at)
+                     VALUES ('conformance-demo',0,0.5,clock_timestamp()+interval '1 hour')
+                     ON CONFLICT(queue_name,shard) DO UPDATE
                        SET tokens=excluded.tokens,refilled_at=excluded.refilled_at"""
             )
             task = connection.execute(

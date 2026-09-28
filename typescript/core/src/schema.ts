@@ -305,6 +305,14 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "keep JIT compilation out of the task detail read",
     kind: "additive",
   },
+  {
+    // The file number was reserved for this change; the version still steps by one.
+    fromVersion: 42,
+    toVersion: 43,
+    file: "0044-shard-the-admission-counters.sql",
+    description: "shard the admission counters",
+    kind: "additive",
+  },
 ];
 
 /**

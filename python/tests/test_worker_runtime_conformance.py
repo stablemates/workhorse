@@ -873,7 +873,7 @@ def execute_budget_admission_race_fixture(
 
     A second claim of the same budget stays open on another queue until the first claim has
     admitted or started waiting. The first claim's queue carries a rate policy so a test session
-    can park it on the queue's token-bucket row, which every claim locks after sampling its ready
+    can park it on the queue's admission shards, which every claim locks after sampling its ready
     rows. Mirrors typescript/core/test/support/budget-race.ts.
     """
     name = runtime_queue(fixture)
@@ -894,7 +894,7 @@ def execute_budget_admission_race_fixture(
             )
         ],
     )
-    # One unbudgeted start creates the late queue's token-bucket row for the blocker to lock.
+    # One unbudgeted start proves the late queue admits before the blocker parks its claim.
     queue.enqueue(fixture["taskType"], {"role": "bucket"}, EnqueueOptions(queue=late_queue))
     bucket_claim = connection.execute(
         CLAIM_V1, (late_queue, f"{name}-bucket", fixture["leaseMs"])
@@ -914,8 +914,9 @@ def execute_budget_admission_race_fixture(
             late_pid = backend_pid(late)
             blocker.execute("BEGIN")
             blocker.execute(
-                "SELECT 1 FROM workhorse.rate_limit_bucket "
-                "WHERE queue_name = %s AND bucket_scope = 'queue' FOR UPDATE",
+                "SELECT pg_advisory_xact_lock(hashtextextended("
+                "'workhorse:admission-shard:' || %s || ':' || shard, 0)) "
+                "FROM generate_series(0, 7) AS shard",
                 (late_queue,),
             ).fetchall()
 
@@ -931,7 +932,7 @@ def execute_budget_admission_race_fixture(
             late_thread = run_in_thread(claim_late, errors)
             wait_until(
                 lambda: waits_on(connection, late_pid, None),
-                f"{name}: the late claim never reached the bucket row",
+                f"{name}: the late claim never reached the admission shards",
             )
 
             queue.enqueue(

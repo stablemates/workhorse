@@ -663,7 +663,8 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
 
 export const resetWorkhorseStateSql = `TRUNCATE workhorse.task_event, workhorse.attempt_history,
   workhorse.task_redrive, workhorse.queue_purge_request, workhorse.task_query,
-  workhorse.rate_limit_bucket, workhorse.rate_limit_policy, workhorse.concurrency_policy,
+  workhorse.rate_limit_bucket, workhorse.admission_shard, workhorse.rate_limit_policy,
+  workhorse.concurrency_policy,
   workhorse.enqueue_idempotency, workhorse.task_outcome, workhorse.task_runtime, workhorse.task RESTART IDENTITY CASCADE;
 ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1;
 ALTER SEQUENCE workhorse.ready_sequence_seq RESTART WITH 1;

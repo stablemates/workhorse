@@ -1170,7 +1170,7 @@ async fn budget_admission_race(database: &ScratchDatabase, fixture: &Value) -> C
         budget: budget.map(Into::into),
         ..Default::default()
     };
-    // One unbudgeted start creates the late queue's token-bucket row for the blocker to lock.
+    // One unbudgeted start proves the late queue admits before the blocker parks its claim.
     queue
         .enqueue(task_type, &json!({"role": "bucket"}), on(&late_queue, None))
         .await
@@ -1190,8 +1190,9 @@ async fn budget_admission_race(database: &ScratchDatabase, fixture: &Value) -> C
     blocker.batch_execute("BEGIN").await.map_err(sql)?;
     blocker
         .execute(
-            "SELECT 1 FROM workhorse.rate_limit_bucket
-              WHERE queue_name = $1 AND bucket_scope = 'queue' FOR UPDATE",
+            "SELECT pg_advisory_xact_lock(hashtextextended(
+                      'workhorse:admission-shard:' || $1 || ':' || shard, 0))
+               FROM generate_series(0, 7) AS shard",
             &[&late_queue],
         )
         .await
@@ -1201,7 +1202,7 @@ async fn budget_admission_race(database: &ScratchDatabase, fixture: &Value) -> C
         let late_queue = late_queue.clone();
         tokio::spawn(async move { claims(&late, &late_queue, &late_worker, lease).await })
     };
-    eventually("the late claim never reached the bucket row", || {
+    eventually("the late claim never reached the admission shards", || {
         waits_on_lock(&observer, late_pid, None)
     })
     .await?;

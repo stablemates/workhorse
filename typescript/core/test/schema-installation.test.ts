@@ -513,6 +513,7 @@ describe("schema installation", () => {
       { version: 40, description: "govern the dependency counter drift check and repair" },
       { version: 41, description: "cut the plain full-tier per-task claim and trigger cost" },
       { version: 42, description: "keep JIT compilation out of the task detail read" },
+      { version: 43, description: "shard the admission counters" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

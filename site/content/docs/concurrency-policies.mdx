@@ -129,6 +129,22 @@ An expiring lease changes no row, so nothing wakes a worker at that moment. A wo
 found the queue full finds the returned capacity at its next poll, or when maintenance recovers
 the expired lease. Recovery is a release from a full queue, so it wakes waiting workers.
 
+## Many workers, one cap
+
+A cap that every claim locks would make claims of a queue run one at a time. Workhorse instead
+splits the cap into shares, one per admission shard, and counts each active lease against one
+shard. A claim locks a shard and spends its share. When that share runs short, the claim borrows
+other shards that no claim holds. Claims that hold different shards admit at the same time.
+
+A claim never spends room on a shard it does not hold, so the shares never admit past the cap. A
+claim that stops short for that reason wakes another worker, which finds the room once the other
+claim commits. For the same reason, a release from a full shard wakes workers even when other
+shards have room: the release cannot see a claim that has not committed.
+
+A queue with a per-key rule keeps a single shard, because keyed admission must see the whole
+queue. `Queue.syncConcurrencyPolicies` and `Queue.syncRateLimitPolicies` rebuild the queue's shards each
+time they run, so the shares always match the current policy.
+
 ## Share one budget across queues
 
 A policy limits one queue. When several queues call the same downstream resource, a named budget

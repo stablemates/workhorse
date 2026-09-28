@@ -5,8 +5,8 @@
 pub const CLIENT_PROTOCOL_VERSION: i32 = 5;
 pub const MINIMUM_PROTOCOL_VERSION: i32 = 5;
 pub const MAXIMUM_PROTOCOL_VERSION: i32 = 5;
-pub const MINIMUM_SCHEMA_VERSION: i32 = 40;
-pub const MAXIMUM_SCHEMA_VERSION: i32 = 42;
+pub const MINIMUM_SCHEMA_VERSION: i32 = 43;
+pub const MAXIMUM_SCHEMA_VERSION: i32 = 43;
 /// PostgreSQL's atomic enqueue batch limit.
 pub const MAX_ENQUEUE_BATCH_SIZE: usize = 1000;
 pub const DEFAULT_TASK_VALUE_MAX_BYTES: i64 = 1048576;
@@ -436,17 +436,28 @@ pub const RATE_LIMIT_POLICY__OPERATOR_READ_SQL: &str = r#"WITH observed AS (
     SELECT policy.*, observed.now,
            GREATEST(observed.now, COALESCE(bucket.refilled_at, observed.now))
              AS refill_baseline,
-           LEAST(policy.rate_burst::numeric, COALESCE(
-             bucket.tokens + GREATEST(
-               0::numeric,
-               extract(epoch FROM observed.now - bucket.refilled_at) * 1000
-             ) * policy.rate_limit::numeric / policy.rate_interval_ms::numeric,
-             policy.rate_burst::numeric
-           )) AS available_tokens
+           LEAST(policy.rate_burst::numeric, COALESCE(bucket.tokens, policy.rate_burst::numeric))
+             AS available_tokens
       FROM policies policy CROSS JOIN observed
-      LEFT JOIN workhorse.rate_limit_bucket bucket
-        ON bucket.queue_name = policy.queue_name
-       AND bucket.bucket_scope = 'queue' AND bucket.bucket_key = ''
+      CROSS JOIN LATERAL (
+        SELECT max(shard_row.refilled_at) AS refilled_at,
+               sum(LEAST(shard_row.share::numeric, COALESCE(
+                 shard_row.tokens + GREATEST(
+                   0::numeric,
+                   extract(epoch FROM observed.now - shard_row.refilled_at) * 1000
+                 ) * policy.rate_limit::numeric * shard_row.share
+                   / (policy.rate_interval_ms::numeric * policy.rate_burst),
+                 shard_row.share::numeric
+               ))) AS tokens
+          FROM (
+            SELECT stored.tokens, stored.refilled_at,
+                   policy.rate_burst / count(*) OVER ()
+                     + ((row_number() OVER (ORDER BY stored.shard) - 1)
+                        < policy.rate_burst % count(*) OVER ())::integer AS share
+              FROM workhorse.admission_shard stored
+             WHERE stored.queue_name = policy.queue_name
+          ) shard_row
+      ) bucket
   )
   SELECT policy.namespace, policy.queue_name, policy.rate_limit,
          policy.rate_interval_ms, policy.rate_burst, policy.per_key_limit,
