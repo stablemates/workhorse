@@ -5315,6 +5315,7 @@ const dashboardRouter: {
         dependency_released: "dependency_released";
         dependency_failed: "dependency_failed";
         dependency_canceled: "dependency_canceled";
+        dependency_counter_repaired: "dependency_counter_repaired";
         child_created: "child_created";
         child_joined: "child_joined";
         children_created: "children_created";
@@ -5655,7 +5656,7 @@ const dashboardRuntimeConfigSchema: z.ZodObject<{
   workspace: z.ZodNullable<z.ZodString>;
 }, z.core.$strict>;
 
-const dashboardTaskEventTypes: readonly ["enqueued", "debounced", "debounce_rejected", "throttled", "claimed", "batch_dispatched", "batch_failed", "succeeded", "failed", "retry_scheduled", "canceled", "cancel_requested", "promoted", "lease_expired", "released", "deadline_exceeded", "execution_timed_out", "redriven", "redrive_created", "checkpoint_saved", "progress_updated", "wait_scheduled", "wait_elapsed", "wait_replayed", "signal_waiting", "signal_received", "signal_replayed", "signal_rejected", "dependency_blocked", "dependency_released", "dependency_failed", "dependency_canceled", "child_created", "child_joined", "children_created", "children_joined", "parent_linked", "human_wait_created", "human_wait_completed", "human_wait_replayed", "human_wait_rejected"];
+const dashboardTaskEventTypes: readonly ["enqueued", "debounced", "debounce_rejected", "throttled", "claimed", "batch_dispatched", "batch_failed", "succeeded", "failed", "retry_scheduled", "canceled", "cancel_requested", "promoted", "lease_expired", "released", "deadline_exceeded", "execution_timed_out", "redriven", "redrive_created", "checkpoint_saved", "progress_updated", "wait_scheduled", "wait_elapsed", "wait_replayed", "signal_waiting", "signal_received", "signal_replayed", "signal_rejected", "dependency_blocked", "dependency_released", "dependency_failed", "dependency_canceled", "dependency_counter_repaired", "child_created", "child_joined", "children_created", "children_joined", "parent_linked", "human_wait_created", "human_wait_completed", "human_wait_replayed", "human_wait_rejected"];
 
 const dashboardTaskFilters: readonly ["all", "blocked", "waiting", "scheduled", "retried", "queued", "running", "completed", "discarded", "canceled"];
 
