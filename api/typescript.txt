@@ -71,10 +71,13 @@ interface Debounce
 interface Dependencies
 interface DependencyCycleDetails
 class DependencyCycleError
+interface DependencyDrift
 type DependencyLimit
 class DependencyLimitExceededError
 interface DependencyLineage
 interface DependencyLineageRecord
+interface DependencyRepair
+type DependencyRepairAction
 type DependencyTerminalPolicy
 type EnqueueDebounce
 type EnqueueIdempotency
@@ -116,6 +119,7 @@ const MAX_CANCELLATION_REASON_CHARACTERS
 const MAX_CANCELLATION_REQUESTED_BY_CHARACTERS
 const MAX_CHECKPOINT_VALUE_BYTES
 const MAX_DEBOUNCE_WINDOW_MS
+const MAX_DEPENDENCY_DRIFT_LIMIT
 const MAX_ENQUEUE_BATCH_SIZE
 const MAX_EXECUTION_TIMEOUT_MS
 const MAX_EXTERNAL_WAITS_PER_TASK
@@ -822,6 +826,18 @@ class Admin {
   */
   setQueueHistory(queueName: string, settings: Partial<QueueHistorySettings>): Promise<QueueHistorySettings>;
   purgeQueue(queueName: string, audit: AdminAudit): Promise<number>;
+  /**
+  * List blocked dependents whose dependency counters disagree with their edges, in task ID order.
+  * It writes nothing, so it is the dry run of {@link repairDependencyDrift}.
+  */
+  listDependencyDrift(limit?: number): Promise<DependencyDrift[]>;
+  /**
+  * Recount the drifted blocked dependents {@link listDependencyDrift} reports, and settle each
+  * one with no pending edge. Each repaired dependent's `dependency_counter_repaired` event records
+  * the audit. The request ID correlates the repair and is not an idempotency key: a rerun finds
+  * only dependents that drifted again.
+  */
+  repairDependencyDrift(audit: AdminAudit, limit?: number): Promise<DependencyRepair[]>;
   queueMetricSnapshot(): Promise<QueueMetricSnapshot[]>;
   budgetMetricSnapshot(): Promise<BudgetMetricSnapshot[]>;
   health(): Promise<QueueHealth>;
@@ -2842,6 +2858,21 @@ class DependencyCycleError extends WorkhorseError {
   get truncated(): boolean;
 }
 
+interface DependencyDrift {
+  taskId: string;
+  queueName: string;
+  /** The counter the dependent's runtime row records. */
+  pendingPrerequisites: number;
+  /** The dependency edges that have not resolved. */
+  pendingEdges: number;
+  /** The rejection flag the dependent's runtime row records. */
+  dependencyRejected: boolean;
+  /** Whether any resolved edge rejected the dependent. */
+  rejectedEdges: boolean;
+  /** What a repair would do now. A repair recounts under lock, so it can act differently. */
+  action: DependencyRepairAction;
+}
+
 type DependencyLimit = "prerequisites" | "dependents" | "unresolved_dependents" | "unknown";
 
 class DependencyLimitExceededError extends WorkhorseError {
@@ -2866,6 +2897,16 @@ interface DependencyLineageRecord {
   releasedAt: Date | null;
   resolution: DependencyTerminalPolicy | null;
 }
+
+interface DependencyRepair {
+  taskId: string;
+  /** The counter the dependent's runtime row recorded before the repair. */
+  recordedPendingPrerequisites: number;
+  pendingEdges: number;
+  action: DependencyRepairAction;
+}
+
+type DependencyRepairAction = "recounted" | "released" | "rejected";
 
 type DependencyTerminalPolicy = "release" | "cancel" | "fail";
 
@@ -3194,7 +3235,7 @@ interface LiveProtocolWorker {
 
 const MAXIMUM_PROTOCOL_VERSION = 5;
 
-const MAXIMUM_SCHEMA_VERSION = 39;
+const MAXIMUM_SCHEMA_VERSION = 40;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -3203,6 +3244,8 @@ const MAX_CANCELLATION_REQUESTED_BY_CHARACTERS = 200;
 const MAX_CHECKPOINT_VALUE_BYTES = 1048576;
 
 const MAX_DEBOUNCE_WINDOW_MS = 31536000000;
+
+const MAX_DEPENDENCY_DRIFT_LIMIT = 100000;
 
 const MAX_ENQUEUE_BATCH_SIZE = 1000;
 
@@ -3264,7 +3307,7 @@ const MINIMUM_POSTGRES_MAJOR = 15;
 
 const MINIMUM_PROTOCOL_VERSION = 5;
 
-const MINIMUM_SCHEMA_VERSION = 25;
+const MINIMUM_SCHEMA_VERSION = 40;
 
 const MIN_PROGRESS_UPDATE_INTERVAL_MS = 100;
 
@@ -4669,7 +4712,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
 
-const WORKHORSE_SCHEMA_VERSION = 39;
+const WORKHORSE_SCHEMA_VERSION = 40;
 
 const WORKHORSE_VERSION = "0.4.0";
 

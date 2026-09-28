@@ -5,8 +5,8 @@
 pub const CLIENT_PROTOCOL_VERSION: i32 = 5;
 pub const MINIMUM_PROTOCOL_VERSION: i32 = 5;
 pub const MAXIMUM_PROTOCOL_VERSION: i32 = 5;
-pub const MINIMUM_SCHEMA_VERSION: i32 = 25;
-pub const MAXIMUM_SCHEMA_VERSION: i32 = 39;
+pub const MINIMUM_SCHEMA_VERSION: i32 = 40;
+pub const MAXIMUM_SCHEMA_VERSION: i32 = 40;
 /// PostgreSQL's atomic enqueue batch limit.
 pub const MAX_ENQUEUE_BATCH_SIZE: usize = 1000;
 pub const DEFAULT_TASK_VALUE_MAX_BYTES: i64 = 1048576;
@@ -150,6 +150,9 @@ pub const LIST_CONCURRENCY_POLICIES: &str = r#"SELECT namespace, queue_name, max
 /// `list_dead_letters` (admin)
 pub const LIST_DEAD_LETTERS: &str = r#"SELECT task_id::text task_id,queue_name,task_type,concurrency_key,priority,payload,tags,current_attempt,max_attempts,retry_policy,deadline_at,execution_timeout_ms,error,finished_at,redrive_count,has_more,cursor_finished_at FROM workhorse.list_dead_letters_v1($1::jsonb,$2::integer,$3::timestamptz,$4::uuid)"#;
 
+/// `list_dependency_drift` (admin)
+pub const LIST_DEPENDENCY_DRIFT: &str = r#"SELECT task_id,queue_name,pending_prerequisites,pending_edges,dependency_rejected,rejected_edges,action FROM workhorse.list_dependency_drift_v1($1::integer)"#;
+
 /// `list_human_waits` (admin)
 pub const LIST_HUMAN_WAITS: &str = r#"WITH parameters AS (
          SELECT $1::integer AS page_limit, $2::timestamptz AS cursor_created_at,
@@ -253,6 +256,9 @@ pub const REDRIVE: &str = r#"SELECT status,source_task_id::text source_task_id,t
 
 /// `redrive_many` (admin)
 pub const REDRIVE_MANY: &str = r#"SELECT status,source_task_id::text source_task_id,target_task_id::text target_task_id,source_state,target_state,requested_at,source_finished_at_cursor,has_more FROM workhorse.redrive_many_v1($1::jsonb,$2::integer,$3::boolean,$4::text,$5::text,$6::text,$7::timestamptz,$8::uuid) ORDER BY ordinal"#;
+
+/// `repair_dependency_drift` (admin)
+pub const REPAIR_DEPENDENCY_DRIFT: &str = r#"SELECT task_id,recorded_pending_prerequisites,pending_edges,action FROM workhorse.repair_dependency_drift_v1($1::integer,$2::text,$3::text,$4::text)"#;
 
 /// `register_worker_v1` (internal)
 pub const REGISTER_WORKER_V1: &str = r#"SELECT workhorse.register_worker_v1(

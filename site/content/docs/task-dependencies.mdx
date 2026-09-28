@@ -84,9 +84,19 @@ Before a dependent leaves `blocked`, Workhorse checks that no edge is still unre
 resolution would drive the counter below zero, or to zero with an edge unresolved, Workhorse
 recounts that dependent's edges instead. A dependent flagged as rejected without a rejecting edge
 gets the same recount. A drifted counter therefore neither fails the prerequisite's completion nor
-releases the dependent early, and each correction records a `dependency_counter_repaired` event. The SQL function `workhorse.dependency_counter_drift_v1()` lists blocked rows whose counter
-or flag disagrees with their edges. `workhorse.repair_dependency_counters_v1()` recounts them and
-settles each row whose edges have all resolved.
+releases the dependent early, and each correction records a `dependency_counter_repaired` event.
+
+An operator can also look for drift on demand. `Admin.listDependencyDrift` lists blocked dependents
+whose counter or flag disagrees with their edges, with the action a repair would take. It writes
+nothing. `Admin.repairDependencyDrift` recounts those dependents and settles each one whose edges
+have all resolved. It requires an actor, a reason, and a request id, and each repair event records
+them. The CLI runs the same pair:
+
+```sh
+workhorse admin repair-dependencies --dry-run
+workhorse admin repair-dependencies --reason "counter drift after restore" \
+  --env workhorse_production --yes
+```
 
 ## Inspect blocked work
 

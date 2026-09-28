@@ -9,8 +9,8 @@ from typing import Literal
 PROTOCOL_VERSION = 5
 MINIMUM_PROTOCOL_VERSION = 5
 MAXIMUM_PROTOCOL_VERSION = 5
-MINIMUM_SCHEMA_VERSION = 25
-MAXIMUM_SCHEMA_VERSION = 39
+MINIMUM_SCHEMA_VERSION = 40
+MAXIMUM_SCHEMA_VERSION = 40
 DEFAULT_VALUE_MAX_BYTES = 1048576
 MAX_BATCH_SIZE = 1000
 
@@ -139,6 +139,10 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
         "SELECT task_id::text task_id,queue_name,task_type,concurrency_key,priority,payload,tags,current_attempt,max_attempts,retry_policy,deadline_at,execution_timeout_ms,error,finished_at,redrive_count,has_more,cursor_finished_at FROM workhorse.list_dead_letters_v1(%s::jsonb,%s::integer,%s::timestamptz,%s::uuid)",
         "SELECT task_id::text task_id,queue_name,task_type,concurrency_key,priority,payload,tags,current_attempt,max_attempts,retry_policy,deadline_at,execution_timeout_ms,error,finished_at,redrive_count,has_more,cursor_finished_at FROM workhorse.list_dead_letters_v1($1::jsonb,$2::integer,$3::timestamptz,$4::uuid)",
     ),
+    "list_dependency_drift": (
+        "SELECT task_id,queue_name,pending_prerequisites,pending_edges,dependency_rejected,rejected_edges,action FROM workhorse.list_dependency_drift_v1(%s::integer)",
+        "SELECT task_id,queue_name,pending_prerequisites,pending_edges,dependency_rejected,rejected_edges,action FROM workhorse.list_dependency_drift_v1($1::integer)",
+    ),
     "list_human_waits": (
         "WITH parameters AS (\n         SELECT %s::integer AS page_limit, %s::timestamptz AS cursor_created_at,\n                %s::uuid AS cursor_task_id, %s::text AS cursor_name\n       )\n       SELECT task_id::text AS task_id, queue_name, task_type, token_name AS wait_name, context, attempt,\n              created_at, deadline_at, created_at::text AS cursor_created_at\n         FROM workhorse.dashboard_human_wait_v1, parameters\n        WHERE parameters.cursor_created_at IS NULL OR (created_at, task_id, token_name) >\n              (parameters.cursor_created_at, parameters.cursor_task_id, parameters.cursor_name)\n        ORDER BY created_at, task_id, token_name LIMIT (SELECT page_limit FROM parameters)",
         "WITH parameters AS (\n         SELECT $1::integer AS page_limit, $2::timestamptz AS cursor_created_at,\n                $3::uuid AS cursor_task_id, $4::text AS cursor_name\n       )\n       SELECT task_id::text AS task_id, queue_name, task_type, token_name AS wait_name, context, attempt,\n              created_at, deadline_at, created_at::text AS cursor_created_at\n         FROM workhorse.dashboard_human_wait_v1, parameters\n        WHERE parameters.cursor_created_at IS NULL OR (created_at, task_id, token_name) >\n              (parameters.cursor_created_at, parameters.cursor_task_id, parameters.cursor_name)\n        ORDER BY created_at, task_id, token_name LIMIT (SELECT page_limit FROM parameters)",
@@ -202,6 +206,10 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
     "redrive_many": (
         "SELECT status,source_task_id::text source_task_id,target_task_id::text target_task_id,source_state,target_state,requested_at,source_finished_at_cursor,has_more FROM workhorse.redrive_many_v1(%s::jsonb,%s::integer,%s::boolean,%s::text,%s::text,%s::text,%s::timestamptz,%s::uuid) ORDER BY ordinal",
         "SELECT status,source_task_id::text source_task_id,target_task_id::text target_task_id,source_state,target_state,requested_at,source_finished_at_cursor,has_more FROM workhorse.redrive_many_v1($1::jsonb,$2::integer,$3::boolean,$4::text,$5::text,$6::text,$7::timestamptz,$8::uuid) ORDER BY ordinal",
+    ),
+    "repair_dependency_drift": (
+        "SELECT task_id,recorded_pending_prerequisites,pending_edges,action FROM workhorse.repair_dependency_drift_v1(%s::integer,%s::text,%s::text,%s::text)",
+        "SELECT task_id,recorded_pending_prerequisites,pending_edges,action FROM workhorse.repair_dependency_drift_v1($1::integer,$2::text,$3::text,$4::text)",
     ),
     "register_worker_v1": (
         "SELECT workhorse.register_worker_v1(\n       %s::text, %s::uuid, %s::text, %s::integer, %s::text[], %s::text[],\n       %s::integer, %s::integer, %s::integer, %s::integer, %s::integer,\n       %s::integer, %s::integer, %s::integer, %s::boolean,\n       %s::integer, %s::text, %s::text\n     ) AS paused",

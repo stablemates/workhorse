@@ -1,14 +1,14 @@
 [
   {
     "id": "current",
-    "installedSchemaVersion": 25,
+    "installedSchemaVersion": 40,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [5],
     "compatible": true
   },
   {
     "id": "schema-newer-inside-major-line",
-    "installedSchemaVersion": 26,
+    "installedSchemaVersion": 41,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [5],
     "compatible": true,
@@ -16,7 +16,7 @@
   },
   {
     "id": "served-protocol-undeclared",
-    "installedSchemaVersion": 25,
+    "installedSchemaVersion": 40,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [],
     "compatible": true,
@@ -42,8 +42,18 @@
     "note": "This is the state `workhorse schema migrate` leaves behind, because it stops before the contract step that adds protocol 5."
   },
   {
+    "id": "schema-before-the-governed-drift-repair",
+    "installedSchemaVersion": 39,
+    "clientProtocolVersion": 5,
+    "servedProtocolVersions": [5],
+    "compatible": false,
+    "refusalCode": "schema-too-old",
+    "refusal": "Refuse every mutation until the schema is migrated: the release calls dependency drift functions schema 39 does not carry.",
+    "note": "The served protocol matches, so only the schema floor refuses this client."
+  },
+  {
     "id": "schema-serves-only-older-protocols",
-    "installedSchemaVersion": 25,
+    "installedSchemaVersion": 40,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [4],
     "compatible": false,
@@ -62,7 +72,7 @@
   },
   {
     "id": "schema-no-longer-serves-client",
-    "installedSchemaVersion": 25,
+    "installedSchemaVersion": 40,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [6],
     "compatible": false,
@@ -71,7 +81,7 @@
   },
   {
     "id": "client-protocol-too-old",
-    "installedSchemaVersion": 25,
+    "installedSchemaVersion": 40,
     "clientProtocolVersion": 4,
     "servedProtocolVersions": [5],
     "compatible": false,
@@ -81,7 +91,7 @@
   },
   {
     "id": "client-protocol-too-new",
-    "installedSchemaVersion": 25,
+    "installedSchemaVersion": 40,
     "clientProtocolVersion": 6,
     "servedProtocolVersions": [5],
     "compatible": false,

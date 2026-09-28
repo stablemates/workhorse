@@ -73,7 +73,7 @@ succeeds without answering again; a conflicting answer or an unavailable wait fa
 
 The guarded commands — `admin cancel`, `admin redrive`, `admin pause`, `admin resume`,
 `admin purge`, `admin set-tier`, `admin set-history`, `admin pause-worker`, `admin resume-worker`,
-`admin redrive-many`, `admin signal`, and `admin complete-human` — mutate a live system. The most common
+`admin redrive-many`, `admin repair-dependencies`, `admin signal`, and `admin complete-human` — mutate a live system. The most common
 way to hurt yourself with an operator CLI is not a typo in the command. It is running the right
 command against the wrong database, because a shell still carried the environment of whatever you
 were doing an hour ago.
@@ -140,6 +140,21 @@ To execute, remove `--dry-run` and supply `--env`, confirmation, and an explicit
 Continue with the returned `nextCursor` through `--cursor`, keeping the filter and request identity.
 Recovery proceeds oldest-first, so its cursor belongs to recovery rather than the newest-first failure list.
 Each call processes its own page; a preview does not reserve the candidate set.
+
+## Repairing dependency counters
+
+Workhorse keeps a counter of unresolved prerequisites on each blocked dependent. If that counter
+drifts from the edges, the dependent can wait forever. `admin repair-dependencies --dry-run` lists
+drifted dependents and what a repair would do to each. It writes nothing and needs no confirmation.
+
+```sh
+workhorse admin repair-dependencies --dry-run
+```
+
+To repair, remove `--dry-run` and supply a reason, `--env`, and confirmation. Interactively, you
+retype `dependencies`. The command prints what it did to each dependent, and each repair event
+records who asked and why. A rerun is safe, because it finds only dependents that drifted again.
+[Task dependencies](160-task-dependencies.md) explains the counter.
 
 ## Taking one worker out of rotation
 

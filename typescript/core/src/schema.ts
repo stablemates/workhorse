@@ -282,6 +282,14 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "release a fused claim lock before it can deadlock",
     kind: "additive",
   },
+  {
+    // The file number was reserved for this change; the version still steps by one.
+    fromVersion: 39,
+    toVersion: 40,
+    file: "0041-govern-dependency-counter-drift-repair.sql",
+    description: "govern the dependency counter drift check and repair",
+    kind: "additive",
+  },
 ];
 
 /**

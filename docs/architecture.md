@@ -2,7 +2,7 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript and Go `Queue`, `Admin`, and `Worker` remain thin protocol clients.
 
-The current schema version is 25 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
+The current schema version is 40 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
 (`WORKHORSE_SCHEMA_BASELINE_VERSION`). `sql/releases/0006.sql` contains the baseline clean-install
 artifact, which is the 0.2.0 schema. The chain began at 1 and was pruned to this baseline when
 0.1.x support was dropped
@@ -18,7 +18,7 @@ contract step pending at the installed version through `workhorse schema contrac
 `--yes` and first names every worker still live on a retiring protocol. The current migration plan
 has one contract step: `0025-add-a-fast-task-tier.sql` moves schema 24 to 25 and retires
 protocols 1 through 4. `migrateSchema` therefore stops at schema 24 on an older installation, and
-`contractSchema` applies step 25. The additive steps 26 through 29 follow, so a second `migrateSchema`
+`contractSchema` applies step 25. The additive steps 26 through 40 follow, so a second `migrateSchema`
 run completes the plan. Step 25 ships without the usual retention window, as
 [ADR 0077](decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) §6 records.
 
@@ -68,7 +68,9 @@ function or reinterpret that suffix.
 ## SQL protocol conformance
 
 `protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 5. It accepts installed
-schema versions 25 through 31 and client protocol 5 only. `protocol/v1/compatibility.json` distinguishes an absent,
+schema versions 40 and newer inside the major line, and client protocol 5 only. Schema version 40
+is the floor because the Admin catalogue calls `list_dependency_drift_v1` and
+`repair_dependency_drift_v1`, which that version introduced. `protocol/v1/compatibility.json` distinguishes an absent,
 older, current, or newer installed schema from the client's protocol version. Every incompatible
 case requires refusal before a mutating function runs.
 
@@ -192,7 +194,7 @@ bytes, and `requested_by` contains 1 through 200 characters.
 
 Every non-empty Python mutation first executes `SELECT version FROM workhorse.schema_version ORDER
 BY version`. `Queue` and `AsyncQueue` enqueue through a per-queue cached check instead, so a warm
-enqueue issues only `enqueue_many_v1`. `python/src/workhorse/_protocol.py` accepts schema version 25 or newer and client protocol 5.
+enqueue issues only `enqueue_many_v1`. `python/src/workhorse/_protocol.py` accepts schema version 40 or newer and client protocol 5.
 It refuses an unreadable, missing, older, or newer schema before the mutating statement. Enqueue
 batches contain at most 1000 requests. Default priority is 0, default attempt budget is 25, default
 payload and result limits are 1048576 bytes, and default idempotency retention is 86400000
@@ -1637,7 +1639,30 @@ releases with `dependency_released.details.reason` `dependency_counter_repaired`
 appends one `dependency_counter_repaired` event with `source` `repair`. Both settlements go
 through `settle_dependents_v1`. The repair returns `(task_id, recorded_pending_prerequisites,
 pending_edges, action)` with `action` `recounted`, `released`, or `rejected`. No maintenance pass
-calls either function; an operator runs them.
+calls either function.
+
+Schema version 40 put the drift check and repair behind a governed operator surface. The operator
+contract is `Admin.listDependencyDrift(limit)`, `Admin.repairDependencyDrift(audit, limit)`, and
+`workhorse admin repair-dependencies`, not the two raw functions. `limit` defaults to 1,000 and must
+be an integer from 1 through `MAX_DEPENDENCY_DRIFT_LIMIT` (100,000); the client rejects any other
+value before it queries. `listDependencyDrift` calls `list_dependency_drift_v1(p_limit)`, which
+returns each drifted row's `task_id`, `queue_name`, `pending_prerequisites`, `pending_edges`,
+`dependency_rejected`, `rejected_edges`, and planned `action`. The plan is `recounted` while a
+pending edge remains, `rejected` after a rejecting resolution, and `released` otherwise. The read
+writes nothing, and the repair recounts under lock, so its action can differ from the plan.
+`repairDependencyDrift` calls `repair_dependency_drift_v1(p_limit, p_requested_by, p_reason,
+p_request_id)`. It rejects a `requested_by` outside 1 through 200 characters, a `reason` outside 1
+through 2,000 characters, and a `request_id` outside 1 through 512 UTF-8 bytes. Each
+`dependency_counter_repaired` event it appends adds `requested_by`, `request_reason`,
+`request_id_preview`, `request_id_digest`, and `request_id_length` to the version 38 details. The
+digest is the first 12 hexadecimal characters of the SHA-256 of the request id; the raw id is not
+stored. The request id correlates the repair and is not an idempotency key: a rerun finds only rows
+that drifted again. `repair_dependency_counters_internal_v1(p_limit, p_audit)` holds the repair body.
+`repair_dependency_counters_v1` keeps its version 38 signature and result and records no audit.
+`workhorse admin repair-dependencies --dry-run` calls the read and needs neither a reason nor
+confirmation. Without `--dry-run`, the command requires `--reason`, `--env`, and confirmation of the
+target `dependencies`, and generates a request id unless `--request-id` supplies one.
+`queue_health_v1` does not report drift.
 
 `task_runtime.priority` duplicates the accepted `task.priority` so claim can remain on the ready index.
 Pending debounce replaces both values in one transaction. Retry, recovery, durable waits, and

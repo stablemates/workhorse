@@ -14,6 +14,7 @@
 
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { SCHEMA_MIGRATIONS } from "../typescript/core/src/schema.js";
 import { parseSqlSchema, type FunctionDefinition } from "./sql-surface.js";
 
 /** One clean-install artifact or one migration step, named by the schema version it produces. */
@@ -100,6 +101,21 @@ export function findSignatureDrift(sources: readonly SignatureSource[]): Signatu
   return drift;
 }
 
+/**
+ * The schema version a file installs or migrates to.
+ *
+ * A release artifact is named by its version. A migration's file number can run ahead of the
+ * version it produces, because a reserved number still steps the version by one, so its version
+ * comes from the migration chain rather than from its name.
+ */
+function sourceVersion(kind: SignatureSource["kind"], file: string): number {
+  if (kind === "migration") {
+    const step = SCHEMA_MIGRATIONS.find((candidate) => candidate.file === file);
+    if (step !== undefined) return step.toVersion;
+  }
+  return Number.parseInt(file, 10);
+}
+
 /** Read every frozen artifact and every migration step out of the repository's `sql/` tree. */
 export async function readSignatureSources(repository: string): Promise<SignatureSource[]> {
   const sources: SignatureSource[] = [];
@@ -109,7 +125,7 @@ export async function readSignatureSources(repository: string): Promise<Signatur
       if (!file.endsWith(".sql")) continue;
       sources.push({
         kind,
-        version: Number.parseInt(file, 10),
+        version: sourceVersion(kind, file),
         file: `sql/${kind === "release" ? "releases" : "migrations"}/${file}`,
         source: await readFile(path.join(directory, file), "utf8"),
       });

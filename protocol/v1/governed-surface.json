@@ -332,6 +332,19 @@
         "task_type": "text"
       }
     },
+    "list_dependency_drift_v1": {
+      "arguments": ["integer"],
+      "returns": "table",
+      "returnsColumns": {
+        "action": "text",
+        "dependency_rejected": "boolean",
+        "pending_edges": "integer",
+        "pending_prerequisites": "integer",
+        "queue_name": "text",
+        "rejected_edges": "boolean",
+        "task_id": "uuid"
+      }
+    },
     "list_task_timeline_v1": {
       "arguments": ["uuid", "integer", "timestamptz", "text", "uuid"],
       "returns": "table",
@@ -536,6 +549,16 @@
     "release_owned_v1": {
       "arguments": ["uuid", "text", "bigint"],
       "returns": "text"
+    },
+    "repair_dependency_drift_v1": {
+      "arguments": ["integer", "text", "text", "text"],
+      "returns": "table",
+      "returnsColumns": {
+        "action": "text",
+        "pending_edges": "integer",
+        "recorded_pending_prerequisites": "integer",
+        "task_id": "uuid"
+      }
     },
     "retain_history_v1": {
       "arguments": ["boolean?", "timestamptz?"],
@@ -1446,9 +1469,11 @@
         "concurrency_key": "text",
         "current_attempt": "integer",
         "deadline_at": "timestamptz",
+        "dependency_rejected": "boolean",
         "error": "jsonb",
         "expires_at": "timestamptz",
         "fence_token": "bigint",
+        "pending_prerequisites": "integer",
         "priority": "integer",
         "queue_name": "text",
         "ready_at": "timestamptz",
@@ -1614,6 +1639,7 @@
       "reject_self_task_dependency_v1",
       "release_dependents_v1",
       "release_own_dependencies_v1",
+      "repair_dependency_counters_internal_v1",
       "repair_dependency_counters_v1",
       "resolve_cron_wall_clock_v1",
       "resolve_dependents_many_v1",
