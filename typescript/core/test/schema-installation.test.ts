@@ -511,6 +511,7 @@ describe("schema installation", () => {
       { version: 38, description: "detect and repair pending-prerequisite counter drift" },
       { version: 39, description: "release a fused claim lock before it can deadlock" },
       { version: 40, description: "govern the dependency counter drift check and repair" },
+      { version: 41, description: "cut the plain full-tier per-task claim and trigger cost" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

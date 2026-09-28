@@ -1466,7 +1466,7 @@ touched-component advisory locks keep the pending graph stable.
 
 `EnqueueOptions.dependencies` accepts 1 through 100 unique stable identities plus success, failure, and cancellation policies. `EnqueueOptions.prerequisiteTaskId` remains a deprecated success-oriented shorthand. The TypeScript union rejects both fields on one request. `enqueue_batch_v1` keeps runtime validation for direct SQL and untyped JavaScript callers. It locks every prerequisite inside the caller's transaction with `FOR KEY SHARE`, first the `task_runtime` rows in identity order and then the `task` rows. One statement per table locks the prerequisites of every request in the batch before the first request runs. The collection skips a value that does not match the UUID pattern, and that request's validation raises its usual error. Each request then locks its own prerequisites again, which waits for nothing and counts the rows that exist. Every terminal transition deletes the runtime row before it inserts the outcome whose trigger resolves dependents. The runtime lock therefore makes a concurrent completion, failure, or cancellation wait until the enqueue commits, so its resolver sees the new edge. A transition that committed first has already deleted the row, and the enqueue's outcome reads see its outcome. Key-share locks do not conflict with the non-key updates that claims and heartbeats make, so an open dependent enqueue does not delay dispatch of its prerequisite. The runtime-then-task order matches `complete_v1` and `purge_queue_internal_v1`, so neither side holds one row while it waits for the other. A request which declares no prerequisite runs none of that: `enqueue_batch_v1` guards the prerequisite lock, both outcome scans, the `task_dependency` insert, and dependent resolution on a prerequisite count above zero, so no statement reaches `task_dependency` and its statement trigger never fires. A live prerequisite creates a `blocked` runtime plus `dependency_blocked`. Each terminal prerequisite resolves its edge according to policy. After every edge resolves, `fail` precedes `cancel`, which precedes `release`.
 
-`task_outcome_resolve_dependencies_insert` is an `AFTER INSERT ... FOR EACH STATEMENT` trigger with the transition table `new_outcomes`. Its function, `resolve_task_outcome_dependencies_v1`, runs once per statement over every outcome that statement inserted. It first sets `released_at` and a `release` resolution on every still-pending edge that enters one of those terminal tasks. A task settled while it was still blocked would otherwise leave those edges pending forever, and a pending edge is neither a prune candidate nor a removable `prerequisite_task_id`, so it held its prerequisite identity against retention until the dependent identity was purged. Cancellation and deadline materialization are the paths that reach it; a dependent released into dispatch has no pending edge left, so the statement matches nothing on the ordinary path. The resolution is `release` because no prerequisite outcome selected an action: the dependent was already terminal, so the edge changes nothing about it. `workhorse.release_own_dependencies_v1(task_id)` remains as the one-task form of that statement. The trigger then passes the new terminal identities and states, in identity order, to `workhorse.resolve_dependents_many_v1(p_prerequisite_task_ids uuid[], p_prerequisite_states text[])`. `resolve_dependents_v1(p_prerequisite_task_id, p_prerequisite_state)` keeps its signature and delegates to it with one element. `enqueue_batch_v1` calls `resolve_dependents_many_v1` once with every terminal prerequisite of a batch.
+`task_outcome_resolve_dependencies_insert` is an `AFTER INSERT ... FOR EACH STATEMENT` trigger with the transition table `new_outcomes`. Its function, `resolve_task_outcome_dependencies_v1`, runs once per statement over every outcome that statement inserted. It first sets `released_at` and a `release` resolution on every still-pending edge that enters one of those terminal tasks. A task settled while it was still blocked would otherwise leave those edges pending forever, and a pending edge is neither a prune candidate nor a removable `prerequisite_task_id`, so it held its prerequisite identity against retention until the dependent identity was purged. Cancellation and deadline materialization are the paths that reach it; a dependent released into dispatch has no pending edge left, so the statement matches nothing on the ordinary path. The resolution is `release` because no prerequisite outcome selected an action: the dependent was already terminal, so the edge changes nothing about it. `workhorse.release_own_dependencies_v1(task_id)` remains as the one-task form of that statement. Most outcomes have no pending edge in either direction. The function therefore probes `task_dependency_dependent_pending_idx` and `task_dependency_prerequisite_pending_idx` for the inserted outcomes first, and returns before any write or resolver call when neither finds an edge (SM-948). Otherwise the trigger passes the new terminal identities and states, in identity order, to `workhorse.resolve_dependents_many_v1(p_prerequisite_task_ids uuid[], p_prerequisite_states text[])`. `resolve_dependents_v1(p_prerequisite_task_id, p_prerequisite_state)` keeps its signature and delegates to it with one element. `enqueue_batch_v1` calls `resolve_dependents_many_v1` once with every terminal prerequisite of a batch.
 
 `resolve_dependents_many_v1` works in a fixed lock order. It first locks the `task_runtime` row of every `blocked` dependent reached by a pending edge from the given prerequisites, `FOR NO KEY UPDATE` in `task_id` order. Only then does it touch `task_dependency`. A dependent's own terminal transition also holds its runtime row before its outcome trigger releases the dependent's own edges, so a resolver and that transition cannot wait for each other. The lock does not conflict with the `FOR KEY SHARE` lock an enqueue takes on a prerequisite's runtime row; only the `DELETE` of a dependent that fails or is canceled waits for such an enqueue. Before that `DELETE`, the resolver locks the runtime rows of every rejected dependent `FOR UPDATE` in `task_id` order. An enqueue batch locks its prerequisites in the same order, so neither holds a row the other waits for. The `DELETE` plan alone could lock the rows in any order. Before schema version 33 a batch locked request by request, so one request could hold a row the resolver was about to delete while the next request waited on a row the resolver already held. The resolver then records `released_at` plus `resolution` on every locked dependent's pending edges from the given prerequisites with one `UPDATE`. A second statement subtracts each dependent's resolved edges from `task_runtime.pending_prerequisites` and records any `fail` or `cancel` resolution in `dependency_rejected`. A dependent stays blocked until its counter reaches zero, so a dependent with edges left costs one runtime update and no edge scan. At zero without a rejection it releases after one probe of `task_dependency_dependent_pending_idx` confirms that no edge is still pending, and the counter write joins the release write. At zero after a rejection it reads only its `fail` and `cancel` edges and chooses `fail` before `cancel`, then the lowest prerequisite identity. When a dependent's counter is smaller than the number of edges the call resolved, or equals it while that probe finds a pending edge, the resolver recounts that dependent's pending and rejecting edges instead of subtracting. It stores the recounted values and appends one `dependency_counter_repaired` event whose `details` carry `source` `resolver`, the prerequisite, the recorded counter, the resolved edges, the pending edges, and the recounted flag. Before schema version 38 such a counter violated `task_runtime_pending_prerequisites_check` and rolled back the prerequisite's completion. A counter that is too low by exactly the edges still pending therefore holds the dependent instead of releasing it early; the probe runs only for a dependent about to settle. `pnpm benchmark:dependency-release-guard` measured the probe against a copy of the resolver without it: 8 to 11 µs added to a call releasing one dependent, 60 to 75 µs to a call releasing 100, and about 57 µs to the last edge of 100, on PostgreSQL 18 and 15 ([analysis](benchmarks/2026-09-27-dependency-release-guard-analysis.md)). `settle_dependents_v1` locks each rejected dependent and checks that it has a `fail` or `cancel` edge. A rejected dependent with none gets its pending edges recounted and its flag cleared, and appends one `dependency_counter_repaired` event whose `details` carry `source` `settlement`, the pending edges, and the cleared flag. It stays blocked when edges remain and otherwise releases with `dependency_released.details.reason` `dependency_counter_repaired`. Before this recount such a dependent raised an exception and rolled back the transition that resolved its edge. The resolver hands the rejected and released dependents to `settle_dependents_v1`, which performs the settlement below and returns the number of dependents that left `blocked`. One statement deletes the runtime rows of every dependent that fails or is canceled, appends their `dependency_failed` or `dependency_canceled` events, and inserts their synthetic terminal outcomes in identity order with `DependencyFailed` or `DependencyCanceled`. A second statement moves every released dependent to ready or scheduled, allocates ready sequences in identity order, and appends one `dependency_released` each. The released event names the smallest prerequisite in the call that resolved one of the dependent's edges. The resolver then materializes an already-passed deadline for each released task and sends one `NOTIFY workhorse_tasks` per queue that gained ready work. `dependency_released.details.reason` is `prerequisite_succeeded` after success. It is `prerequisite_failed_policy` when `on_failure` selects `release`. It is `prerequisite_canceled_policy` when `on_cancellation` selects `release`. The enqueue-time terminal short circuit uses `prerequisite_already_succeeded` after success. It uses `prerequisite_terminal_policy` after a failure or cancellation policy release.
 
@@ -1988,9 +1988,10 @@ fingerprint only when present, so a request accepted before schema version 3 kee
 `enqueue_debounce_v1` updates it on replacement and `redrive_v1` copies it. A task whose budget has
 no row admits freely, the way a queue with no policy row has no limit.
 
-`claim_v1` is `claim_many_v1` with a limit of 1. On a queue with no concurrency or rate-limit policy,
-`claim_many_v1` calls `claim_one_v1(queue, worker, lease_ms, wait_for_budgets)` and lets only its
-first call wait. Before it reads the clock, the claim samples the first 100 ready rows of its queue in
+`claim_v1` is `claim_many_v1` with a limit of 1, and `claim_many_v1` admits every full-tier batch in
+rounds ([Claim](#claim)). `claim_one_v1(queue, worker, lease_ms, wait_for_budgets)` applies the same
+budget rules to one claim, although no claim path calls it since schema version 41. Before it reads
+the clock, the claim samples the first 100 ready rows of its queue in
 priority order. It takes the exclusive transaction advisory lock `workhorse:budget:<budget_name>`
 for each distinct budget name in that sample, in name order, so two claims that share budgets
 cannot deadlock. It then inspects the 100-row priority window and calls
@@ -1998,18 +1999,19 @@ cannot deadlock. It then inspects the 100-row priority window and calls
 candidate whose budget first appears after the sample is not admitted by that claim.
 `budget_admission_v1` takes the same per-budget lock itself whenever the budget row exists, so the
 count it reads includes every start another claim committed before the lock was granted.
-`claim_many_v1` lets only its first claim wait for a budget lock. Each later claim in the batch uses
+`claim_many_v1` lets only its first round wait for a budget lock. Each later round uses
 `pg_try_advisory_xact_lock` and skips any budget it cannot lock at once, because the batch already
 holds budget locks and waiting on another could deadlock against a batch that holds them in a
-different order. On a queue with a concurrency or rate-limit policy, `claim_many_v1` admits in rounds
-([Claim](#claim)); only its first round waits, and it computes each locked budget's room from the same
+different order. `claim_many_v1` computes each locked budget's room from the same
 count and bucket instead of calling `budget_admission_v1`. Admission counts active rows through `task_runtime_active_budget_expiry_idx`
 whose `expires_at` is later than now, and probes `budget_bucket_v1(budget_name, now, false)`
 without consuming. After the runtime update selects a candidate,
 `budget_bucket_v1(budget_name, now, true)` consumes one token. `budget_bucket` holds one row per
 budget with the refill arithmetic of `rate_limit_bucket_v1`, and deleting a budget cascades its
 bucket. `notify_budget_capacity_v1` fires when an active row naming a budget leaves the active
-state and notifies `workhorse_tasks` for each distinct waiting queue found through
+state. The `WHEN` clauses of `task_runtime_budget_capacity_update` and
+`task_runtime_budget_capacity_delete` repeat that test, so a row without a budget queues no trigger
+event. The function notifies `workhorse_tasks` for each distinct waiting queue found through
 `task_runtime_ready_budget_idx`, at most 100 per release.
 
 `budget_status_v1(budget_names)` reports at most 100 budgets and samples at most 101 ready rows
@@ -2480,10 +2482,11 @@ it has no bound. `pnpm benchmark:saturated-claim` measures a claim on a queue wh
 saturated: it writes no row lock and one WAL record, where the window lock wrote 100 row locks and
 101 WAL records.
 
-One runtime update changes the selected row to active and installs worker, global fence, acquisition, heartbeat, and expiry data. The same transaction appends the claim event before returning identity, payload, normalized `retryPolicy`, contract version, result limit, and error-redaction flag. No transaction remains open while user code runs. `Queue.claim` uses `claim_v1`, which is `claim_many_v1` with a limit of 1. `claim_many_v1(queue, worker, limit, lease_ms)` accepts a limit from 1 through 100. On a queue with no concurrency or rate-limit policy row, it invokes `claim_one_v1` repeatedly inside one database call until it reaches the limit or a claim returns no row. Only the first claim of the batch waits for a budget lock. On a fast-tier queue it branches to `fast_claim_v1` instead ([Fast claim](#fast-claim)).
+One runtime update changes the selected row to active and installs worker, global fence, acquisition, heartbeat, and expiry data. The same transaction appends the claim event before returning identity, payload, normalized `retryPolicy`, contract version, result limit, and error-redaction flag. No transaction remains open while user code runs. `Queue.claim` uses `claim_v1`, which is `claim_many_v1` with a limit of 1. `claim_many_v1(queue, worker, limit, lease_ms)` accepts a limit from 1 through 100. On a fast-tier queue it branches to `fast_claim_v1` instead ([Fast claim](#fast-claim)).
 
-On a queue with a concurrency or rate-limit policy row, `claim_many_v1` admits the batch as a set
-instead of calling `claim_one_v1` once per task. It takes the same shared advisory locks and policy
+On every full-tier queue, `claim_many_v1` admits the batch as a set. Before schema version 41, a
+queue with no concurrency or rate-limit policy row called `claim_one_v1` once per task. That
+repeated the policy locks, the budget sample, and the key-bucket prune for every start (SM-948). It takes the same shared advisory locks and policy
 row locks once for the whole batch. The policy row locks serialize every policy claim on the queue,
 so no other claim changes the counts and buckets the batch reads until it commits. The batch then
 runs rounds. Each round:
@@ -2514,9 +2517,9 @@ runs rounds. Each round:
 A round returns its rows in fence order. The batch stops once it fills the limit or the queue's own
 room. It also stops when the window held every ready row and the round activated every fitting row,
 unless some row had both a limited key and a limited budget. Only that mix can leave a greedy
-admission unrealized within one round, so the batch runs another round then. A policy created after
-the unlocked policy check is still enforced, because the plain path's `claim_one_v1` locks and applies
-it.
+admission unrealized within one round, so the batch runs another round then. The batch reads the
+policy rows only after it holds their locks, so a policy synchronized before the batch starts applies
+to it. A queue with no policy row, no per-key rule, and no locked budget runs one direct round.
 
 `claim_many_v1` is declared with `SET plan_cache_mode = force_generic_plan`. Its statements over the
 batch arrays have a pessimistic generic row estimate, so under the default mode PL/pgSQL replanned
@@ -2536,8 +2539,7 @@ compatibility option. Supplying both options throws. Omitting both uses `WorkerQ
 One worker identity, pause state, and `concurrency` budget cover the complete configured queue set.
 
 Each claim requests a number of slots through `claim_many_v1`. Every member passes ordering, policy,
-rate-token, and fence checks inside that call. On a queue without a policy it passes them in its own
-`claim_one_v1` transition; on a policy queue the batch admits its members in rounds ([Claim](#claim)). The worker advances the queue cursor after every batched queue attempt.
+rate-token, and fence checks inside that call, and the batch admits its members in rounds ([Claim](#claim)). The worker advances the queue cursor after every batched queue attempt.
 Each claimed task starts one independent per-task handler task. On a queue whose tier probe answers fast, the worker claims and completes through
 `complete_many_and_claim_v1` instead ([Workers on a fast-tier queue](#workers-on-a-fast-tier-queue)).
 
@@ -2636,6 +2638,12 @@ without waiting for its fallback poll. A release below every cap publishes nothi
 a notification while idle delays its next claim. The count includes the row being released and every concurrent release
 that has not committed, so the first release from a full queue always publishes, even when one statement
 releases several rows.
+
+The `WHEN` clauses of `task_runtime_concurrency_capacity_update` and
+`task_runtime_concurrency_capacity_delete` repeat the function's first test. A claim, a promotion, or
+the delete of a row that was never active therefore calls no function. Every release of an active row
+still calls it, even on a queue with no policy row. A policy synchronized while a lease is held must
+see that lease end, and the wait described next orders the release after any open claim.
 
 Before it counts, the trigger locks the queue's `concurrency_policy` row `FOR KEY SHARE`. `claim_one_v1` and
 `claim_many_v1` hold that row `FOR UPDATE` until they commit, so a release waits for an open claim and then

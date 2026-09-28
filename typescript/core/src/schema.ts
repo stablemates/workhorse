@@ -290,6 +290,14 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "govern the dependency counter drift check and repair",
     kind: "additive",
   },
+  {
+    // The file number was reserved for this change; the version still steps by one.
+    fromVersion: 40,
+    toVersion: 41,
+    file: "0042-cut-the-plain-full-tier-per-task-cost.sql",
+    description: "cut the plain full-tier per-task claim and trigger cost",
+    kind: "additive",
+  },
 ];
 
 /**
