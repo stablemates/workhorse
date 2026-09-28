@@ -79,6 +79,15 @@ The `pending_prerequisites` column counts its unresolved edges. Settling an edge
 the same statement that resolves the edge. The dependent leaves `blocked` once no unresolved edge
 remains, so a wide fan-in costs the same per prerequisite as a single edge.
 
+The counter must agree with the edges. Before a dependent leaves `blocked`, Workhorse checks that
+no edge is still unresolved. If a resolution would drive the counter below zero, or to zero with an
+edge unresolved, Workhorse recounts that dependent's edges instead. A dependent flagged as rejected
+without a rejecting edge gets the same recount. A drifted counter therefore neither fails the
+prerequisite's completion nor releases the dependent early. Workhorse records each correction as a
+`dependency_counter_repaired` event. An operator can list blocked rows that
+disagree with their edges through `dependency_counter_drift_v1`. `repair_dependency_counters_v1`
+recounts those rows and settles each one whose edges have all resolved.
+
 A dependent whose requested `runAt` has arrived becomes ready. A future dependent becomes scheduled
 and follows ordinary promotion later.
 

@@ -11598,6 +11598,209 @@ BEGIN
 END;
 $$;
 
+-- Settle blocked dependents whose pending edges are all resolved. A rejected dependent fails or is
+-- canceled; every other dependent moves to ready or scheduled. The resolver and the counter repair
+-- both call it while they hold every dependent's runtime row, so it sees the edges those locks
+-- protect. It runs the resolver's release and rejection statements, so it keeps the resolver's
+-- generic plans for the session.
+CREATE OR REPLACE FUNCTION workhorse.settle_dependents_v1(
+  p_now timestamptz, p_rejected_task_ids uuid[], p_released_task_ids uuid[],
+  p_released_prerequisite_task_ids uuid[], p_released_prerequisite_states text[]
+)
+RETURNS integer
+LANGUAGE plpgsql
+SET plan_cache_mode = force_generic_plan
+AS $$
+DECLARE
+  v_terminated integer := 0;
+  v_released integer;
+  v_repaired_task_ids uuid[];
+  v_released_task_ids uuid[] := p_released_task_ids;
+  v_released_prerequisite_task_ids uuid[] := p_released_prerequisite_task_ids;
+  v_released_prerequisite_states text[] := p_released_prerequisite_states;
+  v_deadline_task_ids uuid[];
+  v_queue_names text[];
+  v_task_id uuid;
+  v_queue_name text;
+BEGIN
+  -- A rejected dependent's fate is the first rejecting resolution in the order fail, cancel, with
+  -- ties broken by prerequisite identity. The terminal outcomes are this statement's last write, so
+  -- their trigger resolves the next level after this level's evidence exists.
+  IF p_rejected_task_ids IS NOT NULL THEN
+    PERFORM 1 FROM workhorse.task_runtime runtime
+     WHERE runtime.task_id = ANY(p_rejected_task_ids)
+     ORDER BY runtime.task_id FOR UPDATE;
+
+    -- A rejection flag with no rejecting edge has drifted from the edges. The settlement recounts
+    -- that dependent's pending edges and records a dependency_counter_repaired event. With no
+    -- pending edge the dependent releases; otherwise it stays blocked with the recounted values.
+    WITH unexplained AS MATERIALIZED (
+      SELECT runtime.task_id, edges.pending_edges
+        FROM workhorse.task_runtime runtime
+        CROSS JOIN LATERAL (
+          SELECT count(*)::integer AS pending_edges
+            FROM workhorse.task_dependency dependency
+           WHERE dependency.dependent_task_id = runtime.task_id
+             AND dependency.released_at IS NULL
+        ) edges
+       WHERE runtime.task_id = ANY(p_rejected_task_ids)
+         AND runtime.state = 'blocked'
+         AND NOT EXISTS (
+               SELECT 1 FROM workhorse.task_dependency dependency
+                WHERE dependency.dependent_task_id = runtime.task_id
+                  AND dependency.resolution IN ('fail', 'cancel')
+             )
+    ), recounted AS (
+      UPDATE workhorse.task_runtime runtime
+         SET pending_prerequisites = unexplained.pending_edges, dependency_rejected = false,
+             updated_at = p_now
+        FROM unexplained
+       WHERE runtime.task_id = unexplained.task_id
+         AND unexplained.pending_edges <> 0
+    ), repairs AS (
+      INSERT INTO workhorse.task_event(task_id, event_type, details)
+      SELECT unexplained.task_id, 'dependency_counter_repaired', jsonb_build_object(
+               'source', 'settlement',
+               'pending_edges', unexplained.pending_edges,
+               'dependency_rejected', false
+             )
+        FROM unexplained
+       ORDER BY unexplained.task_id
+    )
+    SELECT array_agg(unexplained.task_id ORDER BY unexplained.task_id)
+             FILTER (WHERE unexplained.pending_edges = 0)
+      INTO v_repaired_task_ids
+      FROM unexplained;
+    IF v_repaired_task_ids IS NOT NULL THEN
+      v_released_task_ids := v_released_task_ids || v_repaired_task_ids;
+      v_released_prerequisite_task_ids := v_released_prerequisite_task_ids
+        || array_fill(NULL::uuid, ARRAY[cardinality(v_repaired_task_ids)]);
+      v_released_prerequisite_states := v_released_prerequisite_states
+        || array_fill(NULL::text, ARRAY[cardinality(v_repaired_task_ids)]);
+    END IF;
+
+    WITH settled AS (
+      SELECT rejected.task_id,
+             CASE WHEN final.resolution = 'fail' THEN 'failed' ELSE 'canceled' END AS state,
+             CASE WHEN final.resolution = 'fail'
+               THEN 'dependency_failed' ELSE 'dependency_canceled' END AS event_type,
+             jsonb_build_object(
+               'name', CASE WHEN final.resolution = 'fail'
+                 THEN 'DependencyFailed' ELSE 'DependencyCanceled' END,
+               'message', CASE WHEN final.resolution = 'fail'
+                 THEN 'a prerequisite reached a terminal outcome rejected by dependency policy'
+                 ELSE 'a prerequisite reached a terminal outcome that canceled its dependent' END,
+               'prerequisite_task_id', final.prerequisite_task_id,
+               'prerequisite_state', final.prerequisite_state,
+               'policy_action', final.resolution
+             ) AS error
+        FROM unnest(p_rejected_task_ids) rejected(task_id)
+        CROSS JOIN LATERAL (
+          SELECT dependency.resolution, dependency.prerequisite_task_id,
+                 outcome.state AS prerequisite_state
+            FROM workhorse.task_dependency dependency
+            LEFT JOIN workhorse.task_outcome outcome
+              ON outcome.task_id = dependency.prerequisite_task_id
+           WHERE dependency.dependent_task_id = rejected.task_id
+             AND dependency.resolution IN ('fail', 'cancel')
+           ORDER BY CASE dependency.resolution WHEN 'fail' THEN 0 ELSE 1 END,
+                    dependency.prerequisite_task_id
+           LIMIT 1
+        ) final
+    ), removed AS (
+      DELETE FROM workhorse.task_runtime runtime
+       USING settled
+       WHERE runtime.task_id = settled.task_id
+         AND runtime.state = 'blocked'
+      RETURNING runtime.task_id, runtime.current_attempt, runtime.run_at
+    ), events AS (
+      INSERT INTO workhorse.task_event(task_id, event_type, details)
+      SELECT removed.task_id, settled.event_type, settled.error
+        FROM removed
+        JOIN settled USING (task_id)
+       ORDER BY removed.task_id
+    )
+    INSERT INTO workhorse.task_outcome(
+      task_id, state, current_attempt, fence_token, run_at, error, finished_at, updated_at,
+      history_through_at
+    )
+    SELECT removed.task_id, settled.state, removed.current_attempt, 0, removed.run_at,
+           settled.error, p_now, p_now, p_now
+      FROM removed
+      JOIN settled USING (task_id)
+     ORDER BY removed.task_id;
+    GET DIAGNOSTICS v_terminated = ROW_COUNT;
+  END IF;
+  IF v_released_task_ids IS NULL THEN
+    RETURN v_terminated;
+  END IF;
+
+  -- Ready dependents take FIFO sequence numbers in identity order. A release that no prerequisite
+  -- state explains comes from a counter repair.
+  WITH releasing AS (
+    SELECT settled.task_id, settled.prerequisite_task_id, settled.prerequisite_state
+      FROM unnest(
+        v_released_task_ids, v_released_prerequisite_task_ids, v_released_prerequisite_states
+      ) settled(task_id, prerequisite_task_id, prerequisite_state)
+  ), ready AS (
+    SELECT ordered.task_id, nextval('workhorse.ready_sequence_seq') AS sequence
+      FROM (
+        SELECT runtime.task_id
+          FROM workhorse.task_runtime runtime
+          JOIN releasing USING (task_id)
+         WHERE runtime.run_at <= p_now
+         ORDER BY runtime.task_id
+        OFFSET 0
+      ) ordered
+  ), released AS (
+    UPDATE workhorse.task_runtime runtime
+       SET state = CASE WHEN ready.task_id IS NULL THEN 'scheduled' ELSE 'ready' END,
+           ready_at = CASE WHEN ready.task_id IS NOT NULL THEN p_now END,
+           sequence = ready.sequence,
+           pending_prerequisites = 0,
+           dependency_rejected = false,
+           updated_at = p_now
+      FROM releasing
+      LEFT JOIN ready ON ready.task_id = releasing.task_id
+     WHERE runtime.task_id = releasing.task_id
+       AND runtime.state = 'blocked'
+    RETURNING runtime.task_id, runtime.state, runtime.queue_name, runtime.deadline_at
+  ), events AS (
+    INSERT INTO workhorse.task_event(task_id, event_type, details)
+    SELECT released.task_id, 'dependency_released', jsonb_build_object(
+             'prerequisite_task_id', releasing.prerequisite_task_id,
+             'state', released.state,
+             'reason', CASE releasing.prerequisite_state
+               WHEN 'succeeded' THEN 'prerequisite_succeeded'
+               WHEN 'failed' THEN 'prerequisite_failed_policy'
+               WHEN 'canceled' THEN 'prerequisite_canceled_policy'
+               ELSE 'dependency_counter_repaired'
+             END
+           )
+      FROM released
+      JOIN releasing USING (task_id)
+     ORDER BY released.task_id
+  )
+  SELECT count(*),
+         array_agg(released.task_id ORDER BY released.task_id)
+           FILTER (WHERE released.deadline_at <= p_now),
+         array_agg(DISTINCT released.queue_name ORDER BY released.queue_name)
+           FILTER (
+             WHERE released.state = 'ready'
+               AND (released.deadline_at IS NULL OR released.deadline_at > p_now)
+           )
+    INTO v_released, v_deadline_task_ids, v_queue_names
+    FROM released;
+  FOREACH v_task_id IN ARRAY coalesce(v_deadline_task_ids, '{}') LOOP
+    PERFORM workhorse.terminalize_deadline_v1(v_task_id);
+  END LOOP;
+  FOREACH v_queue_name IN ARRAY coalesce(v_queue_names, '{}') LOOP
+    PERFORM pg_notify('workhorse_tasks', v_queue_name);
+  END LOOP;
+  RETURN v_terminated + v_released;
+END;
+$$;
+
 -- Resolve every pending edge from a set of prerequisites that reached terminal outcomes in the
 -- same statement. The resolver locks the runtime row of every blocked dependent in identity order
 -- before it touches any edge. A dependent's own terminal transition also holds its runtime row
@@ -11613,7 +11816,11 @@ $$;
 -- subtracts the edges it resolved for a dependent from that counter. A dependent with edges left
 -- costs one runtime update and no edge scan. Only a dependent that settles after a rejection reads
 -- its edges, to name the prerequisite that decides its outcome. A counter that would fall below
--- zero violates the runtime check instead of releasing a dependent early.
+-- zero has drifted from the edges, and so has a counter that reaches zero while a pending edge
+-- remains. The resolver checks for that edge with one probe of the dependent's pending-edge index
+-- before it settles a dependent. For either drift it recounts that dependent's pending edges and
+-- rejections, records a `dependency_counter_repaired` event, and continues with the recount, so
+-- the drift can neither fail the prerequisite's own transition nor release the dependent early.
 --
 -- The generic plan keeps every statement on a primary key or a pending-edge index that the arrays
 -- drive. A custom plan per call cost more to plan than the statements cost to run, and a singly
@@ -11637,12 +11844,6 @@ DECLARE
   v_released_task_ids uuid[];
   v_released_prerequisite_task_ids uuid[];
   v_released_prerequisite_states text[];
-  v_terminated integer := 0;
-  v_released integer;
-  v_deadline_task_ids uuid[];
-  v_queue_names text[];
-  v_task_id uuid;
-  v_queue_name text;
 BEGIN
   IF cardinality(p_prerequisite_task_ids) IS DISTINCT FROM cardinality(p_prerequisite_states) THEN
     RAISE EXCEPTION 'prerequisite identities and states must have the same length';
@@ -11711,9 +11912,21 @@ BEGIN
   END IF;
 
   -- A dependent settles once its counter reaches zero. Settled dependents keep their counters until
-  -- the statement that terminates or releases them, so each dependent takes one runtime write.
-  WITH counted AS MATERIALIZED (
-    SELECT runtime.task_id,
+  -- the statement that terminates or releases them, so each dependent takes one runtime write. A
+  -- counter below its resolved edges, or one that reaches zero while a pending edge remains, is
+  -- replaced by a recount of the edges this statement sees, which already include the resolutions
+  -- written above. Only a dependent about to settle pays for the pending-edge probe.
+  WITH measured AS MATERIALIZED (
+    SELECT runtime.task_id, runtime.pending_prerequisites AS recorded, resolved.decrement,
+           runtime.pending_prerequisites < resolved.decrement
+             OR (
+               runtime.pending_prerequisites = resolved.decrement
+               AND EXISTS (
+                 SELECT 1 FROM workhorse.task_dependency dependency
+                  WHERE dependency.dependent_task_id = runtime.task_id
+                    AND dependency.released_at IS NULL
+               )
+             ) AS repaired,
            runtime.pending_prerequisites - resolved.decrement AS remaining,
            runtime.dependency_rejected OR resolved.rejected AS rejected,
            resolved.prerequisite_task_id, resolved.state
@@ -11722,12 +11935,40 @@ BEGIN
         v_releasing_prerequisite_states
       ) resolved(task_id, decrement, rejected, prerequisite_task_id, state)
       JOIN workhorse.task_runtime runtime ON runtime.task_id = resolved.task_id
+  ), counted AS MATERIALIZED (
+    SELECT measured.task_id, measured.recorded, measured.decrement, measured.repaired,
+           CASE WHEN measured.repaired THEN edges.pending_edges ELSE measured.remaining END
+             AS remaining,
+           CASE WHEN measured.repaired THEN edges.rejected_edges ELSE measured.rejected END
+             AS rejected,
+           measured.prerequisite_task_id, measured.state
+      FROM measured
+      LEFT JOIN LATERAL (
+        SELECT (count(*) FILTER (WHERE dependency.released_at IS NULL))::integer AS pending_edges,
+               coalesce(bool_or(dependency.resolution IN ('fail', 'cancel')), false)
+                 AS rejected_edges
+          FROM workhorse.task_dependency dependency
+         WHERE dependency.dependent_task_id = measured.task_id
+      ) edges ON measured.repaired
   ), decremented AS (
     UPDATE workhorse.task_runtime runtime
        SET pending_prerequisites = counted.remaining, dependency_rejected = counted.rejected
       FROM counted
      WHERE runtime.task_id = counted.task_id
        AND counted.remaining <> 0
+  ), repairs AS (
+    INSERT INTO workhorse.task_event(task_id, event_type, details)
+    SELECT counted.task_id, 'dependency_counter_repaired', jsonb_build_object(
+             'source', 'resolver',
+             'prerequisite_task_id', counted.prerequisite_task_id,
+             'recorded_pending_prerequisites', counted.recorded,
+             'resolved_edges', counted.decrement,
+             'pending_edges', counted.remaining,
+             'dependency_rejected', counted.rejected
+           )
+      FROM counted
+     WHERE counted.repaired
+     ORDER BY counted.task_id
   )
   SELECT array_agg(counted.task_id ORDER BY counted.task_id)
            FILTER (WHERE counted.remaining = 0 AND counted.rejected),
@@ -11741,132 +11982,184 @@ BEGIN
          v_released_prerequisite_states
     FROM counted;
 
-  -- A rejected dependent's fate is the first rejecting resolution in the order fail, cancel, with
-  -- ties broken by prerequisite identity. The terminal outcomes are this statement's last write, so
-  -- their trigger resolves the next level after this level's evidence exists.
-  IF v_rejected_task_ids IS NOT NULL THEN
-    PERFORM 1 FROM workhorse.task_runtime runtime
-     WHERE runtime.task_id = ANY(v_rejected_task_ids)
-     ORDER BY runtime.task_id FOR UPDATE;
-    WITH settled AS (
-      SELECT rejected.task_id,
-             CASE WHEN final.resolution = 'fail' THEN 'failed' ELSE 'canceled' END AS state,
-             CASE WHEN final.resolution = 'fail'
-               THEN 'dependency_failed' ELSE 'dependency_canceled' END AS event_type,
-             jsonb_build_object(
-               'name', CASE WHEN final.resolution = 'fail'
-                 THEN 'DependencyFailed' ELSE 'DependencyCanceled' END,
-               'message', CASE WHEN final.resolution = 'fail'
-                 THEN 'a prerequisite reached a terminal outcome rejected by dependency policy'
-                 ELSE 'a prerequisite reached a terminal outcome that canceled its dependent' END,
-               'prerequisite_task_id', final.prerequisite_task_id,
-               'prerequisite_state', final.prerequisite_state,
-               'policy_action', final.resolution
-             ) AS error
-        FROM unnest(v_rejected_task_ids) rejected(task_id)
-        CROSS JOIN LATERAL (
-          SELECT dependency.resolution, dependency.prerequisite_task_id,
-                 outcome.state AS prerequisite_state
-            FROM workhorse.task_dependency dependency
-            JOIN workhorse.task_outcome outcome
-              ON outcome.task_id = dependency.prerequisite_task_id
-           WHERE dependency.dependent_task_id = rejected.task_id
-             AND dependency.resolution IN ('fail', 'cancel')
-           ORDER BY CASE dependency.resolution WHEN 'fail' THEN 0 ELSE 1 END,
-                    dependency.prerequisite_task_id
-           LIMIT 1
-        ) final
-    ), removed AS (
-      DELETE FROM workhorse.task_runtime runtime
-       USING settled
-       WHERE runtime.task_id = settled.task_id
-         AND runtime.state = 'blocked'
-      RETURNING runtime.task_id, runtime.current_attempt, runtime.run_at
-    ), events AS (
-      INSERT INTO workhorse.task_event(task_id, event_type, details)
-      SELECT removed.task_id, settled.event_type, settled.error
-        FROM removed
-        JOIN settled USING (task_id)
-       ORDER BY removed.task_id
-    )
-    INSERT INTO workhorse.task_outcome(
-      task_id, state, current_attempt, fence_token, run_at, error, finished_at, updated_at,
-      history_through_at
-    )
-    SELECT removed.task_id, settled.state, removed.current_attempt, 0, removed.run_at,
-           settled.error, v_now, v_now, v_now
-      FROM removed
-      JOIN settled USING (task_id)
-     ORDER BY removed.task_id;
-    GET DIAGNOSTICS v_terminated = ROW_COUNT;
-    IF v_terminated <> cardinality(v_rejected_task_ids) THEN
-      RAISE EXCEPTION 'a rejected dependent has no rejecting edge';
-    END IF;
+  RETURN workhorse.settle_dependents_v1(
+    v_now, v_rejected_task_ids, v_released_task_ids, v_released_prerequisite_task_ids,
+    v_released_prerequisite_states
+  );
+END;
+$$;
+
+-- Report blocked tasks whose dependency counters disagree with their edges. A row is drifted when
+-- `pending_prerequisites` differs from its pending edges or `dependency_rejected` differs from its
+-- rejecting resolutions. A row is also reported when every edge is resolved but the task is still
+-- blocked, whatever its counter says. Every blocked task keeps all its edges, because pruning
+-- removes only edges whose dependent has a terminal outcome.
+CREATE OR REPLACE FUNCTION workhorse.dependency_counter_drift_v1(p_limit integer DEFAULT 1000)
+RETURNS TABLE(
+  task_id uuid, queue_name text, pending_prerequisites integer, pending_edges integer,
+  dependency_rejected boolean, rejected_edges boolean, counter_drifted boolean,
+  edges_resolved boolean
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+#variable_conflict use_column
+BEGIN
+  IF p_limit IS NULL OR p_limit < 1 OR p_limit > 100000 THEN
+    RAISE EXCEPTION 'dependency counter drift limit must be between 1 and 100000';
   END IF;
-  IF v_released_task_ids IS NULL THEN
-    RETURN v_terminated;
+  RETURN QUERY
+  SELECT runtime.task_id, runtime.queue_name, runtime.pending_prerequisites, edges.pending_edges,
+         runtime.dependency_rejected, edges.rejected_edges,
+         runtime.pending_prerequisites <> edges.pending_edges
+           OR runtime.dependency_rejected <> edges.rejected_edges,
+         edges.pending_edges = 0
+    FROM workhorse.task_runtime runtime
+    CROSS JOIN LATERAL (
+      SELECT (count(*) FILTER (WHERE dependency.released_at IS NULL))::integer AS pending_edges,
+             coalesce(bool_or(dependency.resolution IN ('fail', 'cancel')), false)
+               AS rejected_edges
+        FROM workhorse.task_dependency dependency
+       WHERE dependency.dependent_task_id = runtime.task_id
+    ) edges
+   WHERE runtime.state = 'blocked'
+     AND (
+       runtime.pending_prerequisites <> edges.pending_edges
+       OR runtime.dependency_rejected <> edges.rejected_edges
+       OR edges.pending_edges = 0
+     )
+   ORDER BY runtime.task_id
+   LIMIT p_limit;
+END;
+$$;
+
+-- Repair the blocked tasks that `dependency_counter_drift_v1` reports, in identity order. The
+-- repair locks their runtime rows the way the resolver does, then recounts each one's edges under
+-- the lock, because an edge resolves only while its dependent's runtime row is held. A task with
+-- pending edges left takes the recounted counter and rejection flag. A task with no pending edge
+-- settles: it fails or is canceled after a rejecting resolution and is released otherwise. Each
+-- repaired task gets a `dependency_counter_repaired` event before any settlement event.
+CREATE OR REPLACE FUNCTION workhorse.repair_dependency_counters_v1(p_limit integer DEFAULT 1000)
+RETURNS TABLE(
+  task_id uuid, recorded_pending_prerequisites integer, pending_edges integer, action text
+)
+LANGUAGE plpgsql
+AS $$
+#variable_conflict use_column
+DECLARE
+  v_now timestamptz := clock_timestamp();
+  v_candidates uuid[];
+  v_locked uuid[];
+  v_task_ids uuid[];
+  v_recorded integer[];
+  v_pending_edges integer[];
+  v_rejected_edges boolean[];
+  v_prerequisite_task_ids uuid[];
+  v_actions text[];
+  v_rejected_task_ids uuid[];
+  v_released_task_ids uuid[];
+  v_released_prerequisite_task_ids uuid[];
+BEGIN
+  SELECT array_agg(drift.task_id ORDER BY drift.task_id) INTO v_candidates
+    FROM workhorse.dependency_counter_drift_v1(p_limit) drift;
+  IF v_candidates IS NULL THEN
+    RETURN;
+  END IF;
+  SELECT array_agg(locked.task_id ORDER BY locked.task_id) INTO v_locked
+    FROM (
+      SELECT runtime.task_id
+        FROM workhorse.task_runtime runtime
+       WHERE runtime.task_id = ANY(v_candidates)
+         AND runtime.state = 'blocked'
+       ORDER BY runtime.task_id
+         FOR NO KEY UPDATE OF runtime
+    ) locked;
+  IF v_locked IS NULL THEN
+    RETURN;
   END IF;
 
-  -- Ready dependents take FIFO sequence numbers in identity order.
-  WITH releasing AS (
-    SELECT settled.task_id, settled.prerequisite_task_id, settled.prerequisite_state
-      FROM unnest(
-        v_released_task_ids, v_released_prerequisite_task_ids, v_released_prerequisite_states
-      ) settled(task_id, prerequisite_task_id, prerequisite_state)
-  ), ready AS (
-    SELECT ordered.task_id, nextval('workhorse.ready_sequence_seq') AS sequence
-      FROM (
-        SELECT runtime.task_id
-          FROM workhorse.task_runtime runtime
-          JOIN releasing USING (task_id)
-         WHERE runtime.run_at <= v_now
-         ORDER BY runtime.task_id
-        OFFSET 0
-      ) ordered
-  ), released AS (
+  -- A release names the prerequisite whose edge resolved last. Its reason records the repair
+  -- rather than a prerequisite outcome.
+  SELECT array_agg(measured.task_id ORDER BY measured.task_id),
+         array_agg(measured.recorded ORDER BY measured.task_id),
+         array_agg(measured.pending_edges ORDER BY measured.task_id),
+         array_agg(measured.rejected_edges ORDER BY measured.task_id),
+         array_agg(measured.prerequisite_task_id ORDER BY measured.task_id),
+         array_agg(measured.action ORDER BY measured.task_id)
+    INTO v_task_ids, v_recorded, v_pending_edges, v_rejected_edges, v_prerequisite_task_ids,
+         v_actions
+    FROM (
+      SELECT runtime.task_id, runtime.pending_prerequisites AS recorded, edges.pending_edges,
+             edges.rejected_edges, edges.prerequisite_task_id,
+             CASE
+               WHEN edges.pending_edges > 0 THEN 'recounted'
+               WHEN edges.rejected_edges THEN 'rejected'
+               ELSE 'released'
+             END AS action
+        FROM workhorse.task_runtime runtime
+        CROSS JOIN LATERAL (
+          SELECT (count(*) FILTER (WHERE dependency.released_at IS NULL))::integer
+                   AS pending_edges,
+                 coalesce(bool_or(dependency.resolution IN ('fail', 'cancel')), false)
+                   AS rejected_edges,
+                 (array_agg(dependency.prerequisite_task_id
+                    ORDER BY dependency.released_at DESC, dependency.prerequisite_task_id)
+                    FILTER (WHERE dependency.released_at IS NOT NULL))[1] AS prerequisite_task_id
+            FROM workhorse.task_dependency dependency
+           WHERE dependency.dependent_task_id = runtime.task_id
+        ) edges
+       WHERE runtime.task_id = ANY(v_locked)
+         AND (
+           runtime.pending_prerequisites <> edges.pending_edges
+           OR runtime.dependency_rejected <> edges.rejected_edges
+           OR edges.pending_edges = 0
+         )
+    ) measured;
+  IF v_task_ids IS NULL THEN
+    RETURN;
+  END IF;
+
+  WITH recounted AS (
     UPDATE workhorse.task_runtime runtime
-       SET state = CASE WHEN ready.task_id IS NULL THEN 'scheduled' ELSE 'ready' END,
-           ready_at = CASE WHEN ready.task_id IS NOT NULL THEN v_now END,
-           sequence = ready.sequence,
-           pending_prerequisites = 0,
+       SET pending_prerequisites = repair.pending_edges,
+           dependency_rejected = repair.rejected_edges,
            updated_at = v_now
-      FROM releasing
-      LEFT JOIN ready ON ready.task_id = releasing.task_id
-     WHERE runtime.task_id = releasing.task_id
-       AND runtime.state = 'blocked'
-    RETURNING runtime.task_id, runtime.state, runtime.queue_name, runtime.deadline_at
-  ), events AS (
-    INSERT INTO workhorse.task_event(task_id, event_type, details)
-    SELECT released.task_id, 'dependency_released', jsonb_build_object(
-             'prerequisite_task_id', releasing.prerequisite_task_id,
-             'state', released.state,
-             'reason', CASE releasing.prerequisite_state
-               WHEN 'succeeded' THEN 'prerequisite_succeeded'
-               WHEN 'failed' THEN 'prerequisite_failed_policy'
-               WHEN 'canceled' THEN 'prerequisite_canceled_policy'
-             END
-           )
-      FROM released
-      JOIN releasing USING (task_id)
-     ORDER BY released.task_id
+      FROM unnest(v_task_ids, v_pending_edges, v_rejected_edges, v_actions)
+             repair(task_id, pending_edges, rejected_edges, action)
+     WHERE runtime.task_id = repair.task_id
+       AND repair.action = 'recounted'
   )
-  SELECT count(*),
-         array_agg(released.task_id ORDER BY released.task_id)
-           FILTER (WHERE released.deadline_at <= v_now),
-         array_agg(DISTINCT released.queue_name ORDER BY released.queue_name)
-           FILTER (
-             WHERE released.state = 'ready'
-               AND (released.deadline_at IS NULL OR released.deadline_at > v_now)
-           )
-    INTO v_released, v_deadline_task_ids, v_queue_names
-    FROM released;
-  FOREACH v_task_id IN ARRAY coalesce(v_deadline_task_ids, '{}') LOOP
-    PERFORM workhorse.terminalize_deadline_v1(v_task_id);
-  END LOOP;
-  FOREACH v_queue_name IN ARRAY coalesce(v_queue_names, '{}') LOOP
-    PERFORM pg_notify('workhorse_tasks', v_queue_name);
-  END LOOP;
-  RETURN v_terminated + v_released;
+  INSERT INTO workhorse.task_event(task_id, event_type, details)
+  SELECT repair.task_id, 'dependency_counter_repaired', jsonb_build_object(
+           'source', 'repair',
+           'prerequisite_task_id', repair.prerequisite_task_id,
+           'recorded_pending_prerequisites', repair.recorded,
+           'pending_edges', repair.pending_edges,
+           'dependency_rejected', repair.rejected_edges
+         )
+    FROM unnest(v_task_ids, v_recorded, v_pending_edges, v_rejected_edges, v_prerequisite_task_ids)
+           repair(task_id, recorded, pending_edges, rejected_edges, prerequisite_task_id)
+   ORDER BY repair.task_id;
+
+  SELECT array_agg(repair.task_id ORDER BY repair.task_id)
+           FILTER (WHERE repair.action = 'rejected'),
+         array_agg(repair.task_id ORDER BY repair.task_id)
+           FILTER (WHERE repair.action = 'released'),
+         array_agg(repair.prerequisite_task_id ORDER BY repair.task_id)
+           FILTER (WHERE repair.action = 'released')
+    INTO v_rejected_task_ids, v_released_task_ids, v_released_prerequisite_task_ids
+    FROM unnest(v_task_ids, v_prerequisite_task_ids, v_actions)
+           repair(task_id, prerequisite_task_id, action);
+  PERFORM workhorse.settle_dependents_v1(
+    v_now, v_rejected_task_ids, v_released_task_ids, v_released_prerequisite_task_ids,
+    array_fill(NULL::text, ARRAY[coalesce(cardinality(v_released_task_ids), 0)])
+  );
+
+  RETURN QUERY
+  SELECT repair.task_id, repair.recorded, repair.pending_edges, repair.action
+    FROM unnest(v_task_ids, v_recorded, v_pending_edges, v_actions)
+           repair(task_id, recorded, pending_edges, action)
+   ORDER BY repair.task_id;
 END;
 $$;
 
@@ -18372,10 +18665,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (34, 'reject an oversized fast-tier result per row'),
   (35, 'serialize the concurrency capacity notification with claims'),
   (36, 'plan dependency release once per session'),
-  (37, 'report queue tier and history in the dashboard')
+  (37, 'report queue tier and history in the dashboard'),
+  (38, 'detect and repair pending-prerequisite counter drift')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (37) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (38) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

@@ -266,6 +266,14 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "report queue tier and history in the dashboard",
     kind: "additive",
   },
+  {
+    // The file number was reserved for this change; the version still steps by one.
+    fromVersion: 37,
+    toVersion: 38,
+    file: "0039-detect-and-repair-pending-prerequisite-counter-drift.sql",
+    description: "detect and repair pending-prerequisite counter drift",
+    kind: "additive",
+  },
 ];
 
 /**

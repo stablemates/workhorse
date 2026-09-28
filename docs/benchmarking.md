@@ -4,6 +4,8 @@ This runbook explains how to execute Workhorse's benchmark suite, preserve repro
 
 ## Recorded evidence
 
+- [2026-09-27 dependency release guard analysis](benchmarks/2026-09-27-dependency-release-guard-analysis.md): what the pending-edge probe before a zero-counter release costs `resolve_dependents_many_v1` on PostgreSQL 18 and 15, for SM-937.
+- [`results/2026-09-27-dependency-release-guard.json`](benchmarks/results/2026-09-27-dependency-release-guard.json): three alternating invocations per PostgreSQL version, with per-round load averages.
 - [2026-09-27 fast claim backlog analysis](benchmarks/2026-09-27-fast-claim-backlog-analysis.md): fast-tier claim latency with up to a million delayed rows above due work on PostgreSQL 18, 17, and 15, interpreted in [ADR 0080](decisions/0080-keep-delayed-fast-tier-tasks-in-the-ready-index.md).
 - [`results/2026-09-27-fast-claim-backlog.json`](benchmarks/results/2026-09-27-fast-claim-backlog.json): three alternating invocations per PostgreSQL version, with per-round load averages and candidate plans.
 - [2026-09-20 saturated claim analysis](benchmarks/2026-09-20-saturated-claim-analysis.md): row locks, WAL records, and latency of a claim on a queue whose keys are all at capacity, before and after the claim locked only the candidate it admits.
