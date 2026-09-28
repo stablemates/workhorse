@@ -329,6 +329,15 @@ stands in for the documented `workhorse schema status --json` verification, beca
 databases and a second schema the CLI does not know about. A refusal exits non-zero, which must fail
 the deploy before the container swap.
 
+A migration step that alters a table holds `ACCESS EXCLUSIVE` on it until the step commits.
+Claims and completions against that table wait for the whole step. The step's 5-second
+`lock_timeout` bounds only the wait to acquire the lock, not the time the step holds it. Most steps
+hold it for milliseconds. Step 0030 backfills `workhorse.task_runtime` under that lock, so the stall
+grows with the table: about 1–2 seconds at 2,000,000 rows. A deployment that crosses schema 30 with
+a large `task_runtime` should expect that pause. The
+[schema lifecycle](https://github.com/stablemates/workhorse/blob/main/docs/schema-lifecycle.md#backfills-and-constraints-on-large-tables)
+records the measurements and the pattern later backfills follow instead.
+
 Nothing prepares a schema at startup. The container entry point starts processes only, and the
 server asserts compatibility and refuses to open `/up` when the step did not run. That is
 deliberate: a component that migrated itself would be as many concurrent migrators as the deployment
