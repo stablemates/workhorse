@@ -1,5 +1,57 @@
+import { readdir, readFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parseSchemaMigrationMetadata, splitSqlStatements } from "../src/schema-migrations.js";
+
+const migrations = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../../sql/migrations",
+);
+
+/**
+ * Shipped steps that scan a table under the ACCESS EXCLUSIVE lock their own ALTER took. A shipped
+ * step is immutable, so each stays here with the reason its cost was accepted.
+ */
+const EXCLUSIVE_SCANS_SHIPPED = new Map([
+  ["0025-add-a-fast-task-tier.sql", "queue_control holds one row per queue"],
+  [
+    "0030-release-dependents-through-a-pending-prerequisite-counter.sql",
+    "backfills and validates task_runtime in one step; fresh installs and schemas past 30 skip it",
+  ],
+]);
+
+/** The work in one transactional step that holds a table's ACCESS EXCLUSIVE for time its size sets. */
+function exclusiveScans(body: string): string[] {
+  const statements = splitSqlStatements(body).map((statement) =>
+    statement
+      .replaceAll(/--[^\n]*|\/\*[\s\S]*?\*\//g, " ")
+      .replaceAll(/\s+/g, " ")
+      .trim(),
+  );
+  const altered = new Set<string>();
+  const found: string[] = [];
+  for (const statement of statements) {
+    const alter = /^ALTER TABLE (?:IF EXISTS )?(?:ONLY )?([\w."]+) (.*)$/i.exec(statement);
+    if (alter !== null) {
+      const [, table, action] = alter as unknown as [string, string, string];
+      if (/^VALIDATE CONSTRAINT\b/i.test(action)) {
+        if (altered.has(table)) found.push(`validates a constraint on ${table} it altered`);
+        continue;
+      }
+      if (/\bADD COLUMN\b[^,]*\bCHECK\b/i.test(action)) {
+        found.push(`adds a column to ${table} with an inline CHECK`);
+      }
+      altered.add(table);
+      continue;
+    }
+    const write = /^(?:UPDATE|DELETE FROM) (?:ONLY )?([\w."]+)/i.exec(statement);
+    if (write !== null && altered.has(write[1]!)) {
+      found.push(`rewrites ${write[1]!} after altering it`);
+    }
+  }
+  return found;
+}
 
 describe("splitSqlStatements", () => {
   it("splits a body at the semicolons that end statements", () => {
@@ -68,5 +120,48 @@ describe("parseSchemaMigrationMetadata", () => {
         '-- workhorse-migration: {"kind":"additive","execution":"concurrent"}',
       ),
     ).toThrow('must declare "execution" as "transactional" or "nontransactional"');
+  });
+});
+
+describe("hot-table migration steps", () => {
+  it("flags each way a step holds ACCESS EXCLUSIVE for a table-sized scan", () => {
+    expect(
+      exclusiveScans(`ALTER TABLE t ADD COLUMN c integer NOT NULL DEFAULT 0 CHECK (c >= 0);
+ALTER TABLE t ADD CONSTRAINT k CHECK (c >= 0) NOT VALID;
+UPDATE t SET c = 1;
+ALTER TABLE t VALIDATE CONSTRAINT k;`),
+    ).toEqual([
+      "adds a column to t with an inline CHECK",
+      "rewrites t after altering it",
+      "validates a constraint on t it altered",
+    ]);
+  });
+
+  it("accepts each half of the split pattern as its own step", () => {
+    expect(
+      exclusiveScans(`ALTER TABLE t ADD COLUMN c integer NOT NULL DEFAULT 0;
+ALTER TABLE t ADD CONSTRAINT k CHECK (c >= 0) NOT VALID;`),
+    ).toEqual([]);
+    expect(
+      exclusiveScans("UPDATE t SET c = 1;\nCREATE FUNCTION f() RETURNS void AS $$ $$;"),
+    ).toEqual([]);
+    expect(exclusiveScans("ALTER TABLE t VALIDATE CONSTRAINT k;")).toEqual([]);
+  });
+
+  it("keeps every transactional step from scanning a table it locked exclusively", async () => {
+    // docs/schema-lifecycle.md, "Backfills and constraints on large tables": the ALTER takes ACCESS
+    // EXCLUSIVE, and a scan in the same transaction keeps it for as long as the table takes to read.
+    const offenders: string[] = [];
+    for (const file of (await readdir(migrations)).filter((name) => name.endsWith(".sql"))) {
+      const body = await readFile(path.join(migrations, file), "utf8");
+      if (parseSchemaMigrationMetadata(file, body).execution === "nontransactional") continue;
+      const found = exclusiveScans(body);
+      if (EXCLUSIVE_SCANS_SHIPPED.has(file)) {
+        if (found.length === 0) offenders.push(`${file}: no longer needs its exemption`);
+        continue;
+      }
+      offenders.push(...found.map((finding) => `${file}: ${finding}`));
+    }
+    expect(offenders).toEqual([]);
   });
 });

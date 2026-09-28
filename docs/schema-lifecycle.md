@@ -98,7 +98,10 @@ left unchanged. The current baseline needs no incremental migration.
 2. A guard that requires exactly one `workhorse.schema_version` row equal to the step's starting
    version, raising otherwise. The guard runs after the lock, so a competing migrator that
    committed first fails this check rather than reapplying the step.
-3. The migration body.
+3. The migration body, under `SET LOCAL lock_timeout` of `SCHEMA_MIGRATION_LOCK_TIMEOUT_MS`
+   (5 seconds). The timeout bounds how long the body waits to acquire a table lock. It does not
+   bound how long the body holds one; see
+   [Backfills and constraints on large tables](#backfills-and-constraints-on-large-tables).
 4. Bookkeeping: advance `workhorse.schema_version`, refresh its `installed_at`, and insert the
    step's row into `workhorse.schema_migration`.
 5. `COMMIT`. Any error rolls the entire step back; the schema is either at the starting version or
@@ -157,6 +160,56 @@ WHERE NOT indisvalid AND indrelid::regclass::text LIKE 'workhorse.%';
 ```sql
 DROP INDEX CONCURRENTLY IF EXISTS workhorse.<index>;
 ```
+
+### Backfills and constraints on large tables
+
+An `ALTER TABLE` that adds a column or a constraint takes `ACCESS EXCLUSIVE` on its table. That
+lock blocks every read and write of the table, and PostgreSQL holds it until the step commits.
+Anything else the same step does to that table therefore runs while claims and completions wait.
+Three kinds of statement make that wait proportional to the table's size:
+
+- **An inline `CHECK` on `ADD COLUMN`.** PostgreSQL scans every row to verify it.
+- **A backfill `UPDATE`.** It rewrites every row it matches.
+- **`VALIDATE CONSTRAINT`.** It scans every row. It needs only `SHARE UPDATE EXCLUSIVE` on its
+  own, but in the same transaction as the `ALTER` it inherits the stronger lock. Adding the
+  constraint `NOT VALID` and validating it in one step therefore gains nothing.
+
+`lock_timeout` does not help here. It bounds only the wait to acquire the lock, not the time the
+step holds it once acquired.
+
+A step that adds a column to a table the worker writes on every claim follows this pattern instead.
+Each numbered item is its own migration step, so each commits and releases its locks before the
+next begins:
+
+1. **Add the shape.** `ADD COLUMN` with a constant default and no inline `CHECK`, then
+   `ADD CONSTRAINT ... NOT VALID`. PostgreSQL 11 and later store a constant default without
+   rewriting the table, and a `NOT VALID` constraint checks only rows written after it exists. The
+   step holds `ACCESS EXCLUSIVE` for a time its table size does not set.
+   The default must satisfy the new constraint, because workers from the previous release keep
+   inserting rows that omit the column until step 2 replaces their functions.
+2. **Backfill.** Replace the functions that write the table so that they maintain the new column,
+   then run the backfill `UPDATE` in the same step. The backfill takes row locks only, so writers
+   to other rows proceed. Putting both in one step leaves no window where a writer skips the
+   column after the backfill has passed its row.
+3. **Validate.** `ALTER TABLE ... VALIDATE CONSTRAINT` alone. It takes `SHARE UPDATE EXCLUSIVE`,
+   which lets reads and writes through while it scans.
+
+Step 1 still queues behind any long transaction on the table, and every later statement on the
+table queues behind step 1. The 5-second `lock_timeout` bounds that stall. When it expires, the
+step rolls back and the deployment reruns it.
+
+A large backfill can also run as bounded batches in a non-transactional step, so that no single
+transaction holds many row locks. Each batch must then be idempotent; see
+[Non-transactional steps](#non-transactional-steps).
+
+`typescript/core/test/schema-migration-statements.test.ts` rejects a transactional step that adds
+a column with an inline `CHECK`, or that updates, deletes from, or validates a constraint on a
+table it altered. The shipped steps it exempts are listed in the test with their reason.
+
+On a dedicated PostgreSQL 18 container, a step that added, backfilled, and validated a column on
+`task_runtime` in one transaction stalled single-row updates for 1–2 seconds at 2,000,000 rows. The
+split pattern kept them under 20 ms at the same size, apart from host noise that also appeared with
+no migration running.
 
 ### Shipped migrations that block writes
 
