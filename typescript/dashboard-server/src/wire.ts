@@ -905,6 +905,7 @@ export const dashboardTaskEventTypes = [
   "dependency_released",
   "dependency_failed",
   "dependency_canceled",
+  "dependency_counter_repaired",
   "child_created",
   "child_joined",
   "children_created",

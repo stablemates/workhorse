@@ -742,6 +742,7 @@ export const boundaryEventPresentation: Record<string, { label: string; color: s
   dependency_released: { label: "Dependency released", color: "teal" },
   dependency_failed: { label: "Dependency failed", color: taskStatusColors.failed },
   dependency_canceled: { label: "Dependency canceled", color: taskStatusColors.canceled },
+  dependency_counter_repaired: { label: "Dependency counter repaired", color: "orange" },
   child_created: { label: "Child created", color: "blue" },
   child_joined: { label: "Child joined", color: "teal" },
   children_created: { label: "Children created", color: "blue" },

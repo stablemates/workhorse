@@ -1,4 +1,4 @@
-import { MantineProvider } from "@mantine/core";
+import { MantineProvider, Table } from "@mantine/core";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -10,7 +10,7 @@ import type {
 import type { DashboardClient } from "@stablemates/workhorse-dashboard-server";
 import { dashboardTaskEventTypes } from "@stablemates/workhorse-dashboard-server/wire";
 import { DashboardClientContext } from "./core.js";
-import { defaultEventsLocation } from "./events-location.js";
+import { defaultEventsLocation, parseEventsLocation } from "./events-location.js";
 import { taskStatusColors } from "./status-colors.js";
 
 Object.defineProperty(globalThis, "localStorage", {
@@ -25,6 +25,7 @@ const newlyPersistedEventTypes = [
   "dependency_released",
   "dependency_failed",
   "dependency_canceled",
+  "dependency_counter_repaired",
   "child_created",
   "child_joined",
   "children_created",
@@ -157,6 +158,72 @@ describe("dashboard event history", () => {
 
   it("offers every new lifecycle type as an Events feed filter", () => {
     expect(dashboardTaskEventTypes).toEqual(expect.arrayContaining(newlyPersistedEventTypes));
+  });
+
+  it("filters the Events feed by a repaired dependency counter and shows the repair source", async () => {
+    // The drift repair writes this type from three places, and `source` names which one ran.
+    expect(parseEventsLocation("?events=dependency_counter_repaired")).toEqual({
+      ...defaultEventsLocation,
+      types: ["dependency_counter_repaired"],
+    });
+    const { EventRow } = await import("./pages/events.js");
+    const { eventTypeColor } = await import("./dashboard.js");
+    expect(eventTypeColor("dependency_counter_repaired")).toBe("orange");
+    const event = {
+      id: "event:018f0000-0000-7000-8000-000000000043",
+      kind: "event",
+      recordId: "018f0000-0000-7000-8000-000000000043",
+      taskId: "task-123",
+      queue: "billing",
+      taskType: "invoice.send",
+      occurredAt: "2026-09-28T12:00:00.000Z",
+      attempt: null,
+      type: "dependency_counter_repaired",
+      details: {
+        source: "resolver",
+        prerequisite_task_id: "parent-1",
+        recorded_pending_prerequisites: 0,
+        resolved_edges: 1,
+        pending_edges: 0,
+        dependency_rejected: false,
+      },
+      workerId: null,
+      fenceToken: null,
+      durationMs: null,
+      errorMessage: null,
+    } satisfies DashboardEventRow;
+    const row = renderToStaticMarkup(
+      createElement(
+        MantineProvider,
+        null,
+        createElement(
+          Table,
+          null,
+          createElement(
+            Table.Tbody,
+            null,
+            createElement(EventRow, { event, inspectEvent: () => undefined }),
+          ),
+        ),
+      ),
+    );
+    expect(row).toContain(">Task dependency counter repaired<");
+    expect(row).toContain("source=resolver");
+
+    const timeline = await renderExport(
+      "BoundaryTimeline",
+      taskWithEvents([
+        {
+          id: "repaired",
+          attempt: null,
+          type: event.type,
+          details: event.details,
+          occurredAt: event.occurredAt,
+        },
+      ]),
+    );
+    expect(timeline).toContain("Dependency counter repaired");
+    expect(timeline).toContain("source=resolver");
   });
 
   it("renders known and future event types instead of dropping them", async () => {
