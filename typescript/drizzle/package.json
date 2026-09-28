@@ -38,7 +38,7 @@
   "devDependencies": {
     "@stablemates/workhorse": "workspace:*",
     "@types/pg": "^8.23.1",
-    "drizzle-orm": "^0.45.2",
+    "drizzle-orm": "^0.45.3",
     "pg": "^8.23.0"
   },
   "peerDependencies": {
