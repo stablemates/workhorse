@@ -26,6 +26,9 @@ round trip rather than a failure.
 A local reproduction ran 8 Rust workers at concurrency 16 on one fast-tier queue, with the heartbeat
 at 100 ms and the resend disabled. Six 30-second runs on PostgreSQL 18 recorded 9 deadlocks in
 `pg_stat_database.deadlocks`, between 0 and 3 per run.
+`pnpm benchmark:fast-claim-deadlock` repeats that comparison with the Rust workers in
+`rust/tools/fast-claim-stress`. The cycle depends on timing, so a later run on a quieter host
+recorded no deadlock for either variant. CI never runs the benchmark.
 
 Three remedies were considered:
 
