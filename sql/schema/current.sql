@@ -16480,6 +16480,9 @@ BEGIN
        WHERE NOT v_approximate GROUP BY task.queue_name
     )
     SELECT known.queue_name AS queue, COALESCE(control.paused, false) AS paused,
+           COALESCE(control.tier, 'full') AS tier,
+           COALESCE(control.record_attempts, false) AS record_attempts,
+           COALESCE(control.record_claims, false) AS record_claims,
            COALESCE(live.scheduled, 0)::integer AS scheduled,
            COALESCE(live.ready, 0)::integer AS ready,
            COALESCE(live.active, 0)::integer AS active,
@@ -16548,7 +16551,9 @@ BEGIN
       'ready', v_row.ready, 'active', v_row.active, 'succeeded', v_succeeded,
       'failed', v_failed, 'canceled', v_canceled,
       'terminalCountsApproximate', v_approximate,
-      'concurrencyPolicy', v_concurrency, 'rateLimitPolicy', v_rate_limit));
+      'concurrencyPolicy', v_concurrency, 'rateLimitPolicy', v_rate_limit,
+      'tier', v_row.tier, 'recordAttempts', v_row.record_attempts,
+      'recordClaims', v_row.record_claims));
   END LOOP;
 
   RETURN jsonb_build_object(
@@ -18366,10 +18371,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (33, 'lock an enqueue batch''s prerequisites before its first request'),
   (34, 'reject an oversized fast-tier result per row'),
   (35, 'serialize the concurrency capacity notification with claims'),
-  (36, 'plan dependency release once per session')
+  (36, 'plan dependency release once per session'),
+  (37, 'report queue tier and history in the dashboard')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (36) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (37) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

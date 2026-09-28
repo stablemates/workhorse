@@ -311,6 +311,9 @@ type DashboardManagedQueueRow struct {
 	TerminalCountsApproximate bool                               `json:"terminalCountsApproximate"`
 	ConcurrencyPolicy         *DashboardConcurrencyPolicySummary `json:"concurrencyPolicy"`
 	RateLimitPolicy           *DashboardRateLimitPolicySummary   `json:"rateLimitPolicy"`
+	Tier                      *string                            `json:"tier,omitempty"`
+	RecordAttempts            *bool                              `json:"recordAttempts,omitempty"`
+	RecordClaims              *bool                              `json:"recordClaims,omitempty"`
 }
 
 type DashboardQueueHealthReason struct {

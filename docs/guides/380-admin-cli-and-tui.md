@@ -72,8 +72,8 @@ succeeds without answering again; a conflicting answer or an unavailable wait fa
 ## Changing things requires naming the target twice
 
 The guarded commands — `admin cancel`, `admin redrive`, `admin pause`, `admin resume`,
-`admin purge`, `admin pause-worker`, `admin resume-worker`, `admin redrive-many`, `admin signal`,
-and `admin complete-human` — mutate a live system. The most common
+`admin purge`, `admin set-tier`, `admin set-history`, `admin pause-worker`, `admin resume-worker`,
+`admin redrive-many`, `admin signal`, and `admin complete-human` — mutate a live system. The most common
 way to hurt yourself with an operator CLI is not a typo in the command. It is running the right
 command against the wrong database, because a shell still carried the environment of whatever you
 were doing an hour ago.
@@ -102,6 +102,28 @@ backlog is poison and draining it by hand is not worth the incident. It carries 
 idempotency identity as a redrive, so a retried runbook step re-reports the first purge instead of
 taking a second bite; reusing that identity with different audit fields is refused. The command
 answers with how many tasks it removed.
+
+## Changing a queue's tier
+
+`admin queues` shows each queue's tier and the history it records. A full-tier queue records
+everything. A fast-tier queue lists the history an operator turned back on, or `none`.
+
+`admin set-tier` moves a queue to the tier named by `--tier`. It carries the same guards as
+`Admin.setQueueTier`, because it is that call. Workhorse refuses the switch while the queue holds
+live tasks, and refuses the fast tier while a policy names the queue. The command reports the
+refusal and changes nothing.
+
+```sh
+workhorse admin set-tier emails --tier fast --reason "handlers never suspend" \
+  --env workhorse_production --yes
+```
+
+`admin set-history` turns `--record-attempts` or `--record-claims` on or off, and a flag you omit
+keeps its setting. Workhorse records no audit for this change, so the command takes no reason.
+A full-tier queue already records everything, so the command notes that the switches wait for a
+move to the fast tier. Workhorse also accepts a queue name it has never seen, so the command warns
+when the name matches no known queue.
+[The fast tier](305-fast-tier.md) explains what each switch writes.
 
 ## Recovering a failed backlog
 

@@ -6,7 +6,7 @@ pub const CLIENT_PROTOCOL_VERSION: i32 = 5;
 pub const MINIMUM_PROTOCOL_VERSION: i32 = 5;
 pub const MAXIMUM_PROTOCOL_VERSION: i32 = 5;
 pub const MINIMUM_SCHEMA_VERSION: i32 = 25;
-pub const MAXIMUM_SCHEMA_VERSION: i32 = 36;
+pub const MAXIMUM_SCHEMA_VERSION: i32 = 37;
 /// PostgreSQL's atomic enqueue batch limit.
 pub const MAX_ENQUEUE_BATCH_SIZE: usize = 1000;
 pub const DEFAULT_TASK_VALUE_MAX_BYTES: i64 = 1048576;
@@ -338,7 +338,7 @@ pub const CONCURRENCY_POLICY: &str = r#"SELECT namespace, queue_name, max_active
         ORDER BY queue_name"#;
 
 /// `queue_control` (internal)
-pub const QUEUE_CONTROL: &str = r#"SELECT queue_name, paused FROM workhorse.queue_control"#;
+pub const QUEUE_CONTROL: &str = r#"SELECT queue_name, paused, tier, record_attempts, record_claims FROM workhorse.queue_control"#;
 
 /// `schedule_definition` (internal)
 pub const SCHEDULE_DEFINITION: &str =

@@ -2,9 +2,9 @@
   "formatVersion": 1,
   "protocolVersion": 5,
   "schema": {
-    "installedVersion": 36,
+    "installedVersion": 37,
     "minimumVersion": 25,
-    "maximumVersion": 36,
+    "maximumVersion": 37,
     "baselineVersion": 6
   },
   "supportedClientProtocol": {
@@ -671,7 +671,7 @@
     {
       "name": "queue_control",
       "arity": 0,
-      "contract": "SELECT queue_name, paused FROM workhorse.queue_control",
+      "contract": "SELECT queue_name, paused, tier, record_attempts, record_claims FROM workhorse.queue_control",
       "catalogues": ["internal"]
     },
     {

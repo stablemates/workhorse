@@ -369,6 +369,15 @@ export interface DashboardManagedQueueRow {
   terminalCountsApproximate: boolean;
   concurrencyPolicy: DashboardConcurrencyPolicySummary | null;
   rateLimitPolicy: DashboardRateLimitPolicySummary | null;
+  /**
+   * The queue's storage tier (ADR 0077). A queue without a control row is on the full tier. Absent
+   * when the installed schema predates version 37, which this dashboard still accepts.
+   */
+  tier?: "fast" | "full";
+  /** Whether a fast-tier queue writes attempt history. Absent with `tier`. */
+  recordAttempts?: boolean;
+  /** Whether a fast-tier queue writes a claimed event per claim. Absent with `tier`. */
+  recordClaims?: boolean;
 }
 
 export interface DashboardTaskRow extends Record<string, unknown> {

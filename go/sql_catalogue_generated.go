@@ -8,7 +8,7 @@ const (
 	minimumProtocolVersion = 5
 	maximumProtocolVersion = 5
 	minimumSchemaVersion   = 25
-	maximumSchemaVersion   = 36
+	maximumSchemaVersion   = 37
 	// MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
 	MaxEnqueueBatchSize      = 1000
 	defaultTaskValueMaxBytes = 1048576
@@ -47,7 +47,7 @@ var internalStatementRegistry = map[string]string{
          FROM workhorse.concurrency_policy
         WHERE cardinality($1::text[]) = 0 OR queue_name = ANY($1::text[])
         ORDER BY queue_name`,
-	"queue_control":       `SELECT queue_name, paused FROM workhorse.queue_control`,
+	"queue_control":       `SELECT queue_name, paused, tier, record_attempts, record_claims FROM workhorse.queue_control`,
 	"schedule_definition": `SELECT DISTINCT namespace FROM workhorse.schedule_definition ORDER BY namespace`,
 	"worker_registry": `SELECT served.queue_name,
                CASE WHEN last_heartbeat_at < clock_timestamp() - interval '30 seconds'

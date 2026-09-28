@@ -358,6 +358,9 @@ class DashboardManagedQueueRow(TypedDict, total=False):
     terminalCountsApproximate: Required[bool]
     concurrencyPolicy: Required[DashboardConcurrencyPolicySummary | None]
     rateLimitPolicy: Required[DashboardRateLimitPolicySummary | None]
+    tier: NotRequired[Literal["fast", "full"]]
+    recordAttempts: NotRequired[bool]
+    recordClaims: NotRequired[bool]
 
 
 class DashboardQueueHealthReason(TypedDict, total=False):

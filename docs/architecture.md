@@ -3414,8 +3414,11 @@ total, phase timings, and phase errors.
 calls `queue_health_v1()` once per invocation. If the task estimate is at least 50,000, it runs one
 `EXPLAIN (FORMAT JSON)` probe for each known queue and terminal state and reads `Plan Rows`.
 Every probe uses `dashboard_task_v1` and `dashboard_task_outcome_v1`. Below the threshold, it runs
-one exact grouped terminal-count query. `dashboard_iso_v1(p_value timestamptz)` renders procedure
-timestamps in UTC with millisecond precision and a `Z` suffix.
+one exact grouped terminal-count query. Since schema version 37, each queue row carries `tier`,
+`recordAttempts`, and `recordClaims` from `queue_control`. A queue without a control row reports
+`full`, `false`, and `false`. An older schema omits the three keys, and the Queues page shows a dash
+in its Tier column. `dashboard_iso_v1(p_value timestamptz)` renders procedure timestamps in UTC with
+millisecond precision and a `Z` suffix.
 
 `dashboard_human_waits_v1(p_input jsonb)` accepts `canComplete` and `canSignal`. It returns the
 first 50 human waits in `(created_at, task_id, token_name)` order. It returns the first 50 signal
@@ -4231,9 +4234,9 @@ a value that is not an object with string `createdAt`, `taskId`, and `name` fiel
 exiting 64. This command lists boundaries only; `admin signal` and `admin complete-human` answer them.
 
 Guarded commands are `admin cancel <task-id>`, `admin redrive <task-id>`, `admin pause <queue>`,
-`admin resume <queue>`, `admin purge <queue>`, `admin pause-worker <worker-id>`, and
-`admin resume-worker <worker-id>`, `admin redrive-many`, `admin signal <task-id>`, and
-`admin complete-human <task-id>`. Two independent checks gate every mutation:
+`admin resume <queue>`, `admin purge <queue>`, `admin set-tier <queue>`, `admin set-history <queue>`,
+`admin pause-worker <worker-id>`, `admin resume-worker <worker-id>`, `admin redrive-many`,
+`admin signal <task-id>`, and `admin complete-human <task-id>`. Two independent checks gate every mutation:
 
 1. **Explicit target environment.** The command requires `--env <database>`, and
    `WorkhorseAdminClient.confirmEnvironment` compares it against `current_database()` on the live
@@ -4246,7 +4249,8 @@ Guarded commands are `admin cancel <task-id>`, `admin redrive <task-id>`, `admin
    queue name, or worker id — at a prompt written to stderr; a mismatched answer changes nothing
    and exits 1. A non-interactive session without `--yes` is a usage error.
 
-Every guarded command except `admin cancel`, `admin signal`, and `admin complete-human` requires `--reason`.
+Every guarded command except `admin cancel`, `admin signal`, `admin complete-human`, and
+`admin set-history` requires `--reason`.
 They record `--actor` (default `workhorse-admin`). Existing controls default `--request-id` to a random UUID;
 bulk recovery execution and external-wait delivery require it explicitly. Redrive and purge use the
 request identity for idempotency; scripts must preserve it on retries. `admin purge` prints the deleted row count and emits it as
@@ -4287,6 +4291,26 @@ The database records delivery attribution; these commands do not record a reason
 JSON output is `SignalDeliveryResult` or `HumanWaitCompletionResult`, with dates serialized as ISO strings.
 `delivered`, `completed`, and `duplicate` succeed. `not_found`, `not_waiting`, `already_delivered`,
 `already_completed`, and `stale` exit 1; conflicts also fail without replacing the accepted answer.
+
+`admin set-tier <queue> --tier <fast|full>` calls `Admin.setQueueTier` with `--actor` and
+`--reason` and emits `{queue, tier}` under `--json`. It rejects `--request-id` with exit 64, because
+`set_queue_tier_v1` records none. A `P1007` refusal from `set_queue_tier_v1` prints `Refused:` and
+exits 1. The command words the refusal itself instead of printing the `FastTierUnsupportedError`
+message, which calls every refused queue fast-tier. Feature `tier change` prints that the queue has
+live tasks; a policy feature prints that the queue cannot move to the fast tier.
+`admin set-history <queue>` takes `--record-attempts <on|off>`, `--record-claims <on|off>`, or both,
+and calls `Admin.setQueueHistory`; an omitted flag keeps its setting. It emits
+`{queue, tier, recordAttempts, recordClaims}` under `--json`. Because `set_queue_history_v1` records no
+audit, the command rejects `--actor`, `--reason`, and `--request-id` with exit 64.
+`set_queue_history_v1` accepts any queue name and upserts its `queue_control` row, so the command
+reads `queue_control` and `Admin.queueMetricSnapshot` before the change. It writes a `Note:` to
+stderr when the queue is on the full tier, whose history the switches do not change. It writes a
+`Warning:` to stderr when the queue had neither a control row nor a live task, which usually means a
+misspelled name. Neither message changes the exit code.
+`admin queues` reads `tier`, `record_attempts`, and `record_claims` from `queue_control` into
+`AdminQueueStatus`. A queue without a control row reports `full` with both switches off. Its table
+adds `TIER` and `HISTORY` columns, which the TUI queues view shares. `HISTORY` is `all` for a
+full-tier queue, and otherwise `none` or the enabled switches, such as `attempts,claims`.
 
 `admin pause-worker` and `admin resume-worker` write `workhorse.worker_registry.paused` through
 `Admin.setWorkerPaused` and emit the stored `WorkerPauseResult` — `workerId`, `paused`, `pausedBy`,

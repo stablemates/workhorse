@@ -113,6 +113,8 @@ export function tasksTableRows(items: readonly TaskListItem[]): string[][] {
 export const QUEUES_TABLE_HEADERS = [
   "QUEUE",
   "PAUSED",
+  "TIER",
+  "HISTORY",
   "READY",
   "SCHEDULED",
   "ACTIVE",
@@ -122,10 +124,25 @@ export const QUEUES_TABLE_HEADERS = [
   "RATE LIMIT",
 ];
 
+/**
+ * The history a queue writes. A full-tier queue records everything, so its opt-ins do not apply;
+ * a fast-tier queue lists the opt-ins that are on.
+ */
+function queueHistoryLabel(status: AdminQueueStatus): string {
+  if (status.tier === "full") return "all";
+  const recorded = [
+    ...(status.recordAttempts ? ["attempts"] : []),
+    ...(status.recordClaims ? ["claims"] : []),
+  ];
+  return recorded.length === 0 ? "none" : recorded.join(",");
+}
+
 export function queuesTableRows(queues: readonly AdminQueueStatus[]): string[][] {
   return queues.map((status) => [
     status.queue,
     status.paused ? "yes" : "no",
+    status.tier,
+    queueHistoryLabel(status),
     String(status.readyDepth),
     String(status.scheduledDepth),
     String(status.activeLeases),

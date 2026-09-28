@@ -3591,6 +3591,18 @@
               "type": "null"
             }
           ]
+        },
+        "tier": {
+          "enum": [
+            "fast",
+            "full"
+          ]
+        },
+        "recordAttempts": {
+          "type": "boolean"
+        },
+        "recordClaims": {
+          "type": "boolean"
         }
       },
       "required": [

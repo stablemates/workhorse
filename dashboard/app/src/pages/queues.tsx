@@ -8,6 +8,7 @@ import {
 } from "../concurrency-policy.js";
 import { describeRateLimit, describeRateThrottle, rateLimitCappedFootnote } from "../rate-limit.js";
 import { BudgetsTable, budgetCappedFootnote } from "../budgets-table.js";
+import { describeQueueTier } from "../queue-tier.js";
 import { EmptyState, PageHeader } from "../components/task-list.js";
 import { HelpButton } from "../components/help-button.js";
 
@@ -48,12 +49,21 @@ export function QueuesPage({
               verticalSpacing={6}
               horizontalSpacing="md"
               className="dashboard-table dashboard-table--queues"
-              miw={1380}
+              miw={1480}
             >
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Queue</Table.Th>
                   <Table.Th>Status</Table.Th>
+                  <Table.Th>
+                    <Group gap={4} wrap="nowrap">
+                      <span>Tier</span>
+                      <HelpButton
+                        label="Tier"
+                        help="A full-tier queue records every attempt and claim. A fast-tier queue skips that history for throughput unless an operator turns part of it back on. Change either with workhorse admin set-tier and set-history."
+                      />
+                    </Group>
+                  </Table.Th>
                   <Table.Th ta="right">Scheduled</Table.Th>
                   <Table.Th ta="right">Ready</Table.Th>
                   <Table.Th ta="right">Active</Table.Th>
@@ -108,6 +118,7 @@ export function QueuesPage({
                   const ratePolicy = queue.rateLimitPolicy ?? null;
                   const rate = describeRateLimit(ratePolicy);
                   const throttled = describeRateThrottle(ratePolicy);
+                  const tier = describeQueueTier(queue);
                   return (
                     <Table.Tr key={queue.queue}>
                       <Table.Td>
@@ -136,6 +147,16 @@ export function QueuesPage({
                             setQueuePaused(queue.queue, !event.currentTarget.checked)
                           }
                         />
+                      </Table.Td>
+                      <Table.Td>
+                        <Text size="sm" title={tier.title} aria-label={`Tier: ${tier.title}`}>
+                          {tier.label}
+                        </Text>
+                        {tier.historyLabel === null ? null : (
+                          <Text c="dimmed" size="xs">
+                            {tier.historyLabel}
+                          </Text>
+                        )}
                       </Table.Td>
                       <Table.Td ta="right">{queue.scheduled}</Table.Td>
                       <Table.Td ta="right">{queue.ready}</Table.Td>

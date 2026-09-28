@@ -80,6 +80,10 @@ await admin.setQueueTier("emails", "fast", {
 });
 ```
 
+From a shell, `workhorse admin set-tier` and `workhorse admin set-history` make the same calls
+behind the CLI's target and confirmation checks. The dashboard's Queues page shows each queue's
+tier and the history it records.
+
 Workhorse refuses the switch while the queue holds a live task in either tier. Stop the producers,
 let the workers drain the queue, then switch. Moving to the fast tier also fails while a concurrency
 or rate-limit policy still names the queue. Finished tasks stay in the table they closed into, so

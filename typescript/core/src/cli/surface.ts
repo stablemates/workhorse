@@ -15,6 +15,7 @@ import type {
 import type { SignalDeliveryResult } from "../queue/signals.js";
 import type { HumanWaitCompletionResult } from "../queue/human-waits.js";
 import type { StoredSchedule } from "../queue/cron-schedules.js";
+import type { QueueTier } from "../queue/queue-administration.js";
 import type {
   AdminExternalWaits,
   AdminMaintenanceState,
@@ -108,6 +109,9 @@ export const CLI_OPTIONS = {
     actor: { type: "string" },
     reason: { type: "string" },
     "request-id": { type: "string" },
+    tier: { type: "string" },
+    "record-attempts": { type: "string" },
+    "record-claims": { type: "string" },
     ...HELP_OPTION,
   },
   tui: { ...DATABASE_OPTIONS, env: { type: "string" }, ...HELP_OPTION },
@@ -187,6 +191,8 @@ export const ADMIN_COMMANDS = [
   { name: "pause", mutates: true, positionals: ["queue"] },
   { name: "resume", mutates: true, positionals: ["queue"] },
   { name: "purge", mutates: true, positionals: ["queue"] },
+  { name: "set-tier", mutates: true, positionals: ["queue"] },
+  { name: "set-history", mutates: true, positionals: ["queue"] },
   { name: "pause-worker", mutates: true, positionals: ["worker-id"] },
   { name: "resume-worker", mutates: true, positionals: ["worker-id"] },
 ] as const satisfies readonly AdminCommand[];
@@ -238,6 +244,21 @@ interface AdminQueuePurgeReport {
   readonly deletedCount: number;
 }
 
+/** What `admin set-tier` prints under `--json`. */
+interface AdminQueueTierReport {
+  readonly queue: string;
+  readonly tier: QueueTier;
+}
+
+/** What `admin set-history` prints under `--json`. */
+interface AdminQueueHistoryReport {
+  readonly queue: string;
+  /** The queue's tier. A full-tier queue records all history whatever the settings say. */
+  readonly tier: QueueTier;
+  readonly recordAttempts: boolean;
+  readonly recordClaims: boolean;
+}
+
 /**
  * The payload each `--json` command writes, keyed by the command an operator types.
  *
@@ -268,6 +289,8 @@ export interface CliJsonPayloads {
   readonly "admin pause": AdminQueuePauseReport;
   readonly "admin resume": AdminQueuePauseReport;
   readonly "admin purge": AdminQueuePurgeReport;
+  readonly "admin set-tier": AdminQueueTierReport;
+  readonly "admin set-history": AdminQueueHistoryReport;
   readonly "admin pause-worker": WorkerPauseResult;
   readonly "admin resume-worker": WorkerPauseResult;
 }

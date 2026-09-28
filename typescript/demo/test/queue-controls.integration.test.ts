@@ -5,7 +5,7 @@
  * in parallel; see ./support/demo-integration.ts for the harness they share.
  */
 import { describe, expect, it } from "vitest";
-import { Queue } from "@stablemates/workhorse";
+import { Admin, Queue } from "@stablemates/workhorse";
 import {
   createLocalOperator,
   createLocalOperatorControllers,
@@ -73,6 +73,9 @@ describe("Workhorse demo", () => {
           succeeded: 0,
           failed: 0,
           terminalCountsApproximate: false,
+          tier: "full",
+          recordAttempts: false,
+          recordClaims: false,
           concurrencyPolicy: {
             namespace: "dashboard-test",
             maxActive: 1,
@@ -262,6 +265,25 @@ describe("Workhorse demo", () => {
         status: "succeeded",
       },
     ]);
+  });
+
+  it("reports a queue's tier and the history a fast-tier queue records", async () => {
+    const { app } = createTestApplication();
+    const client = dashboardClient(app);
+    const admin = new Admin(pool);
+    await admin.setQueueTier("fast-demo", "fast", {
+      actor: "dashboard-test",
+      reason: "exercise the tier column",
+      requestId: "tier-column",
+    });
+    await admin.setQueueHistory("fast-demo", { recordClaims: true });
+
+    const queuesPage = await client.dashboard.queues();
+    expect(queuesPage.queues.find((row) => row.queue === "fast-demo")).toMatchObject({
+      tier: "fast",
+      recordAttempts: false,
+      recordClaims: true,
+    });
   });
 
   it("reads exact policy without inventing live utilization beyond the health summary cap", async () => {

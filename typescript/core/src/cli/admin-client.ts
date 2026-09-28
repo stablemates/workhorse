@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { SQL_STATEMENTS } from "../queue/sql-catalogue.generated.js";
 import type { Pool } from "pg";
 import { expectOneRow } from "../errors.js";
 import { Admin, Queue } from "../index.js";
+import type { QueueHistorySettings, QueueTier } from "../index.js";
 import type {
   BulkRedriveOptions,
   BulkRedrivePage,
@@ -50,10 +52,18 @@ export interface ConfirmedEnvironment {
   readonly database: string;
 }
 
-/** Compact per-queue status for operators: dispatch pressure plus the durable pause flag. */
+/**
+ * Compact per-queue status for operators: dispatch pressure plus the durable queue controls.
+ *
+ * The tier and the two history settings come from `queue_control`. A queue without a control row
+ * reports the defaults: full tier, which records all history itself, and both opt-ins off.
+ */
 export interface AdminQueueStatus {
   queue: string;
   paused: boolean;
+  tier: QueueTier;
+  recordAttempts: boolean;
+  recordClaims: boolean;
   readyDepth: number;
   scheduledDepth: number;
   activeLeases: number;
@@ -100,6 +110,35 @@ export interface AdminRedriveRequest {
 }
 
 export type AdminControlRequest = AdminRedriveRequest;
+
+/** Attribution for a tier change. The database records the actor and reason, not a request id. */
+export interface AdminTierRequest {
+  requestedBy: string;
+  reason: string;
+}
+
+interface QueueControlRow {
+  queue_name: string;
+  paused: boolean;
+  tier: QueueTier;
+  record_attempts: boolean;
+  record_claims: boolean;
+}
+
+/**
+ * A history change and the context an operator needs to read it.
+ *
+ * `tier` is the queue's tier, which the history change leaves alone. `knownBefore` is false when
+ * the queue had neither a control row nor a live task, which usually means a misspelled name.
+ */
+export interface AdminHistoryChange extends QueueHistorySettings {
+  tier: QueueTier;
+  knownBefore: boolean;
+}
+
+function isDefaultControl(row: QueueControlRow): boolean {
+  return !row.paused && row.tier === "full" && !row.record_attempts && !row.record_claims;
+}
 
 /**
  * The administrative surface shared by `workhorse admin` and `workhorse tui`.
@@ -189,22 +228,31 @@ export class WorkhorseAdminClient {
   }
 
   /**
-   * Per-queue dispatch pressure merged with the durable pause flag.
+   * Per-queue dispatch pressure merged with the durable queue controls.
    *
-   * A paused queue with no live tasks still appears, so an operator can always see and release an
-   * old pause.
+   * A queue with no live tasks still appears while any control differs from the default, so an
+   * operator can always see and release an old pause or find an idle fast-tier queue.
    */
   async queues(): Promise<AdminQueueStatus[]> {
     const [snapshots, control] = await Promise.all([
       this.admin.queueMetricSnapshot(),
-      this.pool.query<{ queue_name: string; paused: boolean }>(SQL_STATEMENTS["queue_control"]),
+      this.pool.query<QueueControlRow>(SQL_STATEMENTS["queue_control"]),
     ]);
-    const pausedByQueue = new Map(control.rows.map((row) => [row.queue_name, row.paused]));
+    const controlByQueue = new Map(control.rows.map((row) => [row.queue_name, row]));
+    const controls = (queueName: string) => {
+      const row = controlByQueue.get(queueName);
+      return {
+        paused: row?.paused ?? false,
+        tier: row?.tier ?? "full",
+        recordAttempts: row?.record_attempts ?? false,
+        recordClaims: row?.record_claims ?? false,
+      };
+    };
     const statuses = new Map<string, AdminQueueStatus>();
     for (const snapshot of snapshots) {
       statuses.set(snapshot.queue, {
         queue: snapshot.queue,
-        paused: pausedByQueue.get(snapshot.queue) ?? false,
+        ...controls(snapshot.queue),
         readyDepth: snapshot.readyDepth,
         scheduledDepth: snapshot.scheduledDepth,
         activeLeases: snapshot.activeLeases,
@@ -216,11 +264,11 @@ export class WorkhorseAdminClient {
         rateLimitThrottledReadyDepth: snapshot.rateLimitThrottledReadyDepth,
       });
     }
-    for (const [queueName, paused] of pausedByQueue) {
-      if (!paused || statuses.has(queueName)) continue;
-      statuses.set(queueName, {
-        queue: queueName,
-        paused: true,
+    for (const row of control.rows) {
+      if (isDefaultControl(row) || statuses.has(row.queue_name)) continue;
+      statuses.set(row.queue_name, {
+        queue: row.queue_name,
+        ...controls(row.queue_name),
         readyDepth: 0,
         scheduledDepth: 0,
         activeLeases: 0,
@@ -368,6 +416,51 @@ export class WorkhorseAdminClient {
       reason: request.reason,
       requestId: request.requestId,
     });
+  }
+
+  /**
+   * Moves one queue to the fast or full tier and answers the tier it now holds.
+   *
+   * The {@link Admin.setQueueTier} guards apply unchanged: a queue with live tasks, or a queue with
+   * a concurrency or rate-limit policy moving to fast, is refused with `FastTierUnsupportedError`.
+   */
+  setQueueTier(
+    environment: ConfirmedEnvironment,
+    queueName: string,
+    tier: QueueTier,
+    request: AdminTierRequest,
+  ): Promise<QueueTier> {
+    void environment;
+    // The tier function records no request id, so a fresh one only satisfies audit validation.
+    return this.admin.setQueueTier(queueName, tier, {
+      actor: request.requestedBy,
+      reason: request.reason,
+      requestId: randomUUID(),
+    });
+  }
+
+  /**
+   * Changes a queue's history settings and answers both settings after the change.
+   *
+   * The database accepts any queue name and creates its control row, so the answer also carries the
+   * queue's tier and whether the queue existed before. A full-tier queue records all history, and
+   * its settings take effect only if it moves to the fast tier.
+   */
+  async setQueueHistory(
+    environment: ConfirmedEnvironment,
+    queueName: string,
+    settings: Partial<QueueHistorySettings>,
+  ): Promise<AdminHistoryChange> {
+    void environment;
+    const [snapshots, control] = await Promise.all([
+      this.admin.queueMetricSnapshot(),
+      this.pool.query<QueueControlRow>(SQL_STATEMENTS["queue_control"]),
+    ]);
+    const row = control.rows.find((candidate) => candidate.queue_name === queueName);
+    const knownBefore =
+      row !== undefined || snapshots.some((snapshot) => snapshot.queue === queueName);
+    const changed = await this.admin.setQueueHistory(queueName, settings);
+    return { ...changed, tier: row?.tier ?? "full", knownBefore };
   }
 
   /** Deletes one queue's non-active tasks and answers how many rows went. */

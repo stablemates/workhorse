@@ -112,7 +112,8 @@ not by default.
 ## Switching tier needs an empty queue
 
 `Admin.setQueueTier` moves a queue between tiers. Every queue starts full-tier, so nothing changes
-until an operator moves one.
+until an operator moves one. From a shell, `workhorse admin set-tier` and `admin set-history` make
+the same calls. The dashboard's Queues page shows each queue's tier and the history it records.
 
 Workhorse refuses the switch while the queue holds a live task in either tier. A task never
 changes tables mid-flight, so the refusal is what keeps each task's record in one place. Stop
