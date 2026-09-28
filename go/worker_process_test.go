@@ -60,7 +60,7 @@ func TestWorkerProcessDrainsAnInflightTaskOnSIGTERM(t *testing.T) {
 
 	var firstState, secondState string
 	if err := pool.QueryRow(ctx, "SELECT state FROM workhorse.task_outcome WHERE task_id = $1::uuid", firstTaskID).Scan(&firstState); err != nil {
-		t.Fatal(err)
+		t.Fatalf("read the drained task's outcome: %v\n%s", err, output.String())
 	}
 	if err := pool.QueryRow(ctx, "SELECT state FROM workhorse.task_runtime WHERE task_id = $1::uuid", secondTaskID).Scan(&secondState); err != nil {
 		t.Fatal(err)
