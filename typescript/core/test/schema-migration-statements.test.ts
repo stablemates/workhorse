@@ -17,7 +17,7 @@ const EXCLUSIVE_SCANS_SHIPPED = new Map([
   ["0025-add-a-fast-task-tier.sql", "queue_control holds one row per queue"],
   [
     "0030-release-dependents-through-a-pending-prerequisite-counter.sql",
-    "blocks task_runtime for time its size sets; docs/schema-lifecycle.md records the cost",
+    "backfills and validates task_runtime in one step; fresh installs and schemas past 30 skip it",
   ],
 ]);
 

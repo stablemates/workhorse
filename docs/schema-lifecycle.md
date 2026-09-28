@@ -185,6 +185,8 @@ next begins:
    `ADD CONSTRAINT ... NOT VALID`. PostgreSQL 11 and later store a constant default without
    rewriting the table, and a `NOT VALID` constraint checks only rows written after it exists. The
    step holds `ACCESS EXCLUSIVE` for a time its table size does not set.
+   The default must satisfy the new constraint, because workers from the previous release keep
+   inserting rows that omit the column until step 2 replaces their functions.
 2. **Backfill.** Replace the functions that write the table so that they maintain the new column,
    then run the backfill `UPDATE` in the same step. The backfill takes row locks only, so writers
    to other rows proceed. Putting both in one step leaves no window where a writer skips the
@@ -204,16 +206,12 @@ transaction holds many row locks. Each batch must then be idempotent; see
 a column with an inline `CHECK`, or that updates, deletes from, or validates a constraint on a
 table it altered. The shipped steps it exempts are listed in the test with their reason.
 
-On a dedicated PostgreSQL 18 container, shipped step `0030` stalled single-row updates to
-`task_runtime` for 1–2 seconds at 2,000,000 rows. The split pattern kept them under 20 ms at the
-same size, apart from host noise that also appeared with no migration running.
+On a dedicated PostgreSQL 18 container, a step that added, backfilled, and validated a column on
+`task_runtime` in one transaction stalled single-row updates for 1–2 seconds at 2,000,000 rows. The
+split pattern kept them under 20 ms at the same size, apart from host noise that also appeared with
+no migration running.
 
 ### Shipped migrations that block writes
-
-`0030-release-dependents-through-a-pending-prerequisite-counter.sql` adds, backfills, and
-validates columns on `workhorse.task_runtime` in one step under `ACCESS EXCLUSIVE`. Its stall grows
-with the table, from 0.1–0.2 seconds at 250,000 rows to 1–2 seconds at 2,000,000. The step is
-shipped and immutable, and the guard test exempts it.
 
 No supported step builds an index non-concurrently. The two that did, `0003-named-budgets.sql` and
 `0006-bounded-dashboard-reads.sql`, both start below the 0.2.0 baseline, so pruning the chain
