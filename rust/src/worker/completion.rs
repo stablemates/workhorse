@@ -100,9 +100,8 @@ impl Inner {
     async fn flush_chunk(&self, queue: &str, mut chunk: Vec<Entry>, limit: usize) {
         // Concurrent statements then delete their runtime rows in one order.
         chunk.sort_unstable_by_key(|entry| entry.id);
-        // A fused claim can keep a lock on a row that a concurrent claim has just leased, so two
-        // statements can deadlock. PostgreSQL rolls the victim back whole, so fenced_rows sends
-        // the chunk again.
+        // The fused claim gives up a lock wait before it can deadlock (SM-934). If PostgreSQL
+        // still rolls the chunk back as a deadlock victim, fenced_rows sends it again.
         match self.send_chunk(queue, &chunk, limit).await {
             Ok((accepted, claimed)) => {
                 let mut claimed = claimed.into_iter();

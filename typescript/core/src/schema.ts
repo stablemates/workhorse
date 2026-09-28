@@ -274,6 +274,14 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "detect and repair pending-prerequisite counter drift",
     kind: "additive",
   },
+  {
+    // The file number was reserved for this change; the version still steps by one.
+    fromVersion: 38,
+    toVersion: 39,
+    file: "0040-release-a-fused-claim-lock-before-it-can-deadlock.sql",
+    description: "release a fused claim lock before it can deadlock",
+    kind: "additive",
+  },
 ];
 
 /**

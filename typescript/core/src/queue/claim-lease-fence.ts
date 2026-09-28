@@ -630,8 +630,8 @@ export class ClaimLeaseFenceModule extends QueueModule {
       limit,
       leaseMs,
     ];
-    // The fused claim can keep a lock on a row that another worker leased first, so PostgreSQL can
-    // roll this statement back with 40P01. Nothing in it committed, so it is sent again.
+    // The fused claim gives up a lock wait before it can deadlock (SM-934). If PostgreSQL still
+    // rolls this statement back with 40P01, nothing in it committed, so it is sent again.
     const result = await queryFencedWrite<CompletionClaimRow>(
       this.context.database,
       SQL_STATEMENTS["complete_many_and_claim_v1"],

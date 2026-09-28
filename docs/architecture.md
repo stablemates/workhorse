@@ -2947,6 +2947,27 @@ timeout restarts on every claim, because the tier keeps no execution budget.
 `fast_claim_v1` picks one of two statements, so a queue that does not record claims pays for no
 `task_event` write.
 
+`FOR UPDATE SKIP LOCKED` skips a row that another transaction holds, but it can still wait. When it
+locks a candidate whose ready version another worker has just leased and committed, PostgreSQL
+follows the update chain and waits there without a wait policy. The recheck of `state = 'ready'`
+then rejects the row, but the claim keeps its lock on it until the transaction ends. The owning
+worker's `fast_complete_many_v1` pre-lock or its `fast_heartbeat_many_v1` round can wait on that
+lock while the claim waits on the owner, and PostgreSQL rolled one statement back with SQLSTATE
+`40P01` (SM-934). `fast_claim_v1` therefore runs with `SET lock_timeout = '50ms'`, and runs its
+claim inside a PL/pgSQL `BEGIN ... EXCEPTION WHEN lock_not_available` block. A lock wait that
+reaches 50 ms raises SQLSTATE `55P03`, which rolls the block's subtransaction back, releases every
+row lock the claim took, and returns no rows. The function-level `SET` restores the caller's
+`lock_timeout` on exit, so the timeout covers only the claim. In `complete_many_and_claim_v1` the
+completion is outside that block and still commits. The claim collects its rows into an array
+before it returns any, because a set-returning function cannot withdraw a row it has returned. The
+timeout is far below PostgreSQL's default `deadlock_timeout` of 1 s, so the claim leaves the cycle
+before the deadlock detector runs. A server whose `deadlock_timeout` is below 50 ms can still
+detect the cycle first. Migration `0040-release-a-fused-claim-lock-before-it-can-deadlock.sql`
+(schema 39) replaced `fast_claim_v1` in place, because a claim that returns fewer rows than its
+limit stays within its contract. [ADR
+0081](decisions/0081-release-a-fused-claim-lock-before-it-can-deadlock.md) records the choice and
+its measurement.
+
 A delayed row stays in `fast_task_runtime_ready_idx`, and `run_at <= now` is an index condition, not
 a bound on the scan. The claim therefore reads past every delayed row whose priority is above the
 highest due row, and past the whole queue's backlog when nothing is due. On PostgreSQL 18 a btree
@@ -3016,7 +3037,11 @@ of 100. `Queue.claimFast(workerId, limit, { queue?, leaseMs? })` claims through 
 with empty arrays and rejects with `FastTierUnsupportedError` for a full-tier queue. When PostgreSQL
 rolls the statement back with SQLSTATE `40P01`, `completeManyAndClaim` sends it again through
 `queryFencedWrite`, up to `FENCED_WRITE_DEADLOCK_ATTEMPTS` (3) times in total, because nothing in it
-committed.
+committed. Since schema 39 the fused claim leaves a lock wait before it can deadlock ([Fast
+claim](#fast-claim)), so the Go, Python, Rust, and TypeScript workers keep this resend only as a
+safety net. It still covers a server whose `deadlock_timeout` is below the claim's `lock_timeout`, a
+cycle through the completion half of the statement, and the settlement cascades that every fenced
+write shares ([`task_dependency`](#task_dependency)).
 
 ### Retry, timeout, heartbeat, and release
 
@@ -3166,21 +3191,18 @@ unless `PollingOnly` is set, minus 1 for the heartbeat connection unless `Shared
 An explicit `Cohorts` is never capped. The worker's `completionBatcher` groups concurrent fast-tier
 completions by queue and cohort, and keeps one `complete_many_and_claim_v1` call in flight per group.
 A call carries at most `completionBatchLimit` (100) completions, and its claim limits sum to at most 100. The call names its tasks in task ID order, and `heartbeat_many_v1` names its leases in the
-same order. The fused claim's `FOR UPDATE SKIP LOCKED` can still keep a lock on a candidate that
-another worker leased and committed first, because the recheck of `state = 'ready'` fails after the
-lock is taken. That worker's completion or heartbeat can then wait on the claim, and PostgreSQL can
-roll one statement back with SQLSTATE `40P01`. `queryFencedWrite` sends it again, up to
-`fencedWriteDeadlockAttempts` (3) times in total.
+same order. The fused claim releases a lock it would otherwise keep on a candidate another worker
+leased first ([Fast claim](#fast-claim)). When PostgreSQL still rolls a statement back with SQLSTATE
+`40P01`, `queryFencedWrite` sends it again, up to `fencedWriteDeadlockAttempts` (3) times in total.
 
 The Rust worker follows the same rules. Its `default_cohorts` caps the default at the pool's
 `max_size`, minus 1 for the heartbeat connection unless `shared_heartbeats` is true; its listener
 opens a connection outside the pool. `Inner::complete_batched` sends the completions of one queue
 and cohort that finish in the same scheduler turn as one `complete_many_and_claim_v1` statement of
 at most 100 completions. When that statement raises `FastTierUnsupported`, each completion falls
-back to `complete_v1`. The worker sorts each statement's task ids. A fused claim's `FOR UPDATE SKIP
-LOCKED` can still hold a row that another statement deletes, so PostgreSQL may roll one back with
-SQLSTATE `40P01`. `fenced_rows` sends that statement again, up to `FENCED_WRITE_DEADLOCK_ATTEMPTS`
-(3) times in total, because nothing in it committed.
+back to `complete_v1`. The worker sorts each statement's task ids. When PostgreSQL still rolls a
+statement back with SQLSTATE `40P01`, `fenced_rows` sends it again, up to
+`FENCED_WRITE_DEADLOCK_ATTEMPTS` (3) times in total, because nothing in it committed.
 
 A fast-tier handler context rejects durable execution locally with `FastTierUnsupportedError` for
 the task's queue:
