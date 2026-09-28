@@ -508,6 +508,7 @@ describe("schema installation", () => {
       },
       { version: 36, description: "plan dependency release once per session" },
       { version: 37, description: "report queue tier and history in the dashboard" },
+      { version: 38, description: "detect and repair pending-prerequisite counter drift" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

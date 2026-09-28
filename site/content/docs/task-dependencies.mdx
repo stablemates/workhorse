@@ -80,6 +80,12 @@ Workhorse keeps a counter of unresolved edges on each blocked dependent, in the
 sets the `dependency_rejected` flag. The release reads those two columns instead of rescanning
 every edge, so a wide fan-in costs the same per prerequisite as a single edge.
 
+If a resolution would drive the counter below zero, Workhorse recounts that dependent's edges
+instead of failing the prerequisite's completion, and records a `dependency_counter_repaired`
+event. The SQL function `workhorse.dependency_counter_drift_v1()` lists blocked rows whose counter
+or flag disagrees with their edges. `workhorse.repair_dependency_counters_v1()` recounts them and
+settles each row whose edges have all resolved.
+
 ## Inspect blocked work
 
 `Admin.getTask` and `Admin.listTasks` expose `prerequisiteTaskIds`, `dependencyPolicy`, and

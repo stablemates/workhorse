@@ -41,6 +41,23 @@ const within = <T>(work: Promise<T>) =>
 const byTaskId = (left: { task_id: string }, right: { task_id: string }) =>
   left.task_id < right.task_id ? -1 : 1;
 
+const driftRow = (
+  taskId: string,
+  queueName: string,
+  counter: [number, number],
+  rejected: [boolean, boolean],
+  counterDrifted: boolean,
+) => ({
+  task_id: taskId,
+  queue_name: queueName,
+  pending_prerequisites: counter[0],
+  pending_edges: counter[1],
+  dependency_rejected: rejected[0],
+  rejected_edges: rejected[1],
+  counter_drifted: counterDrifted,
+  edges_resolved: counter[1] === 0,
+});
+
 describe("task dependencies", () => {
   it("maps dependency cycle diagnostics through the public enqueue API", async () => {
     const details = {
@@ -214,14 +231,20 @@ describe("task dependencies", () => {
   it("keeps one plan per session for dependency release", async () => {
     // A custom plan sees one-element arrays and always looks cheaper than the generic plan, so
     // PL/pgSQL replanned every release statement on every completion.
-    const result = await pool.query<{ proconfig: string[] | null }>(
-      `SELECT routine.proconfig
+    // settle_dependents_v1 runs the resolver's release and rejection statements.
+    const result = await pool.query<{ proname: string; proconfig: string[] | null }>(
+      `SELECT routine.proname, routine.proconfig
          FROM pg_proc routine
          JOIN pg_namespace namespace ON namespace.oid = routine.pronamespace
-        WHERE namespace.nspname = 'workhorse' AND routine.proname = 'resolve_dependents_many_v1'`,
+        WHERE namespace.nspname = 'workhorse'
+          AND routine.proname IN ('resolve_dependents_many_v1', 'settle_dependents_v1')
+        ORDER BY routine.proname`,
     );
 
-    expect(result.rows).toEqual([{ proconfig: ["plan_cache_mode=force_generic_plan"] }]);
+    expect(result.rows).toEqual([
+      { proname: "resolve_dependents_many_v1", proconfig: ["plan_cache_mode=force_generic_plan"] },
+      { proname: "settle_dependents_v1", proconfig: ["plan_cache_mode=force_generic_plan"] },
+    ]);
   });
 
   it("runs no dependency statement when a request declares no prerequisites", async () => {
@@ -1926,22 +1949,274 @@ describe("task dependencies", () => {
     expect(await readDependencyCounterDrift(pool)).toEqual([]);
   });
 
-  it("refuses to drive a pending-prerequisite counter below zero", async () => {
-    const prerequisiteId = await queue.enqueue("underflow-prerequisite", null);
-    const dependentId = await queue.enqueue("underflow-dependent", null, {
-      prerequisiteTaskId: prerequisiteId,
+  it("recounts a pending-prerequisite counter that would fall below zero", async () => {
+    const [firstId, secondId, loneId] = await queue.enqueueMany(
+      ["underflow-first", "underflow-second", "underflow-lone"].map((type) => ({
+        type,
+        payload: null,
+        options: { queue: type },
+      })),
+    );
+    const heldId = await queue.enqueue("underflow-held", null, {
+      dependencies: {
+        prerequisiteTaskIds: [firstId!, secondId!],
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+    const releasedId = await queue.enqueue("underflow-released", null, {
+      prerequisiteTaskId: loneId!,
     });
     await pool.query(
-      `UPDATE workhorse.task_runtime SET pending_prerequisites = 0 WHERE task_id = $1`,
-      [dependentId],
+      `UPDATE workhorse.task_runtime SET pending_prerequisites = 0
+        WHERE task_id = ANY($1::uuid[])`,
+      [[heldId, releasedId]],
     );
+
+    const first = await queue.claim("underflow-worker", { queue: "underflow-first" });
+    expect(await queue.complete(first!, "underflow-worker", null)).toBe(true);
     await expect(
-      pool.query(`SELECT workhorse.resolve_dependents_v1($1::uuid, 'succeeded')`, [prerequisiteId]),
-    ).rejects.toThrow(/task_runtime_pending_prerequisites_check/);
-    await pool.query(
-      `UPDATE workhorse.task_runtime SET pending_prerequisites = 1 WHERE task_id = $1`,
-      [dependentId],
+      pool.query(
+        `SELECT state, pending_prerequisites, dependency_rejected
+           FROM workhorse.task_runtime WHERE task_id = $1`,
+        [heldId],
+      ),
+    ).resolves.toMatchObject({
+      rows: [{ state: "blocked", pending_prerequisites: 1, dependency_rejected: false }],
+    });
+    expect(await readDependencyCounterDrift(pool)).toEqual([
+      expect.objectContaining({ task_id: releasedId, pending_prerequisites: 0, pending_edges: 1 }),
+    ]);
+
+    const lone = await queue.claim("underflow-worker", { queue: "underflow-lone" });
+    expect(await queue.complete(lone!, "underflow-worker", null)).toBe(true);
+    await expect(admin.getTask(releasedId)).resolves.toMatchObject({ state: "ready" });
+
+    const events = await pool.query<{ task_id: string; event_type: string; details: unknown }>(
+      `SELECT task_id, event_type, details FROM workhorse.task_event
+        WHERE task_id = ANY($1::uuid[])
+          AND event_type IN ('dependency_counter_repaired', 'dependency_released')
+        ORDER BY occurred_at, event_id`,
+      [[heldId, releasedId]],
     );
+    expect(events.rows).toEqual([
+      {
+        task_id: heldId,
+        event_type: "dependency_counter_repaired",
+        details: {
+          source: "resolver",
+          prerequisite_task_id: firstId,
+          recorded_pending_prerequisites: 0,
+          resolved_edges: 1,
+          pending_edges: 1,
+          dependency_rejected: false,
+        },
+      },
+      {
+        task_id: releasedId,
+        event_type: "dependency_counter_repaired",
+        details: {
+          source: "resolver",
+          prerequisite_task_id: loneId,
+          recorded_pending_prerequisites: 0,
+          resolved_edges: 1,
+          pending_edges: 0,
+          dependency_rejected: false,
+        },
+      },
+      {
+        task_id: releasedId,
+        event_type: "dependency_released",
+        details: { prerequisite_task_id: loneId, state: "ready", reason: "prerequisite_succeeded" },
+      },
+    ]);
+
+    const second = await queue.claim("underflow-worker", { queue: "underflow-second" });
+    expect(await queue.complete(second!, "underflow-worker", null)).toBe(true);
+    await expect(admin.getTask(heldId)).resolves.toMatchObject({ state: "ready" });
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+  });
+
+  it("reports and repairs blocked tasks whose counters disagree with their edges", async () => {
+    const [pendingId, resolvedId] = await queue.enqueueMany(
+      ["drift-pending", "drift-resolved"].map((type) => ({
+        type,
+        payload: null,
+        options: { queue: type },
+      })),
+    );
+    const enqueueDependent = (type: string, prerequisiteTaskId: string) =>
+      queue.enqueue(type, null, { queue: type, prerequisiteTaskId });
+    const highId = await enqueueDependent("drift-high", pendingId!);
+    const flaggedId = await enqueueDependent("drift-flagged", pendingId!);
+    const healthyId = await enqueueDependent("drift-healthy", pendingId!);
+    const strandedId = await enqueueDependent("drift-stranded", resolvedId!);
+    const settledId = await enqueueDependent("drift-settled", resolvedId!);
+    const rejectedId = await enqueueDependent("drift-rejected", resolvedId!);
+    await pool.query(
+      `UPDATE workhorse.task_runtime SET pending_prerequisites = 2 WHERE task_id = $1`,
+      [highId],
+    );
+    await pool.query(
+      `UPDATE workhorse.task_runtime SET dependency_rejected = true WHERE task_id = $1`,
+      [flaggedId],
+    );
+    // Resolve edges without the resolver, as a lost counter update would leave them.
+    await pool.query(
+      `UPDATE workhorse.task_dependency
+          SET released_at = clock_timestamp(),
+              resolution = CASE dependent_task_id WHEN $3::uuid THEN 'fail' ELSE 'release' END
+        WHERE dependent_task_id = ANY($1::uuid[]) AND prerequisite_task_id = $2`,
+      [[strandedId, settledId, rejectedId], resolvedId, rejectedId],
+    );
+    await pool.query(
+      `UPDATE workhorse.task_runtime
+          SET pending_prerequisites = 0, dependency_rejected = task_id = $2::uuid
+        WHERE task_id = ANY($1::uuid[])`,
+      [[settledId, rejectedId], rejectedId],
+    );
+
+    const drift = await pool.query(
+      `SELECT task_id, queue_name, pending_prerequisites, pending_edges, dependency_rejected,
+              rejected_edges, counter_drifted, edges_resolved
+         FROM workhorse.dependency_counter_drift_v1()`,
+    );
+    expect(drift.rows).toEqual(
+      [
+        driftRow(highId, "drift-high", [2, 1], [false, false], true),
+        driftRow(flaggedId, "drift-flagged", [1, 1], [true, false], true),
+        driftRow(strandedId, "drift-stranded", [1, 0], [false, false], true),
+        driftRow(settledId, "drift-settled", [0, 0], [false, false], false),
+        driftRow(rejectedId, "drift-rejected", [0, 0], [true, true], false),
+      ].toSorted(byTaskId),
+    );
+    expect(drift.rows.map((entry) => entry.task_id)).not.toContain(healthyId);
+    const limited = await pool.query(
+      `SELECT task_id FROM workhorse.dependency_counter_drift_v1(2)`,
+    );
+    expect(limited.rows).toEqual(drift.rows.slice(0, 2).map(({ task_id }) => ({ task_id })));
+    await expect(
+      pool.query(`SELECT * FROM workhorse.dependency_counter_drift_v1(0)`),
+    ).rejects.toThrow(/between 1 and 100000/);
+
+    const repaired = await pool.query(
+      `SELECT task_id, recorded_pending_prerequisites, pending_edges, action
+         FROM workhorse.repair_dependency_counters_v1()`,
+    );
+    expect(repaired.rows).toEqual(
+      [
+        {
+          task_id: highId,
+          recorded_pending_prerequisites: 2,
+          pending_edges: 1,
+          action: "recounted",
+        },
+        {
+          task_id: flaggedId,
+          recorded_pending_prerequisites: 1,
+          pending_edges: 1,
+          action: "recounted",
+        },
+        {
+          task_id: strandedId,
+          recorded_pending_prerequisites: 1,
+          pending_edges: 0,
+          action: "released",
+        },
+        {
+          task_id: settledId,
+          recorded_pending_prerequisites: 0,
+          pending_edges: 0,
+          action: "released",
+        },
+        {
+          task_id: rejectedId,
+          recorded_pending_prerequisites: 0,
+          pending_edges: 0,
+          action: "rejected",
+        },
+      ].toSorted(byTaskId),
+    );
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+    await expect(
+      pool.query(`SELECT * FROM workhorse.dependency_counter_drift_v1()`),
+    ).resolves.toMatchObject({ rows: [] });
+    await expect(
+      pool.query(`SELECT * FROM workhorse.repair_dependency_counters_v1()`),
+    ).resolves.toMatchObject({ rows: [] });
+
+    await expect(
+      pool.query(
+        `SELECT task_id, state, pending_prerequisites, dependency_rejected
+           FROM workhorse.task_runtime WHERE task_id = ANY($1::uuid[]) ORDER BY task_id`,
+        [[highId, flaggedId, strandedId, settledId]],
+      ),
+    ).resolves.toMatchObject({
+      rows: [
+        { task_id: highId, state: "blocked", pending_prerequisites: 1, dependency_rejected: false },
+        {
+          task_id: flaggedId,
+          state: "blocked",
+          pending_prerequisites: 1,
+          dependency_rejected: false,
+        },
+        {
+          task_id: strandedId,
+          state: "ready",
+          pending_prerequisites: 0,
+          dependency_rejected: false,
+        },
+        {
+          task_id: settledId,
+          state: "ready",
+          pending_prerequisites: 0,
+          dependency_rejected: false,
+        },
+      ].toSorted(byTaskId),
+    });
+    await expect(admin.getTask(rejectedId)).resolves.toMatchObject({
+      state: "failed",
+      error: expect.objectContaining({
+        name: "DependencyFailed",
+        prerequisite_task_id: resolvedId,
+        policy_action: "fail",
+      }),
+    });
+
+    const events = await pool.query<{ event_type: string; details: unknown }>(
+      `SELECT event_type, details FROM workhorse.task_event
+        WHERE task_id = $1
+          AND event_type IN ('dependency_counter_repaired', 'dependency_released')
+        ORDER BY occurred_at, event_id`,
+      [strandedId],
+    );
+    expect(events.rows).toEqual([
+      {
+        event_type: "dependency_counter_repaired",
+        details: {
+          source: "repair",
+          prerequisite_task_id: resolvedId,
+          recorded_pending_prerequisites: 1,
+          pending_edges: 0,
+          dependency_rejected: false,
+        },
+      },
+      {
+        event_type: "dependency_released",
+        details: {
+          prerequisite_task_id: resolvedId,
+          state: "ready",
+          reason: "dependency_counter_repaired",
+        },
+      },
+    ]);
+
+    const pending = await queue.claim("drift-worker", { queue: "drift-pending" });
+    expect(await queue.complete(pending!, "drift-worker", null)).toBe(true);
+    for (const taskId of [highId, flaggedId, healthyId]) {
+      await expect(admin.getTask(taskId)).resolves.toMatchObject({ state: "ready" });
+    }
   });
 
   it("lets a prerequisite be claimed and heartbeated while a dependent enqueue is in flight", async () => {
