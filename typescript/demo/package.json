@@ -40,9 +40,9 @@
   },
   "devDependencies": {
     "@stablemates/workhorse-dashboard": "workspace:*",
-    "@types/node": "^26.6.1",
+    "@types/node": "^26.6.2",
     "@types/pg": "^8.23.1",
-    "tsx": "^4.23.13",
+    "tsx": "^4.23.15",
     "typescript": "^5.8.3"
   },
   "engines": {
