@@ -1,6 +1,6 @@
 # ADR 0075: Shape the Ruby SDK as one gem with an Active Job adapter
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-23
 - **Related:** [ADR 0018](0018-framework-neutral-dashboard-host.md),
   [ADR 0021](0021-no-framework-integration-packages.md),
@@ -13,7 +13,9 @@
   [ADR 0070](0070-publish-the-verified-sqlalchemy-transaction-accessor.md),
   [ADR 0071](0071-give-every-worker-a-pool-and-a-dedicated-heartbeat-connection.md),
   [ADR 0072](0072-converge-the-worker-runtime-defaults.md),
-  [ADR 0074](0074-shape-the-rust-sdk-as-one-python-shaped-crate.md)
+  [ADR 0074](0074-shape-the-rust-sdk-as-one-python-shaped-crate.md),
+  [ADR 0076](0076-keep-overlapping-batched-claims-in-flight-to-fill-worker-slots.md),
+  [ADR 0078](0078-start-a-long-running-workers-first-claim-beside-its-startup-maintenance-pass.md)
 
 ## Context
 
@@ -187,8 +189,12 @@ cannot call blocking code, and Ruby has no such split.
 Inside one process, the worker builds on `concurrent-ruby`.
 
 - **Handlers** run on a `Concurrent::ThreadPoolExecutor` that the worker owns. Its size is fixed
-  at `concurrency`, from 1 through 100, and it never queues. The claim loop claims only as many
-  tasks as the pool has idle threads.
+  at `concurrency`, from 1 through 100, and it never queues.
+- **Dispatch** follows ADR 0076, as in every SDK. The worker keeps overlapping batched claims in
+  flight, and a claim in flight reserves the slots its limit covers, so claimed tasks never exceed
+  `concurrency`. Each claim runs on its own short-lived thread with a borrowed pool connection, so
+  the dispatch loop never blocks on a claim. The loop waits on one `Concurrent::Event` for the
+  first of a finished handler, a returned claim, or a wake.
 - **The cancellation token** is a `Concurrent::Event`. Its reason is set once, atomically, before
   the event fires. So `wait` blocks without polling, and every reader sees the same reason.
 - **The heartbeat and the listener** each run on a dedicated thread. Each thread waits on a
@@ -302,6 +308,7 @@ module Stablemates::Workhorse
                    maintenance_interval: 1, maintenance_routine_interval: 60,
                    registry_interval: 5, disable_registry: false, schedule_namespaces: [],
                    schedule_catchup_limit: 100, shutdown_grace: 25, shared_heartbeats: false,
+                   cohorts: nil,
                    retry_delay: nil, on_registration_error: nil, logger: nil); end
 
     def handle(task_type, &handler) = self          # handler.call(payload, context) -> result
@@ -333,8 +340,16 @@ type again replaces its handler. A task type with no handler is released so that
 can claim it. `handle_batch` validates its options as Python does: `max_size` lies between 1 and
 100 and does not exceed `concurrency`.
 
-Each round claims with `claim_many`, fair across the configured queues, as the Go and Rust workers
-do. The heartbeat thread acts on each `heartbeat_v1` status as ADR 0074's table describes. The
+Dispatch follows ADR 0076. The worker keeps overlapping batched claims in flight, fair across the
+configured queues, and claims fewer times than it runs tasks once it is busy. On the fast tier it
+batches completions into fused claims and splits its slots into cohorts. `cohorts` overrides the
+default cohort count from ADR 0076. A long-running worker starts its first claim beside its startup
+maintenance pass, as ADR 0078 requires. The shared runtime fixture
+`busy-worker-refills-slots-with-overlapping-batched-claims` pins the dispatch in Ruby as it does in
+the other four SDKs, and SM-900 adds the unit tests for pause, drain at `stop`, the empty-poll wait,
+and the release of unhandled task types.
+
+The heartbeat thread acts on each `heartbeat_v1` status as ADR 0074's table describes. The
 cancellation reasons are `:requested`, `:deadline_exceeded`, `:execution_timeout`, `:lease_lost`,
 `:suspended`, and `:shutdown`. A lease lost to `stale` cancels the token and records the loss, and
 the fence token refuses every later write from that handler.
