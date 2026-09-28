@@ -2372,6 +2372,132 @@ describe("task dependencies", () => {
     }
   });
 
+  it("previews and repairs dependency drift through Admin with an audited event", async () => {
+    const [pendingId, resolvedId] = await queue.enqueueMany(
+      ["governed-pending", "governed-resolved"].map((type) => ({
+        type,
+        payload: null,
+        options: { queue: type },
+      })),
+    );
+    const enqueueDependent = (type: string, prerequisiteTaskId: string) =>
+      queue.enqueue(type, null, { queue: type, prerequisiteTaskId });
+    const highId = await enqueueDependent("governed-high", pendingId!);
+    const healthyId = await enqueueDependent("governed-healthy", pendingId!);
+    const strandedId = await enqueueDependent("governed-stranded", resolvedId!);
+    const rejectedId = await enqueueDependent("governed-rejected", resolvedId!);
+    await pool.query(
+      `UPDATE workhorse.task_runtime SET pending_prerequisites = 3 WHERE task_id = $1`,
+      [highId],
+    );
+    await pool.query(
+      `UPDATE workhorse.task_dependency
+          SET released_at = clock_timestamp(),
+              resolution = CASE dependent_task_id WHEN $3::uuid THEN 'fail' ELSE 'release' END
+        WHERE dependent_task_id = ANY($1::uuid[]) AND prerequisite_task_id = $2`,
+      [[strandedId, rejectedId], resolvedId, rejectedId],
+    );
+    const readRuntime = () =>
+      pool.query(
+        `SELECT task_id, state, pending_prerequisites, dependency_rejected
+           FROM workhorse.task_runtime WHERE task_id = ANY($1::uuid[]) ORDER BY task_id`,
+        [[highId, healthyId, strandedId, rejectedId]],
+      );
+    const readRepairEvents = () =>
+      pool.query<{ task_id: string; details: Record<string, unknown> }>(
+        `SELECT task_id, details FROM workhorse.task_event
+          WHERE task_id = ANY($1::uuid[]) AND event_type = 'dependency_counter_repaired'
+          ORDER BY task_id`,
+        [[highId, healthyId, strandedId, rejectedId]],
+      );
+    const before = await readRuntime();
+
+    const expected = [
+      {
+        taskId: highId,
+        queueName: "governed-high",
+        pendingPrerequisites: 3,
+        pendingEdges: 1,
+        dependencyRejected: false,
+        rejectedEdges: false,
+        action: "recounted",
+      },
+      {
+        taskId: strandedId,
+        queueName: "governed-stranded",
+        pendingPrerequisites: 1,
+        pendingEdges: 0,
+        dependencyRejected: false,
+        rejectedEdges: false,
+        action: "released",
+      },
+      {
+        taskId: rejectedId,
+        queueName: "governed-rejected",
+        pendingPrerequisites: 1,
+        pendingEdges: 0,
+        dependencyRejected: false,
+        rejectedEdges: true,
+        action: "rejected",
+      },
+    ].toSorted((left, right) => (left.taskId < right.taskId ? -1 : 1));
+    await expect(admin.listDependencyDrift()).resolves.toEqual(expected);
+    await expect(admin.listDependencyDrift(2)).resolves.toEqual(expected.slice(0, 2));
+    // The dry run writes nothing: no counter changes and no repair event.
+    expect((await readRuntime()).rows).toEqual(before.rows);
+    expect((await readRepairEvents()).rows).toEqual([]);
+
+    for (const limit of [0, 100_001, 1.5]) {
+      await expect(admin.listDependencyDrift(limit)).rejects.toThrow(
+        "limit must be an integer from 1 to 100000",
+      );
+    }
+    const audit = {
+      actor: "operator@example.test",
+      reason: "recount drifted dependents",
+      requestId: "repair-request-0001",
+    };
+    await expect(admin.repairDependencyDrift({ ...audit, reason: "" })).rejects.toThrow(
+      "reason must contain between 1 and 2000 characters",
+    );
+    await expect(admin.repairDependencyDrift(audit, 0)).rejects.toThrow(
+      "limit must be an integer from 1 to 100000",
+    );
+    await expect(
+      pool.query(`SELECT * FROM workhorse.repair_dependency_drift_v1(10, '', 'reason', 'id')`),
+    ).rejects.toThrow("requested_by must contain between 1 and 200 characters");
+    expect((await readRepairEvents()).rows).toEqual([]);
+
+    await expect(admin.repairDependencyDrift(audit)).resolves.toEqual(
+      expected.map(({ taskId, pendingPrerequisites, pendingEdges, action }) => ({
+        taskId,
+        recordedPendingPrerequisites: pendingPrerequisites,
+        pendingEdges,
+        action,
+      })),
+    );
+    await expect(admin.listDependencyDrift()).resolves.toEqual([]);
+    await expect(admin.repairDependencyDrift(audit)).resolves.toEqual([]);
+
+    const events = await readRepairEvents();
+    expect(events.rows.map((row) => row.task_id)).toEqual(expected.map((row) => row.taskId));
+    for (const event of events.rows) {
+      expect(event.details).toMatchObject({
+        source: "repair",
+        requested_by: audit.actor,
+        request_reason: audit.reason,
+        request_id_preview: "repair-r…0001",
+        request_id_digest: expect.stringMatching(/^[0-9a-f]{12}$/),
+        request_id_length: audit.requestId.length,
+      });
+      expect(JSON.stringify(event.details)).not.toContain(audit.requestId);
+    }
+    await expect(admin.getTask(highId)).resolves.toMatchObject({ state: "blocked" });
+    await expect(admin.getTask(strandedId)).resolves.toMatchObject({ state: "ready" });
+    await expect(admin.getTask(rejectedId)).resolves.toMatchObject({ state: "failed" });
+    await expect(admin.getTask(healthyId)).resolves.toMatchObject({ state: "blocked" });
+  });
+
   it("lets a prerequisite be claimed and heartbeated while a dependent enqueue is in flight", async () => {
     const prerequisiteId = await queue.enqueue("unblocked-prerequisite", null, {
       queue: "unblocked-prerequisites",

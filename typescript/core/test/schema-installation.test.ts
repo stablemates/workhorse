@@ -510,6 +510,7 @@ describe("schema installation", () => {
       { version: 37, description: "report queue tier and history in the dashboard" },
       { version: 38, description: "detect and repair pending-prerequisite counter drift" },
       { version: 39, description: "release a fused claim lock before it can deadlock" },
+      { version: 40, description: "govern the dependency counter drift check and repair" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

@@ -3,9 +3,9 @@ export const PROTOCOL_VERSION = 5;
 export const MINIMUM_PROTOCOL_VERSION = 5;
 export const MAXIMUM_PROTOCOL_VERSION = 5;
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
-export const WORKHORSE_SCHEMA_VERSION = 39;
-export const MINIMUM_SCHEMA_VERSION = 25;
-export const MAXIMUM_SCHEMA_VERSION = 39;
+export const WORKHORSE_SCHEMA_VERSION = 40;
+export const MINIMUM_SCHEMA_VERSION = 40;
+export const MAXIMUM_SCHEMA_VERSION = 40;
 export const DEFAULT_TASK_VALUE_MAX_BYTES = 1048576;
 export const MAX_ENQUEUE_BATCH_SIZE = 1000;
 
@@ -63,6 +63,8 @@ export const SQL_STATEMENTS = {
     "SELECT namespace, queue_name, max_active, max_active_per_key, updated_at FROM workhorse.concurrency_policy, (SELECT $1::text[] AS names) AS filter WHERE cardinality(filter.names) = 0 OR queue_name = ANY(filter.names) ORDER BY queue_name",
   list_dead_letters:
     "SELECT task_id::text task_id,queue_name,task_type,concurrency_key,priority,payload,tags,current_attempt,max_attempts,retry_policy,deadline_at,execution_timeout_ms,error,finished_at,redrive_count,has_more,cursor_finished_at FROM workhorse.list_dead_letters_v1($1::jsonb,$2::integer,$3::timestamptz,$4::uuid)",
+  list_dependency_drift:
+    "SELECT task_id,queue_name,pending_prerequisites,pending_edges,dependency_rejected,rejected_edges,action FROM workhorse.list_dependency_drift_v1($1::integer)",
   list_human_waits:
     "WITH parameters AS (\n         SELECT $1::integer AS page_limit, $2::timestamptz AS cursor_created_at,\n                $3::uuid AS cursor_task_id, $4::text AS cursor_name\n       )\n       SELECT task_id::text AS task_id, queue_name, task_type, token_name AS wait_name, context, attempt,\n              created_at, deadline_at, created_at::text AS cursor_created_at\n         FROM workhorse.dashboard_human_wait_v1, parameters\n        WHERE parameters.cursor_created_at IS NULL OR (created_at, task_id, token_name) >\n              (parameters.cursor_created_at, parameters.cursor_task_id, parameters.cursor_name)\n        ORDER BY created_at, task_id, token_name LIMIT (SELECT page_limit FROM parameters)",
   list_task_timeline:
@@ -93,6 +95,8 @@ export const SQL_STATEMENTS = {
     "SELECT status,source_task_id::text source_task_id,target_task_id::text target_task_id,source_state,target_state,requested_at FROM workhorse.redrive_v1($1::uuid,$2::text,$3::text,$4::text)",
   redrive_many:
     "SELECT status,source_task_id::text source_task_id,target_task_id::text target_task_id,source_state,target_state,requested_at,source_finished_at_cursor,has_more FROM workhorse.redrive_many_v1($1::jsonb,$2::integer,$3::boolean,$4::text,$5::text,$6::text,$7::timestamptz,$8::uuid) ORDER BY ordinal",
+  repair_dependency_drift:
+    "SELECT task_id,recorded_pending_prerequisites,pending_edges,action FROM workhorse.repair_dependency_drift_v1($1::integer,$2::text,$3::text,$4::text)",
   register_worker_v1:
     "SELECT workhorse.register_worker_v1(\n       $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::text[],\n       $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,\n       $12::integer, $13::integer, $14::integer, $15::boolean,\n       $16::integer, $17::text, $18::text\n     ) AS paused",
   run_maintenance_v1: "SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)",

@@ -2,7 +2,7 @@
 
 ## Current policy
 
-Schema version 6 is the migration baseline and schema version 39 is current. `sql/schema/current.sql` is the tracked source and
+Schema version 6 is the migration baseline and schema version 40 is current. `sql/schema/current.sql` is the tracked source and
 `sql/schema.sql` is a build artifact for published packages. `sql/releases/` holds the frozen
 clean-install artifact of every supported published release: `0006.sql` is 0.2.0, `0009.sql` is
 0.2.1, `0023.sql` is 0.3.0, and `0024.sql` is 0.4.0.
@@ -283,7 +283,8 @@ release calls.
 
 That minimum is derived rather than authored. `scripts/sql-schema-floor.ts` reads `sql/releases/`
 and `sql/migrations/` in schema-version order for the version that introduced each `workhorse.`
-function, table, and view. It then reads every name the three generated statement catalogues and the
+function, table, and view. It dates a migration by the version its `SCHEMA_MIGRATIONS` step reaches
+rather than by its file number, because file numbers run one ahead from `0036` on. It then reads every name the three generated statement catalogues and the
 three dashboard read models write into SQL. `scripts/sql-schema-floor.test.ts` requires
 `protocol/v1/manifest.json`'s `schema.minimumVersion` to cover the newest of those introductions. It
 also requires the floor to stay at or below `schema.installedVersion`, so a release always accepts

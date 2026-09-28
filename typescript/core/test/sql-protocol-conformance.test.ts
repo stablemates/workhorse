@@ -1206,7 +1206,7 @@ describe("SQL protocol conformance fixtures", () => {
     expect(fixtures.compatibility).toContainEqual(
       expect.objectContaining({ id: "current", compatible: true }),
     );
-    expect(fixtures.compatibility.filter((fixture) => !fixture.compatible)).toHaveLength(7);
+    expect(fixtures.compatibility.filter((fixture) => !fixture.compatible)).toHaveLength(8);
   });
 
   // Recreating the compatibility database mid-test waits on the same cluster-wide checkpoint

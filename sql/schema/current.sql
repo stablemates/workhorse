@@ -12058,8 +12058,11 @@ $$;
 -- the lock, because an edge resolves only while its dependent's runtime row is held. A task with
 -- pending edges left takes the recounted counter and rejection flag. A task with no pending edge
 -- settles: it fails or is canceled after a rejecting resolution and is released otherwise. Each
--- repaired task gets a `dependency_counter_repaired` event before any settlement event.
-CREATE OR REPLACE FUNCTION workhorse.repair_dependency_counters_v1(p_limit integer DEFAULT 1000)
+-- repaired task gets a `dependency_counter_repaired` event before any settlement event, and the
+-- event carries `p_audit`'s keys.
+CREATE OR REPLACE FUNCTION workhorse.repair_dependency_counters_internal_v1(
+  p_limit integer, p_audit jsonb
+)
 RETURNS TABLE(
   task_id uuid, recorded_pending_prerequisites integer, pending_edges integer, action text
 )
@@ -12156,7 +12159,7 @@ BEGIN
            'recorded_pending_prerequisites', repair.recorded,
            'pending_edges', repair.pending_edges,
            'dependency_rejected', repair.rejected_edges
-         )
+         ) || coalesce(p_audit, '{}'::jsonb)
     FROM unnest(v_task_ids, v_recorded, v_pending_edges, v_rejected_edges, v_prerequisite_task_ids)
            repair(task_id, recorded, pending_edges, rejected_edges, prerequisite_task_id)
    ORDER BY repair.task_id;
@@ -12180,6 +12183,93 @@ BEGIN
     FROM unnest(v_task_ids, v_recorded, v_pending_edges, v_actions)
            repair(task_id, recorded, pending_edges, action)
    ORDER BY repair.task_id;
+END;
+$$;
+
+-- The ungoverned repair, kept for callers of migration 0039. It records no audit.
+CREATE OR REPLACE FUNCTION workhorse.repair_dependency_counters_v1(p_limit integer DEFAULT 1000)
+RETURNS TABLE(
+  task_id uuid, recorded_pending_prerequisites integer, pending_edges integer, action text
+)
+LANGUAGE sql
+AS $$
+  SELECT repair.task_id, repair.recorded_pending_prerequisites, repair.pending_edges,
+         repair.action
+    FROM workhorse.repair_dependency_counters_internal_v1(p_limit, '{}'::jsonb) repair;
+$$;
+
+-- List the blocked tasks whose dependency counters disagree with their edges, with the action a
+-- repair would take on each: `recounted` while a pending edge remains, `rejected` after a
+-- rejecting resolution, and `released` otherwise. A repair recounts under lock, so its action can
+-- differ from this plan when an edge resolves in between. It writes nothing.
+CREATE OR REPLACE FUNCTION workhorse.list_dependency_drift_v1(p_limit integer)
+RETURNS TABLE(
+  task_id uuid, queue_name text, pending_prerequisites integer, pending_edges integer,
+  dependency_rejected boolean, rejected_edges boolean, action text
+)
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT drift.task_id, drift.queue_name, drift.pending_prerequisites, drift.pending_edges,
+         drift.dependency_rejected, drift.rejected_edges,
+         CASE
+           WHEN drift.pending_edges > 0 THEN 'recounted'
+           WHEN drift.rejected_edges THEN 'rejected'
+           ELSE 'released'
+         END
+    FROM workhorse.dependency_counter_drift_v1(p_limit) drift
+   ORDER BY drift.task_id;
+$$;
+
+-- Repair drifted blocked tasks on an operator's request. The actor, reason, and request id follow
+-- the limits of every guarded admin mutation. Each `dependency_counter_repaired` event records the
+-- actor and reason, and a preview, digest, and length of the request id rather than the id itself.
+CREATE OR REPLACE FUNCTION workhorse.repair_dependency_drift_v1(
+  p_limit integer,
+  p_requested_by text,
+  p_reason text,
+  p_request_id text
+)
+RETURNS TABLE(
+  task_id uuid, recorded_pending_prerequisites integer, pending_edges integer, action text
+)
+LANGUAGE plpgsql
+AS $$
+#variable_conflict use_column
+DECLARE
+  v_request_id_length integer;
+  v_request_id_preview text;
+BEGIN
+  IF p_requested_by IS NULL OR p_requested_by = '' OR char_length(p_requested_by) > 200 THEN
+    RAISE EXCEPTION 'requested_by must contain between 1 and 200 characters';
+  END IF;
+  IF p_reason IS NULL OR p_reason = '' OR char_length(p_reason) > 2000 THEN
+    RAISE EXCEPTION 'reason must contain between 1 and 2000 characters';
+  END IF;
+  IF p_request_id IS NULL OR p_request_id = '' OR octet_length(p_request_id) > 512 THEN
+    RAISE EXCEPTION 'request_id must contain between 1 and 512 UTF-8 bytes';
+  END IF;
+
+  v_request_id_length := char_length(p_request_id);
+  v_request_id_preview := CASE
+    WHEN v_request_id_length <= 4 THEN repeat('•', v_request_id_length)
+    WHEN v_request_id_length <= 8 THEN left(p_request_id, 2) || '…' || right(p_request_id, 2)
+    ELSE left(p_request_id, 8) || '…' || right(p_request_id, 4)
+  END;
+
+  RETURN QUERY
+  SELECT repair.task_id, repair.recorded_pending_prerequisites, repair.pending_edges,
+         repair.action
+    FROM workhorse.repair_dependency_counters_internal_v1(
+      p_limit,
+      jsonb_build_object(
+        'requested_by', p_requested_by,
+        'request_reason', p_reason,
+        'request_id_preview', v_request_id_preview,
+        'request_id_digest', left(encode(sha256(convert_to(p_request_id, 'UTF8')), 'hex'), 12),
+        'request_id_length', v_request_id_length
+      )
+    ) repair;
 END;
 $$;
 
@@ -18687,10 +18777,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (36, 'plan dependency release once per session'),
   (37, 'report queue tier and history in the dashboard'),
   (38, 'detect and repair pending-prerequisite counter drift'),
-  (39, 'release a fused claim lock before it can deadlock')
+  (39, 'release a fused claim lock before it can deadlock'),
+  (40, 'govern the dependency counter drift check and repair')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (39) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (40) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

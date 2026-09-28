@@ -7,8 +7,8 @@ const (
 	ProtocolVersion        = 5
 	minimumProtocolVersion = 5
 	maximumProtocolVersion = 5
-	minimumSchemaVersion   = 25
-	maximumSchemaVersion   = 39
+	minimumSchemaVersion   = 40
+	maximumSchemaVersion   = 40
 	// MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
 	MaxEnqueueBatchSize      = 1000
 	defaultTaskValueMaxBytes = 1048576
@@ -749,10 +749,11 @@ var adminStatementRegistry = map[string]string{
          ) children ON true
          LEFT JOIN workhorse.task_progress p ON p.task_id = j.id
         WHERE j.id = $1::uuid`,
-	"get_progress":      `SELECT task_id::text task_id,progress_value,revision::text revision,attempt,fence_token::text fence_token,worker_id,created_at,updated_at FROM workhorse.task_progress WHERE task_id=$1::uuid`,
-	"get_wait":          `SELECT task_id::text task_id,wait_name,mode,duration_ms::text duration_ms,requested_wake_at,wake_at,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_wait WHERE task_id=$1::uuid AND wait_name=$2::text`,
-	"list_checkpoints":  `SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_checkpoint WHERE task_id=$1::uuid ORDER BY created_at,checkpoint_name`,
-	"list_dead_letters": `SELECT task_id::text task_id,queue_name,task_type,concurrency_key,priority,payload,tags,current_attempt,max_attempts,retry_policy,deadline_at,execution_timeout_ms,error,finished_at,redrive_count,has_more,cursor_finished_at FROM workhorse.list_dead_letters_v1($1::jsonb,$2::integer,$3::timestamptz,$4::uuid)`,
+	"get_progress":          `SELECT task_id::text task_id,progress_value,revision::text revision,attempt,fence_token::text fence_token,worker_id,created_at,updated_at FROM workhorse.task_progress WHERE task_id=$1::uuid`,
+	"get_wait":              `SELECT task_id::text task_id,wait_name,mode,duration_ms::text duration_ms,requested_wake_at,wake_at,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_wait WHERE task_id=$1::uuid AND wait_name=$2::text`,
+	"list_checkpoints":      `SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_checkpoint WHERE task_id=$1::uuid ORDER BY created_at,checkpoint_name`,
+	"list_dead_letters":     `SELECT task_id::text task_id,queue_name,task_type,concurrency_key,priority,payload,tags,current_attempt,max_attempts,retry_policy,deadline_at,execution_timeout_ms,error,finished_at,redrive_count,has_more,cursor_finished_at FROM workhorse.list_dead_letters_v1($1::jsonb,$2::integer,$3::timestamptz,$4::uuid)`,
+	"list_dependency_drift": `SELECT task_id,queue_name,pending_prerequisites,pending_edges,dependency_rejected,rejected_edges,action FROM workhorse.list_dependency_drift_v1($1::integer)`,
 	"list_human_waits": `WITH parameters AS (
          SELECT $1::integer AS page_limit, $2::timestamptz AS cursor_created_at,
                 $3::uuid AS cursor_task_id, $4::text AS cursor_name
@@ -807,12 +808,13 @@ var adminStatementRegistry = map[string]string{
         WHERE parameters.cursor_created_at IS NULL OR (created_at, task_id, signal_name) >
               (parameters.cursor_created_at, parameters.cursor_task_id, parameters.cursor_name)
         ORDER BY created_at, task_id, signal_name LIMIT (SELECT page_limit FROM parameters)`,
-	"list_waits":       `SELECT task_id::text task_id,wait_name,mode,duration_ms::text duration_ms,requested_wake_at,wake_at,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_wait WHERE task_id=$1::uuid ORDER BY created_at,wait_name`,
-	"list_workers":     `SELECT worker_id,instance_id,hostname,pid,queue_names,schedule_namespaces,queue_name,concurrency,active_slots,draining,paused,paused_by,paused_reason,paused_at,started_at,last_heartbeat_at FROM workhorse.worker_registry ORDER BY last_heartbeat_at DESC,worker_id`,
-	"purge_queue":      `SELECT deleted_count FROM workhorse.purge_queue_v1($1::text,$2::text,$3::text,$4::text)`,
-	"redrive":          `SELECT status,source_task_id::text source_task_id,target_task_id::text target_task_id,source_state,target_state,requested_at FROM workhorse.redrive_v1($1::uuid,$2::text,$3::text,$4::text)`,
-	"redrive_many":     `SELECT status,source_task_id::text source_task_id,target_task_id::text target_task_id,source_state,target_state,requested_at,source_finished_at_cursor,has_more FROM workhorse.redrive_many_v1($1::jsonb,$2::integer,$3::boolean,$4::text,$5::text,$6::text,$7::timestamptz,$8::uuid) ORDER BY ordinal`,
-	"set_queue_paused": `SELECT workhorse.set_queue_paused_v1($1::text,$2::boolean,$3::text,$4::text,$5::text)`,
+	"list_waits":              `SELECT task_id::text task_id,wait_name,mode,duration_ms::text duration_ms,requested_wake_at,wake_at,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_wait WHERE task_id=$1::uuid ORDER BY created_at,wait_name`,
+	"list_workers":            `SELECT worker_id,instance_id,hostname,pid,queue_names,schedule_namespaces,queue_name,concurrency,active_slots,draining,paused,paused_by,paused_reason,paused_at,started_at,last_heartbeat_at FROM workhorse.worker_registry ORDER BY last_heartbeat_at DESC,worker_id`,
+	"purge_queue":             `SELECT deleted_count FROM workhorse.purge_queue_v1($1::text,$2::text,$3::text,$4::text)`,
+	"redrive":                 `SELECT status,source_task_id::text source_task_id,target_task_id::text target_task_id,source_state,target_state,requested_at FROM workhorse.redrive_v1($1::uuid,$2::text,$3::text,$4::text)`,
+	"redrive_many":            `SELECT status,source_task_id::text source_task_id,target_task_id::text target_task_id,source_state,target_state,requested_at,source_finished_at_cursor,has_more FROM workhorse.redrive_many_v1($1::jsonb,$2::integer,$3::boolean,$4::text,$5::text,$6::text,$7::timestamptz,$8::uuid) ORDER BY ordinal`,
+	"repair_dependency_drift": `SELECT task_id,recorded_pending_prerequisites,pending_edges,action FROM workhorse.repair_dependency_drift_v1($1::integer,$2::text,$3::text,$4::text)`,
+	"set_queue_paused":        `SELECT workhorse.set_queue_paused_v1($1::text,$2::boolean,$3::text,$4::text,$5::text)`,
 	"set_worker_paused": `SELECT * FROM workhorse.set_worker_paused_v1(
          $1::text, $2::boolean, $3::text, $4::text, $5::text)`,
 	"set_queue_tier":    `SELECT workhorse.set_queue_tier_v1($1::text,$2::text,$3::text,$4::text) AS tier`,

@@ -9,7 +9,7 @@ import { createIntegrationTestContext } from "./support/integration.js";
 const repository = path.resolve(import.meta.dirname, "../../..");
 const cli = path.join(repository, "typescript/core/src/cli/workhorse.ts");
 const tsxCli = createRequire(import.meta.url).resolve("tsx/cli");
-const { createFailedTask, databaseUrl, queue, admin } = createIntegrationTestContext(
+const { createFailedTask, databaseUrl, pool, queue, admin } = createIntegrationTestContext(
   import.meta.url,
 );
 const databaseName = new URL(databaseUrl).pathname.slice(1);
@@ -441,6 +441,113 @@ describe("admin CLI guarded operations", () => {
     expect(noConfirmation.code).toBe(64);
     expect(noConfirmation.stderr).toContain("requires --yes");
     expect((await admin.getTask(taskId))?.state).toBe("ready");
+  });
+
+  it("previews dependency drift without writes, then repairs it with attribution", async () => {
+    const prerequisiteId = await queue.enqueue("drift.parent", {}, { queue: "cli-drift" });
+    const [recountedId, releasedId] = await Promise.all(
+      ["drift.recounted", "drift.released"].map((type) =>
+        queue.enqueue(type, {}, { queue: "cli-drift", prerequisiteTaskId: prerequisiteId }),
+      ),
+    );
+    await pool.query(
+      `UPDATE workhorse.task_runtime SET pending_prerequisites = 4 WHERE task_id = $1`,
+      [recountedId],
+    );
+    // Resolve one edge without the resolver, as a lost counter update would leave it.
+    await pool.query(
+      `UPDATE workhorse.task_dependency
+          SET released_at = clock_timestamp(), resolution = 'release'
+        WHERE dependent_task_id = $1`,
+      [releasedId],
+    );
+    const expected = [
+      { taskId: recountedId!, recorded: 4, pendingEdges: 1, action: "recounted" },
+      { taskId: releasedId!, recorded: 1, pendingEdges: 0, action: "released" },
+    ].toSorted((left, right) => (left.taskId < right.taskId ? -1 : 1));
+
+    const preview = runAdmin(["repair-dependencies", "--dry-run", "--json"]);
+    expect(preview.code).toBe(0);
+    expect(JSON.parse(preview.stdout)).toEqual(
+      expected.map(({ taskId, recorded, pendingEdges, action }) => ({
+        taskId,
+        queueName: "cli-drift",
+        pendingPrerequisites: recorded,
+        pendingEdges,
+        dependencyRejected: false,
+        rejectedEdges: false,
+        action,
+      })),
+    );
+    const table = runAdmin(["repair-dependencies", "--dry-run", "--limit", "1"]);
+    expect(table.code).toBe(0);
+    expect(table.stdout).toContain(expected[0]!.taskId);
+    expect(table.stdout).not.toContain(expected[1]!.taskId);
+    expect((await admin.getTask(releasedId!))?.state).toBe("blocked");
+
+    const noReason = runAdmin(["repair-dependencies", "--env", databaseName, "--yes"]);
+    expect(noReason.code).toBe(64);
+    expect(noReason.stderr).toContain("requires --reason");
+    const noEnvironment = runAdmin(["repair-dependencies", "--reason", "recount", "--yes"]);
+    expect(noEnvironment.code).toBe(64);
+    expect(noEnvironment.stderr).toContain("requires --env");
+    const noConfirmation = runAdmin([
+      "repair-dependencies",
+      "--env",
+      databaseName,
+      "--reason",
+      "recount",
+    ]);
+    expect(noConfirmation.code).toBe(64);
+    expect(noConfirmation.stderr).toContain("requires --yes");
+    const tooMany = runAdmin(["repair-dependencies", "--dry-run", "--limit", "100001"]);
+    expect(tooMany.code).toBe(64);
+    expect(tooMany.stderr).toContain("--limit must be at most 100000");
+    expect((await admin.getTask(releasedId!))?.state).toBe("blocked");
+
+    const repair = runAdmin([
+      "repair-dependencies",
+      "--env",
+      databaseName,
+      "--yes",
+      "--actor",
+      "operator@example.test",
+      "--reason",
+      "recount drifted dependents",
+      "--request-id",
+      "cli-drift-repair",
+      "--json",
+    ]);
+    expect(repair.code).toBe(0);
+    expect(JSON.parse(repair.stdout)).toEqual(
+      expected.map(({ taskId, recorded, pendingEdges, action }) => ({
+        taskId,
+        recordedPendingPrerequisites: recorded,
+        pendingEdges,
+        action,
+      })),
+    );
+    expect((await admin.getTask(releasedId!))?.state).toBe("ready");
+    expect((await admin.getTask(recountedId!))?.state).toBe("blocked");
+    const events = await pool.query<{ details: Record<string, unknown> }>(
+      `SELECT details FROM workhorse.task_event
+        WHERE task_id = $1 AND event_type = 'dependency_counter_repaired'`,
+      [releasedId],
+    );
+    expect(events.rows).toEqual([
+      {
+        details: expect.objectContaining({
+          requested_by: "operator@example.test",
+          request_reason: "recount drifted dependents",
+        }),
+      },
+    ]);
+
+    const rerun = runAdmin(["repair-dependencies", "--dry-run", "--json"]);
+    expect(JSON.parse(rerun.stdout)).toEqual([]);
+    expect(runAdmin(["cancel", recountedId!, "--dry-run"]).stderr).toContain(
+      "does not support --dry-run",
+    );
   });
 
   it("moves an empty queue between tiers and lists the tier", async () => {

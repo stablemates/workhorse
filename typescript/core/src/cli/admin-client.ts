@@ -3,7 +3,12 @@ import { SQL_STATEMENTS } from "../queue/sql-catalogue.generated.js";
 import type { Pool } from "pg";
 import { expectOneRow } from "../errors.js";
 import { Admin, Queue } from "../index.js";
-import type { QueueHistorySettings, QueueTier } from "../index.js";
+import type {
+  DependencyDrift,
+  DependencyRepair,
+  QueueHistorySettings,
+  QueueTier,
+} from "../index.js";
 import type {
   BulkRedriveOptions,
   BulkRedrivePage,
@@ -475,6 +480,24 @@ export class WorkhorseAdminClient {
       reason: request.reason,
       requestId: request.requestId,
     });
+  }
+
+  /** Lists drifted blocked dependents and the action a repair would take, without writing. */
+  listDependencyDrift(limit: number | undefined): Promise<DependencyDrift[]> {
+    return this.admin.listDependencyDrift(limit);
+  }
+
+  /** Repairs drifted blocked dependents and answers each one's action. */
+  repairDependencyDrift(
+    environment: ConfirmedEnvironment,
+    limit: number | undefined,
+    request: AdminControlRequest,
+  ): Promise<DependencyRepair[]> {
+    void environment;
+    return this.admin.repairDependencyDrift(
+      { actor: request.requestedBy, reason: request.reason, requestId: request.requestId },
+      limit,
+    );
   }
 
   /**

@@ -44,6 +44,7 @@ set-tier <queue>  mutates
 set-history <queue>  mutates
 pause-worker <worker-id>  mutates
 resume-worker <worker-id>  mutates
+repair-dependencies  mutates
 
 ## Options
 
@@ -161,31 +162,32 @@ resume-worker <worker-id>  mutates
 
 ## --json payloads
 
-schema status         SchemaStatusReport
-health                QueueHealth
-admin tasks           TaskListPage
-admin task            TaskSnapshot
-admin timeline        TaskTimelinePage
-admin checkpoints     readonly TaskCheckpoint[] | TaskCheckpoint
-admin waits           readonly TaskWait[] | TaskWait
-admin external-waits  AdminExternalWaits
-admin failures        DeadLetterPage
-admin queues          readonly AdminQueueStatus[]
-admin schedules       readonly StoredSchedule[]
-admin workers         readonly WorkerRegistryEntry[]
-admin maintenance     AdminMaintenanceState
-admin cancel          CancelResult
-admin redrive         RedriveResult
-admin redrive-many    BulkRedrivePage
-admin signal          SignalDeliveryResult
-admin complete-human  HumanWaitCompletionResult
-admin pause           AdminQueuePauseReport
-admin resume          AdminQueuePauseReport
-admin purge           AdminQueuePurgeReport
-admin set-tier        AdminQueueTierReport
-admin set-history     AdminQueueHistoryReport
-admin pause-worker    WorkerPauseResult
-admin resume-worker   WorkerPauseResult
+schema status              SchemaStatusReport
+health                     QueueHealth
+admin tasks                TaskListPage
+admin task                 TaskSnapshot
+admin timeline             TaskTimelinePage
+admin checkpoints          readonly TaskCheckpoint[] | TaskCheckpoint
+admin waits                readonly TaskWait[] | TaskWait
+admin external-waits       AdminExternalWaits
+admin failures             DeadLetterPage
+admin queues               readonly AdminQueueStatus[]
+admin schedules            readonly StoredSchedule[]
+admin workers              readonly WorkerRegistryEntry[]
+admin maintenance          AdminMaintenanceState
+admin cancel               CancelResult
+admin redrive              RedriveResult
+admin redrive-many         BulkRedrivePage
+admin signal               SignalDeliveryResult
+admin complete-human       HumanWaitCompletionResult
+admin pause                AdminQueuePauseReport
+admin resume               AdminQueuePauseReport
+admin purge                AdminQueuePurgeReport
+admin set-tier             AdminQueueTierReport
+admin set-history          AdminQueueHistoryReport
+admin pause-worker         WorkerPauseResult
+admin resume-worker        WorkerPauseResult
+admin repair-dependencies  readonly DependencyDrift[] | readonly DependencyRepair[]
 
 ## Payload types
 
@@ -314,6 +316,31 @@ interface Dependencies {
   onFailure: DependencyTerminalPolicy;
   onCancellation: DependencyTerminalPolicy;
 }
+
+interface DependencyDrift {
+  taskId: string;
+  queueName: string;
+  /** The counter the dependent's runtime row records. */
+  pendingPrerequisites: number;
+  /** The dependency edges that have not resolved. */
+  pendingEdges: number;
+  /** The rejection flag the dependent's runtime row records. */
+  dependencyRejected: boolean;
+  /** Whether any resolved edge rejected the dependent. */
+  rejectedEdges: boolean;
+  /** What a repair would do now. A repair recounts under lock, so it can act differently. */
+  action: DependencyRepairAction;
+}
+
+interface DependencyRepair {
+  taskId: string;
+  /** The counter the dependent's runtime row recorded before the repair. */
+  recordedPendingPrerequisites: number;
+  pendingEdges: number;
+  action: DependencyRepairAction;
+}
+
+type DependencyRepairAction = "recounted" | "released" | "rejected";
 
 type DependencyTerminalPolicy = "release" | "cancel" | "fail";
 

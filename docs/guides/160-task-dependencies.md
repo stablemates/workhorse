@@ -84,9 +84,13 @@ no edge is still unresolved. If a resolution would drive the counter below zero,
 edge unresolved, Workhorse recounts that dependent's edges instead. A dependent flagged as rejected
 without a rejecting edge gets the same recount. A drifted counter therefore neither fails the
 prerequisite's completion nor releases the dependent early. Workhorse records each correction as a
-`dependency_counter_repaired` event. An operator can list blocked rows that
-disagree with their edges through `dependency_counter_drift_v1`. `repair_dependency_counters_v1`
-recounts those rows and settles each one whose edges have all resolved.
+`dependency_counter_repaired` event.
+
+An operator can also look for drift on demand. `Admin.listDependencyDrift` lists blocked dependents
+whose counter or flag disagrees with their edges, with the action a repair would take. It writes
+nothing. `Admin.repairDependencyDrift` recounts those dependents and settles each one whose edges
+have all resolved. It requires an actor, a reason, and a request id, and each repair event records
+them. `workhorse admin repair-dependencies` runs the same pair, with `--dry-run` for the read.
 
 A dependent whose requested `runAt` has arrived becomes ready. A future dependent becomes scheduled
 and follows ordinary promotion later.

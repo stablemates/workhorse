@@ -16,6 +16,7 @@ import type { SignalDeliveryResult } from "../queue/signals.js";
 import type { HumanWaitCompletionResult } from "../queue/human-waits.js";
 import type { StoredSchedule } from "../queue/cron-schedules.js";
 import type { QueueTier } from "../queue/queue-administration.js";
+import type { DependencyDrift, DependencyRepair } from "../admin.js";
 import type {
   AdminExternalWaits,
   AdminMaintenanceState,
@@ -81,7 +82,8 @@ export const CLI_OPTIONS = {
    * One option set for every `admin` subcommand.
    *
    * `admin` parses a shared vocabulary, then rejects selection and delivery flags that do not
-   * apply to the selected subcommand. In particular, --dry-run is valid only for redrive-many.
+   * apply to the selected subcommand. In particular, --dry-run is valid only for redrive-many and
+   * repair-dependencies.
    */
   admin: {
     ...DATABASE_OPTIONS,
@@ -195,6 +197,7 @@ export const ADMIN_COMMANDS = [
   { name: "set-history", mutates: true, positionals: ["queue"] },
   { name: "pause-worker", mutates: true, positionals: ["worker-id"] },
   { name: "resume-worker", mutates: true, positionals: ["worker-id"] },
+  { name: "repair-dependencies", mutates: true, positionals: [] },
 ] as const satisfies readonly AdminCommand[];
 
 /** One of the declared names {@link ADMIN_COMMANDS} declares. */
@@ -293,4 +296,6 @@ export interface CliJsonPayloads {
   readonly "admin set-history": AdminQueueHistoryReport;
   readonly "admin pause-worker": WorkerPauseResult;
   readonly "admin resume-worker": WorkerPauseResult;
+  /** `--dry-run` lists the drift and its planned action; execution lists each repaired row. */
+  readonly "admin repair-dependencies": readonly DependencyDrift[] | readonly DependencyRepair[];
 }

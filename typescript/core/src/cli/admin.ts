@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import readline from "node:readline/promises";
 import { Pool } from "pg";
-import { PurgeIdempotencyConflictError } from "../admin.js";
+import { MAX_DEPENDENCY_DRIFT_LIMIT, PurgeIdempotencyConflictError } from "../admin.js";
 import { FastTierUnsupportedError } from "../errors.js";
 import type { QueueTier } from "../queue/queue-administration.js";
 import {
@@ -92,6 +92,9 @@ Guarded commands (mutate; require --env and confirmation):
                       Stop one registered worker from claiming.
   resume-worker <worker-id>
                       Let one registered worker claim again.
+  repair-dependencies
+                      Recount blocked dependents whose prerequisite counter drifted from their
+                      edges; --dry-run lists the drift and each planned action without writes.
 
 Common options:
   --database-url <url>  Database URL. This takes precedence over all other sources.
@@ -107,7 +110,8 @@ Guarded-command options:
   --request-id <id>  Request identity recorded with the mutation (default: a random UUID).
                      Redrive and purge additionally use it for idempotency. Required explicitly
                      for redrive-many execution, signal, and complete-human; reuse on retries.
-  --dry-run         Preview redrive-many without --env or confirmation; --reason is still required.
+  --dry-run         Preview redrive-many or repair-dependencies without --env or confirmation.
+                     A redrive-many preview still requires --reason.
   --payload-json <json>
                      Signal or human decision value, including JSON null, false, and scalar values.
   --payload-file <path>
@@ -123,6 +127,7 @@ Listing options:
   --type <type>      Filter by task type.
   --state <state>    Filter tasks by lifecycle state; repeatable or comma-separated.
   --limit <count>    Page size, at most 1000 for tasks, timeline, failures, and redrive-many.
+                     repair-dependencies examines at most 1000 rows by default and 100000 at most.
   --cursor <json>   Continue tasks, timeline, failures, or redrive-many from its own nextCursor.
                      Keep filters unchanged; failure listings descend and bulk recovery ascends.
   --created-after <timestamp>, --created-before <timestamp>
@@ -342,12 +347,19 @@ export async function runAdminCommand(
     "finished-before": ["failures", "redrive-many"],
     tag: ["failures", "redrive-many"],
     "error-name": ["failures", "redrive-many"],
-    "dry-run": ["redrive-many"],
+    "dry-run": ["redrive-many", "repair-dependencies"],
     "payload-json": ["signal", "complete-human"],
     "payload-file": ["signal", "complete-human"],
     state: ["tasks"],
     namespace: ["schedules"],
-    limit: ["tasks", "timeline", "failures", "redrive-many", "external-waits"],
+    limit: [
+      "tasks",
+      "timeline",
+      "failures",
+      "redrive-many",
+      "external-waits",
+      "repair-dependencies",
+    ],
     queue: ["tasks", "failures", "redrive-many"],
     type: ["tasks", "failures", "redrive-many"],
     name: ["checkpoints", "waits", "signal", "complete-human"],
@@ -373,7 +385,9 @@ export async function runAdminCommand(
       ? MAX_EXTERNAL_WAIT_LIST_SIZE
       : command === "redrive-many"
         ? MAX_REDRIVE_BATCH_SIZE
-        : MAX_TASK_QUERY_PAGE_SIZE;
+        : command === "repair-dependencies"
+          ? MAX_DEPENDENCY_DRIFT_LIMIT
+          : MAX_TASK_QUERY_PAGE_SIZE;
   if (limit !== undefined && limit > maximum) {
     throw new CliUsageError(`admin ${command} --limit must be at most ${maximum}`);
   }
@@ -601,6 +615,51 @@ export async function runAdminCommand(
         )
       )
         process.exitCode = 1;
+      return;
+    }
+    if (command === "repair-dependencies") {
+      if (values["dry-run"]) {
+        const drift = await client.listDependencyDrift(limit);
+        io.out(
+          json
+            ? toAdminJson("admin repair-dependencies", drift)
+            : `${formatTable(
+                ["TASK", "QUEUE", "RECORDED", "PENDING EDGES", "REJECTED EDGES", "ACTION"],
+                drift.map((row) => [
+                  row.taskId,
+                  row.queueName,
+                  String(row.pendingPrerequisites),
+                  String(row.pendingEdges),
+                  String(row.rejectedEdges),
+                  row.action,
+                ]),
+              )}\n`,
+        );
+        return;
+      }
+      if (!values.reason?.trim()) {
+        throw new CliUsageError("admin repair-dependencies requires --reason <text>");
+      }
+      const environment = await confirmMutation(client, io, values, command, "dependencies");
+      if (environment === null) return;
+      const repairs = await client.repairDependencyDrift(environment, limit, {
+        requestedBy: actor,
+        reason: values.reason,
+        requestId: values["request-id"] ?? randomUUID(),
+      });
+      io.out(
+        json
+          ? toAdminJson("admin repair-dependencies", repairs)
+          : `${formatTable(
+              ["TASK", "RECORDED", "PENDING EDGES", "ACTION"],
+              repairs.map((row) => [
+                row.taskId,
+                String(row.recordedPendingPrerequisites),
+                String(row.pendingEdges),
+                row.action,
+              ]),
+            )}\n`,
+      );
       return;
     }
     if (command === "signal" || command === "complete-human") {

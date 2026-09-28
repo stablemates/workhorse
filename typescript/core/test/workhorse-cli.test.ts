@@ -252,15 +252,8 @@ describe("schema status JSON", () => {
         minimumVersion: MINIMUM_SCHEMA_VERSION,
         clientProtocolVersion: PROTOCOL_VERSION,
         installedProtocolVersions: [PROTOCOL_VERSION],
-        // The floor itself is a contract step: it retires every protocol before the fast tier.
-        pendingContractSteps: [
-          {
-            file: "0025-add-a-fast-task-tier.sql",
-            fromVersion: 24,
-            toVersion: 25,
-            retiresProtocolVersions: [1, 2, 3, 4],
-          },
-        ],
+        // The step to the floor is additive, so no contract step is pending one version below it.
+        pendingContractSteps: [],
         state: "behind",
         compatible: false,
         refusal: expect.stringContaining("below the minimum"),

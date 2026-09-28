@@ -85,9 +85,12 @@ export type {
   WorkhorseTelemetryProvider,
   WorkhorseTelemetrySpan,
 } from "./telemetry.js";
-export { Admin, PurgeIdempotencyConflictError } from "./admin.js";
+export { Admin, MAX_DEPENDENCY_DRIFT_LIMIT, PurgeIdempotencyConflictError } from "./admin.js";
 export type {
   AdminAudit,
+  DependencyDrift,
+  DependencyRepair,
+  DependencyRepairAction,
   PurgeIdempotencyConflictDetails,
   RunTaskNowResult,
   RunTaskNowStatus,
