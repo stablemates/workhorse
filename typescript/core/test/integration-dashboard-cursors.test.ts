@@ -4,6 +4,23 @@ import { createDatabaseTestHarness } from "./support/db.js";
 
 const database = createDatabaseTestHarness(import.meta.url);
 
+async function page(input: object = {}): Promise<DashboardTasksCursorPage> {
+  const result = await database.pool.query<{ result: DashboardTasksCursorPage }>(
+    "SELECT workhorse.dashboard_tasks_cursor_v1($1::jsonb) AS result",
+    [JSON.stringify({ queue: "cursor", pageSize: 25, ...input })],
+  );
+  return result.rows[0]!.result;
+}
+
+async function offsetPage(input: object) {
+  const result = await database.pool.query<{
+    result: { total: number; page: number; hasMore: boolean; count: string };
+  }>("SELECT workhorse.dashboard_tasks_v1($1::jsonb) AS result", [
+    JSON.stringify({ queue: "cursor", pageSize: 25, ...input }),
+  ]);
+  return result.rows[0]!.result;
+}
+
 describe("dashboard cursor pages", () => {
   beforeAll(async () => {
     await database.setup();
@@ -18,14 +35,6 @@ describe("dashboard cursor pages", () => {
     `);
   });
   afterAll(async () => database.teardown());
-
-  async function page(input: object = {}): Promise<DashboardTasksCursorPage> {
-    const result = await database.pool.query<{ result: DashboardTasksCursorPage }>(
-      "SELECT workhorse.dashboard_tasks_cursor_v1($1::jsonb) AS result",
-      [JSON.stringify({ queue: "cursor", pageSize: 25, ...input })],
-    );
-    return result.rows[0]!.result;
-  }
 
   for (const sort of ["updated", "priority"]) {
     it(`walks every row without duplicates in ${sort} order and can return to the previous page`, async () => {
@@ -91,15 +100,6 @@ describe("dashboard cursor pages", () => {
   });
 
   it("preserves legacy task responses and counts them only when asked", async () => {
-    async function offsetPage(input: object) {
-      const result = await database.pool.query<{
-        result: { total: number; page: number; hasMore: boolean; count: string };
-      }>("SELECT workhorse.dashboard_tasks_v1($1::jsonb) AS result", [
-        JSON.stringify({ queue: "cursor", pageSize: 25, ...input }),
-      ]);
-      return result.rows[0]!.result;
-    }
-
     // Without a count mode the page reports what it proved on the way to this offset: the rows it
     // read plus the one that shows another page exists.
     expect(await offsetPage({ page: 2 })).toMatchObject({

@@ -190,7 +190,21 @@ const queryableProviders: QueryableProvider[] = [
   },
 ];
 
+const lendingPool = (max: number): AdapterConnectionPool => ({
+  connect: vi.fn<() => Promise<void>>(async () => undefined),
+  options: { max },
+  query: async <R extends QueryResultRow = QueryResultRow>() => pgResult([]) as QueryResult<R>,
+});
+
 describe.each(queryableProviders)("$name queryable contract", (provider) => {
+  const queue = (lent?: AdapterConnectionPool) =>
+    new Queue(
+      provider.queryable(
+        vi.fn<Execute>(async () => []),
+        lent,
+      ),
+    );
+
   it("preserves statements, positional values, row order, and result metadata", async () => {
     const execute = vi.fn<Execute>(async () => [{ task_id: "task-1" }, { task_id: "task-2" }]);
 
@@ -241,21 +255,8 @@ describe.each(queryableProviders)("$name queryable contract", (provider) => {
   });
 
   it("lets a worker reserve its heartbeat connection from an attached pool", () => {
-    const pool = (max: number): AdapterConnectionPool => ({
-      connect: vi.fn<() => Promise<void>>(async () => undefined),
-      options: { max },
-      query: async <R extends QueryResultRow = QueryResultRow>() => pgResult([]) as QueryResult<R>,
-    });
-    const queue = (lent?: AdapterConnectionPool) =>
-      new Queue(
-        provider.queryable(
-          vi.fn<Execute>(async () => []),
-          lent,
-        ),
-      );
-
-    expect(() => new Worker(queue(pool(4)))).not.toThrow();
-    expect(() => new Worker(queue(pool(2)))).toThrow(/allows 2 connections/);
+    expect(() => new Worker(queue(lendingPool(4)))).not.toThrow();
+    expect(() => new Worker(queue(lendingPool(2)))).toThrow(/allows 2 connections/);
     expect(() => new Worker(queue())).toThrow(/sharedHeartbeats: true/);
   });
 

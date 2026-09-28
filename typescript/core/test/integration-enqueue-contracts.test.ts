@@ -94,6 +94,49 @@ function dependencyBearingCoalescingOptions(
   return { ...coalescing, ...dependency } as unknown as EnqueueOptions;
 }
 
+/** Fills a new prerequisite with MAX_TASK_DEPENDENTS dependents, so one more edge overflows. */
+async function fullPrerequisite(label: string): Promise<string> {
+  const prerequisiteId = await queue.enqueue(`multi-invalid-${label}`, null);
+  await queue.enqueueMany(
+    Array.from({ length: MAX_TASK_DEPENDENTS }, (_unused, index) => ({
+      type: `multi-invalid-${label}-dependent`,
+      payload: { index },
+      options: { prerequisiteTaskId: prerequisiteId },
+    })),
+  );
+  return prerequisiteId;
+}
+
+async function batchTaskCount(): Promise<number> {
+  const counted = await pool.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM workhorse.task WHERE task_type LIKE 'batch-%'",
+  );
+  return counted.rows[0]!.count;
+}
+
+const runBatch = async (order: readonly [string, string]) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SET LOCAL statement_timeout = '2s'");
+    const ids = await queue.enqueueMany(
+      order.map((key) => ({
+        type: `deadlock-${key}`,
+        payload: { key },
+        options: { idempotency: { key, scope: "deadlock", ttlMs: 60_000 } },
+      })),
+      client,
+    );
+    await client.query("COMMIT");
+    return ids;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 describe("enqueue contracts", () => {
   it("uses the synchronized contract cache for one-statement batch enqueue", async () => {
     let queryCount = 0;
@@ -693,26 +736,6 @@ describe("enqueue contracts", () => {
     // The request loop rejects a member as it reaches it, so the first such member in input order
     // decides the error. Dependency limits are checked once, after the loop, by the statement
     // trigger on task_dependency. It sees every edge of the batch and names the lowest task ID.
-
-    /** Fills a new prerequisite with MAX_TASK_DEPENDENTS dependents, so one more edge overflows. */
-    async function fullPrerequisite(label: string): Promise<string> {
-      const prerequisiteId = await queue.enqueue(`multi-invalid-${label}`, null);
-      await queue.enqueueMany(
-        Array.from({ length: MAX_TASK_DEPENDENTS }, (_unused, index) => ({
-          type: `multi-invalid-${label}-dependent`,
-          payload: { index },
-          options: { prerequisiteTaskId: prerequisiteId },
-        })),
-      );
-      return prerequisiteId;
-    }
-
-    async function batchTaskCount(): Promise<number> {
-      const counted = await pool.query<{ count: number }>(
-        "SELECT count(*)::integer AS count FROM workhorse.task WHERE task_type LIKE 'batch-%'",
-      );
-      return counted.rows[0]!.count;
-    }
 
     it("reports the first member the request loop rejects", async () => {
       await queue.enqueue("keyed", { version: 1 }, { idempotency: { key: "multi-invalid" } });
@@ -2117,28 +2140,6 @@ describe("enqueue contracts", () => {
   });
 
   it("prevents reverse-order overlapping keyed batches from deadlocking", async () => {
-    const runBatch = async (order: readonly [string, string]) => {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        await client.query("SET LOCAL statement_timeout = '2s'");
-        const ids = await queue.enqueueMany(
-          order.map((key) => ({
-            type: `deadlock-${key}`,
-            payload: { key },
-            options: { idempotency: { key, scope: "deadlock", ttlMs: 60_000 } },
-          })),
-          client,
-        );
-        await client.query("COMMIT");
-        return ids;
-      } catch (error) {
-        await client.query("ROLLBACK").catch(() => undefined);
-        throw error;
-      } finally {
-        client.release();
-      }
-    };
     const [forward, reverse] = await Promise.all([
       runBatch(["alpha", "omega"]),
       runBatch(["omega", "alpha"]),

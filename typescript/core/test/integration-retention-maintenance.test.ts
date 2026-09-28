@@ -7,6 +7,23 @@ import { createIntegrationTestContext } from "./support/integration.js";
 const { defaultRetentionPolicy, pool, queue, waitForDatabaseCondition, admin } =
   createIntegrationTestContext(import.meta.url);
 
+const stored = async () =>
+  (
+    await pool.query<{
+      task_type: string;
+      enqueued: number;
+      task_succeeded: number;
+      attempt_succeeded: number;
+      attempt_retry: number;
+      last_error: string | null;
+    }>(`SELECT task_type, sum(enqueued)::integer AS enqueued,
+               sum(task_succeeded)::integer AS task_succeeded,
+               sum(attempt_succeeded)::integer AS attempt_succeeded,
+               sum(attempt_retry)::integer AS attempt_retry,
+               max(last_error) AS last_error
+          FROM workhorse.task_stat_bucket GROUP BY task_type ORDER BY task_type`)
+  ).rows;
+
 describe("retention maintenance", () => {
   it("keeps an operator maintenance-time override until it is reverted", async () => {
     await queue.syncMaintenancePolicy(
@@ -362,23 +379,6 @@ describe("retention maintenance", () => {
     const first = await queue.rollupStatistics({ now: later });
     expect(first.map(({ phase }) => phase)).toEqual(["stat_rollup", "stat_retention"]);
     expect(first.every(({ error }) => error === null)).toBe(true);
-
-    const stored = async () =>
-      (
-        await pool.query<{
-          task_type: string;
-          enqueued: number;
-          task_succeeded: number;
-          attempt_succeeded: number;
-          attempt_retry: number;
-          last_error: string | null;
-        }>(`SELECT task_type, sum(enqueued)::integer AS enqueued,
-                   sum(task_succeeded)::integer AS task_succeeded,
-                   sum(attempt_succeeded)::integer AS attempt_succeeded,
-                   sum(attempt_retry)::integer AS attempt_retry,
-                   max(last_error) AS last_error
-              FROM workhorse.task_stat_bucket GROUP BY task_type ORDER BY task_type`)
-      ).rows;
 
     expect(await stored()).toEqual([
       {

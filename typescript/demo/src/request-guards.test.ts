@@ -55,10 +55,10 @@ describe("demo request body limits", () => {
   });
 });
 
-describe("demo operator mutation concurrency", () => {
-  const mutation = () => request("POST", "/rpc/dashboard/purgeQueue");
-  const read = () => request("POST", "/rpc/dashboard/tasks");
+const mutation = () => request("POST", "/rpc/dashboard/purgeQueue");
+const read = () => request("POST", "/rpc/dashboard/tasks");
 
+describe("demo operator mutation concurrency", () => {
   it("admits mutations up to the cap, then refuses until a slot frees", () => {
     const guard = new DemoOperatorMutationGuard();
     for (let index = 0; index < DEMO_OPERATOR_MAX_CONCURRENT_MUTATIONS; index += 1) {
