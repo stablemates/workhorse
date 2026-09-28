@@ -12,9 +12,11 @@
 -- dependency_counter_drift_v1 reports blocked tasks whose counter or rejection flag disagrees with
 -- their edges, and blocked tasks whose edges are all resolved. repair_dependency_counters_v1
 -- recounts those tasks under the resolver's lock and settles the ones with no pending edge.
--- resolve_dependents_many_v1 recounts a dependent whose counter would fall below zero, records a
--- dependency_counter_repaired event, and continues. settle_dependents_v1 holds the settlement both
--- paths share. Every existing signature and result shape is unchanged.
+-- resolve_dependents_many_v1 recounts a dependent whose counter would fall below zero, or reaches
+-- zero while a pending edge remains, records a dependency_counter_repaired event, and continues.
+-- settle_dependents_v1 holds the settlement both paths share. It recounts a rejected dependent
+-- with no rejecting edge instead of raising an exception. Every existing signature and result
+-- shape is unchanged.
 --
 -- Replacing resolve_dependents_many_v1 resets the plan_cache_mode that migration 0037 set on it,
 -- so its definition restates the setting. settle_dependents_v1 now runs the release and rejection
@@ -36,6 +38,10 @@ AS $$
 DECLARE
   v_terminated integer := 0;
   v_released integer;
+  v_repaired_task_ids uuid[];
+  v_released_task_ids uuid[] := p_released_task_ids;
+  v_released_prerequisite_task_ids uuid[] := p_released_prerequisite_task_ids;
+  v_released_prerequisite_states text[] := p_released_prerequisite_states;
   v_deadline_task_ids uuid[];
   v_queue_names text[];
   v_task_id uuid;
@@ -48,6 +54,55 @@ BEGIN
     PERFORM 1 FROM workhorse.task_runtime runtime
      WHERE runtime.task_id = ANY(p_rejected_task_ids)
      ORDER BY runtime.task_id FOR UPDATE;
+
+    -- A rejection flag with no rejecting edge has drifted from the edges. The settlement recounts
+    -- that dependent's pending edges and records a dependency_counter_repaired event. With no
+    -- pending edge the dependent releases; otherwise it stays blocked with the recounted values.
+    WITH unexplained AS MATERIALIZED (
+      SELECT runtime.task_id, edges.pending_edges
+        FROM workhorse.task_runtime runtime
+        CROSS JOIN LATERAL (
+          SELECT count(*)::integer AS pending_edges
+            FROM workhorse.task_dependency dependency
+           WHERE dependency.dependent_task_id = runtime.task_id
+             AND dependency.released_at IS NULL
+        ) edges
+       WHERE runtime.task_id = ANY(p_rejected_task_ids)
+         AND runtime.state = 'blocked'
+         AND NOT EXISTS (
+               SELECT 1 FROM workhorse.task_dependency dependency
+                WHERE dependency.dependent_task_id = runtime.task_id
+                  AND dependency.resolution IN ('fail', 'cancel')
+             )
+    ), recounted AS (
+      UPDATE workhorse.task_runtime runtime
+         SET pending_prerequisites = unexplained.pending_edges, dependency_rejected = false,
+             updated_at = p_now
+        FROM unexplained
+       WHERE runtime.task_id = unexplained.task_id
+         AND unexplained.pending_edges <> 0
+    ), repairs AS (
+      INSERT INTO workhorse.task_event(task_id, event_type, details)
+      SELECT unexplained.task_id, 'dependency_counter_repaired', jsonb_build_object(
+               'source', 'settlement',
+               'pending_edges', unexplained.pending_edges,
+               'dependency_rejected', false
+             )
+        FROM unexplained
+       ORDER BY unexplained.task_id
+    )
+    SELECT array_agg(unexplained.task_id ORDER BY unexplained.task_id)
+             FILTER (WHERE unexplained.pending_edges = 0)
+      INTO v_repaired_task_ids
+      FROM unexplained;
+    IF v_repaired_task_ids IS NOT NULL THEN
+      v_released_task_ids := v_released_task_ids || v_repaired_task_ids;
+      v_released_prerequisite_task_ids := v_released_prerequisite_task_ids
+        || array_fill(NULL::uuid, ARRAY[cardinality(v_repaired_task_ids)]);
+      v_released_prerequisite_states := v_released_prerequisite_states
+        || array_fill(NULL::text, ARRAY[cardinality(v_repaired_task_ids)]);
+    END IF;
+
     WITH settled AS (
       SELECT rejected.task_id,
              CASE WHEN final.resolution = 'fail' THEN 'failed' ELSE 'canceled' END AS state,
@@ -99,11 +154,8 @@ BEGIN
       JOIN settled USING (task_id)
      ORDER BY removed.task_id;
     GET DIAGNOSTICS v_terminated = ROW_COUNT;
-    IF v_terminated <> cardinality(p_rejected_task_ids) THEN
-      RAISE EXCEPTION 'a rejected dependent has no rejecting edge';
-    END IF;
   END IF;
-  IF p_released_task_ids IS NULL THEN
+  IF v_released_task_ids IS NULL THEN
     RETURN v_terminated;
   END IF;
 
@@ -112,7 +164,7 @@ BEGIN
   WITH releasing AS (
     SELECT settled.task_id, settled.prerequisite_task_id, settled.prerequisite_state
       FROM unnest(
-        p_released_task_ids, p_released_prerequisite_task_ids, p_released_prerequisite_states
+        v_released_task_ids, v_released_prerequisite_task_ids, v_released_prerequisite_states
       ) settled(task_id, prerequisite_task_id, prerequisite_state)
   ), ready AS (
     SELECT ordered.task_id, nextval('workhorse.ready_sequence_seq') AS sequence
@@ -188,9 +240,11 @@ $$;
 -- subtracts the edges it resolved for a dependent from that counter. A dependent with edges left
 -- costs one runtime update and no edge scan. Only a dependent that settles after a rejection reads
 -- its edges, to name the prerequisite that decides its outcome. A counter that would fall below
--- zero has drifted from the edges. The resolver recounts that dependent's pending edges and
+-- zero has drifted from the edges, and so has a counter that reaches zero while a pending edge
+-- remains. The resolver checks for that edge with one probe of the dependent's pending-edge index
+-- before it settles a dependent. For either drift it recounts that dependent's pending edges and
 -- rejections, records a `dependency_counter_repaired` event, and continues with the recount, so
--- the drift cannot fail the prerequisite's own transition.
+-- the drift can neither fail the prerequisite's own transition nor release the dependent early.
 CREATE OR REPLACE FUNCTION workhorse.resolve_dependents_many_v1(
   p_prerequisite_task_ids uuid[], p_prerequisite_states text[]
 )
@@ -279,11 +333,20 @@ BEGIN
 
   -- A dependent settles once its counter reaches zero. Settled dependents keep their counters until
   -- the statement that terminates or releases them, so each dependent takes one runtime write. A
-  -- counter below its resolved edges is replaced by a recount of the edges this statement sees,
-  -- which already include the resolutions written above.
+  -- counter below its resolved edges, or one that reaches zero while a pending edge remains, is
+  -- replaced by a recount of the edges this statement sees, which already include the resolutions
+  -- written above. Only a dependent about to settle pays for the pending-edge probe.
   WITH measured AS MATERIALIZED (
     SELECT runtime.task_id, runtime.pending_prerequisites AS recorded, resolved.decrement,
-           runtime.pending_prerequisites < resolved.decrement AS repaired,
+           runtime.pending_prerequisites < resolved.decrement
+             OR (
+               runtime.pending_prerequisites = resolved.decrement
+               AND EXISTS (
+                 SELECT 1 FROM workhorse.task_dependency dependency
+                  WHERE dependency.dependent_task_id = runtime.task_id
+                    AND dependency.released_at IS NULL
+               )
+             ) AS repaired,
            runtime.pending_prerequisites - resolved.decrement AS remaining,
            runtime.dependency_rejected OR resolved.rejected AS rejected,
            resolved.prerequisite_task_id, resolved.state

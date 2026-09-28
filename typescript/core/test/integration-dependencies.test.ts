@@ -2038,6 +2038,159 @@ describe("task dependencies", () => {
     expect(await readDependencyCounterDrift(pool)).toEqual([]);
   });
 
+  it("holds a dependent whose low counter reaches zero while an edge is pending", async () => {
+    const [firstId, secondId] = await queue.enqueueMany(
+      ["early-first", "early-second"].map((type) => ({
+        type,
+        payload: null,
+        options: { queue: type },
+      })),
+    );
+    const heldId = await queue.enqueue("early-held", null, {
+      dependencies: {
+        prerequisiteTaskIds: [firstId!, secondId!],
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+    await pool.query(
+      "UPDATE workhorse.task_runtime SET pending_prerequisites = 1 WHERE task_id = $1",
+      [heldId],
+    );
+
+    const first = await queue.claim("early-worker", { queue: "early-first" });
+    expect(await queue.complete(first!, "early-worker", null)).toBe(true);
+    await expect(
+      pool.query(
+        `SELECT state, pending_prerequisites, dependency_rejected
+           FROM workhorse.task_runtime WHERE task_id = $1`,
+        [heldId],
+      ),
+    ).resolves.toMatchObject({
+      rows: [{ state: "blocked", pending_prerequisites: 1, dependency_rejected: false }],
+    });
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+
+    const second = await queue.claim("early-worker", { queue: "early-second" });
+    expect(await queue.complete(second!, "early-worker", null)).toBe(true);
+    await expect(admin.getTask(heldId)).resolves.toMatchObject({ state: "ready" });
+
+    const events = await pool.query<{ event_type: string; details: unknown }>(
+      `SELECT event_type, details FROM workhorse.task_event
+        WHERE task_id = $1
+          AND event_type IN ('dependency_counter_repaired', 'dependency_released')
+        ORDER BY occurred_at, event_id`,
+      [heldId],
+    );
+    expect(events.rows).toEqual([
+      {
+        event_type: "dependency_counter_repaired",
+        details: {
+          source: "resolver",
+          prerequisite_task_id: firstId,
+          recorded_pending_prerequisites: 1,
+          resolved_edges: 1,
+          pending_edges: 1,
+          dependency_rejected: false,
+        },
+      },
+      {
+        event_type: "dependency_released",
+        details: {
+          prerequisite_task_id: secondId,
+          state: "ready",
+          reason: "prerequisite_succeeded",
+        },
+      },
+    ]);
+  });
+
+  it("recounts a rejected dependent that has no rejecting edge", async () => {
+    const [firstId, secondId, loneId] = await queue.enqueueMany(
+      ["flagged-first", "flagged-second", "flagged-lone"].map((type) => ({
+        type,
+        payload: null,
+        options: { queue: type },
+      })),
+    );
+    const policies = { onSuccess: "release", onFailure: "fail", onCancellation: "cancel" } as const;
+    const releasedId = await queue.enqueue("flagged-released", null, {
+      dependencies: { prerequisiteTaskIds: [firstId!, secondId!], ...policies },
+    });
+    const heldId = await queue.enqueue("flagged-held", null, {
+      dependencies: { prerequisiteTaskIds: [loneId!], ...policies },
+    });
+    await pool.query(
+      `UPDATE workhorse.task_runtime SET dependency_rejected = true
+        WHERE task_id = ANY($1::uuid[])`,
+      [[releasedId, heldId]],
+    );
+
+    for (const type of ["flagged-first", "flagged-second"]) {
+      const claimed = await queue.claim("flagged-worker", { queue: type });
+      expect(await queue.complete(claimed!, "flagged-worker", null)).toBe(true);
+    }
+    await expect(admin.getTask(releasedId)).resolves.toMatchObject({ state: "ready" });
+
+    // Every caller reaches the settlement with no pending edge, so the blocked branch is reached
+    // only by handing the settlement a dependent directly.
+    await expect(
+      pool.query<{ settled: number }>(
+        `SELECT workhorse.settle_dependents_v1(clock_timestamp(), ARRAY[$1::uuid], NULL, NULL, NULL)
+           AS settled`,
+        [heldId],
+      ),
+    ).resolves.toMatchObject({ rows: [{ settled: 0 }] });
+    await expect(
+      pool.query(
+        `SELECT state, pending_prerequisites, dependency_rejected
+           FROM workhorse.task_runtime WHERE task_id = $1`,
+        [heldId],
+      ),
+    ).resolves.toMatchObject({
+      rows: [{ state: "blocked", pending_prerequisites: 1, dependency_rejected: false }],
+    });
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+
+    const events = await pool.query<{ task_id: string; event_type: string; details: unknown }>(
+      `SELECT task_id, event_type, details FROM workhorse.task_event
+        WHERE task_id = ANY($1::uuid[])
+          AND event_type IN ('dependency_counter_repaired', 'dependency_released')
+        ORDER BY occurred_at, event_id`,
+      [[releasedId, heldId]],
+    );
+    expect(events.rows).toEqual([
+      {
+        task_id: releasedId,
+        event_type: "dependency_counter_repaired",
+        details: {
+          source: "settlement",
+          pending_edges: 0,
+          dependency_rejected: false,
+        },
+      },
+      {
+        task_id: releasedId,
+        event_type: "dependency_released",
+        details: {
+          prerequisite_task_id: null,
+          state: "ready",
+          reason: "dependency_counter_repaired",
+        },
+      },
+      {
+        task_id: heldId,
+        event_type: "dependency_counter_repaired",
+        details: {
+          source: "settlement",
+          pending_edges: 1,
+          dependency_rejected: false,
+        },
+      },
+    ]);
+  });
+
   it("reports and repairs blocked tasks whose counters disagree with their edges", async () => {
     const [pendingId, resolvedId] = await queue.enqueueMany(
       ["drift-pending", "drift-resolved"].map((type) => ({
