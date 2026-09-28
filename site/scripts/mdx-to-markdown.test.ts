@@ -168,9 +168,9 @@ describe("the Markdown twin transform", () => {
   });
 });
 
-describe("the origin's negotiation and Markdown type", () => {
-  const config = () => readFile(resolve(repositoryRoot, "site/nginx.conf"), "utf8");
+const config = () => readFile(resolve(repositoryRoot, "site/nginx.conf"), "utf8");
 
+describe("the origin's negotiation and Markdown type", () => {
   it("serves .md as text/markdown with a UTF-8 charset", async () => {
     const source = await config();
     expect(source).toMatch(/types\s*\{\s*text\/markdown\s+md;\s*}/);

@@ -24,6 +24,20 @@ function runCli(args: readonly string[]) {
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
+async function withInstalledVersion(
+  version: number,
+  assertions: (result: ReturnType<typeof runCli>) => void,
+): Promise<void> {
+  await pool.query("UPDATE workhorse.schema_version SET version = $1", [version]);
+  try {
+    assertions(runCli(["schema", "status", "--database-url", databaseUrl, "--json"]));
+  } finally {
+    await pool.query("UPDATE workhorse.schema_version SET version = $1", [
+      WORKHORSE_SCHEMA_VERSION,
+    ]);
+  }
+}
+
 describe("database CLI output", () => {
   it("leaves an already-current schema unchanged through schema migrate", () => {
     const result = runCli(["schema", "migrate", `--database-url=${databaseUrl}`]);
@@ -51,20 +65,6 @@ describe("database CLI output", () => {
       },
     });
   });
-
-  async function withInstalledVersion(
-    version: number,
-    assertions: (result: ReturnType<typeof runCli>) => void,
-  ): Promise<void> {
-    await pool.query("UPDATE workhorse.schema_version SET version = $1", [version]);
-    try {
-      assertions(runCli(["schema", "status", "--database-url", databaseUrl, "--json"]));
-    } finally {
-      await pool.query("UPDATE workhorse.schema_version SET version = $1", [
-        WORKHORSE_SCHEMA_VERSION,
-      ]);
-    }
-  }
 
   it("refuses a schema below this runtime's floor and exits with a runtime failure", async () => {
     await withInstalledVersion(MINIMUM_SCHEMA_VERSION - 1, (result) => {

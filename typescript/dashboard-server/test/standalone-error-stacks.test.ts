@@ -93,29 +93,29 @@ async function persistedErrors(port: number): Promise<unknown[]> {
   return [task.current.runtime.error, task.current.error, task.attempts[0]?.error, event.error];
 }
 
+const remote = async (revealErrorStacks?: boolean) => {
+  // Each listener gets its own port, so no pooled connection reaches a closed one.
+  const port = await freePort();
+  const running = await startDashboardServer(stackDatabase, {
+    hostname: "0.0.0.0",
+    port,
+    publicOrigin: "https://dashboard.example",
+    allowMutations: false,
+    actor: "test",
+    authentication: { username: "operator", passwordHash },
+    ...(revealErrorStacks === undefined ? {} : { revealErrorStacks }),
+  });
+  try {
+    return await persistedErrors(port);
+  } finally {
+    await running.close();
+  }
+};
+
 dashboardSessionSuite(
   "standalone worker stack exposure (requires the built dashboard browser bundle)",
   () => {
     it("omits worker stacks on a remotely reachable listener unless the operator opts in", async () => {
-      const remote = async (revealErrorStacks?: boolean) => {
-        // Each listener gets its own port, so no pooled connection reaches a closed one.
-        const port = await freePort();
-        const running = await startDashboardServer(stackDatabase, {
-          hostname: "0.0.0.0",
-          port,
-          publicOrigin: "https://dashboard.example",
-          allowMutations: false,
-          actor: "test",
-          authentication: { username: "operator", passwordHash },
-          ...(revealErrorStacks === undefined ? {} : { revealErrorStacks }),
-        });
-        try {
-          return await persistedErrors(port);
-        } finally {
-          await running.close();
-        }
-      };
-
       expect(await remote()).toEqual(
         Array.from({ length: 4 }, () => ({ name: "Error", message: "failed" })),
       );

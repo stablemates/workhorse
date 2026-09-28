@@ -145,6 +145,26 @@ function probeStep(
   };
 }
 
+async function registerContractWorker(
+  workerId: string,
+  clientProtocolVersion: number | null,
+): Promise<void> {
+  await contractDatabase.pool.query(
+    `SELECT workhorse.register_worker_v1(
+       $1::text, $2::uuid, 'contract-host', 4242, ARRAY['contract']::text[], ARRAY[]::text[],
+       1, 30000, 10000, 250, 1000, 60000, 5000, 0, false, $3::integer, 'fixture', '9.9.9')`,
+    [workerId, randomUUID(), clientProtocolVersion],
+  );
+}
+
+async function deregisterContractWorker(workerId: string): Promise<void> {
+  await contractDatabase.pool.query(`SELECT workhorse.deregister_worker_v1($1)`, [workerId]);
+}
+
+async function setSchemaVersion(version: number): Promise<void> {
+  await contractDatabase.pool.query("UPDATE workhorse.schema_version SET version = $1", [version]);
+}
+
 describe("schema migrations", () => {
   beforeAll(async () => {
     await Promise.all([
@@ -681,28 +701,6 @@ describe("schema migrations", () => {
   // gate reads workhorse.worker_registry, which only the real baseline carries. Every test leaves
   // schema_version at 1 and an empty registry behind for the next one.
   describe("contract steps", () => {
-    async function registerContractWorker(
-      workerId: string,
-      clientProtocolVersion: number | null,
-    ): Promise<void> {
-      await contractDatabase.pool.query(
-        `SELECT workhorse.register_worker_v1(
-           $1::text, $2::uuid, 'contract-host', 4242, ARRAY['contract']::text[], ARRAY[]::text[],
-           1, 30000, 10000, 250, 1000, 60000, 5000, 0, false, $3::integer, 'fixture', '9.9.9')`,
-        [workerId, randomUUID(), clientProtocolVersion],
-      );
-    }
-
-    async function deregisterContractWorker(workerId: string): Promise<void> {
-      await contractDatabase.pool.query(`SELECT workhorse.deregister_worker_v1($1)`, [workerId]);
-    }
-
-    async function setSchemaVersion(version: number): Promise<void> {
-      await contractDatabase.pool.query("UPDATE workhorse.schema_version SET version = $1", [
-        version,
-      ]);
-    }
-
     // A two-step chain whose second step is a contract step, so one forward run can stop before
     // it and one contract run can apply it.
     const stopPlan = {

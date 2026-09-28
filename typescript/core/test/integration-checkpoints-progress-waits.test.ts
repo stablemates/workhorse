@@ -1185,14 +1185,14 @@ describe("checkpoints progress waits", () => {
   it("coalesces overlapping handler calls for the same checkpoint name", async () => {
     const id = await queue.enqueue("checkpoint-overlap", {});
     let operations = 0;
+    const operation = async () => {
+      operations += 1;
+      await sleep(10);
+      return { operation: operations };
+    };
     const worker = new Worker(queue, { workerId: "checkpoint-worker" }).handle(
       "checkpoint-overlap",
       async (_payload, context) => {
-        const operation = async () => {
-          operations += 1;
-          await sleep(10);
-          return { operation: operations };
-        };
         const [first, second] = await Promise.all([
           context.checkpoint("shared", operation),
           context.checkpoint("shared", operation),

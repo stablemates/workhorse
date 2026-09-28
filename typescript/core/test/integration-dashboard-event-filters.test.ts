@@ -4,6 +4,14 @@ import { createDatabaseTestHarness } from "./support/db.js";
 
 const database = createDatabaseTestHarness(import.meta.url);
 
+async function events(input: object): Promise<DashboardEventsPage> {
+  const result = await database.pool.query<{ result: DashboardEventsPage }>(
+    "SELECT workhorse.dashboard_events_v1($1::jsonb) AS result",
+    [JSON.stringify(input)],
+  );
+  return result.rows[0]!.result;
+}
+
 describe("dashboard event filters and detail metadata", () => {
   beforeAll(async () => {
     await database.setup();
@@ -24,14 +32,6 @@ describe("dashboard event filters and detail metadata", () => {
     `);
   });
   afterAll(async () => database.teardown());
-
-  async function events(input: object): Promise<DashboardEventsPage> {
-    const result = await database.pool.query<{ result: DashboardEventsPage }>(
-      "SELECT workhorse.dashboard_events_v1($1::jsonb) AS result",
-      [JSON.stringify(input)],
-    );
-    return result.rows[0]!.result;
-  }
 
   it("filters both sources before pagination and counts the entire matching result", async () => {
     const counted = { worker: "worker-a", search: "MATCH", pageSize: 25, count: "exact" };

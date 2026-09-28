@@ -188,22 +188,22 @@ describe("an unpinned version", () => {
   });
 });
 
-describe("gofmt, which reports no version", () => {
-  /**
-   * A Go toolchain whose `gofmt` answers a probe with a fixed, recognisable formatting. Built
-   * rather than borrowed so the rule is exercised the same way wherever the suite runs.
-   */
-  async function goToolchain(): Promise<{ goroot: string; formatted: string }> {
-    const goroot = await mkdtemp(join(tmpdir(), "workhorse-goroot-"));
-    temporaryDirectories.push(goroot);
-    await writeTools(join(goroot, "bin"), {
-      gofmt: 'printf "package main\\n\\nfunc main() {}\\n"',
-    });
-    const tools = await toolDirectory({ go: `echo "${goroot}"` });
-    leadPath(tools);
-    return { goroot, formatted: "package main\n\nfunc main() {}\n" };
-  }
+/**
+ * A Go toolchain whose `gofmt` answers a probe with a fixed, recognisable formatting. Built
+ * rather than borrowed so the rule is exercised the same way wherever the suite runs.
+ */
+async function goToolchain(): Promise<{ goroot: string; formatted: string }> {
+  const goroot = await mkdtemp(join(tmpdir(), "workhorse-goroot-"));
+  temporaryDirectories.push(goroot);
+  await writeTools(join(goroot, "bin"), {
+    gofmt: 'printf "package main\\n\\nfunc main() {}\\n"',
+  });
+  const tools = await toolDirectory({ go: `echo "${goroot}"` });
+  leadPath(tools);
+  return { goroot, formatted: "package main\n\nfunc main() {}\n" };
+}
 
+describe("gofmt, which reports no version", () => {
   it.skipIf(!onPosix)("accepts a gofmt inside the directory go names", async () => {
     const { goroot } = await goToolchain();
     leadPath(join(goroot, "bin"));
