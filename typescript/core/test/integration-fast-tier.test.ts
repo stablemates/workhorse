@@ -426,6 +426,81 @@ describe("fast task tier", () => {
     }
   });
 
+  // A fused claim that waits on a row lock can close a cycle with the owner's completion (SM-934).
+  // The claim gives up under its own lock_timeout instead. Holding the claimed task's task row stalls
+  // the claimed event's foreign-key check after the claim has locked its candidate, which is the
+  // point where the cycle forms.
+  it("claims nothing and releases its row locks when a fused claim times out", async () => {
+    const queueName = "fast-claim-lock-timeout";
+    const workerId = "claim-lock-timeout";
+    await makeFast(queueName);
+    await expect(admin.setQueueHistory(queueName, { recordClaims: true })).resolves.toEqual({
+      recordAttempts: false,
+      recordClaims: true,
+    });
+    const [done, waiting] = await queue.enqueueMany(
+      Array.from({ length: 2 }, () => ({
+        type: "timed",
+        payload: {},
+        options: { queue: queueName },
+      })),
+    );
+    await pool.query(
+      `UPDATE workhorse.fast_task_runtime
+          SET state = 'active', worker_id = $2, claimed_at = clock_timestamp(),
+              expires_at = clock_timestamp() + interval '1 hour', fence_token = 1
+        WHERE task_id = $1`,
+      [done, workerId],
+    );
+    const fused = `SELECT accepted::text[] AS accepted, task_id::text AS task_id
+                     FROM workhorse.complete_many_and_claim_v1(
+                       $1, $2::uuid[], $3::bigint[], $4::jsonb[], $5, 1)`;
+    const blocker = await pool.connect();
+    const caller = await pool.connect();
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT FROM workhorse.task WHERE id = $1 FOR UPDATE", [waiting]);
+      await caller.query("BEGIN");
+      await caller.query("SET LOCAL lock_timeout = '7s'");
+      const { rows } = await caller.query<{ accepted: string[]; task_id: string | null }>(fused, [
+        workerId,
+        [done],
+        [1],
+        ["{}"],
+        queueName,
+      ]);
+      expect(rows).toEqual([{ accepted: [done], task_id: null }]);
+      // The caller's own setting survives the claim's timeout.
+      const setting = await caller.query<{ lock_timeout: string }>("SHOW lock_timeout");
+      expect(setting.rows[0]!.lock_timeout).toBe("7s");
+      // The claim released the row it had locked while its transaction is still open.
+      const free = await pool.query<{ state: string }>(
+        "SELECT state FROM workhorse.fast_task_runtime WHERE task_id = $1 FOR UPDATE NOWAIT",
+        [waiting],
+      );
+      expect(free.rows).toEqual([{ state: "ready" }]);
+      await caller.query("COMMIT");
+      await blocker.query("ROLLBACK");
+
+      expect(await outcomeCounts([done!])).toEqual([
+        { task_id: done, state: "succeeded", attempt: 1 },
+      ]);
+      const next = await pool.query<{ accepted: string[]; task_id: string | null }>(fused, [
+        workerId,
+        [],
+        [],
+        [],
+        queueName,
+      ]);
+      expect(next.rows).toEqual([{ accepted: [], task_id: waiting }]);
+    } finally {
+      await caller.query("ROLLBACK");
+      await blocker.query("ROLLBACK");
+      caller.release();
+      blocker.release();
+    }
+  });
+
   // PostgreSQL measures a result as jsonb text, which spaces its separators. A result whose compact
   // JSON fits can still be over the limit, and an SDK that does not measure can send one. Only that
   // attempt fails: the rest of the batch completes and the fused claim still runs.

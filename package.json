@@ -80,6 +80,7 @@
     "benchmark:statistics-tiers": "tsx scripts/with-env.ts tsx scripts/benchmark-statistics-tiers.ts",
     "benchmark:saturated-claim": "tsx scripts/with-env.ts tsx scripts/benchmark-saturated-claim.ts",
     "benchmark:fast-claim-backlog": "tsx scripts/with-env.ts tsx scripts/benchmark-fast-claim-backlog.ts",
+    "benchmark:fast-claim-deadlock": "tsx scripts/with-env.ts tsx scripts/benchmark-fast-claim-deadlock.ts",
     "benchmark:dependency-release-guard": "tsx scripts/with-env.ts tsx scripts/benchmark-dependency-release-guard.ts",
     "benchmark:set-based-enqueue": "tsx scripts/with-env.ts tsx scripts/benchmark-set-based-enqueue.ts",
     "benchmark:tenant-cardinality": "tsx scripts/with-env.ts tsx scripts/benchmark-tenant-cardinality.ts",
