@@ -704,8 +704,13 @@ async fn heartbeat_cadence(database: &ScratchDatabase, fixture: &Value) -> Check
     assert_state(&client, task.task_id, &json!({"state": "succeeded", "attempt": 1})).await
 }
 
-/// Holds each empty claim in PostgreSQL until the runner has counted it, then measures the delay
-/// between the enqueue after the last empty claim and the handler start.
+/// Holds each empty claim in PostgreSQL until the runner has counted it, then measures the
+/// worker's backoff after the last empty claim.
+///
+/// The wrapper stamps each claim with PostgreSQL's clock, and the delay runs from the end of the
+/// last empty claim to the start of the next claim. That span is the worker's own cadence. It
+/// leaves out the enqueue, the claim that finds the task, and the dispatch to the handler, so a
+/// slow runner or a slow database cannot charge that latency to the backoff.
 async fn poll_cadence(database: &ScratchDatabase, fixture: &Value) -> Checked {
     let client = database.connect().await;
     let row = client
@@ -722,6 +727,11 @@ async fn poll_cadence(database: &ScratchDatabase, fixture: &Value) -> Checked {
         .batch_execute(&format!(
             "CREATE TABLE workhorse.runtime_poll_control (hold_claims boolean NOT NULL);
              INSERT INTO workhorse.runtime_poll_control VALUES (true);
+             CREATE TABLE workhorse.runtime_poll_claims (
+               started timestamptz NOT NULL,
+               finished timestamptz NOT NULL,
+               found boolean NOT NULL
+             );
              CREATE SEQUENCE workhorse.runtime_poll_reached;
              CREATE SEQUENCE workhorse.runtime_poll_released;
              ALTER FUNCTION workhorse.claim_many_v1 RENAME TO claim_many_v1_inner;
@@ -729,16 +739,21 @@ async fn poll_cadence(database: &ScratchDatabase, fixture: &Value) -> Checked {
                LANGUAGE plpgsql AS $$
              #variable_conflict use_column
              DECLARE
+               v_started timestamptz := clock_timestamp();
+               v_found boolean;
                v_reached bigint;
              BEGIN
                RETURN QUERY SELECT * FROM workhorse.claim_many_v1_inner({forwarded});
-               IF NOT FOUND AND (SELECT hold_claims FROM workhorse.runtime_poll_control) THEN
+               v_found := FOUND;
+               IF NOT v_found AND (SELECT hold_claims FROM workhorse.runtime_poll_control) THEN
                  v_reached := nextval('workhorse.runtime_poll_reached');
                  WHILE (SELECT CASE WHEN is_called THEN last_value ELSE 0 END
                           FROM workhorse.runtime_poll_released) < v_reached LOOP
                    PERFORM pg_sleep(0.005);
                  END LOOP;
                END IF;
+               INSERT INTO workhorse.runtime_poll_claims
+                 VALUES (v_started, clock_timestamp(), v_found);
              END
              $$;"
         ))
@@ -753,12 +768,11 @@ async fn poll_cadence(database: &ScratchDatabase, fixture: &Value) -> Checked {
     )?;
     let (started, mut handler_started) = mpsc::unbounded_channel();
     worker.handle(task_type, move |_: Value, _| {
-        let _ = started.send(Instant::now());
+        let _ = started.send(());
         async { Ok(Value::Null) }
     });
     let (stop, running) = run(&worker);
     let polls = number(fixture, "emptyPollsBeforeEnqueue");
-    let mut enqueued = None;
     for poll in 1..=polls {
         eventually(&format!("empty poll {poll} never reached PostgreSQL"), || async {
             let row = client
@@ -775,7 +789,6 @@ async fn poll_cadence(database: &ScratchDatabase, fixture: &Value) -> Checked {
         if poll == polls {
             tokio::time::sleep(millis(fixture, "enqueueStallMs")).await;
             queue.enqueue(task_type, &json!({}), Default::default()).await.map_err(driver)?;
-            enqueued = Some(Instant::now());
             client
                 .execute("UPDATE workhorse.runtime_poll_control SET hold_claims = false", &[])
                 .await
@@ -786,13 +799,34 @@ async fn poll_cadence(database: &ScratchDatabase, fixture: &Value) -> Checked {
             .await
             .map_err(sql)?;
     }
-    let handled = tokio::time::timeout(WAIT, handler_started.recv())
+    tokio::time::timeout(WAIT, handler_started.recv())
         .await
         .map_err(|_| "the worker never claimed the enqueued task".to_owned())?
         .ok_or("the handler never started")?;
     let _ = stop.send(());
     running.await.map_err(|error| error.to_string())?.map_err(driver)?;
-    let delay = handled.duration_since(enqueued.ok_or("the fixture enqueued nothing")?);
+    // The claim that found the task, the number of empty claims before it, and the time from the
+    // end of the last of those to its start.
+    let row = client
+        .query_one(
+            "WITH claims AS (
+               SELECT started, found, lag(finished) OVER (ORDER BY started) AS previous_finished,
+                      count(*) FILTER (WHERE NOT found) OVER (ORDER BY started) AS empty_before
+                 FROM workhorse.runtime_poll_claims
+             )
+             SELECT empty_before,
+                    (extract(epoch FROM started - previous_finished) * 1000000)::bigint
+               FROM claims WHERE found ORDER BY started LIMIT 1",
+            &[],
+        )
+        .await
+        .map_err(sql)?;
+    let (empty, micros): (i64, Option<i64>) = (row.get(0), row.get(1));
+    check(empty == polls, || {
+        format!("the worker claimed the task after {empty} empty polls, want {polls}")
+    })?;
+    let micros = micros.ok_or("the task was claimed without an empty poll before it")?;
+    let delay = Duration::from_micros(u64::try_from(micros).map_err(|error| error.to_string())?);
     let (minimum, maximum) =
         (millis(fixture, "expectedMinimumDelayMs"), millis(fixture, "expectedMaximumDelayMs"));
     check(delay >= minimum && delay <= maximum, || {
