@@ -204,33 +204,16 @@ transaction holds many row locks. Each batch must then be idempotent; see
 a column with an inline `CHECK`, or that updates, deletes from, or validates a constraint on a
 table it altered. The shipped steps it exempts are listed in the test with their reason.
 
-These costs were measured on a dedicated PostgreSQL 18 container limited to 4 CPUs, against a
-`task_runtime` with one row in 20 blocked. A probe issued single-row updates to `task_runtime` at
-200 per second while each variant ran. The table shows the worst probe latency across trials:
-
-| `task_runtime` rows | No migration (control) | Shipped `0030` | Split pattern |
-| ------------------- | ---------------------- | -------------- | ------------- |
-| 250,000 (76 MB)     | 3.9–9.0 ms             | 104–226 ms     | 3.3–6.3 ms    |
-| 1,000,000 (303 MB)  | 5.0–11.3 ms            | 478–613 ms     | 7.4–17.4 ms   |
-| 2,000,000 (606 MB)  | 4.2–186 ms             | 971–1,932 ms   | 5.6–151 ms    |
-
-The 2,000,000-row cells come from five trials each, and the others from three. The container
-shared its host with other work, which produced the 186 ms control. The single 151 ms split
-outlier is of the same size, and every other split trial stayed under 21 ms. In the split
-pattern, step 1 took 3–9 ms at every size. At 2,000,000 rows, the backfill took 0.6–1.4 s and the
-validation 0.4–0.5 s, and neither delayed the probe.
+On a dedicated PostgreSQL 18 container, shipped step `0030` stalled single-row updates to
+`task_runtime` for 1–2 seconds at 2,000,000 rows. The split pattern kept them under 20 ms at the
+same size, apart from host noise that also appeared with no migration running.
 
 ### Shipped migrations that block writes
 
-`0030-release-dependents-through-a-pending-prerequisite-counter.sql` blocks every read and write of
-`workhorse.task_runtime` for time proportional to its size. It adds two columns, one with an
-inline `CHECK`, backfills them, and validates a new constraint, all in one transaction under
-`ACCESS EXCLUSIVE`. Its declared kind is `additive`, which describes compatibility, not cost.
-Measured on the container above, the stall was about 0.1–0.2 seconds at 250,000 rows, 0.5–0.6
-seconds at 1,000,000, and 1–2 seconds at 2,000,000. It grows roughly linearly with row count. The
-step is shipped and immutable. An operator upgrading across schema 30 with a large `task_runtime`
-should expect claims and completions to pause for that long, and should plan the migration window
-around it. The step has no pre-step, because the stall is the backfill itself.
+`0030-release-dependents-through-a-pending-prerequisite-counter.sql` adds, backfills, and
+validates columns on `workhorse.task_runtime` in one step under `ACCESS EXCLUSIVE`. Its stall grows
+with the table, from 0.1–0.2 seconds at 250,000 rows to 1–2 seconds at 2,000,000. The step is
+shipped and immutable, and the guard test exempts it.
 
 No supported step builds an index non-concurrently. The two that did, `0003-named-budgets.sql` and
 `0006-bounded-dashboard-reads.sql`, both start below the 0.2.0 baseline, so pruning the chain

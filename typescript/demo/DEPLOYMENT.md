@@ -187,7 +187,11 @@ The container supervises and drains this worker alongside the primary workers.
 
 Staging stays read-only in the dashboard but executes a smaller release-validation seed and one
 report every ten minutes. Its seed covers dependencies, retry recovery, durable timers, cancellation,
-scheduled work, and expired deadlines. Startup markers prevent repeated seed insertion. Existing
+scheduled work, and expired deadlines. Startup markers prevent repeated seed insertion. The primary workspace also runs a fast-tier seed step,
+marked `fast-tier-dashboard-v1`. It moves the new, empty queues `demo-fast`, `demo-python-fast`, and
+`demo-go-fast` to the fast tier, enqueues a small batch, and syncs their schedules in the
+`workhorse-demo-fast-tier` namespace. An existing primary database gains this step on its next start,
+with no migration and no reset. Existing
 staging history is retained, and admission policies also govern tasks left by the previous seed.
 Fresh production history includes task-specific customer, email, order, and report context.
 Each URL must resolve from inside the deployed container, so a loopback address on the build machine
@@ -329,15 +333,6 @@ stands in for the documented `workhorse schema status --json` verification, beca
 databases and a second schema the CLI does not know about. A refusal exits non-zero, which must fail
 the deploy before the container swap.
 
-A migration step that alters a table holds `ACCESS EXCLUSIVE` on it until the step commits.
-Claims and completions against that table wait for the whole step. The step's 5-second
-`lock_timeout` bounds only the wait to acquire the lock, not the time the step holds it. Most steps
-hold it for milliseconds. Step 0030 backfills `workhorse.task_runtime` under that lock, so the stall
-grows with the table: about 1–2 seconds at 2,000,000 rows. A deployment that crosses schema 30 with
-a large `task_runtime` should expect that pause. The
-[schema lifecycle](https://github.com/stablemates/workhorse/blob/main/docs/schema-lifecycle.md#backfills-and-constraints-on-large-tables)
-records the measurements and the pattern later backfills follow instead.
-
 Nothing prepares a schema at startup. The container entry point starts processes only, and the
 server asserts compatibility and refuses to open `/up` when the step did not run. That is
 deliberate: a component that migrated itself would be as many concurrent migrators as the deployment
@@ -415,7 +410,8 @@ line. Use the CLI inside the new image, because only that build carries migratio
 installs it at `/opt/workhorse-demo/node_modules/.bin/workhorse`, under the working directory.
 
 The cutover migrates the databases, so it keeps the soak clock running. Every existing queue stays
-full-tier, and nothing changes until an operator moves an empty queue to the fast tier. From the
+full-tier, and nothing changes until an operator moves an empty queue to the fast tier. The demo's
+fast-tier seed step does this for its own three new queues only. From the
 next release on, the ordinary pipeline step applies again.
 
 ## The soak window forbids a database reinstall
@@ -480,10 +476,10 @@ remember.
 
 ### Dashboard schema
 
-The current build ships Workhorse schema version 38; its packaged migrations carry a version 6
+The current build ships Workhorse schema version 39; its packaged migrations carry a version 6
 baseline forward to it. Version 25 is a contract step, which the
 [fast-tier cutover](#the-fast-tier-release-needs-one-offline-cutover) applies. Versions 26 through
-38 are additive, so the ordinary schema step applies them to a database at version 25. That baseline is the `0.2.0` clean install, and the schema step refuses a
+39 are additive, so the ordinary schema step applies them to a database at version 25. That baseline is the `0.2.0` clean install, and the schema step refuses a
 database below it: the `0.1.x` line had no production install and is not carried forward
 ([ADR 0073](../../docs/decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)). A
 database below the baseline reaches it with Workhorse `0.2.1` first. The baseline includes custom
