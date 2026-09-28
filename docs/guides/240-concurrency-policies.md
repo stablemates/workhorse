@@ -46,6 +46,8 @@ This makes the policy a dispatch budget, not a mutex. A stale handler can overla
 
 When a task leaves a full queue or a full key, PostgreSQL wakes workers listening for that queue. A release below every cap wakes no worker, because no claim was waiting on it. Polling remains the correctness fallback if a notification is lost.
 
+An expiring lease changes no row, so it wakes no worker. A claim can use that capacity at once, but a worker whose claim found the queue full keeps sleeping. That worker finds the capacity at its next poll, or when maintenance recovers the expired lease. Recovery is a release from a full queue, so it wakes waiting workers.
+
 ## Avoiding a blocked queue
 
 If one key is full, `claim_v1` can admit later ready work for another key. It searches a bounded [priority-ordered window](150-priority.md), so admission cost cannot grow with an unlimited saturated prefix.
