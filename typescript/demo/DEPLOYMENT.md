@@ -187,7 +187,11 @@ The container supervises and drains this worker alongside the primary workers.
 
 Staging stays read-only in the dashboard but executes a smaller release-validation seed and one
 report every ten minutes. Its seed covers dependencies, retry recovery, durable timers, cancellation,
-scheduled work, and expired deadlines. Startup markers prevent repeated seed insertion. Existing
+scheduled work, and expired deadlines. Startup markers prevent repeated seed insertion. The primary workspace also runs a fast-tier seed step,
+marked `fast-tier-dashboard-v1`. It moves the new, empty queues `demo-fast`, `demo-python-fast`, and
+`demo-go-fast` to the fast tier, enqueues a small batch, and syncs their schedules in the
+`workhorse-demo-fast-tier` namespace. An existing primary database gains this step on its next start,
+with no migration and no reset. Existing
 staging history is retained, and admission policies also govern tasks left by the previous seed.
 Fresh production history includes task-specific customer, email, order, and report context.
 Each URL must resolve from inside the deployed container, so a loopback address on the build machine
@@ -406,7 +410,8 @@ line. Use the CLI inside the new image, because only that build carries migratio
 installs it at `/opt/workhorse-demo/node_modules/.bin/workhorse`, under the working directory.
 
 The cutover migrates the databases, so it keeps the soak clock running. Every existing queue stays
-full-tier, and nothing changes until an operator moves an empty queue to the fast tier. From the
+full-tier, and nothing changes until an operator moves an empty queue to the fast tier. The demo's
+fast-tier seed step does this for its own three new queues only. From the
 next release on, the ordinary pipeline step applies again.
 
 ## The soak window forbids a database reinstall

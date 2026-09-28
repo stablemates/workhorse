@@ -125,6 +125,13 @@ restart boundaries. Each new durable operation takes two seconds so progress rem
 `SEED_DEMO_DATA=false` to start empty instead. The versioned seed marker makes direct application restarts
 idempotent.
 
+A separate seed step, marked `fast-tier-dashboard-v1`, moves `demo-fast`, `demo-python-fast`, and
+`demo-go-fast` to the fast tier before it enqueues their first tasks. The TypeScript queue records attempts
+and claims, the Python queue records claims only, and the Go queue records neither. The step enqueues a
+small batch on each queue, and schedules in the `workhorse-demo-fast-tier` namespace add one task per queue
+every five minutes. A database that already carries every earlier marker gains this step on its next
+start. Staging keeps its own seed and has no fast-tier queue.
+
 Open `http://workhorse.localhost:43155/tasks` for the Mantine operator dashboard. Its full-width
 application shell keeps the header and responsive sidebar in place while browser URLs switch between
 `/tasks`, `/cron`, `/system`, and `/workers`. Task filters are nested under Current Tasks and persist as
@@ -132,7 +139,8 @@ the `filter` query parameter, with pagination persisted as `page`.
 
 The demo runs **three** named worker processes with three execution slots each. The TypeScript
 worker claims application tasks from `demo` and rate-limited work from `partner-api`. Python and Go
-claim their runtime-specific tasks from `demo-python` and `demo-go`. All three workers also compete
+claim their runtime-specific tasks from `demo-python` and `demo-go`. Each runtime also claims its own
+fast-tier queue: `demo-fast`, `demo-python-fast`, and `demo-go-fast`. All three workers also compete
 for `demo-shared`, whose single handler has the same contract in every SDK.
 
 The production identities begin with `demo-typescript-`, `demo-python-`, and `demo-go-`, so the

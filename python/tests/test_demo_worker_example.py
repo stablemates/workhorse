@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import importlib.util
+import time
 from pathlib import Path
+from threading import Thread
 from types import SimpleNamespace
 from typing import cast
+from uuid import uuid4
 
+import psycopg
 import pytest
+from psycopg_pool import ConnectionPool
 
-from workhorse import HandlerContext
+from workhorse import Admin, AdminAudit, EnqueueOptions, HandlerContext, Queue
 
 module_spec = importlib.util.spec_from_file_location(
     "demo_worker", Path(__file__).parents[1] / "examples" / "demo_worker.py"
@@ -18,10 +23,11 @@ module_spec.loader.exec_module(demo_worker)
 
 
 def test_worker_uses_dedicated_and_shared_queues() -> None:
-    assert (demo_worker.PYTHON_QUEUE, demo_worker.SHARED_QUEUE) == (
-        "demo-python",
-        "demo-shared",
-    )
+    assert (
+        demo_worker.PYTHON_QUEUE,
+        demo_worker.SHARED_QUEUE,
+        demo_worker.PYTHON_FAST_QUEUE,
+    ) == ("demo-python", "demo-shared", "demo-python-fast")
 
 
 def test_database_url_reads_development_primary_database() -> None:
@@ -70,3 +76,48 @@ def test_worker_identity_exposes_runtime_and_stays_process_unique() -> None:
     assert first.startswith("demo-python-")
     assert second.startswith("demo-python-")
     assert first != second
+
+
+@pytest.mark.integration
+def test_worker_completes_a_task_on_its_fast_tier_queue(database_url: str) -> None:
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        audit = AdminAudit(
+            actor="python-demo-worker-test", reason="seed the fast tier", request_id=str(uuid4())
+        )
+        admin = Admin(connection)
+        assert admin.set_queue_tier(demo_worker.PYTHON_FAST_QUEUE, "fast", audit) == "fast"
+        admin.set_queue_history(demo_worker.PYTHON_FAST_QUEUE, record_claims=True)
+        task_id = Queue(connection).enqueue(
+            demo_worker.LANGUAGE_TASK_TYPE,
+            {"language": "python"},
+            EnqueueOptions(queue=demo_worker.PYTHON_FAST_QUEUE, max_attempts=1),
+        )
+
+    def outcome() -> tuple[str, object] | None:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            row = connection.execute(
+                "SELECT state, result FROM workhorse.fast_task_outcome WHERE task_id = %s",
+                (task_id,),
+            ).fetchone()
+        return None if row is None else (str(row[0]), row[1])
+
+    with ConnectionPool(
+        database_url, min_size=1, max_size=6, kwargs={"autocommit": True}, open=True
+    ) as pool:
+        worker = demo_worker.build_worker(pool, 50)
+        thread = Thread(target=worker.run)
+        thread.start()
+        try:
+            deadline = time.monotonic() + 20
+            while outcome() is None:
+                assert time.monotonic() < deadline, "worker did not finish in time"
+                time.sleep(0.05)
+        finally:
+            worker.stop()
+            thread.join(timeout=10)
+        assert not thread.is_alive()
+
+    assert outcome() == (
+        "succeeded",
+        {"language": "python", "runtime": "python", "attempt": 1},
+    )

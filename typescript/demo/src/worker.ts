@@ -4,6 +4,8 @@ import { defineWorkerProcess } from "@stablemates/workhorse";
 import { createDrizzleAdapter } from "@stablemates/workhorse-drizzle";
 import { Pool } from "pg";
 import {
+  DEMO_FAST_QUEUE,
+  DEMO_FAST_TIER_SCHEDULE_NAMESPACE,
   DEMO_QUEUE,
   DEMO_RATE_LIMIT_QUEUE,
   DEMO_SCHEDULE_NAMESPACE,
@@ -27,6 +29,7 @@ import { createDemoWorkerDefinition } from "./worker-definition.js";
  * The launcher starts this TypeScript worker beside the Python and Go demo workers. This worker
  * owns the application-specific handlers and serves the ordinary and rate-limited queues. All
  * three runtimes also serve one shared queue whose handler has the same contract in every SDK.
+ * Outside staging, each runtime also serves its own fast-tier queue and that queue's schedule.
  */
 const databaseUrl = resolveDemoDatabaseUrl();
 const workerPollMs = process.env.WORKHORSE_WORKER_POLL_MS
@@ -46,10 +49,17 @@ export default defineWorkerProcess({
   adapter: () => adapter,
   workers: [
     createDemoWorkerDefinition(database, adapter.queue, {
-      queues: [DEMO_QUEUE, DEMO_RATE_LIMIT_QUEUE, DEMO_SHARED_QUEUE],
+      queues: [
+        DEMO_QUEUE,
+        DEMO_RATE_LIMIT_QUEUE,
+        DEMO_SHARED_QUEUE,
+        ...(staging ? [] : [DEMO_FAST_QUEUE]),
+      ],
       concurrency: staging ? 2 : DEMO_WORKER_CONCURRENCY[0],
       workerId,
-      scheduleNamespaces: [DEMO_SCHEDULE_NAMESPACE],
+      scheduleNamespaces: staging
+        ? [DEMO_SCHEDULE_NAMESPACE]
+        : [DEMO_SCHEDULE_NAMESPACE, DEMO_FAST_TIER_SCHEDULE_NAMESPACE],
       pollMs: workerPollMs,
       onRegistrationError: (error) =>
         demoLogger.error(

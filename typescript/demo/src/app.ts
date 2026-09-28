@@ -50,6 +50,9 @@ import {
   DEMO_CONCURRENCY_MAX_ACTIVE,
   DEMO_CONCURRENCY_MAX_ACTIVE_PER_KEY,
   DEMO_CONCURRENCY_POLICY_NAMESPACE,
+  DEMO_FAST_QUEUE,
+  DEMO_FAST_TIER_QUEUES,
+  DEMO_FAST_TIER_SCHEDULE_NAMESPACE,
   DEMO_IDEMPOTENCY_TTL_MS,
   DEMO_LONG_RUNNING_SEED_DELAY_MS,
   DEMO_LONG_RUNNING_SEED_TASKS,
@@ -84,6 +87,7 @@ import {
   HEARTBEAT_SCHEDULE_NAME,
   GO_WORKER_SCHEDULE_NAME,
   HISTORICAL_TASK_COUNT,
+  FAST_TIER_SEED_NAME,
   HISTORICAL_SEED_NAME,
   HISTORICAL_WORKER_IDS,
   LONG_RUNNING_TASK_TYPE,
@@ -1645,6 +1649,85 @@ async function seedRateLimitDemoData(database: DemoDatabase): Promise<string[]> 
   });
 }
 
+function fastTierSchedule(entry: (typeof DEMO_FAST_TIER_QUEUES)[number]) {
+  const schedule = languageWorkerSchedule(
+    entry.scheduleName,
+    entry.schedule,
+    entry.language,
+    entry.queue,
+  );
+  return { ...schedule, task: { ...schedule.task, tags: [...schedule.task.tags, "fast-tier"] } };
+}
+
+/**
+ * Put one queue per demo language on the fast tier, then give each one a seeded batch and a
+ * schedule. Workhorse changes a tier only while the queue holds no live task, so the step sets
+ * every tier before it enqueues or schedules anything.
+ */
+async function seedFastTierDemoData(database: DemoDatabase): Promise<string[]> {
+  return database.transaction(async (transaction) => {
+    const marker = await transaction.execute<{ name: string }>(sql`
+      INSERT INTO public.workhorse_demo_seed (name)
+      VALUES (${FAST_TIER_SEED_NAME})
+      ON CONFLICT (name) DO NOTHING
+      RETURNING name
+    `);
+    if (marker.rows.length === 0) return [];
+
+    const workhorse = createDrizzleAdapter(transaction, {
+      defaultQueue: DEMO_FAST_QUEUE,
+      queueOptions: DEMO_QUEUE_OPTIONS,
+    });
+    for (const entry of DEMO_FAST_TIER_QUEUES) {
+      await workhorse.admin.setQueueTier(entry.queue, "fast", {
+        actor: "workhorse-demo-seed",
+        reason: "Show the fast tier on the demo dashboard",
+        requestId: `${FAST_TIER_SEED_NAME}:${entry.queue}`,
+      });
+      await workhorse.admin.setQueueHistory(entry.queue, entry.history);
+    }
+
+    const taskIds: string[] = [];
+    const now = Date.now();
+    for (const entry of DEMO_FAST_TIER_QUEUES) {
+      const payload = { language: entry.language };
+      const tags = ["demo-test", "language-worker", entry.language, "fast-tier"];
+      const variants: EnqueueOptions[] = [
+        { queue: entry.queue, maxAttempts: 1, tags },
+        { queue: entry.queue, maxAttempts: 1, priority: 10, tags: [...tags, "priority"] },
+        {
+          queue: entry.queue,
+          maxAttempts: 1,
+          runAt: new Date(now + 60_000),
+          tags: [...tags, "delayed"],
+        },
+        {
+          queue: entry.queue,
+          maxAttempts: 3,
+          retryPolicy: { type: "fixed", delayMs: 1_000 },
+          deadline: new Date(now + 60 * 60_000),
+          executionTimeoutMs: 30_000,
+          idempotency: {
+            key: `fast-tier-${entry.language}`,
+            scope: "workhorse-demo:fast-tier",
+            ttlMs: DEMO_IDEMPOTENCY_TTL_MS,
+          },
+          tags: [...tags, "idempotency", "deadline"],
+        },
+      ];
+      for (const options of variants) {
+        taskIds.push(await workhorse.queue.enqueue(LANGUAGE_WORKER_TASK_TYPE, payload, options));
+      }
+    }
+
+    await workhorse.queue.syncSchedules(
+      DEMO_FAST_TIER_SCHEDULE_NAMESPACE,
+      DEMO_FAST_TIER_QUEUES.map(fastTierSchedule),
+    );
+    return taskIds;
+  });
+}
+
 function showcaseSeedPayload(
   family: DemoFeatureShowcaseFamily,
   example: DemoFeatureExample,
@@ -2124,11 +2207,13 @@ export async function seedDemoData(database: DemoDatabase) {
   }
 
   const historicalTaskCount = await seedHistoricalDemoData(database);
+  const fastTierTaskIds = await seedFastTierDemoData(database);
   const taskIds = [
     ...rateLimitTaskIds,
     ...longRunningTaskIds,
     ...featureShowcaseTaskIds,
     ...representativeSeed.taskIds,
+    ...fastTierTaskIds,
   ];
   return {
     seeded: taskIds.length > 0 || historicalTaskCount > 0,
