@@ -1230,13 +1230,20 @@ BEGIN
 END;
 $$;
 
+-- Only a row that leaves the active state can free capacity. The WHEN clauses repeat the function's
+-- own first test, so a claim, a promotion, or the delete of a row that never started calls no
+-- function (SM-948). The release of an active row still calls it on every queue: a policy created
+-- while the lease was held must see that release, and the FOR KEY SHARE wait orders it after any
+-- open claim.
 CREATE OR REPLACE TRIGGER task_runtime_concurrency_capacity_update
 BEFORE UPDATE OF state ON workhorse.task_runtime
-FOR EACH ROW EXECUTE FUNCTION workhorse.notify_concurrency_capacity_v1();
+FOR EACH ROW WHEN (OLD.state = 'active' AND NEW.state <> 'active')
+EXECUTE FUNCTION workhorse.notify_concurrency_capacity_v1();
 
 CREATE OR REPLACE TRIGGER task_runtime_concurrency_capacity_delete
 BEFORE DELETE ON workhorse.task_runtime
-FOR EACH ROW EXECUTE FUNCTION workhorse.notify_concurrency_capacity_v1();
+FOR EACH ROW WHEN (OLD.state = 'active')
+EXECUTE FUNCTION workhorse.notify_concurrency_capacity_v1();
 
 -- A budget release can unblock ready work in any queue. Walk the distinct waiting queues through
 -- the budget-ready index one step at a time, so the wake-up costs one probe per queue rather than
@@ -1283,13 +1290,19 @@ BEGIN
 END;
 $$;
 
+-- A task that names no budget cannot free budget capacity, and its budget name never changes. The
+-- WHEN clauses repeat the function's row tests, so such a task queues no trigger event (SM-948).
 CREATE OR REPLACE TRIGGER task_runtime_budget_capacity_update
 AFTER UPDATE OF state ON workhorse.task_runtime
-FOR EACH ROW EXECUTE FUNCTION workhorse.notify_budget_capacity_v1();
+FOR EACH ROW WHEN (
+  OLD.state = 'active' AND OLD.budget_name IS NOT NULL AND NEW.state <> 'active'
+)
+EXECUTE FUNCTION workhorse.notify_budget_capacity_v1();
 
 CREATE OR REPLACE TRIGGER task_runtime_budget_capacity_delete
 AFTER DELETE ON workhorse.task_runtime
-FOR EACH ROW EXECUTE FUNCTION workhorse.notify_budget_capacity_v1();
+FOR EACH ROW WHEN (OLD.state = 'active' AND OLD.budget_name IS NOT NULL)
+EXECUTE FUNCTION workhorse.notify_budget_capacity_v1();
 
 -- Immutable terminal materialization. Moving here removes completed work from every dispatch index.
 CREATE TABLE IF NOT EXISTS workhorse.task_outcome (
@@ -9041,7 +9054,7 @@ $$;
 -- until this transaction ends. A queue with no policy, no per-key rate cap, and no budget lock
 -- keeps the one-row fast path, which locks the first ready row it can take. That row holds the line
 -- when it names a budget this claim never locked, because reading past it has no bound.
--- claim_many_v1 calls it only for a queue with no concurrency or rate-limit policy (SM-915).
+-- No claim path calls it since SM-948; it remains a protocol function that claims one task.
 CREATE OR REPLACE FUNCTION workhorse.claim_one_v1(
   p_queue_name text,
   p_worker_id text,
@@ -9286,10 +9299,9 @@ END;
 $$;
 
 -- Claim several tasks through one client round trip. A fast-tier queue branches to fast_claim_v1.
--- A queue with no concurrency or rate-limit policy repeats claim_one_v1 until the limit or an empty
--- claim; only the first claim may wait for a budget lock, because later claims already hold budget
--- locks and waiting on another could deadlock against a batch that holds them in a different order.
--- A queue with a concurrency or rate-limit policy admits the batch as a set (SM-915). It locks the
+-- Every other queue admits the batch as a set (SM-915). A queue with no concurrency or rate-limit
+-- policy once repeated claim_one_v1 per task, which repeated the policy locks, the budget sample and
+-- the key-bucket cleanup for every start; it now takes the same set path (SM-948). It locks the
 -- policy rows and the window's budgets once, reads the clock once, and derives from one read of the
 -- 100-row window how many rows each concurrency key and each budget can still start: the room left
 -- under max_active_per_key and max_active, and the whole tokens left in the per-key and budget
@@ -9369,24 +9381,6 @@ BEGIN
     END IF;
     RETURN;
   END IF;
-  -- This read takes no lock. A policy created after it is still enforced, because claim_one_v1
-  -- locks and applies the policy rows itself. A policy removed after it leaves the set path with no
-  -- rule to apply, and admits as a plain claim would.
-  IF NOT EXISTS (
-    SELECT 1 FROM workhorse.concurrency_policy policy WHERE policy.queue_name = p_queue_name
-  ) AND NOT EXISTS (
-    SELECT 1 FROM workhorse.rate_limit_policy policy WHERE policy.queue_name = p_queue_name
-  ) THEN
-    FOR v_index IN 1..p_limit LOOP
-      RETURN QUERY SELECT * FROM workhorse.claim_one_v1(
-        p_queue_name, p_worker_id, p_lease_ms, v_index = 1
-      );
-      GET DIAGNOSTICS v_claimed = ROW_COUNT;
-      EXIT WHEN v_claimed = 0;
-    END LOOP;
-    RETURN;
-  END IF;
-
   IF p_worker_id IS NULL OR p_worker_id = '' THEN RAISE EXCEPTION 'worker_id must not be empty'; END IF;
   IF p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
     RAISE EXCEPTION 'lease_ms must be between 100 and 86400000';
@@ -12319,6 +12313,9 @@ $$;
 
 -- One firing per statement resolves every outcome the statement inserted. It first releases the
 -- still-pending edges that enter each new terminal task, then resolves the edges that leave it.
+-- Most outcomes have no pending edge in either direction, so one probe of the two pending-edge
+-- indexes ends the firing before any write or resolver call (SM-948). The probe reads the same
+-- snapshot the release and the resolver would, so it skips only work that would find no edge.
 CREATE OR REPLACE FUNCTION workhorse.resolve_task_outcome_dependencies_v1()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -12327,6 +12324,21 @@ DECLARE
   v_task_ids uuid[];
   v_states text[];
 BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM new_outcomes outcome
+     WHERE EXISTS (
+             SELECT 1 FROM workhorse.task_dependency dependency
+              WHERE dependency.dependent_task_id = outcome.task_id
+                AND dependency.released_at IS NULL
+           )
+        OR EXISTS (
+             SELECT 1 FROM workhorse.task_dependency dependency
+              WHERE dependency.prerequisite_task_id = outcome.task_id
+                AND dependency.released_at IS NULL
+           )
+  ) THEN
+    RETURN NULL;
+  END IF;
   UPDATE workhorse.task_dependency dependency
      SET released_at = clock_timestamp(), resolution = 'release'
    WHERE dependency.dependent_task_id IN (SELECT outcome.task_id FROM new_outcomes outcome)
@@ -18778,10 +18790,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (37, 'report queue tier and history in the dashboard'),
   (38, 'detect and repair pending-prerequisite counter drift'),
   (39, 'release a fused claim lock before it can deadlock'),
-  (40, 'govern the dependency counter drift check and repair')
+  (40, 'govern the dependency counter drift check and repair'),
+  (41, 'cut the plain full-tier per-task claim and trigger cost')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (40) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (41) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

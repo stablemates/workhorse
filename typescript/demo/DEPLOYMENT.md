@@ -476,10 +476,10 @@ remember.
 
 ### Dashboard schema
 
-The current build ships Workhorse schema version 40; its packaged migrations carry a version 6
+The current build ships Workhorse schema version 41; its packaged migrations carry a version 6
 baseline forward to it. Version 25 is a contract step, which the
 [fast-tier cutover](#the-fast-tier-release-needs-one-offline-cutover) applies. Versions 26 through
-40 are additive, so the ordinary schema step applies them to a database at version 25. Every client in
+41 are additive, so the ordinary schema step applies them to a database at version 25. Every client in
 this build refuses mutations against a schema below 40, because its Admin calls functions version
 40 introduced. Run the schema step before any process from this build starts. The migration
 baseline is the `0.2.0` clean install, and the schema step refuses a
