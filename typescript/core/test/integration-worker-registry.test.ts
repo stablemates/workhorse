@@ -18,6 +18,25 @@ const { databaseUrl, deferred, pool, queue, admin, adminAudit } = createIntegrat
   import.meta.url,
 );
 
+const lifecycleRegistration = async () =>
+  (await admin.listWorkers()).find((entry) => entry.workerId === "registry-lifecycle");
+
+const closeFailureRegistration = async () =>
+  (await admin.listWorkers()).find(
+    (entry) => entry.workerId === "registry-notification-close-failure",
+  );
+
+const heartbeatBackends = async (): Promise<number[]> => {
+  const backends = await pool.query<{ pid: number }>(
+    `SELECT pid
+       FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND query LIKE '%workhorse.heartbeat_many_v1%'
+        AND query NOT LIKE '%pg_stat_activity%'`,
+  );
+  return backends.rows.map((row) => row.pid);
+};
+
 describe("worker registry", () => {
   it("claims configured queues through one worker identity and shared slot budget", async () => {
     const firstQueue = `multi-queue-first-${randomUUID()}`;
@@ -188,12 +207,9 @@ describe("worker registry", () => {
       registryIntervalMs: 100,
     }).handle("registry-lifecycle", () => ({ ok: true }));
 
-    const registration = async () =>
-      (await admin.listWorkers()).find((entry) => entry.workerId === "registry-lifecycle");
-
     const running = worker.run();
     await vi.waitFor(async () => {
-      expect(await registration()).toMatchObject({
+      expect(await lifecycleRegistration()).toMatchObject({
         workerId: "registry-lifecycle",
         queue: "default",
         concurrency: 4,
@@ -208,7 +224,7 @@ describe("worker registry", () => {
 
     worker.stop();
     await running;
-    await expect(registration()).resolves.toBeUndefined();
+    await expect(lifecycleRegistration()).resolves.toBeUndefined();
   });
 
   it("deregisters when notification subscription cleanup fails", async () => {
@@ -223,20 +239,16 @@ describe("worker registry", () => {
       pollMs: 10,
       registryIntervalMs: 100,
     }).handle("registry-notification-close-failure", () => null);
-    const registration = async () =>
-      (await admin.listWorkers()).find(
-        (entry) => entry.workerId === "registry-notification-close-failure",
-      );
 
     try {
       const running = worker.run();
-      await vi.waitFor(async () => expect(await registration()).toBeDefined());
+      await vi.waitFor(async () => expect(await closeFailureRegistration()).toBeDefined());
       await vi.waitFor(() => expect(subscribe).toHaveBeenCalledOnce());
 
       worker.stop();
       await expect(running).rejects.toBe(closeFailure);
       expect(close).toHaveBeenCalledOnce();
-      await expect(registration()).resolves.toBeUndefined();
+      await expect(closeFailureRegistration()).resolves.toBeUndefined();
     } finally {
       subscribe.mockRestore();
     }
@@ -1337,6 +1349,60 @@ describe("worker registry", () => {
       expect(notificationErrors).toHaveLength(1);
       expect(notificationErrors[0]).toBeInstanceOf(Error);
     } finally {
+      worker.stop();
+      await running;
+    }
+  });
+
+  it("survives PostgreSQL terminating the idle heartbeat connection and resumes heartbeats", async () => {
+    const kind = `heartbeat-reconnect-${randomUUID()}`;
+    const finished: string[] = [];
+    const releases = new Map<string, ReturnType<typeof deferred<void>>>();
+    const worker = new Worker(queue, {
+      workerId: kind,
+      heartbeatMs: 20,
+      leaseMs: 5_000,
+      pollMs: 50,
+      registryIntervalMs: 0,
+    }).handle<{ step: string }>(kind, async ({ step }) => {
+      await releases.get(step)!.promise;
+      finished.push(step);
+      return null;
+    });
+
+    const running = worker.run();
+    try {
+      releases.set("before", deferred());
+      await queue.enqueue(kind, { step: "before" });
+      const [terminatedPid] = await vi.waitFor(
+        async () => {
+          const pids = await heartbeatBackends();
+          expect(pids).toHaveLength(1);
+          return pids;
+        },
+        { timeout: 2_000 },
+      );
+      releases.get("before")!.resolve();
+      await vi.waitFor(() => expect(finished).toEqual(["before"]), { timeout: 2_000 });
+
+      // The worker is idle and still holds the connection, so the error arrives outside a round.
+      await pool.query("SELECT pg_terminate_backend($1)", [terminatedPid]);
+      await sleep(100);
+
+      releases.set("after", deferred());
+      await queue.enqueue(kind, { step: "after" });
+      await vi.waitFor(
+        async () => {
+          const pids = await heartbeatBackends();
+          expect(pids).toHaveLength(1);
+          expect(pids[0]).not.toBe(terminatedPid);
+        },
+        { timeout: 2_000 },
+      );
+      releases.get("after")!.resolve();
+      await vi.waitFor(() => expect(finished).toEqual(["before", "after"]), { timeout: 2_000 });
+    } finally {
+      for (const release of releases.values()) release.resolve();
       worker.stop();
       await running;
     }

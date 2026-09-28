@@ -60,6 +60,7 @@ pub async fn run_runtime(fixture: &Value) -> Outcome {
             "heartbeat-cadence" => heartbeat_cadence(database, fixture).await,
             "poll-cadence" => poll_cadence(database, fixture).await,
             "graceful-drain" => graceful_drain(database, fixture).await,
+            "slot-refill" => slot_refill(database, fixture).await,
             "budget-admission-race" => budget_admission_race(database, fixture).await,
             "missing-handler" => missing_handler(database, fixture).await,
             "json-round-trip" => json_round_trip(database, fixture).await,
@@ -703,8 +704,13 @@ async fn heartbeat_cadence(database: &ScratchDatabase, fixture: &Value) -> Check
     assert_state(&client, task.task_id, &json!({"state": "succeeded", "attempt": 1})).await
 }
 
-/// Holds each empty claim in PostgreSQL until the runner has counted it, then measures the delay
-/// between the enqueue after the last empty claim and the handler start.
+/// Holds each empty claim in PostgreSQL until the runner has counted it, then measures the
+/// worker's backoff after the last empty claim.
+///
+/// The wrapper stamps each claim with PostgreSQL's clock, and the delay runs from the end of the
+/// last empty claim to the start of the next claim. That span is the worker's own cadence. It
+/// leaves out the enqueue, the claim that finds the task, and the dispatch to the handler, so a
+/// slow runner or a slow database cannot charge that latency to the backoff.
 async fn poll_cadence(database: &ScratchDatabase, fixture: &Value) -> Checked {
     let client = database.connect().await;
     let row = client
@@ -721,6 +727,11 @@ async fn poll_cadence(database: &ScratchDatabase, fixture: &Value) -> Checked {
         .batch_execute(&format!(
             "CREATE TABLE workhorse.runtime_poll_control (hold_claims boolean NOT NULL);
              INSERT INTO workhorse.runtime_poll_control VALUES (true);
+             CREATE TABLE workhorse.runtime_poll_claims (
+               started timestamptz NOT NULL,
+               finished timestamptz NOT NULL,
+               found boolean NOT NULL
+             );
              CREATE SEQUENCE workhorse.runtime_poll_reached;
              CREATE SEQUENCE workhorse.runtime_poll_released;
              ALTER FUNCTION workhorse.claim_many_v1 RENAME TO claim_many_v1_inner;
@@ -728,16 +739,21 @@ async fn poll_cadence(database: &ScratchDatabase, fixture: &Value) -> Checked {
                LANGUAGE plpgsql AS $$
              #variable_conflict use_column
              DECLARE
+               v_started timestamptz := clock_timestamp();
+               v_found boolean;
                v_reached bigint;
              BEGIN
                RETURN QUERY SELECT * FROM workhorse.claim_many_v1_inner({forwarded});
-               IF NOT FOUND AND (SELECT hold_claims FROM workhorse.runtime_poll_control) THEN
+               v_found := FOUND;
+               IF NOT v_found AND (SELECT hold_claims FROM workhorse.runtime_poll_control) THEN
                  v_reached := nextval('workhorse.runtime_poll_reached');
                  WHILE (SELECT CASE WHEN is_called THEN last_value ELSE 0 END
                           FROM workhorse.runtime_poll_released) < v_reached LOOP
                    PERFORM pg_sleep(0.005);
                  END LOOP;
                END IF;
+               INSERT INTO workhorse.runtime_poll_claims
+                 VALUES (v_started, clock_timestamp(), v_found);
              END
              $$;"
         ))
@@ -752,12 +768,11 @@ async fn poll_cadence(database: &ScratchDatabase, fixture: &Value) -> Checked {
     )?;
     let (started, mut handler_started) = mpsc::unbounded_channel();
     worker.handle(task_type, move |_: Value, _| {
-        let _ = started.send(Instant::now());
+        let _ = started.send(());
         async { Ok(Value::Null) }
     });
     let (stop, running) = run(&worker);
     let polls = number(fixture, "emptyPollsBeforeEnqueue");
-    let mut enqueued = None;
     for poll in 1..=polls {
         eventually(&format!("empty poll {poll} never reached PostgreSQL"), || async {
             let row = client
@@ -774,7 +789,6 @@ async fn poll_cadence(database: &ScratchDatabase, fixture: &Value) -> Checked {
         if poll == polls {
             tokio::time::sleep(millis(fixture, "enqueueStallMs")).await;
             queue.enqueue(task_type, &json!({}), Default::default()).await.map_err(driver)?;
-            enqueued = Some(Instant::now());
             client
                 .execute("UPDATE workhorse.runtime_poll_control SET hold_claims = false", &[])
                 .await
@@ -785,13 +799,34 @@ async fn poll_cadence(database: &ScratchDatabase, fixture: &Value) -> Checked {
             .await
             .map_err(sql)?;
     }
-    let handled = tokio::time::timeout(WAIT, handler_started.recv())
+    tokio::time::timeout(WAIT, handler_started.recv())
         .await
         .map_err(|_| "the worker never claimed the enqueued task".to_owned())?
         .ok_or("the handler never started")?;
     let _ = stop.send(());
     running.await.map_err(|error| error.to_string())?.map_err(driver)?;
-    let delay = handled.duration_since(enqueued.ok_or("the fixture enqueued nothing")?);
+    // The claim that found the task, the number of empty claims before it, and the time from the
+    // end of the last of those to its start.
+    let row = client
+        .query_one(
+            "WITH claims AS (
+               SELECT started, found, lag(finished) OVER (ORDER BY started) AS previous_finished,
+                      count(*) FILTER (WHERE NOT found) OVER (ORDER BY started) AS empty_before
+                 FROM workhorse.runtime_poll_claims
+             )
+             SELECT empty_before,
+                    (extract(epoch FROM started - previous_finished) * 1000000)::bigint
+               FROM claims WHERE found ORDER BY started LIMIT 1",
+            &[],
+        )
+        .await
+        .map_err(sql)?;
+    let (empty, micros): (i64, Option<i64>) = (row.get(0), row.get(1));
+    check(empty == polls, || {
+        format!("the worker claimed the task after {empty} empty polls, want {polls}")
+    })?;
+    let micros = micros.ok_or("the task was claimed without an empty poll before it")?;
+    let delay = Duration::from_micros(u64::try_from(micros).map_err(|error| error.to_string())?);
     let (minimum, maximum) =
         (millis(fixture, "expectedMinimumDelayMs"), millis(fixture, "expectedMaximumDelayMs"));
     check(delay >= minimum && delay <= maximum, || {
@@ -856,6 +891,239 @@ async fn graceful_drain(database: &ScratchDatabase, fixture: &Value) -> Checked 
             "after the drain {counts:?}, want {want_succeeded} succeeded and {want_ready} ready"
         )
     })
+}
+
+/// Holds each handler until the runner finishes it, in the order the handlers started.
+#[derive(Default)]
+struct HandlerGate(Mutex<(bool, std::collections::VecDeque<oneshot::Sender<()>>)>);
+
+impl HandlerGate {
+    fn lock(
+        &self,
+    ) -> std::sync::MutexGuard<'_, (bool, std::collections::VecDeque<oneshot::Sender<()>>)> {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Returns what the handler waits on, or `None` once the gate is open.
+    fn enter(&self) -> Option<oneshot::Receiver<()>> {
+        let mut state = self.lock();
+        if state.0 {
+            return None;
+        }
+        let (finish, finished) = oneshot::channel();
+        state.1.push_back(finish);
+        Some(finished)
+    }
+
+    fn waiting(&self) -> usize {
+        self.lock().1.len()
+    }
+
+    fn finish_next(&self) {
+        if let Some(finish) = self.lock().1.pop_front() {
+            let _ = finish.send(());
+        }
+    }
+
+    /// Finishes every waiting handler and lets later ones run straight through.
+    fn open(&self) {
+        let mut state = self.lock();
+        state.0 = true;
+        for finish in state.1.drain(..) {
+            let _ = finish.send(());
+        }
+    }
+}
+
+/// The claims the `slot-refill` wrapper records the limit of.
+const RECORDED_CLAIMS: usize = 8;
+
+async fn sequence_value(client: &Client, sequence: &str) -> Checked<i64> {
+    let row = client
+        .query_one(
+            &format!(
+                "SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM workhorse.{sequence}"
+            ),
+            &[],
+        )
+        .await
+        .map_err(sql)?;
+    Ok(row.get(0))
+}
+
+/// Wraps `claim_many_v1` so every claim records its limit and in-flight count in sequences, which
+/// the runner reads while a claim is still open, and can be held before it claims anything.
+async fn slot_refill(database: &ScratchDatabase, fixture: &Value) -> Checked {
+    let client = database.connect().await;
+    let row = client
+        .query_one(
+            "SELECT pg_get_function_arguments(oid), pg_get_function_result(oid), pronargs
+               FROM pg_proc WHERE oid = 'workhorse.claim_many_v1'::regproc",
+            &[],
+        )
+        .await
+        .map_err(sql)?;
+    let (arguments, result, count): (String, String, i16) = (row.get(0), row.get(1), row.get(2));
+    let forwarded = (1..=count).map(|index| format!("${index}")).collect::<Vec<_>>().join(", ");
+    let limit_sequences = (1..=RECORDED_CLAIMS)
+        .map(|claim| format!("CREATE SEQUENCE workhorse.runtime_slot_limit_{claim};"))
+        .collect::<String>();
+    client
+        .batch_execute(&format!(
+            "CREATE TABLE workhorse.runtime_slot_control (hold_claims boolean NOT NULL);
+             INSERT INTO workhorse.runtime_slot_control VALUES (false);
+             CREATE SEQUENCE workhorse.runtime_slot_entered;
+             CREATE SEQUENCE workhorse.runtime_slot_left;
+             CREATE SEQUENCE workhorse.runtime_slot_most_in_flight;
+             CREATE SEQUENCE workhorse.runtime_slot_with_tasks;
+             {limit_sequences}
+             ALTER FUNCTION workhorse.claim_many_v1 RENAME TO claim_many_v1_inner;
+             CREATE FUNCTION workhorse.claim_many_v1({arguments}) RETURNS {result}
+               LANGUAGE plpgsql AS $$
+             #variable_conflict use_column
+             DECLARE
+               v_claim bigint;
+               v_in_flight bigint;
+               v_rows bigint;
+             BEGIN
+               PERFORM pg_advisory_lock(909);
+               v_claim := nextval('workhorse.runtime_slot_entered');
+               v_in_flight := v_claim - (SELECT CASE WHEN is_called THEN last_value ELSE 0 END
+                                           FROM workhorse.runtime_slot_left);
+               IF v_in_flight > (SELECT CASE WHEN is_called THEN last_value ELSE 0 END
+                                   FROM workhorse.runtime_slot_most_in_flight) THEN
+                 PERFORM setval('workhorse.runtime_slot_most_in_flight', v_in_flight);
+               END IF;
+               PERFORM pg_advisory_unlock(909);
+               IF v_claim <= {RECORDED_CLAIMS} THEN
+                 PERFORM setval(format('workhorse.runtime_slot_limit_%s', v_claim)::regclass, $3);
+               END IF;
+               WHILE (SELECT hold_claims FROM workhorse.runtime_slot_control) LOOP
+                 PERFORM pg_sleep(0.005);
+               END LOOP;
+               RETURN QUERY SELECT * FROM workhorse.claim_many_v1_inner({forwarded});
+               GET DIAGNOSTICS v_rows = ROW_COUNT;
+               IF v_rows > 0 THEN
+                 PERFORM nextval('workhorse.runtime_slot_with_tasks');
+               END IF;
+               PERFORM nextval('workhorse.runtime_slot_left');
+             END
+             $$;"
+        ))
+        .await
+        .map_err(sql)?;
+    let hold = |held: bool| {
+        let client = &client;
+        async move {
+            client
+                .execute("UPDATE workhorse.runtime_slot_control SET hold_claims = $1", &[&held])
+                .await
+                .map(drop)
+                .map_err(sql)
+        }
+    };
+
+    let queue = queue(database, fixture).await?;
+    let task_type = text(fixture, "taskType");
+    let task_count = number(fixture, "taskCount");
+    let mut tasks = Vec::new();
+    for sequence in 0..task_count {
+        let payload = json!({"sequence": sequence});
+        tasks.push(
+            queue.enqueue(task_type, &payload, Default::default()).await.map_err(driver)?.task_id,
+        );
+    }
+    let concurrency = usize::try_from(number(fixture, "concurrency")).unwrap_or(1);
+    let worker = worker(database, 16, WorkerOptions { concurrency, ..options(fixture) })?;
+    let gate = Arc::new(HandlerGate::default());
+    let waiting = Arc::clone(&gate);
+    worker.handle(task_type, move |_: Value, _| {
+        let waiting = Arc::clone(&waiting);
+        async move {
+            if let Some(finished) = waiting.enter() {
+                let _ = finished.await;
+            }
+            Ok(Value::Null)
+        }
+    });
+    let claims_received = |want: i64| {
+        let client = &client;
+        async move {
+            eventually(&format!("claim {want} never reached PostgreSQL"), || async {
+                Ok(sequence_value(client, "runtime_slot_entered").await? >= want)
+            })
+            .await
+        }
+    };
+
+    let (stop, running) = run(&worker);
+    let outcome = async {
+        eventually("the worker never filled its slots", || async {
+            Ok(gate.waiting() == concurrency)
+        })
+        .await?;
+        hold(true).await?;
+        for finished in 1..=3 {
+            gate.finish_next();
+            if finished == 2 {
+                // One more free slot is below the refill batch while the first refill is held.
+                tokio::time::sleep(millis(fixture, "settleCheckMs")).await;
+                let claims = sequence_value(&client, "runtime_slot_entered").await?;
+                check(claims == 2, || {
+                    format!("{claims} claims after one refill and one free slot, want 2")
+                })?;
+            } else {
+                claims_received(if finished == 1 { 2 } else { 3 }).await?;
+            }
+        }
+        let claims = sequence_value(&client, "runtime_slot_entered").await?;
+        let recorded = usize::try_from(claims).unwrap_or(0).min(RECORDED_CLAIMS);
+        let mut limits = Vec::new();
+        for claim in 1..=recorded {
+            limits.push(sequence_value(&client, &format!("runtime_slot_limit_{claim}")).await?);
+        }
+        let want_limits: Vec<i64> = fixture["expectedClaimLimits"]
+            .as_array()
+            .ok_or("fixture field expectedClaimLimits is not an array")?
+            .iter()
+            .filter_map(Value::as_i64)
+            .collect();
+        check(limits == want_limits, || {
+            format!("the worker claimed with limits {limits:?}, want {want_limits:?}")
+        })?;
+        let overlapping = sequence_value(&client, "runtime_slot_most_in_flight").await?;
+        let want_overlapping = number(fixture, "expectedOverlappingClaims");
+        check(overlapping == want_overlapping, || {
+            format!("{overlapping} claims were in flight at once, want {want_overlapping}")
+        })?;
+
+        hold(false).await?;
+        gate.open();
+        eventually("the worker never ran every task", || async {
+            for task in &tasks {
+                if task_state(&client, *task).await?.0 != "succeeded" {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        })
+        .await?;
+        let with_tasks = sequence_value(&client, "runtime_slot_with_tasks").await?;
+        let per_task = with_tasks as f64 / task_count as f64;
+        let maximum = fixture["expectedMaximumClaimsPerTask"]
+            .as_f64()
+            .ok_or("fixture field expectedMaximumClaimsPerTask is not a number")?;
+        check(per_task <= maximum, || {
+            format!("{with_tasks} claims leased {task_count} tasks ({per_task} per task), want at most {maximum}")
+        })
+    }
+    .await;
+    let _ = hold(false).await;
+    gate.open();
+    let _ = stop.send(());
+    let stopped = running.await.map_err(|error| error.to_string())?.map_err(driver);
+    outcome?;
+    stopped
 }
 
 const CLAIM: &str = "SELECT * FROM workhorse.claim_v1($1::text, $2::text, $3::integer)";

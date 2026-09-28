@@ -1,0 +1,13 @@
+[package]
+name = "workhorse-fast-claim-stress"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.89"
+license = "Apache-2.0"
+publish = false
+description = "Runs several Rust workers against one fast-tier queue for the manual deadlock benchmark (SM-934)."
+
+[dependencies]
+workhorse = { path = "../.." }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+serde_json = "1"

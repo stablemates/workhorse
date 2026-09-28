@@ -25,6 +25,8 @@ class Admin(_AdminOperations)
   def redrive(self, source_task_id: str, audit: AdminAudit) -> RedriveResult
   def redrive_many(self, filter: DeadLetterFilter, audit: AdminAudit, options: BulkRedriveOptions | None = None) -> BulkRedrivePage
   def resume_queue(self, queue_name: str, audit: AdminAudit) -> None
+  def set_queue_history(self, queue_name: str, *, record_attempts: bool | None = None, record_claims: bool | None = None) -> QueueHistory
+  def set_queue_tier(self, queue_name: str, tier: QueueTier, audit: AdminAudit) -> QueueTier
   def set_worker_paused(self, worker_id: str, paused: bool, audit: AdminAudit) -> WorkerPauseResult | None
 
 class AdminAudit
@@ -54,6 +56,8 @@ class AsyncAdmin(_AdminOperations)
   async def redrive(self, source_task_id: str, audit: AdminAudit) -> RedriveResult
   async def redrive_many(self, filter: DeadLetterFilter, audit: AdminAudit, options: BulkRedriveOptions | None = None) -> BulkRedrivePage
   async def resume_queue(self, queue_name: str, audit: AdminAudit) -> None
+  async def set_queue_history(self, queue_name: str, *, record_attempts: bool | None = None, record_claims: bool | None = None) -> QueueHistory
+  async def set_queue_tier(self, queue_name: str, tier: QueueTier, audit: AdminAudit) -> QueueTier
   async def set_worker_paused(self, worker_id: str, paused: bool, audit: AdminAudit) -> WorkerPauseResult | None
 
 type AsyncBatchHandler = Callable[[Sequence[AsyncBatchHandlerItem]], Awaitable[Sequence[BatchHandlerOutcome]]]
@@ -491,6 +495,9 @@ class ExternalWaitPage
   items: tuple[ExternalWait, ...]
   next_cursor: ExternalWaitCursor | None
 
+class FastTierUnsupportedError(WorkhorseError)
+  def __init__(self, queue: str, feature: str, ordinal: int | None = None) -> None
+
 type Handler = Callable[[Any, HandlerContext], Json]
 
 class HandlerContext
@@ -599,6 +606,13 @@ class Queue
   def sync_schedules(self, namespace: str, definitions: Sequence[ScheduleDefinition], *, prune: bool = True) -> None
 
 type QueueHealth = dict[str, Json]
+
+class QueueHistory
+  def __init__(self, record_attempts: bool, record_claims: bool) -> None
+  record_attempts: bool
+  record_claims: bool
+
+type QueueTier = Literal['fast', 'full']
 
 class RateLimit
   def __init__(self, limit: int, interval_ms: int, burst: int) -> None
@@ -889,7 +903,7 @@ class WaitLimitExceededError(WorkhorseError)
   def __init__(self, task_id: str) -> None
 
 class Worker
-  def __init__(self, pool: _PsycopgPool, *, queue: str | None = None, queues: Sequence[str] | None = None, worker_id: str | None = None, concurrency: int = 1, poll_ms: int | None = None, lease_ms: int = 30000, heartbeat_ms: int | None = None, maintenance_interval_ms: int = 1000, maintenance_routine_poll_ms: int = 60000, registry_interval_ms: int = 5000, retry_delay_ms: int | Callable[[int, ClaimedTask], int | None] | None = None, schedule_namespaces: Sequence[str] = (), schedule_catchup_limit: int = 100, on_notification_error: Callable[[BaseException], None] | None = None, on_registration_error: Callable[[BaseException], None] | None = None, shared_heartbeats: bool = False, _executor: _SyncRowExecutor | None = None, _heartbeat_executor_factory: _HeartbeatExecutorFactory | None = None) -> None
+  def __init__(self, pool: _PsycopgPool, *, queue: str | None = None, queues: Sequence[str] | None = None, worker_id: str | None = None, concurrency: int = 1, cohorts: int | None = None, poll_ms: int | None = None, lease_ms: int = 30000, heartbeat_ms: int | None = None, maintenance_interval_ms: int = 1000, maintenance_routine_poll_ms: int = 60000, registry_interval_ms: int = 5000, retry_delay_ms: int | Callable[[int, ClaimedTask], int | None] | None = None, schedule_namespaces: Sequence[str] = (), schedule_catchup_limit: int = 100, on_notification_error: Callable[[BaseException], None] | None = None, on_registration_error: Callable[[BaseException], None] | None = None, shared_heartbeats: bool = False, _executor: _SyncRowExecutor | None = None, _heartbeat_executor_factory: _HeartbeatExecutorFactory | None = None) -> None
   def handle(self, type: str, handler: Handler) -> Worker
   def handle_batch(self, type: str, handler: BatchHandler, *, max_size: int, linger_ms: int) -> Worker
   def is_paused(self) -> bool
@@ -929,6 +943,8 @@ class WorkerRegistryEntry(WorkerPauseResult)
 class WorkhorseError(Exception)
   def __init__(self, *args, **kwargs)
 
+__version__: str
+
 def assert_schema_compatible(connection: _SyncConnection) -> None
 
 async def assert_schema_compatible_asyncpg(connection: _AsyncpgConnection) -> None
@@ -958,6 +974,8 @@ class Admin(_AdminOperations)
   def redrive(self, source_task_id: str, audit: AdminAudit) -> RedriveResult
   def redrive_many(self, filter: DeadLetterFilter, audit: AdminAudit, options: BulkRedriveOptions | None = None) -> BulkRedrivePage
   def resume_queue(self, queue_name: str, audit: AdminAudit) -> None
+  def set_queue_history(self, queue_name: str, *, record_attempts: bool | None = None, record_claims: bool | None = None) -> QueueHistory
+  def set_queue_tier(self, queue_name: str, tier: QueueTier, audit: AdminAudit) -> QueueTier
   def set_worker_paused(self, worker_id: str, paused: bool, audit: AdminAudit) -> WorkerPauseResult | None
 
 class AdminAudit
@@ -987,6 +1005,8 @@ class AsyncAdmin(_AdminOperations)
   async def redrive(self, source_task_id: str, audit: AdminAudit) -> RedriveResult
   async def redrive_many(self, filter: DeadLetterFilter, audit: AdminAudit, options: BulkRedriveOptions | None = None) -> BulkRedrivePage
   async def resume_queue(self, queue_name: str, audit: AdminAudit) -> None
+  async def set_queue_history(self, queue_name: str, *, record_attempts: bool | None = None, record_claims: bool | None = None) -> QueueHistory
+  async def set_queue_tier(self, queue_name: str, tier: QueueTier, audit: AdminAudit) -> QueueTier
   async def set_worker_paused(self, worker_id: str, paused: bool, audit: AdminAudit) -> WorkerPauseResult | None
 
 class BulkRedriveOptions
@@ -1090,6 +1110,13 @@ class HumanWaitPage
   def __init__(self, items: tuple[HumanWait, ...], next_cursor: ExternalWaitCursor | None) -> None
   items: tuple[HumanWait, ...]
   next_cursor: ExternalWaitCursor | None
+
+class QueueHistory
+  def __init__(self, record_attempts: bool, record_claims: bool) -> None
+  record_attempts: bool
+  record_claims: bool
+
+type QueueTier = Literal['fast', 'full']
 
 class RedriveResult
   def __init__(self, status: Literal['redriven', 'replayed', 'eligible', 'not_found', 'not_failed'], source_task_id: str, target_task_id: str | None, source_state: TaskState | None, target_state: TaskState | None, requested_at: datetime | None) -> None
@@ -2286,10 +2313,13 @@ class DashboardManagedQueueRow(dict)
   queue: ForwardRef('Required[str]', module='dashboard_v1')
   rateLimitPolicy: ForwardRef('Required[DashboardRateLimitPolicySummary | None]', module='dashboard_v1')
   ready: ForwardRef('Required[float]', module='dashboard_v1')
+  recordAttempts: ForwardRef('NotRequired[bool]', module='dashboard_v1')
+  recordClaims: ForwardRef('NotRequired[bool]', module='dashboard_v1')
   scheduled: ForwardRef('Required[float]', module='dashboard_v1')
   def setdefault(self, key, default=None)
   succeeded: ForwardRef('Required[float]', module='dashboard_v1')
   terminalCountsApproximate: ForwardRef('Required[bool]', module='dashboard_v1')
+  tier: ForwardRef("NotRequired[Literal['fast', 'full']]", module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -4594,7 +4624,7 @@ class EventsInput(dict)
   def setdefault(self, key, default=None)
   taskId: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
   taskType: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
-  types: ForwardRef("NotRequired[list[Literal['enqueued', 'debounced', 'debounce_rejected', 'throttled', 'claimed', 'batch_dispatched', 'batch_failed', 'succeeded', 'failed', 'retry_scheduled', 'canceled', 'cancel_requested', 'promoted', 'lease_expired', 'released', 'deadline_exceeded', 'execution_timed_out', 'redriven', 'redrive_created', 'checkpoint_saved', 'progress_updated', 'wait_scheduled', 'wait_elapsed', 'wait_replayed', 'signal_waiting', 'signal_received', 'signal_replayed', 'signal_rejected', 'dependency_blocked', 'dependency_released', 'dependency_failed', 'dependency_canceled', 'child_created', 'child_joined', 'children_created', 'children_joined', 'parent_linked', 'human_wait_created', 'human_wait_completed', 'human_wait_replayed', 'human_wait_rejected', 'retry', 'timeout']]]", module='dashboard_v1')
+  types: ForwardRef("NotRequired[list[Literal['enqueued', 'debounced', 'debounce_rejected', 'throttled', 'claimed', 'batch_dispatched', 'batch_failed', 'succeeded', 'failed', 'retry_scheduled', 'canceled', 'cancel_requested', 'promoted', 'lease_expired', 'released', 'deadline_exceeded', 'execution_timed_out', 'redriven', 'redrive_created', 'checkpoint_saved', 'progress_updated', 'wait_scheduled', 'wait_elapsed', 'wait_replayed', 'signal_waiting', 'signal_received', 'signal_replayed', 'signal_rejected', 'dependency_blocked', 'dependency_released', 'dependency_failed', 'dependency_canceled', 'dependency_counter_repaired', 'child_created', 'child_joined', 'children_created', 'children_joined', 'parent_linked', 'human_wait_created', 'human_wait_completed', 'human_wait_replayed', 'human_wait_rejected', 'retry', 'timeout']]]", module='dashboard_v1')
   def update(...)
   def values(...)
   window: ForwardRef("NotRequired[Literal['15m', '1h', '6h', '24h']]", module='dashboard_v1')
@@ -5501,6 +5531,9 @@ class EnqueueIdempotencyConflictError(WorkhorseError)
 class ExecutionTimeoutError(WorkhorseError)
   def __init__(self, task_id: str, attempt: int) -> None
 
+class FastTierUnsupportedError(WorkhorseError)
+  def __init__(self, queue: str, feature: str, ordinal: int | None = None) -> None
+
 class HumanWaitAlreadyWaitingError(WorkhorseError)
   def __init__(self, task_id: str, wait_name: str) -> None
 
@@ -6001,7 +6034,7 @@ type BatchHandler = Callable[[Sequence[BatchHandlerItem]], Sequence[BatchHandler
 type Handler = Callable[[Any, HandlerContext], Json]
 
 class Worker
-  def __init__(self, pool: _PsycopgPool, *, queue: str | None = None, queues: Sequence[str] | None = None, worker_id: str | None = None, concurrency: int = 1, poll_ms: int | None = None, lease_ms: int = 30000, heartbeat_ms: int | None = None, maintenance_interval_ms: int = 1000, maintenance_routine_poll_ms: int = 60000, registry_interval_ms: int = 5000, retry_delay_ms: int | Callable[[int, ClaimedTask], int | None] | None = None, schedule_namespaces: Sequence[str] = (), schedule_catchup_limit: int = 100, on_notification_error: Callable[[BaseException], None] | None = None, on_registration_error: Callable[[BaseException], None] | None = None, shared_heartbeats: bool = False, _executor: _SyncRowExecutor | None = None, _heartbeat_executor_factory: _HeartbeatExecutorFactory | None = None) -> None
+  def __init__(self, pool: _PsycopgPool, *, queue: str | None = None, queues: Sequence[str] | None = None, worker_id: str | None = None, concurrency: int = 1, cohorts: int | None = None, poll_ms: int | None = None, lease_ms: int = 30000, heartbeat_ms: int | None = None, maintenance_interval_ms: int = 1000, maintenance_routine_poll_ms: int = 60000, registry_interval_ms: int = 5000, retry_delay_ms: int | Callable[[int, ClaimedTask], int | None] | None = None, schedule_namespaces: Sequence[str] = (), schedule_catchup_limit: int = 100, on_notification_error: Callable[[BaseException], None] | None = None, on_registration_error: Callable[[BaseException], None] | None = None, shared_heartbeats: bool = False, _executor: _SyncRowExecutor | None = None, _heartbeat_executor_factory: _HeartbeatExecutorFactory | None = None) -> None
   def handle(self, type: str, handler: Handler) -> Worker
   def handle_batch(self, type: str, handler: BatchHandler, *, max_size: int, linger_ms: int) -> Worker
   def is_paused(self) -> bool

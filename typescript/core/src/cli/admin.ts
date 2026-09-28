@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import readline from "node:readline/promises";
 import { Pool } from "pg";
-import { PurgeIdempotencyConflictError } from "../admin.js";
+import { MAX_DEPENDENCY_DRIFT_LIMIT, PurgeIdempotencyConflictError } from "../admin.js";
+import { FastTierUnsupportedError } from "../errors.js";
+import type { QueueTier } from "../queue/queue-administration.js";
 import {
   MAX_EXTERNAL_WAIT_LIST_SIZE,
   MAX_TASK_QUERY_PAGE_SIZE,
@@ -68,7 +70,7 @@ Inspection commands (safe, read-only):
   external-waits
                List every pending human decision and signal wait across the fleet.
   failures     List terminal failures (dead letters).
-  queues       List per-queue dispatch pressure and pause state.
+  queues       List per-queue dispatch pressure, pause state, tier, and history settings.
   schedules    List enabled recurring schedules.
   workers      List durable worker registrations.
   maintenance  Show the maintenance and retention policies with provenance.
@@ -83,10 +85,16 @@ Guarded commands (mutate; require --env and confirmation):
   pause <queue>       Pause claiming for one queue.
   resume <queue>      Resume claiming for one queue.
   purge <queue>       Delete one queue's non-active tasks.
+  set-tier <queue>    Move one queue to the fast or full tier selected by --tier.
+  set-history <queue>
+                      Choose the history a fast-tier queue writes.
   pause-worker <worker-id>
                       Stop one registered worker from claiming.
   resume-worker <worker-id>
                       Let one registered worker claim again.
+  repair-dependencies
+                      Recount blocked dependents whose prerequisite counter drifted from their
+                      edges; --dry-run lists the drift and each planned action without writes.
 
 Common options:
   --database-url <url>  Database URL. This takes precedence over all other sources.
@@ -98,21 +106,28 @@ Guarded-command options:
   --yes              Skip the interactive confirmation prompt.
   --actor <name>     Attribution recorded for the mutation (default: workhorse-admin).
   --reason <text>    Reason recorded for the mutation. Required for every guarded command except
-                     cancel, signal, and complete-human.
+                     cancel, signal, complete-human, and set-history, which records no reason.
   --request-id <id>  Request identity recorded with the mutation (default: a random UUID).
                      Redrive and purge additionally use it for idempotency. Required explicitly
                      for redrive-many execution, signal, and complete-human; reuse on retries.
-  --dry-run         Preview redrive-many without --env or confirmation; --reason is still required.
+  --dry-run         Preview redrive-many or repair-dependencies without --env or confirmation.
+                     A redrive-many preview still requires --reason.
   --payload-json <json>
                      Signal or human decision value, including JSON null, false, and scalar values.
   --payload-file <path>
                      Read the delivery value from a JSON file instead of --payload-json.
+  --tier <fast|full> Target tier for set-tier. The database refuses a queue with live tasks, and
+                     refuses fast for a queue with a concurrency or rate-limit policy.
+  --record-attempts <on|off>, --record-claims <on|off>
+                     History for set-history: attempt rows and claimed events. An omitted flag
+                     keeps its setting. A full-tier queue records both regardless.
 
 Listing options:
   --queue <name>     Filter by queue.
   --type <type>      Filter by task type.
   --state <state>    Filter tasks by lifecycle state; repeatable or comma-separated.
   --limit <count>    Page size, at most 1000 for tasks, timeline, failures, and redrive-many.
+                     repair-dependencies examines at most 1000 rows by default and 100000 at most.
   --cursor <json>   Continue tasks, timeline, failures, or redrive-many from its own nextCursor.
                      Keep filters unchanged; failure listings descend and bulk recovery ascends.
   --created-after <timestamp>, --created-before <timestamp>
@@ -231,6 +246,32 @@ function parseExternalWaitCursor(
   return cursor as unknown as ExternalWaitCursor;
 }
 
+function parseTier(value: string | undefined): QueueTier {
+  if (value === undefined) throw new CliUsageError("admin set-tier requires --tier <fast|full>");
+  if (value !== "fast" && value !== "full") {
+    throw new CliUsageError(`--tier must be fast or full, not ${value}`);
+  }
+  return value;
+}
+
+function parseSwitch(value: string | undefined, flag: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (value === "on") return true;
+  if (value === "off") return false;
+  throw new CliUsageError(`${flag} must be on or off, not ${value}`);
+}
+
+/**
+ * States why the database refused a tier change. The generic fast-tier message names the queue as
+ * fast-tier, which is wrong for a full-tier queue and drops the live-task cause.
+ */
+function tierRefusal(error: FastTierUnsupportedError, tier: QueueTier): string {
+  if (error.feature === "tier change") {
+    return `Queue ${error.queue} has live tasks, so its tier cannot change.`;
+  }
+  return `Queue ${error.queue} cannot move to the ${tier} tier: the fast tier does not support ${error.feature}.`;
+}
+
 function requirePositional(positionals: readonly string[], command: string, name: string): string {
   const target = positionals[0];
   if (target === undefined) throw new CliUsageError(`admin ${command} requires a <${name}>`);
@@ -306,17 +347,27 @@ export async function runAdminCommand(
     "finished-before": ["failures", "redrive-many"],
     tag: ["failures", "redrive-many"],
     "error-name": ["failures", "redrive-many"],
-    "dry-run": ["redrive-many"],
+    "dry-run": ["redrive-many", "repair-dependencies"],
     "payload-json": ["signal", "complete-human"],
     "payload-file": ["signal", "complete-human"],
     state: ["tasks"],
     namespace: ["schedules"],
-    limit: ["tasks", "timeline", "failures", "redrive-many", "external-waits"],
+    limit: [
+      "tasks",
+      "timeline",
+      "failures",
+      "redrive-many",
+      "external-waits",
+      "repair-dependencies",
+    ],
     queue: ["tasks", "failures", "redrive-many"],
     type: ["tasks", "failures", "redrive-many"],
     name: ["checkpoints", "waits", "signal", "complete-human"],
     "human-cursor": ["external-waits"],
     "signal-cursor": ["external-waits"],
+    tier: ["set-tier"],
+    "record-attempts": ["set-history"],
+    "record-claims": ["set-history"],
   };
   for (const [flag, commands] of Object.entries(scopedOptions)) {
     if (values[flag as keyof typeof values] !== undefined && !commands.includes(command)) {
@@ -334,7 +385,9 @@ export async function runAdminCommand(
       ? MAX_EXTERNAL_WAIT_LIST_SIZE
       : command === "redrive-many"
         ? MAX_REDRIVE_BATCH_SIZE
-        : MAX_TASK_QUERY_PAGE_SIZE;
+        : command === "repair-dependencies"
+          ? MAX_DEPENDENCY_DRIFT_LIMIT
+          : MAX_TASK_QUERY_PAGE_SIZE;
   if (limit !== undefined && limit > maximum) {
     throw new CliUsageError(`admin ${command} --limit must be at most ${maximum}`);
   }
@@ -564,6 +617,51 @@ export async function runAdminCommand(
         process.exitCode = 1;
       return;
     }
+    if (command === "repair-dependencies") {
+      if (values["dry-run"]) {
+        const drift = await client.listDependencyDrift(limit);
+        io.out(
+          json
+            ? toAdminJson("admin repair-dependencies", drift)
+            : `${formatTable(
+                ["TASK", "QUEUE", "RECORDED", "PENDING EDGES", "REJECTED EDGES", "ACTION"],
+                drift.map((row) => [
+                  row.taskId,
+                  row.queueName,
+                  String(row.pendingPrerequisites),
+                  String(row.pendingEdges),
+                  String(row.rejectedEdges),
+                  row.action,
+                ]),
+              )}\n`,
+        );
+        return;
+      }
+      if (!values.reason?.trim()) {
+        throw new CliUsageError("admin repair-dependencies requires --reason <text>");
+      }
+      const environment = await confirmMutation(client, io, values, command, "dependencies");
+      if (environment === null) return;
+      const repairs = await client.repairDependencyDrift(environment, limit, {
+        requestedBy: actor,
+        reason: values.reason,
+        requestId: values["request-id"] ?? randomUUID(),
+      });
+      io.out(
+        json
+          ? toAdminJson("admin repair-dependencies", repairs)
+          : `${formatTable(
+              ["TASK", "RECORDED", "PENDING EDGES", "ACTION"],
+              repairs.map((row) => [
+                row.taskId,
+                String(row.recordedPendingPrerequisites),
+                String(row.pendingEdges),
+                row.action,
+              ]),
+            )}\n`,
+      );
+      return;
+    }
     if (command === "signal" || command === "complete-human") {
       const taskId = requirePositional(positionals, command, "task-id");
       if (!values.name) throw new CliUsageError(`admin ${command} requires --name <name>`);
@@ -667,6 +765,74 @@ export async function runAdminCommand(
       } else io.out(`${paused ? "Paused" : "Resumed"} worker ${workerId}.\n`);
       return;
     }
+    if (command === "set-tier") {
+      const queueName = requirePositional(positionals, command, "queue");
+      const tier = parseTier(values.tier);
+      if (!values.reason) throw new CliUsageError(`admin ${command} requires --reason <text>`);
+      // The tier change records its actor and reason but no request id.
+      if (values["request-id"] !== undefined) {
+        throw new CliUsageError(`admin ${command} does not support --request-id`);
+      }
+      const environment = await confirmMutation(client, io, values, command, queueName);
+      if (environment === null) return;
+      let changed: QueueTier;
+      try {
+        changed = await client.setQueueTier(environment, queueName, tier, {
+          requestedBy: actor,
+          reason: values.reason,
+        });
+      } catch (error) {
+        if (!(error instanceof FastTierUnsupportedError)) throw error;
+        io.error(`Refused: ${tierRefusal(error, tier)}\n`);
+        process.exitCode = 1;
+        return;
+      }
+      if (json) io.out(toAdminJson("admin set-tier", { queue: queueName, tier: changed }));
+      else io.out(`Queue ${queueName} is on the ${changed} tier.\n`);
+      return;
+    }
+    if (command === "set-history") {
+      const queueName = requirePositional(positionals, command, "queue");
+      const recordAttempts = parseSwitch(values["record-attempts"], "--record-attempts");
+      const recordClaims = parseSwitch(values["record-claims"], "--record-claims");
+      if (recordAttempts === undefined && recordClaims === undefined) {
+        throw new CliUsageError(
+          `admin ${command} requires --record-attempts <on|off> or --record-claims <on|off>`,
+        );
+      }
+      // The history function records no audit, so attribution flags would be silently dropped.
+      for (const flag of ["actor", "reason", "request-id"] as const) {
+        if (values[flag] !== undefined) {
+          throw new CliUsageError(`admin ${command} does not support --${flag}`);
+        }
+      }
+      const environment = await confirmMutation(client, io, values, command, queueName);
+      if (environment === null) return;
+      const { knownBefore, ...change } = await client.setQueueHistory(environment, queueName, {
+        recordAttempts,
+        recordClaims,
+      });
+      if (json) io.out(toAdminJson("admin set-history", { queue: queueName, ...change }));
+      else {
+        io.out(
+          `Queue ${queueName} records attempts ${change.recordAttempts ? "on" : "off"}, ` +
+            `claims ${change.recordClaims ? "on" : "off"}.\n`,
+        );
+      }
+      if (change.tier === "full") {
+        io.error(
+          `Note: queue ${queueName} is on the full tier, which records all history. ` +
+            "These settings take effect if the queue moves to the fast tier.\n",
+        );
+      }
+      if (!knownBefore) {
+        io.error(
+          `Warning: queue ${queueName} had no control row and no live tasks; check the name. ` +
+            "This command created its control row.\n",
+        );
+      }
+      return;
+    }
     const queueName = requirePositional(positionals, command, "queue");
     if (!values.reason) throw new CliUsageError(`admin ${command} requires --reason <text>`);
     const environment = await confirmMutation(client, io, values, command, queueName);
@@ -689,7 +855,11 @@ export async function runAdminCommand(
       io.out(toAdminJson(paused ? "admin pause" : "admin resume", { queue: queueName, paused }));
     } else io.out(`${paused ? "Paused" : "Resumed"} queue ${queueName}.\n`);
   } catch (error) {
-    if (error instanceof AdminSafetyError || error instanceof PurgeIdempotencyConflictError) {
+    if (
+      error instanceof AdminSafetyError ||
+      error instanceof PurgeIdempotencyConflictError ||
+      error instanceof FastTierUnsupportedError
+    ) {
       io.error(`Refused: ${error.message}\n`);
       process.exitCode = 1;
       return;

@@ -10,6 +10,7 @@ export {
 export {
   databaseErrorCode,
   expectOneRow,
+  FastTierUnsupportedError,
   MissingRowError,
   SchemaCompatibilityError,
   WorkhorseError,
@@ -84,13 +85,17 @@ export type {
   WorkhorseTelemetryProvider,
   WorkhorseTelemetrySpan,
 } from "./telemetry.js";
-export { Admin, PurgeIdempotencyConflictError } from "./admin.js";
+export { Admin, MAX_DEPENDENCY_DRIFT_LIMIT, PurgeIdempotencyConflictError } from "./admin.js";
 export type {
   AdminAudit,
+  DependencyDrift,
+  DependencyRepair,
+  DependencyRepairAction,
   PurgeIdempotencyConflictDetails,
   RunTaskNowResult,
   RunTaskNowStatus,
 } from "./admin.js";
+export type { QueueHistorySettings, QueueTier } from "./queue/queue-administration.js";
 export {
   CheckpointConflictError,
   CheckpointLeaseLostError,
@@ -185,6 +190,8 @@ export type {
 export type {
   BatchExecutionRecord,
   ClaimedTask,
+  CompletionClaim,
+  CompletionClaimResult,
   ChildTask,
   ChildTaskRequest,
   ChildOutcome,

@@ -63,6 +63,7 @@ telemetry, and graceful shutdown.
 | -------------------------------------------- | ---------- | --------- | --------- | --------- |
 | Claiming and handler execution               | Supported  | Supported | Supported | Supported |
 | Bounded worker concurrency                   | Supported  | Supported | Supported | Supported |
+| Fast task tier with one outcome row per task | Supported  | Supported | Supported | Supported |
 | Unhandled task type released to its queue    | Supported  | Supported | Supported | Supported |
 | Heartbeats, lease recovery, fenced ownership | Supported  | Supported | Supported | Supported |
 | Cooperative cancellation delivery            | Supported  | Supported | Supported | Supported |

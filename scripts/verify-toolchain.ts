@@ -49,6 +49,10 @@ const version = String.raw`(\d+(?:\.\d+)*)`;
 
 /** Every tool `mise.toml` can pin, and the question that makes it name itself. */
 const probes: Record<string, ToolProbe> = {
+  "cargo-deny": {
+    arguments: ["--version"],
+    identity: new RegExp(String.raw`^cargo-deny ${version}`),
+  },
   go: { arguments: ["version"], identity: new RegExp(String.raw`^go version go${version}`) },
   lefthook: { arguments: ["version"], identity: new RegExp(String.raw`^${version}`) },
   node: { arguments: ["--version"], identity: new RegExp(String.raw`^v${version}`) },

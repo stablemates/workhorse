@@ -176,15 +176,18 @@ describe("supported version constants", () => {
   });
 
   it("keeps local toolchains on the declared support floor", async () => {
-    const [manifest, miseSource, rootPackage] = await Promise.all([
+    const [manifest, miseSource, rootPackage, workflow] = await Promise.all([
       readSupportManifest(),
       read("mise.toml"),
       readManifest("package.json"),
+      read(".github/workflows/ci.yml"),
     ]);
     const mise = parseToml(miseSource) as { tools: Record<string, string> };
     const devDependencies = rootPackage.devDependencies as Record<string, string>;
 
     expect(mise.tools).toEqual({
+      // CI installs the advisory scanner itself, so `pnpm rust:vuln` runs the same release there.
+      "cargo-deny": /tool: cargo-deny@(\S+)/.exec(workflow)?.[1],
       go: manifest.toolchains.go,
       // mise bootstraps the hook runner before pnpm install, so it pins the same release.
       lefthook: devDependencies.lefthook!.replace(/^\^/, ""),
@@ -427,10 +430,10 @@ describe("continuous integration", () => {
     expect(workflow.match(/max-parallel: 2/g)).toHaveLength(3);
     expect(workflow).toContain("pnpm --silent exec tsx scripts/ci-matrix.ts");
     expect(workflow).toContain("pnpm go:test:race");
-    // All three language lines are scanned for advisories in the same task, or one line's tree
+    // All four language lines are scanned for advisories in the same task, or one line's tree
     // silently stops being checked.
     expect(workflow).toContain(
-      "- run: pnpm npm:vuln\n      - run: pnpm python:vuln\n      - run: pnpm go:vuln",
+      "- run: pnpm npm:vuln\n      - run: pnpm python:vuln\n      - run: pnpm go:vuln\n      - run: pnpm rust:vuln",
     );
   });
 
@@ -446,9 +449,11 @@ describe("continuous integration", () => {
     expect(scripts["go:test:race"]).toContain("go -C go test -race ./...");
     expect(scripts["go:vuln"]).toContain("govulncheck");
     expect(scripts["npm:vuln"]).toContain("audit-npm-dependencies.ts");
+    expect(scripts["rust:vuln"]).toContain("audit-rust-dependencies.ts");
     expect(check).toContain("pnpm npm:vuln");
     expect(check).toContain("pnpm python:vuln");
     expect(check).toContain("pnpm go:vuln");
+    expect(check).toContain("pnpm rust:vuln");
     expect(check).toContain("pnpm go:test:race");
     expect(check).toContain("pnpm build:verified");
     expect(check.indexOf("pnpm build:verified")).toBeLessThan(check.indexOf("pnpm test"));

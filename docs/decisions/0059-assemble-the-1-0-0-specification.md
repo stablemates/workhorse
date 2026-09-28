@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-03
+- **Amended by:** [ADR 0079](0079-govern-the-rust-api-as-an-eighth-surface.md) (the specification assembles eight
+  surfaces; the eighth is the Rust API)
 - **Related:** [ADR 0054](0054-define-what-1-0-0-promises.md),
   [ADR 0055](0055-the-1-0-0-schema-boundary-adds-no-migration.md),
   [ADR 0056](0056-set-the-1-0-0-exit-criteria.md),

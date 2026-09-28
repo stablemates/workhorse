@@ -12,7 +12,8 @@ use tracing::Instrument;
 
 use super::handler::{ErasedHandler, HandlerResult};
 use super::heartbeat::Beat;
-use super::{exactly_one, lock, millis_i32, sql, Inner, OwnershipStatus};
+use super::{exactly_one, lock, millis_i32, sql, ActiveSlot, Inner, OwnershipStatus};
+use crate::fenced_write::fenced_rows;
 use crate::telemetry::{self, Attribute, Counter, Histogram};
 use crate::{
     CancelReason, CancellationToken, ClaimedTask, Error, Executor, HandlerContext, HandlerError,
@@ -61,6 +62,7 @@ impl Inner {
         task: ClaimedTask,
         handler: ErasedHandler,
         shutdown: StopToken,
+        slot: Option<&ActiveSlot>,
     ) -> Result<(), Error> {
         let started = Instant::now();
         let span = telemetry::handler_span(&task);
@@ -136,7 +138,7 @@ impl Inner {
         let settled = if context.suspended() {
             Ok("suspended")
         } else {
-            self.settle(&task, result, expired, rejected, token.reason()).await
+            self.settle(&task, result, expired, rejected, token.reason(), slot).await
         };
         let settled = match settled {
             Err(Error::LeaseLost { .. }) => Ok("lease_lost"),
@@ -168,12 +170,13 @@ impl Inner {
     }
 
     async fn settle(
-        &self,
+        self: &Arc<Self>,
         task: &ClaimedTask,
         result: HandlerResult,
         expired: Option<Result<OwnershipStatus, Error>>,
         rejected: Option<OwnershipStatus>,
         reason: Option<CancelReason>,
+        slot: Option<&ActiveSlot>,
     ) -> Result<Outcome, Error> {
         let (status, already_expired) = match expired {
             Some(Err(error)) => return Err(error),
@@ -207,7 +210,7 @@ impl Inner {
             _ => {}
         }
         match result {
-            Ok(value) => self.complete(task, value).await,
+            Ok(value) => self.complete(task, value, slot).await,
             Err(error) => self.fail_with_state(task, error).await,
         }
     }
@@ -219,13 +222,12 @@ impl Inner {
     ) -> Result<OwnershipStatus, Error> {
         let budget = Instant::now() + EXPIRATION_BUDGET;
         loop {
-            let rows = self
-                .pool
-                .rows(
-                    sql::EXPIRE_OWNED_TELEMETRY_V1,
-                    &[&task.id, &self.worker_id, &task.fence_token],
-                )
-                .await?;
+            let rows = fenced_rows(
+                &self.pool,
+                sql::EXPIRE_OWNED_TELEMETRY_V1,
+                &[&task.id, &self.worker_id, &task.fence_token],
+            )
+            .await?;
             let row = exactly_one(&rows, "expire_owned_telemetry_v1")?;
             let status =
                 OwnershipStatus::parse(row.try_get::<_, Option<String>>("status")?.as_deref())?;
@@ -260,10 +262,12 @@ impl Inner {
     }
 
     async fn acknowledge(&self, task: &ClaimedTask) -> Result<Outcome, Error> {
-        let rows = self
-            .pool
-            .rows(sql::ACKNOWLEDGE_CANCEL_V1, &[&task.id, &self.worker_id, &task.fence_token])
-            .await?;
+        let rows = fenced_rows(
+            &self.pool,
+            sql::ACKNOWLEDGE_CANCEL_V1,
+            &[&task.id, &self.worker_id, &task.fence_token],
+        )
+        .await?;
         if accepted(&rows, "acknowledge_cancel_v1")? {
             Ok("canceled")
         } else {
@@ -273,10 +277,12 @@ impl Inner {
 
     /// Explains a rejected settlement: a cancellation or expiration that won, or a lost lease.
     async fn reconcile(&self, task: &ClaimedTask, operation: Operation) -> Result<Outcome, Error> {
-        let rows = self
-            .pool
-            .rows(sql::ACKNOWLEDGE_CANCEL_V1, &[&task.id, &self.worker_id, &task.fence_token])
-            .await?;
+        let rows = fenced_rows(
+            &self.pool,
+            sql::ACKNOWLEDGE_CANCEL_V1,
+            &[&task.id, &self.worker_id, &task.fence_token],
+        )
+        .await?;
         if accepted(&rows, "acknowledge_cancel_v1")? {
             return Ok("canceled");
         }
@@ -288,17 +294,23 @@ impl Inner {
         }
     }
 
-    async fn complete(&self, task: &ClaimedTask, result: Value) -> Result<Outcome, Error> {
+    async fn complete(
+        self: &Arc<Self>,
+        task: &ClaimedTask,
+        result: Value,
+        slot: Option<&ActiveSlot>,
+    ) -> Result<Outcome, Error> {
         if let Some(version) = &task.contract_version {
             if let Err(error) = self.validate_result(task, version, &result).await {
                 return self.fail_with_state(task, error).await;
             }
         }
-        let rows = self
-            .pool
-            .rows(sql::COMPLETE_V1, &[&task.id, &self.worker_id, &task.fence_token, &result])
-            .await?;
-        if !accepted(&rows, "complete_v1")? {
+        let accepted = if task.fast_tier {
+            self.complete_fast(task, result, slot).await?
+        } else {
+            self.complete_full(task, &result).await?
+        };
+        if !accepted {
             return self.reconcile(task, Operation::Complete).await;
         }
         self.metrics.add(
@@ -316,6 +328,50 @@ impl Inner {
             "Task completed"
         );
         Ok("succeeded")
+    }
+
+    async fn complete_full(&self, task: &ClaimedTask, result: &Value) -> Result<bool, Error> {
+        let rows = fenced_rows(
+            &self.pool,
+            sql::COMPLETE_V1,
+            &[&task.id, &self.worker_id, &task.fence_token, result],
+        )
+        .await?;
+        accepted(&rows, "complete_v1")
+    }
+
+    /// Completes a fast-tier attempt through the batched statement, which may also claim the
+    /// successors this task's slot and its cohort's free slots can run (ADR 0076, rules 3, 12
+    /// and 14).
+    ///
+    /// A queue that left the fast tier after the claim rejects that statement, so the attempt
+    /// completes through `complete_v1` instead and claims nothing.
+    async fn complete_fast(
+        self: &Arc<Self>,
+        task: &ClaimedTask,
+        result: Value,
+        slot: Option<&ActiveSlot>,
+    ) -> Result<bool, Error> {
+        let reservation = slot.and_then(|slot| slot.ticket.reserve());
+        let (limit, cohort) = reservation
+            .as_ref()
+            .map_or((0, 0), |reservation| (reservation.limit(), reservation.cohort()));
+        match self.complete_batched(task, result.clone(), limit, cohort).await {
+            Ok((accepted, claimed)) => {
+                if let (Some(reservation), Some(slot)) = (reservation, slot) {
+                    if reservation.settle(Some(claimed)) {
+                        slot.hand_over();
+                    }
+                }
+                Ok(accepted)
+            }
+            Err(Error::FastTierUnsupported { .. }) => {
+                // The fused claim never ran, so it hands nothing over and backs nothing off.
+                drop(reservation);
+                self.complete_full(task, &result).await
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Checks a result against the task's pinned contract, caching each compiled schema.
@@ -381,10 +437,12 @@ impl Inner {
                 "No handler registered for the claimed task type"
             );
         }
-        let rows = self
-            .pool
-            .rows(sql::RELEASE_OWNED_V1, &[&task.id, &self.worker_id, &task.fence_token])
-            .await?;
+        let rows = fenced_rows(
+            &self.pool,
+            sql::RELEASE_OWNED_V1,
+            &[&task.id, &self.worker_id, &task.fence_token],
+        )
+        .await?;
         let status: Option<String> = exactly_one(&rows, "release_owned_v1")?.try_get("status")?;
         let outcome = match status.as_deref() {
             Some("released") => "released",
@@ -431,10 +489,12 @@ impl Inner {
             .as_ref()
             .and_then(|delay| delay(task.attempt, task))
             .map(millis_i32);
-        let rows = self
-            .pool
-            .rows(sql::FAIL_V1, &[&task.id, &self.worker_id, &task.fence_token, &envelope, &delay])
-            .await?;
+        let rows = fenced_rows(
+            &self.pool,
+            sql::FAIL_V1,
+            &[&task.id, &self.worker_id, &task.fence_token, &envelope, &delay],
+        )
+        .await?;
         let state: Option<String> = exactly_one(&rows, "fail_v1")?.try_get("state")?;
         let state = state.unwrap_or_default();
         let dimensions = [

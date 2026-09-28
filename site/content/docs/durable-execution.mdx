@@ -7,6 +7,8 @@ After a retry, a crash, or a durable wait, Workhorse calls your handler again â€
 There is no saved JavaScript stack to resume; the process that held it may be gone or replaced.
 Durable execution is how a restarted handler skips the work it already
 finished: you name the boundaries, and the new activation replays their stored results.
+Durable execution needs a full-tier queue, because a [fast-tier queue](/docs/fast-tier) keeps no
+durable execution state and rejects checkpoints and waits.
 
 ## Save completed stages with checkpoints
 

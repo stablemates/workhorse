@@ -29,9 +29,12 @@ await worker.run()
 A worker has a fixed number of slots, set by `concurrency`. One slot runs one task. The
 default is conservative, and you can raise it.
 
-Each pass, the worker asks PostgreSQL to fill its free slots in one claim batch. PostgreSQL
-still checks every task independently, so ordering and admission policies apply to each one.
-The worker stops asking when its slots are full or the queue has nothing left. One worker
+The worker asks PostgreSQL to fill its free slots in claim batches. PostgreSQL still checks
+every task independently, so ordering and admission policies apply to each one. A busy worker
+does not wait for one claim to return before it sends the next. When enough slots free up, it
+sends another batch while the first is still out. That keeps slots full without one round trip
+per task. The worker never claims more tasks than it has slots, because each claimed task holds a
+lease. It stops asking when its slots are full or the queue has nothing left. One worker
 timer submits every running lease in one heartbeat batch. Each accepted result renews its
 task. Every task still has its own abort signal and final write, so cancellation and settlement
 remain independent.
@@ -52,6 +55,10 @@ const worker = new Worker(queue, {
 
 Use `queue` for one name or `queues` for several. If you omit both, the worker uses the queue
 client's default. A batch callback still receives tasks from only one queue at a time.
+
+A worker discovers each queue's [tier](305-fast-tier.md) on its own, so a fast-tier queue needs no
+worker option. On the fast tier, a busy worker in any language splits its slots into
+[cohorts](305-fast-tier.md#workers-need-no-configuration) that complete separately.
 
 ## Tasks this worker cannot run
 
@@ -83,8 +90,9 @@ The notification is only a hint. If PostgreSQL drops the listener or a message i
 worker reconnects and still checks through `pollMs`. This keeps the database state authoritative:
 a missing notification can delay a claim, but it cannot strand the task.
 
-Workers add a small random delay before a notification-triggered claim, so one enqueue does not
-make every process query at the same instant. Without a listener, consecutive empty checks back off
+An idle worker adds a small random delay before a notification-triggered claim, so one enqueue does
+not make every process query at the same instant. A busy worker claims at once, because a dependency
+release notifies on every completion and the delay would otherwise slow every claim. Without a listener, consecutive empty checks back off
 to a cap and reset as soon as a claim succeeds.
 
 ## Running workers in their own process

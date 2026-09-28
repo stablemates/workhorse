@@ -8,16 +8,16 @@ import { createIntegrationTestContext } from "./support/integration.js";
 
 const { createFailedTask, pool, queue, admin } = createIntegrationTestContext(import.meta.url);
 
-describe("operator reads", () => {
-  async function projectionXmin(taskId: string): Promise<string | undefined> {
-    return (
-      await pool.query<{ xmin: string }>(
-        "SELECT xmin::text AS xmin FROM workhorse.task_query WHERE task_id = $1",
-        [taskId],
-      )
-    ).rows[0]?.xmin;
-  }
+async function projectionXmin(taskId: string): Promise<string | undefined> {
+  return (
+    await pool.query<{ xmin: string }>(
+      "SELECT xmin::text AS xmin FROM workhorse.task_query WHERE task_id = $1",
+      [taskId],
+    )
+  ).rows[0]?.xmin;
+}
 
+describe("operator reads", () => {
   it("preserves priority when a failed task is redriven", async () => {
     const queueName = `priority-redrive-${randomUUID()}`;
     const source = await queue.enqueue("priority-source", null, {

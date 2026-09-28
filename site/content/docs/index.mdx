@@ -8,14 +8,15 @@ rebuild the report. The moment that work moves to a separate broker, you have tw
 disagree — an order row without its task, or a task for an order that rolled back.
 
 Workhorse removes the second system. It is a durable task queue built from PostgreSQL tables and
-versioned SQL functions, with supported SDKs for TypeScript, Python, and Go. There is no broker, no
-Redis, and no PostgreSQL extension — one database owns your business data, your queued work, your
-execution state, and the evidence of what happened.
+versioned SQL functions, with supported SDKs for TypeScript, Python, Go, and Rust. There is no
+broker, no Redis, and no PostgreSQL extension — one database owns your business data, your queued
+work, your execution state, and the evidence of what happened.
 
 ## Start with your task
 
 If you are new to Workhorse, follow the [quickstart](/docs/quickstart) to install the schema,
-enqueue a task, and run a worker. Choose the TypeScript, Python, or Go example for your application.
+enqueue a task, and run a worker. Choose the TypeScript, Python, Go, or Rust example for your
+application.
 
 | I want to…                   | Read this                              | What you will learn                                                         |
 | ---------------------------- | -------------------------------------- | --------------------------------------------------------------------------- |
@@ -81,7 +82,7 @@ history you can query with `Admin.getTask` and `Admin.getTaskTimeline`.
 ## When to use it
 
 If your application already runs on PostgreSQL and needs reliable background work, Workhorse fits.
-Choose its TypeScript, Python, or Go SDK and connect it to PostgreSQL 15 or newer.
+Choose its TypeScript, Python, Go, or Rust SDK and connect it to PostgreSQL 15 or newer.
 
 Workhorse is a public beta. It is usable for evaluation and early production adoption. A minor
 release may change behaviour, so read the changelog before you upgrade. It will not ask you to

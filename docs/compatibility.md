@@ -122,8 +122,9 @@ names, so no equivalent exists on the TypeScript or Python lines.
 ### Dependency advisories
 
 Each language line fails its build on an advisory in its own dependency tree. `pnpm npm:vuln`
-covers npm, `pnpm python:vuln` covers PyPI, and `pnpm go:vuln` covers the Go module. `pnpm check`
-runs all three, and so does the `static` task in `.github/workflows/ci.yml`.
+covers npm, `pnpm python:vuln` covers PyPI, `pnpm go:vuln` covers the Go module, and
+`pnpm rust:vuln` covers the Rust crate. `pnpm check` runs all four, and so does the `static` task in
+`.github/workflows/ci.yml`.
 
 `pnpm npm:vuln` runs `pnpm audit --prod` and fails on every advisory it reports, whatever the
 severity. Severity describes the advisory rather than this repository's exposure to it, so a
@@ -142,6 +143,19 @@ never answered is refused in one place and never read as a clean tree. The packe
 high or critical advisory that no acceptance names a published package for; `pnpm npm:vuln` remains
 the scan with no severity threshold. A release therefore needs an answer from the advisory service
 twice, which is deliberate: the two trees can hold different versions of the same dependency.
+
+`pnpm rust:vuln` runs `cargo deny check advisories` against the root `Cargo.lock`. `mise.toml` pins
+the cargo-deny version, and `deny.toml` holds its configuration. The graph includes every feature
+of the published crate, because a consumer can enable any of them. The scan fails on every RustSec
+entry that reaches the lockfile, whatever its kind: a vulnerability, an unmaintained crate, or an
+unsound API. A reported entry passes only when `scripts/rust-advisory-acceptances.json` states a
+reason and a review date for it. The check fails once that date passes, and when an entry stops
+matching anything. cargo-deny's own `ignore` list stays empty, because it carries no review date.
+
+cargo-deny exits non-zero both on an advisory and on an advisory database it could not fetch.
+`scripts/audit-rust-dependencies.ts` tells them apart by the summary record a completed check
+writes. Without that record, the scan reports the unreachable database and names no acceptance
+entry as stale.
 
 Fixing beats accepting. Prefer a lockfile bump, then a declared-range bump; write an entry only when
 no released version carries the fix, or when the path is provably outside what this repository
@@ -281,7 +295,7 @@ version 1 are their compatibility boundary instead. Their version numbers still 
 packages, because every line releases from one commit.
 
 Every release publishes one version to npm, PyPI, and the Go module proxy from one source commit.
-The current release is `0.3.0`. “Public beta” means the release is usable for evaluation and early production adoption without a
+The current release is `0.4.0`. “Public beta” means the release is usable for evaluation and early production adoption without a
 0.x compatibility promise. The label is retired at 1.0.0 and replaced by “stable”; see
 [What SemVer governs](#what-semver-governs).
 
@@ -328,33 +342,35 @@ environment publishes those artifacts through PyPI trusted publishing with `id-t
 Before publication, the publish task generates a PEP 740 attestation beside each distribution.
 
 The Go module releases from its own `go/vX.Y.Z` tag. `scripts/release-go.sh X.Y.Z` requires
-a clean worktree and a matching `go/CHANGELOG.md` heading. It resets the test database, runs
-`pnpm check`, creates an annotated tag, and pushes that tag to `origin`.
+a clean worktree and a matching `go/CHANGELOG.md` heading. It rehearses the module release, resets
+the test database, runs `pnpm check`, creates an annotated tag, and pushes that tag to `origin`.
 
 ## What SemVer governs
 
 SemVer says a major release may break the public API. It does not say which artifact is the public
-API, and Workhorse ships seven of them. Each surface below is governed, and each states in one
+API, and Workhorse ships eight of them. Each surface below is governed, and each states in one
 sentence what a breaking change is for it. Anything not on this list is internal and may change in
-any release. [ADR 0054](decisions/0054-define-what-1-0-0-promises.md) records the decision.
+any release. [ADR 0054](decisions/0054-define-what-1-0-0-promises.md) records the decision, and
+[ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md) adds the Rust API.
 
-| Governed surface                                    | A breaking change is                                                                                                                                                                   | Enforced by                                                 |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| SQL protocol and schema                             | A narrowing of `workhorse.protocol_version`, which is how a superseded `_vN` function is removed. A schema-version bump is not one, because inside a major line a migration only adds. | `sql-catalogues:check`, which classifies the change         |
-| TypeScript API                                      | A change that makes caller code stop compiling or behave differently, across the names and types reachable through a package's `exports` map and shipped `.d.ts`.                      | `typescript-api:check`, against `api/typescript.txt`        |
-| Python API                                          | The same, across the names in a public module's `__all__`. Underscore-prefixed modules such as `workhorse._protocol` are private.                                                      | `python-api:check`, against `api/python.txt`                |
-| Go API                                              | The same, across the exported identifiers of the module's non-`internal` packages. Go's own standard applies: what `apidiff` calls an incompatible change.                             | `go-api:check`, `apidiff` against the tag `api/go.txt` pins |
-| `workhorse` CLI                                     | Removing or renaming a command or flag, changing what an exit code means, or removing or retyping a field in `--json` output.                                                          | `cli-surface:check`, against `api/cli.txt`                  |
-| `dashboard/v1` wire contract                        | Removing a procedure, removing or retyping a response field, or tightening request validation.                                                                                         | `dashboard-spec:check`, which classifies the change         |
-| OpenTelemetry instrument, span, and attribute names | Renaming or removing an instrument, span, or attribute, or changing an instrument's unit or kind.                                                                                      | `telemetry-surface:check`, against `api/telemetry.txt`      |
+| Governed surface                                    | A breaking change is                                                                                                                                                                                                       | Enforced by                                                 |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| SQL protocol and schema                             | A narrowing of `workhorse.protocol_version`, which is how a superseded `_vN` function is removed. A schema-version bump is not one, because inside a major line a migration only adds.                                     | `sql-catalogues:check`, which classifies the change         |
+| TypeScript API                                      | A change that makes caller code stop compiling or behave differently, across the names and types reachable through a package's `exports` map and shipped `.d.ts`.                                                          | `typescript-api:check`, against `api/typescript.txt`        |
+| Python API                                          | The same, across the names in a public module's `__all__`. Underscore-prefixed modules such as `workhorse._protocol` are private.                                                                                          | `python-api:check`, against `api/python.txt`                |
+| Go API                                              | The same, across the exported identifiers of the module's non-`internal` packages. Go's own standard applies: what `apidiff` calls an incompatible change.                                                                 | `go-api:check`, `apidiff` against the tag `api/go.txt` pins |
+| Rust API                                            | The same, across the public items reachable from the `workhorse` crate root under any published feature, auto and derived traits included. Removing or renaming a feature, or moving an item behind one, is also breaking. | `rust-api:check`, against `api/rust.txt`                    |
+| `workhorse` CLI                                     | Removing or renaming a command or flag, changing what an exit code means, or removing or retyping a field in `--json` output.                                                                                              | `cli-surface:check`, against `api/cli.txt`                  |
+| `dashboard/v1` wire contract                        | Removing a procedure, removing or retyping a response field, or tightening request validation.                                                                                                                             | `dashboard-spec:check`, which classifies the change         |
+| OpenTelemetry instrument, span, and attribute names | Renaming or removing an instrument, span, or attribute, or changing an instrument's unit or kind.                                                                                                                          | `telemetry-surface:check`, against `api/telemetry.txt`      |
 
 The right-hand column is Gate 1 of
 [ADR 0056](decisions/0056-set-the-1-0-0-exit-criteria.md): every governed surface holds a mechanical
-check in the CI `required` task, so no promise rests on review alone. Five of them read the committed
+check in the CI `required` task, so no promise rests on review alone. Six of them read the committed
 snapshots in [`api/`](../api/README.md), which that directory's own README explains. Each has a
 generator, so a legitimate addition costs one command: `pnpm typescript-api:generate`,
-`pnpm python-api:generate`, `pnpm go-api:generate`, `pnpm cli-surface:generate`, or
-`pnpm telemetry-surface:generate`.
+`pnpm python-api:generate`, `pnpm go-api:generate`, `pnpm rust-api:generate`,
+`pnpm cli-surface:generate`, or `pnpm telemetry-surface:generate`.
 
 A snapshot is only as good as where it reads from, so neither of the two newest reads a table kept
 beside the code. `api/cli.txt` reads `typescript/core/src/cli/surface.ts`, which the CLI itself
@@ -379,8 +395,8 @@ The release notes announce a `dashboard/v2` transition and give its upgrade step
 backend serves one bound contract rather than negotiating concurrent versions, so `Deprecation`
 and `Sunset` response headers do not apply.
 
-The three language lines float independently, and each is governed on its own surfaces: a Go `/v2`
-does not move the TypeScript or Python major. Only a protocol break moves all three at once.
+The four language lines float independently, and each is governed on its own surfaces: a Go `/v2`
+does not move the TypeScript, Python, or Rust major. Only a protocol break moves all four at once.
 
 The runtime support matrix and the declared dependency ranges are not on this list. They move by
 their own rule, in a minor and only on upstream end of life; see [Raising a floor](#raising-a-floor).
@@ -390,7 +406,7 @@ their own rule, in a minor and only on upstream end of life; see [Raising a floo
 `sql-catalogues:check` and `dashboard-spec:check` regenerate an artifact and diff it. A diff alone
 says only that something moved, because regenerating rewrites the artifact whether a procedure was
 added or removed. Each check therefore compares against a separate promise file that accumulates:
-the generator may add an entry and may never drop one. The three language checks need no such file,
+the generator may add an entry and may never drop one. The four language checks need no such file,
 because their snapshots in [`api/`](../api/README.md) are not regenerated from the surface they
 describe.
 
@@ -466,10 +482,11 @@ and changes nothing. The last 0.x minor carries the final schema change before t
 the command anyway is the point: the procedure is the same one every other release uses. See
 `docs/schema-lifecycle.md`.
 
-The nine npm packages, the Python distribution, and the Go module publish 1.0.0 from one source
-commit as one release train. A line that cannot clear the parity bar slips the train rather than
-being left behind. That synchronisation happens once; afterwards the three version lines float again
-as they do today.
+The nine npm packages, the Python distribution, the Go module, and the Rust crate publish 1.0.0
+from one source commit as one release train
+([ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md)). A line that
+cannot clear the parity bar slips the train rather than being left behind. That synchronisation
+happens once; afterwards the four version lines float again as they do today.
 
 At 1.0.0 the “public beta” label retires and “stable” replaces it.
 
@@ -511,14 +528,18 @@ dashboard release inside a major line.
 Six gates hold the tag, and each is met with evidence rather than with an assertion
 ([ADR 0056](decisions/0056-set-the-1-0-0-exit-criteria.md)):
 
-1. Every governed surface above has a mechanical check in the CI `required` task. Seven checks, one
-   per surface. None of them exists yet.
+1. Every governed surface above has a mechanical check in the CI `required` task. Eight checks, one
+   per surface.
 2. Six weeks and two published 0.x minors separate the last non-additive change to a governed
    surface from the tag, and no outside-filed defect against a governed surface is open and
-   unaccepted.
+   unaccepted. The Rust API's clock starts at the later of the commit that first landed
+   `api/rust.txt` and the last one that removed a line from it. Both minors must publish the crate
+   from a commit at or after that start, so 0.4.0 does not count
+   ([ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md)).
 3. The migration rehearsals ADR 0055 placed have run, the recovery procedure has been executed
    against a deliberate mid-migration failure, and a fresh host has installed the candidate from the
-   registries in all three languages.
+   registries in all four languages, Rust from crates.io included
+   ([ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md)).
 4. One database has run 30 consecutive days under continuous work without being reinstalled, across
    daily partition rollover, a retention pass that dropped a partition, and an ungraceful worker
    kill with clean recovery.
@@ -585,24 +606,26 @@ for the distribution being published.
 
 ### Release train
 
-Every release publishes the same version to npm, PyPI, and the Go module proxy from one source
-commit, in one controlled window, in a fixed order. Dates go into the changelogs before the
+Every release publishes the same version to npm, PyPI, the Go module proxy, and crates.io from one
+source commit, in one controlled window, in a fixed order. Dates go into the changelogs before the
 candidate is cut, and a slipped date means a new candidate. No commit lands on `main` between the
 first tag and the last, so every tag names the candidate commit.
 
-The Rust crate rides the same `v*` tag once `rust/Cargo.toml` carries the train's version; [Rust
-crate](#rust-crate) describes that step.
+The Rust crate has no tag of its own. It rides the npm `v*` tag and publishes after npm, as
+[Rust crate](#rust-crate) describes.
 
 1. Rehearse. The candidate commit's `main` push run must show a green `CI / required`.
    `.github/workflows/release.yml` and `.github/workflows/release-python.yml` are dispatched
    manually with `dry-run` enabled, and every npm and Python archive is downloaded and inspected.
    All nine npm tarballs, the Python wheel, and the Python source distribution are installed in
-   clean consumers, and the Go external consumer is built from the same commit.
+   clean consumers. The Go external consumer and the Rust packaged-crate consumer are built from the
+   same commit.
    Test registries are not part of the rehearsal.
 2. Publish Python first. One distribution is the smallest production test of trusted publishing.
    Its PEP 740 attestations are verified on PyPI before the train continues.
 3. Publish npm second. `@stablemates/workhorse` goes before its eight dependents, and every
-   package's provenance is verified before the train continues.
+   package's provenance is verified. The same run then publishes the Rust crate, and its version is
+   verified on crates.io before the train continues.
 4. Publish Go last. The `go/vX.Y.Z` tag is pushed after the gate passes, and the version is
    verified through the public module proxy.
 
@@ -611,10 +634,41 @@ of the exact public version in a clean environment. It then runs a minimal enque
 test against a fresh PostgreSQL database. Any failure stops the release train: the defect is filed,
 the remaining stages stay blocked, and the fix ships as a new candidate.
 
+`pnpm release:verify <python|npm|crate|go> X.Y.Z` holds the version checks as exact commands and
+the output each must print. After each stage publishes, the handoff runs that stage's target
+instead of restating commands. Each target installs the public version into a fresh scratch
+directory:
+
+- `python` installs `stablemates-workhorse==X.Y.Z` into a virtual environment on the oldest
+  supported Python. It checks both `workhorse.__version__` and the installed distribution metadata.
+- `npm` checks every published package's version, then installs `@stablemates/workhorse` and runs
+  `npm audit signatures` and `workhorse --version`.
+- `crate` resolves `workhorse = "=X.Y.Z"` from crates.io and checks the locked package ID.
+- `go` resolves the module through `proxy.golang.org` with no direct fallback and runs
+  `go mod verify`.
+
+The script covers registry visibility, signatures or checksums, and clean installation. The
+maintainer still reviews provenance on each registry page and runs the enqueue-and-worker smoke
+test.
+
+Every release check also runs its target before anything is tagged or published. Each rehearsal
+substitutes the artifact about to ship for the registry release:
+
+- `--wheel <file>` installs the dry-run wheel.
+- `--tarballs <directory>` installs all nine packed tarballs and checks each installed version.
+  It skips `npm view` and `npm audit signatures`, which only the registry can answer.
+- `--crate <directory>` depends on the unpacked `.crate` archive by path and checks its package ID.
+- `--go-proxy <directory>` serves a file module proxy ahead of `proxy.golang.org`. It skips the
+  checksum database for this module only, which has never seen the unpublished version, and uses a
+  scratch module cache.
+
+A check the artifact cannot satisfy therefore fails the rehearsal, not the train after the tag.
+
 A published version is never reused. An ordinary defect stays available and receives a higher
 fix. A security, secret, privacy, or legal exposure triggers credential rotation and removal where
 the registry permits it. The response also deprecates the npm release, yanks the PyPI release, or
-retracts the Go version as appropriate. Removal does not make prior public access reversible.
+retracts the Go version as appropriate, and yanks the crates.io version. Removal does not make prior
+public access reversible.
 [`SECURITY.md`](../SECURITY.md) states how to report a vulnerability privately and which versions
 receive fixes.
 
@@ -631,7 +685,8 @@ those commits.
    a tag that disagrees with any manifest or lacks a `CHANGELOG.md` entry.
 3. `pnpm npm:release-check` validates generated package assets, lint, dependencies, types, and unit
    behavior. It builds every tarball once, then installs and exercises those exact files in clean
-   consumers against PostgreSQL.
+   consumers against PostgreSQL. It then runs `pnpm release:verify npm` against those tarballs, so
+   a post-publish check the packages cannot satisfy fails before anything is published.
 4. The build job uploads the unchanged tarballs without publication credentials. It runs on Depot
    like the rest of CI; the publish task that follows does not. npm verifies the Sigstore provenance
    bundle against the runner environment and rejects anything it reads as `self-hosted`, which is
@@ -658,26 +713,37 @@ pipeline.
 3. `pnpm python:release-check` validates the version and changelog, rebuilds the embedded dashboard
    bundle, checks Python format, lint, types, and dependencies, then runs every Python test against
    PostgreSQL. It builds the wheel and source distribution once and tests those exact files.
+   It then runs `pnpm release:verify python` against that wheel, so a post-publish check the
+   package cannot satisfy fails the rehearsal before `python/vX.Y.Z` is tagged.
 4. The `pypi` environment generates PEP 740 attestations for the unchanged artifacts, then
    publishes both distributions and their attestations through trusted publishing.
+
+`workhorse.__version__` is public Python API from the release after 0.4.0, and `api/python.txt`
+records it. The post-publish Python check therefore fails against 0.4.0, which predates the
+attribute. For 0.4.0, `importlib.metadata.version("stablemates-workhorse")` is the check.
 
 ### Go module
 
 1. Add the intended version to `go/CHANGELOG.md` and commit the release candidate.
 2. Run `scripts/release-go.sh X.Y.Z` from a clean worktree.
-3. The script runs `pnpm check`, creates `go/vX.Y.Z`, and pushes the tag only after the gate passes.
+3. The script runs `pnpm go:release-check X.Y.Z`, which validates the changelog entry and stages a
+   file module proxy that serves `HEAD:go` as `vX.Y.Z`. It then runs `pnpm release:verify go`
+   against that proxy, so a post-publish check the module cannot satisfy fails before the tag.
+4. The script runs `pnpm check`, creates `go/vX.Y.Z`, and pushes the tag only after the gate passes.
 
 ### Rust crate
 
 The Rust SDK publishes one crate, `workhorse`, from `rust/`
-([ADR 0074](decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md)). It is not on the
-release train yet. crates.io holds only the `0.0.0` placeholder that reserved the name. The crate
-joins the train in the release whose `rust/Cargo.toml` carries the train's version.
+([ADR 0074](decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md)). It has no tag of its
+own and publishes from the npm `v*` tag. The crate joined the release train at `0.4.0`. Before that
+release, crates.io held only the `0.0.0` placeholder that reserved the name.
 
 1. Set `version` in `rust/Cargo.toml` to the release version and commit it with the candidate.
 2. Tag `vX.Y.Z`. The build job of `.github/workflows/release.yml` runs `pnpm rust:release-check`.
    It packages the crate with verification and builds a clean consumer from the packaged archive.
-   With PostgreSQL available, that consumer enqueues one task.
+   With PostgreSQL available, that consumer enqueues one task. It then runs
+   `pnpm release:verify crate` against the unpacked archive, so a post-publish check the crate
+   cannot satisfy fails before anything is published.
 3. After npm publishes, the `crates-io` job compares the crate version with the tag. A mismatch
    writes a notice and publishes nothing, so a release that leaves the crate behind still succeeds.
 4. On a match, the job exchanges its OIDC identity for a crates.io token and runs
@@ -698,8 +764,8 @@ or with `cargo owner --add <github-login> workhorse` using a token that carries 
 accept it.
 
 The public repository requires pull requests and `CI / required` on `main`. Outside collaborators
-require workflow approval. The protected `npm` and `pypi` environments require review and prevent
-administrator bypass.
+require workflow approval. The protected `npm`, `pypi`, and `crates-io` environments require review.
+The `npm` and `pypi` environments also prevent administrator bypass.
 
 ### Publication credentials
 

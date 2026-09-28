@@ -4,9 +4,9 @@ This changelog covers nine published packages on npm. They are versioned in lock
 from one tag:
 `@stablemates/workhorse`, `@stablemates/workhorse-drizzle`, `@stablemates/workhorse-prisma`, `@stablemates/workhorse-typeorm`,
 `@stablemates/workhorse-kysely`, `@stablemates/workhorse-otel`, `@stablemates/workhorse-dashboard`,
-`@stablemates/workhorse-dashboard-server`, and `@stablemates/workhorse-dashboard-contract`. The Python distribution and Go module release
-from that same commit under their own tags, so their notes live in [`python/CHANGELOG.md`](python/CHANGELOG.md) and
-[`go/CHANGELOG.md`](go/CHANGELOG.md). Each entry states its required schema version and upgrade steps.
+`@stablemates/workhorse-dashboard-server`, and `@stablemates/workhorse-dashboard-contract`. The Python distribution, Go module, and Rust crate
+release from that same commit, so their notes live in [`python/CHANGELOG.md`](python/CHANGELOG.md),
+[`go/CHANGELOG.md`](go/CHANGELOG.md), and [`rust/CHANGELOG.md`](rust/CHANGELOG.md). Each entry states its required schema version and upgrade steps.
 
 The supported Node.js and PostgreSQL versions, the schema compatibility guarantees, and the release
 process are in [`docs/compatibility.md`](docs/compatibility.md).
@@ -14,6 +14,39 @@ process are in [`docs/compatibility.md`](docs/compatibility.md).
 Workhorse is a public beta. While the line is `0.x`, any minor release may change behaviour. From
 `0.1.0` the schema upgrades in place: every release ships ordered, immutable migrations, and inside
 a major line a migration only adds. Breaking changes are always listed with upgrade steps.
+
+## 0.4.0 — 2026-09-23
+
+The npm packages, Python distribution, Go module, and Rust crate release from one source commit.
+
+Requires **schema v18**, Node.js **22** or newer, and PostgreSQL **15** or newer.
+
+**A 0.3.x database upgrades in place.** Run `workhorse schema migrate` from a deployment step before
+any process from this release starts. It applies migration 0024 and leaves the installation at
+schema version 24. The step is additive: it replaces one read function. No table changes, no
+database is dropped, and no data is lost. The compatibility floor stays at version 18.
+
+**The Rust crate joins the release train.** `workhorse` publishes to crates.io from the same `v*`
+tag as the npm packages, and its notes live in [`rust/CHANGELOG.md`](rust/CHANGELOG.md).
+
+- Measure row retention lag against the history gate the prune applies. `prune_terminal_tasks_v1`
+  keeps a terminal task until daily history retention passes its `history_through_at`, but queue
+  health counted a row held only by that gate as lag. The measured lag climbed toward a day between
+  history passes, so health read Degraded for most of every day. Migration 0024 replaces
+  `queue_health_v1` so both eligible boundaries apply the prune's predicate. A history pass that
+  stops advancing still shows as task event and attempt history lag.
+- Fit the dashboard Workers table on a laptop viewport without horizontal scrolling. Schedules
+  become a calendar icon with a hover card, the Paused badge moves to the placement line, queues
+  stack one per line, and a long worker name is truncated in the middle with the full name on hover.
+- Bound the dashboard login body. A non-numeric or unsafe `Content-Length` returns 413, and a
+  streamed body past `MAX_LOGIN_BODY_BYTES` returns 413 without being buffered.
+- Enforce dashboard mutation authorization in the RPC middleware, so a read-only dashboard refuses a
+  mutation with `FORBIDDEN` before any handler runs.
+- Substitute the dashboard's runtime configuration and module URLs literally, so a `$` pattern in a
+  value is no longer expanded.
+- Document the dashboard's security boundaries in
+  [`docs/dashboard-security-review.md`](docs/dashboard-security-review.md).
+- Move every optional package's peer range on `@stablemates/workhorse` to `>=0.4.0 <0.5.0`.
 
 ## 0.3.0 — 2026-09-21
 

@@ -3,6 +3,7 @@ import { OBSERVATION_FORMAT } from "../../../scripts/soak/observation.js";
 import { collectSoakObservation, observationFileName } from "../../../scripts/soak/observe.js";
 import { buildSoakReport } from "../../../scripts/soak/report.js";
 import { WORKHORSE_SCHEMA_BASELINE_VERSION, WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
+import { PROTOCOL_VERSION } from "../src/schema.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { pool, queue } = createIntegrationTestContext(import.meta.url);
@@ -22,7 +23,7 @@ describe("soak observation collector", () => {
     expect(observation.database.name).toMatch(/workhorse/);
     expect(Date.parse(observation.observedAt)).toBeGreaterThan(0);
     expect(observation.installation.schemaVersion).toBe(WORKHORSE_SCHEMA_VERSION);
-    expect(observation.installation.protocolVersions).toContain(1);
+    expect(observation.installation.protocolVersions).toContain(PROTOCOL_VERSION);
     // A clean installation opens its lineage at the migration baseline, not at version 1: the
     // chain below the baseline was pruned and this installation applied none of it.
     expect(observation.installation.migrations[0]).toMatchObject({

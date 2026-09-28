@@ -36,7 +36,7 @@ from workhorse import (
     Worker,
 )
 from workhorse._statements import SQL_STATEMENTS, STATEMENTS, DriverStatement
-from workhorse._drivers import SyncExecutor
+from workhorse._drivers import PooledSyncExecutor, SyncExecutor
 
 REPOSITORY = Path(__file__).parents[2]
 
@@ -64,6 +64,7 @@ SYNC_ONLY_RUNTIME_FIXTURE_KINDS = frozenset(
         "heartbeat-cadence",
         "lease-loss",
         "poll-cadence",
+        "slot-refill",
         "suspension-replay",
         "trace-propagation",
     }
@@ -117,6 +118,7 @@ def execute_runtime_fixture(
             enqueue_connection, poll_fixture, database_url
         ),
         "graceful-drain": execute_graceful_drain_fixture,
+        "slot-refill": execute_slot_refill_fixture,
         "trace-propagation": execute_trace_propagation_fixture,
         # The race holds three sessions of its own besides the setup connection.
         "budget-admission-race": lambda setup_connection, race_fixture: (
@@ -715,6 +717,150 @@ def execute_graceful_drain_fixture(
     states = [task_state(connection, task_id)["state"] for task_id in task_ids]
     assert states.count("succeeded") == fixture["expectedSucceeded"]
     assert states.count("ready") == fixture["expectedReady"]
+
+
+class ClaimRecordingExecutor:
+    """Records every dispatch claim's limit, and can hold a claim before it reaches PostgreSQL.
+
+    Holding a claim keeps it in flight, so the next claim is observed while the first is open.
+    """
+
+    def __init__(self, executor: PooledSyncExecutor) -> None:
+        self._executor = executor
+        self._lock = Lock()
+        self._held: list[Event] = []
+        self.limits: list[int] = []
+        self.claims_with_tasks = 0
+        self.in_flight = 0
+        self.maximum_in_flight = 0
+        self.holding = False
+
+    def rows(self, statement: DriverStatement, parameters: Any = ()) -> Any:
+        if statement is not STATEMENTS.claim_many:
+            return self._executor.rows(statement, parameters)
+        release = Event()
+        with self._lock:
+            self.limits.append(int(parameters[2]))
+            self.in_flight += 1
+            self.maximum_in_flight = max(self.maximum_in_flight, self.in_flight)
+            if self.holding:
+                self._held.append(release)
+            else:
+                release.set()
+        try:
+            assert release.wait(timeout=10), "held claim was never released"
+            rows = self._executor.rows(statement, parameters)
+            if rows:
+                with self._lock:
+                    self.claims_with_tasks += 1
+            return rows
+        finally:
+            with self._lock:
+                self.in_flight -= 1
+
+    def release_held(self) -> None:
+        with self._lock:
+            self.holding = False
+            held, self._held = self._held, []
+        for release in held:
+            release.set()
+
+    def claims(self) -> int:
+        with self._lock:
+            return len(self.limits)
+
+
+def execute_slot_refill_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> None:
+    queue_name = runtime_queue(fixture)
+    queue = Queue(connection)
+    task_ids = [
+        queue.enqueue(fixture["taskType"], {"sequence": sequence}, EnqueueOptions(queue=queue_name))
+        for sequence in range(fixture["taskCount"])
+    ]
+    executor = ClaimRecordingExecutor(PooledSyncExecutor(worker_pool))
+    # Handlers block until the fixture finishes them in the order they started.
+    handlers_lock = Lock()
+    started: list[Event] = []
+    open_handlers = False
+
+    def handler(_payload: object, _context: HandlerContext) -> None:
+        finished = Event()
+        with handlers_lock:
+            if open_handlers:
+                return
+            started.append(finished)
+        assert finished.wait(timeout=10)
+
+    def finish_first() -> None:
+        with handlers_lock:
+            finished = started.pop(0)
+        finished.set()
+
+    def open_all() -> None:
+        nonlocal open_handlers
+        with handlers_lock:
+            open_handlers = True
+            waiting, started[:] = list(started), []
+        for finished in waiting:
+            finished.set()
+
+    def started_count() -> int:
+        with handlers_lock:
+            return len(started)
+
+    errors: list[BaseException] = []
+    worker = Worker(
+        worker_pool,
+        queue=queue_name,
+        worker_id=f"python-{fixture['id']}",
+        concurrency=fixture["concurrency"],
+        registry_interval_ms=0,
+        shared_heartbeats=True,
+        _executor=executor,
+    ).handle(fixture["taskType"], handler)
+    thread = run_in_thread(worker.run, errors)
+    try:
+        wait_for(
+            lambda: started_count() == fixture["concurrency"],
+            f"{fixture['id']} did not fill its slots",
+        )
+        executor.holding = True
+        for finished in range(1, 4):
+            finish_first()
+            if finished == 2:
+                # One more free slot is below the refill batch while the first refill is held.
+                sleep(fixture["settleCheckMs"] / 1000)
+                assert executor.claims() == 2
+            else:
+                expected = 2 if finished == 1 else 3
+                wait_for(
+                    lambda: executor.claims() >= expected,
+                    f"{fixture['id']} did not start claim {expected}",
+                )
+        assert executor.limits == fixture["expectedClaimLimits"]
+        assert executor.maximum_in_flight == fixture["expectedOverlappingClaims"]
+
+        executor.release_held()
+        open_all()
+        wait_for(
+            lambda: all(
+                task_state(connection, task_id)["state"] == "succeeded" for task_id in task_ids
+            ),
+            f"{fixture['id']} did not run every task",
+        )
+        assert (
+            executor.claims_with_tasks / fixture["taskCount"]
+            <= fixture["expectedMaximumClaimsPerTask"]
+        )
+    finally:
+        executor.release_held()
+        open_all()
+        worker.stop()
+        join(thread)
+    assert errors == []
+    assert active_slots(worker) == 0
 
 
 CLAIM_V1 = SQL_STATEMENTS["claim_v1"][0]

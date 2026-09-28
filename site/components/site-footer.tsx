@@ -1,3 +1,4 @@
+import cargoManifest from "../../rust/Cargo.toml?raw";
 import support from "../../support.json";
 
 import { WorkhorseMark } from "@/components/logo";
@@ -12,10 +13,16 @@ import { demoUrl, siteConfig } from "@/lib/site";
  * is the failure ADR 0058 removed from `/docs/releases`, and `support.json` is
  * the repository's source of truth for every minimum.
  *
- * All three SDK runtimes are named. Workhorse publishes a TypeScript, a Python,
- * and a Go line, so a line that named only Node left two of them off the one
+ * Every SDK runtime is named. Workhorse publishes a TypeScript, a Python, a Go,
+ * and a Rust line, so a line that named only Node left three of them off the one
  * sentence that says what Workhorse runs on.
+ *
+ * The Rust floor is the crate's own `rust-version`, which Cargo enforces, so the
+ * footer reads it from `rust/Cargo.toml` as the README alignment test does.
  */
+const rustVersion = /^rust-version = "([^"]+)"$/m.exec(cargoManifest)?.[1];
+if (!rustVersion) throw new Error("rust/Cargo.toml declares no rust-version");
+
 const runtimes = [
   `PostgreSQL ${support.support.postgres.minimum}+`,
   `Node ${support.support.node.minimum}+`,
@@ -23,6 +30,7 @@ const runtimes = [
   // `support.json` spells the Go floor as a full version, `1.25.0`. Every other
   // surface prints the language version a reader installs (support-matrix).
   `Go ${support.support.go.minimum.replace(/\.0$/, "")}+`,
+  `Rust ${rustVersion}+`,
 ].join(" · ");
 
 const columns = [

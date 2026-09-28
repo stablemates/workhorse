@@ -60,13 +60,18 @@ Install the SDK. Each package includes its default PostgreSQL driver.
   <Tab value="Rust">
 
     ```bash
-    cargo add workhorse --git https://github.com/stablemates/workhorse
+    cargo add workhorse
     cargo add tokio --features macros,rt-multi-thread
     cargo add serde_json
     ```
 
-    Crates.io holds only a placeholder until the next release publishes the crate, so add it from
-    the repository.
+    The crate has two optional features. `dashboard` embeds the dashboard backend as a
+    `tower::Service`, and `opentelemetry` connects telemetry to your OpenTelemetry provider. Enable
+    the ones you use:
+
+    ```bash
+    cargo add workhorse --features dashboard,opentelemetry
+    ```
 
     Your application never installs the schema. A deployment step installs it once, and that step
     runs on Node.js.
@@ -117,12 +122,12 @@ A Python, Go, or Rust project has no `node_modules` to resolve the binary from, 
 package and the version:
 
 ```bash
-npx --package @stablemates/workhorse@0.3.0 workhorse schema install
+npx --package @stablemates/workhorse@0.4.0 workhorse schema install
 ```
 
-Pin that to the version of `stablemates-workhorse` or `github.com/stablemates/workhorse/go` the
-application depends on. All three release together from one commit, so the numbers are the same.
-The Rust crate has no release yet, so a Rust project uses the latest release's version.
+Pin that to the version of `stablemates-workhorse`, `github.com/stablemates/workhorse/go`, or the
+`workhorse` crate the application depends on. Every line releases together from one commit, so the
+numbers are the same.
 `--package` also names where the binary comes from: without it `npx` looks for a `workhorse`
 package by that bare name, which belongs to someone else.
 
@@ -205,11 +210,11 @@ release instead. Download that asset from the release for the version your appli
 then apply it:
 
 ```bash
-curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.3.0/schema.sql
+curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.4.0/schema.sql
 psql "$DATABASE_URL" -f schema.sql
 ```
 
-The [`v0.3.0` release](https://github.com/stablemates/workhorse/releases/tag/v0.3.0) is the page
+The [`v0.4.0` release](https://github.com/stablemates/workhorse/releases/tag/v0.4.0) is the page
 that carries the file. Change both version numbers together when you pin a different one: the
 schema the file creates is the schema that release's SDK expects.
 

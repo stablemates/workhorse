@@ -74,7 +74,13 @@ export const Route = createFileRoute("/")({
             image: siteConfig.socialImage,
             codeRepository: siteConfig.github,
             license: "https://www.apache.org/licenses/LICENSE-2.0",
-            sameAs: [siteConfig.github, siteConfig.npm, siteConfig.pypi, siteConfig.goModule],
+            sameAs: [
+              siteConfig.github,
+              siteConfig.npm,
+              siteConfig.pypi,
+              siteConfig.goModule,
+              siteConfig.crates,
+            ],
             publisher: publisherReference,
           }),
         },
@@ -125,9 +131,10 @@ const features: readonly Feature[] = [
     title: "Sleep for an hour or a month without holding a worker.",
     lede: (
       <>
-        TypeScript&apos;s <code>ctx.sleep</code>, Python&apos;s <code>context.sleep</code>, and
-        Go&apos;s <code>handler.Sleep</code> commit a named timer in PostgreSQL and give the worker
-        slot back. When the timer is due, the handler restarts and its checkpoints replay.
+        TypeScript&apos;s <code>ctx.sleep</code>, Python&apos;s and Rust&apos;s{" "}
+        <code>context.sleep</code>, and Go&apos;s <code>handler.Sleep</code> commit a named timer in
+        PostgreSQL and give the worker slot back. When the timer is due, the handler restarts and
+        its checkpoints replay.
       </>
     ),
     file: "settle-order.ts",
@@ -228,8 +235,9 @@ const features: readonly Feature[] = [
     lede: (
       <>
         Debounce replaces a pending payload while updates settle. <code>enqueueWithResult</code>,{" "}
-        <code>enqueue_with_result</code>, and <code>EnqueueWithResult</code> return the retained
-        task and a typed outcome, so diagnostics show whether Workhorse replaced or coalesced it.
+        <code>enqueue_with_result</code>, <code>EnqueueWithResult</code>, and Rust&apos;s{" "}
+        <code>enqueue</code> return the retained task and a typed outcome, so diagnostics show
+        whether Workhorse replaced or coalesced it.
       </>
     ),
     file: "indexing.ts",
@@ -324,7 +332,7 @@ const operatingNote = (
 
 const dashboardNote = (
   <>
-    TypeScript, Python, and Go embed the same packaged dashboard through their native HTTP
+    TypeScript, Python, Go, and Rust embed the same packaged dashboard through their native HTTP
     interfaces. Each host needs a database connection, with no worker runtime or extra service.
   </>
 );
@@ -349,9 +357,15 @@ const dashboardTabs: readonly CodeTab[] = [
     note: dashboardNote,
     snippet: landingSupplementalSnippets.operateDashboard.go,
   },
+  {
+    label: "rust",
+    file: "dashboard.rs",
+    note: dashboardNote,
+    snippet: landingSupplementalSnippets.operateDashboard.rust,
+  },
 ];
 
-/** Operational SDK calls, grouped separately to stay within the six-tab CSS contract. */
+/** Operational SDK calls, grouped separately to stay within the eight-tab CSS contract. */
 const healthFleetTabs: readonly CodeTab[] = [
   {
     label: "health ts",
@@ -372,6 +386,12 @@ const healthFleetTabs: readonly CodeTab[] = [
     snippet: landingSupplementalSnippets.operateHealth.go,
   },
   {
+    label: "health rs",
+    file: "monitor.rs",
+    note: operatingNote,
+    snippet: landingSupplementalSnippets.operateHealth.rust,
+  },
+  {
     label: "fleet ts",
     file: "pause-fleet.ts",
     note: operatingNote,
@@ -388,6 +408,12 @@ const healthFleetTabs: readonly CodeTab[] = [
     file: "pause-fleet.go",
     note: operatingNote,
     snippet: landingSupplementalSnippets.operateFleet.go,
+  },
+  {
+    label: "fleet rs",
+    file: "pause_fleet.rs",
+    note: operatingNote,
+    snippet: landingSupplementalSnippets.operateFleet.rust,
   },
 ];
 
@@ -421,6 +447,11 @@ const deployTabs: readonly CodeTab[] = [
     file: "worker.go",
     snippet: landingSupplementalSnippets.deploy.go,
   },
+  {
+    label: "rust",
+    file: "worker.rs",
+    snippet: landingSupplementalSnippets.deploy.rust,
+  },
 ];
 
 /**
@@ -453,10 +484,11 @@ function FeatureSection({ feature, index }: { feature: Feature; index: number })
   const snippets = landingFeatureSnippets[feature.snippet];
   const tabs: readonly CodeTab[] = [
     { label: "typescript", file: feature.file, snippet: snippets.typescript },
-    ...("python" in snippets && "go" in snippets
+    ...("python" in snippets && "go" in snippets && "rust" in snippets
       ? [
           { label: "python", file: `${baseFile}.py`, snippet: snippets.python },
           { label: "go", file: `${baseFile}.go`, snippet: snippets.go },
+          { label: "rust", file: `${baseFile.replaceAll("-", "_")}.rs`, snippet: snippets.rust },
         ]
       : []),
   ];
@@ -943,7 +975,7 @@ function HomePage() {
                 One config file is a production worker.
               </h2>
               <p className="mt-3 text-pretty text-[16px] leading-relaxed text-fd-muted-foreground">
-                TypeScript, Python, and Go connect process signals to bounded drain and fleet
+                TypeScript, Python, Go, and Rust connect process signals to bounded drain and fleet
                 registration. Active handlers finish before the supervisor replaces the process.
               </p>
               <p className="mt-4">

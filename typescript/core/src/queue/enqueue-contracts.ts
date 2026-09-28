@@ -1,5 +1,10 @@
 import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
-import { databaseErrorCode, databaseErrorDetails, WorkhorseError } from "../errors.js";
+import {
+  databaseErrorCode,
+  databaseErrorDetails,
+  fastTierRejection,
+  WorkhorseError,
+} from "../errors.js";
 import { injectTraceContext, logDebug, telemetryMetrics, withSpan } from "../telemetry.js";
 import type {
   ClaimedTask,
@@ -410,6 +415,9 @@ function validateContractValue(
   return serializeJsonWithinLimit(taskType, kind, value, maxBytes);
 }
 
+// PostgreSQL enforces the limit on octet_length(value::jsonb::text), so the client measures the
+// same text. That text is never shorter than the compact JSON and, without exponent notation, at
+// most twice as long, which lets most values skip the exact measure.
 function serializeJsonWithinLimit(
   taskType: string,
   kind: "payload" | "result",
@@ -417,11 +425,53 @@ function serializeJsonWithinLimit(
   maxBytes: number,
 ): string {
   const serialized = JSON.stringify(value);
-  const actualBytes = Buffer.byteLength(serialized, "utf8");
+  const compactBytes = Buffer.byteLength(serialized, "utf8");
+  if (compactBytes * 2 <= maxBytes && !EXPONENT_NUMBER.test(serialized)) return serialized;
+  const actualBytes = jsonbTextBytes(JSON.parse(serialized) as Json);
   if (actualBytes > maxBytes) {
     throw new TaskValueSizeLimitError(taskType, kind, actualBytes, maxBytes);
   }
   return serialized;
+}
+
+// JSON.stringify writes a number in exponent notation with an explicit exponent sign.
+const EXPONENT_NUMBER = /\de[+-]/;
+
+/**
+ * Returns the UTF-8 length of PostgreSQL's jsonb text for a parsed JSON value. That text puts a
+ * space after each `:` and `,`, escapes strings as JSON.stringify does, and writes numbers in
+ * plain decimal notation.
+ */
+export function jsonbTextBytes(value: Json): number {
+  if (value === null) return 4;
+  if (typeof value === "boolean") return value ? 4 : 5;
+  if (typeof value === "number") return numericTextBytes(JSON.stringify(value));
+  if (typeof value === "string") return Buffer.byteLength(JSON.stringify(value), "utf8");
+  if (Array.isArray(value)) {
+    if (value.length === 0) return 2;
+    let bytes = 2 + (value.length - 1) * 2;
+    for (const element of value) bytes += jsonbTextBytes(element);
+    return bytes;
+  }
+  const keys = Object.keys(value);
+  if (keys.length === 0) return 2;
+  let bytes = 2 + (keys.length - 1) * 2;
+  for (const key of keys) {
+    bytes += Buffer.byteLength(JSON.stringify(key), "utf8") + 2 + jsonbTextBytes(value[key]!);
+  }
+  return bytes;
+}
+
+// numeric_out writes every digit of the integer part and as many fraction digits as the input
+// had after its decimal point, shifted by the exponent.
+function numericTextBytes(token: string): number {
+  const match = /^(-?)(\d+)(?:\.(\d+))?e([+-]\d+)$/.exec(token);
+  if (!match) return token.length;
+  const [, sign, integerDigits, fractionDigits = "", exponentText] = match;
+  const exponent = Number(exponentText);
+  const scale = Math.max(0, fractionDigits.length - exponent);
+  const integerLength = Math.max(1, integerDigits!.length + exponent);
+  return sign!.length + integerLength + (scale > 0 ? 1 + scale : 0);
 }
 
 interface TaskAcceptance {
@@ -880,7 +930,13 @@ export class EnqueueContractsModule extends QueueModule {
           }
           return enqueueResults;
         } catch (error) {
-          throw enqueueConflict(error) ?? dependencyCycle(error) ?? dependencyLimit(error) ?? error;
+          throw (
+            enqueueConflict(error) ??
+            dependencyCycle(error) ??
+            dependencyLimit(error) ??
+            fastTierRejection(error) ??
+            error
+          );
         }
       },
     );

@@ -12,6 +12,7 @@ import {
 } from "../../../scripts/sql-released-signatures.js";
 import { randomUUID } from "node:crypto";
 import {
+  contractSchema,
   migrateSchema,
   readWorkerClientProtocols,
   SCHEMA_MIGRATIONS,
@@ -23,7 +24,9 @@ import {
   parseSchemaMigrationMetadata,
   planSchemaContract,
 } from "../src/schema-migrations.js";
+import type { Queryable } from "../src/types.js";
 import { createDatabaseTestHarness } from "./support/db.js";
+import { readDependencyCounterDrift } from "./support/dependency-counter.js";
 import {
   createHistoryFixtureDay,
   readSeededRows,
@@ -46,6 +49,19 @@ const releaseDatabase = createDatabaseTestHarness(new URL("?release", import.met
 const lockDatabase = createDatabaseTestHarness(new URL("?lock", import.meta.url).href, {
   schemaProvisioning: "install",
 });
+/**
+ * Bring a database to the current schema the way an operator does across a contract step: migrate,
+ * apply the pending contract step once confirmed, and migrate again until nothing is pending.
+ */
+async function migrateThroughContracts(database: Queryable): Promise<void> {
+  for (;;) {
+    const { contractStop } = await migrateSchema(database);
+    if (contractStop === null) return;
+    const outcome = await contractSchema(database, { confirmed: true });
+    if (outcome.kind !== "applied") throw new Error(`expected ${contractStop.file} to apply`);
+  }
+}
+
 const contractDatabase = createDatabaseTestHarness(new URL("?contract", import.meta.url).href, {
   schemaProvisioning: "install",
 });
@@ -127,6 +143,26 @@ function probeStep(
     ],
     readStep: () => Promise.resolve(body),
   };
+}
+
+async function registerContractWorker(
+  workerId: string,
+  clientProtocolVersion: number | null,
+): Promise<void> {
+  await contractDatabase.pool.query(
+    `SELECT workhorse.register_worker_v1(
+       $1::text, $2::uuid, 'contract-host', 4242, ARRAY['contract']::text[], ARRAY[]::text[],
+       1, 30000, 10000, 250, 1000, 60000, 5000, 0, false, $3::integer, 'fixture', '9.9.9')`,
+    [workerId, randomUUID(), clientProtocolVersion],
+  );
+}
+
+async function deregisterContractWorker(workerId: string): Promise<void> {
+  await contractDatabase.pool.query(`SELECT workhorse.deregister_worker_v1($1)`, [workerId]);
+}
+
+async function setSchemaVersion(version: number): Promise<void> {
+  await contractDatabase.pool.query("UPDATE workhorse.schema_version SET version = $1", [version]);
 }
 
 describe("schema migrations", () => {
@@ -539,9 +575,16 @@ describe("schema migrations", () => {
       ])
         expect(populated).toContain(table);
 
-      await migrateSchema(releaseDatabase.pool);
+      await migrateThroughContracts(releaseDatabase.pool);
 
       expect(await readSeededRows(releaseDatabase.pool, seeded)).toEqual(seeded);
+      // The counter migration backfills every blocked row from the edges it summarizes.
+      expect(await readDependencyCounterDrift(releaseDatabase.pool)).toEqual([]);
+      const counted = await releaseDatabase.pool.query<{ count: number }>(
+        `SELECT count(*)::integer AS count
+           FROM workhorse.task_runtime WHERE pending_prerequisites > 0`,
+      );
+      expect(counted.rows[0]?.count).toBeGreaterThan(0);
 
       expect(await dumpNormalizedSchema(releaseDatabase.databaseUrl)).toBe(
         await dumpNormalizedSchema(cleanDatabase.databaseUrl),
@@ -553,12 +596,7 @@ describe("schema migrations", () => {
       const protocols = await releaseDatabase.pool.query<{ version: number }>(
         "SELECT version FROM workhorse.protocol_version ORDER BY version",
       );
-      expect(protocols.rows).toEqual([
-        { version: 1 },
-        { version: 2 },
-        { version: 3 },
-        { version: 4 },
-      ]);
+      expect(protocols.rows).toEqual([{ version: 5 }]);
       const migrations = await releaseDatabase.pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_migration ORDER BY version",
       );
@@ -617,7 +655,7 @@ describe("schema migrations", () => {
       await readFile(path.join(repository, "sql", "releases", newest), "utf8"),
     );
     await seedReleasedSchema(releaseDatabase.pool);
-    await migrateSchema(releaseDatabase.pool);
+    await migrateThroughContracts(releaseDatabase.pool);
     const migrated = await readShapes();
 
     await releaseDatabase.pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
@@ -663,28 +701,6 @@ describe("schema migrations", () => {
   // gate reads workhorse.worker_registry, which only the real baseline carries. Every test leaves
   // schema_version at 1 and an empty registry behind for the next one.
   describe("contract steps", () => {
-    async function registerContractWorker(
-      workerId: string,
-      clientProtocolVersion: number | null,
-    ): Promise<void> {
-      await contractDatabase.pool.query(
-        `SELECT workhorse.register_worker_v1(
-           $1::text, $2::uuid, 'contract-host', 4242, ARRAY['contract']::text[], ARRAY[]::text[],
-           1, 30000, 10000, 250, 1000, 60000, 5000, 0, false, $3::integer, 'fixture', '9.9.9')`,
-        [workerId, randomUUID(), clientProtocolVersion],
-      );
-    }
-
-    async function deregisterContractWorker(workerId: string): Promise<void> {
-      await contractDatabase.pool.query(`SELECT workhorse.deregister_worker_v1($1)`, [workerId]);
-    }
-
-    async function setSchemaVersion(version: number): Promise<void> {
-      await contractDatabase.pool.query("UPDATE workhorse.schema_version SET version = $1", [
-        version,
-      ]);
-    }
-
     // A two-step chain whose second step is a contract step, so one forward run can stop before
     // it and one contract run can apply it.
     const stopPlan = {

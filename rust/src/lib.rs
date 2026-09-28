@@ -11,6 +11,7 @@ pub mod contracts;
 #[cfg(feature = "dashboard")]
 pub mod dashboard;
 mod error;
+mod fenced_write;
 pub mod policies;
 mod queue;
 mod sql_catalogue_generated;

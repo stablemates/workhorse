@@ -1,4 +1,5 @@
 from ._telemetry import METRIC_ATTRIBUTE_CARDINALITY_LIMIT, TRACE_ATTRIBUTE_COUNT_LIMIT
+from ._version import WORKHORSE_VERSION as _WORKHORSE_VERSION
 from .admin import (
     Admin,
     AdminAudit,
@@ -16,6 +17,8 @@ from .admin import (
     ExternalWaitPage,
     HumanWait,
     HumanWaitPage,
+    QueueHistory,
+    QueueTier,
     RedriveResult,
     TaskListCursor,
     TaskListItem,
@@ -52,6 +55,7 @@ from .errors import (
     DependencyLimitExceededError,
     EnqueueIdempotencyConflictError,
     ExecutionTimeoutError,
+    FastTierUnsupportedError,
     HumanWaitAlreadyWaitingError,
     HumanWaitConflictError,
     HumanWaitIdempotencyConflictError,
@@ -132,6 +136,10 @@ from .types import (
 from .worker import BatchHandler, Handler, Worker
 from .worker_process import run_worker_process
 
+# The published distribution version, the same string `importlib.metadata` reports for
+# `stablemates-workhorse`. The release train's post-publish check reads it.
+__version__: str = _WORKHORSE_VERSION
+
 __all__ = [
     "METRIC_ATTRIBUTE_CARDINALITY_LIMIT",
     "TRACE_ATTRIBUTE_COUNT_LIMIT",
@@ -197,6 +205,7 @@ __all__ = [
     "ExternalWait",
     "ExternalWaitCursor",
     "ExternalWaitPage",
+    "FastTierUnsupportedError",
     "Handler",
     "HandlerContext",
     "HumanWait",
@@ -217,6 +226,8 @@ __all__ = [
     "PurgeIdempotencyConflictError",
     "Queue",
     "QueueHealth",
+    "QueueHistory",
+    "QueueTier",
     "RateLimit",
     "RateLimitPolicy",
     "RateLimitPolicyDefinition",
@@ -260,6 +271,7 @@ __all__ = [
     "WorkerPauseResult",
     "WorkerRegistryEntry",
     "WorkhorseError",
+    "__version__",
     "assert_schema_compatible",
     "assert_schema_compatible_asyncpg",
     "assert_schema_compatible_psycopg",

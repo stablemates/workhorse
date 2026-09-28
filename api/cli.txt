@@ -40,8 +40,11 @@ complete-human <task-id>  mutates
 pause <queue>  mutates
 resume <queue>  mutates
 purge <queue>  mutates
+set-tier <queue>  mutates
+set-history <queue>  mutates
 pause-worker <worker-id>  mutates
 resume-worker <worker-id>  mutates
+repair-dependencies  mutates
 
 ## Options
 
@@ -71,10 +74,13 @@ resume-worker <worker-id>  mutates
 --payload-json <string>
 --queue <string>
 --reason <string>
+--record-attempts <string>
+--record-claims <string>
 --request-id <string>
 --signal-cursor <string>
 --state <string>  (repeatable)
 --tag <string>  (repeatable)
+--tier <string>
 --type <string>
 --yes
 
@@ -156,29 +162,32 @@ resume-worker <worker-id>  mutates
 
 ## --json payloads
 
-schema status         SchemaStatusReport
-health                QueueHealth
-admin tasks           TaskListPage
-admin task            TaskSnapshot
-admin timeline        TaskTimelinePage
-admin checkpoints     readonly TaskCheckpoint[] | TaskCheckpoint
-admin waits           readonly TaskWait[] | TaskWait
-admin external-waits  AdminExternalWaits
-admin failures        DeadLetterPage
-admin queues          readonly AdminQueueStatus[]
-admin schedules       readonly StoredSchedule[]
-admin workers         readonly WorkerRegistryEntry[]
-admin maintenance     AdminMaintenanceState
-admin cancel          CancelResult
-admin redrive         RedriveResult
-admin redrive-many    BulkRedrivePage
-admin signal          SignalDeliveryResult
-admin complete-human  HumanWaitCompletionResult
-admin pause           AdminQueuePauseReport
-admin resume          AdminQueuePauseReport
-admin purge           AdminQueuePurgeReport
-admin pause-worker    WorkerPauseResult
-admin resume-worker   WorkerPauseResult
+schema status              SchemaStatusReport
+health                     QueueHealth
+admin tasks                TaskListPage
+admin task                 TaskSnapshot
+admin timeline             TaskTimelinePage
+admin checkpoints          readonly TaskCheckpoint[] | TaskCheckpoint
+admin waits                readonly TaskWait[] | TaskWait
+admin external-waits       AdminExternalWaits
+admin failures             DeadLetterPage
+admin queues               readonly AdminQueueStatus[]
+admin schedules            readonly StoredSchedule[]
+admin workers              readonly WorkerRegistryEntry[]
+admin maintenance          AdminMaintenanceState
+admin cancel               CancelResult
+admin redrive              RedriveResult
+admin redrive-many         BulkRedrivePage
+admin signal               SignalDeliveryResult
+admin complete-human       HumanWaitCompletionResult
+admin pause                AdminQueuePauseReport
+admin resume               AdminQueuePauseReport
+admin purge                AdminQueuePurgeReport
+admin set-tier             AdminQueueTierReport
+admin set-history          AdminQueueHistoryReport
+admin pause-worker         WorkerPauseResult
+admin resume-worker        WorkerPauseResult
+admin repair-dependencies  readonly DependencyDrift[] | readonly DependencyRepair[]
 
 ## Payload types
 
@@ -190,6 +199,14 @@ interface AdminExternalWaits {
 interface AdminMaintenanceState {
   maintenancePolicy: MaintenancePolicy;
   retentionPolicy: RetentionPolicy;
+}
+
+interface AdminQueueHistoryReport {
+  readonly queue: string;
+  /** The queue's tier. A full-tier queue records all history whatever the settings say. */
+  readonly tier: QueueTier;
+  readonly recordAttempts: boolean;
+  readonly recordClaims: boolean;
 }
 
 interface AdminQueuePauseReport {
@@ -205,6 +222,9 @@ interface AdminQueuePurgeReport {
 interface AdminQueueStatus {
   queue: string;
   paused: boolean;
+  tier: QueueTier;
+  recordAttempts: boolean;
+  recordClaims: boolean;
   readyDepth: number;
   scheduledDepth: number;
   activeLeases: number;
@@ -214,6 +234,11 @@ interface AdminQueueStatus {
   concurrencyActive: number;
   rateLimitPerSecond: number | null;
   rateLimitThrottledReadyDepth: number;
+}
+
+interface AdminQueueTierReport {
+  readonly queue: string;
+  readonly tier: QueueTier;
 }
 
 interface Budget {
@@ -291,6 +316,31 @@ interface Dependencies {
   onFailure: DependencyTerminalPolicy;
   onCancellation: DependencyTerminalPolicy;
 }
+
+interface DependencyDrift {
+  taskId: string;
+  queueName: string;
+  /** The counter the dependent's runtime row records. */
+  pendingPrerequisites: number;
+  /** The dependency edges that have not resolved. */
+  pendingEdges: number;
+  /** The rejection flag the dependent's runtime row records. */
+  dependencyRejected: boolean;
+  /** Whether any resolved edge rejected the dependent. */
+  rejectedEdges: boolean;
+  /** What a repair would do now. A repair recounts under lock, so it can act differently. */
+  action: DependencyRepairAction;
+}
+
+interface DependencyRepair {
+  taskId: string;
+  /** The counter the dependent's runtime row recorded before the repair. */
+  recordedPendingPrerequisites: number;
+  pendingEdges: number;
+  action: DependencyRepairAction;
+}
+
+type DependencyRepairAction = "recounted" | "released" | "rejected";
 
 type DependencyTerminalPolicy = "release" | "cancel" | "fail";
 
@@ -597,6 +647,8 @@ interface QueueHealthStatus {
   level: "healthy" | "degraded" | "critical";
   reasons: QueueHealthReason[];
 }
+
+type QueueTier = "fast" | "full";
 
 interface RateLimit {
   /** Tokens added during each interval. One token admits one task start. */

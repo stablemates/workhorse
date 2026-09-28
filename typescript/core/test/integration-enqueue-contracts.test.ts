@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   DEFAULT_IDEMPOTENCY_SCOPE,
   DEFAULT_IDEMPOTENCY_TTL_MS,
+  DependencyLimitExceededError,
   EnqueueIdempotencyConflictError,
   type EnqueueOptions,
   installSchema,
@@ -11,6 +12,7 @@ import {
   MAX_IDEMPOTENCY_KEY_BYTES,
   MAX_IDEMPOTENCY_SCOPE_BYTES,
   MAX_IDEMPOTENCY_TTL_MS,
+  MAX_TASK_DEPENDENTS,
   MAX_THROTTLE_WINDOW_MS,
   TaskContractValidationError,
   Queue,
@@ -18,6 +20,7 @@ import {
   Worker,
   WORKHORSE_SCHEMA_VERSION,
 } from "../src/index.js";
+import { jsonbTextBytes } from "../src/queue/enqueue-contracts.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { pool, queue, safeKeyDigest, safeKeyPreview, admin, adminAudit } =
@@ -90,6 +93,49 @@ function dependencyBearingCoalescingOptions(
       : { throttle: { key: dependencyOption, scope, windowMs: 60_000 } };
   return { ...coalescing, ...dependency } as unknown as EnqueueOptions;
 }
+
+/** Fills a new prerequisite with MAX_TASK_DEPENDENTS dependents, so one more edge overflows. */
+async function fullPrerequisite(label: string): Promise<string> {
+  const prerequisiteId = await queue.enqueue(`multi-invalid-${label}`, null);
+  await queue.enqueueMany(
+    Array.from({ length: MAX_TASK_DEPENDENTS }, (_unused, index) => ({
+      type: `multi-invalid-${label}-dependent`,
+      payload: { index },
+      options: { prerequisiteTaskId: prerequisiteId },
+    })),
+  );
+  return prerequisiteId;
+}
+
+async function batchTaskCount(): Promise<number> {
+  const counted = await pool.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM workhorse.task WHERE task_type LIKE 'batch-%'",
+  );
+  return counted.rows[0]!.count;
+}
+
+const runBatch = async (order: readonly [string, string]) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SET LOCAL statement_timeout = '2s'");
+    const ids = await queue.enqueueMany(
+      order.map((key) => ({
+        type: `deadlock-${key}`,
+        payload: { key },
+        options: { idempotency: { key, scope: "deadlock", ttlMs: 60_000 } },
+      })),
+      client,
+    );
+    await client.query("COMMIT");
+    return ids;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+};
 
 describe("enqueue contracts", () => {
   it("uses the synchronized contract cache for one-statement batch enqueue", async () => {
@@ -335,6 +381,56 @@ describe("enqueue contracts", () => {
         "DELETE FROM workhorse.contract_definition WHERE task_type = 'contract.policy' AND version = 'one'",
       ),
     ).rejects.toThrow(/contract documents are immutable/);
+  });
+
+  // PostgreSQL enforces a size limit on the value's jsonb text, which spaces its separators and
+  // expands exponent notation. The client must measure that text, not the compact JSON it sends.
+  it("measures a value as PostgreSQL's jsonb text", async () => {
+    const values: Json[] = [
+      null,
+      true,
+      false,
+      0,
+      -12.5,
+      1e21,
+      -1.5e-7,
+      1.2345678901234567e300,
+      5e-324,
+      Number.MAX_SAFE_INTEGER,
+      "",
+      'quote " slash \\ tab \t newline \n bell \u0007 delete \u007f',
+      "caf\u00e9 \u{1f40e} \u2028",
+      [],
+      {},
+      [1, [2, [3, []]], {}],
+      { a: 1, b: [true, null, "x"], c: { d: {}, e: [] } },
+      { "k:with,separators": "v, w: x", nested: [{ n: 1e-7 }, { n: 2e22 }] },
+    ];
+    const { rows } = await pool.query<{ bytes: number }>(
+      "SELECT octet_length(value::jsonb::text) AS bytes FROM unnest($1::text[]) WITH ORDINALITY AS input(value, ordinal) ORDER BY ordinal",
+      [values.map((value) => JSON.stringify(value))],
+    );
+    expect(values.map((value) => jsonbTextBytes(value))).toEqual(rows.map((row) => row.bytes));
+  });
+
+  it("rejects a value whose compact JSON fits but whose jsonb text does not", async () => {
+    const contractedQueue = new Queue(pool, "default", {
+      contracts: {
+        "list.sum": {
+          currentVersion: "1",
+          versions: { "1": { maxPayloadBytes: 18 } },
+        },
+      },
+    });
+    // The compact JSON is 17 bytes; PostgreSQL stores {"items": [1, 2, 3]}, which is 20.
+    await expect(contractedQueue.enqueue("list.sum", { items: [1, 2, 3] })).rejects.toMatchObject({
+      name: "TaskValueSizeLimitError",
+      actualBytes: 20,
+      maxBytes: 18,
+    });
+    await expect(contractedQueue.enqueue("list.sum", { items: [1] })).resolves.toEqual(
+      expect.any(String),
+    );
   });
 
   it("fails a handler attempt when its result violates the accepted contract", async () => {
@@ -597,6 +693,113 @@ describe("enqueue contracts", () => {
       "SELECT task_id, event_type FROM workhorse.task_event WHERE event_type = 'enqueued' ORDER BY occurred_at, event_id",
     );
     expect(events.rows).toEqual(ids.map((taskId) => ({ task_id: taskId, event_type: "enqueued" })));
+  });
+
+  it("writes a mixed batch in input order", async () => {
+    const prerequisite = await queue.enqueue("prerequisite", null, { queue: "buffer-other" });
+    const ids = await queue.enqueueMany([
+      { type: "first", payload: { order: 1 } },
+      { type: "keyed", payload: { order: 2 }, options: { idempotency: { key: "buffered" } } },
+      {
+        type: "expired",
+        payload: { order: 3 },
+        options: { deadline: new Date(Date.now() - 1_000), maxAttempts: 5 },
+      },
+      { type: "dependent", payload: { order: 4 }, options: { prerequisiteTaskId: prerequisite } },
+      { type: "keyed", payload: { order: 2 }, options: { idempotency: { key: "buffered" } } },
+      { type: "last", payload: { order: 5 } },
+    ]);
+
+    expect(ids[4]).toBe(ids[1]);
+    expect(new Set(ids).size).toBe(5);
+    expect((await admin.getTask(ids[2]!))?.state).toBe("failed");
+    expect((await admin.getTask(ids[3]!))?.state).toBe("blocked");
+    expect((await queue.claim("buffer-1"))?.id).toBe(ids[0]);
+    expect((await queue.claim("buffer-2"))?.id).toBe(ids[1]);
+    expect((await queue.claim("buffer-3"))?.id).toBe(ids[5]);
+    expect(await queue.claim("buffer-4")).toBeNull();
+
+    const events = await pool.query<{ task_id: string }>(
+      `SELECT task_id FROM workhorse.task_event
+        WHERE event_type = 'enqueued' AND task_id <> $1 ORDER BY occurred_at, event_id`,
+      [prerequisite],
+    );
+    expect(events.rows.map((row) => row.task_id)).toEqual([ids[0], ids[1], ids[2], ids[3], ids[5]]);
+    const projected = await pool.query<{ count: number }>(
+      "SELECT count(*)::integer AS count FROM workhorse.task_query WHERE task_id = ANY($1::uuid[])",
+      [ids],
+    );
+    expect(projected.rows[0]).toEqual({ count: 5 });
+  });
+
+  describe("a batch with more than one invalid member", () => {
+    // The request loop rejects a member as it reaches it, so the first such member in input order
+    // decides the error. Dependency limits are checked once, after the loop, by the statement
+    // trigger on task_dependency. It sees every edge of the batch and names the lowest task ID.
+
+    it("reports the first member the request loop rejects", async () => {
+      await queue.enqueue("keyed", { version: 1 }, { idempotency: { key: "multi-invalid" } });
+      const missing = { prerequisiteTaskId: "00000000-0000-7000-8000-000000000000" };
+      const conflicting = { idempotency: { key: "multi-invalid" } };
+
+      await expect(
+        queue.enqueueMany([
+          { type: "batch-valid", payload: null },
+          { type: "batch-missing", payload: null, options: missing },
+          { type: "keyed", payload: { version: 2 }, options: conflicting },
+        ]),
+      ).rejects.toThrow(/prerequisite task does not exist/);
+      await expect(
+        queue.enqueueMany([
+          { type: "batch-valid", payload: null },
+          { type: "keyed", payload: { version: 2 }, options: conflicting },
+          { type: "batch-missing", payload: null, options: missing },
+        ]),
+      ).rejects.toBeInstanceOf(EnqueueIdempotencyConflictError);
+      expect(await batchTaskCount()).toBe(0);
+    });
+
+    it("reports a later loop rejection before an earlier dependency limit", async () => {
+      const full = await fullPrerequisite("full");
+
+      await expect(
+        queue.enqueueMany([
+          { type: "batch-overflow", payload: null, options: { prerequisiteTaskId: full } },
+          {
+            type: "batch-missing",
+            payload: null,
+            options: { prerequisiteTaskId: "00000000-0000-7000-8000-000000000000" },
+          },
+        ]),
+      ).rejects.toThrow(/prerequisite task does not exist/);
+      expect(await batchTaskCount()).toBe(0);
+    });
+
+    it("names the lowest prerequisite ID when members overflow different prerequisites", async () => {
+      const [lower, higher] = [await fullPrerequisite("a"), await fullPrerequisite("b")].toSorted();
+
+      for (const order of [
+        [higher!, lower!],
+        [lower!, higher!],
+      ]) {
+        const error = await queue
+          .enqueueMany(
+            order.map((prerequisiteTaskId) => ({
+              type: "batch-overflow",
+              payload: null,
+              options: { prerequisiteTaskId },
+            })),
+          )
+          .catch((caught: unknown) => caught);
+        expect(error).toBeInstanceOf(DependencyLimitExceededError);
+        expect(error).toMatchObject({
+          taskId: lower,
+          limit: "dependents",
+          max: MAX_TASK_DEPENDENTS,
+        });
+      }
+      expect(await batchTaskCount()).toBe(0);
+    });
   });
 
   it("persists bounded priority and claims higher priorities before FIFO peers", async () => {
@@ -1937,28 +2140,6 @@ describe("enqueue contracts", () => {
   });
 
   it("prevents reverse-order overlapping keyed batches from deadlocking", async () => {
-    const runBatch = async (order: readonly [string, string]) => {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        await client.query("SET LOCAL statement_timeout = '2s'");
-        const ids = await queue.enqueueMany(
-          order.map((key) => ({
-            type: `deadlock-${key}`,
-            payload: { key },
-            options: { idempotency: { key, scope: "deadlock", ttlMs: 60_000 } },
-          })),
-          client,
-        );
-        await client.query("COMMIT");
-        return ids;
-      } catch (error) {
-        await client.query("ROLLBACK").catch(() => undefined);
-        throw error;
-      } finally {
-        client.release();
-      }
-    };
     const [forward, reverse] = await Promise.all([
       runBatch(["alpha", "omega"]),
       runBatch(["omega", "alpha"]),

@@ -30,11 +30,18 @@ import type {
   WorkerPauseResult,
   WorkerRegistryEntry,
 } from "./types.js";
-import { databaseErrorCode, databaseErrorDetails, expectOneRow, WorkhorseError } from "./errors.js";
+import {
+  databaseErrorCode,
+  databaseErrorDetails,
+  expectOneRow,
+  fastTierRejection,
+  WorkhorseError,
+} from "./errors.js";
 import { MAX_TASK_QUERY_PAGE_SIZE, MAX_REDRIVE_BATCH_SIZE } from "./types.js";
 import type { BudgetMetricSnapshot, QueueMetricSnapshot } from "./telemetry.js";
 import { logInfo } from "./telemetry.js";
 import { createQueueModuleContext } from "./queue/module-context.js";
+import type { QueueHistorySettings, QueueTier } from "./queue/queue-administration.js";
 import { createQueueModules, type QueueModules } from "./queue/modules.js";
 import { validateQueueOptions } from "./queue/enqueue-contracts.js";
 import type { ExternalWaitQuery } from "./queue/external-waits.js";
@@ -68,6 +75,51 @@ export interface AdminAudit {
   actor: string;
   reason: string;
   requestId: string;
+}
+
+/** The largest number of drifted dependents one drift read or repair examines. */
+export const MAX_DEPENDENCY_DRIFT_LIMIT = 100_000;
+
+/**
+ * What a dependency repair does to one drifted blocked dependent.
+ *
+ * `recounted` stores the recount because a pending edge remains. `rejected` fails or cancels the
+ * dependent after a rejecting resolution. `released` makes it ready or scheduled.
+ */
+export type DependencyRepairAction = "recounted" | "released" | "rejected";
+
+/**
+ * One blocked dependent whose counter or rejection flag disagrees with its dependency edges, or
+ * whose edges are all resolved.
+ */
+export interface DependencyDrift {
+  taskId: string;
+  queueName: string;
+  /** The counter the dependent's runtime row records. */
+  pendingPrerequisites: number;
+  /** The dependency edges that have not resolved. */
+  pendingEdges: number;
+  /** The rejection flag the dependent's runtime row records. */
+  dependencyRejected: boolean;
+  /** Whether any resolved edge rejected the dependent. */
+  rejectedEdges: boolean;
+  /** What a repair would do now. A repair recounts under lock, so it can act differently. */
+  action: DependencyRepairAction;
+}
+
+/** One dependent a repair changed, and what it did. */
+export interface DependencyRepair {
+  taskId: string;
+  /** The counter the dependent's runtime row recorded before the repair. */
+  recordedPendingPrerequisites: number;
+  pendingEdges: number;
+  action: DependencyRepairAction;
+}
+
+function validateDependencyDriftLimit(limit: number): void {
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_DEPENDENCY_DRIFT_LIMIT) {
+    throw new RangeError(`limit must be an integer from 1 to ${MAX_DEPENDENCY_DRIFT_LIMIT}`);
+  }
 }
 
 export interface PurgeIdempotencyConflictDetails {
@@ -288,6 +340,31 @@ export class Admin {
     return this.modules.queueAdministration.resumeQueue(queueName, audit);
   }
 
+  /**
+   * Move a queue between the full and fast tiers. Workhorse refuses the change while the queue
+   * holds a live task, so a task never changes tier.
+   */
+  async setQueueTier(queueName: string, tier: QueueTier, audit: AdminAudit): Promise<QueueTier> {
+    validateAdminAudit(audit);
+    if (tier !== "fast" && tier !== "full") throw new RangeError("tier must be fast or full");
+    try {
+      return await this.modules.queueAdministration.setQueueTier(queueName, tier, audit);
+    } catch (error) {
+      throw fastTierRejection(error) ?? error;
+    }
+  }
+
+  /**
+   * Choose the history a fast-tier queue writes. An omitted setting keeps its current value, and
+   * the result reports both settings after the change.
+   */
+  async setQueueHistory(
+    queueName: string,
+    settings: Partial<QueueHistorySettings>,
+  ): Promise<QueueHistorySettings> {
+    return this.modules.queueAdministration.setQueueHistory(queueName, settings);
+  }
+
   async purgeQueue(queueName: string, audit: AdminAudit): Promise<number> {
     validateAdminAudit(audit);
     try {
@@ -301,6 +378,60 @@ export class Admin {
       if (conflict) throw conflict;
       throw error;
     }
+  }
+
+  /**
+   * List blocked dependents whose dependency counters disagree with their edges, in task ID order.
+   * It writes nothing, so it is the dry run of {@link repairDependencyDrift}.
+   */
+  async listDependencyDrift(limit = 1_000): Promise<DependencyDrift[]> {
+    validateDependencyDriftLimit(limit);
+    const result = await this.database.query<{
+      task_id: string;
+      queue_name: string;
+      pending_prerequisites: number;
+      pending_edges: number;
+      dependency_rejected: boolean;
+      rejected_edges: boolean;
+      action: DependencyRepairAction;
+    }>(SQL_STATEMENTS["list_dependency_drift"], [limit]);
+    return result.rows.map((row) => ({
+      taskId: row.task_id,
+      queueName: row.queue_name,
+      pendingPrerequisites: row.pending_prerequisites,
+      pendingEdges: row.pending_edges,
+      dependencyRejected: row.dependency_rejected,
+      rejectedEdges: row.rejected_edges,
+      action: row.action,
+    }));
+  }
+
+  /**
+   * Recount the drifted blocked dependents {@link listDependencyDrift} reports, and settle each
+   * one with no pending edge. Each repaired dependent's `dependency_counter_repaired` event records
+   * the audit. The request ID correlates the repair and is not an idempotency key: a rerun finds
+   * only dependents that drifted again.
+   */
+  async repairDependencyDrift(audit: AdminAudit, limit = 1_000): Promise<DependencyRepair[]> {
+    validateAdminAudit(audit);
+    validateDependencyDriftLimit(limit);
+    const result = await this.database.query<{
+      task_id: string;
+      recorded_pending_prerequisites: number;
+      pending_edges: number;
+      action: DependencyRepairAction;
+    }>(SQL_STATEMENTS["repair_dependency_drift"], [
+      limit,
+      audit.actor,
+      audit.reason,
+      audit.requestId,
+    ]);
+    return result.rows.map((row) => ({
+      taskId: row.task_id,
+      recordedPendingPrerequisites: row.recorded_pending_prerequisites,
+      pendingEdges: row.pending_edges,
+      action: row.action,
+    }));
   }
 
   queueMetricSnapshot(): Promise<QueueMetricSnapshot[]> {

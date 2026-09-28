@@ -737,7 +737,7 @@
         },
         {
           "id": "sync-schedule",
-          "sql": "SELECT workhorse.sync_schedule_definitions_v1($1::text, $2::jsonb, $3::boolean) AS synced",
+          "sql": "SELECT workhorse.sync_schedule_definitions_v2($1::text, $2::jsonb, $3::boolean) AS synced",
           "parameters": [
             "conformance",
             [
@@ -2524,6 +2524,7 @@
               "json": {
                 "queues": [
                   {
+                    "tier": "full",
                     "queue": "conformance",
                     "ready": 2,
                     "active": 0,
@@ -2532,11 +2533,14 @@
                     "canceled": 0,
                     "scheduled": 3,
                     "succeeded": 1,
+                    "recordClaims": false,
+                    "recordAttempts": false,
                     "rateLimitPolicy": null,
                     "concurrencyPolicy": null,
                     "terminalCountsApproximate": false
                   },
                   {
+                    "tier": "full",
                     "queue": "conformance-purge",
                     "ready": 1,
                     "active": 0,
@@ -2545,11 +2549,14 @@
                     "canceled": 0,
                     "scheduled": 0,
                     "succeeded": 0,
+                    "recordClaims": false,
+                    "recordAttempts": false,
                     "rateLimitPolicy": null,
                     "concurrencyPolicy": null,
                     "terminalCountsApproximate": false
                   },
                   {
+                    "tier": "full",
                     "queue": "conformance-redrive",
                     "ready": 0,
                     "active": 0,
@@ -2558,6 +2565,8 @@
                     "canceled": 0,
                     "scheduled": 0,
                     "succeeded": 0,
+                    "recordClaims": false,
+                    "recordAttempts": false,
                     "rateLimitPolicy": null,
                     "concurrencyPolicy": null,
                     "terminalCountsApproximate": false

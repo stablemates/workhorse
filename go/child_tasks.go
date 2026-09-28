@@ -166,6 +166,9 @@ func (handler *HandlerContext) RunChild(
 	payload any,
 	options ...EnqueueOptions,
 ) (any, error) {
+	if err := handler.rejectOnFastTier(fastTierChildTasksFeature); err != nil {
+		return nil, err
+	}
 	if len(options) > 1 {
 		return nil, fmt.Errorf(tooManyChildOptionsMessage, ErrInvalidEnqueueOptions)
 	}
@@ -210,8 +213,9 @@ func (handler *HandlerContext) createChild(name string, request []byte) (any, er
 	if err := context.Cause(handler.context); err != nil {
 		return nil, err
 	}
-	rows, err := handler.executor.Query(
+	rows, err := queryFencedWrite(
 		handler.context,
+		handler.executor,
 		protocolStatementRegistry[createChildStatementName],
 		handler.Task.ID,
 		handler.workerID,
@@ -264,6 +268,9 @@ func (handler *HandlerContext) RunChildrenAll(children []ChildTaskRequest) ([]Ch
 }
 
 func (handler *HandlerContext) createChildSet(children []ChildTaskRequest, mode childJoinMode) (any, error) {
+	if err := handler.rejectOnFastTier(fastTierChildTasksFeature); err != nil {
+		return nil, err
+	}
 	if len(children) > MaxChildTasks {
 		return nil, &ChildLimitExceededError{ParentTaskID: handler.Task.ID}
 	}
@@ -315,8 +322,9 @@ func (handler *HandlerContext) createChildren(requests []byte, mode childJoinMod
 	if err := context.Cause(handler.context); err != nil {
 		return nil, err
 	}
-	rows, err := handler.executor.Query(
+	rows, err := queryFencedWrite(
 		handler.context,
+		handler.executor,
 		protocolStatementRegistry[createChildrenStatementName],
 		handler.Task.ID,
 		handler.workerID,

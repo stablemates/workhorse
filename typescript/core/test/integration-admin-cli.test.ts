@@ -9,7 +9,7 @@ import { createIntegrationTestContext } from "./support/integration.js";
 const repository = path.resolve(import.meta.dirname, "../../..");
 const cli = path.join(repository, "typescript/core/src/cli/workhorse.ts");
 const tsxCli = createRequire(import.meta.url).resolve("tsx/cli");
-const { createFailedTask, databaseUrl, queue, admin } = createIntegrationTestContext(
+const { createFailedTask, databaseUrl, pool, queue, admin } = createIntegrationTestContext(
   import.meta.url,
 );
 const databaseName = new URL(databaseUrl).pathname.slice(1);
@@ -441,6 +441,327 @@ describe("admin CLI guarded operations", () => {
     expect(noConfirmation.code).toBe(64);
     expect(noConfirmation.stderr).toContain("requires --yes");
     expect((await admin.getTask(taskId))?.state).toBe("ready");
+  });
+
+  it("previews dependency drift without writes, then repairs it with attribution", async () => {
+    const prerequisiteId = await queue.enqueue("drift.parent", {}, { queue: "cli-drift" });
+    const [recountedId, releasedId] = await Promise.all(
+      ["drift.recounted", "drift.released"].map((type) =>
+        queue.enqueue(type, {}, { queue: "cli-drift", prerequisiteTaskId: prerequisiteId }),
+      ),
+    );
+    await pool.query(
+      `UPDATE workhorse.task_runtime SET pending_prerequisites = 4 WHERE task_id = $1`,
+      [recountedId],
+    );
+    // Resolve one edge without the resolver, as a lost counter update would leave it.
+    await pool.query(
+      `UPDATE workhorse.task_dependency
+          SET released_at = clock_timestamp(), resolution = 'release'
+        WHERE dependent_task_id = $1`,
+      [releasedId],
+    );
+    const expected = [
+      { taskId: recountedId!, recorded: 4, pendingEdges: 1, action: "recounted" },
+      { taskId: releasedId!, recorded: 1, pendingEdges: 0, action: "released" },
+    ].toSorted((left, right) => (left.taskId < right.taskId ? -1 : 1));
+
+    const preview = runAdmin(["repair-dependencies", "--dry-run", "--json"]);
+    expect(preview.code).toBe(0);
+    expect(JSON.parse(preview.stdout)).toEqual(
+      expected.map(({ taskId, recorded, pendingEdges, action }) => ({
+        taskId,
+        queueName: "cli-drift",
+        pendingPrerequisites: recorded,
+        pendingEdges,
+        dependencyRejected: false,
+        rejectedEdges: false,
+        action,
+      })),
+    );
+    const table = runAdmin(["repair-dependencies", "--dry-run", "--limit", "1"]);
+    expect(table.code).toBe(0);
+    expect(table.stdout).toContain(expected[0]!.taskId);
+    expect(table.stdout).not.toContain(expected[1]!.taskId);
+    expect((await admin.getTask(releasedId!))?.state).toBe("blocked");
+
+    const noReason = runAdmin(["repair-dependencies", "--env", databaseName, "--yes"]);
+    expect(noReason.code).toBe(64);
+    expect(noReason.stderr).toContain("requires --reason");
+    const noEnvironment = runAdmin(["repair-dependencies", "--reason", "recount", "--yes"]);
+    expect(noEnvironment.code).toBe(64);
+    expect(noEnvironment.stderr).toContain("requires --env");
+    const noConfirmation = runAdmin([
+      "repair-dependencies",
+      "--env",
+      databaseName,
+      "--reason",
+      "recount",
+    ]);
+    expect(noConfirmation.code).toBe(64);
+    expect(noConfirmation.stderr).toContain("requires --yes");
+    const tooMany = runAdmin(["repair-dependencies", "--dry-run", "--limit", "100001"]);
+    expect(tooMany.code).toBe(64);
+    expect(tooMany.stderr).toContain("--limit must be at most 100000");
+    expect((await admin.getTask(releasedId!))?.state).toBe("blocked");
+
+    const repair = runAdmin([
+      "repair-dependencies",
+      "--env",
+      databaseName,
+      "--yes",
+      "--actor",
+      "operator@example.test",
+      "--reason",
+      "recount drifted dependents",
+      "--request-id",
+      "cli-drift-repair",
+      "--json",
+    ]);
+    expect(repair.code).toBe(0);
+    expect(JSON.parse(repair.stdout)).toEqual(
+      expected.map(({ taskId, recorded, pendingEdges, action }) => ({
+        taskId,
+        recordedPendingPrerequisites: recorded,
+        pendingEdges,
+        action,
+      })),
+    );
+    expect((await admin.getTask(releasedId!))?.state).toBe("ready");
+    expect((await admin.getTask(recountedId!))?.state).toBe("blocked");
+    const events = await pool.query<{ details: Record<string, unknown> }>(
+      `SELECT details FROM workhorse.task_event
+        WHERE task_id = $1 AND event_type = 'dependency_counter_repaired'`,
+      [releasedId],
+    );
+    expect(events.rows).toEqual([
+      {
+        details: expect.objectContaining({
+          requested_by: "operator@example.test",
+          request_reason: "recount drifted dependents",
+        }),
+      },
+    ]);
+
+    const rerun = runAdmin(["repair-dependencies", "--dry-run", "--json"]);
+    expect(JSON.parse(rerun.stdout)).toEqual([]);
+    expect(runAdmin(["cancel", recountedId!, "--dry-run"]).stderr).toContain(
+      "does not support --dry-run",
+    );
+  });
+
+  it("moves an empty queue between tiers and lists the tier", async () => {
+    const queueName = "cli-tier";
+    const setTier = (tier: string) =>
+      runAdmin([
+        "set-tier",
+        queueName,
+        "--tier",
+        tier,
+        "--env",
+        databaseName,
+        "--reason",
+        `move to ${tier}`,
+        "--yes",
+        "--json",
+      ]);
+    const fast = setTier("fast");
+    expect(fast.code).toBe(0);
+    expect(JSON.parse(fast.stdout)).toEqual({ queue: queueName, tier: "fast" });
+    // An idle fast-tier queue has no live tasks, so its control row alone keeps it listed.
+    expect(JSON.parse(runAdmin(["queues", "--json"]).stdout)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          queue: queueName,
+          paused: false,
+          tier: "fast",
+          recordAttempts: false,
+          recordClaims: false,
+        }),
+      ]),
+    );
+    expect(runAdmin(["queues"]).stdout).toMatch(/cli-tier\s+no\s+fast\s+none/);
+
+    const full = setTier("full");
+    expect(full.code).toBe(0);
+    expect(JSON.parse(full.stdout)).toEqual({ queue: queueName, tier: "full" });
+  });
+
+  it("refuses a tier change the database guards against", async () => {
+    const queueName = "cli-tier-live";
+    await queue.enqueue("live", {}, { queue: queueName });
+    const refused = runAdmin([
+      "set-tier",
+      queueName,
+      "--tier",
+      "fast",
+      "--env",
+      databaseName,
+      "--reason",
+      "queue still holds work",
+      "--yes",
+    ]);
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain(
+      `Refused: Queue ${queueName} has live tasks, so its tier cannot change.`,
+    );
+    expect(refused.stderr).not.toContain("Fast-tier queue");
+    expect(JSON.parse(runAdmin(["queues", "--json"]).stdout)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ queue: queueName, tier: "full" })]),
+    );
+  });
+
+  it("requires --tier, --reason, and confirmation before a tier change", () => {
+    const base = ["set-tier", "cli-tier-guarded", "--env", databaseName];
+    const noTier = runAdmin([...base, "--reason", "no tier", "--yes"]);
+    expect(noTier.code).toBe(64);
+    expect(noTier.stderr).toContain("requires --tier <fast|full>");
+
+    const badTier = runAdmin([...base, "--tier", "medium", "--reason", "bad tier", "--yes"]);
+    expect(badTier.code).toBe(64);
+    expect(badTier.stderr).toContain("--tier must be fast or full");
+
+    const noReason = runAdmin([...base, "--tier", "fast", "--yes"]);
+    expect(noReason.code).toBe(64);
+    expect(noReason.stderr).toContain("requires --reason");
+
+    const noConfirmation = runAdmin([...base, "--tier", "fast", "--reason", "unconfirmed"]);
+    expect(noConfirmation.code).toBe(64);
+    expect(noConfirmation.stderr).toContain("requires --yes");
+
+    const noEnvironment = runAdmin([
+      "set-tier",
+      "cli-tier-guarded",
+      "--tier",
+      "fast",
+      "--reason",
+      "no target",
+      "--yes",
+    ]);
+    expect(noEnvironment.code).toBe(64);
+    expect(noEnvironment.stderr).toContain("requires --env");
+  });
+
+  it("changes one history setting at a time and keeps the other", async () => {
+    const queueName = "cli-history";
+    const fast = runAdmin([
+      "set-tier",
+      queueName,
+      "--tier",
+      "fast",
+      "--env",
+      databaseName,
+      "--reason",
+      "history test",
+      "--yes",
+    ]);
+    expect(fast.code).toBe(0);
+    const setHistory = (...flags: string[]) =>
+      runAdmin(["set-history", queueName, ...flags, "--env", databaseName, "--yes", "--json"]);
+
+    const claims = setHistory("--record-claims", "on");
+    expect(claims.code).toBe(0);
+    expect(JSON.parse(claims.stdout)).toEqual({
+      queue: queueName,
+      tier: "fast",
+      recordAttempts: false,
+      recordClaims: true,
+    });
+    // A known fast-tier queue needs neither the full-tier note nor the unknown-queue warning.
+    expect(claims.stderr).toBe("");
+
+    const attempts = setHistory("--record-attempts", "on");
+    expect(JSON.parse(attempts.stdout)).toEqual({
+      queue: queueName,
+      tier: "fast",
+      recordAttempts: true,
+      recordClaims: true,
+    });
+    expect(JSON.parse(runAdmin(["queues", "--json"]).stdout)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ queue: queueName, recordAttempts: true, recordClaims: true }),
+      ]),
+    );
+
+    const off = runAdmin([
+      "set-history",
+      queueName,
+      "--record-attempts",
+      "off",
+      "--record-claims",
+      "off",
+      "--env",
+      databaseName,
+      "--yes",
+    ]);
+    expect(off.code).toBe(0);
+    expect(off.stdout).toContain(`Queue ${queueName} records attempts off, claims off.`);
+  });
+
+  it("notes that a full-tier queue records all history", async () => {
+    const queueName = "cli-history-full";
+    await queue.enqueue("live", {}, { queue: queueName });
+    const result = runAdmin([
+      "set-history",
+      queueName,
+      "--record-claims",
+      "on",
+      "--env",
+      databaseName,
+      "--yes",
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain(`Queue ${queueName} records attempts off, claims on.`);
+    expect(result.stderr).toContain(
+      `Note: queue ${queueName} is on the full tier, which records all history.`,
+    );
+    // The live task makes the queue known, so no misspelling warning follows.
+    expect(result.stderr).not.toContain("Warning:");
+  });
+
+  it("warns when the history change names an unknown queue", () => {
+    const queueName = "cli-history-typo";
+    const result = runAdmin([
+      "set-history",
+      queueName,
+      "--record-attempts",
+      "on",
+      "--env",
+      databaseName,
+      "--yes",
+      "--json",
+    ]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ queue: queueName, tier: "full" });
+    expect(result.stderr).toContain(
+      `Warning: queue ${queueName} had no control row and no live tasks; check the name.`,
+    );
+  });
+
+  it("refuses history flags it cannot apply or record", () => {
+    const base = ["set-history", "cli-history-guarded", "--env", databaseName, "--yes"];
+    const nothing = runAdmin(base);
+    expect(nothing.code).toBe(64);
+    expect(nothing.stderr).toContain("requires --record-attempts <on|off> or --record-claims");
+
+    const malformed = runAdmin([...base, "--record-claims", "yes"]);
+    expect(malformed.code).toBe(64);
+    expect(malformed.stderr).toContain("--record-claims must be on or off");
+
+    const reason = runAdmin([...base, "--record-claims", "on", "--reason", "not recorded"]);
+    expect(reason.code).toBe(64);
+    expect(reason.stderr).toContain("does not support --reason");
+
+    const noConfirmation = runAdmin([
+      "set-history",
+      "cli-history-guarded",
+      "--record-claims",
+      "on",
+      "--env",
+      databaseName,
+    ]);
+    expect(noConfirmation.code).toBe(64);
+    expect(noConfirmation.stderr).toContain("requires --yes");
   });
 
   it("pauses and resumes one registered worker through the durable registry", async () => {

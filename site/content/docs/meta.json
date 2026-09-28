@@ -21,6 +21,7 @@
     "---Executing work---",
     "workers",
     "batch-handlers",
+    "fast-tier",
     "retries",
     "durable-execution",
     "signals",

@@ -24,6 +24,8 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Client } from "pg";
+import { dropLocalDatabase } from "../typescript/core/src/drop-local-database.js";
+import { verifyRelease } from "./verify-release.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const consumerSource = path.join(root, "rust", "release-consumer", "main.rs");
@@ -195,7 +197,7 @@ async function runTaskThroughConsumer(binary: string, sourceUrl: string): Promis
   const admin = new Client({ connectionString: sourceUrl });
   await admin.connect();
   try {
-    await admin.query(`DROP DATABASE IF EXISTS ${identifier} WITH (FORCE)`);
+    await dropLocalDatabase(admin, scratch);
     await admin.query(`CREATE DATABASE ${identifier}`);
     try {
       const database = new Client({ connectionString: scratchUrl });
@@ -230,7 +232,7 @@ async function runTaskThroughConsumer(binary: string, sourceUrl: string): Promis
         await database.end();
       }
     } finally {
-      await admin.query(`DROP DATABASE IF EXISTS ${identifier} WITH (FORCE)`);
+      await dropLocalDatabase(admin, scratch);
     }
   } finally {
     await admin.end();
@@ -302,6 +304,10 @@ async function checkRustRelease(argv: readonly string[]): Promise<void> {
 
     if (url) await runTaskThroughConsumer(binary, url);
     else console.log("SKIPPED the consumer task: DATABASE_URL_TEST is unset");
+
+    // The post-publish check, run now against the archive crates.io will receive. A check the
+    // crate cannot satisfy fails the rehearsal instead of halting the train after the tag.
+    await verifyRelease("crate", crate.version, { crate: unpacked });
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }

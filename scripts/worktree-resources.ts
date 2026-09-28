@@ -3,6 +3,7 @@ import { chmod, copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from "
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { Pool } from "pg";
 import { isMissing } from "./environment-file.js";
+import { dropLocalDatabase } from "../typescript/core/src/drop-local-database.js";
 import {
   assertLocalDatabasePurpose,
   databaseName,
@@ -135,7 +136,7 @@ export async function dropWorktreeDatabases(resources: WorktreeResources): Promi
     adminUrl.pathname = "/postgres";
     const pool = new Pool({ connectionString: adminUrl.toString(), max: 1 });
     try {
-      await pool.query(`DROP DATABASE IF EXISTS ${identifier(name)} WITH (FORCE)`);
+      await dropLocalDatabase(pool, name);
       console.log(`Dropped worktree ${purpose} database ${name}`);
     } finally {
       await pool.end();
@@ -212,10 +213,6 @@ async function findEnvironmentFiles(root: string): Promise<string[]> {
 function isLocalEnvironmentFile(name: string): boolean {
   if (name.endsWith(".example")) return false;
   return name === ".env" || name.startsWith(".env.");
-}
-
-function identifier(value: string): string {
-  return `"${value.replaceAll('"', '""')}"`;
 }
 
 function isLocalHost(hostname: string): boolean {

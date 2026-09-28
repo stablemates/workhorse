@@ -132,6 +132,24 @@ describe("a substituted tool", () => {
     expect(await refusals("rustfmt", "identity", pins)).toEqual([]);
   });
 
+  it.skipIf(!onPosix)("refuses a cargo-deny that answers as another tool", async () => {
+    leadPath(await toolDirectory({ "cargo-deny": 'echo "cargo 1.89.0 (c24e10642 2025-06-23)"' }));
+
+    const [refusal] = await refusals("cargo-deny", "identity", [["cargo-deny", "0.20.2"]]);
+
+    expect(refusal).toContain("cargo-deny did not identify itself");
+  });
+
+  it.skipIf(!onPosix)("refuses a cargo-deny that disagrees with its pin", async () => {
+    leadPath(await toolDirectory({ "cargo-deny": 'echo "cargo-deny 0.19.9"' }));
+    const pins: [string, string][] = [["cargo-deny", "0.20.2"]];
+
+    expect(await refusals("cargo-deny", "identity", pins)).toEqual([]);
+    expect((await refusals("cargo-deny", "pinned", pins))[0]).toContain(
+      "cargo-deny 0.19.9 does not match the mise.toml pin 0.20.2",
+    );
+  });
+
   it.skipIf(!onPosix)("accepts a uv that answers as the pinned uv does", async () => {
     leadPath(await toolDirectory({ uv: 'echo "uv 0.8.9"' }));
 
@@ -170,22 +188,22 @@ describe("an unpinned version", () => {
   });
 });
 
-describe("gofmt, which reports no version", () => {
-  /**
-   * A Go toolchain whose `gofmt` answers a probe with a fixed, recognisable formatting. Built
-   * rather than borrowed so the rule is exercised the same way wherever the suite runs.
-   */
-  async function goToolchain(): Promise<{ goroot: string; formatted: string }> {
-    const goroot = await mkdtemp(join(tmpdir(), "workhorse-goroot-"));
-    temporaryDirectories.push(goroot);
-    await writeTools(join(goroot, "bin"), {
-      gofmt: 'printf "package main\\n\\nfunc main() {}\\n"',
-    });
-    const tools = await toolDirectory({ go: `echo "${goroot}"` });
-    leadPath(tools);
-    return { goroot, formatted: "package main\n\nfunc main() {}\n" };
-  }
+/**
+ * A Go toolchain whose `gofmt` answers a probe with a fixed, recognisable formatting. Built
+ * rather than borrowed so the rule is exercised the same way wherever the suite runs.
+ */
+async function goToolchain(): Promise<{ goroot: string; formatted: string }> {
+  const goroot = await mkdtemp(join(tmpdir(), "workhorse-goroot-"));
+  temporaryDirectories.push(goroot);
+  await writeTools(join(goroot, "bin"), {
+    gofmt: 'printf "package main\\n\\nfunc main() {}\\n"',
+  });
+  const tools = await toolDirectory({ go: `echo "${goroot}"` });
+  leadPath(tools);
+  return { goroot, formatted: "package main\n\nfunc main() {}\n" };
+}
 
+describe("gofmt, which reports no version", () => {
   it.skipIf(!onPosix)("accepts a gofmt inside the directory go names", async () => {
     const { goroot } = await goToolchain();
     leadPath(join(goroot, "bin"));

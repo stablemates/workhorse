@@ -67,6 +67,10 @@ _LIST_WORKERS = _catalogue_statement("list_workers")
 _SET_WORKER_PAUSED = _catalogue_statement("set_worker_paused")
 _SET_QUEUE_PAUSED = _catalogue_statement("set_queue_paused")
 _PURGE_QUEUE = _catalogue_statement("purge_queue")
+_SET_QUEUE_TIER = _catalogue_statement("set_queue_tier")
+_SET_QUEUE_HISTORY = _catalogue_statement("set_queue_history")
+
+QueueTier = Literal["fast", "full"]
 
 
 @dataclass(frozen=True)
@@ -330,6 +334,12 @@ class HumanWaitPage:
 
 
 @dataclass(frozen=True)
+class QueueHistory:
+    record_attempts: bool
+    record_claims: bool
+
+
+@dataclass(frozen=True)
 class WorkerPauseResult:
     worker_id: str
     paused: bool
@@ -519,6 +529,36 @@ class Admin(_AdminOperations):
         except Exception as error:
             _raise_admin_error(error)
 
+    def set_queue_tier(self, queue_name: str, tier: QueueTier, audit: AdminAudit) -> QueueTier:
+        _assert_sync_compatible(self._executor)
+        _validate_tier(tier)
+        _validate_audit(audit)
+        try:
+            row = _one(
+                self._sync_rows(_SET_QUEUE_TIER, (queue_name, tier, audit.actor, audit.reason)),
+                "workhorse.set_queue_tier_v1",
+            )
+            return cast(QueueTier, row["tier"])
+        except Exception as error:
+            _raise_admin_error(error)
+
+    def set_queue_history(
+        self,
+        queue_name: str,
+        *,
+        record_attempts: bool | None = None,
+        record_claims: bool | None = None,
+    ) -> QueueHistory:
+        _assert_sync_compatible(self._executor)
+        try:
+            row = _one(
+                self._sync_rows(_SET_QUEUE_HISTORY, (queue_name, record_attempts, record_claims)),
+                "workhorse.set_queue_history_v1",
+            )
+            return _queue_history(row)
+        except Exception as error:
+            _raise_admin_error(error)
+
 
 class AsyncAdmin(_AdminOperations):
     """Asynchronous operator client over a caller-owned Psycopg or asyncpg connection."""
@@ -683,6 +723,51 @@ class AsyncAdmin(_AdminOperations):
             return int(cast(int | str, row["deleted_count"]))
         except Exception as error:
             _raise_admin_error(error)
+
+    async def set_queue_tier(
+        self, queue_name: str, tier: QueueTier, audit: AdminAudit
+    ) -> QueueTier:
+        await _assert_async_compatible(self._executor)
+        _validate_tier(tier)
+        _validate_audit(audit)
+        try:
+            row = _one(
+                await self._async_rows(
+                    _SET_QUEUE_TIER, (queue_name, tier, audit.actor, audit.reason)
+                ),
+                "workhorse.set_queue_tier_v1",
+            )
+            return cast(QueueTier, row["tier"])
+        except Exception as error:
+            _raise_admin_error(error)
+
+    async def set_queue_history(
+        self,
+        queue_name: str,
+        *,
+        record_attempts: bool | None = None,
+        record_claims: bool | None = None,
+    ) -> QueueHistory:
+        await _assert_async_compatible(self._executor)
+        try:
+            row = _one(
+                await self._async_rows(
+                    _SET_QUEUE_HISTORY, (queue_name, record_attempts, record_claims)
+                ),
+                "workhorse.set_queue_history_v1",
+            )
+            return _queue_history(row)
+        except Exception as error:
+            _raise_admin_error(error)
+
+
+def _validate_tier(tier: str) -> None:
+    if tier not in ("fast", "full"):
+        raise ValueError("tier must be 'fast' or 'full'")
+
+
+def _queue_history(row: _Row) -> QueueHistory:
+    return QueueHistory(bool(row["record_attempts"]), bool(row["record_claims"]))
 
 
 def _validate_audit(audit: AdminAudit) -> None:
@@ -1203,6 +1288,8 @@ __all__ = [
     "ExternalWaitPage",
     "HumanWait",
     "HumanWaitPage",
+    "QueueHistory",
+    "QueueTier",
     "RedriveResult",
     "TaskListCursor",
     "TaskListItem",

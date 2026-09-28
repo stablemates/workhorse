@@ -252,6 +252,7 @@ describe("schema status JSON", () => {
         minimumVersion: MINIMUM_SCHEMA_VERSION,
         clientProtocolVersion: PROTOCOL_VERSION,
         installedProtocolVersions: [PROTOCOL_VERSION],
+        // The step to the floor is additive, so no contract step is pending one version below it.
         pendingContractSteps: [],
         state: "behind",
         compatible: false,

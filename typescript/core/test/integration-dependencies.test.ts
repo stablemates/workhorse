@@ -1,14 +1,17 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { PoolClient } from "pg";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readDashboardTaskDetail } from "../../dashboard-server/src/server/read-model.js";
 import { dashboardDatabase } from "../../dashboard-server/src/server/sql.js";
 import {
   DependencyCycleError,
   DependencyLimitExceededError,
   MAX_TASK_DEPENDENTS,
+  type ClaimedTask,
   type Queryable,
 } from "../src/index.js";
+import { SQL_STATEMENTS } from "../src/queue/sql-catalogue.generated.js";
+import { readDependencyCounterDrift } from "./support/dependency-counter.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { defaultRetentionPolicy, pool, queue, admin } = createIntegrationTestContext(
@@ -26,6 +29,140 @@ const insertDependency = (
      ) VALUES ($1, $2, 'release', 'fail', 'cancel')`,
     [dependentTaskId, prerequisiteTaskId],
   );
+
+const within = <T>(work: Promise<T>) =>
+  Promise.race([
+    work,
+    sleep(2_000).then(() => {
+      throw new Error("blocked behind the open dependent enqueue");
+    }),
+  ]);
+
+const byTaskId = (left: { task_id: string }, right: { task_id: string }) =>
+  left.task_id < right.task_id ? -1 : 1;
+
+const driftRow = (
+  taskId: string,
+  queueName: string,
+  counter: [number, number],
+  rejected: [boolean, boolean],
+  counterDrifted: boolean,
+) => ({
+  task_id: taskId,
+  queue_name: queueName,
+  pending_prerequisites: counter[0],
+  pending_edges: counter[1],
+  dependency_rejected: rejected[0],
+  rejected_edges: rejected[1],
+  counter_drifted: counterDrifted,
+  edges_resolved: counter[1] === 0,
+});
+
+const releaseReason = async (dependentId: string): Promise<string | undefined> => {
+  const evidence = await pool.query<{ reason: string }>(
+    `SELECT details->>'reason' AS reason
+       FROM workhorse.task_event
+      WHERE task_id = $1 AND event_type = 'dependency_released'`,
+    [dependentId],
+  );
+  return evidence.rows[0]?.reason;
+};
+
+// A resolver locks one cascade level at a time, and each level's rejected dependents settle before
+// the trigger locks the next level. Two cascades that meet at different levels therefore lock the
+// same rows in opposite orders. The first failure holds the upper dependent at its first level and
+// needs the lower dependent at its second. The second failure holds the lower dependent at its
+// first level and needs the upper one. A third transaction holds the first cascade at its first
+// level until the second one has taken the lower dependent.
+async function arrangeTwoLevelCascade(prefix: string) {
+  const policy = { onSuccess: "release", onFailure: "fail", onCancellation: "cancel" } as const;
+  // Task IDs are random, so an arrangement whose dependents come out in the other order is left
+  // behind and built again under new queue names.
+  for (let arrangement = 0; arrangement < 20; arrangement++) {
+    const name = `${prefix}-${arrangement}`;
+    const [firstRootId, secondRootId] = await queue.enqueueMany(
+      ["first", "second"].map((root) => ({
+        type: `${prefix}-root`,
+        payload: null,
+        options: { queue: `${name}-${root}-root`, maxAttempts: 1 },
+      })),
+    );
+    const firstRoot = await queue.claim(`${prefix}-worker`, { queue: `${name}-first-root` });
+    const secondRoot = await queue.claim(`${prefix}-worker`, { queue: `${name}-second-root` });
+    expect([firstRoot?.id, secondRoot?.id]).toEqual([firstRootId, secondRootId]);
+    const levelOneId = await queue.enqueue(`${prefix}-level-one`, null, {
+      dependencies: { prerequisiteTaskIds: [firstRootId!], ...policy },
+    });
+    const [lowerId, upperId] = await queue.enqueueMany([
+      {
+        type: `${prefix}-lower`,
+        payload: null,
+        options: {
+          dependencies: { prerequisiteTaskIds: [levelOneId, secondRootId!], ...policy },
+        },
+      },
+      {
+        type: `${prefix}-upper`,
+        payload: null,
+        options: {
+          dependencies: { prerequisiteTaskIds: [firstRootId!, secondRootId!], ...policy },
+        },
+      },
+    ]);
+    if (lowerId! < upperId!) {
+      return {
+        firstRoot: firstRoot!,
+        secondRoot: secondRoot!,
+        dependentIds: [levelOneId, lowerId!, upperId!],
+      };
+    }
+  }
+  throw new Error("no arrangement put the lower dependent's ID first");
+}
+
+const waitingSessions = async (count: number) =>
+  vi.waitFor(
+    async () => {
+      const waiting = await pool.query<{ count: number }>(
+        `SELECT count(*)::integer AS count FROM pg_stat_activity
+          WHERE datname = current_database() AND cardinality(pg_blocking_pids(pid)) > 0`,
+      );
+      expect(waiting.rows[0]!.count).toBe(count);
+    },
+    { timeout: 10_000, interval: 20 },
+  );
+
+// Runs two failures against the arranged cascade and returns once the third transaction ends.
+async function crossTwoLevelCascades(
+  levelOneId: string,
+  firstFailure: () => Promise<unknown>,
+  secondFailure: () => Promise<unknown>,
+) {
+  const blocker = await pool.connect();
+  let failures: Array<Promise<unknown>> = [];
+  try {
+    await blocker.query("BEGIN");
+    // A key-share lock lets the first cascade lock its first level but not delete it.
+    await blocker.query("SELECT FROM workhorse.task_runtime WHERE task_id = $1 FOR KEY SHARE", [
+      levelOneId,
+    ]);
+    failures = [firstFailure()];
+    await waitingSessions(1);
+    failures.push(secondFailure());
+    await waitingSessions(2);
+    await blocker.query("ROLLBACK");
+    return await Promise.race([
+      Promise.allSettled(failures),
+      sleep(10_000).then(() => {
+        throw new Error("the crossed cascades did not finish");
+      }),
+    ]);
+  } finally {
+    await blocker.query("ROLLBACK");
+    await Promise.allSettled(failures);
+    blocker.release();
+  }
+}
 
 describe("task dependencies", () => {
   it("maps dependency cycle diagnostics through the public enqueue API", async () => {
@@ -195,6 +332,25 @@ describe("task dependencies", () => {
       await client.query("ROLLBACK").catch(() => undefined);
       client.release();
     }
+  });
+
+  it("keeps one plan per session for dependency release", async () => {
+    // A custom plan sees one-element arrays and always looks cheaper than the generic plan, so
+    // PL/pgSQL replanned every release statement on every completion.
+    // settle_dependents_v1 runs the resolver's release and rejection statements.
+    const result = await pool.query<{ proname: string; proconfig: string[] | null }>(
+      `SELECT routine.proname, routine.proconfig
+         FROM pg_proc routine
+         JOIN pg_namespace namespace ON namespace.oid = routine.pronamespace
+        WHERE namespace.nspname = 'workhorse'
+          AND routine.proname IN ('resolve_dependents_many_v1', 'settle_dependents_v1')
+        ORDER BY routine.proname`,
+    );
+
+    expect(result.rows).toEqual([
+      { proname: "resolve_dependents_many_v1", proconfig: ["plan_cache_mode=force_generic_plan"] },
+      { proname: "settle_dependents_v1", proconfig: ["plan_cache_mode=force_generic_plan"] },
+    ]);
   });
 
   it("runs no dependency statement when a request declares no prerequisites", async () => {
@@ -432,16 +588,6 @@ describe("task dependencies", () => {
   });
 
   it("records why each terminal prerequisite policy released a dependent", async () => {
-    const releaseReason = async (dependentId: string): Promise<string | undefined> => {
-      const evidence = await pool.query<{ reason: string }>(
-        `SELECT details->>'reason' AS reason
-           FROM workhorse.task_event
-          WHERE task_id = $1 AND event_type = 'dependency_released'`,
-        [dependentId],
-      );
-      return evidence.rows[0]?.reason;
-    };
-
     const succeededId = await queue.enqueue("release-reason-success", null);
     const succeededDependentId = await queue.enqueue("release-reason-success-dependent", null, {
       dependencies: {
@@ -669,7 +815,8 @@ describe("task dependencies", () => {
 
       await follower.query("BEGIN");
       await follower.query("SET LOCAL lock_timeout = '100ms'");
-      await expect(insertDependency(follower, lowerId, fourthId)).rejects.toMatchObject({
+      // A new sink below the merged component walks its upstream cone, which the waiter holds.
+      await expect(insertDependency(follower, fourthId, lowerId)).rejects.toMatchObject({
         code: "55P03",
       });
     } finally {
@@ -745,6 +892,176 @@ describe("task dependencies", () => {
         [dependentId],
       ),
     ).resolves.toMatchObject({ rows: [{ count: 1 }] });
+  });
+
+  it("settles one dependency level per statement and records each cause before its effects", async () => {
+    const rootId = await queue.enqueue("level-root", null);
+    const policies = { onSuccess: "release", onFailure: "fail", onCancellation: "cancel" } as const;
+    const middleIds = await queue.enqueueMany(
+      Array.from({ length: 3 }, (_unused, index) => ({
+        type: "level-middle",
+        payload: { index },
+        options: { dependencies: { prerequisiteTaskIds: [rootId], ...policies } },
+      })),
+    );
+    const leafIds = await queue.enqueueMany(
+      middleIds.map((middleId, index) => ({
+        type: "level-leaf",
+        payload: { index },
+        options: { dependencies: { prerequisiteTaskIds: [middleId], ...policies } },
+      })),
+    );
+
+    await expect(queue.cancel(rootId)).resolves.toMatchObject({ status: "canceled" });
+
+    const events = await pool.query<{ task_id: string; prerequisite_task_id: string }>(
+      `SELECT task_id, details->>'prerequisite_task_id' AS prerequisite_task_id
+         FROM workhorse.task_event
+        WHERE task_id = ANY($1::uuid[]) AND event_type = 'dependency_canceled'
+        ORDER BY event_id`,
+      [[...middleIds, ...leafIds]],
+    );
+    // Each level settles in dependent id order, and every middle event precedes every leaf event.
+    const middleEvents = middleIds.map((taskId) => ({
+      task_id: taskId,
+      prerequisite_task_id: rootId,
+    }));
+    const leafEvents = leafIds.map((taskId, index) => ({
+      task_id: taskId,
+      prerequisite_task_id: middleIds[index],
+    }));
+    // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+    expect(events.rows).toEqual([...middleEvents.sort(byTaskId), ...leafEvents.sort(byTaskId)]);
+  });
+
+  it("resolves overlapping fan-in without deadlock while dependents are canceled and extended", async () => {
+    // Every round races two completions, a failure or a cancellation, two dependent cancellations,
+    // and two dependent enqueues over one shared fan-in, within the ten pooled connections.
+    const rounds = 12;
+    const dependentIds: string[] = [];
+    for (let round = 0; round < rounds; round += 1) {
+      const claimedIds = await queue.enqueueMany(
+        Array.from({ length: 3 }, (_unused, index) => ({
+          type: "overlap-prerequisite",
+          payload: { round, index },
+          options: { queue: "overlap-prerequisites", maxAttempts: 1 },
+        })),
+      );
+      const claimed = await queue.claimMany("overlap-worker", 3, {
+        queue: "overlap-prerequisites",
+      });
+      expect(new Set(claimed.map(({ id }) => id))).toEqual(new Set(claimedIds));
+      const canceledId = await queue.enqueue("overlap-canceled-prerequisite", null, {
+        queue: "overlap-canceled-prerequisites",
+      });
+      const prerequisiteTaskIds = [...claimedIds, canceledId];
+      const dependents = await queue.enqueueMany(
+        Array.from({ length: 8 }, (_unused, index) => ({
+          type: "overlap-dependent",
+          payload: { round, index },
+          options: {
+            queue: "overlap-dependents",
+            dependencies: {
+              // Each dependent waits on a different subset, so the resolvers' sets overlap.
+              prerequisiteTaskIds: prerequisiteTaskIds.filter(
+                (_prerequisiteId, position) => position !== index % 4,
+              ),
+              onSuccess: "release",
+              onFailure: round % 2 === 0 ? "release" : "fail",
+              onCancellation: "release",
+            },
+          },
+        })),
+      );
+      dependentIds.push(...dependents);
+      const [first, second, third] = claimed;
+      const settled = await Promise.allSettled([
+        queue.complete(first!, "overlap-worker", null),
+        queue.complete(second!, "overlap-worker", null),
+        queue.fail(third!, "overlap-worker", new Error("overlap")),
+        queue.cancel(canceledId),
+        queue.cancel(dependents[0]!),
+        queue.cancel(dependents[5]!),
+        queue.enqueue("overlap-grandchild", null, {
+          queue: "overlap-grandchildren",
+          prerequisiteTaskId: dependents[2]!,
+        }),
+        queue.enqueue("overlap-grandchild", null, {
+          queue: "overlap-grandchildren",
+          prerequisiteTaskId: dependents[7]!,
+        }),
+      ]);
+      expect(settled.filter(({ status }) => status === "rejected")).toEqual([]);
+    }
+
+    const unsettled = await pool.query<{ task_id: string }>(
+      `SELECT runtime.task_id FROM workhorse.task_runtime runtime
+        WHERE runtime.task_id = ANY($1::uuid[]) AND runtime.state = 'blocked'`,
+      [dependentIds],
+    );
+    expect(unsettled.rows).toEqual([]);
+    await expect(
+      pool.query<{ count: number }>(
+        `SELECT count(*)::integer AS count FROM workhorse.task_event
+          WHERE task_id = ANY($1::uuid[])
+            AND event_type IN ('dependency_released', 'dependency_failed')
+          GROUP BY task_id HAVING count(*) > 1`,
+        [dependentIds],
+      ),
+    ).resolves.toMatchObject({ rows: [] });
+  });
+
+  it("bounds the unresolved cascade when an edge extends an existing dependent", async () => {
+    const rootId = await queue.enqueue("extended-root", null);
+    let bottomId = rootId;
+    for (let index = 1; index < MAX_TASK_DEPENDENTS; index += 1) {
+      bottomId = await queue.enqueue("extended-chain", { index }, { prerequisiteTaskId: bottomId });
+    }
+    const headId = await queue.enqueue("extended-head", null);
+    await queue.enqueue("extended-tail", null, { prerequisiteTaskId: headId });
+
+    // The head already has a dependent, so this edge takes the full component check.
+    const client = await pool.connect();
+    try {
+      const error = (await insertDependency(client, headId, bottomId).catch(
+        (caught: unknown) => caught,
+      )) as { code?: string; detail?: string };
+      expect(error.code).toBe("P1005");
+      expect(JSON.parse(error.detail ?? "null")).toEqual({
+        max: 100,
+        limit: "unresolved_dependents",
+        taskId: rootId,
+      });
+    } finally {
+      client.release();
+    }
+  });
+
+  it("accepts a sink whose prerequisites together exceed the cascade bound", async () => {
+    const chains = await Promise.all(
+      [0, 1].map(async (chain) => {
+        const rootId = await queue.enqueue("union-root", { chain });
+        let bottomId = rootId;
+        for (let index = 1; index < 60; index += 1) {
+          bottomId = await queue.enqueue(
+            "union-chain",
+            { chain, index },
+            { prerequisiteTaskId: bottomId },
+          );
+        }
+        return bottomId;
+      }),
+    );
+
+    const sinkId = await queue.enqueue("union-sink", null, {
+      dependencies: {
+        prerequisiteTaskIds: chains,
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+    await expect(admin.getTask(sinkId)).resolves.toMatchObject({ state: "blocked" });
   });
 
   it("settles a dependent deterministically when cancellation races completion", async () => {
@@ -1020,10 +1337,25 @@ describe("task dependencies", () => {
 
     const transaction = await pool.connect();
     await transaction.query("BEGIN");
-    await transaction.query("SELECT id FROM workhorse.task WHERE id = $1 FOR UPDATE", [
-      prerequisiteId,
-    ]);
+    // Take the enqueue's first prerequisite lock before the completion starts, then wait until the
+    // completion queues behind it. A lock the enqueue does not take would order the two
+    // transactions differently from production and can deadlock with the completion.
+    const locked = await transaction.query<{ pid: number }>(
+      `SELECT pg_backend_pid() AS pid FROM workhorse.task_runtime
+        WHERE task_id = $1 FOR KEY SHARE`,
+      [prerequisiteId],
+    );
+    expect(locked.rows).toHaveLength(1);
+    const pid = locked.rows[0]!.pid;
     const completion = queue.complete(claimed!, "racing-dependency-worker", null);
+    for (;;) {
+      const waiting = await pool.query(
+        "SELECT 1 FROM pg_stat_activity WHERE $1::integer = ANY(pg_blocking_pids(pid))",
+        [pid],
+      );
+      if (waiting.rowCount) break;
+      await sleep(5);
+    }
     const dependentId = await queue.enqueue(
       "racing-dependent",
       null,
@@ -1039,6 +1371,1159 @@ describe("task dependencies", () => {
       prerequisiteTaskId: prerequisiteId,
       blockedReason: null,
     });
+  });
+
+  it("releases every dependent whose prerequisite finishes while its enqueue is in flight", async () => {
+    // Each race holds two pooled connections, and the test pool has ten.
+    const rounds = 20;
+    const width = 2;
+    const dependentIds: string[] = [];
+    for (let round = 0; round < rounds; round += 1) {
+      await queue.enqueueMany(
+        Array.from({ length: width }, () => ({
+          type: "in-flight-prerequisite",
+          payload: null,
+          options: { queue: "in-flight-prerequisites", maxAttempts: 1 },
+        })),
+      );
+      const claimed = await queue.claimMany("in-flight-worker", width, {
+        queue: "in-flight-prerequisites",
+      });
+      expect(claimed).toHaveLength(width);
+      const unclaimedIds = await queue.enqueueMany(
+        Array.from({ length: width }, () => ({
+          type: "in-flight-unclaimed-prerequisite",
+          payload: null,
+          options: { queue: "in-flight-unclaimed-prerequisites" },
+        })),
+      );
+      // Every terminal transition takes a turn: completion, final failure, and cancellation.
+      const finishers = [
+        ...claimed.map((task, index) =>
+          index % 2 === 0
+            ? {
+                prerequisiteId: task.id,
+                expected: "completed",
+                finish: async () =>
+                  (await queue.complete(task, "in-flight-worker", null)) ? "completed" : "stale",
+              }
+            : {
+                prerequisiteId: task.id,
+                expected: "failed",
+                finish: () => queue.fail(task, "in-flight-worker", new Error("done")),
+              },
+        ),
+        ...unclaimedIds.map((prerequisiteId) => ({
+          prerequisiteId,
+          expected: "canceled",
+          finish: async () => (await queue.cancel(prerequisiteId)).status,
+        })),
+      ];
+      // Each dependent enqueue holds its transaction open for a moment after it writes the edge,
+      // so a finish that does not wait for it resolves dependents on a snapshot without it.
+      const results = await Promise.all(
+        finishers.map(async ({ prerequisiteId, finish }, index) => {
+          const transaction = await pool.connect();
+          try {
+            await transaction.query("BEGIN");
+            const enqueue = async () => {
+              const dependentId = await queue.enqueue(
+                "in-flight-dependent",
+                null,
+                { queue: "in-flight-dependents", prerequisiteTaskId: prerequisiteId },
+                transaction,
+              );
+              await sleep(5);
+              await transaction.query("COMMIT");
+              return dependentId;
+            };
+            const [dependentId, finished] = await Promise.all([
+              enqueue(),
+              sleep(index % 2 === 0 ? 0 : 2).then(finish),
+            ]);
+            return { dependentId, finished };
+          } catch (error) {
+            await transaction.query("ROLLBACK").catch(() => undefined);
+            throw error;
+          } finally {
+            transaction.release();
+          }
+        }),
+      );
+      expect(results.map(({ finished }) => finished)).toEqual(
+        finishers.map(({ expected }) => expected),
+      );
+      dependentIds.push(...results.map(({ dependentId }) => dependentId));
+    }
+
+    const stranded = await pool.query<{ task_id: string }>(
+      `SELECT runtime.task_id FROM workhorse.task_runtime runtime
+        WHERE runtime.task_id = ANY($1::uuid[]) AND runtime.state = 'blocked'
+          AND NOT EXISTS (
+            SELECT 1 FROM workhorse.task_dependency dependency
+              LEFT JOIN workhorse.task_outcome outcome
+                ON outcome.task_id = dependency.prerequisite_task_id
+             WHERE dependency.dependent_task_id = runtime.task_id AND outcome.task_id IS NULL
+          )`,
+      [dependentIds],
+    );
+    expect(stranded.rows).toEqual([]);
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+  });
+
+  it("counts the prerequisites still pending when one finishes while a fan-in enqueue is in flight", async () => {
+    // Each race holds two pooled connections, and the test pool has ten.
+    const rounds = 10;
+    const races: { dependentId: string; pendingId: string; expected: string }[] = [];
+    for (let round = 0; round < rounds; round += 1) {
+      await queue.enqueueMany(
+        Array.from({ length: 2 }, () => ({
+          type: "fan-in-race-prerequisite",
+          payload: null,
+          options: { queue: "fan-in-race-prerequisites", maxAttempts: 1 },
+        })),
+      );
+      const claimed = await queue.claimMany("fan-in-race-worker", 2, {
+        queue: "fan-in-race-prerequisites",
+      });
+      expect(claimed).toHaveLength(2);
+      const [unclaimedId, ...pendingIds] = await queue.enqueueMany(
+        Array.from({ length: 4 }, (_unused, index) => ({
+          type: "fan-in-race-other",
+          payload: null,
+          options: {
+            queue: index === 0 ? "fan-in-race-unclaimed" : "fan-in-race-pending",
+            maxAttempts: 1,
+          },
+        })),
+      );
+      // One prerequisite of each dependent finishes during its enqueue, through every terminal
+      // transition, and the other stays pending. The finished one either commits first or waits.
+      const finishers = [
+        {
+          prerequisiteId: claimed[0]!.id,
+          finished: "completed",
+          settled: "ready",
+          finish: async () =>
+            (await queue.complete(claimed[0]!, "fan-in-race-worker", null)) ? "completed" : "stale",
+        },
+        {
+          prerequisiteId: claimed[1]!.id,
+          finished: "failed",
+          settled: "failed",
+          finish: () => queue.fail(claimed[1]!, "fan-in-race-worker", new Error("done")),
+        },
+        {
+          prerequisiteId: unclaimedId!,
+          finished: "canceled",
+          settled: "canceled",
+          finish: async () => (await queue.cancel(unclaimedId!)).status,
+        },
+      ];
+      const results = await Promise.all(
+        finishers.map(async ({ prerequisiteId, finish }, index) => {
+          const transaction = await pool.connect();
+          try {
+            await transaction.query("BEGIN");
+            const enqueue = async () => {
+              const dependentId = await queue.enqueue(
+                "fan-in-race-dependent",
+                null,
+                {
+                  queue: "fan-in-race-dependents",
+                  dependencies: {
+                    prerequisiteTaskIds: [prerequisiteId, pendingIds[index]!],
+                    onSuccess: "release",
+                    onFailure: "fail",
+                    onCancellation: "cancel",
+                  },
+                },
+                transaction,
+              );
+              await sleep(5);
+              await transaction.query("COMMIT");
+              return dependentId;
+            };
+            const [dependentId, finished] = await Promise.all([
+              enqueue(),
+              sleep((index + round) % 2 === 0 ? 0 : 2).then(finish),
+            ]);
+            return { dependentId, finished };
+          } catch (error) {
+            await transaction.query("ROLLBACK").catch(() => undefined);
+            throw error;
+          } finally {
+            transaction.release();
+          }
+        }),
+      );
+      expect(results.map(({ finished }) => finished)).toEqual(
+        finishers.map(({ finished }) => finished),
+      );
+      const counters = await pool.query<{
+        pending_prerequisites: number;
+        dependency_rejected: boolean;
+      }>(
+        `SELECT runtime.pending_prerequisites, runtime.dependency_rejected
+           FROM unnest($1::uuid[]) WITH ORDINALITY dependent(task_id, position)
+           JOIN workhorse.task_runtime runtime ON runtime.task_id = dependent.task_id
+          WHERE runtime.state = 'blocked'
+          ORDER BY dependent.position`,
+        [results.map(({ dependentId }) => dependentId)],
+      );
+      expect(counters.rows).toEqual([
+        { pending_prerequisites: 1, dependency_rejected: false },
+        { pending_prerequisites: 1, dependency_rejected: true },
+        { pending_prerequisites: 1, dependency_rejected: true },
+      ]);
+      races.push(
+        ...results.map(({ dependentId }, index) => ({
+          dependentId,
+          pendingId: pendingIds[index]!,
+          expected: finishers[index]!.settled,
+        })),
+      );
+    }
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+
+    // The last pending prerequisite brings each counter to zero, and the recorded verdict settles it.
+    const pending = await queue.claimMany("fan-in-race-worker", races.length, {
+      queue: "fan-in-race-pending",
+    });
+    expect(pending).toHaveLength(races.length);
+    for (const task of pending)
+      expect(await queue.complete(task, "fan-in-race-worker", null)).toBe(true);
+    const settled = await pool.query<{ state: string }>(
+      `SELECT coalesce(runtime.state, outcome.state) AS state
+         FROM unnest($1::uuid[]) WITH ORDINALITY dependent(task_id, position)
+         LEFT JOIN workhorse.task_runtime runtime ON runtime.task_id = dependent.task_id
+         LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = dependent.task_id
+        ORDER BY dependent.position`,
+      [races.map(({ dependentId }) => dependentId)],
+    );
+    expect(settled.rows.map(({ state }) => state)).toEqual(races.map(({ expected }) => expected));
+  });
+
+  // A batch and a resolver can both need the same two prerequisites: the batch to hold them against
+  // completion, and the resolver to delete them as rejected dependents. Each must lock them in task
+  // ID order, or each can hold one row while it waits for the other. While a third transaction
+  // holds the lowest ID, both must wait for it before they lock the highest.
+  it("does not deadlock a two-request batch with a resolver rejecting both prerequisites", async () => {
+    const rootId = await queue.enqueue("rejecting-root", null, {
+      queue: "rejecting-roots",
+      maxAttempts: 1,
+    });
+    const root = await queue.claim("rejecting-root-worker", { queue: "rejecting-roots" });
+    expect(root?.id).toBe(rootId);
+    const dependencies = {
+      prerequisiteTaskIds: [rootId],
+      onSuccess: "release",
+      onFailure: "fail",
+      onCancellation: "cancel",
+    } as const;
+    const prerequisiteIds = await queue.enqueueMany(
+      Array.from({ length: 2 }, () => ({
+        type: "rejected-prerequisite",
+        payload: null,
+        options: { queue: "rejected-prerequisites", dependencies },
+      })),
+    );
+    const [lowest, highest] = prerequisiteIds.toSorted() as [string, string];
+
+    const blocker = await pool.connect();
+    const enqueuer = await pool.connect();
+    let batch: Promise<string[]> | undefined;
+    let failure: Promise<unknown> | undefined;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", [
+        lowest,
+      ]);
+      const blockerPid = (await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
+        .rows[0]!.pid;
+      const waitingBehindBlocker = async (count: number) =>
+        vi.waitFor(
+          async () => {
+            const waiting = await pool.query<{ count: number }>(
+              `SELECT count(*)::integer AS count FROM pg_stat_activity
+                WHERE datname = current_database() AND $1::integer = ANY(pg_blocking_pids(pid))`,
+              [blockerPid],
+            );
+            expect(waiting.rows[0]!.count).toBe(count);
+          },
+          { timeout: 10_000, interval: 20 },
+        );
+
+      // The first request names the highest prerequisite, so a batch that locks request by
+      // request would hold it while it waits for the lowest.
+      batch = queue.enqueueMany(
+        [highest, lowest].map((prerequisiteTaskId) => ({
+          type: "rejected-dependent",
+          payload: null,
+          options: {
+            queue: "rejected-dependents",
+            dependencies: { ...dependencies, prerequisiteTaskIds: [prerequisiteTaskId] },
+          },
+        })),
+        enqueuer,
+      );
+      await waitingBehindBlocker(1);
+      const unlocked = await pool.query(
+        "SELECT FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE SKIP LOCKED",
+        [highest],
+      );
+      expect(unlocked.rowCount).toBe(1);
+
+      // The root's failure rejects both prerequisites. A resolver that deletes them in any order
+      // could lock the highest before it waits for the lowest.
+      failure = queue.fail(root!, "rejecting-root-worker", new Error("reject both"));
+      await waitingBehindBlocker(2);
+      const shared = await pool.query(
+        "SELECT FROM workhorse.task_runtime WHERE task_id = $1 FOR KEY SHARE SKIP LOCKED",
+        [highest],
+      );
+      expect(shared.rowCount).toBe(1);
+
+      await blocker.query("ROLLBACK");
+      const [dependentIds, failed] = await within(Promise.all([batch, failure]));
+      expect(failed).toBe("failed");
+      for (const taskId of [...prerequisiteIds, ...dependentIds]) {
+        await expect(admin.getTask(taskId)).resolves.toMatchObject({
+          state: "failed",
+          error: expect.objectContaining({ name: "DependencyFailed" }),
+        });
+      }
+    } finally {
+      await blocker.query("ROLLBACK");
+      await Promise.allSettled([batch, failure]);
+      blocker.release();
+      enqueuer.release();
+    }
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+  });
+
+  it("deadlocks two fenced failures whose cascades meet at different levels", async () => {
+    const { firstRoot, secondRoot, dependentIds } = await arrangeTwoLevelCascade("crossed-raw");
+    const failRaw = (task: ClaimedTask) =>
+      pool.query(SQL_STATEMENTS["fail_v1"], [
+        task.id,
+        "crossed-raw-worker",
+        task.fenceToken.toString(),
+        JSON.stringify({ name: "Error", message: "crossed" }),
+        null,
+      ]);
+
+    const settled = await crossTwoLevelCascades(
+      dependentIds[0]!,
+      () => failRaw(firstRoot),
+      () => failRaw(secondRoot),
+    );
+
+    const rejected = settled.filter((result) => result.status === "rejected");
+    expect(rejected).toEqual([
+      { status: "rejected", reason: expect.objectContaining({ code: "40P01" }) },
+    ]);
+    // PostgreSQL rolled the whole victim statement back, so sending it again finishes the cascade.
+    const victim = settled[0]!.status === "rejected" ? firstRoot : secondRoot;
+    await expect(failRaw(victim)).resolves.toMatchObject({ rows: [{ state: "failed" }] });
+    for (const taskId of dependentIds) {
+      await expect(admin.getTask(taskId)).resolves.toMatchObject({
+        state: "failed",
+        error: expect.objectContaining({ name: "DependencyFailed" }),
+      });
+    }
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+  });
+
+  it("retries a fenced failure that PostgreSQL chose as a crossed cascade's deadlock victim", async () => {
+    const { firstRoot, secondRoot, dependentIds } = await arrangeTwoLevelCascade("crossed-sdk");
+    const codes: Array<string | undefined> = [];
+    const observed = queue.forDatabase({
+      query: (text, values) =>
+        pool.query(text, values as unknown[]).catch((error: unknown) => {
+          codes.push((error as { code?: string }).code);
+          throw error;
+        }),
+    });
+
+    const settled = await crossTwoLevelCascades(
+      dependentIds[0]!,
+      () => observed.fail(firstRoot, "crossed-sdk-worker", new Error("crossed")),
+      () => observed.fail(secondRoot, "crossed-sdk-worker", new Error("crossed")),
+    );
+
+    expect(codes).toEqual(["40P01"]);
+    expect(settled).toEqual([
+      { status: "fulfilled", value: "failed" },
+      { status: "fulfilled", value: "failed" },
+    ]);
+    for (const taskId of dependentIds) {
+      await expect(admin.getTask(taskId)).resolves.toMatchObject({
+        state: "failed",
+        error: expect.objectContaining({ name: "DependencyFailed" }),
+      });
+    }
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+  });
+
+  // The resolver deletes rejected dependents through a join, and a hash join visits them in heap
+  // order. The resolver must lock them in task ID order first, the order an enqueue batch uses. The
+  // resolver's session forbids the other join methods, and the higher dependent is moved in front
+  // of the lower one in the heap. While a third transaction holds the lower dependent, the higher
+  // one must still be free of the resolver's delete lock.
+  it("locks rejected dependents in task ID order before a hash join deletes them", async () => {
+    const rootId = await queue.enqueue("heap-order-root", null, {
+      queue: "heap-order-roots",
+      maxAttempts: 1,
+    });
+    const root = await queue.claim("heap-order-worker", { queue: "heap-order-roots" });
+    expect(root?.id).toBe(rootId);
+    const dependentIds = await queue.enqueueMany(
+      Array.from({ length: 2 }, () => ({
+        type: "heap-order-dependent",
+        payload: null,
+        options: {
+          dependencies: {
+            prerequisiteTaskIds: [rootId],
+            onSuccess: "release",
+            onFailure: "fail",
+            onCancellation: "cancel",
+          },
+        },
+      })),
+    );
+    const [lowest, highest] = dependentIds.toSorted() as [string, string];
+    const heapOrdered = async () =>
+      (
+        await pool.query<{ ordered: boolean }>(
+          `SELECT (SELECT ctid FROM workhorse.task_runtime WHERE task_id = $1)
+                < (SELECT ctid FROM workhorse.task_runtime WHERE task_id = $2) AS ordered`,
+          [highest, lowest],
+        )
+      ).rows[0]!.ordered;
+    for (let moves = 0; !(await heapOrdered()); moves++) {
+      if (moves === 10) throw new Error("could not move the lowest dependent behind the highest");
+      await pool.query(
+        "UPDATE workhorse.task_runtime SET updated_at = updated_at WHERE task_id = $1",
+        [lowest],
+      );
+    }
+
+    const blocker = await pool.connect();
+    const resolver = await pool.connect();
+    let failure: Promise<unknown> | undefined;
+    try {
+      await resolver.query(
+        `SET enable_nestloop = off; SET enable_mergejoin = off;
+         SET enable_indexscan = off; SET enable_bitmapscan = off`,
+      );
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT FROM workhorse.task_runtime WHERE task_id = $1 FOR KEY SHARE", [
+        lowest,
+      ]);
+
+      failure = queue.forDatabase(resolver).fail(root!, "heap-order-worker", new Error("reject"));
+      await waitingSessions(1);
+      const unlocked = await pool.query(
+        "SELECT FROM workhorse.task_runtime WHERE task_id = $1 FOR KEY SHARE SKIP LOCKED",
+        [highest],
+      );
+      expect(unlocked.rowCount).toBe(1);
+
+      await blocker.query("ROLLBACK");
+      await expect(within(failure)).resolves.toBe("failed");
+      for (const taskId of dependentIds) {
+        await expect(admin.getTask(taskId)).resolves.toMatchObject({
+          state: "failed",
+          error: expect.objectContaining({ name: "DependencyFailed" }),
+        });
+      }
+    } finally {
+      await blocker.query("ROLLBACK");
+      await Promise.allSettled([failure]);
+      await resolver.query("RESET ALL");
+      blocker.release();
+      resolver.release();
+    }
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+  });
+
+  it("settles every terminal prerequisite of an enqueue in one pass", async () => {
+    const [succeededId, failedId, pendingId] = await queue.enqueueMany(
+      ["one-pass-succeeded", "one-pass-failed", "one-pass-pending"].map((type) => ({
+        type,
+        payload: null,
+        options: { queue: type, maxAttempts: 1 },
+      })),
+    );
+    const succeeded = await queue.claim("one-pass-worker", { queue: "one-pass-succeeded" });
+    expect(await queue.complete(succeeded!, "one-pass-worker", null)).toBe(true);
+    const failed = await queue.claim("one-pass-worker", { queue: "one-pass-failed" });
+    expect(await queue.fail(failed!, "one-pass-worker", new Error("done"))).toBe("failed");
+
+    const policies = {
+      onSuccess: "release",
+      onFailure: "release",
+      onCancellation: "cancel",
+    } as const;
+    const releasedId = await queue.enqueue("one-pass-released", null, {
+      dependencies: { prerequisiteTaskIds: [succeededId!, failedId!], ...policies },
+    });
+    const blockedId = await queue.enqueue("one-pass-blocked", null, {
+      dependencies: { prerequisiteTaskIds: [succeededId!, failedId!, pendingId!], ...policies },
+    });
+
+    await expect(admin.getTask(releasedId)).resolves.toMatchObject({ state: "ready" });
+    await expect(
+      pool.query(
+        `SELECT state, pending_prerequisites, dependency_rejected
+           FROM workhorse.task_runtime WHERE task_id = $1`,
+        [blockedId],
+      ),
+    ).resolves.toMatchObject({
+      rows: [{ state: "blocked", pending_prerequisites: 1, dependency_rejected: false }],
+    });
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+
+    const pending = await queue.claim("one-pass-worker", { queue: "one-pass-pending" });
+    expect(await queue.complete(pending!, "one-pass-worker", null)).toBe(true);
+    await expect(admin.getTask(blockedId)).resolves.toMatchObject({ state: "ready" });
+    const released = await pool.query<{ details: unknown }>(
+      `SELECT details FROM workhorse.task_event
+        WHERE task_id = $1 AND event_type = 'dependency_released' AND details->>'state' = 'ready'`,
+      [blockedId],
+    );
+    expect(released.rows).toEqual([
+      {
+        details: {
+          prerequisite_task_id: pendingId,
+          state: "ready",
+          reason: "prerequisite_succeeded",
+        },
+      },
+    ]);
+  });
+
+  it("holds a rejection until the last edge resolves and cascades it downstream", async () => {
+    const [failingId, pendingId] = await queue.enqueueMany(
+      ["held-rejection-failing", "held-rejection-pending"].map((type) => ({
+        type,
+        payload: null,
+        options: { queue: type, maxAttempts: 1 },
+      })),
+    );
+    const policies = { onSuccess: "release", onFailure: "fail", onCancellation: "cancel" } as const;
+    const dependentId = await queue.enqueue("held-rejection-dependent", null, {
+      dependencies: { prerequisiteTaskIds: [failingId!, pendingId!], ...policies },
+    });
+    const downstreamId = await queue.enqueue("held-rejection-downstream", null, {
+      dependencies: { prerequisiteTaskIds: [dependentId], ...policies },
+    });
+
+    const failing = await queue.claim("held-rejection-worker", { queue: "held-rejection-failing" });
+    expect(await queue.fail(failing!, "held-rejection-worker", new Error("nope"))).toBe("failed");
+    await expect(
+      pool.query(
+        `SELECT state, pending_prerequisites, dependency_rejected
+           FROM workhorse.task_runtime WHERE task_id = $1`,
+        [dependentId],
+      ),
+    ).resolves.toMatchObject({
+      rows: [{ state: "blocked", pending_prerequisites: 1, dependency_rejected: true }],
+    });
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+
+    const pending = await queue.claim("held-rejection-worker", { queue: "held-rejection-pending" });
+    expect(await queue.complete(pending!, "held-rejection-worker", null)).toBe(true);
+    await expect(admin.getTask(dependentId)).resolves.toMatchObject({
+      state: "failed",
+      error: expect.objectContaining({ name: "DependencyFailed", prerequisite_task_id: failingId }),
+    });
+    await expect(admin.getTask(downstreamId)).resolves.toMatchObject({
+      state: "failed",
+      error: expect.objectContaining({
+        name: "DependencyFailed",
+        prerequisite_task_id: dependentId,
+      }),
+    });
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+  });
+
+  it("recounts a pending-prerequisite counter that would fall below zero", async () => {
+    const [firstId, secondId, loneId] = await queue.enqueueMany(
+      ["underflow-first", "underflow-second", "underflow-lone"].map((type) => ({
+        type,
+        payload: null,
+        options: { queue: type },
+      })),
+    );
+    const heldId = await queue.enqueue("underflow-held", null, {
+      dependencies: {
+        prerequisiteTaskIds: [firstId!, secondId!],
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+    const releasedId = await queue.enqueue("underflow-released", null, {
+      prerequisiteTaskId: loneId!,
+    });
+    await pool.query(
+      `UPDATE workhorse.task_runtime SET pending_prerequisites = 0
+        WHERE task_id = ANY($1::uuid[])`,
+      [[heldId, releasedId]],
+    );
+
+    const first = await queue.claim("underflow-worker", { queue: "underflow-first" });
+    expect(await queue.complete(first!, "underflow-worker", null)).toBe(true);
+    await expect(
+      pool.query(
+        `SELECT state, pending_prerequisites, dependency_rejected
+           FROM workhorse.task_runtime WHERE task_id = $1`,
+        [heldId],
+      ),
+    ).resolves.toMatchObject({
+      rows: [{ state: "blocked", pending_prerequisites: 1, dependency_rejected: false }],
+    });
+    expect(await readDependencyCounterDrift(pool)).toEqual([
+      expect.objectContaining({ task_id: releasedId, pending_prerequisites: 0, pending_edges: 1 }),
+    ]);
+
+    const lone = await queue.claim("underflow-worker", { queue: "underflow-lone" });
+    expect(await queue.complete(lone!, "underflow-worker", null)).toBe(true);
+    await expect(admin.getTask(releasedId)).resolves.toMatchObject({ state: "ready" });
+
+    const events = await pool.query<{ task_id: string; event_type: string; details: unknown }>(
+      `SELECT task_id, event_type, details FROM workhorse.task_event
+        WHERE task_id = ANY($1::uuid[])
+          AND event_type IN ('dependency_counter_repaired', 'dependency_released')
+        ORDER BY occurred_at, event_id`,
+      [[heldId, releasedId]],
+    );
+    expect(events.rows).toEqual([
+      {
+        task_id: heldId,
+        event_type: "dependency_counter_repaired",
+        details: {
+          source: "resolver",
+          prerequisite_task_id: firstId,
+          recorded_pending_prerequisites: 0,
+          resolved_edges: 1,
+          pending_edges: 1,
+          dependency_rejected: false,
+        },
+      },
+      {
+        task_id: releasedId,
+        event_type: "dependency_counter_repaired",
+        details: {
+          source: "resolver",
+          prerequisite_task_id: loneId,
+          recorded_pending_prerequisites: 0,
+          resolved_edges: 1,
+          pending_edges: 0,
+          dependency_rejected: false,
+        },
+      },
+      {
+        task_id: releasedId,
+        event_type: "dependency_released",
+        details: { prerequisite_task_id: loneId, state: "ready", reason: "prerequisite_succeeded" },
+      },
+    ]);
+
+    const second = await queue.claim("underflow-worker", { queue: "underflow-second" });
+    expect(await queue.complete(second!, "underflow-worker", null)).toBe(true);
+    await expect(admin.getTask(heldId)).resolves.toMatchObject({ state: "ready" });
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+  });
+
+  it("holds a dependent whose low counter reaches zero while an edge is pending", async () => {
+    const [firstId, secondId] = await queue.enqueueMany(
+      ["early-first", "early-second"].map((type) => ({
+        type,
+        payload: null,
+        options: { queue: type },
+      })),
+    );
+    const heldId = await queue.enqueue("early-held", null, {
+      dependencies: {
+        prerequisiteTaskIds: [firstId!, secondId!],
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+    await pool.query(
+      "UPDATE workhorse.task_runtime SET pending_prerequisites = 1 WHERE task_id = $1",
+      [heldId],
+    );
+
+    const first = await queue.claim("early-worker", { queue: "early-first" });
+    expect(await queue.complete(first!, "early-worker", null)).toBe(true);
+    await expect(
+      pool.query(
+        `SELECT state, pending_prerequisites, dependency_rejected
+           FROM workhorse.task_runtime WHERE task_id = $1`,
+        [heldId],
+      ),
+    ).resolves.toMatchObject({
+      rows: [{ state: "blocked", pending_prerequisites: 1, dependency_rejected: false }],
+    });
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+
+    const second = await queue.claim("early-worker", { queue: "early-second" });
+    expect(await queue.complete(second!, "early-worker", null)).toBe(true);
+    await expect(admin.getTask(heldId)).resolves.toMatchObject({ state: "ready" });
+
+    const events = await pool.query<{ event_type: string; details: unknown }>(
+      `SELECT event_type, details FROM workhorse.task_event
+        WHERE task_id = $1
+          AND event_type IN ('dependency_counter_repaired', 'dependency_released')
+        ORDER BY occurred_at, event_id`,
+      [heldId],
+    );
+    expect(events.rows).toEqual([
+      {
+        event_type: "dependency_counter_repaired",
+        details: {
+          source: "resolver",
+          prerequisite_task_id: firstId,
+          recorded_pending_prerequisites: 1,
+          resolved_edges: 1,
+          pending_edges: 1,
+          dependency_rejected: false,
+        },
+      },
+      {
+        event_type: "dependency_released",
+        details: {
+          prerequisite_task_id: secondId,
+          state: "ready",
+          reason: "prerequisite_succeeded",
+        },
+      },
+    ]);
+  });
+
+  it("recounts a rejected dependent that has no rejecting edge", async () => {
+    const [firstId, secondId, loneId] = await queue.enqueueMany(
+      ["flagged-first", "flagged-second", "flagged-lone"].map((type) => ({
+        type,
+        payload: null,
+        options: { queue: type },
+      })),
+    );
+    const policies = { onSuccess: "release", onFailure: "fail", onCancellation: "cancel" } as const;
+    const releasedId = await queue.enqueue("flagged-released", null, {
+      dependencies: { prerequisiteTaskIds: [firstId!, secondId!], ...policies },
+    });
+    const heldId = await queue.enqueue("flagged-held", null, {
+      dependencies: { prerequisiteTaskIds: [loneId!], ...policies },
+    });
+    await pool.query(
+      `UPDATE workhorse.task_runtime SET dependency_rejected = true
+        WHERE task_id = ANY($1::uuid[])`,
+      [[releasedId, heldId]],
+    );
+
+    for (const type of ["flagged-first", "flagged-second"]) {
+      const claimed = await queue.claim("flagged-worker", { queue: type });
+      expect(await queue.complete(claimed!, "flagged-worker", null)).toBe(true);
+    }
+    await expect(admin.getTask(releasedId)).resolves.toMatchObject({ state: "ready" });
+
+    // Every caller reaches the settlement with no pending edge, so the blocked branch is reached
+    // only by handing the settlement a dependent directly.
+    await expect(
+      pool.query<{ settled: number }>(
+        `SELECT workhorse.settle_dependents_v1(clock_timestamp(), ARRAY[$1::uuid], NULL, NULL, NULL)
+           AS settled`,
+        [heldId],
+      ),
+    ).resolves.toMatchObject({ rows: [{ settled: 0 }] });
+    await expect(
+      pool.query(
+        `SELECT state, pending_prerequisites, dependency_rejected
+           FROM workhorse.task_runtime WHERE task_id = $1`,
+        [heldId],
+      ),
+    ).resolves.toMatchObject({
+      rows: [{ state: "blocked", pending_prerequisites: 1, dependency_rejected: false }],
+    });
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+
+    const events = await pool.query<{ task_id: string; event_type: string; details: unknown }>(
+      `SELECT task_id, event_type, details FROM workhorse.task_event
+        WHERE task_id = ANY($1::uuid[])
+          AND event_type IN ('dependency_counter_repaired', 'dependency_released')
+        ORDER BY occurred_at, event_id`,
+      [[releasedId, heldId]],
+    );
+    expect(events.rows).toEqual([
+      {
+        task_id: releasedId,
+        event_type: "dependency_counter_repaired",
+        details: {
+          source: "settlement",
+          pending_edges: 0,
+          dependency_rejected: false,
+        },
+      },
+      {
+        task_id: releasedId,
+        event_type: "dependency_released",
+        details: {
+          prerequisite_task_id: null,
+          state: "ready",
+          reason: "dependency_counter_repaired",
+        },
+      },
+      {
+        task_id: heldId,
+        event_type: "dependency_counter_repaired",
+        details: {
+          source: "settlement",
+          pending_edges: 1,
+          dependency_rejected: false,
+        },
+      },
+    ]);
+  });
+
+  it("reports and repairs blocked tasks whose counters disagree with their edges", async () => {
+    const [pendingId, resolvedId] = await queue.enqueueMany(
+      ["drift-pending", "drift-resolved"].map((type) => ({
+        type,
+        payload: null,
+        options: { queue: type },
+      })),
+    );
+    const enqueueDependent = (type: string, prerequisiteTaskId: string) =>
+      queue.enqueue(type, null, { queue: type, prerequisiteTaskId });
+    const highId = await enqueueDependent("drift-high", pendingId!);
+    const flaggedId = await enqueueDependent("drift-flagged", pendingId!);
+    const healthyId = await enqueueDependent("drift-healthy", pendingId!);
+    const strandedId = await enqueueDependent("drift-stranded", resolvedId!);
+    const settledId = await enqueueDependent("drift-settled", resolvedId!);
+    const rejectedId = await enqueueDependent("drift-rejected", resolvedId!);
+    await pool.query(
+      `UPDATE workhorse.task_runtime SET pending_prerequisites = 2 WHERE task_id = $1`,
+      [highId],
+    );
+    await pool.query(
+      `UPDATE workhorse.task_runtime SET dependency_rejected = true WHERE task_id = $1`,
+      [flaggedId],
+    );
+    // Resolve edges without the resolver, as a lost counter update would leave them.
+    await pool.query(
+      `UPDATE workhorse.task_dependency
+          SET released_at = clock_timestamp(),
+              resolution = CASE dependent_task_id WHEN $3::uuid THEN 'fail' ELSE 'release' END
+        WHERE dependent_task_id = ANY($1::uuid[]) AND prerequisite_task_id = $2`,
+      [[strandedId, settledId, rejectedId], resolvedId, rejectedId],
+    );
+    await pool.query(
+      `UPDATE workhorse.task_runtime
+          SET pending_prerequisites = 0, dependency_rejected = task_id = $2::uuid
+        WHERE task_id = ANY($1::uuid[])`,
+      [[settledId, rejectedId], rejectedId],
+    );
+
+    const drift = await pool.query(
+      `SELECT task_id, queue_name, pending_prerequisites, pending_edges, dependency_rejected,
+              rejected_edges, counter_drifted, edges_resolved
+         FROM workhorse.dependency_counter_drift_v1()`,
+    );
+    expect(drift.rows).toEqual(
+      [
+        driftRow(highId, "drift-high", [2, 1], [false, false], true),
+        driftRow(flaggedId, "drift-flagged", [1, 1], [true, false], true),
+        driftRow(strandedId, "drift-stranded", [1, 0], [false, false], true),
+        driftRow(settledId, "drift-settled", [0, 0], [false, false], false),
+        driftRow(rejectedId, "drift-rejected", [0, 0], [true, true], false),
+      ].toSorted(byTaskId),
+    );
+    expect(drift.rows.map((entry) => entry.task_id)).not.toContain(healthyId);
+    const limited = await pool.query(
+      `SELECT task_id FROM workhorse.dependency_counter_drift_v1(2)`,
+    );
+    expect(limited.rows).toEqual(drift.rows.slice(0, 2).map(({ task_id }) => ({ task_id })));
+    await expect(
+      pool.query(`SELECT * FROM workhorse.dependency_counter_drift_v1(0)`),
+    ).rejects.toThrow(/between 1 and 100000/);
+
+    const repaired = await pool.query(
+      `SELECT task_id, recorded_pending_prerequisites, pending_edges, action
+         FROM workhorse.repair_dependency_counters_v1()`,
+    );
+    expect(repaired.rows).toEqual(
+      [
+        {
+          task_id: highId,
+          recorded_pending_prerequisites: 2,
+          pending_edges: 1,
+          action: "recounted",
+        },
+        {
+          task_id: flaggedId,
+          recorded_pending_prerequisites: 1,
+          pending_edges: 1,
+          action: "recounted",
+        },
+        {
+          task_id: strandedId,
+          recorded_pending_prerequisites: 1,
+          pending_edges: 0,
+          action: "released",
+        },
+        {
+          task_id: settledId,
+          recorded_pending_prerequisites: 0,
+          pending_edges: 0,
+          action: "released",
+        },
+        {
+          task_id: rejectedId,
+          recorded_pending_prerequisites: 0,
+          pending_edges: 0,
+          action: "rejected",
+        },
+      ].toSorted(byTaskId),
+    );
+    expect(await readDependencyCounterDrift(pool)).toEqual([]);
+    await expect(
+      pool.query(`SELECT * FROM workhorse.dependency_counter_drift_v1()`),
+    ).resolves.toMatchObject({ rows: [] });
+    await expect(
+      pool.query(`SELECT * FROM workhorse.repair_dependency_counters_v1()`),
+    ).resolves.toMatchObject({ rows: [] });
+
+    await expect(
+      pool.query(
+        `SELECT task_id, state, pending_prerequisites, dependency_rejected
+           FROM workhorse.task_runtime WHERE task_id = ANY($1::uuid[]) ORDER BY task_id`,
+        [[highId, flaggedId, strandedId, settledId]],
+      ),
+    ).resolves.toMatchObject({
+      rows: [
+        { task_id: highId, state: "blocked", pending_prerequisites: 1, dependency_rejected: false },
+        {
+          task_id: flaggedId,
+          state: "blocked",
+          pending_prerequisites: 1,
+          dependency_rejected: false,
+        },
+        {
+          task_id: strandedId,
+          state: "ready",
+          pending_prerequisites: 0,
+          dependency_rejected: false,
+        },
+        {
+          task_id: settledId,
+          state: "ready",
+          pending_prerequisites: 0,
+          dependency_rejected: false,
+        },
+      ].toSorted(byTaskId),
+    });
+    await expect(admin.getTask(rejectedId)).resolves.toMatchObject({
+      state: "failed",
+      error: expect.objectContaining({
+        name: "DependencyFailed",
+        prerequisite_task_id: resolvedId,
+        policy_action: "fail",
+      }),
+    });
+
+    const events = await pool.query<{ event_type: string; details: unknown }>(
+      `SELECT event_type, details FROM workhorse.task_event
+        WHERE task_id = $1
+          AND event_type IN ('dependency_counter_repaired', 'dependency_released')
+        ORDER BY occurred_at, event_id`,
+      [strandedId],
+    );
+    expect(events.rows).toEqual([
+      {
+        event_type: "dependency_counter_repaired",
+        details: {
+          source: "repair",
+          prerequisite_task_id: resolvedId,
+          recorded_pending_prerequisites: 1,
+          pending_edges: 0,
+          dependency_rejected: false,
+        },
+      },
+      {
+        event_type: "dependency_released",
+        details: {
+          prerequisite_task_id: resolvedId,
+          state: "ready",
+          reason: "dependency_counter_repaired",
+        },
+      },
+    ]);
+
+    const pending = await queue.claim("drift-worker", { queue: "drift-pending" });
+    expect(await queue.complete(pending!, "drift-worker", null)).toBe(true);
+    for (const taskId of [highId, flaggedId, healthyId]) {
+      await expect(admin.getTask(taskId)).resolves.toMatchObject({ state: "ready" });
+    }
+  });
+
+  it("previews and repairs dependency drift through Admin with an audited event", async () => {
+    const [pendingId, resolvedId] = await queue.enqueueMany(
+      ["governed-pending", "governed-resolved"].map((type) => ({
+        type,
+        payload: null,
+        options: { queue: type },
+      })),
+    );
+    const enqueueDependent = (type: string, prerequisiteTaskId: string) =>
+      queue.enqueue(type, null, { queue: type, prerequisiteTaskId });
+    const highId = await enqueueDependent("governed-high", pendingId!);
+    const healthyId = await enqueueDependent("governed-healthy", pendingId!);
+    const strandedId = await enqueueDependent("governed-stranded", resolvedId!);
+    const rejectedId = await enqueueDependent("governed-rejected", resolvedId!);
+    await pool.query(
+      `UPDATE workhorse.task_runtime SET pending_prerequisites = 3 WHERE task_id = $1`,
+      [highId],
+    );
+    await pool.query(
+      `UPDATE workhorse.task_dependency
+          SET released_at = clock_timestamp(),
+              resolution = CASE dependent_task_id WHEN $3::uuid THEN 'fail' ELSE 'release' END
+        WHERE dependent_task_id = ANY($1::uuid[]) AND prerequisite_task_id = $2`,
+      [[strandedId, rejectedId], resolvedId, rejectedId],
+    );
+    const readRuntime = () =>
+      pool.query(
+        `SELECT task_id, state, pending_prerequisites, dependency_rejected
+           FROM workhorse.task_runtime WHERE task_id = ANY($1::uuid[]) ORDER BY task_id`,
+        [[highId, healthyId, strandedId, rejectedId]],
+      );
+    const readRepairEvents = () =>
+      pool.query<{ task_id: string; details: Record<string, unknown> }>(
+        `SELECT task_id, details FROM workhorse.task_event
+          WHERE task_id = ANY($1::uuid[]) AND event_type = 'dependency_counter_repaired'
+          ORDER BY task_id`,
+        [[highId, healthyId, strandedId, rejectedId]],
+      );
+    const before = await readRuntime();
+
+    const expected = [
+      {
+        taskId: highId,
+        queueName: "governed-high",
+        pendingPrerequisites: 3,
+        pendingEdges: 1,
+        dependencyRejected: false,
+        rejectedEdges: false,
+        action: "recounted",
+      },
+      {
+        taskId: strandedId,
+        queueName: "governed-stranded",
+        pendingPrerequisites: 1,
+        pendingEdges: 0,
+        dependencyRejected: false,
+        rejectedEdges: false,
+        action: "released",
+      },
+      {
+        taskId: rejectedId,
+        queueName: "governed-rejected",
+        pendingPrerequisites: 1,
+        pendingEdges: 0,
+        dependencyRejected: false,
+        rejectedEdges: true,
+        action: "rejected",
+      },
+    ].toSorted((left, right) => (left.taskId < right.taskId ? -1 : 1));
+    await expect(admin.listDependencyDrift()).resolves.toEqual(expected);
+    await expect(admin.listDependencyDrift(2)).resolves.toEqual(expected.slice(0, 2));
+    // The dry run writes nothing: no counter changes and no repair event.
+    expect((await readRuntime()).rows).toEqual(before.rows);
+    expect((await readRepairEvents()).rows).toEqual([]);
+
+    for (const limit of [0, 100_001, 1.5]) {
+      await expect(admin.listDependencyDrift(limit)).rejects.toThrow(
+        "limit must be an integer from 1 to 100000",
+      );
+    }
+    const audit = {
+      actor: "operator@example.test",
+      reason: "recount drifted dependents",
+      requestId: "repair-request-0001",
+    };
+    await expect(admin.repairDependencyDrift({ ...audit, reason: "" })).rejects.toThrow(
+      "reason must contain between 1 and 2000 characters",
+    );
+    await expect(admin.repairDependencyDrift(audit, 0)).rejects.toThrow(
+      "limit must be an integer from 1 to 100000",
+    );
+    await expect(
+      pool.query(`SELECT * FROM workhorse.repair_dependency_drift_v1(10, '', 'reason', 'id')`),
+    ).rejects.toThrow("requested_by must contain between 1 and 200 characters");
+    expect((await readRepairEvents()).rows).toEqual([]);
+
+    await expect(admin.repairDependencyDrift(audit)).resolves.toEqual(
+      expected.map(({ taskId, pendingPrerequisites, pendingEdges, action }) => ({
+        taskId,
+        recordedPendingPrerequisites: pendingPrerequisites,
+        pendingEdges,
+        action,
+      })),
+    );
+    await expect(admin.listDependencyDrift()).resolves.toEqual([]);
+    await expect(admin.repairDependencyDrift(audit)).resolves.toEqual([]);
+
+    const events = await readRepairEvents();
+    expect(events.rows.map((row) => row.task_id)).toEqual(expected.map((row) => row.taskId));
+    for (const event of events.rows) {
+      expect(event.details).toMatchObject({
+        source: "repair",
+        requested_by: audit.actor,
+        request_reason: audit.reason,
+        request_id_preview: "repair-r…0001",
+        request_id_digest: expect.stringMatching(/^[0-9a-f]{12}$/),
+        request_id_length: audit.requestId.length,
+      });
+      expect(JSON.stringify(event.details)).not.toContain(audit.requestId);
+    }
+    await expect(admin.getTask(highId)).resolves.toMatchObject({ state: "blocked" });
+    await expect(admin.getTask(strandedId)).resolves.toMatchObject({ state: "ready" });
+    await expect(admin.getTask(rejectedId)).resolves.toMatchObject({ state: "failed" });
+    await expect(admin.getTask(healthyId)).resolves.toMatchObject({ state: "blocked" });
+  });
+
+  it("lets a prerequisite be claimed and heartbeated while a dependent enqueue is in flight", async () => {
+    const prerequisiteId = await queue.enqueue("unblocked-prerequisite", null, {
+      queue: "unblocked-prerequisites",
+    });
+    const transaction = await pool.connect();
+    try {
+      await transaction.query("BEGIN");
+      await queue.enqueue(
+        "unblocked-dependent",
+        null,
+        { queue: "unblocked-dependents", prerequisiteTaskId: prerequisiteId },
+        transaction,
+      );
+      // The enqueue transaction stays open, so any lock it holds on the prerequisite is still held.
+      const claimed = await within(
+        queue.claim("unblocked-worker", { queue: "unblocked-prerequisites" }),
+      );
+      expect(claimed?.id).toBe(prerequisiteId);
+      await expect(within(queue.heartbeat(claimed!, "unblocked-worker"))).resolves.toBe(true);
+      await transaction.query("COMMIT");
+    } catch (error) {
+      await transaction.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      transaction.release();
+    }
   });
 
   it("validates dependency identity and keeps enqueue transactional and idempotent", async () => {

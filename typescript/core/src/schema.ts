@@ -171,6 +171,133 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "row retention lag waits for history retention",
     kind: "additive",
   },
+  {
+    fromVersion: 24,
+    toVersion: 25,
+    file: "0025-add-a-fast-task-tier.sql",
+    description: "add a fast task tier",
+    kind: "contract",
+    retiresProtocolVersions: [1, 2, 3, 4],
+  },
+  {
+    fromVersion: 25,
+    toVersion: 26,
+    file: "0026-a-dependent-enqueue-holds-its-prerequisites.sql",
+    description: "a dependent enqueue holds its prerequisites against completion",
+    kind: "additive",
+  },
+  {
+    fromVersion: 26,
+    toVersion: 27,
+    file: "0027-write-full-tier-enqueue-rows-set-based.sql",
+    description: "write full-tier enqueue rows set-based",
+    kind: "additive",
+  },
+  {
+    fromVersion: 27,
+    toVersion: 28,
+    file: "0028-release-dependents-per-statement.sql",
+    description: "release dependents per statement",
+    kind: "additive",
+  },
+  {
+    fromVersion: 28,
+    toVersion: 29,
+    file: "0029-claim-policy-limited-tasks-as-a-set.sql",
+    description: "claim policy limited tasks as a set",
+    kind: "additive",
+  },
+  {
+    fromVersion: 29,
+    toVersion: 30,
+    file: "0030-release-dependents-through-a-pending-prerequisite-counter.sql",
+    description: "release dependents through a pending-prerequisite counter",
+    kind: "additive",
+  },
+  {
+    fromVersion: 30,
+    toVersion: 31,
+    file: "0031-lock-a-workers-fast-tier-rows-in-task-id-order.sql",
+    description: "lock a worker's fast-tier rows in task ID order",
+    kind: "additive",
+  },
+  {
+    fromVersion: 31,
+    toVersion: 32,
+    file: "0032-a-child-terminal-at-creation-settles-its-parent.sql",
+    description: "a child terminal at creation settles its parent",
+    kind: "additive",
+  },
+  {
+    fromVersion: 32,
+    toVersion: 33,
+    file: "0033-lock-an-enqueue-batchs-prerequisites-before-its-first-request.sql",
+    description: "lock an enqueue batch's prerequisites before its first request",
+    kind: "additive",
+  },
+  {
+    fromVersion: 33,
+    toVersion: 34,
+    file: "0034-reject-an-oversized-fast-tier-result-per-row.sql",
+    description: "reject an oversized fast-tier result per row",
+    kind: "additive",
+  },
+  {
+    // The file number was reserved for this change; the version still steps by one.
+    fromVersion: 34,
+    toVersion: 35,
+    file: "0036-serialize-the-capacity-notify-with-claims.sql",
+    description: "serialize the concurrency capacity notification with claims",
+    kind: "additive",
+  },
+  {
+    // The file number was reserved for this change; the version still steps by one.
+    fromVersion: 35,
+    toVersion: 36,
+    file: "0037-plan-dependency-release-once-per-session.sql",
+    description: "plan dependency release once per session",
+    kind: "additive",
+  },
+  {
+    // The file number was reserved for this change; the version still steps by one.
+    fromVersion: 36,
+    toVersion: 37,
+    file: "0038-report-queue-tier-and-history-in-the-dashboard.sql",
+    description: "report queue tier and history in the dashboard",
+    kind: "additive",
+  },
+  {
+    // The file number was reserved for this change; the version still steps by one.
+    fromVersion: 37,
+    toVersion: 38,
+    file: "0039-detect-and-repair-pending-prerequisite-counter-drift.sql",
+    description: "detect and repair pending-prerequisite counter drift",
+    kind: "additive",
+  },
+  {
+    // The file number was reserved for this change; the version still steps by one.
+    fromVersion: 38,
+    toVersion: 39,
+    file: "0040-release-a-fused-claim-lock-before-it-can-deadlock.sql",
+    description: "release a fused claim lock before it can deadlock",
+    kind: "additive",
+  },
+  {
+    // The file number was reserved for this change; the version still steps by one.
+    fromVersion: 39,
+    toVersion: 40,
+    file: "0041-govern-dependency-counter-drift-repair.sql",
+    description: "govern the dependency counter drift check and repair",
+    kind: "additive",
+  },
+  {
+    // The file number was reserved for this change; the version still steps by one.
+    fromVersion: 40,
+    toVersion: 41,
+    file: "0042-cut-the-plain-full-tier-per-task-cost.sql",
+    description: "cut the plain full-tier per-task claim and trigger cost",
+    kind: "additive",
+  },
 ];
 
 /**

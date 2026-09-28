@@ -196,7 +196,7 @@ export async function seedReleasedSchema(pool: Pool): Promise<void> {
     },
   ]);
 
-  await pool.query("SELECT workhorse.sync_schedule_definitions_v1($1, $2::jsonb, false)", [
+  await pool.query("SELECT workhorse.sync_schedule_definitions_v2($1, $2::jsonb, false)", [
     "fixture",
     JSON.stringify([
       {

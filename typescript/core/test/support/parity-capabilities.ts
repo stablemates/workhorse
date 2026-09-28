@@ -296,8 +296,8 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
         "compatibility/schema-newer-inside-major-line",
         "compatibility/served-protocol-undeclared",
         "compatibility/schema-not-installed",
-        "compatibility/schema-too-old",
-        "compatibility/schema-below-the-dashboard-reads",
+        "compatibility/schema-before-the-fast-tier-contract",
+        "compatibility/schema-serves-only-older-protocols",
         "compatibility/schema-below-the-statement-catalogues",
         "compatibility/schema-no-longer-serves-client",
         "compatibility/client-protocol-too-old",
@@ -366,6 +366,16 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
     typescript: { file: "integration-claim-lease-fence.test.ts", pattern: "concurrency" },
     python: { file: "test_worker.py", pattern: "concurrency" },
     go: { file: "worker_test.go", pattern: "Concurrency" },
+  },
+  {
+    capability: "Fast task tier with one outcome row per task",
+    rust: {
+      file: "worker_postgres.rs",
+      test: "a_crashed_fast_worker_loses_no_task_and_records_one_outcome_each",
+    },
+    typescript: { file: "integration-fast-tier.test.ts", pattern: "one outcome each" },
+    python: { file: "test_worker_fast_tier.py", pattern: "fast_task_outcome" },
+    go: { file: "worker_fast_tier_test.go", pattern: "StaleCompletion" },
   },
   {
     capability: "Unhandled task type released to its queue",

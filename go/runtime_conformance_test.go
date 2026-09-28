@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -71,6 +72,7 @@ func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 		"heartbeat-cadence":        executeWorkerHeartbeatFixture,
 		"poll-cadence":             executeWorkerPollCadenceFixture,
 		"graceful-drain":           executeWorkerGracefulDrainFixture,
+		"slot-refill":              executeWorkerSlotRefillFixture,
 		"trace-propagation":        executeWorkerTracePropagationFixture,
 		"budget-admission-race":    executeBudgetAdmissionRaceFixture,
 		"missing-handler":          executeWorkerMissingHandlerFixture,
@@ -981,4 +983,223 @@ func executeWorkerMaintenancePhaseErrorFixture(t *testing.T, fixture workerRunti
 		}
 		assertWorkerFixtureTaskState(t, ctx, pool, taskID, fixture.ExpectedState)
 	})
+}
+
+type slotRefillClaimContextKey struct{}
+
+// slotRefillQueryTracer records the limit of every claim, tracks how many claims are in flight,
+// and can hold a claim before it reaches PostgreSQL so the next one is observed while the first is
+// still in flight.
+type slotRefillQueryTracer struct {
+	mu              sync.Mutex
+	limits          []int
+	inFlight        int
+	maximumInFlight int
+	claimsWithTasks int
+	holding         bool
+	held            []chan struct{}
+}
+
+func (tracer *slotRefillQueryTracer) TraceQueryStart(
+	ctx context.Context,
+	_ *pgx.Conn,
+	data pgx.TraceQueryStartData,
+) context.Context {
+	if !strings.Contains(data.SQL, "claim_many_v1") {
+		return ctx
+	}
+	limit, _ := data.Args[2].(int)
+	tracer.mu.Lock()
+	tracer.limits = append(tracer.limits, limit)
+	tracer.inFlight++
+	tracer.maximumInFlight = max(tracer.maximumInFlight, tracer.inFlight)
+	var hold chan struct{}
+	if tracer.holding {
+		hold = make(chan struct{})
+		tracer.held = append(tracer.held, hold)
+	}
+	tracer.mu.Unlock()
+	if hold != nil {
+		<-hold
+	}
+	return context.WithValue(ctx, slotRefillClaimContextKey{}, true)
+}
+
+func (tracer *slotRefillQueryTracer) TraceQueryEnd(
+	ctx context.Context,
+	_ *pgx.Conn,
+	data pgx.TraceQueryEndData,
+) {
+	if ctx.Value(slotRefillClaimContextKey{}) != true {
+		return
+	}
+	tracer.mu.Lock()
+	defer tracer.mu.Unlock()
+	tracer.inFlight--
+	if data.Err == nil && data.CommandTag.RowsAffected() > 0 {
+		tracer.claimsWithTasks++
+	}
+}
+
+func (tracer *slotRefillQueryTracer) claimCount() int {
+	tracer.mu.Lock()
+	defer tracer.mu.Unlock()
+	return len(tracer.limits)
+}
+
+func (tracer *slotRefillQueryTracer) release() {
+	tracer.mu.Lock()
+	defer tracer.mu.Unlock()
+	tracer.holding = false
+	for _, hold := range tracer.held {
+		close(hold)
+	}
+	tracer.held = nil
+}
+
+func executeWorkerSlotRefillFixture(t *testing.T, fixture workerRuntimeFixture) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-slot-refill-fixture")
+	ctx := context.Background()
+	tracer := &slotRefillQueryTracer{}
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ConnConfig.Tracer = tracer
+	// Held claims keep their connections while every handler still settles.
+	config.MaxConns = int32(fixture.Concurrency*2 + 8)
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "runtime-" + fixture.ID
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	taskIDs := make([]string, 0, fixture.TaskCount)
+	for sequence := range fixture.TaskCount {
+		taskID, err := queue.Enqueue(ctx, fixture.TaskType, map[string]any{"sequence": sequence})
+		if err != nil {
+			t.Fatal(err)
+		}
+		taskIDs = append(taskIDs, taskID)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-" + fixture.ID, Concurrency: fixture.Concurrency,
+		DisableRegistry: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Handlers block until the fixture finishes them in the order they started.
+	var handlersMu sync.Mutex
+	var started []chan struct{}
+	openHandlers := false
+	worker.Handle(fixture.TaskType, func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
+		handlersMu.Lock()
+		if openHandlers {
+			handlersMu.Unlock()
+			return nil, nil
+		}
+		finish := make(chan struct{})
+		started = append(started, finish)
+		handlersMu.Unlock()
+		<-finish
+		return nil, nil
+	})
+	startedCount := func() int {
+		handlersMu.Lock()
+		defer handlersMu.Unlock()
+		return len(started)
+	}
+	finishNext := func() {
+		handlersMu.Lock()
+		finish := started[0]
+		started = started[1:]
+		handlersMu.Unlock()
+		close(finish)
+	}
+	openAll := func() {
+		handlersMu.Lock()
+		openHandlers = true
+		for _, finish := range started {
+			close(finish)
+		}
+		started = nil
+		handlersMu.Unlock()
+	}
+
+	runContext, stop := context.WithCancel(ctx)
+	runResult := make(chan error, 1)
+	go func() { runResult <- worker.Run(runContext) }()
+	stopped := false
+	stopWorker := func() {
+		if stopped {
+			return
+		}
+		stopped = true
+		tracer.release()
+		openAll()
+		stop()
+		if err := <-runResult; err != nil {
+			t.Error(err)
+		}
+	}
+	defer stopWorker()
+
+	waitForBudgetRace(t, fixture.ID+" did not fill its slots", func() bool {
+		return startedCount() == fixture.Concurrency
+	})
+	tracer.mu.Lock()
+	tracer.holding = true
+	tracer.mu.Unlock()
+	for finished := 1; finished <= 3; finished++ {
+		finishNext()
+		if finished == 2 {
+			// One more free slot is below the refill batch while the first refill is held.
+			time.Sleep(time.Duration(fixture.SettleCheckMS) * time.Millisecond)
+			if count := tracer.claimCount(); count != 2 {
+				t.Fatalf("a slot below the refill batch started a claim: %d claims", count)
+			}
+			continue
+		}
+		expected := 2
+		if finished == 3 {
+			expected = 3
+		}
+		waitForBudgetRace(t, fmt.Sprintf("%s did not start claim %d", fixture.ID, expected), func() bool {
+			return tracer.claimCount() >= expected
+		})
+	}
+	tracer.mu.Lock()
+	limits := append([]int(nil), tracer.limits...)
+	maximumInFlight := tracer.maximumInFlight
+	tracer.mu.Unlock()
+	if !reflect.DeepEqual(limits, fixture.ExpectedClaimLimits) {
+		t.Fatalf("claim limits: got %v, want %v", limits, fixture.ExpectedClaimLimits)
+	}
+	if maximumInFlight != fixture.ExpectedOverlappingClaims {
+		t.Fatalf("overlapping claims: got %d, want %d", maximumInFlight, fixture.ExpectedOverlappingClaims)
+	}
+
+	tracer.release()
+	openAll()
+	waitForBudgetRace(t, fixture.ID+" did not settle every task", func() bool {
+		var succeeded int
+		if err := pool.QueryRow(
+			ctx,
+			"SELECT count(*) FROM workhorse.task_outcome WHERE task_id = ANY($1::uuid[]) AND state = 'succeeded'",
+			taskIDs,
+		).Scan(&succeeded); err != nil {
+			t.Fatal(err)
+		}
+		return succeeded == fixture.TaskCount
+	})
+	stopWorker()
+	tracer.mu.Lock()
+	claimsPerTask := float64(tracer.claimsWithTasks) / float64(fixture.TaskCount)
+	tracer.mu.Unlock()
+	if claimsPerTask > fixture.ExpectedMaximumClaimsPerTask {
+		t.Fatalf("claims per task: got %.3f, want at most %.3f", claimsPerTask, fixture.ExpectedMaximumClaimsPerTask)
+	}
 }

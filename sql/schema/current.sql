@@ -131,6 +131,22 @@ BEGIN
 END;
 $$;
 
+-- PostgreSQL 18 generates the same layout natively and faster. Swap the body in place so column
+-- defaults that call uuid_v7_v1() keep one name on every supported version.
+DO $uuid_v7$
+BEGIN
+  IF current_setting('server_version_num')::integer >= 180000 THEN
+    EXECUTE $body$
+      CREATE OR REPLACE FUNCTION workhorse.uuid_v7_v1()
+      RETURNS uuid
+      LANGUAGE sql
+      VOLATILE
+      AS 'SELECT uuidv7()'
+    $body$;
+  END IF;
+END;
+$uuid_v7$;
+
 -- Safe, bounded cancellation diagnostics. requested_by is attribution only and does not assert that
 -- the caller was authorized to cancel the task.
 CREATE OR REPLACE FUNCTION workhorse.cancellation_envelope_v1(
@@ -274,7 +290,12 @@ CREATE TABLE IF NOT EXISTS workhorse.queue_control (
   request_id_preview text,
   request_id_digest text CHECK (request_id_digest IS NULL OR char_length(request_id_digest) = 12),
   request_id_length integer CHECK (request_id_length IS NULL OR request_id_length BETWEEN 1 AND 512),
-  updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  -- A fast-tier queue keeps its live tasks in fast_task_runtime and its finished tasks in
+  -- fast_task_outcome. The two history switches only affect fast-tier queues.
+  tier text NOT NULL DEFAULT 'full' CHECK (tier IN ('fast', 'full')),
+  record_attempts boolean NOT NULL DEFAULT false,
+  record_claims boolean NOT NULL DEFAULT false
 );
 
 -- A purge request is both the destructive-operation audit record and its replay barrier. The raw
@@ -574,88 +595,119 @@ $$;
 CREATE OR REPLACE FUNCTION workhorse.validate_task_dependencies_v1()
 RETURNS trigger
 LANGUAGE plpgsql
+-- The recursive walks' row estimates overshoot jit_above_cost, and JIT compilation then costs more
+-- than the walk. Each walk is an index probe per frontier row, so one generic plan serves every
+-- firing.
+SET jit = off
+SET plan_cache_mode = force_generic_plan
 AS $$
 DECLARE
   v_component_task_id text;
   v_cycle uuid[];
   v_fan_out_root uuid;
   v_limit_task_id uuid;
+  v_sinks boolean;
+  v_exact_fan_out boolean := true;
+  v_prerequisites uuid[];
+  v_cone uuid[];
+  v_walk uuid[];
 BEGIN
-  -- Lock every task in each pre-existing component touched by this statement in canonical order.
-  -- Transactions which mutate disconnected components proceed independently. Mutations which
-  -- overlap a component share a lock even when a concurrent commit has just merged its root.
-  FOR v_component_task_id IN
-    WITH RECURSIVE inserted_tasks(task_id) AS (
-      SELECT inserted.dependent_task_id FROM inserted_dependencies inserted
-      UNION
-      SELECT inserted.prerequisite_task_id FROM inserted_dependencies inserted
-    ), component(seed_task_id, task_id) AS (
-      SELECT inserted_tasks.task_id, inserted_tasks.task_id FROM inserted_tasks
-      UNION
-      SELECT component.seed_task_id, neighbor.task_id
-        FROM component
-        CROSS JOIN LATERAL (
-          SELECT dependency.prerequisite_task_id AS task_id
-            FROM workhorse.task_dependency dependency
-           WHERE dependency.dependent_task_id = component.task_id
-             AND NOT EXISTS (
-               SELECT 1 FROM inserted_dependencies inserted
-                WHERE inserted.dependent_task_id = dependency.dependent_task_id
-                  AND inserted.prerequisite_task_id = dependency.prerequisite_task_id
-             )
-          UNION
-          SELECT dependency.dependent_task_id
-            FROM workhorse.task_dependency dependency
-           WHERE dependency.prerequisite_task_id = component.task_id
-             AND NOT EXISTS (
-               SELECT 1 FROM inserted_dependencies inserted
-                WHERE inserted.dependent_task_id = dependency.dependent_task_id
-                  AND inserted.prerequisite_task_id = dependency.prerequisite_task_id
-             )
-        ) neighbor
-    )
-    SELECT DISTINCT component.task_id::text
-      FROM component
-     ORDER BY component.task_id::text
-  LOOP
-    PERFORM pg_advisory_xact_lock(hashtextextended(
-      'workhorse:task-dependency-component-task:' || v_component_task_id,
-      0
-    ));
-  END LOOP;
-
-  WITH RECURSIVE reachable(dependent_task_id, task_id, path) AS (
-    SELECT inserted.dependent_task_id,
-           inserted.prerequisite_task_id,
-           ARRAY[inserted.dependent_task_id, inserted.prerequisite_task_id]
-      FROM inserted_dependencies inserted
-    UNION ALL
-    SELECT reachable.dependent_task_id,
-           edge.prerequisite_task_id,
-           reachable.path || edge.prerequisite_task_id
-      FROM reachable
-      JOIN workhorse.task_dependency edge ON edge.dependent_task_id = reachable.task_id
-     WHERE (
-       edge.prerequisite_task_id = reachable.dependent_task_id
-       OR NOT edge.prerequisite_task_id = ANY(reachable.path)
+  -- Any concurrent edge insert that touches one of these tasks takes the same lock, so the checks
+  -- below see every committed edge that names an endpoint. Key-share locks, which enqueue and
+  -- foreign key checks take, do not conflict with this lock.
+  PERFORM 1 FROM workhorse.task task
+   WHERE task.id IN (
+     SELECT inserted.dependent_task_id FROM inserted_dependencies inserted
+     UNION
+     SELECT inserted.prerequisite_task_id FROM inserted_dependencies inserted
+   )
+   ORDER BY task.id FOR NO KEY UPDATE;
+  -- A cycle through a new edge needs a path from its prerequisite back to its dependent, and the
+  -- last edge of that path names the dependent as a prerequisite. Enqueue always inserts such
+  -- sinks, because every dependent it inserts is new.
+  v_sinks := NOT EXISTS (
+    SELECT 1 FROM workhorse.task_dependency dependency
+     WHERE dependency.prerequisite_task_id IN (
+       SELECT inserted.dependent_task_id FROM inserted_dependencies inserted
      )
-       AND reachable.task_id <> reachable.dependent_task_id
-  )
-  SELECT reachable.path INTO v_cycle
-    FROM reachable
-   WHERE reachable.task_id = reachable.dependent_task_id
-   ORDER BY cardinality(reachable.path)
-   LIMIT 1;
-  IF v_cycle IS NOT NULL THEN
-    RAISE EXCEPTION USING
-      ERRCODE = 'P1003',
-      MESSAGE = 'dependency cycle rejected',
-      DETAIL = jsonb_build_object(
-        'dependentTaskId', v_cycle[1],
-        'prerequisiteTaskId', v_cycle[2],
-        'cycleTaskIds', to_jsonb(v_cycle[1:101]),
-        'truncated', cardinality(v_cycle) > 101
-      )::text;
+  );
+  IF NOT v_sinks THEN
+    -- Lock every task in each pre-existing component touched by this statement in canonical order.
+    -- Transactions which mutate disconnected components proceed independently. Mutations which
+    -- overlap a component share a lock even when a concurrent commit has just merged its root.
+    FOR v_component_task_id IN
+      WITH RECURSIVE inserted_tasks(task_id) AS (
+        SELECT inserted.dependent_task_id FROM inserted_dependencies inserted
+        UNION
+        SELECT inserted.prerequisite_task_id FROM inserted_dependencies inserted
+      ), component(seed_task_id, task_id) AS (
+        SELECT inserted_tasks.task_id, inserted_tasks.task_id FROM inserted_tasks
+        UNION
+        SELECT component.seed_task_id, neighbor.task_id
+          FROM component
+          CROSS JOIN LATERAL (
+            SELECT dependency.prerequisite_task_id AS task_id
+              FROM workhorse.task_dependency dependency
+             WHERE dependency.dependent_task_id = component.task_id
+               AND NOT EXISTS (
+                 SELECT 1 FROM inserted_dependencies inserted
+                  WHERE inserted.dependent_task_id = dependency.dependent_task_id
+                    AND inserted.prerequisite_task_id = dependency.prerequisite_task_id
+               )
+            UNION
+            SELECT dependency.dependent_task_id
+              FROM workhorse.task_dependency dependency
+             WHERE dependency.prerequisite_task_id = component.task_id
+               AND NOT EXISTS (
+                 SELECT 1 FROM inserted_dependencies inserted
+                  WHERE inserted.dependent_task_id = dependency.dependent_task_id
+                    AND inserted.prerequisite_task_id = dependency.prerequisite_task_id
+               )
+          ) neighbor
+      )
+      SELECT DISTINCT component.task_id::text
+        FROM component
+       ORDER BY component.task_id::text
+    LOOP
+      PERFORM pg_advisory_xact_lock(hashtextextended(
+        'workhorse:task-dependency-component-task:' || v_component_task_id,
+        0
+      ));
+    END LOOP;
+
+    WITH RECURSIVE reachable(dependent_task_id, task_id, path) AS (
+      SELECT inserted.dependent_task_id,
+             inserted.prerequisite_task_id,
+             ARRAY[inserted.dependent_task_id, inserted.prerequisite_task_id]
+        FROM inserted_dependencies inserted
+      UNION ALL
+      SELECT reachable.dependent_task_id,
+             edge.prerequisite_task_id,
+             reachable.path || edge.prerequisite_task_id
+        FROM reachable
+        JOIN workhorse.task_dependency edge ON edge.dependent_task_id = reachable.task_id
+       WHERE (
+         edge.prerequisite_task_id = reachable.dependent_task_id
+         OR NOT edge.prerequisite_task_id = ANY(reachable.path)
+       )
+         AND reachable.task_id <> reachable.dependent_task_id
+    )
+    SELECT reachable.path INTO v_cycle
+      FROM reachable
+     WHERE reachable.task_id = reachable.dependent_task_id
+     ORDER BY cardinality(reachable.path)
+     LIMIT 1;
+    IF v_cycle IS NOT NULL THEN
+      RAISE EXCEPTION USING
+        ERRCODE = 'P1003',
+        MESSAGE = 'dependency cycle rejected',
+        DETAIL = jsonb_build_object(
+          'dependentTaskId', v_cycle[1],
+          'prerequisiteTaskId', v_cycle[2],
+          'cycleTaskIds', to_jsonb(v_cycle[1:101]),
+          'truncated', cardinality(v_cycle) > 101
+        )::text;
+    END IF;
   END IF;
   SELECT dependency.dependent_task_id INTO v_limit_task_id
       FROM workhorse.task_dependency dependency
@@ -697,45 +749,140 @@ BEGIN
         'max', 100
       )::text;
   END IF;
-  IF EXISTS (SELECT 1 FROM inserted_dependencies inserted WHERE inserted.released_at IS NULL) THEN
-    WITH RECURSIVE affected(root_task_id) AS (
-      SELECT inserted.prerequisite_task_id
-        FROM inserted_dependencies inserted
-       WHERE inserted.released_at IS NULL
-      UNION
-      SELECT dependency.prerequisite_task_id
-        FROM affected
-        JOIN workhorse.task_dependency dependency
-          ON dependency.dependent_task_id = affected.root_task_id
-         AND dependency.released_at IS NULL
-    ), reachable(root_task_id, dependent_task_id) AS (
-      SELECT affected.root_task_id, dependency.dependent_task_id
-        FROM affected
-        JOIN workhorse.task_dependency dependency
-          ON dependency.prerequisite_task_id = affected.root_task_id
-         AND dependency.released_at IS NULL
-      UNION
-      SELECT reachable.root_task_id, dependency.dependent_task_id
+  SELECT array_agg(DISTINCT inserted.prerequisite_task_id) INTO v_prerequisites
+    FROM inserted_dependencies inserted
+   WHERE inserted.released_at IS NULL;
+  IF v_prerequisites IS NOT NULL THEN
+    IF v_sinks THEN
+      -- New sinks change only the transitive counts of their prerequisites' unresolved upstream
+      -- cone. Lock the cone with the component keys, then walk it again: a writer that grew the
+      -- cone before the locks were granted is visible to the next walk, and its new members are
+      -- locked in turn. Every walk step is a LATERAL index probe fenced by OFFSET 0, so the plan
+      -- stays a nested loop over the frontier even when statistics lag a fast-growing graph.
+      v_cone := '{}';
+      LOOP
+        WITH RECURSIVE cone(task_id) AS (
+          SELECT unnest(v_prerequisites)
+          UNION
+          SELECT upstream.task_id
+            FROM cone
+            CROSS JOIN LATERAL (
+              SELECT dependency.prerequisite_task_id AS task_id
+                FROM workhorse.task_dependency dependency
+               WHERE dependency.dependent_task_id = cone.task_id
+                 AND dependency.released_at IS NULL
+              OFFSET 0
+            ) upstream
+        )
+        SELECT array_agg(cone.task_id ORDER BY cone.task_id::text) INTO v_walk
+          FROM cone
+         WHERE cone.task_id <> ALL(v_cone);
+        EXIT WHEN v_walk IS NULL;
+        FOREACH v_component_task_id IN ARRAY v_walk::text[] LOOP
+          PERFORM pg_advisory_xact_lock(hashtextextended(
+            'workhorse:task-dependency-component-task:' || v_component_task_id,
+            0
+          ));
+        END LOOP;
+        v_cone := v_cone || v_walk;
+      END LOOP;
+      -- A task's transitive dependents include those of every task below it, so the largest count
+      -- in the cone belongs to a cone source. The union of the sources' dependents bounds every
+      -- source's own count, so one walk that stops above the cap settles the common case. Only a
+      -- union above the cap counts each source separately.
+      SELECT array_agg(cone.task_id) INTO v_cone
+        FROM unnest(v_cone) AS cone(task_id)
+       WHERE NOT EXISTS (
+         SELECT 1 FROM workhorse.task_dependency dependency
+          WHERE dependency.dependent_task_id = cone.task_id
+            AND dependency.released_at IS NULL
+       );
+      v_exact_fan_out := (
+        WITH RECURSIVE reachable(task_id) AS (
+          SELECT downstream.task_id
+            FROM unnest(v_cone) AS source(task_id)
+            CROSS JOIN LATERAL (
+              SELECT dependency.dependent_task_id AS task_id
+                FROM workhorse.task_dependency dependency
+               WHERE dependency.prerequisite_task_id = source.task_id
+                 AND dependency.released_at IS NULL
+              OFFSET 0
+            ) downstream
+          UNION
+          SELECT downstream.task_id
+            FROM reachable
+            CROSS JOIN LATERAL (
+              SELECT dependency.dependent_task_id AS task_id
+                FROM workhorse.task_dependency dependency
+               WHERE dependency.prerequisite_task_id = reachable.task_id
+                 AND dependency.released_at IS NULL
+              OFFSET 0
+            ) downstream
+        )
+        SELECT count(*) FROM (SELECT 1 FROM reachable LIMIT 101) bounded
+      ) > 100 AND EXISTS (
+        SELECT 1
+          FROM unnest(v_cone) AS source(task_id)
+         WHERE (
+           WITH RECURSIVE reachable(task_id) AS (
+             SELECT dependency.dependent_task_id
+               FROM workhorse.task_dependency dependency
+              WHERE dependency.prerequisite_task_id = source.task_id
+                AND dependency.released_at IS NULL
+             UNION
+             SELECT downstream.task_id
+               FROM reachable
+               CROSS JOIN LATERAL (
+                 SELECT dependency.dependent_task_id AS task_id
+                   FROM workhorse.task_dependency dependency
+                  WHERE dependency.prerequisite_task_id = reachable.task_id
+                    AND dependency.released_at IS NULL
+                 OFFSET 0
+               ) downstream
+           )
+           SELECT count(*) FROM (SELECT 1 FROM reachable LIMIT 101) bounded
+         ) > 100
+      );
+    END IF;
+    -- The exact check names the same task whichever path reached it.
+    IF v_exact_fan_out THEN
+      WITH RECURSIVE affected(root_task_id) AS (
+        SELECT unnest(v_prerequisites)
+        UNION
+        SELECT dependency.prerequisite_task_id
+          FROM affected
+          JOIN workhorse.task_dependency dependency
+            ON dependency.dependent_task_id = affected.root_task_id
+           AND dependency.released_at IS NULL
+      ), reachable(root_task_id, dependent_task_id) AS (
+        SELECT affected.root_task_id, dependency.dependent_task_id
+          FROM affected
+          JOIN workhorse.task_dependency dependency
+            ON dependency.prerequisite_task_id = affected.root_task_id
+           AND dependency.released_at IS NULL
+        UNION
+        SELECT reachable.root_task_id, dependency.dependent_task_id
+          FROM reachable
+          JOIN workhorse.task_dependency dependency
+            ON dependency.prerequisite_task_id = reachable.dependent_task_id
+           AND dependency.released_at IS NULL
+      )
+      SELECT reachable.root_task_id INTO v_fan_out_root
         FROM reachable
-        JOIN workhorse.task_dependency dependency
-          ON dependency.prerequisite_task_id = reachable.dependent_task_id
-         AND dependency.released_at IS NULL
-    )
-    SELECT reachable.root_task_id INTO v_fan_out_root
-      FROM reachable
-     GROUP BY reachable.root_task_id
-    HAVING count(*) > 100
-     ORDER BY reachable.root_task_id
-     LIMIT 1;
-    IF v_fan_out_root IS NOT NULL THEN
-      RAISE EXCEPTION USING
-        ERRCODE = 'P1005',
-        MESSAGE = 'a task accepts at most 100 unresolved transitive dependent tasks',
-        DETAIL = jsonb_build_object(
-          'taskId', v_fan_out_root,
-          'limit', 'unresolved_dependents',
-          'max', 100
-        )::text;
+       GROUP BY reachable.root_task_id
+      HAVING count(*) > 100
+       ORDER BY reachable.root_task_id
+       LIMIT 1;
+      IF v_fan_out_root IS NOT NULL THEN
+        RAISE EXCEPTION USING
+          ERRCODE = 'P1005',
+          MESSAGE = 'a task accepts at most 100 unresolved transitive dependent tasks',
+          DETAIL = jsonb_build_object(
+            'taskId', v_fan_out_root,
+            'limit', 'unresolved_dependents',
+            'max', 100
+          )::text;
+      END IF;
     END IF;
   END IF;
   IF EXISTS (
@@ -971,6 +1118,9 @@ CREATE TABLE IF NOT EXISTS workhorse.task_runtime (
   budget_name text CONSTRAINT task_runtime_budget_name_check CHECK (
     budget_name IS NULL OR (budget_name <> '' AND octet_length(budget_name) <= 256)
   ),
+  pending_prerequisites integer NOT NULL DEFAULT 0
+    CONSTRAINT task_runtime_pending_prerequisites_check CHECK (pending_prerequisites >= 0),
+  dependency_rejected boolean NOT NULL DEFAULT false,
   CHECK (wait_name IS NULL OR (wait_name <> '' AND char_length(wait_name) <= 200)),
   CHECK (
     (cancel_requested_at IS NULL AND cancel_requested_by IS NULL AND cancel_reason IS NULL)
@@ -997,6 +1147,9 @@ CREATE TABLE IF NOT EXISTS workhorse.task_runtime (
     (state = 'active' AND ready_at IS NULL AND sequence IS NULL AND worker_id IS NOT NULL
       AND acquired_at IS NOT NULL AND heartbeat_at IS NOT NULL AND expires_at IS NOT NULL
       AND fence_token > 0 AND wait_name IS NULL AND attempt_started_at IS NOT NULL)
+  ),
+  CONSTRAINT task_runtime_dependency_counter_check CHECK (
+    state = 'blocked' OR (pending_prerequisites = 0 AND NOT dependency_rejected)
   )
 ) WITH (fillfactor = 70);
 CREATE INDEX IF NOT EXISTS task_runtime_ready_idx
@@ -1034,12 +1187,42 @@ CREATE OR REPLACE FUNCTION workhorse.notify_concurrency_capacity_v1()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+  v_policy workhorse.concurrency_policy%ROWTYPE;
 BEGIN
-  IF OLD.state = 'active'
-     AND (TG_OP = 'DELETE' OR NEW.state <> 'active')
-     AND EXISTS (
-       SELECT 1 FROM workhorse.concurrency_policy policy
-        WHERE policy.queue_name = OLD.queue_name
+  IF OLD.state <> 'active' OR (TG_OP <> 'DELETE' AND NEW.state = 'active') THEN
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+  END IF;
+  -- A claim holds the policy row FOR UPDATE until it commits. Waiting for it here means the count
+  -- below sees every lease a committed or open claim took, so a claim that fills the queue while
+  -- this release is open cannot hide the cap. KEY SHARE does not conflict with another release, and
+  -- the count runs under a snapshot taken after the wait.
+  SELECT * INTO v_policy FROM workhorse.concurrency_policy policy
+   WHERE policy.queue_name = OLD.queue_name
+   FOR KEY SHARE;
+  -- Only a release from a full queue or key can unblock a waiting claim. Every other release would
+  -- wake a worker that no cap held back, and a woken worker delays its claim. This runs before the
+  -- row changes, so the first row a statement releases from a full queue still counts itself. A
+  -- concurrent release that has not committed still counts as active, so it cannot hide the cap.
+  -- A claim counts only unexpired leases, but this count includes expired ones. It therefore counts
+  -- every lease a claim may have counted when it found the queue full: a lease that expired after
+  -- that claim must not hide the cap from this release.
+  IF FOUND AND (
+       (SELECT count(*) FROM (
+          SELECT 1 FROM workhorse.task_runtime active
+           WHERE active.queue_name = OLD.queue_name AND active.state = 'active'
+           LIMIT v_policy.max_active
+        ) capped) = v_policy.max_active
+       OR (
+         v_policy.max_active_per_key IS NOT NULL AND OLD.concurrency_key IS NOT NULL
+         AND (SELECT count(*) FROM (
+                SELECT 1 FROM workhorse.task_runtime active
+                 WHERE active.queue_name = OLD.queue_name
+                   AND active.concurrency_key = OLD.concurrency_key
+                   AND active.state = 'active'
+                 LIMIT v_policy.max_active_per_key
+              ) capped) = v_policy.max_active_per_key
+       )
      ) THEN
     PERFORM pg_notify('workhorse_tasks', OLD.queue_name);
   END IF;
@@ -1047,13 +1230,20 @@ BEGIN
 END;
 $$;
 
+-- Only a row that leaves the active state can free capacity. The WHEN clauses repeat the function's
+-- own first test, so a claim, a promotion, or the delete of a row that never started calls no
+-- function (SM-948). The release of an active row still calls it on every queue: a policy created
+-- while the lease was held must see that release, and the FOR KEY SHARE wait orders it after any
+-- open claim.
 CREATE OR REPLACE TRIGGER task_runtime_concurrency_capacity_update
-AFTER UPDATE OF state ON workhorse.task_runtime
-FOR EACH ROW EXECUTE FUNCTION workhorse.notify_concurrency_capacity_v1();
+BEFORE UPDATE OF state ON workhorse.task_runtime
+FOR EACH ROW WHEN (OLD.state = 'active' AND NEW.state <> 'active')
+EXECUTE FUNCTION workhorse.notify_concurrency_capacity_v1();
 
 CREATE OR REPLACE TRIGGER task_runtime_concurrency_capacity_delete
-AFTER DELETE ON workhorse.task_runtime
-FOR EACH ROW EXECUTE FUNCTION workhorse.notify_concurrency_capacity_v1();
+BEFORE DELETE ON workhorse.task_runtime
+FOR EACH ROW WHEN (OLD.state = 'active')
+EXECUTE FUNCTION workhorse.notify_concurrency_capacity_v1();
 
 -- A budget release can unblock ready work in any queue. Walk the distinct waiting queues through
 -- the budget-ready index one step at a time, so the wake-up costs one probe per queue rather than
@@ -1100,13 +1290,19 @@ BEGIN
 END;
 $$;
 
+-- A task that names no budget cannot free budget capacity, and its budget name never changes. The
+-- WHEN clauses repeat the function's row tests, so such a task queues no trigger event (SM-948).
 CREATE OR REPLACE TRIGGER task_runtime_budget_capacity_update
 AFTER UPDATE OF state ON workhorse.task_runtime
-FOR EACH ROW EXECUTE FUNCTION workhorse.notify_budget_capacity_v1();
+FOR EACH ROW WHEN (
+  OLD.state = 'active' AND OLD.budget_name IS NOT NULL AND NEW.state <> 'active'
+)
+EXECUTE FUNCTION workhorse.notify_budget_capacity_v1();
 
 CREATE OR REPLACE TRIGGER task_runtime_budget_capacity_delete
 AFTER DELETE ON workhorse.task_runtime
-FOR EACH ROW EXECUTE FUNCTION workhorse.notify_budget_capacity_v1();
+FOR EACH ROW WHEN (OLD.state = 'active' AND OLD.budget_name IS NOT NULL)
+EXECUTE FUNCTION workhorse.notify_budget_capacity_v1();
 
 -- Immutable terminal materialization. Moving here removes completed work from every dispatch index.
 CREATE TABLE IF NOT EXISTS workhorse.task_outcome (
@@ -1327,6 +1523,110 @@ CREATE INDEX IF NOT EXISTS attempt_history_identity_idx
 -- partition rather than a pass over all retained history. One closed attempt writes one entry.
 CREATE INDEX IF NOT EXISTS attempt_history_worker_idx
   ON workhorse.attempt_history (worker_id);
+
+-- One row per live fast-tier task. It copies every field the claim returns from task, so a claim
+-- reads and writes this table alone. A retry returns the row to ready; any close deletes it.
+CREATE TABLE IF NOT EXISTS workhorse.fast_task_runtime (
+  task_id uuid PRIMARY KEY REFERENCES workhorse.task(id) ON DELETE CASCADE,
+  queue_name text NOT NULL CHECK (queue_name <> ''),
+  task_type text NOT NULL CHECK (task_type <> ''),
+  state text NOT NULL CHECK (state IN ('ready', 'active')),
+  priority integer NOT NULL DEFAULT 0 CHECK (priority BETWEEN 0 AND 100),
+  -- The time the row became runnable: its enqueue or release time, or the end of its retry delay.
+  -- Ordering by it keeps a due retry behind older ready rows and ahead of newer ones.
+  run_at timestamptz NOT NULL,
+  sequence bigint NOT NULL,
+  payload jsonb NOT NULL,
+  contract_version text,
+  result_max_bytes integer NOT NULL CHECK (result_max_bytes BETWEEN 1 AND 16777216),
+  redact boolean NOT NULL,
+  trace_context jsonb,
+  retry_policy jsonb,
+  max_attempts integer NOT NULL CHECK (max_attempts BETWEEN 1 AND 100),
+  attempt integer NOT NULL DEFAULT 1 CHECK (attempt BETWEEN 1 AND 100),
+  fence_token bigint NOT NULL DEFAULT 0 CHECK (fence_token >= 0),
+  worker_id text,
+  claimed_at timestamptz,
+  expires_at timestamptz,
+  deadline_at timestamptz CHECK (deadline_at IS NULL OR isfinite(deadline_at)),
+  execution_timeout_ms bigint CHECK (execution_timeout_ms BETWEEN 1 AND 31536000000),
+  attempt_timeout_at timestamptz,
+  previous_retry_delay_ms bigint CHECK (previous_retry_delay_ms BETWEEN 0 AND 31536000000),
+  cancel_requested_at timestamptz,
+  cancel_requested_by text CHECK (
+    cancel_requested_by IS NULL OR (cancel_requested_by <> '' AND char_length(cancel_requested_by) <= 200)
+  ),
+  cancel_reason text CHECK (
+    cancel_reason IS NULL OR (cancel_reason <> '' AND char_length(cancel_reason) <= 2000)
+  ),
+  errors jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(errors) = 'array'),
+  errors_dropped integer NOT NULL DEFAULT 0 CHECK (errors_dropped >= 0),
+  enqueued_at timestamptz NOT NULL,
+  CONSTRAINT fast_task_runtime_state_shape_check CHECK (
+    (state = 'ready' AND worker_id IS NULL AND claimed_at IS NULL AND expires_at IS NULL
+      AND attempt_timeout_at IS NULL AND cancel_requested_at IS NULL
+      AND cancel_requested_by IS NULL AND cancel_reason IS NULL)
+    OR
+    (state = 'active' AND worker_id IS NOT NULL AND claimed_at IS NOT NULL
+      AND expires_at IS NOT NULL AND fence_token > 0
+      AND (cancel_requested_at IS NOT NULL
+        OR (cancel_requested_by IS NULL AND cancel_reason IS NULL)))
+  )
+);
+CREATE INDEX IF NOT EXISTS fast_task_runtime_ready_idx
+  ON workhorse.fast_task_runtime (queue_name, priority DESC, run_at, sequence)
+  WHERE state = 'ready';
+-- Recovery asks which active rows crossed any of their three boundaries. One expression index
+-- answers that with a single range scan instead of three.
+CREATE INDEX IF NOT EXISTS fast_task_runtime_active_due_idx
+  ON workhorse.fast_task_runtime ((least(expires_at, attempt_timeout_at, deadline_at)))
+  WHERE state = 'active';
+CREATE INDEX IF NOT EXISTS fast_task_runtime_ready_deadline_idx
+  ON workhorse.fast_task_runtime (deadline_at)
+  WHERE state = 'ready' AND deadline_at IS NOT NULL;
+
+-- One row per finished fast-tier task. It replaces task_outcome, the attempt history, and the task
+-- events for a fast-tier task, so it names the last claim and keeps a capped list of earlier
+-- attempt errors.
+CREATE TABLE IF NOT EXISTS workhorse.fast_task_outcome (
+  task_id uuid PRIMARY KEY REFERENCES workhorse.task(id) ON DELETE CASCADE,
+  queue_name text NOT NULL CHECK (queue_name <> ''),
+  task_type text NOT NULL CHECK (task_type <> ''),
+  state text NOT NULL CHECK (state IN ('succeeded', 'failed', 'canceled')),
+  attempt integer NOT NULL CHECK (attempt >= 1),
+  result jsonb,
+  error jsonb,
+  fence_token bigint CHECK (fence_token > 0),
+  worker_id text,
+  claimed_at timestamptz,
+  enqueued_at timestamptz NOT NULL,
+  finished_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  errors jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(errors) = 'array'),
+  errors_dropped integer NOT NULL DEFAULT 0 CHECK (errors_dropped >= 0),
+  closed_as text CHECK (
+    closed_as IS NULL OR closed_as IN ('canceled', 'deadline_exceeded', 'timeout', 'lease_expired')
+  ),
+  CONSTRAINT fast_task_outcome_claim_check CHECK (
+    (fence_token IS NULL AND worker_id IS NULL AND claimed_at IS NULL)
+    OR (fence_token IS NOT NULL AND worker_id IS NOT NULL AND claimed_at IS NOT NULL)
+  ),
+  CONSTRAINT fast_task_outcome_state_shape_check CHECK (
+    (state = 'succeeded' AND error IS NULL AND fence_token IS NOT NULL AND closed_as IS NULL)
+    OR (state = 'failed' AND error IS NOT NULL)
+    OR (state = 'canceled' AND error IS NOT NULL AND closed_as = 'canceled')
+  )
+);
+CREATE INDEX IF NOT EXISTS fast_task_outcome_finished_brin_idx
+  ON workhorse.fast_task_outcome USING brin (finished_at);
+CREATE INDEX IF NOT EXISTS fast_task_outcome_retention_idx
+  ON workhorse.fast_task_outcome (finished_at, task_id);
+
+-- An installation that never uses the fast tier leaves these tables empty, so autovacuum never
+-- analyzes them. PostgreSQL then sizes a never-analyzed table at ten pages, and the dashboard's
+-- tier-spanning views probe both tables once per full-tier row. Recorded empty statistics let the
+-- planner skip those probes until the tables hold rows.
+ANALYZE workhorse.fast_task_runtime;
+ANALYZE workhorse.fast_task_outcome;
 
 -- One database-owned schedule coordinates low-frequency maintenance across every worker process.
 -- The IANA timezone and local time control the daily history-retention boundary; interval routines remain
@@ -1612,7 +1912,7 @@ ON CONFLICT (singleton) DO NOTHING;
 -- One exclusive, UTC-day-aligned watermark per exported dataset. Every history day below it has a
 -- complete row in cold_export_segment. The row is created when export is first enabled.
 CREATE TABLE IF NOT EXISTS workhorse.cold_export_dataset (
-  dataset text PRIMARY KEY CHECK (dataset IN ('task_event', 'attempt_history')),
+  dataset text PRIMARY KEY CHECK (dataset IN ('task_event', 'attempt_history', 'fast_task_outcome')),
   exported_through timestamptz NOT NULL CHECK (isfinite(exported_through)),
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
@@ -1621,7 +1921,7 @@ CREATE TABLE IF NOT EXISTS workhorse.cold_export_dataset (
 -- retried segment rewrites the same key with the same bytes. `attempts` fences completion the way a
 -- fence token fences a task attempt: a stale exporter cannot complete a segment another one holds.
 CREATE TABLE IF NOT EXISTS workhorse.cold_export_segment (
-  dataset text NOT NULL CHECK (dataset IN ('task_event', 'attempt_history')),
+  dataset text NOT NULL CHECK (dataset IN ('task_event', 'attempt_history', 'fast_task_outcome')),
   segment_start timestamptz NOT NULL CHECK (isfinite(segment_start)),
   segment_end timestamptz NOT NULL CHECK (isfinite(segment_end) AND segment_end > segment_start),
   status text NOT NULL CHECK (status IN ('exporting', 'complete')),
@@ -2272,7 +2572,19 @@ BEGIN
                count(runtime.task_id) FILTER (
              WHERE runtime.state = 'active' AND runtime.attempt_timeout_at <= clock_timestamp()
            )::text AS overdue_execution_timeouts
-            FROM workhorse.task_runtime runtime
+            FROM (
+              SELECT task_id, state, run_at, ready_at, wait_name, expires_at, deadline_at,
+                     attempt_timeout_at
+                FROM workhorse.task_runtime
+              UNION ALL
+              -- A fast-tier row has no scheduled state; a ready row with a future run time is one.
+              SELECT task_id,
+                     CASE WHEN state = 'ready' AND run_at > clock_timestamp() THEN 'scheduled'
+                          ELSE state END,
+                     run_at, CASE WHEN state = 'ready' THEN run_at END, NULL::text, expires_at,
+                     deadline_at, attempt_timeout_at
+                FROM workhorse.fast_task_runtime
+            ) runtime
         ), terminal AS (
           -- Terminal history is unbounded, so its counts stop scanning at the cap. Live-state counts
           -- come from depth and stay exact; claim-shaped work never pays for lifetime history here.
@@ -2280,29 +2592,39 @@ BEGIN
                  count(*) FILTER (WHERE state = 'failed')::text AS failed_count,
                  count(*) FILTER (WHERE state = 'canceled')::text AS canceled_count,
                  count(*) > 100000 AS terminal_counts_capped
-            FROM (SELECT state FROM workhorse.task_outcome LIMIT 100001)
-              sampled_outcomes
+            FROM (
+              SELECT state FROM workhorse.task_outcome
+              UNION ALL
+              SELECT state FROM workhorse.fast_task_outcome
+              LIMIT 100001
+            ) sampled_outcomes
         ), retention AS (
           -- The LIMIT 1 clauses on the singleton CTEs here and below are planner facts, not semantics:
           -- without them each CTE gets a default multi-hundred-row estimate, the cross joins multiply
           -- into a cost that trips JIT compilation, and compiling this statement costs a full second.
           WITH policy AS (
             SELECT * FROM workhorse.retention_policy WHERE singleton LIMIT 1
+          ), terminal_outcome AS NOT MATERIALIZED (
+            -- A fast-tier outcome has no history boundary of its own. Its history rows, if the queue
+            -- recorded any, end when it finished.
+            SELECT task_id, finished_at, history_through_at FROM workhorse.task_outcome
+            UNION ALL
+            SELECT task_id, finished_at, finished_at FROM workhorse.fast_task_outcome
           ), boundaries AS (
             SELECT
               (SELECT task.created_at
                  FROM workhorse.task task
-                 JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
+                 JOIN terminal_outcome outcome ON outcome.task_id = task.id
                 ORDER BY task.created_at, task.id LIMIT 1)
                 AS oldest_task_identity_at,
-              (SELECT finished_at FROM workhorse.task_outcome ORDER BY finished_at, task_id LIMIT 1)
+              (SELECT finished_at FROM terminal_outcome ORDER BY finished_at, task_id LIMIT 1)
                 AS oldest_terminal_outcome_at,
               -- A row counts as eligible only once workhorse.prune_terminal_tasks_v1 could delete it.
               -- That prune also waits until daily history retention has passed the row's history, so
               -- a row held only by that gate is waiting on history retention, not lagging here.
               (SELECT task.created_at
                  FROM workhorse.task task
-                 JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
+                 JOIN terminal_outcome outcome ON outcome.task_id = task.id
                 WHERE policy.task_identity_retention_days IS NOT NULL
                   AND policy.terminal_outcome_retention_days IS NOT NULL
                   AND task.created_at < clock_timestamp()
@@ -2317,7 +2639,7 @@ BEGIN
                 AS eligible_task_identity_at,
               (SELECT outcome.finished_at
                  FROM workhorse.task task
-                 JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
+                 JOIN terminal_outcome outcome ON outcome.task_id = task.id
                 WHERE policy.task_identity_retention_days IS NOT NULL
                   AND policy.terminal_outcome_retention_days IS NOT NULL
                   AND task.created_at < clock_timestamp()
@@ -3996,7 +4318,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.sync_schedule_definitions_v1(
+CREATE OR REPLACE FUNCTION workhorse.sync_schedule_definitions_internal_v1(
   p_namespace text, p_definitions jsonb, p_prune boolean DEFAULT true
 ) RETURNS void
 LANGUAGE plpgsql
@@ -4147,7 +4469,7 @@ BEGIN
   FROM workhorse.schedule_definition definition
   WHERE definition.namespace = p_namespace;
 
-  PERFORM workhorse.sync_schedule_definitions_v1(p_namespace, p_definitions, p_prune);
+  PERFORM workhorse.sync_schedule_definitions_internal_v1(p_namespace, p_definitions, p_prune);
 
   UPDATE workhorse.schedule_definition definition
      SET revision = definition.revision + CASE
@@ -4241,84 +4563,6 @@ BEGIN
      AND occurrence.schedule_name = p_schedule_name
      AND occurrence.occurrence_at = date_trunc('second', p_occurrence_at);
   RETURN v_task_id;
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION workhorse.fire_due_schedules_v1(
-  p_namespaces text[],
-  p_now timestamptz,
-  p_catchup_limit integer
-) RETURNS TABLE(
-  namespace text,
-  schedule_name text,
-  occurrence_at timestamptz,
-  task_id uuid
-)
-LANGUAGE plpgsql
-AS $$
-DECLARE
-  v_definition record;
-  v_occurrence timestamptz;
-  v_locked_namespaces text[] := '{}';
-  v_skipped_namespaces text[] := '{}';
-BEGIN
-  IF p_namespaces IS NULL OR array_position(p_namespaces, '') IS NOT NULL THEN
-    RAISE EXCEPTION 'schedule namespaces must contain non-empty names';
-  END IF;
-  IF p_now IS NULL THEN RAISE EXCEPTION 'schedule evaluation time is required'; END IF;
-  IF p_catchup_limit NOT BETWEEN 1 AND 10000 THEN
-    RAISE EXCEPTION 'schedule catch-up limit must be between 1 and 10000';
-  END IF;
-
-  FOR v_definition IN
-    SELECT definition.namespace, definition.schedule_name, definition.cron_expression,
-           definition.timezone, definition.revision,
-           max(occurrence.occurrence_at) AS last_occurrence_at
-      FROM workhorse.schedule_definition definition
-      LEFT JOIN workhorse.schedule_occurrence occurrence
-        ON occurrence.namespace = definition.namespace
-       AND occurrence.schedule_name = definition.schedule_name
-     WHERE definition.configured_enabled
-       AND NOT definition.paused
-       AND definition.namespace = ANY(p_namespaces)
-     GROUP BY definition.namespace, definition.schedule_name, definition.cron_expression,
-              definition.timezone, definition.revision
-     ORDER BY definition.namespace, definition.schedule_name
-  LOOP
-    IF v_definition.namespace = ANY(v_skipped_namespaces) THEN CONTINUE; END IF;
-    IF NOT v_definition.namespace = ANY(v_locked_namespaces) THEN
-      IF pg_try_advisory_xact_lock(hashtextextended(
-        'workhorse:schedule-namespace:' || v_definition.namespace,
-        0
-      )) THEN
-        v_locked_namespaces := array_append(v_locked_namespaces, v_definition.namespace);
-      ELSE
-        v_skipped_namespaces := array_append(v_skipped_namespaces, v_definition.namespace);
-        CONTINUE;
-      END IF;
-    END IF;
-    FOR v_occurrence IN
-      SELECT evaluated.occurrence_at
-        FROM workhorse.cron_occurrences_v1(
-          v_definition.cron_expression,
-          v_definition.last_occurrence_at,
-          p_now,
-          p_catchup_limit,
-          v_definition.timezone
-        ) evaluated
-    LOOP
-      namespace := v_definition.namespace;
-      schedule_name := v_definition.schedule_name;
-      occurrence_at := v_occurrence;
-      task_id := workhorse.fire_schedule_v1(
-        v_definition.namespace,
-        v_definition.schedule_name,
-        v_definition.revision,
-        v_occurrence
-      );
-      RETURN NEXT;
-    END LOOP;
-  END LOOP;
 END;
 $$;
 
@@ -4600,6 +4844,9 @@ BEGIN
     PERFORM pg_advisory_xact_lock(
       hashtextextended('workhorse:concurrency-policy:' || v_queue_name, 0)
     );
+    IF cardinality(workhorse.lock_queue_tiers_v1(ARRAY[v_queue_name])) > 0 THEN
+      PERFORM workhorse.reject_fast_feature_v1(v_queue_name, 'concurrency policies');
+    END IF;
     IF EXISTS (
       SELECT 1 FROM workhorse.concurrency_policy policy
        WHERE policy.queue_name = v_queue_name AND policy.namespace <> p_namespace
@@ -4761,6 +5008,9 @@ BEGIN
     PERFORM pg_advisory_xact_lock(
       hashtextextended('workhorse:rate-limit-policy:' || v_queue_name, 0)
     );
+    IF cardinality(workhorse.lock_queue_tiers_v1(ARRAY[v_queue_name])) > 0 THEN
+      PERFORM workhorse.reject_fast_feature_v1(v_queue_name, 'rate-limit policies');
+    END IF;
     IF EXISTS (
       SELECT 1 FROM workhorse.rate_limit_policy policy
        WHERE policy.queue_name = v_queue_name AND policy.namespace <> p_namespace
@@ -5222,6 +5472,52 @@ AS $$
    LIMIT 100;
 $$;
 
+-- Take the shared tier lock of every named queue, in a fixed order, and return the fast-tier ones.
+-- A caller that writes a task or a policy for these queues holds the lock until it commits, which
+-- is what lets set_queue_tier_v1 prove a queue empty before it changes the tier.
+CREATE OR REPLACE FUNCTION workhorse.lock_queue_tiers_v1(p_queue_names text[])
+RETURNS text[]
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_queue_name text;
+BEGIN
+  FOR v_queue_name IN
+    SELECT DISTINCT queue_name COLLATE "C" FROM unnest(p_queue_names) queue_name
+     WHERE queue_name IS NOT NULL
+     ORDER BY 1
+  LOOP
+    PERFORM pg_advisory_xact_lock_shared(
+      hashtextextended('workhorse:queue-tier:' || v_queue_name, 0)
+    );
+  END LOOP;
+  RETURN ARRAY(
+    SELECT control.queue_name FROM workhorse.queue_control control
+     WHERE control.queue_name = ANY(p_queue_names) AND control.tier = 'fast'
+  );
+END;
+$$;
+
+-- Every rejection of a full-tier feature on a fast-tier queue raises the same error, so clients
+-- can map it to one type. The detail names the queue and the feature; a batch caller adds the
+-- ordinal of the request that carried it.
+CREATE OR REPLACE FUNCTION workhorse.reject_fast_feature_v1(
+  p_queue_name text, p_feature text, p_ordinal integer DEFAULT NULL
+) RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RAISE EXCEPTION USING
+    ERRCODE = 'P1007',
+    MESSAGE = format('fast-tier queue %s does not support %s', p_queue_name, p_feature),
+    DETAIL = (
+      jsonb_build_object('queue', p_queue_name, 'feature', p_feature)
+      || CASE WHEN p_ordinal IS NULL THEN '{}'::jsonb
+         ELSE jsonb_build_object('ordinal', p_ordinal) END
+    )::text;
+END;
+$$;
+
 -- The core batch insert path. Accept up to 1,000 tasks atomically. Scoped idempotency keys are
 -- resolved in ordinal order through their unique index before any durable task side effects. Exact
 -- replays return the original identity; material mismatches abort the whole statement with SQLSTATE
@@ -5260,15 +5556,16 @@ DECLARE
   v_execution_timeout_ms numeric;
   v_dependencies jsonb;
   v_prerequisite_task_ids uuid[];
+  v_batch_prerequisite_task_ids uuid[];
   v_prerequisite_task_id uuid;
   v_on_success text;
   v_on_failure text;
   v_on_cancellation text;
   v_pending_prerequisites integer;
+  v_pending_edges integer;
   v_terminal_prerequisite_id uuid;
   v_terminal_prerequisite_state text;
   v_terminal_action text;
-  v_terminal record;
   v_state text;
   v_idempotency jsonb;
   v_key text;
@@ -5289,6 +5586,24 @@ DECLARE
   v_is_keyed boolean;
   v_ready_queues text[] := '{}';
   v_notify_queue text;
+  v_fast_queues text[];
+  v_is_fast boolean;
+  v_fast_feature text;
+  v_fast_task workhorse.task;
+  v_fast_tasks workhorse.task[] := '{}';
+  v_fast_runtime workhorse.fast_task_runtime;
+  v_fast_runtimes workhorse.fast_task_runtime[] := '{}';
+  v_fast_past_deadline uuid[] := '{}';
+  v_fast_task_id uuid;
+  v_full_task workhorse.task;
+  v_full_tasks workhorse.task[] := '{}';
+  v_full_runtime workhorse.task_runtime;
+  v_full_runtimes workhorse.task_runtime[] := '{}';
+  v_full_enqueued_details jsonb[] := '{}';
+  v_full_past_deadline uuid[] := '{}';
+  v_edge workhorse.task_dependency;
+  v_edges workhorse.task_dependency[] := '{}';
+  v_full_task_id uuid;
 BEGIN
   IF p_requests IS NULL OR jsonb_typeof(p_requests) <> 'array' THEN
     RAISE EXCEPTION 'requests must be a JSON array';
@@ -5339,6 +5654,53 @@ BEGIN
   LOOP
     PERFORM pg_advisory_xact_lock(hashtextextended(v_lock.scope || chr(31) || v_lock.key, 0));
   END LOOP;
+
+  -- A queue's tier can change only while it holds no live task. The shared tier lock keeps the
+  -- tier read here valid until this batch commits, so set_queue_tier_v1 cannot switch a queue
+  -- between that read and the insert of its first task.
+  v_fast_queues := workhorse.lock_queue_tiers_v1(ARRAY(
+    SELECT DISTINCT request->>'queue'
+      FROM jsonb_array_elements(p_requests) input(request)
+     WHERE COALESCE(request->>'queue', '') <> ''
+  ));
+
+  -- Every terminal transition deletes the runtime row before it records the outcome that resolves
+  -- dependents. Holding the runtime row makes that transition wait until this batch's edges commit,
+  -- so its resolver sees them. A transition that committed first has already deleted the row, and
+  -- the outcome reads in the loop see its outcome. Key-share locks do not block the non-key updates
+  -- that claims and heartbeats make.
+  --
+  -- The batch locks the prerequisites of all its requests before the first request, in identity
+  -- order. A resolver locks the dependents it deletes in the same order, so neither can hold a row
+  -- the other waits for. Locking request by request let one request hold a row that a resolver was
+  -- about to delete while the next request waited on a row that resolver had already locked. The
+  -- runtime rows are locked before the task rows, in the order completion and purge lock them.
+  -- A value that is not a UUID is left to the per-request validation, which raises its usual
+  -- error. Every new task identity is random, so no request can name a task this batch creates.
+  v_batch_prerequisite_task_ids := ARRAY(
+    SELECT DISTINCT prerequisite.value::uuid
+      FROM jsonb_array_elements(p_requests) input(request)
+      CROSS JOIN LATERAL (
+        SELECT input.request->>'prerequisiteTaskId' AS value
+         WHERE jsonb_typeof(input.request->'prerequisiteTaskId') = 'string'
+        UNION ALL
+        SELECT item.value
+          FROM jsonb_array_elements_text(
+            CASE WHEN jsonb_typeof(input.request->'dependencies') = 'object'
+                  AND jsonb_typeof(input.request->'dependencies'->'prerequisiteTaskIds') = 'array'
+              THEN input.request->'dependencies'->'prerequisiteTaskIds' ELSE '[]'::jsonb END
+          ) item(value)
+      ) prerequisite
+     WHERE prerequisite.value ~* '^(\{[0-9a-f]{4}(-?[0-9a-f]{4}){7}\}|[0-9a-f]{4}(-?[0-9a-f]{4}){7})$'
+  );
+  IF cardinality(v_batch_prerequisite_task_ids) > 0 THEN
+    PERFORM 1 FROM workhorse.task_runtime runtime
+     WHERE runtime.task_id = ANY(v_batch_prerequisite_task_ids)
+     ORDER BY runtime.task_id FOR KEY SHARE;
+    PERFORM 1 FROM workhorse.task prerequisite
+     WHERE prerequisite.id = ANY(v_batch_prerequisite_task_ids)
+     ORDER BY prerequisite.id FOR KEY SHARE;
+  END IF;
 
   FOR v_request, v_ordinal IN
     SELECT request, ordinality::integer
@@ -5494,6 +5856,18 @@ BEGIN
       v_on_failure := 'fail';
       v_on_cancellation := 'cancel';
     END IF;
+    v_is_fast := v_queue_name = ANY(v_fast_queues);
+    IF v_is_fast THEN
+      v_fast_feature := CASE
+        WHEN v_concurrency_key IS NOT NULL THEN 'concurrency keys'
+        WHEN v_budget_name IS NOT NULL THEN 'budgets'
+        WHEN v_dependencies IS NOT NULL AND v_dependencies <> 'null'::jsonb THEN 'dependencies'
+        WHEN cardinality(v_prerequisite_task_ids) > 0 THEN 'prerequisite tasks'
+      END;
+      IF v_fast_feature IS NOT NULL THEN
+        PERFORM workhorse.reject_fast_feature_v1(v_queue_name, v_fast_feature, v_ordinal);
+      END IF;
+    END IF;
     v_prerequisite_task_id := CASE
       WHEN v_dependencies IS NULL OR v_dependencies = 'null'::jsonb
         THEN NULLIF(v_request->>'prerequisiteTaskId', '')::uuid
@@ -5501,24 +5875,59 @@ BEGIN
     END;
     -- Most requests carry no prerequisite. The prerequisite lock, the existence check and both
     -- outcome scans answer nothing for an empty set, so a request without prerequisites states
-    -- their answers directly and reaches the task insert without touching dependency relations.
+    -- their answers directly and reaches the buffer without touching dependency relations.
     IF cardinality(v_prerequisite_task_ids) > 0 THEN
       IF cardinality(v_prerequisite_task_ids) <> (
         SELECT count(DISTINCT prerequisite_id) FROM unnest(v_prerequisite_task_ids) prerequisite_id
       ) THEN
         RAISE EXCEPTION 'dependency prerequisiteTaskIds must be unique';
       END IF;
+      -- The batch already holds these rows, so locking them again waits for nothing. The lock
+      -- still counts the prerequisites that exist, and it covers a spelling of a UUID that the
+      -- batch pattern missed.
+      PERFORM 1 FROM workhorse.task_runtime runtime
+       WHERE runtime.task_id = ANY(v_prerequisite_task_ids)
+       ORDER BY runtime.task_id FOR KEY SHARE;
       PERFORM 1 FROM workhorse.task prerequisite
        WHERE prerequisite.id = ANY(v_prerequisite_task_ids)
-       ORDER BY prerequisite.id FOR UPDATE;
+       ORDER BY prerequisite.id FOR KEY SHARE;
       GET DIAGNOSTICS v_pending_prerequisites = ROW_COUNT;
       IF v_pending_prerequisites <> cardinality(v_prerequisite_task_ids) THEN
         RAISE EXCEPTION 'prerequisite task does not exist';
       END IF;
-      SELECT count(*)::integer INTO v_pending_prerequisites
+      -- A fast-tier task never resolves dependents when it finishes, so a dependent on it would
+      -- stay blocked forever.
+      SELECT prerequisite_id INTO v_fast_task_id
         FROM unnest(v_prerequisite_task_ids) prerequisite_id
-        LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = prerequisite_id
-       WHERE outcome.task_id IS NULL;
+       WHERE EXISTS (
+               SELECT 1 FROM workhorse.fast_task_runtime runtime
+                WHERE runtime.task_id = prerequisite_id
+             ) OR EXISTS (
+               SELECT 1 FROM workhorse.fast_task_outcome outcome
+                WHERE outcome.task_id = prerequisite_id
+             )
+       LIMIT 1;
+      IF FOUND THEN
+        RAISE EXCEPTION USING
+          ERRCODE = 'P1007',
+          MESSAGE = format('fast-tier task %s cannot be a prerequisite', v_fast_task_id),
+          DETAIL = jsonb_build_object(
+            'feature', 'dependencies', 'taskId', v_fast_task_id, 'ordinal', v_ordinal
+          )::text;
+      END IF;
+      -- An edge starts pending unless its prerequisite is terminal and its policy releases. The
+      -- dependent's counter starts at that count and falls as the pending edges resolve.
+      SELECT count(*) FILTER (WHERE outcome.task_id IS NULL)::integer,
+             count(*) FILTER (
+               WHERE outcome.task_id IS NULL OR CASE outcome.state
+                 WHEN 'succeeded' THEN v_on_success
+                 WHEN 'failed' THEN v_on_failure
+                 WHEN 'canceled' THEN v_on_cancellation
+               END <> 'release'
+             )::integer
+        INTO v_pending_prerequisites, v_pending_edges
+        FROM unnest(v_prerequisite_task_ids) prerequisite_id
+        LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = prerequisite_id;
       SELECT outcome.task_id, outcome.state, action.policy_action
         INTO v_terminal_prerequisite_id, v_terminal_prerequisite_state, v_terminal_action
         FROM workhorse.task_outcome outcome
@@ -5536,6 +5945,7 @@ BEGIN
        LIMIT 1;
     ELSE
       v_pending_prerequisites := 0;
+      v_pending_edges := 0;
       v_terminal_prerequisite_id := NULL;
       v_terminal_prerequisite_state := NULL;
       v_terminal_action := NULL;
@@ -5675,102 +6085,133 @@ BEGIN
       task_id := gen_random_uuid();
     END IF;
 
-    IF v_is_new THEN
-      INSERT INTO workhorse.task(
-        id, queue_name, task_type, concurrency_key, priority, payload, contract_version,
-        payload_max_bytes, result_max_bytes,
-        payload_redact_keys, result_redact_keys, trace_context, tags, max_attempts, retry_policy,
-        deadline_at, execution_timeout_ms, budget_name
-      ) VALUES (
-        task_id, v_queue_name, v_task_type, v_concurrency_key, v_priority::integer, v_payload, v_contract_version,
-        v_payload_max_bytes::integer, v_result_max_bytes::integer,
-        v_payload_redact_keys, v_result_redact_keys, v_trace_context, v_tags,
-        v_max_attempts, v_retry_policy,
-        v_deadline_at, v_execution_timeout_ms::bigint, v_budget_name
-      );
-      INSERT INTO workhorse.task_runtime(
-        task_id, queue_name, concurrency_key, priority, state, current_attempt, run_at, ready_at, sequence,
-        deadline_at, budget_name
-      ) VALUES (
-        task_id, v_queue_name, v_concurrency_key, v_priority::integer, v_state, 1, v_run_at,
-        CASE WHEN v_state = 'ready' THEN v_now END,
-        CASE WHEN v_state = 'ready' THEN nextval('workhorse.ready_sequence_seq') END,
-        v_deadline_at, v_budget_name
-      );
-      -- A request without prerequisites has no edge to write and no dependent to resolve. Running
-      -- the insert anyway would fire the statement trigger on `task_dependency`, and that trigger
-      -- walks the dependency graph recursively for a transition that cannot have occurred.
-      IF cardinality(v_prerequisite_task_ids) > 0 THEN
-        WITH prerequisites AS MATERIALIZED (
-          SELECT input.prerequisite_task_id, outcome.state,
-                 outcome.state IS NOT NULL AND (
-                   (outcome.state = 'succeeded' AND v_on_success = 'release')
-                   OR (outcome.state = 'failed' AND v_on_failure = 'release')
-                   OR (outcome.state = 'canceled' AND v_on_cancellation = 'release')
-                 ) AS releases_immediately
-            FROM unnest(v_prerequisite_task_ids) input(prerequisite_task_id)
-            LEFT JOIN workhorse.task_outcome outcome
-              ON outcome.task_id = input.prerequisite_task_id
-        ), inserted_edges AS (
-          INSERT INTO workhorse.task_dependency(
-            dependent_task_id, prerequisite_task_id, on_success, on_failure, on_cancellation,
-            created_at, released_at, resolution
-          )
-          SELECT task_id, prerequisites.prerequisite_task_id,
-                 v_on_success, v_on_failure, v_on_cancellation, v_now,
-                 CASE WHEN prerequisites.releases_immediately THEN v_now END,
-                 CASE WHEN prerequisites.releases_immediately THEN 'release' END
-            FROM prerequisites
-          RETURNING prerequisite_task_id, released_at
-        )
-        INSERT INTO workhorse.task_event(task_id, event_type, details)
-        SELECT task_id,
-               CASE WHEN inserted_edges.released_at IS NOT NULL
-                 THEN 'dependency_released' ELSE 'dependency_blocked' END,
-               jsonb_build_object(
-                 'prerequisite_task_id', inserted_edges.prerequisite_task_id,
-                 'state', v_state,
-                 'reason', CASE
-                   WHEN NOT prerequisites.releases_immediately THEN 'prerequisite_pending'
-                   WHEN prerequisites.state = 'succeeded' THEN 'prerequisite_already_succeeded'
-                   ELSE 'prerequisite_terminal_policy'
-                 END
-               )
-          FROM inserted_edges
-          JOIN prerequisites USING (prerequisite_task_id);
-        FOR v_terminal IN
-          SELECT outcome.task_id, outcome.state FROM workhorse.task_outcome outcome
-           WHERE outcome.task_id = ANY(v_prerequisite_task_ids)
-           ORDER BY outcome.task_id
-        LOOP
-          PERFORM workhorse.resolve_dependents_v1(v_terminal.task_id, v_terminal.state);
-        END LOOP;
-      END IF;
-      INSERT INTO workhorse.task_event(task_id, event_type, details)
-        VALUES (
-          task_id,
-          'enqueued',
-          jsonb_build_object(
-            'state', v_state,
-            'priority', v_priority,
-            'run_at', v_run_at,
-            'deadline_at', v_deadline_at,
-            'execution_timeout_ms', v_execution_timeout_ms
-          ) ||
-          CASE WHEN v_is_keyed THEN jsonb_build_object(
-            'idempotency', jsonb_build_object(
-              'scope', v_scope,
-              'key_preview', v_key_preview,
-              'key_digest', v_key_digest,
-              'key_length', v_key_length,
-              'ttl_ms', v_ttl_ms,
-              'expires_at', v_expires_at,
-              'request_digest', v_request_digest
-            )
-          ) ELSE '{}'::jsonb END
-        );
+    IF v_is_new AND v_is_fast THEN
+      -- Fast-tier rows are collected here and written after the loop, one statement per table.
+      v_fast_task.id := task_id;
+      v_fast_task.queue_name := v_queue_name;
+      v_fast_task.task_type := v_task_type;
+      v_fast_task.concurrency_key := NULL;
+      v_fast_task.payload := v_payload;
+      v_fast_task.contract_version := v_contract_version;
+      v_fast_task.payload_max_bytes := v_payload_max_bytes::integer;
+      v_fast_task.result_max_bytes := v_result_max_bytes::integer;
+      v_fast_task.payload_redact_keys := v_payload_redact_keys;
+      v_fast_task.result_redact_keys := v_result_redact_keys;
+      v_fast_task.trace_context := v_trace_context;
+      v_fast_task.tags := v_tags;
+      v_fast_task.max_attempts := v_max_attempts;
+      v_fast_task.retry_policy := v_retry_policy;
+      v_fast_task.deadline_at := v_deadline_at;
+      v_fast_task.execution_timeout_ms := v_execution_timeout_ms::bigint;
+      v_fast_task.created_at := v_now;
+      v_fast_task.priority := v_priority::integer;
+      v_fast_task.budget_name := NULL;
+      v_fast_tasks := array_append(v_fast_tasks, v_fast_task);
+
+      v_fast_runtime := NULL;
+      v_fast_runtime.task_id := task_id;
+      v_fast_runtime.queue_name := v_queue_name;
+      v_fast_runtime.task_type := v_task_type;
+      v_fast_runtime.state := 'ready';
+      v_fast_runtime.priority := v_priority::integer;
+      v_fast_runtime.run_at := v_run_at;
+      v_fast_runtime.sequence := nextval('workhorse.ready_sequence_seq');
+      v_fast_runtime.payload := v_payload;
+      v_fast_runtime.contract_version := v_contract_version;
+      v_fast_runtime.result_max_bytes := v_result_max_bytes::integer;
+      v_fast_runtime.redact := cardinality(v_payload_redact_keys) > 0
+        OR cardinality(v_result_redact_keys) > 0;
+      v_fast_runtime.trace_context := v_trace_context;
+      v_fast_runtime.retry_policy := v_retry_policy;
+      v_fast_runtime.max_attempts := v_max_attempts;
+      v_fast_runtime.attempt := 1;
+      v_fast_runtime.fence_token := 0;
+      v_fast_runtime.deadline_at := v_deadline_at;
+      v_fast_runtime.execution_timeout_ms := v_execution_timeout_ms::bigint;
+      v_fast_runtime.errors := '[]'::jsonb;
+      v_fast_runtime.errors_dropped := 0;
+      v_fast_runtime.enqueued_at := v_now;
+      v_fast_runtimes := array_append(v_fast_runtimes, v_fast_runtime);
+
       IF v_deadline_at IS NOT NULL AND v_deadline_at <= v_now THEN
-        PERFORM workhorse.terminalize_deadline_v1(task_id);
+        v_fast_past_deadline := array_append(v_fast_past_deadline, task_id);
+      ELSIF v_run_at <= v_now AND NOT v_queue_name = ANY(v_ready_queues) THEN
+        v_ready_queues := array_append(v_ready_queues, v_queue_name);
+      END IF;
+    ELSIF v_is_new THEN
+      -- Full-tier rows are collected here and written after the loop, one statement per table.
+      -- A prerequisite exists before this batch starts, because the batch generates every new task
+      -- identity, so no check or lock above needs a buffered row.
+      v_full_task := NULL;
+      v_full_task.id := task_id;
+      v_full_task.queue_name := v_queue_name;
+      v_full_task.task_type := v_task_type;
+      v_full_task.concurrency_key := v_concurrency_key;
+      v_full_task.priority := v_priority::integer;
+      v_full_task.payload := v_payload;
+      v_full_task.contract_version := v_contract_version;
+      v_full_task.payload_max_bytes := v_payload_max_bytes::integer;
+      v_full_task.result_max_bytes := v_result_max_bytes::integer;
+      v_full_task.payload_redact_keys := v_payload_redact_keys;
+      v_full_task.result_redact_keys := v_result_redact_keys;
+      v_full_task.trace_context := v_trace_context;
+      v_full_task.tags := v_tags;
+      v_full_task.max_attempts := v_max_attempts;
+      v_full_task.retry_policy := v_retry_policy;
+      v_full_task.deadline_at := v_deadline_at;
+      v_full_task.execution_timeout_ms := v_execution_timeout_ms::bigint;
+      v_full_task.budget_name := v_budget_name;
+      v_full_tasks := array_append(v_full_tasks, v_full_task);
+
+      v_full_runtime := NULL;
+      v_full_runtime.task_id := task_id;
+      v_full_runtime.queue_name := v_queue_name;
+      v_full_runtime.concurrency_key := v_concurrency_key;
+      v_full_runtime.priority := v_priority::integer;
+      v_full_runtime.state := v_state;
+      v_full_runtime.current_attempt := 1;
+      v_full_runtime.run_at := v_run_at;
+      v_full_runtime.ready_at := CASE WHEN v_state = 'ready' THEN v_now END;
+      v_full_runtime.sequence := CASE WHEN v_state = 'ready'
+        THEN nextval('workhorse.ready_sequence_seq') END;
+      v_full_runtime.deadline_at := v_deadline_at;
+      v_full_runtime.budget_name := v_budget_name;
+      v_full_runtime.pending_prerequisites := v_pending_edges;
+      v_full_runtime.dependency_rejected := false;
+      v_full_runtimes := array_append(v_full_runtimes, v_full_runtime);
+
+      FOREACH v_prerequisite_task_id IN ARRAY v_prerequisite_task_ids LOOP
+        v_edge := NULL;
+        v_edge.dependent_task_id := task_id;
+        v_edge.prerequisite_task_id := v_prerequisite_task_id;
+        v_edge.on_success := v_on_success;
+        v_edge.on_failure := v_on_failure;
+        v_edge.on_cancellation := v_on_cancellation;
+        v_edges := array_append(v_edges, v_edge);
+      END LOOP;
+
+      v_full_enqueued_details := array_append(v_full_enqueued_details,
+        jsonb_build_object(
+          'state', v_state,
+          'priority', v_priority,
+          'run_at', v_run_at,
+          'deadline_at', v_deadline_at,
+          'execution_timeout_ms', v_execution_timeout_ms
+        ) ||
+        CASE WHEN v_is_keyed THEN jsonb_build_object(
+          'idempotency', jsonb_build_object(
+            'scope', v_scope,
+            'key_preview', v_key_preview,
+            'key_digest', v_key_digest,
+            'key_length', v_key_length,
+            'ttl_ms', v_ttl_ms,
+            'expires_at', v_expires_at,
+            'request_digest', v_request_digest
+          )
+        ) ELSE '{}'::jsonb END
+      );
+      IF v_deadline_at IS NOT NULL AND v_deadline_at <= v_now THEN
+        v_full_past_deadline := array_append(v_full_past_deadline, task_id);
       ELSIF v_state = 'ready' AND NOT v_queue_name = ANY(v_ready_queues) THEN
         v_ready_queues := array_append(v_ready_queues, v_queue_name);
       END IF;
@@ -5779,6 +6220,113 @@ BEGIN
     accepted := v_is_new;
     RETURN NEXT;
   END LOOP;
+
+  -- The buffered writes keep each task's evidence in the order the one-row writes produced: its
+  -- dependency events, the resolution of any terminal prerequisite, `enqueued`, then an expired
+  -- deadline. Omitted columns keep their per-row defaults, so created_at, updated_at and the event
+  -- identity advance with each row.
+  IF cardinality(v_full_tasks) > 0 THEN
+    INSERT INTO workhorse.task(
+      id, queue_name, task_type, concurrency_key, priority, payload, contract_version,
+      payload_max_bytes, result_max_bytes,
+      payload_redact_keys, result_redact_keys, trace_context, tags, max_attempts, retry_policy,
+      deadline_at, execution_timeout_ms, budget_name
+    )
+    SELECT buffered.id, buffered.queue_name, buffered.task_type, buffered.concurrency_key,
+           buffered.priority, buffered.payload, buffered.contract_version,
+           buffered.payload_max_bytes, buffered.result_max_bytes,
+           buffered.payload_redact_keys, buffered.result_redact_keys, buffered.trace_context,
+           buffered.tags, buffered.max_attempts, buffered.retry_policy,
+           buffered.deadline_at, buffered.execution_timeout_ms, buffered.budget_name
+      FROM unnest(v_full_tasks) WITH ORDINALITY buffered
+     ORDER BY buffered.ordinality;
+    INSERT INTO workhorse.task_runtime(
+      task_id, queue_name, concurrency_key, priority, state, current_attempt, run_at, ready_at,
+      sequence, deadline_at, budget_name, pending_prerequisites, dependency_rejected
+    )
+    SELECT buffered.task_id, buffered.queue_name, buffered.concurrency_key, buffered.priority,
+           buffered.state, buffered.current_attempt, buffered.run_at, buffered.ready_at,
+           buffered.sequence, buffered.deadline_at, buffered.budget_name,
+           buffered.pending_prerequisites, buffered.dependency_rejected
+      FROM unnest(v_full_runtimes) WITH ORDINALITY buffered
+     ORDER BY buffered.ordinality;
+    -- A batch without prerequisites has no edge to write and no dependent to resolve. Running the
+    -- insert anyway would fire the statement trigger on `task_dependency`, and that trigger walks
+    -- the dependency graph recursively for a transition that cannot have occurred.
+    IF cardinality(v_edges) > 0 THEN
+      WITH edges AS MATERIALIZED (
+        SELECT edge.dependent_task_id, edge.prerequisite_task_id, edge.on_success,
+               edge.on_failure, edge.on_cancellation, edge.ordinality, outcome.state,
+               outcome.state IS NOT NULL AND (
+                 (outcome.state = 'succeeded' AND edge.on_success = 'release')
+                 OR (outcome.state = 'failed' AND edge.on_failure = 'release')
+                 OR (outcome.state = 'canceled' AND edge.on_cancellation = 'release')
+               ) AS releases_immediately
+          FROM unnest(v_edges) WITH ORDINALITY edge
+          LEFT JOIN workhorse.task_outcome outcome
+            ON outcome.task_id = edge.prerequisite_task_id
+      ), inserted_edges AS (
+        INSERT INTO workhorse.task_dependency(
+          dependent_task_id, prerequisite_task_id, on_success, on_failure, on_cancellation,
+          created_at, released_at, resolution
+        )
+        SELECT edges.dependent_task_id, edges.prerequisite_task_id,
+               edges.on_success, edges.on_failure, edges.on_cancellation, v_now,
+               CASE WHEN edges.releases_immediately THEN v_now END,
+               CASE WHEN edges.releases_immediately THEN 'release' END
+          FROM edges
+         ORDER BY edges.ordinality
+        RETURNING dependent_task_id, prerequisite_task_id
+      )
+      INSERT INTO workhorse.task_event(task_id, event_type, details)
+      SELECT edges.dependent_task_id,
+             CASE WHEN edges.releases_immediately
+               THEN 'dependency_released' ELSE 'dependency_blocked' END,
+             jsonb_build_object(
+               'prerequisite_task_id', edges.prerequisite_task_id,
+               'state', runtime.state,
+               'reason', CASE
+                 WHEN NOT edges.releases_immediately THEN 'prerequisite_pending'
+                 WHEN edges.state = 'succeeded' THEN 'prerequisite_already_succeeded'
+                 ELSE 'prerequisite_terminal_policy'
+               END
+             )
+        FROM edges
+        JOIN inserted_edges USING (dependent_task_id, prerequisite_task_id)
+        JOIN unnest(v_full_runtimes) runtime ON runtime.task_id = edges.dependent_task_id
+       ORDER BY edges.ordinality;
+      -- One resolver call resolves the pending edges to every terminal prerequisite in the batch. A
+      -- dependent's fate depends only on the resolutions of its edges, so it matches the fate that
+      -- one call per dependent produced.
+      PERFORM workhorse.resolve_dependents_many_v1(terminal.task_ids, terminal.states)
+         FROM (
+           SELECT array_agg(outcome.task_id ORDER BY outcome.task_id) AS task_ids,
+                  array_agg(outcome.state ORDER BY outcome.task_id) AS states
+             FROM workhorse.task_outcome outcome
+            WHERE outcome.task_id IN (
+              SELECT edge.prerequisite_task_id FROM unnest(v_edges) edge
+            )
+         ) terminal
+        WHERE terminal.task_ids IS NOT NULL;
+    END IF;
+    INSERT INTO workhorse.task_event(task_id, event_type, details)
+    SELECT buffered.id, 'enqueued', event.details
+      FROM unnest(v_full_tasks) WITH ORDINALITY buffered
+      JOIN unnest(v_full_enqueued_details) WITH ORDINALITY event(details, ordinality)
+        ON event.ordinality = buffered.ordinality
+     ORDER BY buffered.ordinality;
+    FOREACH v_full_task_id IN ARRAY v_full_past_deadline LOOP
+      PERFORM workhorse.terminalize_deadline_v1(v_full_task_id);
+    END LOOP;
+  END IF;
+
+  IF cardinality(v_fast_tasks) > 0 THEN
+    INSERT INTO workhorse.task SELECT * FROM unnest(v_fast_tasks);
+    INSERT INTO workhorse.fast_task_runtime SELECT * FROM unnest(v_fast_runtimes);
+    FOREACH v_fast_task_id IN ARRAY v_fast_past_deadline LOOP
+      PERFORM workhorse.fast_terminalize_deadline_v1(v_fast_task_id);
+    END LOOP;
+  END IF;
 
   FOREACH v_notify_queue IN ARRAY v_ready_queues LOOP
     PERFORM pg_notify('workhorse_tasks', v_notify_queue);
@@ -5852,6 +6400,9 @@ DECLARE
   v_state text;
   v_sequence bigint;
 BEGIN
+  IF cardinality(workhorse.lock_queue_tiers_v1(ARRAY[p_request->>'queue'])) > 0 THEN
+    PERFORM workhorse.reject_fast_feature_v1(p_request->>'queue', 'debounce');
+  END IF;
   IF p_request IS NULL OR jsonb_typeof(p_request) <> 'object'
      OR v_debounce IS NULL OR jsonb_typeof(v_debounce) <> 'object'
      OR v_debounce - ARRAY['key', 'scope', 'windowMs', 'schedule'] <> '{}'::jsonb
@@ -6121,6 +6672,9 @@ DECLARE
   v_normalized jsonb;
   v_row record;
 BEGIN
+  IF cardinality(workhorse.lock_queue_tiers_v1(ARRAY[p_request->>'queue'])) > 0 THEN
+    PERFORM workhorse.reject_fast_feature_v1(p_request->>'queue', 'throttle');
+  END IF;
   IF p_request IS NULL OR jsonb_typeof(p_request) <> 'object'
      OR v_throttle IS NULL OR jsonb_typeof(v_throttle) <> 'object'
      OR v_throttle - ARRAY['key', 'scope', 'windowMs'] <> '{}'::jsonb
@@ -6215,6 +6769,8 @@ DECLARE
   v_error_message text;
   v_error_detail text;
   v_contract_mismatch jsonb;
+  v_fast_queue text;
+  v_fast_feature text;
 BEGIN
   IF p_requests IS NULL OR jsonb_typeof(p_requests) <> 'array' THEN
     RAISE EXCEPTION 'requests must be a JSON array';
@@ -6315,6 +6871,24 @@ BEGIN
        AND identity.coalescing_mode <> 'idempotency'
   ) THEN
     RAISE EXCEPTION 'idempotency key is retained for incompatible coalescing mode';
+  END IF;
+
+  -- Report a coalescing request on a fast-tier queue with its ordinal before any request runs.
+  SELECT input.request->>'queue',
+         CASE WHEN input.request ? 'debounce' THEN 'debounce' ELSE 'throttle' END,
+         input.ordinality::integer
+    INTO v_fast_queue, v_fast_feature, v_ordinal
+    FROM jsonb_array_elements(p_requests) WITH ORDINALITY input(request, ordinality)
+   WHERE (input.request ? 'debounce' OR input.request ? 'throttle')
+     AND input.request->>'queue' = ANY(workhorse.lock_queue_tiers_v1(ARRAY(
+       SELECT DISTINCT candidate->>'queue'
+         FROM jsonb_array_elements(p_requests) candidate
+        WHERE candidate ? 'debounce' OR candidate ? 'throttle'
+     )))
+   ORDER BY input.ordinality
+   LIMIT 1;
+  IF FOUND THEN
+    PERFORM workhorse.reject_fast_feature_v1(v_fast_queue, v_fast_feature, v_ordinal);
   END IF;
 
   IF NOT EXISTS (
@@ -6469,9 +7043,19 @@ BEGIN
            outcome.finished_at,
            (SELECT count(*)::integer FROM workhorse.task_redrive redrive
              WHERE redrive.source_task_id = task.id) AS redrive_count
-      FROM workhorse.task_outcome outcome
+      FROM (
+        SELECT full_outcome.task_id, full_outcome.current_attempt, full_outcome.error,
+               full_outcome.finished_at
+          FROM workhorse.task_outcome full_outcome
+         WHERE full_outcome.state = 'failed'
+        UNION ALL
+        SELECT fast_outcome.task_id, fast_outcome.attempt, fast_outcome.error,
+               fast_outcome.finished_at
+          FROM workhorse.fast_task_outcome fast_outcome
+         WHERE fast_outcome.state = 'failed'
+      ) outcome
       JOIN workhorse.task task ON task.id = outcome.task_id
-     WHERE outcome.state = 'failed'
+     WHERE true
        AND (NOT (v_filter ? 'queue') OR task.queue_name = v_filter->>'queue')
        AND (NOT (v_filter ? 'type') OR task.task_type = v_filter->>'type')
        AND (v_tags IS NULL OR task.tags @> v_tags)
@@ -6509,7 +7093,9 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
   v_task workhorse.task%ROWTYPE;
-  v_outcome workhorse.task_outcome%ROWTYPE;
+  v_source_state text;
+  v_source_attempt integer;
+  v_target_fast boolean;
   v_existing workhorse.task_redrive%ROWTYPE;
   v_fingerprint jsonb;
   v_conflicting_fields text[];
@@ -6571,8 +7157,20 @@ BEGIN
            'failed'::text,
            COALESCE(runtime.state, outcome.state), v_existing.requested_at
       FROM (VALUES (1)) singleton(value)
-      LEFT JOIN workhorse.task_runtime runtime ON runtime.task_id = v_existing.target_task_id
-      LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = v_existing.target_task_id;
+      LEFT JOIN LATERAL (
+        SELECT full_runtime.state FROM workhorse.task_runtime full_runtime
+         WHERE full_runtime.task_id = v_existing.target_task_id
+        UNION ALL
+        SELECT fast_runtime.state FROM workhorse.fast_task_runtime fast_runtime
+         WHERE fast_runtime.task_id = v_existing.target_task_id
+      ) runtime ON true
+      LEFT JOIN LATERAL (
+        SELECT full_outcome.state FROM workhorse.task_outcome full_outcome
+         WHERE full_outcome.task_id = v_existing.target_task_id
+        UNION ALL
+        SELECT fast_outcome.state FROM workhorse.fast_task_outcome fast_outcome
+         WHERE fast_outcome.task_id = v_existing.target_task_id
+      ) outcome ON true;
     RETURN;
   END IF;
 
@@ -6582,16 +7180,37 @@ BEGIN
     RETURN QUERY VALUES ('not_found'::text, p_source_task_id, NULL::uuid, NULL::text, NULL::text, NULL::timestamptz);
     RETURN;
   END IF;
-  SELECT outcome.* INTO v_outcome FROM workhorse.task_outcome outcome
+  -- A task has its outcome in exactly one of the two tables, depending on its tier at enqueue.
+  SELECT outcome.state, outcome.current_attempt INTO v_source_state, v_source_attempt
+    FROM workhorse.task_outcome outcome
    WHERE outcome.task_id = p_source_task_id FOR SHARE;
-  IF NOT FOUND OR v_outcome.state <> 'failed' THEN
+  IF NOT FOUND THEN
+    SELECT outcome.state, outcome.attempt INTO v_source_state, v_source_attempt
+      FROM workhorse.fast_task_outcome outcome
+     WHERE outcome.task_id = p_source_task_id FOR SHARE;
+  END IF;
+  IF v_source_state IS DISTINCT FROM 'failed' THEN
     RETURN QUERY VALUES (
       'not_failed'::text, p_source_task_id, NULL::uuid,
-      COALESCE(v_outcome.state, (SELECT runtime.state FROM workhorse.task_runtime runtime
-                                 WHERE runtime.task_id = p_source_task_id)),
+      COALESCE(
+        v_source_state,
+        (SELECT runtime.state FROM workhorse.task_runtime runtime
+          WHERE runtime.task_id = p_source_task_id),
+        (SELECT runtime.state FROM workhorse.fast_task_runtime runtime
+          WHERE runtime.task_id = p_source_task_id)
+      ),
       NULL::text, NULL::timestamptz
     );
     RETURN;
+  END IF;
+
+  -- The copy takes the queue's current tier, not the source's. A queue that moved to the fast tier
+  -- cannot accept a copy that carries a full-tier feature.
+  v_target_fast := cardinality(workhorse.lock_queue_tiers_v1(ARRAY[v_task.queue_name])) > 0;
+  IF v_target_fast AND v_task.concurrency_key IS NOT NULL THEN
+    PERFORM workhorse.reject_fast_feature_v1(v_task.queue_name, 'concurrency keys');
+  ELSIF v_target_fast AND v_task.budget_name IS NOT NULL THEN
+    PERFORM workhorse.reject_fast_feature_v1(v_task.queue_name, 'budgets');
   END IF;
 
   target_task_id := gen_random_uuid();
@@ -6607,13 +7226,26 @@ BEGIN
     v_task.payload_redact_keys, v_task.result_redact_keys, v_task.tags,
     v_task.max_attempts, v_task.retry_policy, NULL, v_task.execution_timeout_ms, v_task.budget_name
   );
-  INSERT INTO workhorse.task_runtime(
-    task_id, queue_name, concurrency_key, priority, state, current_attempt, run_at, ready_at, sequence,
-    deadline_at, budget_name
-  ) VALUES (
-    target_task_id, v_task.queue_name, v_task.concurrency_key, v_task.priority, 'ready', 1, v_now, v_now,
-    nextval('workhorse.ready_sequence_seq'), NULL, v_task.budget_name
-  );
+  IF v_target_fast THEN
+    INSERT INTO workhorse.fast_task_runtime(
+      task_id, queue_name, task_type, state, priority, run_at, sequence, payload, contract_version,
+      result_max_bytes, redact, retry_policy, max_attempts, execution_timeout_ms, enqueued_at
+    ) VALUES (
+      target_task_id, v_task.queue_name, v_task.task_type, 'ready', v_task.priority, v_now,
+      nextval('workhorse.ready_sequence_seq'), v_task.payload, v_task.contract_version,
+      v_task.result_max_bytes,
+      cardinality(v_task.payload_redact_keys) > 0 OR cardinality(v_task.result_redact_keys) > 0,
+      v_task.retry_policy, v_task.max_attempts, v_task.execution_timeout_ms, v_now
+    );
+  ELSE
+    INSERT INTO workhorse.task_runtime(
+      task_id, queue_name, concurrency_key, priority, state, current_attempt, run_at, ready_at, sequence,
+      deadline_at, budget_name
+    ) VALUES (
+      target_task_id, v_task.queue_name, v_task.concurrency_key, v_task.priority, 'ready', 1, v_now, v_now,
+      nextval('workhorse.ready_sequence_seq'), NULL, v_task.budget_name
+    );
+  END IF;
   INSERT INTO workhorse.task_redrive(
     source_task_id, target_task_id, request_id_hash, request_id_preview,
     request_id_digest, request_id_length, requested_by, reason,
@@ -6626,7 +7258,7 @@ BEGIN
   -- The history foreign key keeps the source identity while this event is retained. Semantic
   -- terminal evidence and its materialization watermark remain immutable.
   INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
-    VALUES (p_source_task_id, v_outcome.current_attempt, 'redriven', jsonb_build_object(
+    VALUES (p_source_task_id, v_source_attempt, 'redriven', jsonb_build_object(
       'target_task_id', target_task_id,
       'request_id_preview', v_request_id_preview,
       'request_id_digest', v_request_id_digest,
@@ -6739,9 +7371,17 @@ BEGIN
   FOR v_candidate IN
     WITH candidates AS MATERIALIZED (
       SELECT outcome.task_id, outcome.finished_at
-        FROM workhorse.task_outcome outcome
+        FROM (
+          SELECT full_outcome.task_id, full_outcome.finished_at, full_outcome.error
+            FROM workhorse.task_outcome full_outcome
+           WHERE full_outcome.state = 'failed'
+          UNION ALL
+          SELECT fast_outcome.task_id, fast_outcome.finished_at, fast_outcome.error
+            FROM workhorse.fast_task_outcome fast_outcome
+           WHERE fast_outcome.state = 'failed'
+        ) outcome
         JOIN workhorse.task task ON task.id = outcome.task_id
-       WHERE outcome.state = 'failed'
+       WHERE true
          AND (NOT (v_filter ? 'queue') OR task.queue_name = v_filter->>'queue')
          AND (NOT (v_filter ? 'type') OR task.task_type = v_filter->>'type')
          AND (v_tags IS NULL OR task.tags @> v_tags)
@@ -6839,6 +7479,97 @@ BEGIN
     request_id_length = EXCLUDED.request_id_length,
     updated_at = EXCLUDED.updated_at;
   RETURN p_paused;
+END;
+$$;
+
+-- Change a queue's tier. The tier decides which tables hold the queue's tasks, so Workhorse
+-- changes it only while the queue has no live task in either tier. The exclusive tier lock waits
+-- for every enqueue that already read the old tier, and blocks new ones until this commits.
+CREATE OR REPLACE FUNCTION workhorse.set_queue_tier_v1(
+  p_queue_name text,
+  p_tier text,
+  p_requested_by text,
+  p_reason text
+)
+RETURNS text
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF p_queue_name IS NULL OR p_queue_name = '' THEN
+    RAISE EXCEPTION 'queue_name must not be empty';
+  END IF;
+  IF p_tier IS NULL OR p_tier NOT IN ('fast', 'full') THEN
+    RAISE EXCEPTION 'tier must be fast or full';
+  END IF;
+  IF p_requested_by IS NULL OR p_requested_by = '' OR char_length(p_requested_by) > 200 THEN
+    RAISE EXCEPTION 'requested_by must contain between 1 and 200 characters';
+  END IF;
+  IF p_reason IS NULL OR p_reason = '' OR char_length(p_reason) > 2000 THEN
+    RAISE EXCEPTION 'reason must contain between 1 and 2000 characters';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:queue-tier:' || p_queue_name, 0));
+  IF p_tier = COALESCE(
+    (SELECT control.tier FROM workhorse.queue_control control
+      WHERE control.queue_name = p_queue_name),
+    'full'
+  ) THEN
+    RETURN p_tier;
+  END IF;
+  IF EXISTS (
+       SELECT 1 FROM workhorse.task_runtime runtime WHERE runtime.queue_name = p_queue_name
+     ) OR EXISTS (
+       SELECT 1 FROM workhorse.fast_task_runtime runtime WHERE runtime.queue_name = p_queue_name
+     ) THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'P1007',
+      MESSAGE = format('queue %s has live tasks, so its tier cannot change', p_queue_name),
+      DETAIL = jsonb_build_object('queue', p_queue_name, 'feature', 'tier change')::text;
+  END IF;
+  IF p_tier = 'fast' THEN
+    IF EXISTS (
+      SELECT 1 FROM workhorse.concurrency_policy policy WHERE policy.queue_name = p_queue_name
+    ) THEN
+      PERFORM workhorse.reject_fast_feature_v1(p_queue_name, 'concurrency policies');
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM workhorse.rate_limit_policy policy WHERE policy.queue_name = p_queue_name
+    ) THEN
+      PERFORM workhorse.reject_fast_feature_v1(p_queue_name, 'rate-limit policies');
+    END IF;
+  END IF;
+  INSERT INTO workhorse.queue_control(queue_name, tier, updated_by, reason, updated_at)
+  VALUES (p_queue_name, p_tier, p_requested_by, p_reason, clock_timestamp())
+  ON CONFLICT (queue_name) DO UPDATE SET
+    tier = EXCLUDED.tier,
+    updated_by = EXCLUDED.updated_by,
+    reason = EXCLUDED.reason,
+    updated_at = EXCLUDED.updated_at;
+  RETURN p_tier;
+END;
+$$;
+
+-- Choose which optional history a fast-tier queue records. A null argument keeps that setting.
+-- The change applies to claims and completions that start after it commits.
+CREATE OR REPLACE FUNCTION workhorse.set_queue_history_v1(
+  p_queue_name text,
+  p_record_attempts boolean,
+  p_record_claims boolean
+)
+RETURNS TABLE (record_attempts boolean, record_claims boolean)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF p_queue_name IS NULL OR p_queue_name = '' THEN
+    RAISE EXCEPTION 'queue_name must not be empty';
+  END IF;
+  RETURN QUERY
+    INSERT INTO workhorse.queue_control AS control(queue_name, record_attempts, record_claims)
+    VALUES (p_queue_name, COALESCE(p_record_attempts, false), COALESCE(p_record_claims, false))
+    ON CONFLICT (queue_name) DO UPDATE SET
+      record_attempts = COALESCE(p_record_attempts, control.record_attempts),
+      record_claims = COALESCE(p_record_claims, control.record_claims),
+      updated_at = clock_timestamp()
+    RETURNING control.record_attempts, control.record_claims;
 END;
 $$;
 
@@ -7159,6 +7890,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
   v_count integer;
+  v_fast_count integer;
 BEGIN
   IF p_queue_name IS NULL OR p_queue_name = '' THEN
     RAISE EXCEPTION 'queue_name must not be empty';
@@ -7192,7 +7924,27 @@ BEGIN
    WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('blocked', 'ready', 'scheduled')
      AND task.id = runtime.task_id;
   GET DIAGNOSTICS v_count = ROW_COUNT;
-  RETURN v_count;
+
+  -- Fast-tier ready rows carry no events, and deleting the task cascades to the runtime row.
+  PERFORM 1
+    FROM workhorse.fast_task_runtime fast
+    JOIN workhorse.task task ON task.id = fast.task_id
+   WHERE fast.queue_name = p_queue_name AND fast.state = 'ready'
+   FOR UPDATE OF fast, task;
+  DELETE FROM workhorse.enqueue_idempotency idempotency
+   USING workhorse.fast_task_runtime fast
+   WHERE fast.queue_name = p_queue_name AND fast.state = 'ready'
+     AND idempotency.task_id = fast.task_id;
+  DELETE FROM workhorse.attempt_history attempt
+   USING workhorse.fast_task_runtime fast
+   WHERE fast.queue_name = p_queue_name AND fast.state = 'ready'
+     AND attempt.task_id = fast.task_id;
+  DELETE FROM workhorse.task task
+   USING workhorse.fast_task_runtime fast
+   WHERE fast.queue_name = p_queue_name AND fast.state = 'ready'
+     AND task.id = fast.task_id;
+  GET DIAGNOSTICS v_fast_count = ROW_COUNT;
+  RETURN v_count + v_fast_count;
 END;
 $$;
 
@@ -7343,6 +8095,7 @@ AS $$
 DECLARE
   v_runtime workhorse.task_runtime%ROWTYPE;
   v_outcome workhorse.task_outcome%ROWTYPE;
+  v_fast_runtime workhorse.fast_task_runtime%ROWTYPE;
   v_now timestamptz := clock_timestamp();
   v_request_id_hash bytea;
   v_request_id_length integer;
@@ -7410,6 +8163,29 @@ BEGIN
     RETURN;
   END IF;
 
+  -- A delayed fast-tier task is ready with a future run_at, so running it now moves run_at to now.
+  SELECT * INTO v_fast_runtime
+    FROM workhorse.fast_task_runtime runtime
+   WHERE runtime.task_id = p_task_id
+   FOR UPDATE;
+  IF FOUND THEN
+    IF v_fast_runtime.state = 'active' OR v_fast_runtime.run_at <= v_now THEN
+      RETURN QUERY VALUES ('already_ready'::text, v_fast_runtime.state, v_fast_runtime.run_at);
+      RETURN;
+    END IF;
+    UPDATE workhorse.fast_task_runtime runtime
+       SET run_at = v_now, sequence = nextval('workhorse.ready_sequence_seq')
+     WHERE runtime.task_id = p_task_id;
+    PERFORM pg_notify('workhorse_tasks', v_fast_runtime.queue_name);
+    RETURN QUERY VALUES ('released'::text, 'ready'::text, v_now);
+    RETURN;
+  END IF;
+  IF EXISTS (SELECT 1 FROM workhorse.fast_task_outcome outcome WHERE outcome.task_id = p_task_id) THEN
+    RETURN QUERY SELECT 'not_scheduled'::text, outcome.state, NULL::timestamptz
+      FROM workhorse.fast_task_outcome outcome WHERE outcome.task_id = p_task_id;
+    RETURN;
+  END IF;
+
   SELECT * INTO v_outcome
     FROM workhorse.task_outcome outcome
    WHERE outcome.task_id = p_task_id;
@@ -7422,6 +8198,842 @@ BEGIN
     RETURN QUERY VALUES ('not_scheduled'::text, NULL::text, NULL::timestamptz);
   ELSE
     RETURN QUERY VALUES ('not_found'::text, NULL::text, NULL::timestamptz);
+  END IF;
+END;
+$$;
+
+-- Fast-tier transitions (ADR 0077). A fast-tier task lives in one fast_task_runtime row until it
+-- closes, and then in one fast_task_outcome row. These helpers own every write to those two
+-- tables. The public functions below them branch here when the task or queue is fast-tier, so a
+-- client calls the same function for both tiers.
+
+-- Claim up to p_limit ready rows of one fast-tier queue. The caller has already validated the
+-- arguments and checked that the queue is not paused. The claimed event is optional per queue, and
+-- the claim picks one of two statements rather than filtering a writable CTE, so a queue that
+-- records no claims pays for no task_event write.
+--
+-- FOR UPDATE SKIP LOCKED skips a row another claim holds, but it can still wait. When it locks a
+-- row whose ready version another worker has just leased, it follows the update chain, and that
+-- walk waits without a wait policy. The claim then also keeps the lock on the row its recheck
+-- rejected. The owning worker's completion or heartbeat can wait on that lock, and PostgreSQL
+-- resolved the cycle with 40P01 (SM-934). The claim therefore runs in a subtransaction under a
+-- lock_timeout far below the default deadlock_timeout. A claim that times out rolls back its
+-- subtransaction, which releases every row lock it took, and claims nothing. The caller's
+-- completion stays, and the worker's next poll claims again. The claim collects its rows before it
+-- returns any, because a set-returning function cannot withdraw rows it has already returned.
+CREATE OR REPLACE FUNCTION workhorse.fast_claim_v1(
+  p_queue_name text,
+  p_worker_id text,
+  p_limit integer,
+  p_lease_ms integer,
+  p_record_claims boolean
+) RETURNS TABLE (
+  task_id uuid, task_type text, priority integer, payload jsonb, contract_version text, result_max_bytes integer,
+  redact_error_details boolean,
+  trace_context jsonb,
+  attempt integer, max_attempts integer,
+  retry_policy jsonb, deadline_at timestamptz, execution_timeout_ms bigint,
+  attempt_timeout_at timestamptz, fence_token bigint, lease_expires_at timestamptz
+)
+LANGUAGE plpgsql
+SET plan_cache_mode = force_generic_plan
+SET lock_timeout = '50ms'
+AS $$
+#variable_conflict use_column
+DECLARE
+  v_now timestamptz := clock_timestamp();
+  v_claimed workhorse.fast_task_runtime[];
+BEGIN
+  BEGIN
+    IF NOT p_record_claims THEN
+      WITH claimed AS (
+        UPDATE workhorse.fast_task_runtime runtime
+           SET state = 'active', fence_token = nextval('workhorse.fence_token_seq'),
+               worker_id = p_worker_id, claimed_at = v_now,
+               expires_at = v_now + p_lease_ms * interval '1 millisecond',
+               attempt_timeout_at = v_now + runtime.execution_timeout_ms * interval '1 millisecond'
+         WHERE runtime.task_id = ANY (ARRAY(
+                 SELECT candidate.task_id FROM workhorse.fast_task_runtime candidate
+                  WHERE candidate.state = 'ready' AND candidate.queue_name = p_queue_name
+                    AND candidate.run_at <= v_now
+                    AND (candidate.deadline_at IS NULL OR candidate.deadline_at > v_now)
+                  ORDER BY candidate.priority DESC, candidate.run_at, candidate.sequence
+                  LIMIT p_limit
+                  FOR UPDATE SKIP LOCKED
+               ))
+           AND runtime.state = 'ready'
+        RETURNING runtime.*
+      )
+      SELECT array_agg(
+               claimed::workhorse.fast_task_runtime
+               ORDER BY claimed.priority DESC, claimed.run_at, claimed.sequence
+             )
+        INTO v_claimed
+        FROM claimed;
+    ELSE
+      WITH claimed AS (
+        UPDATE workhorse.fast_task_runtime runtime
+           SET state = 'active', fence_token = nextval('workhorse.fence_token_seq'),
+               worker_id = p_worker_id, claimed_at = v_now,
+               expires_at = v_now + p_lease_ms * interval '1 millisecond',
+               attempt_timeout_at = v_now + runtime.execution_timeout_ms * interval '1 millisecond'
+         WHERE runtime.task_id = ANY (ARRAY(
+                 SELECT candidate.task_id FROM workhorse.fast_task_runtime candidate
+                  WHERE candidate.state = 'ready' AND candidate.queue_name = p_queue_name
+                    AND candidate.run_at <= v_now
+                    AND (candidate.deadline_at IS NULL OR candidate.deadline_at > v_now)
+                  ORDER BY candidate.priority DESC, candidate.run_at, candidate.sequence
+                  LIMIT p_limit
+                  FOR UPDATE SKIP LOCKED
+               ))
+           AND runtime.state = 'ready'
+        RETURNING runtime.*
+      ), claim_events AS (
+        INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
+        SELECT claimed.task_id, claimed.attempt, 'claimed',
+               jsonb_build_object(
+                 'worker_id', p_worker_id, 'fence_token', claimed.fence_token::text,
+                 'expires_at', claimed.expires_at
+               )
+          FROM claimed
+      )
+      SELECT array_agg(
+               claimed::workhorse.fast_task_runtime
+               ORDER BY claimed.priority DESC, claimed.run_at, claimed.sequence
+             )
+        INTO v_claimed
+        FROM claimed;
+    END IF;
+  EXCEPTION WHEN lock_not_available THEN
+    RETURN;
+  END;
+  RETURN QUERY
+    SELECT claimed.task_id, claimed.task_type, claimed.priority, claimed.payload,
+           claimed.contract_version, claimed.result_max_bytes, claimed.redact,
+           claimed.trace_context, claimed.attempt, claimed.max_attempts, claimed.retry_policy,
+           claimed.deadline_at, claimed.execution_timeout_ms, claimed.attempt_timeout_at,
+           claimed.fence_token, claimed.expires_at
+      FROM unnest(v_claimed) WITH ORDINALITY AS claimed
+     ORDER BY claimed.ordinality;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.fast_records_attempts_v1(p_queue_name text)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT COALESCE(
+    (SELECT control.record_attempts FROM workhorse.queue_control control
+      WHERE control.queue_name = p_queue_name),
+    false
+  )
+$$;
+
+-- Close one attempt of an active fast-tier row and return the row to ready. The closed attempt
+-- goes to attempt_history when the queue records attempts, and otherwise into the row's capped
+-- errors list. The list keeps the most recent entries and counts the ones it drops, so a reader
+-- can tell that the history is incomplete. The caller holds the row lock and has already decided
+-- that another attempt remains.
+CREATE OR REPLACE FUNCTION workhorse.fast_retry_v1(
+  p_runtime workhorse.fast_task_runtime,
+  p_outcome text,
+  p_error jsonb,
+  p_delay_ms bigint,
+  p_next_previous_retry_delay_ms bigint
+) RETURNS text
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_now timestamptz := clock_timestamp();
+  v_entry jsonb;
+BEGIN
+  IF workhorse.fast_records_attempts_v1(p_runtime.queue_name) THEN
+    INSERT INTO workhorse.attempt_history(
+      task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at, error
+    ) VALUES (
+      p_runtime.task_id, p_runtime.attempt, p_runtime.fence_token, p_runtime.worker_id, p_outcome,
+      p_runtime.claimed_at, p_runtime.claimed_at, v_now, p_error
+    );
+  ELSE
+    v_entry := jsonb_build_object(
+      'attempt', p_runtime.attempt,
+      'fence_token', p_runtime.fence_token::text,
+      'worker_id', p_runtime.worker_id,
+      'claimed_at', p_runtime.claimed_at,
+      'finished_at', v_now,
+      'outcome', p_outcome,
+      'error', p_error
+    );
+  END IF;
+  UPDATE workhorse.fast_task_runtime runtime
+     SET state = 'ready', attempt = runtime.attempt + 1,
+         worker_id = NULL, claimed_at = NULL, expires_at = NULL, attempt_timeout_at = NULL,
+         previous_retry_delay_ms = p_next_previous_retry_delay_ms,
+         run_at = v_now + GREATEST(0, p_delay_ms) * interval '1 millisecond',
+         sequence = nextval('workhorse.ready_sequence_seq'),
+         errors = CASE
+           WHEN v_entry IS NULL THEN runtime.errors
+           WHEN jsonb_array_length(runtime.errors) >= 10
+             THEN (runtime.errors - 0) || jsonb_build_array(v_entry)
+           ELSE runtime.errors || jsonb_build_array(v_entry)
+         END,
+         errors_dropped = runtime.errors_dropped + CASE
+           WHEN v_entry IS NOT NULL AND jsonb_array_length(runtime.errors) >= 10 THEN 1
+           ELSE 0
+         END
+   WHERE runtime.task_id = p_runtime.task_id;
+  IF p_delay_ms > 0 THEN
+    RETURN 'scheduled';
+  END IF;
+  PERFORM pg_notify('workhorse_tasks', p_runtime.queue_name);
+  RETURN 'ready';
+END;
+$$;
+
+-- Close a fast-tier task: delete its runtime row and write its one outcome row. The outcome names
+-- the final claim only when the row was active, because a ready row has no claim of its own. When
+-- the queue records attempts, an active row's final attempt also gets its attempt_history row. The
+-- caller holds the row lock.
+CREATE OR REPLACE FUNCTION workhorse.fast_finish_v1(
+  p_runtime workhorse.fast_task_runtime,
+  p_state text,
+  p_result jsonb,
+  p_error jsonb,
+  p_closed_as text,
+  p_history_outcome text
+) RETURNS timestamptz
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_now timestamptz := clock_timestamp();
+  v_active boolean := p_runtime.state = 'active';
+BEGIN
+  DELETE FROM workhorse.fast_task_runtime runtime WHERE runtime.task_id = p_runtime.task_id;
+  INSERT INTO workhorse.fast_task_outcome(
+    task_id, queue_name, task_type, state, attempt, result, error,
+    fence_token, worker_id, claimed_at, enqueued_at, finished_at, errors, errors_dropped, closed_as
+  ) VALUES (
+    p_runtime.task_id, p_runtime.queue_name, p_runtime.task_type, p_state, p_runtime.attempt,
+    p_result, p_error,
+    CASE WHEN v_active THEN p_runtime.fence_token END,
+    CASE WHEN v_active THEN p_runtime.worker_id END,
+    CASE WHEN v_active THEN p_runtime.claimed_at END,
+    p_runtime.enqueued_at, v_now, p_runtime.errors, p_runtime.errors_dropped, p_closed_as
+  );
+  IF v_active AND workhorse.fast_records_attempts_v1(p_runtime.queue_name) THEN
+    INSERT INTO workhorse.attempt_history(
+      task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at, error
+    ) VALUES (
+      p_runtime.task_id, p_runtime.attempt, p_runtime.fence_token, p_runtime.worker_id,
+      p_history_outcome, p_runtime.claimed_at, p_runtime.claimed_at, v_now, p_error
+    );
+  END IF;
+  RETURN v_now;
+END;
+$$;
+
+-- Complete a batch of fast-tier attempts in one statement. Each accepted attempt deletes its
+-- runtime row and writes its outcome row. An attempt whose fence, lease, deadline, attempt timeout,
+-- or cancellation no longer allows completion is left alone and missing from the result, exactly
+-- as complete_v1 returns false for it.
+--
+-- The worker checks result sizes before it calls, but not every SDK does, and a client measure can
+-- disagree with PostgreSQL's jsonb text. An oversized result therefore fails only its own attempt.
+-- The function passes it to fast_fail_v1 with a TaskValueSizeLimitError envelope, so the retry
+-- policy decides what happens next, and leaves it out of the result. The other completions in the
+-- batch, and the fused claim that follows them, are unaffected. fast_complete_v1 keeps raising for
+-- one oversized result, as complete_v1 does on the full tier.
+--
+-- The DELETE matches on the primary key, the fence, and the owning worker. It has no state
+-- predicate: fast_task_runtime_state_shape_check gives a ready row a NULL worker_id, so the
+-- worker match already implies an active row. A state predicate let the planner prefer
+-- fast_task_runtime_active_due_idx, whose scan grows with every active row of every worker.
+-- The generic plan keeps the primary-key plan: a custom plan per call cost more to plan than
+-- the statement costs to run. The history insert joins queue_control once instead of calling
+-- fast_records_attempts_v1 per completed row.
+--
+-- Before the DELETE, the function locks the worker's rows in task ID order, as
+-- fast_heartbeat_many_v1 does. The DELETE's plan locks rows in input order, and a heartbeat's plan
+-- can lock them in index order. Without the shared order, a worker's completion and its own
+-- heartbeat could each hold a row the other needs, and PostgreSQL rolled one back with 40P01.
+-- The oversized attempts fail after that lock, in task ID order, so they add no new lock order.
+CREATE OR REPLACE FUNCTION workhorse.fast_complete_many_v1(
+  p_worker_id text, p_task_ids uuid[], p_fence_tokens bigint[], p_results jsonb[]
+) RETURNS uuid[]
+LANGUAGE plpgsql
+SET plan_cache_mode = force_generic_plan
+AS $$
+DECLARE
+  v_now timestamptz := clock_timestamp();
+  v_accepted uuid[];
+  v_oversized uuid[] := '{}'::uuid[];
+  v_rejection record;
+BEGIN
+  PERFORM 1 FROM (
+    SELECT FROM workhorse.fast_task_runtime runtime
+     WHERE runtime.task_id = ANY (p_task_ids) AND runtime.worker_id = p_worker_id
+     ORDER BY runtime.task_id
+       FOR UPDATE
+  ) locked;
+  FOR v_rejection IN
+    SELECT input.task_id, input.fence_token, runtime.task_type
+      FROM unnest(p_task_ids, p_fence_tokens, p_results) AS input(task_id, fence_token, result)
+      JOIN workhorse.fast_task_runtime runtime ON runtime.task_id = input.task_id
+     WHERE octet_length(COALESCE(input.result, 'null'::jsonb)::text) > runtime.result_max_bytes
+     ORDER BY input.task_id
+  LOOP
+    v_oversized := v_oversized || v_rejection.task_id;
+    PERFORM workhorse.fast_fail_v1(
+      v_rejection.task_id, p_worker_id, v_rejection.fence_token,
+      jsonb_build_object(
+        'name', 'TaskValueSizeLimitError',
+        'message', v_rejection.task_type || ' result exceeds its configured size limit',
+        'stack', NULL
+      ),
+      NULL
+    );
+  END LOOP;
+  WITH input AS (
+    SELECT * FROM unnest(p_task_ids, p_fence_tokens, p_results)
+      AS input(task_id, fence_token, result)
+     WHERE input.task_id <> ALL (v_oversized)
+  ), done AS (
+    DELETE FROM workhorse.fast_task_runtime runtime
+     USING input
+     WHERE runtime.task_id = input.task_id
+       AND runtime.fence_token = input.fence_token AND runtime.worker_id = p_worker_id
+       AND runtime.expires_at > v_now
+       AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
+       AND (runtime.attempt_timeout_at IS NULL OR runtime.attempt_timeout_at > v_now)
+       AND runtime.cancel_requested_at IS NULL
+    RETURNING runtime.*, COALESCE(input.result, 'null'::jsonb) AS result
+  ), kept AS (
+    INSERT INTO workhorse.fast_task_outcome(
+      task_id, queue_name, task_type, state, attempt, result,
+      fence_token, worker_id, claimed_at, enqueued_at, finished_at, errors, errors_dropped
+    )
+    SELECT done.task_id, done.queue_name, done.task_type, 'succeeded', done.attempt, done.result,
+           done.fence_token, done.worker_id, done.claimed_at, done.enqueued_at, v_now,
+           done.errors, done.errors_dropped
+      FROM done
+    RETURNING fast_task_outcome.task_id
+  ), history AS (
+    INSERT INTO workhorse.attempt_history(
+      task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at
+    )
+    SELECT done.task_id, done.attempt, done.fence_token, done.worker_id, 'succeeded',
+           done.claimed_at, done.claimed_at, v_now
+      FROM done
+      JOIN workhorse.queue_control control
+        ON control.queue_name = done.queue_name AND control.record_attempts
+  )
+  SELECT COALESCE(array_agg(kept.task_id), '{}'::uuid[]) INTO v_accepted FROM kept;
+  RETURN v_accepted;
+END;
+$$;
+
+-- Complete one fast-tier attempt. An oversized result raises, as complete_v1 raises on the full
+-- tier, so a single completion keeps the same outcome on either tier.
+CREATE OR REPLACE FUNCTION workhorse.fast_complete_v1(
+  p_task_id uuid, p_worker_id text, p_fence_token bigint, p_result jsonb
+) RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM workhorse.fast_task_runtime runtime
+     WHERE runtime.task_id = p_task_id
+       AND octet_length(COALESCE(p_result, 'null'::jsonb)::text) > runtime.result_max_bytes
+  ) THEN
+    RAISE EXCEPTION 'result exceeds its configured size limit';
+  END IF;
+  RETURN cardinality(workhorse.fast_complete_many_v1(
+    p_worker_id, ARRAY[p_task_id], ARRAY[p_fence_token], ARRAY[p_result]
+  )) = 1;
+END;
+$$;
+
+-- Settle a fast-tier task whose deadline has passed. It mirrors terminalize_deadline_v1: a task
+-- with a pending cancellation closes as canceled, and any other task fails with the deadline
+-- envelope.
+CREATE OR REPLACE FUNCTION workhorse.fast_terminalize_deadline_v1(p_task_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_runtime workhorse.fast_task_runtime%ROWTYPE;
+BEGIN
+  SELECT * INTO v_runtime FROM workhorse.fast_task_runtime runtime
+   WHERE runtime.task_id = p_task_id
+   FOR UPDATE;
+  IF NOT FOUND OR v_runtime.deadline_at IS NULL OR v_runtime.deadline_at > clock_timestamp() THEN
+    RETURN false;
+  END IF;
+  IF v_runtime.cancel_requested_at IS NOT NULL THEN
+    PERFORM workhorse.fast_finish_v1(
+      v_runtime, 'canceled', NULL,
+      workhorse.cancellation_envelope_v1(
+        v_runtime.cancel_requested_at, v_runtime.cancel_requested_by, v_runtime.cancel_reason
+      ),
+      'canceled', 'canceled'
+    );
+  ELSE
+    PERFORM workhorse.fast_finish_v1(
+      v_runtime, 'failed', NULL, workhorse.deadline_envelope_v1(v_runtime.deadline_at),
+      'deadline_exceeded', 'deadline_exceeded'
+    );
+  END IF;
+  RETURN true;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.fast_timeout_owned_v1(
+  p_task_id uuid, p_worker_id text, p_fence_token bigint
+) RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_runtime workhorse.fast_task_runtime%ROWTYPE;
+  v_error jsonb;
+  v_retry record;
+BEGIN
+  SELECT * INTO v_runtime FROM workhorse.fast_task_runtime runtime
+   WHERE runtime.task_id = p_task_id AND runtime.state = 'active'
+     AND runtime.worker_id = p_worker_id AND runtime.fence_token = p_fence_token
+   FOR UPDATE;
+  IF NOT FOUND OR v_runtime.attempt_timeout_at IS NULL
+     OR v_runtime.cancel_requested_at IS NOT NULL
+     OR v_runtime.attempt_timeout_at > clock_timestamp() THEN
+    RETURN false;
+  END IF;
+  IF v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= v_runtime.attempt_timeout_at
+     AND v_runtime.deadline_at <= clock_timestamp() THEN
+    RETURN workhorse.fast_terminalize_deadline_v1(p_task_id);
+  END IF;
+  v_error := workhorse.timeout_envelope_v1(
+    v_runtime.execution_timeout_ms, v_runtime.attempt_timeout_at
+  );
+  IF v_runtime.attempt < v_runtime.max_attempts THEN
+    SELECT * INTO STRICT v_retry FROM workhorse.retry_delay_v1(
+      p_task_id, v_runtime.attempt, v_runtime.retry_policy, v_runtime.previous_retry_delay_ms,
+      NULL, 'execution-timeout-immediate'
+    );
+    PERFORM workhorse.fast_retry_v1(
+      v_runtime, 'timeout', v_error, v_retry.delay_ms, v_retry.next_previous_retry_delay_ms
+    );
+  ELSE
+    PERFORM workhorse.fast_finish_v1(v_runtime, 'failed', NULL, v_error, 'timeout', 'timeout');
+  END IF;
+  RETURN true;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.fast_expire_owned_v1(
+  p_task_id uuid, p_worker_id text, p_fence_token bigint
+) RETURNS text
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_runtime workhorse.fast_task_runtime%ROWTYPE;
+BEGIN
+  SELECT * INTO v_runtime FROM workhorse.fast_task_runtime runtime
+   WHERE runtime.task_id = p_task_id AND runtime.state = 'active'
+     AND runtime.worker_id = p_worker_id AND runtime.fence_token = p_fence_token
+   FOR UPDATE;
+  IF NOT FOUND THEN RETURN 'stale'; END IF;
+  IF v_runtime.cancel_requested_at IS NOT NULL THEN RETURN 'cancel_requested'; END IF;
+  IF v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= clock_timestamp()
+     AND (
+       v_runtime.attempt_timeout_at IS NULL
+       OR v_runtime.attempt_timeout_at > clock_timestamp()
+       OR v_runtime.deadline_at <= v_runtime.attempt_timeout_at
+     ) THEN
+    IF workhorse.fast_terminalize_deadline_v1(p_task_id) THEN RETURN 'deadline_exceeded'; END IF;
+    RETURN 'stale';
+  END IF;
+  IF v_runtime.attempt_timeout_at IS NOT NULL
+     AND v_runtime.attempt_timeout_at <= clock_timestamp() THEN
+    IF workhorse.fast_timeout_owned_v1(p_task_id, p_worker_id, p_fence_token) THEN
+      RETURN 'timeout_exceeded';
+    END IF;
+    RETURN 'stale';
+  END IF;
+  RETURN 'not_due';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.fast_fail_v1(
+  p_task_id uuid, p_worker_id text, p_fence_token bigint, p_error jsonb, p_retry_delay_ms integer
+) RETURNS text
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_runtime workhorse.fast_task_runtime%ROWTYPE;
+  v_error jsonb;
+  v_retry record;
+BEGIN
+  SELECT * INTO v_runtime FROM workhorse.fast_task_runtime runtime
+   WHERE runtime.task_id = p_task_id AND runtime.state = 'active'
+     AND runtime.worker_id = p_worker_id AND runtime.fence_token = p_fence_token
+   FOR UPDATE;
+  IF NOT FOUND OR v_runtime.expires_at <= clock_timestamp() THEN RETURN 'stale'; END IF;
+  IF v_runtime.cancel_requested_at IS NOT NULL THEN RETURN 'cancel_requested'; END IF;
+  IF (v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= clock_timestamp())
+     OR (v_runtime.attempt_timeout_at IS NOT NULL
+       AND v_runtime.attempt_timeout_at <= clock_timestamp()) THEN
+    RETURN workhorse.fast_expire_owned_v1(p_task_id, p_worker_id, p_fence_token);
+  END IF;
+  v_error := workhorse.redact_error_details_v1(p_error, v_runtime.redact);
+  IF v_runtime.attempt < v_runtime.max_attempts THEN
+    SELECT * INTO STRICT v_retry FROM workhorse.retry_delay_v1(
+      p_task_id, v_runtime.attempt, v_runtime.retry_policy, v_runtime.previous_retry_delay_ms,
+      p_retry_delay_ms, 'legacy-handler'
+    );
+    RETURN workhorse.fast_retry_v1(
+      v_runtime, 'retry', v_error, v_retry.delay_ms, v_retry.next_previous_retry_delay_ms
+    );
+  END IF;
+  PERFORM workhorse.fast_finish_v1(v_runtime, 'failed', NULL, v_error, NULL, 'failed');
+  RETURN 'failed';
+END;
+$$;
+
+-- Return an owned fast-tier task to ready without consuming its attempt. Unlike the full tier, the
+-- fast tier keeps no execution budget across releases, so a released attempt starts its execution
+-- timeout afresh when it is claimed again.
+CREATE OR REPLACE FUNCTION workhorse.fast_release_owned_v1(
+  p_task_id uuid, p_worker_id text, p_fence_token bigint
+) RETURNS text
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_runtime workhorse.fast_task_runtime%ROWTYPE;
+BEGIN
+  SELECT * INTO v_runtime FROM workhorse.fast_task_runtime runtime
+   WHERE runtime.task_id = p_task_id AND runtime.state = 'active'
+     AND runtime.worker_id = p_worker_id AND runtime.fence_token = p_fence_token
+   FOR UPDATE;
+  IF NOT FOUND OR v_runtime.expires_at <= clock_timestamp() THEN RETURN 'stale'; END IF;
+  IF v_runtime.cancel_requested_at IS NOT NULL THEN RETURN 'cancel_requested'; END IF;
+  IF (v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= clock_timestamp())
+     OR (v_runtime.attempt_timeout_at IS NOT NULL
+       AND v_runtime.attempt_timeout_at <= clock_timestamp()) THEN
+    RETURN workhorse.fast_expire_owned_v1(p_task_id, p_worker_id, p_fence_token);
+  END IF;
+  UPDATE workhorse.fast_task_runtime runtime
+     SET state = 'ready', worker_id = NULL, claimed_at = NULL, expires_at = NULL,
+         attempt_timeout_at = NULL, run_at = clock_timestamp(),
+         sequence = nextval('workhorse.ready_sequence_seq')
+   WHERE runtime.task_id = p_task_id;
+  PERFORM pg_notify('workhorse_tasks', v_runtime.queue_name);
+  RETURN 'released';
+END;
+$$;
+
+-- Extend a batch of fast-tier leases in one statement. Before the UPDATE, the function locks the
+-- worker's rows in task ID order, the order fast_complete_many_v1 locks them in, so a heartbeat
+-- and a batched completion of the same worker never wait on each other in a cycle.
+CREATE OR REPLACE FUNCTION workhorse.fast_heartbeat_many_v1(
+  p_worker_id text, p_task_ids uuid[], p_fence_tokens bigint[], p_lease_ms integer[]
+) RETURNS TABLE (ordinal bigint, task_id uuid, status text)
+LANGUAGE plpgsql
+AS $$
+#variable_conflict use_column
+DECLARE
+  v_now timestamptz := clock_timestamp();
+BEGIN
+  PERFORM 1 FROM (
+    SELECT FROM workhorse.fast_task_runtime runtime
+     WHERE runtime.task_id = ANY (p_task_ids) AND runtime.worker_id = p_worker_id
+     ORDER BY runtime.task_id
+       FOR NO KEY UPDATE
+  ) locked;
+  RETURN QUERY
+  WITH leases AS MATERIALIZED (
+    SELECT input.ordinal, input.task_id, input.fence_token, input.lease_ms
+      FROM unnest(p_task_ids, p_fence_tokens, p_lease_ms)
+        WITH ORDINALITY AS input(task_id, fence_token, lease_ms, ordinal)
+  ), heartbeated AS (
+    UPDATE workhorse.fast_task_runtime runtime
+       SET expires_at = CASE
+             WHEN runtime.cancel_requested_at IS NULL
+               AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
+               AND (runtime.attempt_timeout_at IS NULL OR runtime.attempt_timeout_at > v_now)
+               AND runtime.expires_at > v_now
+             THEN v_now + lease.lease_ms * interval '1 millisecond'
+             ELSE runtime.expires_at END
+      FROM leases lease
+     WHERE runtime.task_id = lease.task_id AND runtime.state = 'active'
+       AND runtime.worker_id = p_worker_id AND runtime.fence_token = lease.fence_token
+    RETURNING lease.ordinal, runtime.task_id,
+      CASE
+        WHEN runtime.cancel_requested_at IS NOT NULL THEN 'cancel_requested'
+        WHEN runtime.deadline_at IS NOT NULL AND runtime.deadline_at <= v_now THEN 'deadline_exceeded'
+        WHEN runtime.attempt_timeout_at IS NOT NULL AND runtime.attempt_timeout_at <= v_now THEN 'timeout_exceeded'
+        WHEN runtime.expires_at <= v_now THEN 'stale'
+        ELSE 'accepted'
+      END AS status
+  )
+  SELECT lease.ordinal, lease.task_id, COALESCE(heartbeated.status, 'stale')
+    FROM leases lease
+    LEFT JOIN heartbeated USING (ordinal, task_id)
+   ORDER BY lease.ordinal;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.fast_acknowledge_cancel_v1(
+  p_task_id uuid, p_worker_id text, p_fence_token bigint
+) RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_runtime workhorse.fast_task_runtime%ROWTYPE;
+BEGIN
+  SELECT * INTO v_runtime FROM workhorse.fast_task_runtime runtime
+   WHERE runtime.task_id = p_task_id AND runtime.state = 'active'
+     AND runtime.worker_id = p_worker_id AND runtime.fence_token = p_fence_token
+     AND runtime.expires_at > clock_timestamp() AND runtime.cancel_requested_at IS NOT NULL
+   FOR UPDATE;
+  IF NOT FOUND THEN RETURN false; END IF;
+  PERFORM workhorse.fast_finish_v1(
+    v_runtime, 'canceled', NULL,
+    workhorse.cancellation_envelope_v1(
+      v_runtime.cancel_requested_at, v_runtime.cancel_requested_by, v_runtime.cancel_reason
+    ),
+    'canceled', 'canceled'
+  );
+  RETURN true;
+END;
+$$;
+
+-- Cancel a live fast-tier task. The caller has validated the request and found the row. An active
+-- task records the request once and waits for its worker or for lease recovery; a ready task
+-- closes at once.
+CREATE OR REPLACE FUNCTION workhorse.fast_cancel_v1(
+  p_task_id uuid, p_requested_by text, p_reason text
+) RETURNS TABLE (
+  status text, state text, current_attempt integer, requested_at timestamptz,
+  requested_by text, reason text, finished_at timestamptz
+)
+LANGUAGE plpgsql
+AS $$
+#variable_conflict use_column
+DECLARE
+  v_runtime workhorse.fast_task_runtime%ROWTYPE;
+  v_now timestamptz := clock_timestamp();
+  v_finished_at timestamptz;
+BEGIN
+  SELECT * INTO v_runtime FROM workhorse.fast_task_runtime runtime
+   WHERE runtime.task_id = p_task_id
+   FOR UPDATE;
+  IF NOT FOUND THEN RETURN; END IF;
+  IF v_runtime.state = 'active' THEN
+    IF v_runtime.cancel_requested_at IS NULL THEN
+      UPDATE workhorse.fast_task_runtime runtime
+         SET cancel_requested_at = v_now, cancel_requested_by = p_requested_by,
+             cancel_reason = p_reason
+       WHERE runtime.task_id = p_task_id
+      RETURNING * INTO v_runtime;
+    END IF;
+    RETURN QUERY VALUES (
+      'cancel_requested'::text, 'active'::text, v_runtime.attempt, v_runtime.cancel_requested_at,
+      v_runtime.cancel_requested_by, v_runtime.cancel_reason, NULL::timestamptz
+    );
+    RETURN;
+  END IF;
+  v_finished_at := workhorse.fast_finish_v1(
+    v_runtime, 'canceled', NULL,
+    workhorse.cancellation_envelope_v1(v_now, p_requested_by, p_reason), 'canceled', 'canceled'
+  );
+  RETURN QUERY VALUES (
+    'canceled'::text, 'canceled'::text, v_runtime.attempt, v_now, p_requested_by, p_reason,
+    v_finished_at
+  );
+END;
+$$;
+
+-- Recover fast-tier rows that crossed a boundary: a ready row past its deadline, or an active row
+-- past its deadline, attempt timeout, or lease. One index range scan finds the active rows, because
+-- the index key is the earliest of the three boundaries. An active row with a pending cancellation
+-- waits for its lease to lapse, unless its deadline passed first, as it does on the full tier.
+CREATE OR REPLACE FUNCTION workhorse.fast_recover_expired_v1(
+  p_limit integer, p_retry_delay_ms integer, p_now timestamptz
+) RETURNS TABLE (
+  recovered integer, expired_leases integer, retried integer, retry_dimensions jsonb,
+  queues text[]
+)
+LANGUAGE plpgsql
+AS $$
+#variable_conflict use_column
+DECLARE
+  v_candidate uuid;
+  v_runtime workhorse.fast_task_runtime%ROWTYPE;
+  v_retry record;
+  v_error jsonb := jsonb_build_object('name', 'LeaseExpired', 'message', 'worker lease expired');
+BEGIN
+  recovered := 0;
+  expired_leases := 0;
+  retried := 0;
+  retry_dimensions := '[]'::jsonb;
+  queues := '{}'::text[];
+  IF p_limit <= 0 THEN
+    RETURN NEXT;
+    RETURN;
+  END IF;
+  FOR v_candidate IN
+    SELECT due.task_id FROM (
+      SELECT runtime.task_id, runtime.deadline_at AS due_at
+        FROM workhorse.fast_task_runtime runtime
+       WHERE runtime.state = 'ready' AND runtime.deadline_at IS NOT NULL
+         AND runtime.deadline_at <= p_now
+      UNION ALL
+      SELECT runtime.task_id, least(runtime.expires_at, runtime.attempt_timeout_at, runtime.deadline_at)
+        FROM workhorse.fast_task_runtime runtime
+       WHERE runtime.state = 'active'
+         AND least(runtime.expires_at, runtime.attempt_timeout_at, runtime.deadline_at) <= p_now
+         AND (
+           runtime.cancel_requested_at IS NULL
+           OR runtime.expires_at <= p_now
+           OR runtime.deadline_at <= p_now
+         )
+    ) due
+     ORDER BY due.due_at, due.task_id
+     LIMIT p_limit
+  LOOP
+    -- The scan read an unlocked snapshot. Re-read the row under its lock so that a heartbeat,
+    -- completion, or concurrent recovery that won the race is respected.
+    SELECT * INTO v_runtime FROM workhorse.fast_task_runtime runtime
+     WHERE runtime.task_id = v_candidate
+     FOR UPDATE SKIP LOCKED;
+    CONTINUE WHEN NOT FOUND;
+    IF v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= p_now
+       AND (
+         v_runtime.state = 'ready'
+         OR v_runtime.attempt_timeout_at IS NULL
+         OR v_runtime.attempt_timeout_at > p_now
+         OR v_runtime.deadline_at <= v_runtime.attempt_timeout_at
+       ) THEN
+      CONTINUE WHEN NOT workhorse.fast_terminalize_deadline_v1(v_runtime.task_id);
+    ELSIF v_runtime.attempt_timeout_at IS NOT NULL AND v_runtime.attempt_timeout_at <= p_now
+       AND v_runtime.cancel_requested_at IS NULL THEN
+      CONTINUE WHEN NOT workhorse.fast_timeout_owned_v1(
+        v_runtime.task_id, v_runtime.worker_id, v_runtime.fence_token
+      );
+      IF v_runtime.attempt < v_runtime.max_attempts THEN
+        retried := retried + 1;
+        retry_dimensions := retry_dimensions || jsonb_build_array(jsonb_build_object(
+          'queue', v_runtime.queue_name, 'type', v_runtime.task_type
+        ));
+      END IF;
+    ELSIF v_runtime.expires_at <= p_now THEN
+      IF v_runtime.cancel_requested_at IS NOT NULL THEN
+        PERFORM workhorse.fast_finish_v1(
+          v_runtime, 'canceled', NULL,
+          workhorse.cancellation_envelope_v1(
+            v_runtime.cancel_requested_at, v_runtime.cancel_requested_by, v_runtime.cancel_reason
+          ),
+          'canceled', 'canceled'
+        );
+      ELSIF v_runtime.attempt < v_runtime.max_attempts THEN
+        SELECT * INTO STRICT v_retry FROM workhorse.retry_delay_v1(
+          v_runtime.task_id, v_runtime.attempt, v_runtime.retry_policy,
+          v_runtime.previous_retry_delay_ms, p_retry_delay_ms, 'lease-recovery-immediate'
+        );
+        PERFORM workhorse.fast_retry_v1(
+          v_runtime, 'lease_expired', v_error, v_retry.delay_ms,
+          v_retry.next_previous_retry_delay_ms
+        );
+        retried := retried + 1;
+        retry_dimensions := retry_dimensions || jsonb_build_array(jsonb_build_object(
+          'queue', v_runtime.queue_name, 'type', v_runtime.task_type
+        ));
+      ELSE
+        PERFORM workhorse.fast_finish_v1(
+          v_runtime, 'failed', NULL, v_error, 'lease_expired', 'lease_expired'
+        );
+      END IF;
+      expired_leases := expired_leases + 1;
+    ELSE
+      CONTINUE;
+    END IF;
+    recovered := recovered + 1;
+    queues := array_append(queues, v_runtime.queue_name);
+  END LOOP;
+  RETURN NEXT;
+END;
+$$;
+
+-- The fast tier's fused completion (ADR 0077). A worker completes the attempts it finished and
+-- claims replacements for them in one round trip. The first row carries the accepted task ids; the
+-- claimed tasks follow in claim order, and a call that claims nothing returns one row whose claim
+-- columns are null. The queue must be fast-tier. A paused queue completes the batch and claims
+-- nothing.
+CREATE OR REPLACE FUNCTION workhorse.complete_many_and_claim_v1(
+  p_worker_id text,
+  p_task_ids uuid[],
+  p_fence_tokens bigint[],
+  p_results jsonb[],
+  p_queue_name text,
+  p_limit integer,
+  p_lease_ms integer DEFAULT 30000
+) RETURNS TABLE (
+  accepted uuid[],
+  task_id uuid, task_type text, priority integer, payload jsonb, contract_version text, result_max_bytes integer,
+  redact_error_details boolean,
+  trace_context jsonb,
+  attempt integer, max_attempts integer,
+  retry_policy jsonb, deadline_at timestamptz, execution_timeout_ms bigint,
+  attempt_timeout_at timestamptz, fence_token bigint, lease_expires_at timestamptz
+)
+LANGUAGE plpgsql
+AS $$
+#variable_conflict use_column
+DECLARE
+  v_accepted uuid[];
+  v_control workhorse.queue_control%ROWTYPE;
+  v_first boolean := true;
+BEGIN
+  IF p_worker_id IS NULL OR p_worker_id = '' THEN RAISE EXCEPTION 'worker_id must not be empty'; END IF;
+  IF p_lease_ms IS NULL OR p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
+    RAISE EXCEPTION 'lease_ms must be between 100 and 86400000';
+  END IF;
+  IF p_limit IS NULL OR p_limit NOT BETWEEN 0 AND 100 THEN
+    RAISE EXCEPTION 'limit must be between 0 and 100';
+  END IF;
+  IF p_task_ids IS NULL OR p_fence_tokens IS NULL OR p_results IS NULL
+     OR cardinality(p_task_ids) > 100
+     OR cardinality(p_task_ids) <> cardinality(p_fence_tokens)
+     OR cardinality(p_task_ids) <> cardinality(p_results) THEN
+    RAISE EXCEPTION 'completions must contain at most 100 entries with one fence token and result each';
+  END IF;
+  SELECT * INTO v_control FROM workhorse.queue_control control
+   WHERE control.queue_name = p_queue_name;
+  IF NOT FOUND OR v_control.tier <> 'fast' THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'P1007',
+      MESSAGE = format('queue %s is not a fast-tier queue', p_queue_name),
+      DETAIL = jsonb_build_object('queue', p_queue_name, 'feature', 'batched completion')::text;
+  END IF;
+  v_accepted := workhorse.fast_complete_many_v1(p_worker_id, p_task_ids, p_fence_tokens, p_results);
+  IF p_limit > 0 AND NOT v_control.paused THEN
+    -- One set-returning query streams the claims. A per-row RETURN NEXT loop costs measurably more
+    -- per claim on the hot path.
+    RETURN QUERY
+      SELECT CASE WHEN claim.ordinality = 1 THEN v_accepted END,
+             claim.task_id, claim.task_type, claim.priority, claim.payload, claim.contract_version,
+             claim.result_max_bytes, claim.redact_error_details, claim.trace_context, claim.attempt,
+             claim.max_attempts, claim.retry_policy, claim.deadline_at, claim.execution_timeout_ms,
+             claim.attempt_timeout_at, claim.fence_token, claim.lease_expires_at
+        FROM workhorse.fast_claim_v1(
+          p_queue_name, p_worker_id, p_limit, p_lease_ms, v_control.record_claims
+        ) WITH ORDINALITY AS claim
+       ORDER BY claim.ordinality;
+    v_first := NOT FOUND;
+  END IF;
+  IF v_first THEN
+    accepted := v_accepted;
+    RETURN NEXT;
   END IF;
 END;
 $$;
@@ -7442,6 +9054,7 @@ $$;
 -- until this transaction ends. A queue with no policy, no per-key rate cap, and no budget lock
 -- keeps the one-row fast path, which locks the first ready row it can take. That row holds the line
 -- when it names a budget this claim never locked, because reading past it has no bound.
+-- No claim path calls it since SM-948; it remains a protocol function that claims one task.
 CREATE OR REPLACE FUNCTION workhorse.claim_one_v1(
   p_queue_name text,
   p_worker_id text,
@@ -7470,10 +9083,21 @@ DECLARE
   v_fence bigint;
   v_now timestamptz;
   v_expires timestamptz;
+  v_control workhorse.queue_control%ROWTYPE;
 BEGIN
   IF p_worker_id IS NULL OR p_worker_id = '' THEN RAISE EXCEPTION 'worker_id must not be empty'; END IF;
   IF p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
     RAISE EXCEPTION 'lease_ms must be between 100 and 86400000';
+  END IF;
+  SELECT * INTO v_control FROM workhorse.queue_control control
+   WHERE control.queue_name = p_queue_name;
+  IF FOUND AND v_control.tier = 'fast' THEN
+    IF NOT v_control.paused THEN
+      RETURN QUERY SELECT * FROM workhorse.fast_claim_v1(
+        p_queue_name, p_worker_id, 1, p_lease_ms, v_control.record_claims
+      );
+    END IF;
+    RETURN;
   END IF;
   -- Shared queue locks allow unrelated claims to overlap while serializing first policy creation
   -- and pruning against deployment synchronization for this queue.
@@ -7573,7 +9197,7 @@ BEGIN
           WHERE control.queue_name = p_queue_name AND control.paused
        )
      ORDER BY runtime.priority DESC, runtime.sequence, runtime.task_id
-     FOR UPDATE OF runtime SKIP LOCKED
+     FOR NO KEY UPDATE OF runtime SKIP LOCKED
      LIMIT 1;
     IF v_candidate_budget IS NOT NULL THEN RETURN; END IF;
   ELSE
@@ -7626,7 +9250,7 @@ BEGIN
       JOIN workhorse.task_runtime runtime ON runtime.task_id = admissible.task_id
      WHERE runtime.state = 'ready'
      ORDER BY admissible.priority DESC, admissible.sequence, admissible.task_id
-     FOR UPDATE OF runtime SKIP LOCKED
+     FOR NO KEY UPDATE OF runtime SKIP LOCKED
      LIMIT 1;
   END IF;
   IF v_task_id IS NULL THEN RETURN; END IF;
@@ -7674,29 +9298,28 @@ BEGIN
 END;
 $$;
 
--- Policy-aware claim of one task. claim_one_v1 owns ordering, policy and budget admission, rate
--- tokens, fencing, and the claim event; a standalone claim may wait for the budgets it needs.
-CREATE OR REPLACE FUNCTION workhorse.claim_v1(
-  p_queue_name text,
-  p_worker_id text,
-  p_lease_ms integer DEFAULT 30000
-) RETURNS TABLE (
-  task_id uuid, task_type text, priority integer, payload jsonb, contract_version text, result_max_bytes integer,
-  redact_error_details boolean,
-  trace_context jsonb,
-  attempt integer, max_attempts integer,
-  retry_policy jsonb, deadline_at timestamptz, execution_timeout_ms bigint,
-  attempt_timeout_at timestamptz, fence_token bigint, lease_expires_at timestamptz
-)
-LANGUAGE sql
-AS $$
-  SELECT * FROM workhorse.claim_one_v1(p_queue_name, p_worker_id, p_lease_ms, true);
-$$;
-
--- Claim several tasks through one client round trip while retaining claim_one_v1 as the single
--- owner of ordering, policy admission, rate tokens, fencing, and claim event semantics. Only the
--- first claim may wait for a budget lock; later claims already hold budget locks, so waiting on
--- another budget could deadlock against a batch that holds them in a different order.
+-- Claim several tasks through one client round trip. A fast-tier queue branches to fast_claim_v1.
+-- Every other queue admits the batch as a set (SM-915). A queue with no concurrency or rate-limit
+-- policy once repeated claim_one_v1 per task, which repeated the policy locks, the budget sample and
+-- the key-bucket cleanup for every start; it now takes the same set path (SM-948). It locks the
+-- policy rows and the window's budgets once, reads the clock once, and derives from one read of the
+-- 100-row window how many rows each concurrency key and each budget can still start: the room left
+-- under max_active_per_key and max_active, and the whole tokens left in the per-key and budget
+-- buckets. A row whose key or budget has no room is dropped, and the rest are ranked within their
+-- key and within their budget in claim order. A row is admitted when both ranks fit, and the batch
+-- takes at most as many rows as the queue's own active room and whole queue tokens allow. It then
+-- locks only the admitted rows, activates them, appends their claim events, and charges every
+-- bucket once with the number of starts it admitted. A round never admits more than claim_one_v1
+-- would. It can admit fewer when a row has both a limited key and a limited budget, because such a
+-- row can use a key rank and then miss its budget rank. The first row that claim_one_v1 would take
+-- always fits both ranks, so a round admits nothing only when claim_one_v1 would admit nothing. A
+-- short round is repeated from a fresh window, with budget locks it can take without waiting, until
+-- the limit, an empty round, exhausted queue capacity, or a window that no further round can change.
+-- A round on a queue with no per-key rule and no locked budget skips the window. It locks the first
+-- ready rows up to the queue's room directly, stops at a row that names a budget, and ends the batch.
+-- The function plans every statement generically. Statements over the batch arrays otherwise keep a
+-- custom plan, because the generic estimate for an array parameter is pessimistic, and replanning
+-- them on every call doubled the latency of a claim.
 CREATE OR REPLACE FUNCTION workhorse.claim_many_v1(
   p_queue_name text,
   p_worker_id text,
@@ -7711,21 +9334,471 @@ CREATE OR REPLACE FUNCTION workhorse.claim_many_v1(
   attempt_timeout_at timestamptz, fence_token bigint, lease_expires_at timestamptz
 )
 LANGUAGE plpgsql
+SET plan_cache_mode = force_generic_plan
 AS $$
 DECLARE
   v_claimed integer;
+  v_control workhorse.queue_control%ROWTYPE;
+  v_policy workhorse.concurrency_policy%ROWTYPE;
+  v_rate_policy workhorse.rate_limit_policy%ROWTYPE;
+  v_budget_name text;
+  v_budget_names text[] := '{}';
+  v_first_round boolean := true;
+  v_now timestamptz;
+  v_expires timestamptz;
+  v_room integer;
+  v_take integer;
+  v_queue_capped boolean;
+  v_window integer;
+  v_mixed boolean;
+  v_fit integer;
+  v_picked uuid[];
+  v_fences bigint[];
+  v_ids uuid[];
+  v_keys text[];
+  v_budgets text[];
+  v_total integer := 0;
+  v_direct boolean;
 BEGIN
   IF p_limit NOT BETWEEN 1 AND 100 THEN
     RAISE EXCEPTION 'limit must be between 1 and 100';
   END IF;
-  FOR v_index IN 1..p_limit LOOP
-    RETURN QUERY SELECT * FROM workhorse.claim_one_v1(
-      p_queue_name, p_worker_id, p_lease_ms, v_index = 1
-    );
-    GET DIAGNOSTICS v_claimed = ROW_COUNT;
+  -- A fast-tier queue has no admission policy to apply row by row, so it claims the whole batch in
+  -- one statement.
+  SELECT * INTO v_control FROM workhorse.queue_control control
+   WHERE control.queue_name = p_queue_name;
+  IF FOUND AND v_control.tier = 'fast' THEN
+    IF p_worker_id IS NULL OR p_worker_id = '' THEN
+      RAISE EXCEPTION 'worker_id must not be empty';
+    END IF;
+    IF p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
+      RAISE EXCEPTION 'lease_ms must be between 100 and 86400000';
+    END IF;
+    IF NOT v_control.paused THEN
+      RETURN QUERY SELECT * FROM workhorse.fast_claim_v1(
+        p_queue_name, p_worker_id, p_limit, p_lease_ms, v_control.record_claims
+      );
+    END IF;
+    RETURN;
+  END IF;
+  IF p_worker_id IS NULL OR p_worker_id = '' THEN RAISE EXCEPTION 'worker_id must not be empty'; END IF;
+  IF p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
+    RAISE EXCEPTION 'lease_ms must be between 100 and 86400000';
+  END IF;
+  -- The same locks claim_one_v1 takes. The policy row locks serialize every policy claim on this
+  -- queue, so no other claim changes the counts and buckets this batch reads until it commits.
+  PERFORM pg_advisory_xact_lock_shared(
+    hashtextextended('workhorse:concurrency-policy:' || p_queue_name, 0)
+  );
+  PERFORM pg_advisory_xact_lock_shared(
+    hashtextextended('workhorse:rate-limit-policy:' || p_queue_name, 0)
+  );
+  SELECT policy.* INTO v_policy
+    FROM workhorse.concurrency_policy policy
+   WHERE policy.queue_name = p_queue_name
+   FOR UPDATE;
+  SELECT policy.* INTO v_rate_policy
+    FROM workhorse.rate_limit_policy policy
+   WHERE policy.queue_name = p_queue_name
+   FOR UPDATE;
+
+  LOOP
+    -- Lock each budget the window can name, in name order, before reading the clock. Only the
+    -- first round may wait; a later round already holds budget locks and takes only the ones it can
+    -- get at once.
+    -- A queue with no ready row that names a budget skips the sample.
+    IF EXISTS (
+      SELECT 1 FROM workhorse.task_runtime runtime
+       WHERE runtime.state = 'ready' AND runtime.queue_name = p_queue_name
+         AND runtime.budget_name IS NOT NULL
+    ) THEN
+      FOR v_budget_name IN
+        SELECT DISTINCT sample.budget_name
+          FROM (
+            SELECT runtime.budget_name
+              FROM workhorse.task_runtime runtime
+             WHERE runtime.state = 'ready' AND runtime.queue_name = p_queue_name
+             ORDER BY runtime.priority DESC, runtime.sequence, runtime.task_id
+             LIMIT 100
+          ) sample
+         WHERE sample.budget_name IS NOT NULL
+         ORDER BY sample.budget_name
+      LOOP
+        CONTINUE WHEN v_budget_name = ANY(v_budget_names);
+        IF v_first_round THEN
+          PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:budget:' || v_budget_name, 0));
+        ELSIF NOT pg_try_advisory_xact_lock(
+          hashtextextended('workhorse:budget:' || v_budget_name, 0)
+        ) THEN
+          CONTINUE;
+        END IF;
+        v_budget_names := v_budget_names || v_budget_name;
+      END LOOP;
+    END IF;
+    v_now := clock_timestamp();
+    v_expires := v_now + make_interval(secs => p_lease_ms::double precision / 1000.0);
+
+    IF v_first_round THEN
+      WITH oldest_key_buckets AS MATERIALIZED (
+        SELECT bucket.bucket_key, bucket.tokens, bucket.refilled_at
+          FROM workhorse.rate_limit_bucket bucket
+         WHERE bucket.queue_name = p_queue_name AND bucket.bucket_scope = 'key'
+         ORDER BY bucket.refilled_at, bucket.bucket_key
+         FOR UPDATE SKIP LOCKED
+         LIMIT 100
+      ), full_key_buckets AS (
+        SELECT oldest.bucket_key
+          FROM oldest_key_buckets oldest
+         WHERE v_rate_policy.per_key_limit IS NULL OR LEAST(
+           v_rate_policy.per_key_burst::numeric,
+           oldest.tokens + GREATEST(
+             0::numeric,
+             extract(epoch FROM v_now - oldest.refilled_at) * 1000
+           ) * v_rate_policy.per_key_limit::numeric / v_rate_policy.per_key_interval_ms::numeric
+         ) >= v_rate_policy.per_key_burst
+      )
+      DELETE FROM workhorse.rate_limit_bucket bucket
+       USING full_key_buckets refilled
+       WHERE bucket.queue_name = p_queue_name AND bucket.bucket_scope = 'key'
+         AND bucket.bucket_key = refilled.bucket_key;
+    END IF;
+    v_first_round := false;
+
+    -- The queue's own room: unexpired active leases under max_active and whole queue tokens.
+    v_take := p_limit - v_total;
+    v_queue_capped := false;
+    IF v_policy.queue_name IS NOT NULL THEN
+      SELECT v_policy.max_active - count(*)::integer INTO v_room
+        FROM workhorse.task_runtime active
+       WHERE active.state = 'active'
+         AND active.queue_name = p_queue_name
+         AND active.expires_at > v_now;
+      IF v_room <= v_take THEN v_take := v_room; v_queue_capped := true; END IF;
+    END IF;
+    IF v_rate_policy.rate_limit IS NOT NULL THEN
+      SELECT floor(LEAST(
+               v_rate_policy.rate_burst::numeric,
+               bucket.tokens + GREATEST(
+                 0::numeric,
+                 extract(epoch FROM v_now - bucket.refilled_at) * 1000
+               ) * v_rate_policy.rate_limit::numeric / v_rate_policy.rate_interval_ms::numeric
+             ))::integer
+        INTO v_room
+        FROM workhorse.rate_limit_bucket bucket
+       WHERE bucket.queue_name = p_queue_name AND bucket.bucket_scope = 'queue'
+         AND bucket.bucket_key = ''
+       FOR UPDATE;
+      IF NOT FOUND THEN v_room := v_rate_policy.rate_burst; END IF;
+      IF v_room <= v_take THEN v_take := v_room; v_queue_capped := true; END IF;
+    END IF;
+    EXIT WHEN v_take <= 0;
+
+    v_direct := v_policy.max_active_per_key IS NULL AND v_rate_policy.per_key_limit IS NULL
+      AND cardinality(v_budget_names) = 0;
+    IF v_direct THEN
+      -- No per-key rule and no budget lock, so no rule passes over a row, and the first ready rows
+      -- this claim can lock are the rows it takes. As in claim_one_v1, a row that names a budget
+      -- holds the line, and the rows after it stay ready.
+      SELECT array_agg(line.task_id ORDER BY line.priority DESC, line.sequence, line.task_id)
+        INTO v_picked
+        FROM (
+          SELECT locked.task_id, locked.priority, locked.sequence,
+                 bool_or(locked.budget_name IS NOT NULL) OVER (
+                   ORDER BY locked.priority DESC, locked.sequence, locked.task_id
+                 ) AS reached_budget
+            FROM (
+              SELECT runtime.task_id, runtime.budget_name, runtime.priority, runtime.sequence
+                FROM workhorse.task_runtime runtime
+                JOIN workhorse.task task ON task.id = runtime.task_id
+               WHERE runtime.state = 'ready' AND runtime.queue_name = p_queue_name
+                 AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
+                 AND (task.execution_timeout_ms IS NULL
+                   OR runtime.execution_used_ms < task.execution_timeout_ms)
+                 AND NOT EXISTS (
+                   SELECT 1 FROM workhorse.queue_control control
+                    WHERE control.queue_name = p_queue_name AND control.paused
+                 )
+               ORDER BY runtime.priority DESC, runtime.sequence, runtime.task_id
+               FOR NO KEY UPDATE OF runtime SKIP LOCKED
+               LIMIT v_take
+            ) locked
+        ) line
+       WHERE NOT line.reached_budget;
+    ELSE
+      -- The window reads without locking, and only the admitted rows are locked (SM-801). A null
+      -- room means no rule limits that key or budget.
+      WITH ready_window AS MATERIALIZED (
+        SELECT runtime.task_id, runtime.concurrency_key, runtime.budget_name, runtime.priority,
+               runtime.sequence
+          FROM workhorse.task_runtime runtime
+          JOIN workhorse.task task ON task.id = runtime.task_id
+         WHERE runtime.state = 'ready' AND runtime.queue_name = p_queue_name
+           AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
+           AND (task.execution_timeout_ms IS NULL
+             OR runtime.execution_used_ms < task.execution_timeout_ms)
+           AND NOT EXISTS (
+             SELECT 1 FROM workhorse.queue_control control
+              WHERE control.queue_name = p_queue_name AND control.paused
+           )
+         ORDER BY runtime.priority DESC, runtime.sequence, runtime.task_id
+         LIMIT 100
+      ), key_room AS (
+        SELECT keys.concurrency_key, LEAST(
+          CASE WHEN v_policy.max_active_per_key IS NOT NULL THEN
+            v_policy.max_active_per_key - (
+              SELECT count(*)::integer
+                FROM workhorse.task_runtime active
+               WHERE active.state = 'active'
+                 AND active.queue_name = p_queue_name
+                 AND active.concurrency_key = keys.concurrency_key
+                 AND active.expires_at > v_now
+            )
+          END,
+          CASE WHEN v_rate_policy.per_key_limit IS NOT NULL THEN floor(LEAST(
+            v_rate_policy.per_key_burst::numeric,
+            COALESCE(
+              bucket.tokens + GREATEST(
+                0::numeric,
+                extract(epoch FROM v_now - bucket.refilled_at) * 1000
+              ) * v_rate_policy.per_key_limit::numeric / v_rate_policy.per_key_interval_ms::numeric,
+              v_rate_policy.per_key_burst::numeric
+            )
+          ))::integer END
+        ) AS room
+          FROM (
+            SELECT DISTINCT ready.concurrency_key FROM ready_window ready
+             WHERE ready.concurrency_key IS NOT NULL
+          ) keys
+          LEFT JOIN workhorse.rate_limit_bucket bucket
+            ON bucket.queue_name = p_queue_name AND bucket.bucket_scope = 'key'
+           AND bucket.bucket_key = keys.concurrency_key
+      ), budget_room AS (
+        -- A budget this claim never locked has no room, whether or not it exists.
+        SELECT names.budget_name, CASE
+          WHEN NOT (names.budget_name = ANY(v_budget_names)) THEN 0
+          WHEN budget.budget_name IS NULL THEN NULL
+          ELSE LEAST(
+            budget.max_active - (
+              SELECT count(*)::integer
+                FROM workhorse.task_runtime active
+               WHERE active.state = 'active'
+                 AND active.budget_name = names.budget_name
+                 AND active.expires_at > v_now
+            ),
+            CASE WHEN budget.rate_limit IS NOT NULL THEN floor(LEAST(
+              budget.rate_burst::numeric,
+              COALESCE(
+                bucket.tokens + GREATEST(
+                  0::numeric,
+                  extract(epoch FROM v_now - bucket.refilled_at) * 1000
+                ) * budget.rate_limit::numeric / budget.rate_interval_ms::numeric,
+                budget.rate_burst::numeric
+              )
+            ))::integer END
+          )
+        END AS room
+          FROM (
+            SELECT DISTINCT ready.budget_name FROM ready_window ready
+             WHERE ready.budget_name IS NOT NULL
+          ) names
+          LEFT JOIN workhorse.budget budget ON budget.budget_name = names.budget_name
+          LEFT JOIN workhorse.budget_bucket bucket ON bucket.budget_name = names.budget_name
+      ), eligible AS (
+        SELECT ready.task_id, ready.concurrency_key, ready.budget_name, ready.priority,
+               ready.sequence, key_room.room AS key_room, budget_room.room AS budget_room
+          FROM ready_window ready
+          LEFT JOIN key_room ON key_room.concurrency_key = ready.concurrency_key
+          LEFT JOIN budget_room ON budget_room.budget_name = ready.budget_name
+         WHERE COALESCE(key_room.room, 1) >= 1 AND COALESCE(budget_room.room, 1) >= 1
+      ), ranked AS (
+        SELECT eligible.*,
+               row_number() OVER (
+                 PARTITION BY eligible.concurrency_key
+                 ORDER BY eligible.priority DESC, eligible.sequence, eligible.task_id
+               ) AS key_rank,
+               row_number() OVER (
+                 PARTITION BY eligible.budget_name
+                 ORDER BY eligible.priority DESC, eligible.sequence, eligible.task_id
+               ) AS budget_rank
+          FROM eligible
+      ), picked AS (
+        SELECT runtime.task_id, ranked.priority, ranked.sequence
+          FROM ranked
+          JOIN workhorse.task_runtime runtime ON runtime.task_id = ranked.task_id
+         WHERE runtime.state = 'ready'
+           AND (ranked.key_room IS NULL OR ranked.key_rank <= ranked.key_room)
+           AND (ranked.budget_room IS NULL OR ranked.budget_rank <= ranked.budget_room)
+         ORDER BY ranked.priority DESC, ranked.sequence, ranked.task_id
+         FOR NO KEY UPDATE OF runtime SKIP LOCKED
+         LIMIT v_take
+      )
+      SELECT (SELECT array_agg(picked.task_id ORDER BY picked.priority DESC, picked.sequence,
+                               picked.task_id)
+                FROM picked),
+             (SELECT count(*)::integer FROM ready_window),
+             (SELECT COALESCE(bool_or(eligible.key_room IS NOT NULL
+                                      AND eligible.budget_room IS NOT NULL), false)
+                FROM eligible),
+             (SELECT count(*)::integer FROM ranked
+               WHERE (ranked.key_room IS NULL OR ranked.key_rank <= ranked.key_room)
+                 AND (ranked.budget_room IS NULL OR ranked.budget_rank <= ranked.budget_room))
+        INTO v_picked, v_window, v_mixed, v_fit;
+    END IF;
+    v_claimed := COALESCE(cardinality(v_picked), 0);
     EXIT WHEN v_claimed = 0;
+
+    SELECT array_agg(fence ORDER BY fence) INTO v_fences
+      FROM (
+        SELECT nextval('workhorse.fence_token_seq') AS fence
+          FROM generate_series(1, v_claimed)
+      ) allocated;
+    WITH activated AS (
+      UPDATE workhorse.task_runtime runtime
+         SET state = 'active', fence_token = v_fences[array_position(v_picked, runtime.task_id)],
+             worker_id = p_worker_id,
+             acquired_at = v_now, heartbeat_at = v_now, expires_at = v_expires,
+             ready_at = NULL, sequence = NULL, wait_name = NULL,
+             attempt_started_at = COALESCE(runtime.attempt_started_at, v_now),
+             attempt_timeout_at = CASE
+               WHEN task.execution_timeout_ms IS NULL THEN NULL
+               ELSE v_now + make_interval(secs =>
+                 (task.execution_timeout_ms - runtime.execution_used_ms)::double precision / 1000.0)
+             END,
+             error = NULL, updated_at = v_now
+        FROM workhorse.task task
+       WHERE runtime.task_id = ANY(v_picked) AND runtime.state = 'ready'
+         AND task.id = runtime.task_id
+         AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
+      RETURNING runtime.task_id, runtime.current_attempt, runtime.fence_token,
+                runtime.concurrency_key, runtime.budget_name
+    ), events AS (
+      INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
+      SELECT activated.task_id, activated.current_attempt, 'claimed',
+             jsonb_build_object(
+               'worker_id', p_worker_id, 'fence_token', activated.fence_token::text,
+               'expires_at', v_expires
+             )
+        FROM activated
+       ORDER BY activated.fence_token
+    )
+    SELECT array_agg(activated.task_id ORDER BY activated.fence_token),
+           array_agg(activated.concurrency_key ORDER BY activated.fence_token),
+           array_agg(activated.budget_name ORDER BY activated.fence_token)
+      INTO v_ids, v_keys, v_budgets
+      FROM activated;
+    v_claimed := COALESCE(cardinality(v_ids), 0);
+
+    -- Charge each bucket once for the starts this round admitted. A missing bucket starts full,
+    -- as in rate_limit_bucket_v1 and budget_bucket_v1, and refill never runs from a clock ahead of
+    -- this claim.
+    IF v_claimed > 0 AND v_rate_policy.rate_limit IS NOT NULL THEN
+      INSERT INTO workhorse.rate_limit_bucket AS bucket(
+        queue_name, bucket_scope, bucket_key, tokens, refilled_at
+      ) VALUES (p_queue_name, 'queue', '', v_rate_policy.rate_burst - v_claimed, v_now)
+      ON CONFLICT (queue_name, bucket_scope, bucket_key) DO UPDATE
+         SET tokens = LEAST(
+               v_rate_policy.rate_burst::numeric,
+               bucket.tokens + GREATEST(
+                 0::numeric,
+                 extract(epoch FROM v_now - bucket.refilled_at) * 1000
+               ) * v_rate_policy.rate_limit::numeric / v_rate_policy.rate_interval_ms::numeric
+             ) - v_claimed,
+             refilled_at = GREATEST(v_now, bucket.refilled_at);
+    END IF;
+    IF v_claimed > 0 AND v_rate_policy.per_key_limit IS NOT NULL THEN
+      INSERT INTO workhorse.rate_limit_bucket(
+        queue_name, bucket_scope, bucket_key, tokens, refilled_at
+      )
+      SELECT DISTINCT p_queue_name, 'key', claimed.bucket_key, v_rate_policy.per_key_burst, v_now
+        FROM unnest(v_keys) AS claimed(bucket_key)
+       WHERE claimed.bucket_key IS NOT NULL
+      ON CONFLICT DO NOTHING;
+      UPDATE workhorse.rate_limit_bucket bucket
+         SET tokens = LEAST(
+               v_rate_policy.per_key_burst::numeric,
+               bucket.tokens + GREATEST(
+                 0::numeric,
+                 extract(epoch FROM v_now - bucket.refilled_at) * 1000
+               ) * v_rate_policy.per_key_limit::numeric / v_rate_policy.per_key_interval_ms::numeric
+             ) - started.starts,
+             refilled_at = GREATEST(v_now, bucket.refilled_at)
+        FROM (
+          SELECT claimed.bucket_key, count(*)::integer AS starts
+            FROM unnest(v_keys) AS claimed(bucket_key)
+           WHERE claimed.bucket_key IS NOT NULL
+           GROUP BY claimed.bucket_key
+        ) started
+       WHERE bucket.queue_name = p_queue_name AND bucket.bucket_scope = 'key'
+         AND bucket.bucket_key = started.bucket_key;
+    END IF;
+    IF v_claimed > 0 AND EXISTS (
+      SELECT 1 FROM unnest(v_budgets) AS claimed(budget_name) WHERE claimed.budget_name IS NOT NULL
+    ) THEN
+      INSERT INTO workhorse.budget_bucket(budget_name, tokens, refilled_at)
+      SELECT budget.budget_name, budget.rate_burst, v_now
+        FROM workhorse.budget budget
+       WHERE budget.rate_limit IS NOT NULL AND budget.budget_name = ANY(v_budgets)
+      ON CONFLICT DO NOTHING;
+      UPDATE workhorse.budget_bucket bucket
+         SET tokens = LEAST(
+               budget.rate_burst::numeric,
+               bucket.tokens + GREATEST(
+                 0::numeric,
+                 extract(epoch FROM v_now - bucket.refilled_at) * 1000
+               ) * budget.rate_limit::numeric / budget.rate_interval_ms::numeric
+             ) - started.starts,
+             refilled_at = GREATEST(v_now, bucket.refilled_at)
+        FROM workhorse.budget budget, (
+          SELECT claimed.budget_name, count(*)::integer AS starts
+            FROM unnest(v_budgets) AS claimed(budget_name)
+           WHERE claimed.budget_name IS NOT NULL
+           GROUP BY claimed.budget_name
+        ) started
+       WHERE budget.budget_name = started.budget_name AND budget.rate_limit IS NOT NULL
+         AND bucket.budget_name = started.budget_name;
+    END IF;
+
+    RETURN QUERY
+      SELECT task.id, task.task_type, task.priority, task.payload, task.contract_version,
+             task.result_max_bytes,
+             cardinality(task.payload_redact_keys) > 0 OR cardinality(task.result_redact_keys) > 0,
+             task.trace_context,
+             runtime.current_attempt, task.max_attempts,
+             task.retry_policy, task.deadline_at, task.execution_timeout_ms,
+             runtime.attempt_timeout_at, runtime.fence_token, runtime.expires_at
+        FROM unnest(v_ids) WITH ORDINALITY AS claimed(task_id, ordinality)
+        JOIN workhorse.task task ON task.id = claimed.task_id
+        JOIN workhorse.task_runtime runtime ON runtime.task_id = claimed.task_id
+       ORDER BY claimed.ordinality;
+    v_total := v_total + v_claimed;
+    -- A round stops the batch when it fills the limit or the queue's own room. A direct round
+    -- always stops it, because a short one found no further row it could take. A window round also
+    -- stops the batch when its window held every ready row, no row had both a limited key and a
+    -- limited budget, and it activated every row that fit, because then it admitted every row
+    -- claim_one_v1 would have admitted.
+    EXIT WHEN v_direct OR v_total >= p_limit OR (v_queue_capped AND v_claimed >= v_take)
+      OR (v_window < 100 AND NOT v_mixed AND v_claimed >= v_fit);
   END LOOP;
 END;
+$$;
+
+-- Policy-aware claim of one task. It is claim_many_v1 with a limit of one, so a single claim and a
+-- batch share one admission path on every queue.
+CREATE OR REPLACE FUNCTION workhorse.claim_v1(
+  p_queue_name text,
+  p_worker_id text,
+  p_lease_ms integer DEFAULT 30000
+) RETURNS TABLE (
+  task_id uuid, task_type text, priority integer, payload jsonb, contract_version text, result_max_bytes integer,
+  redact_error_details boolean,
+  trace_context jsonb,
+  attempt integer, max_attempts integer,
+  retry_policy jsonb, deadline_at timestamptz, execution_timeout_ms bigint,
+  attempt_timeout_at timestamptz, fence_token bigint, lease_expires_at timestamptz
+)
+LANGUAGE sql
+AS $$
+  SELECT * FROM workhorse.claim_many_v1(p_queue_name, p_worker_id, 1, p_lease_ms);
 $$;
 
 -- Record process-local batch evidence against the immutable claims that entered the coordinator.
@@ -7826,6 +9899,13 @@ BEGIN
         AND claim.event_type = 'claimed'
         AND claim.details->>'worker_id' = p_worker_id
         AND claim.details->>'fence_token' = member.fence_token::text
+   ) OR EXISTS (
+     -- A fast-tier queue may record no claims, so its live lease is the evidence instead.
+     SELECT 1
+       FROM workhorse.fast_task_runtime fast
+      WHERE fast.task_id = member.task_id AND fast.state = 'active'
+        AND fast.attempt = member.attempt AND fast.worker_id = p_worker_id
+        AND fast.fence_token = member.fence_token
    );
   IF v_authorized <> v_size THEN
     RAISE EXCEPTION 'batch members must match retained claims';
@@ -7916,6 +9996,9 @@ DECLARE
   v_state text;
   v_run_at timestamptz;
 BEGIN
+  IF EXISTS (SELECT 1 FROM workhorse.fast_task_runtime fast WHERE fast.task_id = p_task_id) THEN
+    RETURN workhorse.fast_timeout_owned_v1(p_task_id, p_worker_id, p_fence_token);
+  END IF;
   SELECT * INTO v_runtime FROM workhorse.task_runtime runtime
    WHERE runtime.task_id = p_task_id AND runtime.state = 'active'
      AND runtime.worker_id = p_worker_id AND runtime.fence_token = p_fence_token
@@ -8010,6 +10093,9 @@ AS $$
 DECLARE
   v_runtime workhorse.task_runtime%ROWTYPE;
 BEGIN
+  IF EXISTS (SELECT 1 FROM workhorse.fast_task_runtime fast WHERE fast.task_id = p_task_id) THEN
+    RETURN workhorse.fast_expire_owned_v1(p_task_id, p_worker_id, p_fence_token);
+  END IF;
   SELECT * INTO v_runtime FROM workhorse.task_runtime runtime
    WHERE runtime.task_id = p_task_id AND runtime.state = 'active'
      AND runtime.worker_id = p_worker_id AND runtime.fence_token = p_fence_token
@@ -8067,6 +10153,11 @@ BEGIN
   IF p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
     RAISE EXCEPTION 'lease_ms must be between 100 and 86400000';
   END IF;
+  IF EXISTS (SELECT 1 FROM workhorse.fast_task_runtime fast WHERE fast.task_id = p_task_id) THEN
+    RETURN (SELECT beat.status FROM workhorse.fast_heartbeat_many_v1(
+      p_worker_id, ARRAY[p_task_id], ARRAY[p_fence_token], ARRAY[p_lease_ms]
+    ) beat);
+  END IF;
   UPDATE workhorse.task_runtime r
      SET heartbeat_at = CASE
            WHEN r.cancel_requested_at IS NULL
@@ -8107,6 +10198,8 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
   v_now timestamptz := clock_timestamp();
+  v_fast_count bigint;
+  v_full_count bigint;
 BEGIN
   IF p_worker_id IS NULL OR p_worker_id = '' THEN RAISE EXCEPTION 'worker_id must not be empty'; END IF;
   IF p_leases IS NULL OR jsonb_typeof(p_leases) <> 'array'
@@ -8119,6 +10212,44 @@ BEGIN
        OR (item->>'leaseMs')::integer NOT BETWEEN 100 AND 86400000
   ) THEN
     RAISE EXCEPTION 'each lease requires taskId, fenceToken, and leaseMs between 100 and 86400000';
+  END IF;
+  -- A batch that names no fast-tier task takes the full-tier path below unchanged. A batch that
+  -- names no full-tier task takes the fast set-based path, which reports a task that has left
+  -- fast_task_runtime as stale. Counting such a task as full-tier would send a worker's heartbeat
+  -- one lease at a time whenever it raced that worker's own completion, and that path does not
+  -- lock in task ID order. A mixed batch goes one lease at a time, in task ID order.
+  SELECT count(*) FILTER (WHERE fast.task_id IS NOT NULL),
+         count(*) FILTER (WHERE fast.task_id IS NULL AND EXISTS (
+           SELECT 1 FROM workhorse.task_runtime runtime
+            WHERE runtime.task_id = (item->>'taskId')::uuid
+         ))
+    INTO v_fast_count, v_full_count
+    FROM jsonb_array_elements(p_leases) item
+    LEFT JOIN workhorse.fast_task_runtime fast ON fast.task_id = (item->>'taskId')::uuid;
+  IF v_fast_count > 0 AND v_full_count = 0 THEN
+    RETURN QUERY SELECT * FROM workhorse.fast_heartbeat_many_v1(
+      p_worker_id,
+      ARRAY(SELECT (item->>'taskId')::uuid FROM jsonb_array_elements(p_leases) WITH ORDINALITY input(item, n) ORDER BY n),
+      ARRAY(SELECT (item->>'fenceToken')::bigint FROM jsonb_array_elements(p_leases) WITH ORDINALITY input(item, n) ORDER BY n),
+      ARRAY(SELECT (item->>'leaseMs')::integer FROM jsonb_array_elements(p_leases) WITH ORDINALITY input(item, n) ORDER BY n)
+    );
+    RETURN;
+  ELSIF v_fast_count > 0 THEN
+    RETURN QUERY
+      WITH beats AS MATERIALIZED (
+        SELECT sorted.n, sorted.task_id,
+               workhorse.heartbeat_v1(sorted.task_id, p_worker_id, sorted.fence_token, sorted.lease_ms)
+                 AS status
+          FROM (
+            SELECT input.n, (input.item->>'taskId')::uuid AS task_id,
+                   (input.item->>'fenceToken')::bigint AS fence_token,
+                   (input.item->>'leaseMs')::integer AS lease_ms
+              FROM jsonb_array_elements(p_leases) WITH ORDINALITY input(item, n)
+             ORDER BY 2
+          ) sorted
+      )
+      SELECT beats.n, beats.task_id, beats.status FROM beats ORDER BY beats.n;
+    RETURN;
   END IF;
   RETURN QUERY
   WITH leases AS MATERIALIZED (
@@ -8176,6 +10307,9 @@ DECLARE
   v_runtime workhorse.task_runtime%ROWTYPE;
   v_envelope jsonb;
 BEGIN
+  IF EXISTS (SELECT 1 FROM workhorse.fast_task_runtime fast WHERE fast.task_id = p_task_id) THEN
+    RETURN workhorse.fast_acknowledge_cancel_v1(p_task_id, p_worker_id, p_fence_token);
+  END IF;
   SELECT * INTO v_runtime
     FROM workhorse.task_runtime runtime
    WHERE runtime.task_id = p_task_id AND runtime.state = 'active'
@@ -9037,6 +11171,11 @@ BEGIN
     RETURN;
   END IF;
 
+  -- A fast-tier task never resolves dependents, so it cannot be joined as a child.
+  IF cardinality(workhorse.lock_queue_tiers_v1(ARRAY[p_request->>'queue'])) > 0 THEN
+    PERFORM workhorse.reject_fast_feature_v1(p_request->>'queue', 'child tasks');
+  END IF;
+
   BEGIN
     SELECT * INTO v_enqueue FROM workhorse.enqueue_many_v1(jsonb_build_array(p_request));
     IF v_enqueue.outcome <> 'accepted' THEN
@@ -9063,7 +11202,12 @@ BEGIN
                0, floor(extract(epoch FROM v_now - runtime.acquired_at) * 1000)::bigint
              )
            ),
-           attempt_timeout_at = NULL, error = NULL, updated_at = v_now
+           attempt_timeout_at = NULL, error = NULL, updated_at = v_now,
+           pending_prerequisites = (
+             SELECT count(*)::integer FROM workhorse.task_dependency dependency
+              WHERE dependency.dependent_task_id = p_parent_task_id
+                AND dependency.released_at IS NULL
+           )
      WHERE runtime.task_id = p_parent_task_id
        AND runtime.state = 'active'
        AND runtime.worker_id = p_worker_id
@@ -9091,6 +11235,16 @@ BEGIN
         v_edge.child_task_id, 'parent_linked',
         jsonb_build_object('parent_task_id', p_parent_task_id, 'name', p_child_name)
       );
+    -- A child whose deadline had already passed reached its outcome inside the enqueue, before
+    -- its edge existed, so that outcome resolved nothing. Resolve the edge now that the parent
+    -- is blocked, or the parent waits for an outcome that will never fire again.
+    SELECT * INTO v_outcome FROM workhorse.task_outcome outcome
+     WHERE outcome.task_id = v_edge.child_task_id;
+    IF FOUND THEN
+      PERFORM workhorse.resolve_dependents_many_v1(
+        ARRAY[v_outcome.task_id], ARRAY[v_outcome.state]
+      );
+    END IF;
     RETURN QUERY VALUES (
       'created'::text, v_edge.child_task_id, p_request->>'type', v_edge.created_at,
       NULL::timestamptz, NULL::jsonb
@@ -9167,6 +11321,7 @@ DECLARE
   v_result_bytes integer := 2;
   v_now timestamptz;
   v_had_unjoined boolean;
+  v_fast_queue text;
 BEGIN
   IF p_mode NOT IN ('settled', 'all_success') THEN
     RAISE EXCEPTION 'child join mode must be settled or all_success';
@@ -9342,6 +11497,18 @@ BEGIN
     RETURN;
   END IF;
 
+  SELECT item->'request'->>'queue' INTO v_fast_queue
+    FROM jsonb_array_elements(p_children) WITH ORDINALITY input(item, ordinality)
+   WHERE item->'request'->>'queue' = ANY(workhorse.lock_queue_tiers_v1(ARRAY(
+           SELECT DISTINCT child->'request'->>'queue'
+             FROM jsonb_array_elements(p_children) child
+            WHERE COALESCE(child->'request'->>'queue', '') <> '')))
+   ORDER BY ordinality
+   LIMIT 1;
+  IF FOUND THEN
+    PERFORM workhorse.reject_fast_feature_v1(v_fast_queue, 'child tasks');
+  END IF;
+
   BEGIN
     FOR v_item IN
       SELECT item, ordinality::integer AS ordinal
@@ -9383,7 +11550,12 @@ BEGIN
                0, floor(extract(epoch FROM v_now - runtime.acquired_at) * 1000)::bigint
              )
            ),
-           attempt_timeout_at = NULL, error = NULL, updated_at = v_now
+           attempt_timeout_at = NULL, error = NULL, updated_at = v_now,
+           pending_prerequisites = (
+             SELECT count(*)::integer FROM workhorse.task_dependency dependency
+              WHERE dependency.dependent_task_id = p_parent_task_id
+                AND dependency.released_at IS NULL
+           )
      WHERE runtime.task_id = p_parent_task_id
        AND runtime.state = 'active'
        AND runtime.worker_id = p_worker_id
@@ -9417,6 +11589,17 @@ BEGIN
           'fence_token', p_fence_token::text
         )
       );
+    -- A child whose deadline had already passed reached its outcome inside the enqueue, before
+    -- its edge existed. Resolve those edges together now that the parent is blocked.
+    PERFORM workhorse.resolve_dependents_many_v1(terminal.task_ids, terminal.states)
+       FROM (
+         SELECT array_agg(outcome.task_id ORDER BY outcome.task_id) AS task_ids,
+                array_agg(outcome.state ORDER BY outcome.task_id) AS states
+           FROM workhorse.task_child edge
+           JOIN workhorse.task_outcome outcome ON outcome.task_id = edge.child_task_id
+          WHERE edge.parent_task_id = p_parent_task_id
+       ) terminal
+      WHERE terminal.task_ids IS NOT NULL;
     RETURN QUERY VALUES (
       'created'::text, v_children, NULL::jsonb, NULL::integer, v_result_limit
     );
@@ -9429,118 +11612,674 @@ BEGIN
 END;
 $$;
 
--- Resolve every pending edge in the same transaction that materializes a prerequisite outcome.
--- Dependents lock in identity order, so concurrent fan-in outcomes serialize at the one state
--- transition boundary without repeating terminal evidence, FIFO allocation, or notifications.
+-- Settle blocked dependents whose pending edges are all resolved. A rejected dependent fails or is
+-- canceled; every other dependent moves to ready or scheduled. The resolver and the counter repair
+-- both call it while they hold every dependent's runtime row, so it sees the edges those locks
+-- protect. It runs the resolver's release and rejection statements, so it keeps the resolver's
+-- generic plans for the session.
+CREATE OR REPLACE FUNCTION workhorse.settle_dependents_v1(
+  p_now timestamptz, p_rejected_task_ids uuid[], p_released_task_ids uuid[],
+  p_released_prerequisite_task_ids uuid[], p_released_prerequisite_states text[]
+)
+RETURNS integer
+LANGUAGE plpgsql
+SET plan_cache_mode = force_generic_plan
+AS $$
+DECLARE
+  v_terminated integer := 0;
+  v_released integer;
+  v_repaired_task_ids uuid[];
+  v_released_task_ids uuid[] := p_released_task_ids;
+  v_released_prerequisite_task_ids uuid[] := p_released_prerequisite_task_ids;
+  v_released_prerequisite_states text[] := p_released_prerequisite_states;
+  v_deadline_task_ids uuid[];
+  v_queue_names text[];
+  v_task_id uuid;
+  v_queue_name text;
+BEGIN
+  -- A rejected dependent's fate is the first rejecting resolution in the order fail, cancel, with
+  -- ties broken by prerequisite identity. The terminal outcomes are this statement's last write, so
+  -- their trigger resolves the next level after this level's evidence exists.
+  IF p_rejected_task_ids IS NOT NULL THEN
+    PERFORM 1 FROM workhorse.task_runtime runtime
+     WHERE runtime.task_id = ANY(p_rejected_task_ids)
+     ORDER BY runtime.task_id FOR UPDATE;
+
+    -- A rejection flag with no rejecting edge has drifted from the edges. The settlement recounts
+    -- that dependent's pending edges and records a dependency_counter_repaired event. With no
+    -- pending edge the dependent releases; otherwise it stays blocked with the recounted values.
+    WITH unexplained AS MATERIALIZED (
+      SELECT runtime.task_id, edges.pending_edges
+        FROM workhorse.task_runtime runtime
+        CROSS JOIN LATERAL (
+          SELECT count(*)::integer AS pending_edges
+            FROM workhorse.task_dependency dependency
+           WHERE dependency.dependent_task_id = runtime.task_id
+             AND dependency.released_at IS NULL
+        ) edges
+       WHERE runtime.task_id = ANY(p_rejected_task_ids)
+         AND runtime.state = 'blocked'
+         AND NOT EXISTS (
+               SELECT 1 FROM workhorse.task_dependency dependency
+                WHERE dependency.dependent_task_id = runtime.task_id
+                  AND dependency.resolution IN ('fail', 'cancel')
+             )
+    ), recounted AS (
+      UPDATE workhorse.task_runtime runtime
+         SET pending_prerequisites = unexplained.pending_edges, dependency_rejected = false,
+             updated_at = p_now
+        FROM unexplained
+       WHERE runtime.task_id = unexplained.task_id
+         AND unexplained.pending_edges <> 0
+    ), repairs AS (
+      INSERT INTO workhorse.task_event(task_id, event_type, details)
+      SELECT unexplained.task_id, 'dependency_counter_repaired', jsonb_build_object(
+               'source', 'settlement',
+               'pending_edges', unexplained.pending_edges,
+               'dependency_rejected', false
+             )
+        FROM unexplained
+       ORDER BY unexplained.task_id
+    )
+    SELECT array_agg(unexplained.task_id ORDER BY unexplained.task_id)
+             FILTER (WHERE unexplained.pending_edges = 0)
+      INTO v_repaired_task_ids
+      FROM unexplained;
+    IF v_repaired_task_ids IS NOT NULL THEN
+      v_released_task_ids := v_released_task_ids || v_repaired_task_ids;
+      v_released_prerequisite_task_ids := v_released_prerequisite_task_ids
+        || array_fill(NULL::uuid, ARRAY[cardinality(v_repaired_task_ids)]);
+      v_released_prerequisite_states := v_released_prerequisite_states
+        || array_fill(NULL::text, ARRAY[cardinality(v_repaired_task_ids)]);
+    END IF;
+
+    WITH settled AS (
+      SELECT rejected.task_id,
+             CASE WHEN final.resolution = 'fail' THEN 'failed' ELSE 'canceled' END AS state,
+             CASE WHEN final.resolution = 'fail'
+               THEN 'dependency_failed' ELSE 'dependency_canceled' END AS event_type,
+             jsonb_build_object(
+               'name', CASE WHEN final.resolution = 'fail'
+                 THEN 'DependencyFailed' ELSE 'DependencyCanceled' END,
+               'message', CASE WHEN final.resolution = 'fail'
+                 THEN 'a prerequisite reached a terminal outcome rejected by dependency policy'
+                 ELSE 'a prerequisite reached a terminal outcome that canceled its dependent' END,
+               'prerequisite_task_id', final.prerequisite_task_id,
+               'prerequisite_state', final.prerequisite_state,
+               'policy_action', final.resolution
+             ) AS error
+        FROM unnest(p_rejected_task_ids) rejected(task_id)
+        CROSS JOIN LATERAL (
+          SELECT dependency.resolution, dependency.prerequisite_task_id,
+                 outcome.state AS prerequisite_state
+            FROM workhorse.task_dependency dependency
+            LEFT JOIN workhorse.task_outcome outcome
+              ON outcome.task_id = dependency.prerequisite_task_id
+           WHERE dependency.dependent_task_id = rejected.task_id
+             AND dependency.resolution IN ('fail', 'cancel')
+           ORDER BY CASE dependency.resolution WHEN 'fail' THEN 0 ELSE 1 END,
+                    dependency.prerequisite_task_id
+           LIMIT 1
+        ) final
+    ), removed AS (
+      DELETE FROM workhorse.task_runtime runtime
+       USING settled
+       WHERE runtime.task_id = settled.task_id
+         AND runtime.state = 'blocked'
+      RETURNING runtime.task_id, runtime.current_attempt, runtime.run_at
+    ), events AS (
+      INSERT INTO workhorse.task_event(task_id, event_type, details)
+      SELECT removed.task_id, settled.event_type, settled.error
+        FROM removed
+        JOIN settled USING (task_id)
+       ORDER BY removed.task_id
+    )
+    INSERT INTO workhorse.task_outcome(
+      task_id, state, current_attempt, fence_token, run_at, error, finished_at, updated_at,
+      history_through_at
+    )
+    SELECT removed.task_id, settled.state, removed.current_attempt, 0, removed.run_at,
+           settled.error, p_now, p_now, p_now
+      FROM removed
+      JOIN settled USING (task_id)
+     ORDER BY removed.task_id;
+    GET DIAGNOSTICS v_terminated = ROW_COUNT;
+  END IF;
+  IF v_released_task_ids IS NULL THEN
+    RETURN v_terminated;
+  END IF;
+
+  -- Ready dependents take FIFO sequence numbers in identity order. A release that no prerequisite
+  -- state explains comes from a counter repair.
+  WITH releasing AS (
+    SELECT settled.task_id, settled.prerequisite_task_id, settled.prerequisite_state
+      FROM unnest(
+        v_released_task_ids, v_released_prerequisite_task_ids, v_released_prerequisite_states
+      ) settled(task_id, prerequisite_task_id, prerequisite_state)
+  ), ready AS (
+    SELECT ordered.task_id, nextval('workhorse.ready_sequence_seq') AS sequence
+      FROM (
+        SELECT runtime.task_id
+          FROM workhorse.task_runtime runtime
+          JOIN releasing USING (task_id)
+         WHERE runtime.run_at <= p_now
+         ORDER BY runtime.task_id
+        OFFSET 0
+      ) ordered
+  ), released AS (
+    UPDATE workhorse.task_runtime runtime
+       SET state = CASE WHEN ready.task_id IS NULL THEN 'scheduled' ELSE 'ready' END,
+           ready_at = CASE WHEN ready.task_id IS NOT NULL THEN p_now END,
+           sequence = ready.sequence,
+           pending_prerequisites = 0,
+           dependency_rejected = false,
+           updated_at = p_now
+      FROM releasing
+      LEFT JOIN ready ON ready.task_id = releasing.task_id
+     WHERE runtime.task_id = releasing.task_id
+       AND runtime.state = 'blocked'
+    RETURNING runtime.task_id, runtime.state, runtime.queue_name, runtime.deadline_at
+  ), events AS (
+    INSERT INTO workhorse.task_event(task_id, event_type, details)
+    SELECT released.task_id, 'dependency_released', jsonb_build_object(
+             'prerequisite_task_id', releasing.prerequisite_task_id,
+             'state', released.state,
+             'reason', CASE releasing.prerequisite_state
+               WHEN 'succeeded' THEN 'prerequisite_succeeded'
+               WHEN 'failed' THEN 'prerequisite_failed_policy'
+               WHEN 'canceled' THEN 'prerequisite_canceled_policy'
+               ELSE 'dependency_counter_repaired'
+             END
+           )
+      FROM released
+      JOIN releasing USING (task_id)
+     ORDER BY released.task_id
+  )
+  SELECT count(*),
+         array_agg(released.task_id ORDER BY released.task_id)
+           FILTER (WHERE released.deadline_at <= p_now),
+         array_agg(DISTINCT released.queue_name ORDER BY released.queue_name)
+           FILTER (
+             WHERE released.state = 'ready'
+               AND (released.deadline_at IS NULL OR released.deadline_at > p_now)
+           )
+    INTO v_released, v_deadline_task_ids, v_queue_names
+    FROM released;
+  FOREACH v_task_id IN ARRAY coalesce(v_deadline_task_ids, '{}') LOOP
+    PERFORM workhorse.terminalize_deadline_v1(v_task_id);
+  END LOOP;
+  FOREACH v_queue_name IN ARRAY coalesce(v_queue_names, '{}') LOOP
+    PERFORM pg_notify('workhorse_tasks', v_queue_name);
+  END LOOP;
+  RETURN v_terminated + v_released;
+END;
+$$;
+
+-- Resolve every pending edge from a set of prerequisites that reached terminal outcomes in the
+-- same statement. The resolver locks the runtime row of every blocked dependent in identity order
+-- before it touches any edge. A dependent's own terminal transition also holds its runtime row
+-- before it releases the dependent's edges, so the two cannot wait for each other. The lock does
+-- not conflict with the key-share lock an enqueue takes on a prerequisite's runtime row. Only the
+-- delete of a dependent that fails or is canceled waits for such an enqueue. Before that delete,
+-- the resolver locks every rejected dependent for update in identity order, the order in which an
+-- enqueue batch locks all its prerequisites. The delete's plan would otherwise lock them in any
+-- order, and a batch holding one could wait for another that the resolver already held.
+--
+-- Each blocked dependent carries `pending_prerequisites`, the number of its edges still pending,
+-- and `dependency_rejected`, whether a resolved edge chose `fail` or `cancel`. The resolver
+-- subtracts the edges it resolved for a dependent from that counter. A dependent with edges left
+-- costs one runtime update and no edge scan. Only a dependent that settles after a rejection reads
+-- its edges, to name the prerequisite that decides its outcome. A counter that would fall below
+-- zero has drifted from the edges, and so has a counter that reaches zero while a pending edge
+-- remains. The resolver checks for that edge with one probe of the dependent's pending-edge index
+-- before it settles a dependent. For either drift it recounts that dependent's pending edges and
+-- rejections, records a `dependency_counter_repaired` event, and continues with the recount, so
+-- the drift can neither fail the prerequisite's own transition nor release the dependent early.
+--
+-- The generic plan keeps every statement on a primary key or a pending-edge index that the arrays
+-- drive. A custom plan per call cost more to plan than the statements cost to run, and a singly
+-- released task paid that on every completion.
+CREATE OR REPLACE FUNCTION workhorse.resolve_dependents_many_v1(
+  p_prerequisite_task_ids uuid[], p_prerequisite_states text[]
+)
+RETURNS integer
+LANGUAGE plpgsql
+SET plan_cache_mode = force_generic_plan
+AS $$
+DECLARE
+  v_now timestamptz := clock_timestamp();
+  v_dependents uuid[];
+  v_resolved_task_ids uuid[];
+  v_decrements integer[];
+  v_rejections boolean[];
+  v_releasing_prerequisite_task_ids uuid[];
+  v_releasing_prerequisite_states text[];
+  v_rejected_task_ids uuid[];
+  v_released_task_ids uuid[];
+  v_released_prerequisite_task_ids uuid[];
+  v_released_prerequisite_states text[];
+BEGIN
+  IF cardinality(p_prerequisite_task_ids) IS DISTINCT FROM cardinality(p_prerequisite_states) THEN
+    RAISE EXCEPTION 'prerequisite identities and states must have the same length';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM unnest(p_prerequisite_states) prerequisite(state)
+     WHERE prerequisite.state IS NULL
+        OR prerequisite.state NOT IN ('succeeded', 'failed', 'canceled')
+  ) THEN
+    RAISE EXCEPTION 'prerequisite state must be succeeded, failed, or canceled';
+  END IF;
+  SELECT array_agg(locked.task_id ORDER BY locked.task_id) INTO v_dependents
+    FROM (
+      SELECT runtime.task_id
+        FROM workhorse.task_runtime runtime
+       WHERE runtime.task_id IN (
+               SELECT dependency.dependent_task_id
+                 FROM workhorse.task_dependency dependency
+                WHERE dependency.prerequisite_task_id = ANY(p_prerequisite_task_ids)
+                  AND dependency.released_at IS NULL
+             )
+         AND runtime.state = 'blocked'
+       ORDER BY runtime.task_id
+         FOR NO KEY UPDATE OF runtime
+    ) locked;
+  IF v_dependents IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  -- A release names the smallest prerequisite in this call that resolved one of the dependent's
+  -- edges.
+  WITH resolved AS (
+    UPDATE workhorse.task_dependency dependency
+       SET released_at = v_now,
+           resolution = CASE prerequisite.state
+             WHEN 'succeeded' THEN dependency.on_success
+             WHEN 'failed' THEN dependency.on_failure
+             ELSE dependency.on_cancellation
+           END
+      FROM unnest(p_prerequisite_task_ids, p_prerequisite_states) prerequisite(task_id, state)
+     WHERE dependency.prerequisite_task_id = prerequisite.task_id
+       AND dependency.dependent_task_id = ANY(v_dependents)
+       AND dependency.released_at IS NULL
+    RETURNING dependency.dependent_task_id, dependency.prerequisite_task_id,
+              dependency.resolution, prerequisite.state
+  ), counted AS (
+    SELECT resolved.dependent_task_id,
+           count(*)::integer AS decrement,
+           bool_or(resolved.resolution IN ('fail', 'cancel')) AS rejected,
+           (array_agg(resolved.prerequisite_task_id
+              ORDER BY resolved.prerequisite_task_id))[1] AS prerequisite_task_id,
+           (array_agg(resolved.state ORDER BY resolved.prerequisite_task_id))[1] AS state
+      FROM resolved
+     GROUP BY resolved.dependent_task_id
+  )
+  SELECT array_agg(counted.dependent_task_id ORDER BY counted.dependent_task_id),
+         array_agg(counted.decrement ORDER BY counted.dependent_task_id),
+         array_agg(counted.rejected ORDER BY counted.dependent_task_id),
+         array_agg(counted.prerequisite_task_id ORDER BY counted.dependent_task_id),
+         array_agg(counted.state ORDER BY counted.dependent_task_id)
+    INTO v_resolved_task_ids, v_decrements, v_rejections, v_releasing_prerequisite_task_ids,
+         v_releasing_prerequisite_states
+    FROM counted;
+  IF v_resolved_task_ids IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  -- A dependent settles once its counter reaches zero. Settled dependents keep their counters until
+  -- the statement that terminates or releases them, so each dependent takes one runtime write. A
+  -- counter below its resolved edges, or one that reaches zero while a pending edge remains, is
+  -- replaced by a recount of the edges this statement sees, which already include the resolutions
+  -- written above. Only a dependent about to settle pays for the pending-edge probe.
+  WITH measured AS MATERIALIZED (
+    SELECT runtime.task_id, runtime.pending_prerequisites AS recorded, resolved.decrement,
+           runtime.pending_prerequisites < resolved.decrement
+             OR (
+               runtime.pending_prerequisites = resolved.decrement
+               AND EXISTS (
+                 SELECT 1 FROM workhorse.task_dependency dependency
+                  WHERE dependency.dependent_task_id = runtime.task_id
+                    AND dependency.released_at IS NULL
+               )
+             ) AS repaired,
+           runtime.pending_prerequisites - resolved.decrement AS remaining,
+           runtime.dependency_rejected OR resolved.rejected AS rejected,
+           resolved.prerequisite_task_id, resolved.state
+      FROM unnest(
+        v_resolved_task_ids, v_decrements, v_rejections, v_releasing_prerequisite_task_ids,
+        v_releasing_prerequisite_states
+      ) resolved(task_id, decrement, rejected, prerequisite_task_id, state)
+      JOIN workhorse.task_runtime runtime ON runtime.task_id = resolved.task_id
+  ), counted AS MATERIALIZED (
+    SELECT measured.task_id, measured.recorded, measured.decrement, measured.repaired,
+           CASE WHEN measured.repaired THEN edges.pending_edges ELSE measured.remaining END
+             AS remaining,
+           CASE WHEN measured.repaired THEN edges.rejected_edges ELSE measured.rejected END
+             AS rejected,
+           measured.prerequisite_task_id, measured.state
+      FROM measured
+      LEFT JOIN LATERAL (
+        SELECT (count(*) FILTER (WHERE dependency.released_at IS NULL))::integer AS pending_edges,
+               coalesce(bool_or(dependency.resolution IN ('fail', 'cancel')), false)
+                 AS rejected_edges
+          FROM workhorse.task_dependency dependency
+         WHERE dependency.dependent_task_id = measured.task_id
+      ) edges ON measured.repaired
+  ), decremented AS (
+    UPDATE workhorse.task_runtime runtime
+       SET pending_prerequisites = counted.remaining, dependency_rejected = counted.rejected
+      FROM counted
+     WHERE runtime.task_id = counted.task_id
+       AND counted.remaining <> 0
+  ), repairs AS (
+    INSERT INTO workhorse.task_event(task_id, event_type, details)
+    SELECT counted.task_id, 'dependency_counter_repaired', jsonb_build_object(
+             'source', 'resolver',
+             'prerequisite_task_id', counted.prerequisite_task_id,
+             'recorded_pending_prerequisites', counted.recorded,
+             'resolved_edges', counted.decrement,
+             'pending_edges', counted.remaining,
+             'dependency_rejected', counted.rejected
+           )
+      FROM counted
+     WHERE counted.repaired
+     ORDER BY counted.task_id
+  )
+  SELECT array_agg(counted.task_id ORDER BY counted.task_id)
+           FILTER (WHERE counted.remaining = 0 AND counted.rejected),
+         array_agg(counted.task_id ORDER BY counted.task_id)
+           FILTER (WHERE counted.remaining = 0 AND NOT counted.rejected),
+         array_agg(counted.prerequisite_task_id ORDER BY counted.task_id)
+           FILTER (WHERE counted.remaining = 0 AND NOT counted.rejected),
+         array_agg(counted.state ORDER BY counted.task_id)
+           FILTER (WHERE counted.remaining = 0 AND NOT counted.rejected)
+    INTO v_rejected_task_ids, v_released_task_ids, v_released_prerequisite_task_ids,
+         v_released_prerequisite_states
+    FROM counted;
+
+  RETURN workhorse.settle_dependents_v1(
+    v_now, v_rejected_task_ids, v_released_task_ids, v_released_prerequisite_task_ids,
+    v_released_prerequisite_states
+  );
+END;
+$$;
+
+-- Report blocked tasks whose dependency counters disagree with their edges. A row is drifted when
+-- `pending_prerequisites` differs from its pending edges or `dependency_rejected` differs from its
+-- rejecting resolutions. A row is also reported when every edge is resolved but the task is still
+-- blocked, whatever its counter says. Every blocked task keeps all its edges, because pruning
+-- removes only edges whose dependent has a terminal outcome.
+CREATE OR REPLACE FUNCTION workhorse.dependency_counter_drift_v1(p_limit integer DEFAULT 1000)
+RETURNS TABLE(
+  task_id uuid, queue_name text, pending_prerequisites integer, pending_edges integer,
+  dependency_rejected boolean, rejected_edges boolean, counter_drifted boolean,
+  edges_resolved boolean
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+#variable_conflict use_column
+BEGIN
+  IF p_limit IS NULL OR p_limit < 1 OR p_limit > 100000 THEN
+    RAISE EXCEPTION 'dependency counter drift limit must be between 1 and 100000';
+  END IF;
+  RETURN QUERY
+  SELECT runtime.task_id, runtime.queue_name, runtime.pending_prerequisites, edges.pending_edges,
+         runtime.dependency_rejected, edges.rejected_edges,
+         runtime.pending_prerequisites <> edges.pending_edges
+           OR runtime.dependency_rejected <> edges.rejected_edges,
+         edges.pending_edges = 0
+    FROM workhorse.task_runtime runtime
+    CROSS JOIN LATERAL (
+      SELECT (count(*) FILTER (WHERE dependency.released_at IS NULL))::integer AS pending_edges,
+             coalesce(bool_or(dependency.resolution IN ('fail', 'cancel')), false)
+               AS rejected_edges
+        FROM workhorse.task_dependency dependency
+       WHERE dependency.dependent_task_id = runtime.task_id
+    ) edges
+   WHERE runtime.state = 'blocked'
+     AND (
+       runtime.pending_prerequisites <> edges.pending_edges
+       OR runtime.dependency_rejected <> edges.rejected_edges
+       OR edges.pending_edges = 0
+     )
+   ORDER BY runtime.task_id
+   LIMIT p_limit;
+END;
+$$;
+
+-- Repair the blocked tasks that `dependency_counter_drift_v1` reports, in identity order. The
+-- repair locks their runtime rows the way the resolver does, then recounts each one's edges under
+-- the lock, because an edge resolves only while its dependent's runtime row is held. A task with
+-- pending edges left takes the recounted counter and rejection flag. A task with no pending edge
+-- settles: it fails or is canceled after a rejecting resolution and is released otherwise. Each
+-- repaired task gets a `dependency_counter_repaired` event before any settlement event, and the
+-- event carries `p_audit`'s keys.
+CREATE OR REPLACE FUNCTION workhorse.repair_dependency_counters_internal_v1(
+  p_limit integer, p_audit jsonb
+)
+RETURNS TABLE(
+  task_id uuid, recorded_pending_prerequisites integer, pending_edges integer, action text
+)
+LANGUAGE plpgsql
+AS $$
+#variable_conflict use_column
+DECLARE
+  v_now timestamptz := clock_timestamp();
+  v_candidates uuid[];
+  v_locked uuid[];
+  v_task_ids uuid[];
+  v_recorded integer[];
+  v_pending_edges integer[];
+  v_rejected_edges boolean[];
+  v_prerequisite_task_ids uuid[];
+  v_actions text[];
+  v_rejected_task_ids uuid[];
+  v_released_task_ids uuid[];
+  v_released_prerequisite_task_ids uuid[];
+BEGIN
+  SELECT array_agg(drift.task_id ORDER BY drift.task_id) INTO v_candidates
+    FROM workhorse.dependency_counter_drift_v1(p_limit) drift;
+  IF v_candidates IS NULL THEN
+    RETURN;
+  END IF;
+  SELECT array_agg(locked.task_id ORDER BY locked.task_id) INTO v_locked
+    FROM (
+      SELECT runtime.task_id
+        FROM workhorse.task_runtime runtime
+       WHERE runtime.task_id = ANY(v_candidates)
+         AND runtime.state = 'blocked'
+       ORDER BY runtime.task_id
+         FOR NO KEY UPDATE OF runtime
+    ) locked;
+  IF v_locked IS NULL THEN
+    RETURN;
+  END IF;
+
+  -- A release names the prerequisite whose edge resolved last. Its reason records the repair
+  -- rather than a prerequisite outcome.
+  SELECT array_agg(measured.task_id ORDER BY measured.task_id),
+         array_agg(measured.recorded ORDER BY measured.task_id),
+         array_agg(measured.pending_edges ORDER BY measured.task_id),
+         array_agg(measured.rejected_edges ORDER BY measured.task_id),
+         array_agg(measured.prerequisite_task_id ORDER BY measured.task_id),
+         array_agg(measured.action ORDER BY measured.task_id)
+    INTO v_task_ids, v_recorded, v_pending_edges, v_rejected_edges, v_prerequisite_task_ids,
+         v_actions
+    FROM (
+      SELECT runtime.task_id, runtime.pending_prerequisites AS recorded, edges.pending_edges,
+             edges.rejected_edges, edges.prerequisite_task_id,
+             CASE
+               WHEN edges.pending_edges > 0 THEN 'recounted'
+               WHEN edges.rejected_edges THEN 'rejected'
+               ELSE 'released'
+             END AS action
+        FROM workhorse.task_runtime runtime
+        CROSS JOIN LATERAL (
+          SELECT (count(*) FILTER (WHERE dependency.released_at IS NULL))::integer
+                   AS pending_edges,
+                 coalesce(bool_or(dependency.resolution IN ('fail', 'cancel')), false)
+                   AS rejected_edges,
+                 (array_agg(dependency.prerequisite_task_id
+                    ORDER BY dependency.released_at DESC, dependency.prerequisite_task_id)
+                    FILTER (WHERE dependency.released_at IS NOT NULL))[1] AS prerequisite_task_id
+            FROM workhorse.task_dependency dependency
+           WHERE dependency.dependent_task_id = runtime.task_id
+        ) edges
+       WHERE runtime.task_id = ANY(v_locked)
+         AND (
+           runtime.pending_prerequisites <> edges.pending_edges
+           OR runtime.dependency_rejected <> edges.rejected_edges
+           OR edges.pending_edges = 0
+         )
+    ) measured;
+  IF v_task_ids IS NULL THEN
+    RETURN;
+  END IF;
+
+  WITH recounted AS (
+    UPDATE workhorse.task_runtime runtime
+       SET pending_prerequisites = repair.pending_edges,
+           dependency_rejected = repair.rejected_edges,
+           updated_at = v_now
+      FROM unnest(v_task_ids, v_pending_edges, v_rejected_edges, v_actions)
+             repair(task_id, pending_edges, rejected_edges, action)
+     WHERE runtime.task_id = repair.task_id
+       AND repair.action = 'recounted'
+  )
+  INSERT INTO workhorse.task_event(task_id, event_type, details)
+  SELECT repair.task_id, 'dependency_counter_repaired', jsonb_build_object(
+           'source', 'repair',
+           'prerequisite_task_id', repair.prerequisite_task_id,
+           'recorded_pending_prerequisites', repair.recorded,
+           'pending_edges', repair.pending_edges,
+           'dependency_rejected', repair.rejected_edges
+         ) || coalesce(p_audit, '{}'::jsonb)
+    FROM unnest(v_task_ids, v_recorded, v_pending_edges, v_rejected_edges, v_prerequisite_task_ids)
+           repair(task_id, recorded, pending_edges, rejected_edges, prerequisite_task_id)
+   ORDER BY repair.task_id;
+
+  SELECT array_agg(repair.task_id ORDER BY repair.task_id)
+           FILTER (WHERE repair.action = 'rejected'),
+         array_agg(repair.task_id ORDER BY repair.task_id)
+           FILTER (WHERE repair.action = 'released'),
+         array_agg(repair.prerequisite_task_id ORDER BY repair.task_id)
+           FILTER (WHERE repair.action = 'released')
+    INTO v_rejected_task_ids, v_released_task_ids, v_released_prerequisite_task_ids
+    FROM unnest(v_task_ids, v_prerequisite_task_ids, v_actions)
+           repair(task_id, prerequisite_task_id, action);
+  PERFORM workhorse.settle_dependents_v1(
+    v_now, v_rejected_task_ids, v_released_task_ids, v_released_prerequisite_task_ids,
+    array_fill(NULL::text, ARRAY[coalesce(cardinality(v_released_task_ids), 0)])
+  );
+
+  RETURN QUERY
+  SELECT repair.task_id, repair.recorded, repair.pending_edges, repair.action
+    FROM unnest(v_task_ids, v_recorded, v_pending_edges, v_actions)
+           repair(task_id, recorded, pending_edges, action)
+   ORDER BY repair.task_id;
+END;
+$$;
+
+-- The ungoverned repair, kept for callers of migration 0039. It records no audit.
+CREATE OR REPLACE FUNCTION workhorse.repair_dependency_counters_v1(p_limit integer DEFAULT 1000)
+RETURNS TABLE(
+  task_id uuid, recorded_pending_prerequisites integer, pending_edges integer, action text
+)
+LANGUAGE sql
+AS $$
+  SELECT repair.task_id, repair.recorded_pending_prerequisites, repair.pending_edges,
+         repair.action
+    FROM workhorse.repair_dependency_counters_internal_v1(p_limit, '{}'::jsonb) repair;
+$$;
+
+-- List the blocked tasks whose dependency counters disagree with their edges, with the action a
+-- repair would take on each: `recounted` while a pending edge remains, `rejected` after a
+-- rejecting resolution, and `released` otherwise. A repair recounts under lock, so its action can
+-- differ from this plan when an edge resolves in between. It writes nothing.
+CREATE OR REPLACE FUNCTION workhorse.list_dependency_drift_v1(p_limit integer)
+RETURNS TABLE(
+  task_id uuid, queue_name text, pending_prerequisites integer, pending_edges integer,
+  dependency_rejected boolean, rejected_edges boolean, action text
+)
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT drift.task_id, drift.queue_name, drift.pending_prerequisites, drift.pending_edges,
+         drift.dependency_rejected, drift.rejected_edges,
+         CASE
+           WHEN drift.pending_edges > 0 THEN 'recounted'
+           WHEN drift.rejected_edges THEN 'rejected'
+           ELSE 'released'
+         END
+    FROM workhorse.dependency_counter_drift_v1(p_limit) drift
+   ORDER BY drift.task_id;
+$$;
+
+-- Repair drifted blocked tasks on an operator's request. The actor, reason, and request id follow
+-- the limits of every guarded admin mutation. Each `dependency_counter_repaired` event records the
+-- actor and reason, and a preview, digest, and length of the request id rather than the id itself.
+CREATE OR REPLACE FUNCTION workhorse.repair_dependency_drift_v1(
+  p_limit integer,
+  p_requested_by text,
+  p_reason text,
+  p_request_id text
+)
+RETURNS TABLE(
+  task_id uuid, recorded_pending_prerequisites integer, pending_edges integer, action text
+)
+LANGUAGE plpgsql
+AS $$
+#variable_conflict use_column
+DECLARE
+  v_request_id_length integer;
+  v_request_id_preview text;
+BEGIN
+  IF p_requested_by IS NULL OR p_requested_by = '' OR char_length(p_requested_by) > 200 THEN
+    RAISE EXCEPTION 'requested_by must contain between 1 and 200 characters';
+  END IF;
+  IF p_reason IS NULL OR p_reason = '' OR char_length(p_reason) > 2000 THEN
+    RAISE EXCEPTION 'reason must contain between 1 and 2000 characters';
+  END IF;
+  IF p_request_id IS NULL OR p_request_id = '' OR octet_length(p_request_id) > 512 THEN
+    RAISE EXCEPTION 'request_id must contain between 1 and 512 UTF-8 bytes';
+  END IF;
+
+  v_request_id_length := char_length(p_request_id);
+  v_request_id_preview := CASE
+    WHEN v_request_id_length <= 4 THEN repeat('•', v_request_id_length)
+    WHEN v_request_id_length <= 8 THEN left(p_request_id, 2) || '…' || right(p_request_id, 2)
+    ELSE left(p_request_id, 8) || '…' || right(p_request_id, 4)
+  END;
+
+  RETURN QUERY
+  SELECT repair.task_id, repair.recorded_pending_prerequisites, repair.pending_edges,
+         repair.action
+    FROM workhorse.repair_dependency_counters_internal_v1(
+      p_limit,
+      jsonb_build_object(
+        'requested_by', p_requested_by,
+        'request_reason', p_reason,
+        'request_id_preview', v_request_id_preview,
+        'request_id_digest', left(encode(sha256(convert_to(p_request_id, 'UTF8')), 'hex'), 12),
+        'request_id_length', v_request_id_length
+      )
+    ) repair;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.resolve_dependents_v1(
   p_prerequisite_task_id uuid, p_prerequisite_state text
 )
 RETURNS integer
 LANGUAGE plpgsql
 AS $$
-DECLARE
-  v_dependency workhorse.task_dependency%ROWTYPE;
-  v_runtime workhorse.task_runtime%ROWTYPE;
-  v_now timestamptz := clock_timestamp();
-  v_count integer := 0;
-  v_action text;
-  v_final_action text;
-  v_final_prerequisite_task_id uuid;
-  v_final_prerequisite_state text;
-  v_error jsonb;
 BEGIN
   IF p_prerequisite_state NOT IN ('succeeded', 'failed', 'canceled') THEN
     RAISE EXCEPTION 'prerequisite state must be succeeded, failed, or canceled';
   END IF;
-  FOR v_dependency IN
-    SELECT dependency.* FROM workhorse.task_dependency dependency
-     WHERE dependency.prerequisite_task_id = p_prerequisite_task_id
-       AND dependency.released_at IS NULL
-     ORDER BY dependency.dependent_task_id FOR UPDATE
-  LOOP
-    SELECT * INTO v_runtime FROM workhorse.task_runtime runtime
-     WHERE runtime.task_id = v_dependency.dependent_task_id FOR UPDATE;
-    IF NOT FOUND OR v_runtime.state <> 'blocked' THEN CONTINUE; END IF;
-    v_action := CASE p_prerequisite_state
-      WHEN 'succeeded' THEN v_dependency.on_success
-      WHEN 'failed' THEN v_dependency.on_failure
-      WHEN 'canceled' THEN v_dependency.on_cancellation
-    END;
-    UPDATE workhorse.task_dependency dependency
-       SET released_at = v_now, resolution = v_action
-     WHERE dependency.dependent_task_id = v_dependency.dependent_task_id
-       AND dependency.prerequisite_task_id = p_prerequisite_task_id
-       AND dependency.released_at IS NULL;
-    IF EXISTS (
-      SELECT 1 FROM workhorse.task_dependency dependency
-       WHERE dependency.dependent_task_id = v_dependency.dependent_task_id
-         AND dependency.released_at IS NULL
-    ) THEN CONTINUE; END IF;
-    SELECT dependency.resolution, dependency.prerequisite_task_id, outcome.state
-      INTO STRICT v_final_action, v_final_prerequisite_task_id, v_final_prerequisite_state
-      FROM workhorse.task_dependency dependency
-      JOIN workhorse.task_outcome outcome ON outcome.task_id = dependency.prerequisite_task_id
-     WHERE dependency.dependent_task_id = v_dependency.dependent_task_id
-     ORDER BY CASE dependency.resolution WHEN 'fail' THEN 0 WHEN 'cancel' THEN 1 ELSE 2 END,
-              dependency.prerequisite_task_id
-     LIMIT 1;
-    IF v_final_action IN ('fail', 'cancel') THEN
-      v_error := jsonb_build_object(
-        'name', CASE WHEN v_final_action = 'fail' THEN 'DependencyFailed' ELSE 'DependencyCanceled' END,
-        'message', CASE WHEN v_final_action = 'fail'
-          THEN 'a prerequisite reached a terminal outcome rejected by dependency policy'
-          ELSE 'a prerequisite reached a terminal outcome that canceled its dependent' END,
-        'prerequisite_task_id', v_final_prerequisite_task_id,
-        'prerequisite_state', v_final_prerequisite_state,
-        'policy_action', v_final_action
-      );
-      DELETE FROM workhorse.task_runtime runtime
-       WHERE runtime.task_id = v_dependency.dependent_task_id AND runtime.state = 'blocked';
-      IF NOT FOUND THEN CONTINUE; END IF;
-      INSERT INTO workhorse.task_outcome(
-        task_id, state, current_attempt, fence_token, run_at, error, finished_at, updated_at,
-        history_through_at
-      ) VALUES (
-        v_dependency.dependent_task_id,
-        CASE WHEN v_final_action = 'fail' THEN 'failed' ELSE 'canceled' END,
-        v_runtime.current_attempt, 0, v_runtime.run_at, v_error, v_now, v_now, v_now
-      );
-      INSERT INTO workhorse.task_event(task_id, event_type, details)
-        VALUES (
-          v_dependency.dependent_task_id,
-          CASE WHEN v_final_action = 'fail' THEN 'dependency_failed' ELSE 'dependency_canceled' END,
-          v_error
-        );
-      v_count := v_count + 1;
-      CONTINUE;
-    END IF;
-    UPDATE workhorse.task_runtime runtime
-       SET state = CASE WHEN runtime.run_at <= v_now THEN 'ready' ELSE 'scheduled' END,
-           ready_at = CASE WHEN runtime.run_at <= v_now THEN v_now END,
-           sequence = CASE WHEN runtime.run_at <= v_now
-             THEN nextval('workhorse.ready_sequence_seq') END,
-           updated_at = v_now
-     WHERE runtime.task_id = v_dependency.dependent_task_id AND runtime.state = 'blocked'
-    RETURNING * INTO v_runtime;
-    IF NOT FOUND THEN CONTINUE; END IF;
-
-    INSERT INTO workhorse.task_event(task_id, event_type, details)
-      VALUES (v_runtime.task_id, 'dependency_released', jsonb_build_object(
-        'prerequisite_task_id', p_prerequisite_task_id, 'state', v_runtime.state,
-        'reason', CASE p_prerequisite_state
-          WHEN 'succeeded' THEN 'prerequisite_succeeded'
-          WHEN 'failed' THEN 'prerequisite_failed_policy'
-          WHEN 'canceled' THEN 'prerequisite_canceled_policy'
-        END
-      ));
-    v_count := v_count + 1;
-    IF v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= v_now THEN
-      PERFORM workhorse.terminalize_deadline_v1(v_runtime.task_id);
-    ELSIF v_runtime.state = 'ready' THEN
-      PERFORM pg_notify('workhorse_tasks', v_runtime.queue_name);
-    END IF;
-  END LOOP;
-  RETURN v_count;
+  RETURN workhorse.resolve_dependents_many_v1(
+    ARRAY[p_prerequisite_task_id], ARRAY[p_prerequisite_state]
+  );
 END;
 $$;
 
@@ -9572,20 +12311,53 @@ BEGIN
 END;
 $$;
 
+-- One firing per statement resolves every outcome the statement inserted. It first releases the
+-- still-pending edges that enter each new terminal task, then resolves the edges that leave it.
+-- Most outcomes have no pending edge in either direction, so one probe of the two pending-edge
+-- indexes ends the firing before any write or resolver call (SM-948). The probe reads the same
+-- snapshot the release and the resolver would, so it skips only work that would find no edge.
 CREATE OR REPLACE FUNCTION workhorse.resolve_task_outcome_dependencies_v1()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+  v_task_ids uuid[];
+  v_states text[];
 BEGIN
-  PERFORM workhorse.release_own_dependencies_v1(NEW.task_id);
-  PERFORM workhorse.resolve_dependents_v1(NEW.task_id, NEW.state);
-  RETURN NEW;
+  IF NOT EXISTS (
+    SELECT 1 FROM new_outcomes outcome
+     WHERE EXISTS (
+             SELECT 1 FROM workhorse.task_dependency dependency
+              WHERE dependency.dependent_task_id = outcome.task_id
+                AND dependency.released_at IS NULL
+           )
+        OR EXISTS (
+             SELECT 1 FROM workhorse.task_dependency dependency
+              WHERE dependency.prerequisite_task_id = outcome.task_id
+                AND dependency.released_at IS NULL
+           )
+  ) THEN
+    RETURN NULL;
+  END IF;
+  UPDATE workhorse.task_dependency dependency
+     SET released_at = clock_timestamp(), resolution = 'release'
+   WHERE dependency.dependent_task_id IN (SELECT outcome.task_id FROM new_outcomes outcome)
+     AND dependency.released_at IS NULL;
+  SELECT array_agg(outcome.task_id ORDER BY outcome.task_id),
+         array_agg(outcome.state ORDER BY outcome.task_id)
+    INTO v_task_ids, v_states
+    FROM new_outcomes outcome;
+  IF v_task_ids IS NOT NULL THEN
+    PERFORM workhorse.resolve_dependents_many_v1(v_task_ids, v_states);
+  END IF;
+  RETURN NULL;
 END;
 $$;
 
 CREATE OR REPLACE TRIGGER task_outcome_resolve_dependencies_insert
   AFTER INSERT ON workhorse.task_outcome
-  FOR EACH ROW EXECUTE FUNCTION workhorse.resolve_task_outcome_dependencies_v1();
+  REFERENCING NEW TABLE AS new_outcomes
+  FOR EACH STATEMENT EXECUTE FUNCTION workhorse.resolve_task_outcome_dependencies_v1();
 
 CREATE OR REPLACE FUNCTION workhorse.complete_v1(
   p_task_id uuid, p_worker_id text, p_fence_token bigint, p_result jsonb DEFAULT 'null'::jsonb
@@ -9596,6 +12368,9 @@ DECLARE
   v_runtime workhorse.task_runtime%ROWTYPE;
   v_result_max_bytes integer;
 BEGIN
+  IF EXISTS (SELECT 1 FROM workhorse.fast_task_runtime fast WHERE fast.task_id = p_task_id) THEN
+    RETURN workhorse.fast_complete_v1(p_task_id, p_worker_id, p_fence_token, p_result);
+  END IF;
   SELECT task.result_max_bytes INTO v_result_max_bytes
     FROM workhorse.task_runtime runtime
     JOIN workhorse.task task ON task.id = runtime.task_id
@@ -9653,6 +12428,9 @@ DECLARE
   v_retry record;
   v_error jsonb;
 BEGIN
+  IF EXISTS (SELECT 1 FROM workhorse.fast_task_runtime fast WHERE fast.task_id = p_task_id) THEN
+    RETURN workhorse.fast_fail_v1(p_task_id, p_worker_id, p_fence_token, p_error, p_retry_delay_ms);
+  END IF;
   SELECT * INTO v_runtime FROM workhorse.task_runtime r
    WHERE r.task_id = p_task_id AND r.state = 'active' AND r.worker_id = p_worker_id
      AND r.fence_token = p_fence_token
@@ -9749,6 +12527,9 @@ AS $$
 DECLARE
   v_runtime workhorse.task_runtime%ROWTYPE;
 BEGIN
+  IF EXISTS (SELECT 1 FROM workhorse.fast_task_runtime fast WHERE fast.task_id = p_task_id) THEN
+    RETURN workhorse.fast_release_owned_v1(p_task_id, p_worker_id, p_fence_token);
+  END IF;
   SELECT * INTO v_runtime FROM workhorse.task_runtime r
    WHERE r.task_id = p_task_id AND r.state = 'active' AND r.worker_id = p_worker_id
      AND r.fence_token = p_fence_token
@@ -9820,10 +12601,20 @@ DECLARE
   -- The three scans compare against one stable time so the deadline and timeout comparisons
   -- seek their partial indexes, and the three scans agree on which work is due.
   v_now timestamptz := clock_timestamp();
+  v_limit integer := GREATEST(1, LEAST(p_limit, 10000));
+  v_fast record;
 BEGIN
   PERFORM set_config('workhorse.recovery_expired_leases', '0', true);
   PERFORM set_config('workhorse.recovery_retried', '0', true);
   PERFORM set_config('workhorse.recovery_retry_dimensions', '[]', true);
+  -- Fast-tier rows share this call's limit and counters, so one recovery pass covers both tiers.
+  SELECT * INTO STRICT v_fast
+    FROM workhorse.fast_recover_expired_v1(v_limit, p_retry_delay_ms, v_now);
+  v_count := v_fast.recovered;
+  v_expired_leases := v_fast.expired_leases;
+  v_retried := v_fast.retried;
+  v_retry_dimensions := v_fast.retry_dimensions;
+  v_notify_queues := v_fast.queues;
   FOR v_runtime IN
     SELECT runtime.* FROM workhorse.task_runtime runtime
      WHERE runtime.deadline_at IS NOT NULL AND runtime.deadline_at <= v_now
@@ -9834,7 +12625,7 @@ BEGIN
          OR runtime.deadline_at <= runtime.attempt_timeout_at
        )
      ORDER BY runtime.deadline_at, runtime.task_id FOR UPDATE SKIP LOCKED
-     LIMIT GREATEST(1, LEAST(p_limit, 10000))
+     LIMIT GREATEST(0, v_limit - v_count)
   LOOP
     IF workhorse.terminalize_deadline_v1(v_runtime.task_id) THEN
       v_count := v_count + 1;
@@ -9842,7 +12633,7 @@ BEGIN
     END IF;
   END LOOP;
 
-  IF v_count < GREATEST(1, LEAST(p_limit, 10000)) THEN
+  IF v_count < v_limit THEN
     FOR v_runtime IN
       SELECT runtime.* FROM workhorse.task_runtime runtime
        WHERE runtime.state = 'active' AND runtime.attempt_timeout_at IS NOT NULL
@@ -9853,7 +12644,7 @@ BEGIN
            OR runtime.attempt_timeout_at < runtime.deadline_at
          )
        ORDER BY runtime.attempt_timeout_at, runtime.task_id FOR UPDATE SKIP LOCKED
-       LIMIT GREATEST(0, LEAST(p_limit, 10000) - v_count)
+       LIMIT GREATEST(0, v_limit - v_count)
     LOOP
       SELECT * INTO STRICT v_task FROM workhorse.task task WHERE task.id = v_runtime.task_id;
       IF workhorse.timeout_owned_v1(
@@ -9871,7 +12662,7 @@ BEGIN
     END LOOP;
   END IF;
 
-  IF v_count >= GREATEST(1, LEAST(p_limit, 10000)) THEN
+  IF v_count >= v_limit THEN
     PERFORM set_config('workhorse.recovery_expired_leases', v_expired_leases::text, true);
     PERFORM set_config('workhorse.recovery_retried', v_retried::text, true);
     PERFORM set_config('workhorse.recovery_retry_dimensions', v_retry_dimensions::text, true);
@@ -9897,7 +12688,7 @@ BEGIN
          OR r.attempt_timeout_at IS NULL OR r.attempt_timeout_at > v_now
        )
      ORDER BY r.expires_at, r.task_id FOR UPDATE SKIP LOCKED
-     LIMIT GREATEST(0, LEAST(p_limit, 10000) - v_count)
+     LIMIT GREATEST(0, v_limit - v_count)
   LOOP
     SELECT * INTO STRICT v_task FROM workhorse.task j WHERE j.id = v_runtime.task_id;
     IF v_runtime.cancel_requested_at IS NOT NULL THEN
@@ -10239,7 +13030,10 @@ CREATE OR REPLACE FUNCTION workhorse.prune_terminal_tasks_v1(
 ) RETURNS integer
 LANGUAGE plpgsql
 AS $$
-DECLARE v_count integer;
+DECLARE
+  v_count integer;
+  v_fast_count integer;
+  v_fast_before timestamptz := p_history_before;
 BEGIN
   IF p_identity_before IS NULL OR p_outcome_before IS NULL OR p_history_before IS NULL
      OR NOT isfinite(p_identity_before) OR NOT isfinite(p_outcome_before)
@@ -10319,6 +13113,50 @@ BEGIN
     RETURNING result.pruned
   )
   SELECT pruned INTO STRICT v_count FROM recorded;
+
+  -- Fast-tier outcomes share the batch. No fast task is a prerequisite or a child, and its history
+  -- rows exist only when the queue opted in, so their absence stands in for history_through_at.
+  -- The outcome row is the task's archived history, so while cold export is on it also waits for
+  -- the fast_task_outcome export to pass its close time.
+  IF EXISTS (SELECT 1 FROM workhorse.cold_export_policy policy WHERE policy.singleton AND policy.enabled) THEN
+    SELECT LEAST(v_fast_before, COALESCE(
+             (SELECT exported.exported_through FROM workhorse.cold_export_dataset exported
+               WHERE exported.dataset = 'fast_task_outcome'),
+             timestamp '2000-01-01' AT TIME ZONE 'UTC'))
+      INTO v_fast_before;
+  END IF;
+  IF v_count < p_limit THEN
+    WITH candidates AS MATERIALIZED (
+      SELECT task.id
+        FROM workhorse.fast_task_outcome outcome
+        JOIN workhorse.task task ON task.id = outcome.task_id
+       WHERE outcome.finished_at < p_outcome_before
+         AND outcome.finished_at < v_fast_before
+         AND task.created_at < p_identity_before
+         AND NOT EXISTS (SELECT 1 FROM workhorse.task_event event WHERE event.task_id = task.id)
+         AND NOT EXISTS (
+               SELECT 1 FROM workhorse.attempt_history attempt WHERE attempt.task_id = task.id
+             )
+         AND NOT EXISTS (
+               SELECT 1 FROM workhorse.schedule_occurrence occurrence
+                WHERE occurrence.task_id = task.id
+             )
+         AND NOT EXISTS (
+               SELECT 1 FROM workhorse.enqueue_idempotency idempotency
+                WHERE idempotency.task_id = task.id
+             )
+         AND NOT EXISTS (
+               SELECT 1 FROM workhorse.task_redrive redrive
+                WHERE redrive.source_task_id = task.id
+             )
+       ORDER BY outcome.finished_at, outcome.task_id
+       FOR UPDATE OF task SKIP LOCKED
+       LIMIT p_limit - v_count
+    )
+    DELETE FROM workhorse.task task USING candidates WHERE task.id = candidates.id;
+    GET DIAGNOSTICS v_fast_count = ROW_COUNT;
+    v_count := v_count + v_fast_count;
+  END IF;
   RETURN v_count;
 END;
 $$;
@@ -10641,20 +13479,60 @@ CREATE OR REPLACE FUNCTION workhorse.aggregate_stats_v1(
 )
 LANGUAGE sql STABLE
 AS $$
-  WITH enqueue_source AS (
-    SELECT date_bin('1 minute', event.occurred_at,
+  -- A fast-tier task writes no events and, by default, no attempt rows. Its live row and its
+  -- outcome row carry the same facts: the enqueue time, one errors entry per closed attempt, and
+  -- the final attempt. Every such fact happened before the outcome row closed, so outcome rows that
+  -- closed before p_from cannot contribute to the window.
+  WITH fast_row AS MATERIALIZED (
+    SELECT runtime.task_id, runtime.queue_name, runtime.task_type, runtime.enqueued_at,
+           runtime.attempt, runtime.claimed_at, runtime.errors,
+           NULL::text AS state, NULL::text AS closed_as, NULL::jsonb AS error,
+           NULL::timestamptz AS finished_at
+      FROM workhorse.fast_task_runtime runtime
+     UNION ALL
+    SELECT outcome.task_id, outcome.queue_name, outcome.task_type, outcome.enqueued_at,
+           outcome.attempt, outcome.claimed_at, outcome.errors,
+           outcome.state, outcome.closed_as, outcome.error, outcome.finished_at
+      FROM workhorse.fast_task_outcome outcome
+     WHERE outcome.finished_at >= p_from
+  ), fast_attempt AS (
+    SELECT fast_row.task_id, fast_row.queue_name, fast_row.task_type, entry.attempt,
+           entry.outcome, entry.claimed_at, entry.finished_at, entry.error
+      FROM fast_row
+     CROSS JOIN LATERAL jsonb_to_recordset(fast_row.errors) AS entry(
+       attempt integer, claimed_at timestamptz, finished_at timestamptz, outcome text, error jsonb
+     )
+     UNION ALL
+    -- A queue that records attempts already wrote the final attempt to attempt_history.
+    SELECT fast_row.task_id, fast_row.queue_name, fast_row.task_type, fast_row.attempt,
+           COALESCE(fast_row.closed_as, fast_row.state), fast_row.claimed_at, fast_row.finished_at,
+           CASE WHEN fast_row.state <> 'succeeded' THEN fast_row.error END
+      FROM fast_row
+     WHERE fast_row.state IS NOT NULL AND fast_row.claimed_at IS NOT NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM workhorse.attempt_history recorded
+          WHERE recorded.task_id = fast_row.task_id AND recorded.attempt = fast_row.attempt
+       )
+  ), enqueue_source AS (
+    SELECT date_bin('1 minute', enqueue.occurred_at,
                     timestamp '2000-01-01' AT TIME ZONE 'UTC') AS bucket,
-           task.queue_name AS queue, task.task_type AS type,
+           enqueue.queue, enqueue.type,
            count(*)::integer AS enqueued
-      FROM workhorse.task_event event
-      JOIN workhorse.task task ON task.id = event.task_id
-     WHERE event.event_type = 'enqueued'
-       AND event.occurred_at >= p_from AND event.occurred_at < p_to
+      FROM (
+        SELECT event.occurred_at, task.queue_name AS queue, task.task_type AS type
+          FROM workhorse.task_event event
+          JOIN workhorse.task task ON task.id = event.task_id
+         WHERE event.event_type = 'enqueued'
+         UNION ALL
+        SELECT fast_row.enqueued_at, fast_row.queue_name, fast_row.task_type
+          FROM fast_row
+      ) enqueue
+     WHERE enqueue.occurred_at >= p_from AND enqueue.occurred_at < p_to
      GROUP BY 1, 2, 3
   ), attempt_source AS (
     SELECT date_bin('1 minute', history.occurred_at,
                     timestamp '2000-01-01' AT TIME ZONE 'UTC') AS bucket,
-           task.queue_name AS queue, task.task_type AS type,
+           history.queue_name AS queue, history.task_type AS type,
            count(*) FILTER (WHERE history.outcome = 'succeeded')::integer AS attempt_succeeded,
            count(*) FILTER (WHERE history.outcome = 'failed')::integer AS attempt_failed,
            count(*) FILTER (WHERE history.outcome = 'retry')::integer AS attempt_retry,
@@ -10674,25 +13552,60 @@ AS $$
               ORDER BY history.finished_at DESC, history.attempt_id DESC
             ) FILTER (WHERE history.error IS NOT NULL))[1] AS last_error,
            max(history.finished_at) FILTER (WHERE history.error IS NOT NULL) AS last_error_at
-      FROM workhorse.attempt_history history
-      JOIN workhorse.task task ON task.id = history.task_id
-     WHERE history.occurred_at >= p_from AND history.occurred_at < p_to
+      FROM (
+        SELECT recorded.attempt_id, task.queue_name, task.task_type, recorded.outcome,
+               recorded.started_at, recorded.finished_at, recorded.error, recorded.occurred_at
+          FROM workhorse.attempt_history recorded
+          JOIN workhorse.task task ON task.id = recorded.task_id
+         WHERE recorded.occurred_at >= p_from AND recorded.occurred_at < p_to
+         UNION ALL
+        SELECT md5(fast_attempt.task_id::text || ':' || fast_attempt.attempt || ':attempt')::uuid,
+               fast_attempt.queue_name, fast_attempt.task_type, fast_attempt.outcome,
+               fast_attempt.claimed_at, fast_attempt.finished_at, fast_attempt.error,
+               fast_attempt.finished_at
+          FROM fast_attempt
+         WHERE fast_attempt.finished_at >= p_from AND fast_attempt.finished_at < p_to
+      ) history
      GROUP BY 1, 2, 3
   ), wait_bin_source AS (
-    SELECT date_bin('1 minute', claimed.occurred_at,
+    SELECT date_bin('1 minute', first_claim.claimed_at,
                     timestamp '2000-01-01' AT TIME ZONE 'UTC') AS bucket,
-           task.queue_name AS queue, task.task_type AS type,
+           first_claim.queue, first_claim.type,
            workhorse.stat_sketch_index_v1(
-             extract(epoch FROM claimed.occurred_at - enqueued.occurred_at) * 1000
+             extract(epoch FROM first_claim.claimed_at - first_claim.enqueued_at) * 1000
            ) AS bin,
            count(*)::bigint AS samples
-      FROM workhorse.task_event claimed
-      JOIN workhorse.task_event enqueued ON enqueued.task_id = claimed.task_id
-       AND enqueued.event_type = 'enqueued'
-       AND enqueued.occurred_at <= claimed.occurred_at
-      JOIN workhorse.task task ON task.id = claimed.task_id
-     WHERE claimed.event_type = 'claimed' AND claimed.attempt = 1
-       AND claimed.occurred_at >= p_from AND claimed.occurred_at < p_to
+      FROM (
+        SELECT claimed.occurred_at AS claimed_at, enqueued.occurred_at AS enqueued_at,
+               task.queue_name AS queue, task.task_type AS type
+          FROM workhorse.task_event claimed
+          JOIN workhorse.task_event enqueued ON enqueued.task_id = claimed.task_id
+           AND enqueued.event_type = 'enqueued'
+           AND enqueued.occurred_at <= claimed.occurred_at
+          JOIN workhorse.task task ON task.id = claimed.task_id
+         WHERE claimed.event_type = 'claimed' AND claimed.attempt = 1
+           AND claimed.occurred_at >= p_from AND claimed.occurred_at < p_to
+         UNION ALL
+        -- A fast-tier task has no enqueued event, so the join above never counts it twice. Its
+        -- first claim is on the row itself, in an errors entry, or in a recorded attempt.
+        SELECT fast_claim.claimed_at, fast_claim.enqueued_at,
+               fast_claim.queue_name, fast_claim.task_type
+          FROM (
+            SELECT fast_row.enqueued_at, fast_row.queue_name, fast_row.task_type,
+                   CASE
+                     WHEN fast_row.attempt = 1 THEN fast_row.claimed_at
+                     ELSE COALESCE(
+                       (SELECT (entry->>'claimed_at')::timestamptz
+                          FROM jsonb_array_elements(fast_row.errors) entry
+                         WHERE (entry->>'attempt')::integer = 1),
+                       (SELECT recorded.claimed_at FROM workhorse.attempt_history recorded
+                         WHERE recorded.task_id = fast_row.task_id AND recorded.attempt = 1)
+                     )
+                   END AS claimed_at
+              FROM fast_row
+          ) fast_claim
+         WHERE fast_claim.claimed_at >= p_from AND fast_claim.claimed_at < p_to
+      ) first_claim
      GROUP BY 1, 2, 3, 4
   ), wait_source AS (
     SELECT bucket, queue, type,
@@ -10702,13 +13615,21 @@ AS $$
   ), outcome_source AS (
     SELECT date_bin('1 minute', outcome.finished_at,
                     timestamp '2000-01-01' AT TIME ZONE 'UTC') AS bucket,
-           task.queue_name AS queue, task.task_type AS type,
+           outcome.queue_name AS queue, outcome.task_type AS type,
            count(*) FILTER (WHERE outcome.state = 'succeeded')::integer AS task_succeeded,
            count(*) FILTER (WHERE outcome.state = 'failed')::integer AS task_failed,
            count(*) FILTER (WHERE outcome.state = 'canceled')::integer AS task_canceled
-      FROM workhorse.task_outcome outcome
-      JOIN workhorse.task task ON task.id = outcome.task_id
-     WHERE outcome.finished_at >= p_from AND outcome.finished_at < p_to
+      FROM (
+        SELECT full_outcome.state, full_outcome.finished_at,
+               task.queue_name, task.task_type
+          FROM workhorse.task_outcome full_outcome
+          JOIN workhorse.task task ON task.id = full_outcome.task_id
+         WHERE full_outcome.finished_at >= p_from AND full_outcome.finished_at < p_to
+         UNION ALL
+        SELECT fast_row.state, fast_row.finished_at, fast_row.queue_name, fast_row.task_type
+          FROM fast_row
+         WHERE fast_row.state IS NOT NULL AND fast_row.finished_at < p_to
+      ) outcome
      GROUP BY 1, 2, 3
   ), measure AS (
     SELECT source.bucket, source.queue, source.type, source.enqueued,
@@ -11801,6 +14722,24 @@ BEGIN
              CASE WHEN outcome.state = 'canceled' THEN outcome.error->>'reason' END
         FROM workhorse.task_outcome outcome
        WHERE outcome.task_id = query_row.task_id
+      UNION ALL
+      SELECT CASE WHEN fast_runtime.state = 'ready' AND fast_runtime.run_at > statement_timestamp()
+               THEN 'scheduled' ELSE fast_runtime.state END,
+             fast_runtime.attempt, fast_runtime.run_at,
+             COALESCE(fast_runtime.claimed_at, fast_runtime.run_at),
+             fast_runtime.cancel_requested_at, fast_runtime.cancel_requested_by,
+             fast_runtime.cancel_reason
+        FROM workhorse.fast_task_runtime fast_runtime
+       WHERE fast_runtime.task_id = query_row.task_id
+      UNION ALL
+      SELECT fast_outcome.state, fast_outcome.attempt,
+             COALESCE(fast_outcome.claimed_at, fast_outcome.enqueued_at), fast_outcome.finished_at,
+             CASE WHEN fast_outcome.state = 'canceled'
+               THEN NULLIF(fast_outcome.error->>'requested_at', '')::timestamptz END,
+             CASE WHEN fast_outcome.state = 'canceled' THEN fast_outcome.error->>'requested_by' END,
+             CASE WHEN fast_outcome.state = 'canceled' THEN fast_outcome.error->>'reason' END
+        FROM workhorse.fast_task_outcome fast_outcome
+       WHERE fast_outcome.task_id = query_row.task_id
     ) lifecycle ON true
     WHERE (v_queue IS NULL OR query_row.queue_name = v_queue)
       AND (v_type IS NULL OR query_row.task_type = v_type)
@@ -11865,6 +14804,7 @@ BEGIN
 END;
 $$;
 
+-- The views add the events and attempts a fast-tier task keeps in its outcome row.
 CREATE OR REPLACE FUNCTION workhorse.list_task_timeline_v1(
   p_task_id uuid,
   p_limit integer,
@@ -11932,7 +14872,7 @@ BEGIN
       NULL::timestamptz AS finished_at,
       NULL::jsonb AS error,
       1 AS kind_rank
-    FROM workhorse.task_event event
+    FROM workhorse.dashboard_task_event_v1 event
     WHERE event.task_id = p_task_id
       AND (p_cursor_occurred_at IS NULL
         OR (event.occurred_at, 1, event.event_id)
@@ -11954,7 +14894,7 @@ BEGIN
       history.finished_at,
       history.error,
       0 AS kind_rank
-    FROM workhorse.attempt_history history
+    FROM workhorse.dashboard_attempt_history_v1 history
     WHERE history.task_id = p_task_id
       AND (p_cursor_occurred_at IS NULL
         OR (history.occurred_at, 0, history.attempt_id)
@@ -12310,6 +15250,9 @@ DECLARE
   v_fence_token bigint := 0;
   v_claimed_at timestamptz;
 BEGIN
+  IF EXISTS (SELECT 1 FROM workhorse.fast_task_runtime fast WHERE fast.task_id = p_task_id) THEN
+    RETURN workhorse.fast_terminalize_deadline_v1(p_task_id);
+  END IF;
   SELECT * INTO v_runtime FROM workhorse.task_runtime runtime
    WHERE runtime.task_id = p_task_id FOR UPDATE;
   IF NOT FOUND OR v_runtime.deadline_at IS NULL
@@ -12418,6 +15361,7 @@ DECLARE
   v_claimed_at timestamptz;
   v_attempt integer;
   v_envelope jsonb;
+  v_fast_outcome workhorse.fast_task_outcome%ROWTYPE;
 BEGIN
   IF p_task_id IS NULL THEN RAISE EXCEPTION 'task_id is required'; END IF;
   IF p_requested_by IS NOT NULL
@@ -12426,6 +15370,13 @@ BEGIN
   END IF;
   IF p_reason IS NOT NULL AND (p_reason = '' OR char_length(p_reason) > 2000) THEN
     RAISE EXCEPTION 'reason must contain between 1 and 2000 characters';
+  END IF;
+
+  -- A fast-tier task that settles between this check and its lock falls through to the outcome
+  -- lookup below, which reads both outcome tables.
+  IF EXISTS (SELECT 1 FROM workhorse.fast_task_runtime fast WHERE fast.task_id = p_task_id) THEN
+    RETURN QUERY SELECT * FROM workhorse.fast_cancel_v1(p_task_id, p_requested_by, p_reason);
+    IF FOUND THEN RETURN; END IF;
   END IF;
 
   SELECT * INTO v_runtime
@@ -12557,6 +15508,25 @@ BEGIN
     RETURN;
   END IF;
 
+  SELECT * INTO v_fast_outcome FROM workhorse.fast_task_outcome outcome
+   WHERE outcome.task_id = p_task_id;
+  IF FOUND THEN
+    IF v_fast_outcome.state = 'canceled' THEN
+      RETURN QUERY VALUES (
+        'canceled'::text, v_fast_outcome.state, v_fast_outcome.attempt,
+        NULLIF(v_fast_outcome.error->>'requested_at', '')::timestamptz,
+        v_fast_outcome.error->>'requested_by', v_fast_outcome.error->>'reason',
+        v_fast_outcome.finished_at
+      );
+    ELSE
+      RETURN QUERY VALUES (
+        'already_terminal'::text, v_fast_outcome.state, v_fast_outcome.attempt,
+        NULL::timestamptz, NULL::text, NULL::text, v_fast_outcome.finished_at
+      );
+    END IF;
+    RETURN;
+  END IF;
+
   RETURN QUERY VALUES (
     'not_found'::text, NULL::text, NULL::integer, NULL::timestamptz,
     NULL::text, NULL::text, NULL::timestamptz
@@ -12566,9 +15536,39 @@ $$;
 
 -- Stable, versioned relations owned by core for dashboard reads. PostgreSQL stores each view's
 -- expanded target list, so later private-table changes can preserve this contract in one migration.
+-- A fast-tier task keeps its attempts in two places unless its queue records attempts: the capped
+-- errors list holds each retried attempt, and the outcome row names the final claim. This view
+-- presents both as attempt rows. A derived row takes a stable identity from its task and attempt,
+-- so a detail read can find it again. A final attempt that attempt_history already records is not
+-- derived a second time.
 CREATE OR REPLACE VIEW workhorse.dashboard_attempt_history_v1 AS
   SELECT attempt_id, task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at,
-         finished_at, error, occurred_at FROM workhorse.attempt_history;
+         finished_at, error, occurred_at FROM workhorse.attempt_history
+  UNION ALL
+  SELECT md5(entries.task_id::text || ':' || entry.attempt || ':attempt')::uuid, entries.task_id,
+         entry.attempt, entry.fence_token::bigint, entry.worker_id, entry.outcome,
+         entry.claimed_at, entry.claimed_at, entry.finished_at, entry.error, entry.finished_at
+    FROM (
+      SELECT task_id, errors FROM workhorse.fast_task_runtime
+      UNION ALL
+      SELECT task_id, errors FROM workhorse.fast_task_outcome
+    ) entries
+    CROSS JOIN LATERAL jsonb_to_recordset(entries.errors) AS entry(
+      attempt integer, fence_token text, worker_id text, claimed_at timestamptz,
+      finished_at timestamptz, outcome text, error jsonb
+    )
+  UNION ALL
+  SELECT md5(outcome.task_id::text || ':' || outcome.attempt || ':attempt')::uuid, outcome.task_id,
+         outcome.attempt, outcome.fence_token, outcome.worker_id,
+         COALESCE(outcome.closed_as, outcome.state), outcome.claimed_at, outcome.claimed_at,
+         outcome.finished_at, CASE WHEN outcome.state <> 'succeeded' THEN outcome.error END,
+         outcome.finished_at
+    FROM workhorse.fast_task_outcome outcome
+   WHERE outcome.claimed_at IS NOT NULL
+     AND NOT EXISTS (
+       SELECT 1 FROM workhorse.attempt_history recorded
+        WHERE recorded.task_id = outcome.task_id AND recorded.attempt = outcome.attempt
+     );
 CREATE OR REPLACE VIEW workhorse.dashboard_concurrency_policy_v1 AS
   SELECT namespace, queue_name, max_active, max_active_per_key, updated_at
     FROM workhorse.concurrency_policy;
@@ -12586,16 +15586,83 @@ CREATE OR REPLACE VIEW workhorse.dashboard_task_redrive_v1 AS
   SELECT source_task_id, target_task_id, request_id_preview, request_id_digest, request_id_length,
          requested_by, reason, source_state, target_initial_state, requested_at
     FROM workhorse.task_redrive;
+-- A fast-tier task writes no events of its own, so this view derives the three its rows can
+-- support: the enqueue, each claim, and the close. A queue that records claims already has real
+-- claimed events, and a derived claim for the same attempt is left out. Each derived event takes a
+-- stable identity from its task, attempt, and kind.
 CREATE OR REPLACE VIEW workhorse.dashboard_task_event_v1 AS
-  SELECT event_id, task_id, attempt, event_type, details, occurred_at FROM workhorse.task_event;
+  SELECT event_id, task_id, attempt, event_type, details, occurred_at FROM workhorse.task_event
+  UNION ALL
+  SELECT md5(fast.task_id::text || ':0:enqueued')::uuid, fast.task_id, NULL::integer, 'enqueued',
+         jsonb_build_object('tier', 'fast') || COALESCE((
+           SELECT jsonb_build_object('idempotency', jsonb_build_object(
+                    'scope', idempotency.idempotency_scope,
+                    'expires_at', idempotency.expires_at))
+             FROM workhorse.enqueue_idempotency idempotency
+            WHERE idempotency.task_id = fast.task_id
+            LIMIT 1
+         ), '{}'::jsonb),
+         fast.enqueued_at
+    FROM (
+      SELECT task_id, enqueued_at FROM workhorse.fast_task_runtime
+      UNION ALL
+      SELECT task_id, enqueued_at FROM workhorse.fast_task_outcome
+    ) fast
+  UNION ALL
+  SELECT md5(claim.task_id::text || ':' || claim.attempt || ':claimed')::uuid, claim.task_id,
+         claim.attempt, 'claimed',
+         jsonb_build_object('worker_id', claim.worker_id, 'fence_token', claim.fence_token),
+         claim.claimed_at
+    FROM (
+      SELECT runtime.task_id, runtime.attempt, runtime.worker_id, runtime.fence_token::text,
+             runtime.claimed_at
+        FROM workhorse.fast_task_runtime runtime
+       WHERE runtime.state = 'active'
+      UNION ALL
+      SELECT outcome.task_id, outcome.attempt, outcome.worker_id, outcome.fence_token::text,
+             outcome.claimed_at
+        FROM workhorse.fast_task_outcome outcome
+       WHERE outcome.claimed_at IS NOT NULL
+      UNION ALL
+      SELECT entries.task_id, entry.attempt, entry.worker_id, entry.fence_token, entry.claimed_at
+        FROM (
+          SELECT task_id, errors FROM workhorse.fast_task_runtime
+          UNION ALL
+          SELECT task_id, errors FROM workhorse.fast_task_outcome
+        ) entries
+        CROSS JOIN LATERAL jsonb_to_recordset(entries.errors) AS entry(
+          attempt integer, fence_token text, worker_id text, claimed_at timestamptz
+        )
+    ) claim
+   WHERE NOT EXISTS (
+     SELECT 1 FROM workhorse.task_event recorded
+      WHERE recorded.task_id = claim.task_id AND recorded.attempt = claim.attempt
+        AND recorded.event_type = 'claimed'
+   )
+  UNION ALL
+  SELECT md5(outcome.task_id::text || ':' || outcome.attempt || ':terminal')::uuid,
+         outcome.task_id, CASE WHEN outcome.claimed_at IS NULL THEN NULL ELSE outcome.attempt END,
+         COALESCE(outcome.closed_as, outcome.state),
+         jsonb_strip_nulls(jsonb_build_object(
+           'fence_token', outcome.fence_token::text,
+           'error', CASE WHEN outcome.state <> 'succeeded' THEN outcome.error END
+         )),
+         outcome.finished_at
+    FROM workhorse.fast_task_outcome outcome;
 -- `result` is deliberately absent. Its redaction keys live on workhorse.task, so projecting it
 -- here would join every reader of this view to workhorse.task, including the task list and the
 -- activity chart, which never read a result. Measurement showed that join changing the loaded plan
 -- for both. The one caller that needs a result reads workhorse.dashboard_task_result_v1 instead,
 -- which ADR 0027 reserves for exactly this: a policy-bearing read a view cannot carry.
+-- A fast-tier outcome keeps no run time of its own. Its last claim, or its enqueue when it was
+-- never claimed, stands in for one.
 CREATE OR REPLACE VIEW workhorse.dashboard_task_outcome_v1 AS
   SELECT task_id, state, current_attempt, run_at, error, finished_at, updated_at
-    FROM workhorse.task_outcome;
+    FROM workhorse.task_outcome
+  UNION ALL
+  SELECT task_id, state, attempt, COALESCE(claimed_at, enqueued_at), error, finished_at,
+         finished_at
+    FROM workhorse.fast_task_outcome;
 
 -- The redacted terminal result for one task. Redaction is applied here, not by each dashboard
 -- backend, so a backend in any language cannot forget it (ADR 0015, ADR 0035).
@@ -12606,9 +15673,12 @@ STABLE
 PARALLEL SAFE
 AS $$
   SELECT workhorse.redact_top_level_keys_v1(outcome.result, task.result_redact_keys)
-    FROM workhorse.task_outcome outcome
-    JOIN workhorse.task task ON task.id = outcome.task_id
-   WHERE outcome.task_id = p_task_id;
+    FROM (
+      SELECT task_id, result FROM workhorse.task_outcome WHERE task_id = p_task_id
+      UNION ALL
+      SELECT task_id, result FROM workhorse.fast_task_outcome WHERE task_id = p_task_id
+    ) outcome
+    JOIN workhorse.task task ON task.id = outcome.task_id;
 $$;
 CREATE OR REPLACE VIEW workhorse.dashboard_task_progress_v1 AS
   SELECT task_id, progress_value, revision, attempt, fence_token, worker_id, created_at, updated_at
@@ -12622,7 +15692,19 @@ CREATE OR REPLACE VIEW workhorse.dashboard_task_runtime_v1 AS
   SELECT task_id, queue_name, state, current_attempt, fence_token, run_at, ready_at, worker_id,
          acquired_at, heartbeat_at, expires_at, attempt_timeout_at, wait_name, attempt_started_at,
          cancel_requested_at, cancel_requested_by, cancel_reason, error, updated_at, priority
-    FROM workhorse.task_runtime;
+    FROM workhorse.task_runtime
+  UNION ALL
+  -- A delayed fast-tier row is ready with a future run time. The dashboard shows it as scheduled,
+  -- the state a full-tier task has in that position. A fast-tier row keeps no heartbeat time; a
+  -- heartbeat only moves its expiry.
+  SELECT task_id, queue_name,
+         CASE WHEN state = 'ready' AND run_at > statement_timestamp() THEN 'scheduled' ELSE state END,
+         attempt, fence_token, run_at,
+         CASE WHEN state = 'ready' AND run_at <= statement_timestamp() THEN run_at END,
+         worker_id, claimed_at, NULL::timestamptz, expires_at, attempt_timeout_at, NULL::text,
+         claimed_at, cancel_requested_at, cancel_requested_by, cancel_reason,
+         errors -> -1 -> 'error', COALESCE(claimed_at, run_at), priority
+    FROM workhorse.fast_task_runtime;
 -- `payload` is redacted here, not by each backend, for the reason recorded on
 -- dashboard_task_outcome_v1. The key arrays stay projected so the dashboard can report how many
 -- keys were withheld without ever receiving their values.
@@ -12646,7 +15728,7 @@ CREATE OR REPLACE VIEW workhorse.dashboard_maintenance_run_v1 AS
   SELECT run_id, routine_name, started_at, completed_at, outcome, rows_affected, phases
     FROM workhorse.maintenance_run;
 CREATE OR REPLACE VIEW workhorse.dashboard_queue_control_v1 AS
-  SELECT queue_name, paused FROM workhorse.queue_control;
+  SELECT queue_name, paused, tier, record_attempts, record_claims FROM workhorse.queue_control;
 CREATE OR REPLACE VIEW workhorse.dashboard_rate_limit_policy_v1 AS
   SELECT queue_name FROM workhorse.rate_limit_policy;
 CREATE OR REPLACE VIEW workhorse.dashboard_retention_policy_v1 AS
@@ -13813,6 +16895,9 @@ BEGIN
        WHERE NOT v_approximate GROUP BY task.queue_name
     )
     SELECT known.queue_name AS queue, COALESCE(control.paused, false) AS paused,
+           COALESCE(control.tier, 'full') AS tier,
+           COALESCE(control.record_attempts, false) AS record_attempts,
+           COALESCE(control.record_claims, false) AS record_claims,
            COALESCE(live.scheduled, 0)::integer AS scheduled,
            COALESCE(live.ready, 0)::integer AS ready,
            COALESCE(live.active, 0)::integer AS active,
@@ -13881,7 +16966,9 @@ BEGIN
       'ready', v_row.ready, 'active', v_row.active, 'succeeded', v_succeeded,
       'failed', v_failed, 'canceled', v_canceled,
       'terminalCountsApproximate', v_approximate,
-      'concurrencyPolicy', v_concurrency, 'rateLimitPolicy', v_rate_limit));
+      'concurrencyPolicy', v_concurrency, 'rateLimitPolicy', v_rate_limit,
+      'tier', v_row.tier, 'recordAttempts', v_row.record_attempts,
+      'recordClaims', v_row.record_claims));
   END LOOP;
 
   RETURN jsonb_build_object(
@@ -15276,7 +18363,7 @@ AS $$
    WHERE state.singleton
 $$;
 
--- The UTC day that holds the oldest retained row of one history dataset, or NULL when nothing is
+-- The UTC day that holds the oldest retained row of one exported dataset, or NULL when nothing is
 -- retained. Day partitions answer from their bounds; the default partition is scanned for its minimum.
 CREATE OR REPLACE FUNCTION workhorse.cold_export_oldest_history_day_internal_v1(
   p_dataset text
@@ -15287,8 +18374,15 @@ AS $$
 DECLARE v_partition_day timestamptz;
 DECLARE v_default_day timestamptz;
 BEGIN
-  IF p_dataset NOT IN ('task_event', 'attempt_history') THEN
-    RAISE EXCEPTION 'cold export dataset must be task_event or attempt_history';
+  IF p_dataset NOT IN ('task_event', 'attempt_history', 'fast_task_outcome') THEN
+    RAISE EXCEPTION 'cold export dataset must be task_event, attempt_history or fast_task_outcome';
+  END IF;
+  -- Fast-tier outcomes live in one unpartitioned table, so its minimum close time is the answer.
+  IF p_dataset = 'fast_task_outcome' THEN
+    RETURN (
+      SELECT date_trunc('day', min(outcome.finished_at) AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+        FROM workhorse.fast_task_outcome outcome
+    );
   END IF;
   SELECT min(((regexp_match(
            pg_get_expr(child.relpartbound, child.oid),
@@ -15342,7 +18436,7 @@ AS $$
            WHERE failed.dataset = names.dataset AND failed.last_error IS NOT NULL
            ORDER BY failed.updated_at DESC LIMIT 1),
          GREATEST(policy.updated_at, exported.updated_at)
-    FROM unnest(ARRAY['task_event', 'attempt_history']) AS names(dataset)
+    FROM unnest(ARRAY['attempt_history', 'fast_task_outcome', 'task_event']) AS names(dataset)
     LEFT JOIN workhorse.cold_export_policy policy ON policy.singleton
     LEFT JOIN workhorse.cold_export_dataset exported ON exported.dataset = names.dataset
     LEFT JOIN LATERAL (
@@ -15391,7 +18485,7 @@ BEGIN
   ON CONFLICT (singleton) DO NOTHING;
   SELECT * INTO STRICT v_policy FROM workhorse.cold_export_policy WHERE singleton FOR UPDATE;
   IF p_enabled THEN
-    FOREACH v_dataset IN ARRAY ARRAY['task_event', 'attempt_history'] LOOP
+    FOREACH v_dataset IN ARRAY ARRAY['task_event', 'attempt_history', 'fast_task_outcome'] LOOP
       v_oldest := COALESCE(
         workhorse.cold_export_oldest_history_day_internal_v1(v_dataset),
         date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
@@ -15451,8 +18545,8 @@ DECLARE v_exported_through timestamptz;
 DECLARE v_limit timestamptz;
 DECLARE v_segment workhorse.cold_export_segment%ROWTYPE;
 BEGIN
-  IF p_dataset NOT IN ('task_event', 'attempt_history') THEN
-    RAISE EXCEPTION 'cold export dataset must be task_event or attempt_history';
+  IF p_dataset NOT IN ('task_event', 'attempt_history', 'fast_task_outcome') THEN
+    RAISE EXCEPTION 'cold export dataset must be task_event, attempt_history or fast_task_outcome';
   END IF;
   IF p_exporter_id IS NULL OR p_exporter_id = '' OR octet_length(p_exporter_id) > 256 THEN
     RAISE EXCEPTION 'cold export exporter id must contain 1 through 256 bytes';
@@ -15551,8 +18645,19 @@ BEGIN
               OR (history.occurred_at, history.attempt_id) > (p_after_occurred_at, p_after_id))
        ORDER BY history.occurred_at, history.attempt_id
        LIMIT p_limit;
+  ELSIF p_dataset = 'fast_task_outcome' THEN
+    -- A fast-tier task's attempts live in its outcome row, so the row is its archived history.
+    -- The close time orders the row, and the task id breaks ties.
+    RETURN QUERY
+      SELECT outcome.finished_at, outcome.task_id, to_jsonb(outcome)
+        FROM workhorse.fast_task_outcome outcome
+       WHERE outcome.finished_at >= p_from AND outcome.finished_at < p_to
+         AND (p_after_id IS NULL
+              OR (outcome.finished_at, outcome.task_id) > (p_after_occurred_at, p_after_id))
+       ORDER BY outcome.finished_at, outcome.task_id
+       LIMIT p_limit;
   ELSE
-    RAISE EXCEPTION 'cold export dataset must be task_event or attempt_history';
+    RAISE EXCEPTION 'cold export dataset must be task_event, attempt_history or fast_task_outcome';
   END IF;
 END;
 $$;
@@ -15669,12 +18774,29 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (21, 'a claim locks only the row it takes'),
   (22, 'history staging through pg_temp'),
   (23, 'a canceled dependent releases its edges'),
-  (24, 'row retention lag waits for history retention')
+  (24, 'row retention lag waits for history retention'),
+  (25, 'add a fast task tier'),
+  (26, 'a dependent enqueue holds its prerequisites against completion'),
+  (27, 'write full-tier enqueue rows set-based'),
+  (28, 'release dependents per statement'),
+  (29, 'claim policy limited tasks as a set'),
+  (30, 'release dependents through a pending-prerequisite counter'),
+  (31, 'lock a worker''s fast-tier rows in task ID order'),
+  (32, 'a child terminal at creation settles its parent'),
+  (33, 'lock an enqueue batch''s prerequisites before its first request'),
+  (34, 'reject an oversized fast-tier result per row'),
+  (35, 'serialize the concurrency capacity notification with claims'),
+  (36, 'plan dependency release once per session'),
+  (37, 'report queue tier and history in the dashboard'),
+  (38, 'detect and repair pending-prerequisite counter drift'),
+  (39, 'release a fused claim lock before it can deadlock'),
+  (40, 'govern the dependency counter drift check and repair'),
+  (41, 'cut the plain full-tier per-task claim and trigger cost')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (24) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (41) ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.protocol_version(version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )

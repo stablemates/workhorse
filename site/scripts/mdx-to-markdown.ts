@@ -1,15 +1,16 @@
 /**
  * Turns an MDX page body into the Markdown an agent reads at `/docs/<slug>.md`.
  *
- * A docs page shows its three languages in a `<Tabs>` component, so the HTML
- * hides two of them behind a control an agent cannot click. Copying the body
- * into the twin unchanged hands the agent the raw `<Tabs>` and `<Tab>` tags
- * instead, which its tooling reads as markup it has to strip. This transform
+ * A docs page shows its languages — TypeScript, Python, Go, and Rust — in a
+ * `<Tabs>` component, so the HTML hides all but one of them behind a control an
+ * agent cannot click. Copying the body into the twin unchanged hands the agent
+ * the raw `<Tabs>` and `<Tab>` tags instead, which its tooling reads as markup
+ * it has to strip. This transform
  * expands every tab inline under a bold language label, so the twin carries all
- * three languages as ordinary Markdown.
+ * four languages as ordinary Markdown.
  *
  * Expansion costs no size. The twin already carried every language; only the
- * HTML hid two of them.
+ * HTML hid all but one of them.
  *
  * A tab body is indented to sit under its tag, so the transform removes that
  * indentation. A fenced block indented by four spaces is an indented code block

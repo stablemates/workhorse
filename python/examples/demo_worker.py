@@ -13,8 +13,10 @@ from workhorse import HandlerContext, Json, Worker, run_worker_process
 LANGUAGE_TASK_TYPE = "demo.language-worker"
 SHARED_TASK_TYPE = "demo.shared-worker"
 PYTHON_QUEUE = "demo-python"
+PYTHON_FAST_QUEUE = "demo-python-fast"
 SHARED_QUEUE = "demo-shared"
 SCHEDULE_NAMESPACE = "workhorse-demo"
+FAST_TIER_SCHEDULE_NAMESPACE = "workhorse-demo-fast-tier"
 WORKER_CONCURRENCY = 3
 DEFAULT_POLL_MS = 15_000
 
@@ -46,6 +48,23 @@ def worker_id() -> str:
     return f"demo-python-{hostname or 'unknown-host'}-{os.getpid()}-{str(uuid4())[:8]}"
 
 
+def build_worker(pool: ConnectionPool, poll_ms: int) -> Worker:
+    return (
+        Worker(
+            pool,
+            queues=(PYTHON_QUEUE, SHARED_QUEUE, PYTHON_FAST_QUEUE),
+            worker_id=worker_id(),
+            concurrency=WORKER_CONCURRENCY,
+            poll_ms=poll_ms,
+            schedule_namespaces=(SCHEDULE_NAMESPACE, FAST_TIER_SCHEDULE_NAMESPACE),
+            maintenance_interval_ms=1_000,
+            registry_interval_ms=250,
+        )
+        .handle(LANGUAGE_TASK_TYPE, language_task)
+        .handle(SHARED_TASK_TYPE, shared_task)
+    )
+
+
 def main() -> None:
     poll_ms = int(os.environ.get("WORKHORSE_WORKER_POLL_MS", DEFAULT_POLL_MS))
     with ConnectionPool(
@@ -54,21 +73,7 @@ def main() -> None:
         max_size=WORKER_CONCURRENCY + 3,
         kwargs={"autocommit": True},
     ) as pool:
-        worker = (
-            Worker(
-                pool,
-                queues=(PYTHON_QUEUE, SHARED_QUEUE),
-                worker_id=worker_id(),
-                concurrency=WORKER_CONCURRENCY,
-                poll_ms=poll_ms,
-                schedule_namespaces=(SCHEDULE_NAMESPACE,),
-                maintenance_interval_ms=1_000,
-                registry_interval_ms=250,
-            )
-            .handle(LANGUAGE_TASK_TYPE, language_task)
-            .handle(SHARED_TASK_TYPE, shared_task)
-        )
-        run_worker_process(worker)
+        run_worker_process(build_worker(pool, poll_ms))
 
 
 if __name__ == "__main__":

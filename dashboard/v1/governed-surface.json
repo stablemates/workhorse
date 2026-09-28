@@ -723,6 +723,7 @@
             "debounced",
             "dependency_blocked",
             "dependency_canceled",
+            "dependency_counter_repaired",
             "dependency_failed",
             "dependency_released",
             "enqueued",
@@ -1371,6 +1372,12 @@
         "queues[].ready": {
           "type": "number"
         },
+        "queues[].recordAttempts": {
+          "type": "boolean"
+        },
+        "queues[].recordClaims": {
+          "type": "boolean"
+        },
         "queues[].scheduled": {
           "type": "number"
         },
@@ -1379,6 +1386,13 @@
         },
         "queues[].terminalCountsApproximate": {
           "type": "boolean"
+        },
+        "queues[].tier": {
+          "type": "enum",
+          "enum": [
+            "fast",
+            "full"
+          ]
         },
         "rateLimitPoliciesCapped": {
           "type": "boolean"

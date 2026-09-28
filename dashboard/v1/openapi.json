@@ -1604,7 +1604,7 @@
                       },
                       "types": {
                         "default": [],
-                        "maxItems": 43,
+                        "maxItems": 44,
                         "type": "array",
                         "items": {
                           "type": "string",
@@ -1641,6 +1641,7 @@
                             "dependency_released",
                             "dependency_failed",
                             "dependency_canceled",
+                            "dependency_counter_repaired",
                             "child_created",
                             "child_joined",
                             "children_created",
@@ -2121,6 +2122,7 @@
                       "json": {
                         "queues": [
                           {
+                            "tier": "full",
                             "queue": "conformance",
                             "ready": 2,
                             "active": 0,
@@ -2129,11 +2131,14 @@
                             "canceled": 0,
                             "scheduled": 3,
                             "succeeded": 1,
+                            "recordClaims": false,
+                            "recordAttempts": false,
                             "rateLimitPolicy": null,
                             "concurrencyPolicy": null,
                             "terminalCountsApproximate": false
                           },
                           {
+                            "tier": "full",
                             "queue": "conformance-purge",
                             "ready": 1,
                             "active": 0,
@@ -2142,11 +2147,14 @@
                             "canceled": 0,
                             "scheduled": 0,
                             "succeeded": 0,
+                            "recordClaims": false,
+                            "recordAttempts": false,
                             "rateLimitPolicy": null,
                             "concurrencyPolicy": null,
                             "terminalCountsApproximate": false
                           },
                           {
+                            "tier": "full",
                             "queue": "conformance-redrive",
                             "ready": 0,
                             "active": 0,
@@ -2155,6 +2163,8 @@
                             "canceled": 0,
                             "scheduled": 0,
                             "succeeded": 0,
+                            "recordClaims": false,
+                            "recordAttempts": false,
                             "rateLimitPolicy": null,
                             "concurrencyPolicy": null,
                             "terminalCountsApproximate": false
@@ -8269,6 +8279,18 @@
                 "type": "null"
               }
             ]
+          },
+          "tier": {
+            "enum": [
+              "fast",
+              "full"
+            ]
+          },
+          "recordAttempts": {
+            "type": "boolean"
+          },
+          "recordClaims": {
+            "type": "boolean"
           }
         },
         "required": [

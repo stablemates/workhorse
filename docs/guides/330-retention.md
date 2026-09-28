@@ -50,6 +50,10 @@ from raw history, so cleanup won't pass the statistics watermark. See
 parent of another task, and deleting it would break the lineage. It waits until the child is
 gone too.
 
+A task on a [fast-tier queue](305-fast-tier.md) usually has no events or attempts, so its outcome
+row stands in for its history. Cleanup deletes that row only once both the outcome and history
+windows have passed.
+
 ## Statistics are the exception
 
 Summary rows are the one category _not_ bound by "keep the task at least as long". That's

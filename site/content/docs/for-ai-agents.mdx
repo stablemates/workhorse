@@ -46,7 +46,7 @@ A Python, Go, or Rust project has no Node.js dependency tree to resolve that bin
 version instead, which must equal the SDK version the application depends on:
 
 ```bash
-npx --package @stablemates/workhorse@0.3.0 workhorse schema install
+npx --package @stablemates/workhorse@0.4.0 workhorse schema install
 ```
 
 That command needs Node.js on the machine that runs your deployment, and
@@ -61,7 +61,7 @@ Install the SDK your application uses:
 npm install @stablemates/workhorse
 pip install stablemates-workhorse
 go get github.com/stablemates/workhorse/go
-cargo add workhorse --git https://github.com/stablemates/workhorse
+cargo add workhorse
 ```
 
 **Enqueue inside the transaction that writes your application data.** This is what replaces an

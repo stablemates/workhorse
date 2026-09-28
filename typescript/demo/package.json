@@ -1,6 +1,6 @@
 {
   "name": "@stablemates/workhorse-demo",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Interactive end-to-end demo of Workhorse",
   "files": [
@@ -28,21 +28,21 @@
     "@opentelemetry/exporter-logs-otlp-http": "0.222.0",
     "@opentelemetry/sdk-logs": "0.222.0",
     "@opentelemetry/sdk-node": "0.222.0",
-    "@orpc/client": "1.15.1",
-    "@orpc/server": "1.15.1",
+    "@orpc/client": "1.15.4",
+    "@orpc/server": "1.15.4",
     "@stablemates/workhorse": "workspace:*",
     "@stablemates/workhorse-dashboard-server": "workspace:*",
     "@stablemates/workhorse-drizzle": "workspace:*",
     "@stablemates/workhorse-otel": "workspace:*",
-    "drizzle-orm": "^0.45.2",
-    "hono": "^4.13.8",
+    "drizzle-orm": "^0.45.3",
+    "hono": "^4.13.9",
     "pg": "^8.23.0"
   },
   "devDependencies": {
     "@stablemates/workhorse-dashboard": "workspace:*",
-    "@types/node": "^26.6.1",
+    "@types/node": "^26.6.2",
     "@types/pg": "^8.23.1",
-    "tsx": "^4.23.13",
+    "tsx": "^4.23.15",
     "typescript": "^5.8.3"
   },
   "engines": {

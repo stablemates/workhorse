@@ -1,12 +1,12 @@
 ---
 title: Releases
-description: The current published version of the TypeScript, Python, and Go lines, when each shipped, and which versions receive fixes.
+description: The current published version of the TypeScript, Python, Go, and Rust lines, when each shipped, and which versions receive fixes.
 ---
 
-Workhorse publishes three lines from one source commit: nine npm packages released in lockstep, one
-Python distribution, and one Go module. Each line carries its own version, so "the current version"
-is three numbers rather than one. This page prints all three, because you cannot apply the support
-policy below without them.
+Workhorse publishes four lines from one source commit: nine npm packages released in lockstep, one
+Python distribution, one Go module, and one Rust crate. Each line carries its own version, so "the
+current version" is four numbers rather than one. This page prints all four, because you cannot
+apply the support policy below without them.
 
 The build reads every version here from the changelog that owns its line. Nobody types a
 version into this page, so it cannot disagree with the release it describes.
@@ -21,8 +21,8 @@ older version keeps working, and it keeps the defect: upgrade to the current lin
 fix.
 
 Which lines move depends on where the defect lives. A defect in the SQL schema or in the protocol
-the three SDKs share is fixed on all three lines as one release train. A defect in one SDK ships on
-that line alone, and the other two do not move.
+the SDKs share is fixed on every line as one release train. A defect in one SDK ships on that line
+alone, and the other lines do not move.
 
 That single-line policy is affordable because every upgrade is an ordinary rolling deployment. A
 minor adds, a major adds, and the one destructive act is a contract step you run on your own

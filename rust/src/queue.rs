@@ -15,6 +15,7 @@ use crate::compatibility::{check_compatibility, read_compatibility_state, Compat
 use crate::contracts::{
     load_contract, serialize_contracts, ContractCache, PayloadContract, TaskTypeContracts,
 };
+use crate::fenced_write::fenced_rows;
 use crate::policies::{
     self, Budget, BudgetDefinition, ConcurrencyPolicy, ConcurrencyPolicyDefinition,
     RateLimitPolicy, RateLimitPolicyDefinition,
@@ -483,6 +484,8 @@ impl<E: Executor> Queue<E> {
         Ok(())
     }
 
+    /// Stores `definitions` for `namespace`. A sync that PostgreSQL aborts as a deadlock victim is
+    /// sent again, as a fenced write is.
     pub async fn sync_concurrency_policies(
         &self,
         namespace: &str,
@@ -490,14 +493,14 @@ impl<E: Executor> Queue<E> {
         prune: bool,
     ) -> Result<Vec<ConcurrencyPolicy>, Error> {
         let document = policies::concurrency_document(definitions);
-        self.sync_policies(
+        self.assert_compatible().await?;
+        let rows = fenced_rows(
+            &self.executor,
             sql::SYNC_CONCURRENCY_POLICIES_V1,
-            namespace,
-            document,
-            prune,
-            policies::concurrency_policy,
+            &[&namespace, &document, &prune],
         )
-        .await
+        .await?;
+        Ok(rows.iter().map(policies::concurrency_policy).collect::<Result<_, _>>()?)
     }
 
     pub async fn sync_rate_limit_policies(

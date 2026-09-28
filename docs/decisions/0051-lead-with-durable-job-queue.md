@@ -14,7 +14,7 @@ say "PostgreSQL-native durable execution protocol". The root README and the GitH
 three nouns, and a launch post would have to pick one.
 
 The competitor survey (WH-552) found a terminology split. "Job queue" and "background jobs"
-(pg-boss, Graphile Worker, BullMQ, River, Solid Queue) address application developers replacing
+(pg-boss, BullMQ, River, Solid Queue) address application developers replacing
 Sidekiq, Bull, or Celery. "Durable execution" and "durable workflows" (Temporal, Inngest, DBOS,
 Absurd, Hatchet) address platform engineers who expect a persisted program to resume from its last
 step, usually behind a server. `docs/features.md` rules out a workflow runtime and a persisted
@@ -64,11 +64,11 @@ the incumbents the reader will compare against.
 
 1. **Enqueue inside your own transaction.** The business write and its job commit or roll back
    together, with no outbox table and no relay. Absent in BullMQ, Inngest, Trigger.dev, Temporal, and
-   Hatchet; a docs footnote in Graphile Worker.
+   Hatchet.
 2. **Crash mid-job, finish anyway.** Named checkpoints, durable waits, and signals replay completed
    stages, and fence tokens stop a resumed worker from overwriting newer work. Delivery is
-   at-least-once, and the copy says so. Absent in pg-boss, Graphile Worker, BullMQ, River, and Solid
-   Queue; the platforms that have it need their own server.
+   at-least-once, and the copy says so. Absent in pg-boss, BullMQ, River, and Solid Queue; the
+   platforms that have it need their own server.
 3. **Three languages, one protocol, one dashboard.** TypeScript, Python, and Go run full workers over
    the same versioned SQL functions and embed the same operator dashboard. Every PostgreSQL queue
    surveyed is single-language or insert-only elsewhere; DBOS licenses its production dashboard;

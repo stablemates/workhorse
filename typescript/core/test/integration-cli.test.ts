@@ -2,7 +2,11 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
-import { MINIMUM_SCHEMA_VERSION, WORKHORSE_SCHEMA_VERSION } from "../src/schema.js";
+import {
+  MINIMUM_SCHEMA_VERSION,
+  PROTOCOL_VERSION,
+  WORKHORSE_SCHEMA_VERSION,
+} from "../src/schema.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const repository = path.resolve(import.meta.dirname, "../../..");
@@ -18,6 +22,20 @@ function runCli(args: readonly string[]) {
   });
   if (result.error) throw result.error;
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+async function withInstalledVersion(
+  version: number,
+  assertions: (result: ReturnType<typeof runCli>) => void,
+): Promise<void> {
+  await pool.query("UPDATE workhorse.schema_version SET version = $1", [version]);
+  try {
+    assertions(runCli(["schema", "status", "--database-url", databaseUrl, "--json"]));
+  } finally {
+    await pool.query("UPDATE workhorse.schema_version SET version = $1", [
+      WORKHORSE_SCHEMA_VERSION,
+    ]);
+  }
 }
 
 describe("database CLI output", () => {
@@ -37,7 +55,7 @@ describe("database CLI output", () => {
         installedVersion: WORKHORSE_SCHEMA_VERSION,
         expectedVersion: WORKHORSE_SCHEMA_VERSION,
         state: "current",
-        installedProtocolVersions: [1, 2, 3, 4],
+        installedProtocolVersions: [PROTOCOL_VERSION],
         pendingContractSteps: [],
       },
       postgres: {
@@ -47,20 +65,6 @@ describe("database CLI output", () => {
       },
     });
   });
-
-  async function withInstalledVersion(
-    version: number,
-    assertions: (result: ReturnType<typeof runCli>) => void,
-  ): Promise<void> {
-    await pool.query("UPDATE workhorse.schema_version SET version = $1", [version]);
-    try {
-      assertions(runCli(["schema", "status", "--database-url", databaseUrl, "--json"]));
-    } finally {
-      await pool.query("UPDATE workhorse.schema_version SET version = $1", [
-        WORKHORSE_SCHEMA_VERSION,
-      ]);
-    }
-  }
 
   it("refuses a schema below this runtime's floor and exits with a runtime failure", async () => {
     await withInstalledVersion(MINIMUM_SCHEMA_VERSION - 1, (result) => {

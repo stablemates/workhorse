@@ -187,7 +187,11 @@ The container supervises and drains this worker alongside the primary workers.
 
 Staging stays read-only in the dashboard but executes a smaller release-validation seed and one
 report every ten minutes. Its seed covers dependencies, retry recovery, durable timers, cancellation,
-scheduled work, and expired deadlines. Startup markers prevent repeated seed insertion. Existing
+scheduled work, and expired deadlines. Startup markers prevent repeated seed insertion. The primary workspace also runs a fast-tier seed step,
+marked `fast-tier-dashboard-v1`. It moves the new, empty queues `demo-fast`, `demo-python-fast`, and
+`demo-go-fast` to the fast tier, enqueues a small batch, and syncs their schedules in the
+`workhorse-demo-fast-tier` namespace. An existing primary database gains this step on its next start,
+with no migration and no reset. Existing
 staging history is retained, and admission policies also govern tasks left by the previous seed.
 Fresh production history includes task-specific customer, email, order, and report context.
 Each URL must resolve from inside the deployed container, so a loopback address on the build machine
@@ -378,6 +382,38 @@ The pre-deploy hook runs `node dist/prepare-schema.js` through the same `kamal a
 deploy uses, and the first boot rewrites the env file from the deployment's own secrets. Nothing in
 this procedure repeats.
 
+### The fast-tier release needs one offline cutover
+
+The release that ships schema version 25 cannot deploy through the schema step alone. Migration 0025
+adds the [fast tier](../../docs/guides/305-fast-tier.md) and is a contract step: it narrows the
+database to protocol version 5 and drops the superseded functions older workers call.
+`dist/prepare-schema.js` applies only additive steps, so it stops before 0025. The new build then
+refuses the database at version 24, and the deploy fails before the container swap.
+
+[ADR 0077](../../docs/decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md)
+therefore makes this release one offline cutover. For this release only, deploy in this order:
+
+1. Stop every demo container, so no worker, producer, or dashboard of the old build holds either
+   database. An old worker left running fails on its next call once the contract step lands.
+2. From a container of the new image, run `workhorse schema migrate` against each configured
+   database, primary first, then secondary.
+3. From the same image, run `workhorse schema contract --yes` against each database. Each run
+   applies 0025 and leaves the database at version 25. Without `--yes`, the command applies nothing
+   and names any old worker that still heartbeated inside its lease.
+4. Deploy the new release as usual. Its pre-deploy hook finds version 25, applies the additive
+   steps after it, installs the demo's own tables, and verifies both workspaces before any
+   container starts.
+
+The CLI reads the database from `--database-url`, `WORKHORSE_DATABASE_URL`, or `DATABASE_URL`. Pass
+the URL through the environment, as the role env file does, so no credential appears on a command
+line. Use the CLI inside the new image, because only that build carries migration 0025. The image
+installs it at `/opt/workhorse-demo/node_modules/.bin/workhorse`, under the working directory.
+
+The cutover migrates the databases, so it keeps the soak clock running. Every existing queue stays
+full-tier, and nothing changes until an operator moves an empty queue to the fast tier. The demo's
+fast-tier seed step does this for its own three new queues only. From the
+next release on, the ordinary pipeline step applies again.
+
 ## The soak window forbids a database reinstall
 
 The demo host is the soak site for
@@ -440,8 +476,13 @@ remember.
 
 ### Dashboard schema
 
-The current build ships Workhorse schema version 23; its packaged migrations carry a version 6
-baseline forward to it. That baseline is the `0.2.0` clean install, and the schema step refuses a
+The current build ships Workhorse schema version 41; its packaged migrations carry a version 6
+baseline forward to it. Version 25 is a contract step, which the
+[fast-tier cutover](#the-fast-tier-release-needs-one-offline-cutover) applies. Versions 26 through
+41 are additive, so the ordinary schema step applies them to a database at version 25. Every client in
+this build refuses mutations against a schema below 40, because its Admin calls functions version
+40 introduced. Run the schema step before any process from this build starts. The migration
+baseline is the `0.2.0` clean install, and the schema step refuses a
 database below it: the `0.1.x` line had no production install and is not carried forward
 ([ADR 0073](../../docs/decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)). A
 database below the baseline reaches it with Workhorse `0.2.1` first. The baseline includes custom

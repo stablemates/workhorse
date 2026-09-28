@@ -1,6 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignoreBinaries": ["foundryctl", "go", "gofmt", "mise", "rustfmt", "uv"],
+  "ignoreBinaries": ["cargo-deny", "foundryctl", "go", "gofmt", "mise", "rustfmt", "uv"],
   "ignore": ["typescript/dashboard-server/src/server/types.ts"],
   "tags": ["-internal"],
   "workspaces": {

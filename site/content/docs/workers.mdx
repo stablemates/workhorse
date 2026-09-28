@@ -84,10 +84,14 @@ Python exposes this lifecycle through synchronous `Worker` and asynchronous `Asy
 Both rotate across configured queues, fill a bounded set of slots, and drain active handlers before
 `run` returns. `AsyncWorker` uses dedicated native Psycopg or asyncpg query and notification
 connections, and its handler context methods are awaitable. Both surfaces share the same claim,
-heartbeat, batch, settlement, telemetry, and drain core. Workers in all three languages also
+heartbeat, batch, settlement, telemetry, and drain core. Workers in every SDK language also
 participate in the worker registry.
 Python's `handle_batch` follows the same grouping contract described in
 [Batch handlers](/docs/batch-handlers).
+
+A worker discovers each queue's [tier](/docs/fast-tier) on its own, so a fast-tier queue needs no
+worker option. On the fast tier, a busy worker in any language splits its slots into
+[cohorts](/docs/fast-tier#workers-need-no-configuration) that complete separately.
 
 ## Tasks this worker cannot run
 
@@ -107,7 +111,7 @@ An idle worker listens for committed wake hints and receives only notifications 
 queues. Promotion and recovery notify each affected queue separately, so activity on one queue does
 not wake workers assigned to another. Notifications wake dispatch without changing the cadence of
 maintenance or worker registration, while bounded polling still covers a lost listener or message.
-Workers briefly stagger notification-triggered claims. Workers without an active listener back off
+Idle workers briefly stagger notification-triggered claims, while a busy worker claims at once. Workers without an active listener back off
 after consecutive empty checks and reset that delay when a claim succeeds.
 
 The `HandlerContext` carries the claimed task, its `AbortSignal`, checkpoints, durable waits,
@@ -161,7 +165,9 @@ accidentally write as a stale owner after the task moves on.
 </Tabs>
 
 - **`concurrency`** caps simultaneous handlers in this one `Worker`. Replicas multiply that
-  capacity. When the fleet must share one budget, use
+  capacity. A busy worker refills freed slots with batched claims that overlap in flight, so
+  throughput rises with `concurrency` instead of waiting on one claim per task. It never claims
+  more tasks than it has free slots. When the fleet must share one budget, use
   [concurrency policies](/docs/concurrency-policies); for a shared start rate, use
   [rate limits](/docs/rate-limits).
 - **`leaseMs`** is how long a claim owns a task before the database may recover it. One
@@ -311,8 +317,9 @@ A worker that dies stops refreshing and goes stale in the registry. Automatic ma
 removes that row. Its tasks are not lost: their leases expire and
 recovery makes them claimable again.
 
-The protocol names make this lifecycle greppable. `claim_many_v1` applies `claim_v1` to each
-selected task and writes its `task_runtime` lease. `heartbeat_many_v1` submits every active lease
+The protocol names make this lifecycle greppable. `claim_many_v1` admits the
+tasks that the queue's policies allow and writes each one's `task_runtime` lease; `claim_v1` is the
+same call with a limit of one. `heartbeat_many_v1` submits every active lease
 and extends the accepted `expires_at` values. `recover_expired_v1` makes abandoned work ready.
 Workers claim from `workhorse_tasks`, TypeScript configures fallback polling with `pollMs`, and
 processes commonly begin graceful drain after `SIGINT`.

@@ -305,6 +305,63 @@ describe("Workhorse dashboard events feed", () => {
     }
   });
 
+  it("filters to repaired dependency counters and shows which path repaired them", async () => {
+    const { app, workhorse } = createTestApplication({
+      operator: createLocalOperator(database),
+      workerPollMs: 5,
+    });
+    const client = dashboardClient(app);
+    const queue = workhorse.context.queue;
+    const family = demoFeatureShowcaseFamily("task-dependencies");
+    const prerequisite = await queue.enqueue(
+      family.taskType,
+      showcaseTestPayload("task-dependencies", "test-repair", "success", { role: "prerequisite" }),
+      { maxAttempts: 1 },
+    );
+    const dependent = await queue.enqueue(
+      family.taskType,
+      showcaseTestPayload("task-dependencies", "test-repair", "success", { role: "dependent" }),
+      { maxAttempts: 1, prerequisiteTaskId: prerequisite },
+    );
+    // A counter below the dependent's pending edges makes the resolver recount instead of subtract.
+    await pool.query(
+      "UPDATE workhorse.task_runtime SET pending_prerequisites = 0 WHERE task_id = $1",
+      [dependent],
+    );
+    workhorse.start();
+
+    try {
+      await waitForTaskState(workhorse.context.admin, dependent, "succeeded");
+      const repaired = await client.dashboard.events({
+        window: "1h",
+        pageSize: 100,
+        types: ["dependency_counter_repaired"],
+      });
+      expect(repaired.events).toHaveLength(1);
+      expect(repaired.events[0]).toMatchObject({
+        kind: "event",
+        taskId: dependent,
+        type: "dependency_counter_repaired",
+        details: {
+          source: "resolver",
+          prerequisite_task_id: prerequisite,
+          recorded_pending_prerequisites: 0,
+          resolved_edges: 1,
+          pending_edges: 0,
+        },
+      });
+      const detail = await client.dashboard.eventDetail({ id: repaired.events[0]!.id });
+      expect(detail.details).toMatchObject({ source: "resolver" });
+      // The same task's other lifecycle rows stay out of the filtered feed.
+      const all = await client.dashboard.events({ window: "1h", pageSize: 100, taskId: dependent });
+      expect(all.events.map((event) => event.type)).toEqual(
+        expect.arrayContaining(["dependency_counter_repaired", "dependency_released"]),
+      );
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
   it("joins named children and retains their results for the suspended parent", async () => {
     const { workhorse } = createTestApplication();
     const queue = workhorse.context.queue;

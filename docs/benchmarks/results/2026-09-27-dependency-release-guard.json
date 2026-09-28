@@ -1,0 +1,2143 @@
+{
+  "benchmark": "dependency-release-guard",
+  "issue": "SM-937",
+  "command": "pnpm benchmark:dependency-release-guard",
+  "host": {
+    "cpu": "AMD Ryzen 9 9955HX, 32 logical CPUs, shared with other checkouts",
+    "server": "one postgres:<major>-alpine container per run, pinned to CPUs 24-27 with a 4 GB memory limit, shared_buffers=1GB, removed after the run",
+    "client": "Node benchmark pinned to CPUs 28-31",
+    "order": "invocations 1 to 3, each running PostgreSQL 18 and 15 in turn"
+  },
+  "runs": [
+    {
+      "postgresMajor": 18,
+      "invocation": 1,
+      "report": {
+        "schemaVersion": 36,
+        "serverVersion": "18.6",
+        "options": {
+          "rounds": 5,
+          "samplesPerRound": 100,
+          "warmupSamples": 10,
+          "install": true
+        },
+        "results": [
+          {
+            "shape": "single",
+            "releasedPerCall": 1,
+            "latency": {
+              "guarded": {
+                "count": 500,
+                "min": 0.34643100000005234,
+                "max": 0.522000999999932,
+                "mean": 0.37576398399999905,
+                "sampleStandardDeviation": 0.021849829775589868,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 0.37384680766855133,
+                  "upper": 0.3776811603314468,
+                  "marginOfError": 0.001917176331447703
+                },
+                "p50": 0.3707069999999817,
+                "p95": 0.41370699999998806,
+                "p99": 0.473479999999995
+              },
+              "unguarded": {
+                "count": 500,
+                "min": 0.33560099999999693,
+                "max": 0.9270520000000033,
+                "mean": 0.3635567519999987,
+                "sampleStandardDeviation": 0.0328691789762955,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 0.3606727015238768,
+                  "upper": 0.3664408024761206,
+                  "marginOfError": 0.0028840504761218884
+                },
+                "p50": 0.35926499999993666,
+                "p95": 0.39396099999999024,
+                "p99": 0.4238870000000361
+              }
+            },
+            "rounds": [
+              {
+                "round": 1,
+                "loadAverage1m": {
+                  "start": 1.45,
+                  "end": 1.45
+                },
+                "meanMs": {
+                  "guarded": 0.3827359699999988,
+                  "unguarded": 0.3705984500000011
+                },
+                "guardedOverUnguarded": 1.0327511353595724
+              },
+              {
+                "round": 2,
+                "loadAverage1m": {
+                  "start": 1.45,
+                  "end": 1.45
+                },
+                "meanMs": {
+                  "guarded": 0.3748641900000024,
+                  "unguarded": 0.36257154000000014
+                },
+                "guardedOverUnguarded": 1.0339040675945008
+              },
+              {
+                "round": 3,
+                "loadAverage1m": {
+                  "start": 1.45,
+                  "end": 1.45
+                },
+                "meanMs": {
+                  "guarded": 0.37472695999999983,
+                  "unguarded": 0.36691232999999157
+                },
+                "guardedOverUnguarded": 1.021298357566802
+              },
+              {
+                "round": 4,
+                "loadAverage1m": {
+                  "start": 1.45,
+                  "end": 1.45
+                },
+                "meanMs": {
+                  "guarded": 0.3676427799999976,
+                  "unguarded": 0.3540040499999975
+                },
+                "guardedOverUnguarded": 1.038527045100191
+              },
+              {
+                "round": 5,
+                "loadAverage1m": {
+                  "start": 1.45,
+                  "end": 1.45
+                },
+                "meanMs": {
+                  "guarded": 0.37885001999999646,
+                  "unguarded": 0.36369739000000323
+                },
+                "guardedOverUnguarded": 1.0416627405547043
+              }
+            ],
+            "guardedOverUnguarded": {
+              "count": 5,
+              "min": 1.021298357566802,
+              "max": 1.0416627405547043,
+              "mean": 1.033628669235154,
+              "sampleStandardDeviation": 0.007768894449672664,
+              "confidenceInterval95": {
+                "confidenceLevel": 0.95,
+                "lower": 1.0239838591447177,
+                "upper": 1.0432734793255902,
+                "marginOfError": 0.009644810090436233
+              }
+            }
+          },
+          {
+            "shape": "fan-out",
+            "releasedPerCall": 100,
+            "latency": {
+              "guarded": {
+                "count": 500,
+                "min": 3.5555920000006154,
+                "max": 14.727496000000428,
+                "mean": 7.397337438000006,
+                "sampleStandardDeviation": 2.3422214967687243,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 7.191823177123263,
+                  "upper": 7.60285169887675,
+                  "marginOfError": 0.20551426087674335
+                },
+                "p50": 7.342519000000038,
+                "p95": 11.020089000000098,
+                "p99": 11.689456999999948
+              },
+              "unguarded": {
+                "count": 500,
+                "min": 3.498254000000088,
+                "max": 11.973401000000194,
+                "mean": 7.324109223999981,
+                "sampleStandardDeviation": 2.302078807795627,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 7.122117215423156,
+                  "upper": 7.526101232576806,
+                  "marginOfError": 0.20199200857682534
+                },
+                "p50": 7.3375089999999545,
+                "p95": 10.973772000000281,
+                "p99": 11.461469000000307
+              }
+            },
+            "rounds": [
+              {
+                "round": 1,
+                "loadAverage1m": {
+                  "start": 1.45,
+                  "end": 1.45
+                },
+                "meanMs": {
+                  "guarded": 7.478774749999996,
+                  "unguarded": 7.398858030000009
+                },
+                "guardedOverUnguarded": 1.0108012236045008
+              },
+              {
+                "round": 2,
+                "loadAverage1m": {
+                  "start": 1.45,
+                  "end": 1.42
+                },
+                "meanMs": {
+                  "guarded": 7.30505533,
+                  "unguarded": 7.230765120000001
+                },
+                "guardedOverUnguarded": 1.010274183819706
+              },
+              {
+                "round": 3,
+                "loadAverage1m": {
+                  "start": 1.42,
+                  "end": 1.42
+                },
+                "meanMs": {
+                  "guarded": 7.504324809999985,
+                  "unguarded": 7.4310058599999635
+                },
+                "guardedOverUnguarded": 1.0098666252431163
+              },
+              {
+                "round": 4,
+                "loadAverage1m": {
+                  "start": 1.42,
+                  "end": 1.42
+                },
+                "meanMs": {
+                  "guarded": 7.363227820000048,
+                  "unguarded": 7.282800169999955
+                },
+                "guardedOverUnguarded": 1.0110435063605614
+              },
+              {
+                "round": 5,
+                "loadAverage1m": {
+                  "start": 1.42,
+                  "end": 1.42
+                },
+                "meanMs": {
+                  "guarded": 7.335304480000004,
+                  "unguarded": 7.277116939999978
+                },
+                "guardedOverUnguarded": 1.0079959605541293
+              }
+            ],
+            "guardedOverUnguarded": {
+              "count": 5,
+              "min": 1.0079959605541293,
+              "max": 1.0110435063605614,
+              "mean": 1.0099962999164027,
+              "sampleStandardDeviation": 0.0012082979795166578,
+              "confidenceInterval95": {
+                "confidenceLevel": 0.95,
+                "lower": 1.0084962403364213,
+                "upper": 1.0114963594963842,
+                "marginOfError": 0.0015000595799814218
+              }
+            }
+          },
+          {
+            "shape": "fan-in",
+            "releasedPerCall": 1,
+            "latency": {
+              "guarded": {
+                "count": 500,
+                "min": 1.2363940000013827,
+                "max": 4.365873999999167,
+                "mean": 1.2974540020000058,
+                "sampleStandardDeviation": 0.16518556851638125,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 1.2829600738775022,
+                  "upper": 1.3119479301225094,
+                  "marginOfError": 0.014493928122503622
+                },
+                "p50": 1.2746860000006563,
+                "p95": 1.3543950000002951,
+                "p99": 1.8463300000003073
+              },
+              "unguarded": {
+                "count": 500,
+                "min": 1.1780740000012884,
+                "max": 2.220613000001322,
+                "mean": 1.2310397200000516,
+                "sampleStandardDeviation": 0.06601084497559188,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 1.225247710135176,
+                  "upper": 1.2368317298649272,
+                  "marginOfError": 0.005792009864875562
+                },
+                "p50": 1.2184790000010253,
+                "p95": 1.2887620000001334,
+                "p99": 1.4470490000003338
+              }
+            },
+            "rounds": [
+              {
+                "round": 1,
+                "loadAverage1m": {
+                  "start": 1.42,
+                  "end": 1.42
+                },
+                "meanMs": {
+                  "guarded": 1.3181214200000613,
+                  "unguarded": 1.2391695099999742
+                },
+                "guardedOverUnguarded": 1.0637135673230764
+              },
+              {
+                "round": 2,
+                "loadAverage1m": {
+                  "start": 1.42,
+                  "end": 1.62
+                },
+                "meanMs": {
+                  "guarded": 1.2851655299999585,
+                  "unguarded": 1.2347243300000081
+                },
+                "guardedOverUnguarded": 1.0408521957285397
+              },
+              {
+                "round": 3,
+                "loadAverage1m": {
+                  "start": 1.62,
+                  "end": 1.62
+                },
+                "meanMs": {
+                  "guarded": 1.3400981799999863,
+                  "unguarded": 1.2631112900000516
+                },
+                "guardedOverUnguarded": 1.0609502033664282
+              },
+              {
+                "round": 4,
+                "loadAverage1m": {
+                  "start": 1.62,
+                  "end": 1.62
+                },
+                "meanMs": {
+                  "guarded": 1.2773971399999755,
+                  "unguarded": 1.2101738500001011
+                },
+                "guardedOverUnguarded": 1.0555484569426687
+              },
+              {
+                "round": 5,
+                "loadAverage1m": {
+                  "start": 1.62,
+                  "end": 1.62
+                },
+                "meanMs": {
+                  "guarded": 1.2664877400000478,
+                  "unguarded": 1.2080196200001228
+                },
+                "guardedOverUnguarded": 1.0483999754903974
+              }
+            ],
+            "guardedOverUnguarded": {
+              "count": 5,
+              "min": 1.0408521957285397,
+              "max": 1.0637135673230764,
+              "mean": 1.053892879770222,
+              "sampleStandardDeviation": 0.009343769231800778,
+              "confidenceInterval95": {
+                "confidenceLevel": 0.95,
+                "lower": 1.0422929178511389,
+                "upper": 1.0654928416893052,
+                "marginOfError": 0.011599961919083204
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "postgresMajor": 15,
+      "invocation": 1,
+      "report": {
+        "schemaVersion": 36,
+        "serverVersion": "15.19",
+        "options": {
+          "rounds": 5,
+          "samplesPerRound": 100,
+          "warmupSamples": 10,
+          "install": true
+        },
+        "results": [
+          {
+            "shape": "single",
+            "releasedPerCall": 1,
+            "latency": {
+              "guarded": {
+                "count": 500,
+                "min": 0.37442399999997633,
+                "max": 0.8048129999999674,
+                "mean": 0.4085917499999971,
+                "sampleStandardDeviation": 0.034549572851596634,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 0.4055602562074592,
+                  "upper": 0.41162324379253495,
+                  "marginOfError": 0.003031493792537842
+                },
+                "p50": 0.3987690000000157,
+                "p95": 0.4565080000000421,
+                "p99": 0.5440019999999777
+              },
+              "unguarded": {
+                "count": 500,
+                "min": 0.36533600000007027,
+                "max": 0.583246000000031,
+                "mean": 0.3981936860000013,
+                "sampleStandardDeviation": 0.024222699066526732,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 0.3960683062688509,
+                  "upper": 0.4003190657311517,
+                  "marginOfError": 0.00212537973115041
+                },
+                "p50": 0.39063400000009096,
+                "p95": 0.4397960000000012,
+                "p99": 0.46883100000002287
+              }
+            },
+            "rounds": [
+              {
+                "round": 1,
+                "loadAverage1m": {
+                  "start": 1.81,
+                  "end": 1.81
+                },
+                "meanMs": {
+                  "guarded": 0.4327867499999968,
+                  "unguarded": 0.4219548599999979
+                },
+                "guardedOverUnguarded": 1.0256707316986442
+              },
+              {
+                "round": 2,
+                "loadAverage1m": {
+                  "start": 1.81,
+                  "end": 1.81
+                },
+                "meanMs": {
+                  "guarded": 0.4103652000000011,
+                  "unguarded": 0.39224910000000135
+                },
+                "guardedOverUnguarded": 1.046185192011912
+              },
+              {
+                "round": 3,
+                "loadAverage1m": {
+                  "start": 1.81,
+                  "end": 1.81
+                },
+                "meanMs": {
+                  "guarded": 0.3965966999999978,
+                  "unguarded": 0.38782802000000627
+                },
+                "guardedOverUnguarded": 1.0226097124183844
+              },
+              {
+                "round": 4,
+                "loadAverage1m": {
+                  "start": 1.81,
+                  "end": 1.81
+                },
+                "meanMs": {
+                  "guarded": 0.3977750399999968,
+                  "unguarded": 0.3900737100000049
+                },
+                "guardedOverUnguarded": 1.0197432685222283
+              },
+              {
+                "round": 5,
+                "loadAverage1m": {
+                  "start": 1.81,
+                  "end": 1.81
+                },
+                "meanMs": {
+                  "guarded": 0.40543505999999296,
+                  "unguarded": 0.39886273999999616
+                },
+                "guardedOverUnguarded": 1.0164776484261149
+              }
+            ],
+            "guardedOverUnguarded": {
+              "count": 5,
+              "min": 1.0164776484261149,
+              "max": 1.046185192011912,
+              "mean": 1.0261373106154568,
+              "sampleStandardDeviation": 0.011712942001415781,
+              "confidenceInterval95": {
+                "confidenceLevel": 0.95,
+                "lower": 1.011596103763469,
+                "upper": 1.0406785174674444,
+                "marginOfError": 0.014541206851987691
+              }
+            }
+          },
+          {
+            "shape": "fan-out",
+            "releasedPerCall": 100,
+            "latency": {
+              "guarded": {
+                "count": 500,
+                "min": 3.9566160000000536,
+                "max": 13.11435500000016,
+                "mean": 8.24723230599997,
+                "sampleStandardDeviation": 2.5922067759802747,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 8.019783509914621,
+                  "upper": 8.47468110208532,
+                  "marginOfError": 0.22744879608534965
+                },
+                "p50": 8.192235999999866,
+                "p95": 12.279505999999856,
+                "p99": 12.736995999999635
+              },
+              "unguarded": {
+                "count": 500,
+                "min": 3.913144000000102,
+                "max": 12.922745000000305,
+                "mean": 8.169614271999974,
+                "sampleStandardDeviation": 2.566084892263212,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 7.944457496388447,
+                  "upper": 8.394771047611501,
+                  "marginOfError": 0.22515677561152744
+                },
+                "p50": 8.141249000000016,
+                "p95": 12.197823000000426,
+                "p99": 12.554973999999675
+              }
+            },
+            "rounds": [
+              {
+                "round": 1,
+                "loadAverage1m": {
+                  "start": 1.81,
+                  "end": 1.81
+                },
+                "meanMs": {
+                  "guarded": 8.358669120000002,
+                  "unguarded": 8.25818211999998
+                },
+                "guardedOverUnguarded": 1.0121681743681408
+              },
+              {
+                "round": 2,
+                "loadAverage1m": {
+                  "start": 1.81,
+                  "end": 1.81
+                },
+                "meanMs": {
+                  "guarded": 8.232560229999995,
+                  "unguarded": 8.154549549999992
+                },
+                "guardedOverUnguarded": 1.0095665222857102
+              },
+              {
+                "round": 3,
+                "loadAverage1m": {
+                  "start": 1.81,
+                  "end": 1.75
+                },
+                "meanMs": {
+                  "guarded": 8.188146859999943,
+                  "unguarded": 8.140006109999977
+                },
+                "guardedOverUnguarded": 1.0059140926123906
+              },
+              {
+                "round": 4,
+                "loadAverage1m": {
+                  "start": 1.75,
+                  "end": 1.75
+                },
+                "meanMs": {
+                  "guarded": 8.212208159999964,
+                  "unguarded": 8.154877370000014
+                },
+                "guardedOverUnguarded": 1.0070302455081492
+              },
+              {
+                "round": 5,
+                "loadAverage1m": {
+                  "start": 1.75,
+                  "end": 1.75
+                },
+                "meanMs": {
+                  "guarded": 8.244577159999954,
+                  "unguarded": 8.140456209999911
+                },
+                "guardedOverUnguarded": 1.0127905546463278
+              }
+            ],
+            "guardedOverUnguarded": {
+              "count": 5,
+              "min": 1.0059140926123906,
+              "max": 1.0127905546463278,
+              "mean": 1.0094939178841438,
+              "sampleStandardDeviation": 0.003037662079446598,
+              "confidenceInterval95": {
+                "confidenceLevel": 0.95,
+                "lower": 1.0057227669095778,
+                "upper": 1.0132650688587097,
+                "marginOfError": 0.003771150974565821
+              }
+            }
+          },
+          {
+            "shape": "fan-in",
+            "releasedPerCall": 1,
+            "latency": {
+              "guarded": {
+                "count": 500,
+                "min": 1.216827000000194,
+                "max": 1.9086169999991398,
+                "mean": 1.268940355999981,
+                "sampleStandardDeviation": 0.059007702904734616,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 1.2637628249828543,
+                  "upper": 1.2741178870171077,
+                  "marginOfError": 0.005177531017126701
+                },
+                "p50": 1.2591859999993176,
+                "p95": 1.3158629999998084,
+                "p99": 1.3489759999993112
+              },
+              "unguarded": {
+                "count": 500,
+                "min": 1.1694580000003043,
+                "max": 1.7040930000002845,
+                "mean": 1.2122482859999837,
+                "sampleStandardDeviation": 0.04455562619859085,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 1.2083388279923886,
+                  "upper": 1.2161577440075788,
+                  "marginOfError": 0.003909458007595097
+                },
+                "p50": 1.2004759999999806,
+                "p95": 1.2542470000007597,
+                "p99": 1.4267709999985527
+              }
+            },
+            "rounds": [
+              {
+                "round": 1,
+                "loadAverage1m": {
+                  "start": 1.75,
+                  "end": 1.75
+                },
+                "meanMs": {
+                  "guarded": 1.2724329599999509,
+                  "unguarded": 1.221157890000013
+                },
+                "guardedOverUnguarded": 1.0419888946546767
+              },
+              {
+                "round": 2,
+                "loadAverage1m": {
+                  "start": 1.75,
+                  "end": 1.75
+                },
+                "meanMs": {
+                  "guarded": 1.2730135499999777,
+                  "unguarded": 1.2174644599998645
+                },
+                "guardedOverUnguarded": 1.0456268678266956
+              },
+              {
+                "round": 3,
+                "loadAverage1m": {
+                  "start": 1.75,
+                  "end": 1.75
+                },
+                "meanMs": {
+                  "guarded": 1.2710725199998887,
+                  "unguarded": 1.2079738100000212
+                },
+                "guardedOverUnguarded": 1.052235163939412
+              },
+              {
+                "round": 4,
+                "loadAverage1m": {
+                  "start": 1.75,
+                  "end": 1.85
+                },
+                "meanMs": {
+                  "guarded": 1.2628703400000085,
+                  "unguarded": 1.2029832100000386
+                },
+                "guardedOverUnguarded": 1.0497821827454832
+              },
+              {
+                "round": 5,
+                "loadAverage1m": {
+                  "start": 1.85,
+                  "end": 1.85
+                },
+                "meanMs": {
+                  "guarded": 1.2653124100000788,
+                  "unguarded": 1.2116620599999806
+                },
+                "guardedOverUnguarded": 1.044278311396578
+              }
+            ],
+            "guardedOverUnguarded": {
+              "count": 5,
+              "min": 1.0419888946546767,
+              "max": 1.052235163939412,
+              "mean": 1.0467822841125691,
+              "sampleStandardDeviation": 0.004162773680638759,
+              "confidenceInterval95": {
+                "confidenceLevel": 0.95,
+                "lower": 1.0416143465302894,
+                "upper": 1.0519502216948489,
+                "marginOfError": 0.005167937582279642
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "postgresMajor": 18,
+      "invocation": 2,
+      "report": {
+        "schemaVersion": 36,
+        "serverVersion": "18.6",
+        "options": {
+          "rounds": 5,
+          "samplesPerRound": 100,
+          "warmupSamples": 10,
+          "install": true
+        },
+        "results": [
+          {
+            "shape": "single",
+            "releasedPerCall": 1,
+            "latency": {
+              "guarded": {
+                "count": 500,
+                "min": 0.34731299999998555,
+                "max": 0.7616709999999784,
+                "mean": 0.3797925259999986,
+                "sampleStandardDeviation": 0.03820284419640593,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 0.376440482096702,
+                  "upper": 0.38314456990329515,
+                  "marginOfError": 0.003352043903296562
+                },
+                "p50": 0.3710879999999861,
+                "p95": 0.424378000000047,
+                "p99": 0.5210289999999986
+              },
+              "unguarded": {
+                "count": 500,
+                "min": 0.34010000000000673,
+                "max": 1.1376980000000003,
+                "mean": 0.3689475499999977,
+                "sampleStandardDeviation": 0.05494892358047438,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 0.36412614970493884,
+                  "upper": 0.3737689502950565,
+                  "marginOfError": 0.004821400295058824
+                },
+                "p50": 0.3585329999999658,
+                "p95": 0.4151600000000144,
+                "p99": 0.5217499999999973
+              }
+            },
+            "rounds": [
+              {
+                "round": 1,
+                "loadAverage1m": {
+                  "start": 1.85,
+                  "end": 1.85
+                },
+                "meanMs": {
+                  "guarded": 0.3798214600000034,
+                  "unguarded": 0.37039149000000066
+                },
+                "guardedOverUnguarded": 1.0254594672248079
+              },
+              {
+                "round": 2,
+                "loadAverage1m": {
+                  "start": 1.85,
+                  "end": 1.85
+                },
+                "meanMs": {
+                  "guarded": 0.3784687099999962,
+                  "unguarded": 0.3597485499999948
+                },
+                "guardedOverUnguarded": 1.0520367906972847
+              },
+              {
+                "round": 3,
+                "loadAverage1m": {
+                  "start": 1.85,
+                  "end": 1.85
+                },
+                "meanMs": {
+                  "guarded": 0.3837308199999978,
+                  "unguarded": 0.3781019799999973
+                },
+                "guardedOverUnguarded": 1.014887094746239
+              },
+              {
+                "round": 4,
+                "loadAverage1m": {
+                  "start": 1.85,
+                  "end": 1.85
+                },
+                "meanMs": {
+                  "guarded": 0.3840464999999972,
+                  "unguarded": 0.3714067299999965
+                },
+                "guardedOverUnguarded": 1.0340321512213868
+              },
+              {
+                "round": 5,
+                "loadAverage1m": {
+                  "start": 1.85,
+                  "end": 1.85
+                },
+                "meanMs": {
+                  "guarded": 0.37289513999999824,
+                  "unguarded": 0.3650889999999993
+                },
+                "guardedOverUnguarded": 1.0213814713672529
+              }
+            ],
+            "guardedOverUnguarded": {
+              "count": 5,
+              "min": 1.014887094746239,
+              "max": 1.0520367906972847,
+              "mean": 1.0295593950513944,
+              "sampleStandardDeviation": 0.014354468842399054,
+              "confidenceInterval95": {
+                "confidenceLevel": 0.95,
+                "lower": 1.0117388252353305,
+                "upper": 1.0473799648674582,
+                "marginOfError": 0.017820569816063885
+              }
+            }
+          },
+          {
+            "shape": "fan-out",
+            "releasedPerCall": 100,
+            "latency": {
+              "guarded": {
+                "count": 500,
+                "min": 3.5786149999998997,
+                "max": 11.789003999999295,
+                "mean": 7.371078307999995,
+                "sampleStandardDeviation": 2.323010168161047,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 7.1672497126355506,
+                  "upper": 7.57490690336444,
+                  "marginOfError": 0.20382859536444492
+                },
+                "p50": 7.357276000000184,
+                "p95": 11.010070999999698,
+                "p99": 11.568170000000464
+              },
+              "unguarded": {
+                "count": 500,
+                "min": 3.559940000000097,
+                "max": 11.780579000000216,
+                "mean": 7.322767217999968,
+                "sampleStandardDeviation": 2.33181507365613,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 7.118166051105714,
+                  "upper": 7.527368384894222,
+                  "marginOfError": 0.20460116689425453
+                },
+                "p50": 7.313022999999703,
+                "p95": 10.965957999999773,
+                "p99": 11.390705999999227
+              }
+            },
+            "rounds": [
+              {
+                "round": 1,
+                "loadAverage1m": {
+                  "start": 1.85,
+                  "end": 1.78
+                },
+                "meanMs": {
+                  "guarded": 7.465592860000004,
+                  "unguarded": 7.375494829999979
+                },
+                "guardedOverUnguarded": 1.012215862403367
+              },
+              {
+                "round": 2,
+                "loadAverage1m": {
+                  "start": 1.78,
+                  "end": 1.78
+                },
+                "meanMs": {
+                  "guarded": 7.352046570000025,
+                  "unguarded": 7.335604120000007
+                },
+                "guardedOverUnguarded": 1.0022414581990853
+              },
+              {
+                "round": 3,
+                "loadAverage1m": {
+                  "start": 1.78,
+                  "end": 1.78
+                },
+                "meanMs": {
+                  "guarded": 7.416810210000017,
+                  "unguarded": 7.389168259999951
+                },
+                "guardedOverUnguarded": 1.00374087434843
+              },
+              {
+                "round": 4,
+                "loadAverage1m": {
+                  "start": 1.78,
+                  "end": 2.12
+                },
+                "meanMs": {
+                  "guarded": 7.262553919999964,
+                  "unguarded": 7.205146229999982
+                },
+                "guardedOverUnguarded": 1.0079675954057608
+              },
+              {
+                "round": 5,
+                "loadAverage1m": {
+                  "start": 2.12,
+                  "end": 2.12
+                },
+                "meanMs": {
+                  "guarded": 7.358387979999962,
+                  "unguarded": 7.308422649999921
+                },
+                "guardedOverUnguarded": 1.006836677679012
+              }
+            ],
+            "guardedOverUnguarded": {
+              "count": 5,
+              "min": 1.0022414581990853,
+              "max": 1.012215862403367,
+              "mean": 1.006600493607131,
+              "sampleStandardDeviation": 0.003893447346333919,
+              "confidenceInterval95": {
+                "confidenceLevel": 0.95,
+                "lower": 1.001766915226608,
+                "upper": 1.0114340719876542,
+                "marginOfError": 0.0048335783805230825
+              }
+            }
+          },
+          {
+            "shape": "fan-in",
+            "releasedPerCall": 1,
+            "latency": {
+              "guarded": {
+                "count": 500,
+                "min": 1.2361030000010942,
+                "max": 2.161582000000635,
+                "mean": 1.2996786380000631,
+                "sampleStandardDeviation": 0.09122813408399062,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 1.2916739797842194,
+                  "upper": 1.3076832962159068,
+                  "marginOfError": 0.008004658215843816
+                },
+                "p50": 1.2810870000012073,
+                "p95": 1.3611679999994521,
+                "p99": 1.852430999999342
+              },
+              "unguarded": {
+                "count": 500,
+                "min": 1.1829330000000482,
+                "max": 4.436728000000585,
+                "mean": 1.2446275299999907,
+                "sampleStandardDeviation": 0.15552458194498192,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 1.230981288792367,
+                  "upper": 1.2582737712076144,
+                  "marginOfError": 0.013646241207623715
+                },
+                "p50": 1.224822000000131,
+                "p95": 1.3144699999993463,
+                "p99": 1.5933640000002924
+              }
+            },
+            "rounds": [
+              {
+                "round": 1,
+                "loadAverage1m": {
+                  "start": 2.12,
+                  "end": 2.12
+                },
+                "meanMs": {
+                  "guarded": 1.3031767400000536,
+                  "unguarded": 1.2587128200000006
+                },
+                "guardedOverUnguarded": 1.0353249123180082
+              },
+              {
+                "round": 2,
+                "loadAverage1m": {
+                  "start": 2.12,
+                  "end": 2.12
+                },
+                "meanMs": {
+                  "guarded": 1.288858870000149,
+                  "unguarded": 1.2282248999999865
+                },
+                "guardedOverUnguarded": 1.0493671558036017
+              },
+              {
+                "round": 3,
+                "loadAverage1m": {
+                  "start": 2.12,
+                  "end": 2.12
+                },
+                "meanMs": {
+                  "guarded": 1.294467749999967,
+                  "unguarded": 1.233854360000023
+                },
+                "guardedOverUnguarded": 1.0491252387355854
+              },
+              {
+                "round": 4,
+                "loadAverage1m": {
+                  "start": 2.12,
+                  "end": 2.12
+                },
+                "meanMs": {
+                  "guarded": 1.3150032300001113,
+                  "unguarded": 1.2618028500000582
+                },
+                "guardedOverUnguarded": 1.0421621967330719
+              },
+              {
+                "round": 5,
+                "loadAverage1m": {
+                  "start": 2.12,
+                  "end": 2.12
+                },
+                "meanMs": {
+                  "guarded": 1.2968866000000343,
+                  "unguarded": 1.2405427199998849
+                },
+                "guardedOverUnguarded": 1.0454187341489978
+              }
+            ],
+            "guardedOverUnguarded": {
+              "count": 5,
+              "min": 1.0353249123180082,
+              "max": 1.0493671558036017,
+              "mean": 1.044279647547853,
+              "sampleStandardDeviation": 0.005816590356159922,
+              "confidenceInterval95": {
+                "confidenceLevel": 0.95,
+                "lower": 1.0370585545438944,
+                "upper": 1.0515007405518118,
+                "marginOfError": 0.007221093003958758
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "postgresMajor": 15,
+      "invocation": 2,
+      "report": {
+        "schemaVersion": 36,
+        "serverVersion": "15.19",
+        "options": {
+          "rounds": 5,
+          "samplesPerRound": 100,
+          "warmupSamples": 10,
+          "install": true
+        },
+        "results": [
+          {
+            "shape": "single",
+            "releasedPerCall": 1,
+            "latency": {
+              "guarded": {
+                "count": 500,
+                "min": 0.3830400000000509,
+                "max": 1.01366500000006,
+                "mean": 0.4382002259999971,
+                "sampleStandardDeviation": 0.05257666041543548,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 0.43358697592115,
+                  "upper": 0.4428134760788442,
+                  "marginOfError": 0.004613250078847127
+                },
+                "p50": 0.4283550000000105,
+                "p95": 0.5228020000000129,
+                "p99": 0.6126109999999585
+              },
+              "unguarded": {
+                "count": 500,
+                "min": 0.3741129999999657,
+                "max": 3.7569710000000214,
+                "mean": 0.43555672599999445,
+                "sampleStandardDeviation": 0.1559625336935619,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 0.4218720574574525,
+                  "upper": 0.4492413945425364,
+                  "marginOfError": 0.01368466854254198
+                },
+                "p50": 0.42036000000007334,
+                "p95": 0.521609999999896,
+                "p99": 0.6337409999999863
+              }
+            },
+            "rounds": [
+              {
+                "round": 1,
+                "loadAverage1m": {
+                  "start": 1.95,
+                  "end": 1.95
+                },
+                "meanMs": {
+                  "guarded": 0.4430782999999968,
+                  "unguarded": 0.43842983000000063
+                },
+                "guardedOverUnguarded": 1.0106025404338848
+              },
+              {
+                "round": 2,
+                "loadAverage1m": {
+                  "start": 1.95,
+                  "end": 1.95
+                },
+                "meanMs": {
+                  "guarded": 0.4507906100000048,
+                  "unguarded": 0.4683051299999954
+                },
+                "guardedOverUnguarded": 0.9626001961584517
+              },
+              {
+                "round": 3,
+                "loadAverage1m": {
+                  "start": 1.95,
+                  "end": 1.95
+                },
+                "meanMs": {
+                  "guarded": 0.44237936999999306,
+                  "unguarded": 0.4346774099999925
+                },
+                "guardedOverUnguarded": 1.0177187951865285
+              },
+              {
+                "round": 4,
+                "loadAverage1m": {
+                  "start": 1.95,
+                  "end": 1.95
+                },
+                "meanMs": {
+                  "guarded": 0.4262312799999995,
+                  "unguarded": 0.4166974699999889
+                },
+                "guardedOverUnguarded": 1.0228794525678566
+              },
+              {
+                "round": 5,
+                "loadAverage1m": {
+                  "start": 1.95,
+                  "end": 1.95
+                },
+                "meanMs": {
+                  "guarded": 0.42852156999999125,
+                  "unguarded": 0.41967378999999483
+                },
+                "guardedOverUnguarded": 1.0210825174476503
+              }
+            ],
+            "guardedOverUnguarded": {
+              "count": 5,
+              "min": 0.9626001961584517,
+              "max": 1.0228794525678566,
+              "mean": 1.0069767003588743,
+              "sampleStandardDeviation": 0.02524720304384373,
+              "confidenceInterval95": {
+                "confidenceLevel": 0.95,
+                "lower": 0.9756331829189101,
+                "upper": 1.0383202177988387,
+                "marginOfError": 0.031343517439964226
+              }
+            }
+          },
+          {
+            "shape": "fan-out",
+            "releasedPerCall": 100,
+            "latency": {
+              "guarded": {
+                "count": 500,
+                "min": 3.928461999999854,
+                "max": 15.31815700000061,
+                "mean": 8.399296931999999,
+                "sampleStandardDeviation": 2.681215611283498,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 8.164038206314022,
+                  "upper": 8.634555657685976,
+                  "marginOfError": 0.23525872568597783
+                },
+                "p50": 8.404043999999885,
+                "p95": 12.535498000000189,
+                "p99": 13.360066999999617
+              },
+              "unguarded": {
+                "count": 500,
+                "min": 3.888076999999612,
+                "max": 14.595578999999816,
+                "mean": 8.344380176000016,
+                "sampleStandardDeviation": 2.6706299285780335,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 8.110050273126095,
+                  "upper": 8.578710078873936,
+                  "marginOfError": 0.23432990287392075
+                },
+                "p50": 8.403052000000116,
+                "p95": 12.525157999999465,
+                "p99": 13.089979000000312
+              }
+            },
+            "rounds": [
+              {
+                "round": 1,
+                "loadAverage1m": {
+                  "start": 1.95,
+                  "end": 1.95
+                },
+                "meanMs": {
+                  "guarded": 8.575725040000004,
+                  "unguarded": 8.51553982
+                },
+                "guardedOverUnguarded": 1.0070676928617783
+              },
+              {
+                "round": 2,
+                "loadAverage1m": {
+                  "start": 1.95,
+                  "end": 1.95
+                },
+                "meanMs": {
+                  "guarded": 8.427453510000014,
+                  "unguarded": 8.364196310000006
+                },
+                "guardedOverUnguarded": 1.007562854535633
+              },
+              {
+                "round": 3,
+                "loadAverage1m": {
+                  "start": 1.95,
+                  "end": 1.95
+                },
+                "meanMs": {
+                  "guarded": 8.344518490000036,
+                  "unguarded": 8.300207500000006
+                },
+                "guardedOverUnguarded": 1.0053385400304786
+              },
+              {
+                "round": 4,
+                "loadAverage1m": {
+                  "start": 1.95,
+                  "end": 1.96
+                },
+                "meanMs": {
+                  "guarded": 8.334878780000018,
+                  "unguarded": 8.270976339999988
+                },
+                "guardedOverUnguarded": 1.0077261060089104
+              },
+              {
+                "round": 5,
+                "loadAverage1m": {
+                  "start": 1.96,
+                  "end": 1.96
+                },
+                "meanMs": {
+                  "guarded": 8.313908839999922,
+                  "unguarded": 8.270980910000072
+                },
+                "guardedOverUnguarded": 1.0051901860815502
+              }
+            ],
+            "guardedOverUnguarded": {
+              "count": 5,
+              "min": 1.0051901860815502,
+              "max": 1.0077261060089104,
+              "mean": 1.00657707590367,
+              "sampleStandardDeviation": 0.0012237411063464952,
+              "confidenceInterval95": {
+                "confidenceLevel": 0.95,
+                "lower": 1.0050578442231484,
+                "upper": 1.0080963075841918,
+                "marginOfError": 0.0015192316805217475
+              }
+            }
+          },
+          {
+            "shape": "fan-in",
+            "releasedPerCall": 1,
+            "latency": {
+              "guarded": {
+                "count": 500,
+                "min": 1.2138409999988653,
+                "max": 1.819840000000113,
+                "mean": 1.2599822980000244,
+                "sampleStandardDeviation": 0.05820896621757706,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 1.2548748507816003,
+                  "upper": 1.2650897452184484,
+                  "marginOfError": 0.005107447218424151
+                },
+                "p50": 1.2483759999995527,
+                "p95": 1.3085289999999077,
+                "p99": 1.4853409999996074
+              },
+              "unguarded": {
+                "count": 500,
+                "min": 1.1601399999999558,
+                "max": 1.9033669999989797,
+                "mean": 1.2056112279999833,
+                "sampleStandardDeviation": 0.05410222480864014,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 1.200864119855568,
+                  "upper": 1.2103583361443986,
+                  "marginOfError": 0.004747108144415164
+                },
+                "p50": 1.193902999999409,
+                "p95": 1.257874000000811,
+                "p99": 1.4198379999997996
+              }
+            },
+            "rounds": [
+              {
+                "round": 1,
+                "loadAverage1m": {
+                  "start": 1.96,
+                  "end": 1.96
+                },
+                "meanMs": {
+                  "guarded": 1.2640260100001615,
+                  "unguarded": 1.213263390000011
+                },
+                "guardedOverUnguarded": 1.0418397360528204
+              },
+              {
+                "round": 2,
+                "loadAverage1m": {
+                  "start": 1.96,
+                  "end": 1.96
+                },
+                "meanMs": {
+                  "guarded": 1.2664785200000914,
+                  "unguarded": 1.2133703599998988
+                },
+                "guardedOverUnguarded": 1.0437691258588162
+              },
+              {
+                "round": 3,
+                "loadAverage1m": {
+                  "start": 1.96,
+                  "end": 1.96
+                },
+                "meanMs": {
+                  "guarded": 1.2562942199998544,
+                  "unguarded": 1.2004834800000208
+                },
+                "guardedOverUnguarded": 1.046490219090589
+              },
+              {
+                "round": 4,
+                "loadAverage1m": {
+                  "start": 1.96,
+                  "end": 1.96
+                },
+                "meanMs": {
+                  "guarded": 1.256835020000035,
+                  "unguarded": 1.1972456599998986
+                },
+                "guardedOverUnguarded": 1.0497720409361446
+              },
+              {
+                "round": 5,
+                "loadAverage1m": {
+                  "start": 1.96,
+                  "end": 1.96
+                },
+                "meanMs": {
+                  "guarded": 1.25627771999998,
+                  "unguarded": 1.2036932500000876
+                },
+                "guardedOverUnguarded": 1.0436859390877937
+              }
+            ],
+            "guardedOverUnguarded": {
+              "count": 5,
+              "min": 1.0418397360528204,
+              "max": 1.0497720409361446,
+              "mean": 1.0451114122052327,
+              "sampleStandardDeviation": 0.0030886946953805547,
+              "confidenceInterval95": {
+                "confidenceLevel": 0.95,
+                "lower": 1.0412769060271319,
+                "upper": 1.0489459183833336,
+                "marginOfError": 0.0038345061781008515
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "postgresMajor": 18,
+      "invocation": 3,
+      "report": {
+        "schemaVersion": 36,
+        "serverVersion": "18.6",
+        "options": {
+          "rounds": 5,
+          "samplesPerRound": 100,
+          "warmupSamples": 10,
+          "install": true
+        },
+        "results": [
+          {
+            "shape": "single",
+            "releasedPerCall": 1,
+            "latency": {
+              "guarded": {
+                "count": 500,
+                "min": 0.3489749999999958,
+                "max": 0.7932710000000043,
+                "mean": 0.3792003979999994,
+                "sampleStandardDeviation": 0.03305243676978241,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 0.3763002678789633,
+                  "upper": 0.38210052812103545,
+                  "marginOfError": 0.0029001301210360535
+                },
+                "p50": 0.3711279999999988,
+                "p95": 0.4245369999999866,
+                "p99": 0.5004509999999982
+              },
+              "unguarded": {
+                "count": 500,
+                "min": 0.33383699999990313,
+                "max": 1.0258970000000431,
+                "mean": 0.36883403800000203,
+                "sampleStandardDeviation": 0.04854203676124967,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 0.3645747991448371,
+                  "upper": 0.37309327685516697,
+                  "marginOfError": 0.004259238855164939
+                },
+                "p50": 0.35824300000001585,
+                "p95": 0.4075360000000501,
+                "p99": 0.5327210000000377
+              }
+            },
+            "rounds": [
+              {
+                "round": 1,
+                "loadAverage1m": {
+                  "start": 2.04,
+                  "end": 2.04
+                },
+                "meanMs": {
+                  "guarded": 0.3877951700000017,
+                  "unguarded": 0.3911799200000024
+                },
+                "guardedOverUnguarded": 0.9913473319387133
+              },
+              {
+                "round": 2,
+                "loadAverage1m": {
+                  "start": 2.04,
+                  "end": 2.04
+                },
+                "meanMs": {
+                  "guarded": 0.3848496399999982,
+                  "unguarded": 0.3640726600000005
+                },
+                "guardedOverUnguarded": 1.057068223689188
+              },
+              {
+                "round": 3,
+                "loadAverage1m": {
+                  "start": 2.04,
+                  "end": 2.04
+                },
+                "meanMs": {
+                  "guarded": 0.378121620000004,
+                  "unguarded": 0.3620292300000068
+                },
+                "guardedOverUnguarded": 1.044450526826237
+              },
+              {
+                "round": 4,
+                "loadAverage1m": {
+                  "start": 2.04,
+                  "end": 2.04
+                },
+                "meanMs": {
+                  "guarded": 0.37250340999999026,
+                  "unguarded": 0.36183606000000507
+                },
+                "guardedOverUnguarded": 1.0294811689028038
+              },
+              {
+                "round": 5,
+                "loadAverage1m": {
+                  "start": 2.04,
+                  "end": 2.04
+                },
+                "meanMs": {
+                  "guarded": 0.37273215000000276,
+                  "unguarded": 0.3650523199999952
+                },
+                "guardedOverUnguarded": 1.0210376145534636
+              }
+            ],
+            "guardedOverUnguarded": {
+              "count": 5,
+              "min": 0.9913473319387133,
+              "max": 1.057068223689188,
+              "mean": 1.028676973182081,
+              "sampleStandardDeviation": 0.0250368565633486,
+              "confidenceInterval95": {
+                "confidenceLevel": 0.95,
+                "lower": 0.997594593523137,
+                "upper": 1.0597593528410252,
+                "marginOfError": 0.031082379658944087
+              }
+            }
+          },
+          {
+            "shape": "fan-out",
+            "releasedPerCall": 100,
+            "latency": {
+              "guarded": {
+                "count": 500,
+                "min": 3.4794080000001486,
+                "max": 12.004620000000159,
+                "mean": 7.3755305779999825,
+                "sampleStandardDeviation": 2.342199459973399,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 7.170018250704547,
+                  "upper": 7.581042905295418,
+                  "marginOfError": 0.2055123272954362
+                },
+                "p50": 7.344513000000006,
+                "p95": 11.125949000000219,
+                "p99": 11.638732000000346
+              },
+              "unguarded": {
+                "count": 500,
+                "min": 3.5178509999996095,
+                "max": 12.001774999999725,
+                "mean": 7.315641803999985,
+                "sampleStandardDeviation": 2.3270372342065255,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 7.1114598605414425,
+                  "upper": 7.519823747458528,
+                  "marginOfError": 0.20418194345854282
+                },
+                "p50": 7.367064000000028,
+                "p95": 11.04912400000103,
+                "p99": 11.40666599999986
+              }
+            },
+            "rounds": [
+              {
+                "round": 1,
+                "loadAverage1m": {
+                  "start": 2.04,
+                  "end": 2.04
+                },
+                "meanMs": {
+                  "guarded": 7.403767090000007,
+                  "unguarded": 7.337997119999992
+                },
+                "guardedOverUnguarded": 1.008962932108648
+              },
+              {
+                "round": 2,
+                "loadAverage1m": {
+                  "start": 2.04,
+                  "end": 2.04
+                },
+                "meanMs": {
+                  "guarded": 7.428786150000005,
+                  "unguarded": 7.352462330000003
+                },
+                "guardedOverUnguarded": 1.0103807155445843
+              },
+              {
+                "round": 3,
+                "loadAverage1m": {
+                  "start": 2.04,
+                  "end": 2.04
+                },
+                "meanMs": {
+                  "guarded": 7.272208809999966,
+                  "unguarded": 7.23325869999996
+                },
+                "guardedOverUnguarded": 1.0053848633949738
+              },
+              {
+                "round": 4,
+                "loadAverage1m": {
+                  "start": 2.04,
+                  "end": 2.04
+                },
+                "meanMs": {
+                  "guarded": 7.452552489999944,
+                  "unguarded": 7.392294540000003
+                },
+                "guardedOverUnguarded": 1.008151454149166
+              },
+              {
+                "round": 5,
+                "loadAverage1m": {
+                  "start": 2.04,
+                  "end": 2.11
+                },
+                "meanMs": {
+                  "guarded": 7.320338349999993,
+                  "unguarded": 7.26219632999997
+                },
+                "guardedOverUnguarded": 1.0080061206497324
+              }
+            ],
+            "guardedOverUnguarded": {
+              "count": 5,
+              "min": 1.0053848633949738,
+              "max": 1.0103807155445843,
+              "mean": 1.0081772171694208,
+              "sampleStandardDeviation": 0.0018234534823380834,
+              "confidenceInterval95": {
+                "confidenceLevel": 0.95,
+                "lower": 1.005913463599357,
+                "upper": 1.0104409707394846,
+                "marginOfError": 0.002263753570063813
+              }
+            }
+          },
+          {
+            "shape": "fan-in",
+            "releasedPerCall": 1,
+            "latency": {
+              "guarded": {
+                "count": 500,
+                "min": 1.2375950000005105,
+                "max": 2.622918999999456,
+                "mean": 1.282417233999993,
+                "sampleStandardDeviation": 0.08708378594723906,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 1.2747762145968387,
+                  "upper": 1.2900582534031475,
+                  "marginOfError": 0.007641019403154486
+                },
+                "p50": 1.2683329999999842,
+                "p95": 1.3256509999991977,
+                "p99": 1.7472839999991265
+              },
+              "unguarded": {
+                "count": 500,
+                "min": 1.1809499999999389,
+                "max": 4.5803780000005645,
+                "mean": 1.2285531180000253,
+                "sampleStandardDeviation": 0.1574754029591388,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 1.2147357053044017,
+                  "upper": 1.242370530695649,
+                  "marginOfError": 0.013817412695623624
+                },
+                "p50": 1.211926999998468,
+                "p95": 1.2710889999998471,
+                "p99": 1.424576999999772
+              }
+            },
+            "rounds": [
+              {
+                "round": 1,
+                "loadAverage1m": {
+                  "start": 2.11,
+                  "end": 2.11
+                },
+                "meanMs": {
+                  "guarded": 1.2952535900000839,
+                  "unguarded": 1.2685890100001234
+                },
+                "guardedOverUnguarded": 1.021019084817673
+              },
+              {
+                "round": 2,
+                "loadAverage1m": {
+                  "start": 2.11,
+                  "end": 2.11
+                },
+                "meanMs": {
+                  "guarded": 1.277689210000044,
+                  "unguarded": 1.2222936100000517
+                },
+                "guardedOverUnguarded": 1.0453210256085608
+              },
+              {
+                "round": 3,
+                "loadAverage1m": {
+                  "start": 2.11,
+                  "end": 2.11
+                },
+                "meanMs": {
+                  "guarded": 1.2856684699999095,
+                  "unguarded": 1.223775749999968
+                },
+                "guardedOverUnguarded": 1.050575213636929
+              },
+              {
+                "round": 4,
+                "loadAverage1m": {
+                  "start": 2.11,
+                  "end": 2.11
+                },
+                "meanMs": {
+                  "guarded": 1.2810726099999739,
+                  "unguarded": 1.2165191100000265
+                },
+                "guardedOverUnguarded": 1.053064106818631
+              },
+              {
+                "round": 5,
+                "loadAverage1m": {
+                  "start": 2.11,
+                  "end": 2.11
+                },
+                "meanMs": {
+                  "guarded": 1.2724022899999545,
+                  "unguarded": 1.211588109999957
+                },
+                "guardedOverUnguarded": 1.0501937741861793
+              }
+            ],
+            "guardedOverUnguarded": {
+              "count": 5,
+              "min": 1.021019084817673,
+              "max": 1.053064106818631,
+              "mean": 1.0440346410135946,
+              "sampleStandardDeviation": 0.013168294087854164,
+              "confidenceInterval95": {
+                "confidenceLevel": 0.95,
+                "lower": 1.0276866655693253,
+                "upper": 1.0603826164578638,
+                "marginOfError": 0.016347975444269153
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "postgresMajor": 15,
+      "invocation": 3,
+      "report": {
+        "schemaVersion": 36,
+        "serverVersion": "15.19",
+        "options": {
+          "rounds": 5,
+          "samplesPerRound": 100,
+          "warmupSamples": 10,
+          "install": true
+        },
+        "results": [
+          {
+            "shape": "single",
+            "releasedPerCall": 1,
+            "latency": {
+              "guarded": {
+                "count": 500,
+                "min": 0.37532599999997274,
+                "max": 0.6112079999999196,
+                "mean": 0.4066295539999987,
+                "sampleStandardDeviation": 0.02178018160549934,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 0.4047184888293517,
+                  "upper": 0.40854061917064577,
+                  "marginOfError": 0.001911065170647019
+                },
+                "p50": 0.40372899999999845,
+                "p95": 0.43773299999998017,
+                "p99": 0.4899409999999307
+              },
+              "unguarded": {
+                "count": 500,
+                "min": 0.3636539999999968,
+                "max": 0.49114299999996547,
+                "mean": 0.39731767000000046,
+                "sampleStandardDeviation": 0.016216033596419165,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 0.3958948215787396,
+                  "upper": 0.3987405184212613,
+                  "marginOfError": 0.0014228484212608153
+                },
+                "p50": 0.39545300000008865,
+                "p95": 0.43075899999996636,
+                "p99": 0.4469800000000532
+              }
+            },
+            "rounds": [
+              {
+                "round": 1,
+                "loadAverage1m": {
+                  "start": 2.27,
+                  "end": 2.27
+                },
+                "meanMs": {
+                  "guarded": 0.40489362000000084,
+                  "unguarded": 0.3980556599999994
+                },
+                "guardedOverUnguarded": 1.017178401633584
+              },
+              {
+                "round": 2,
+                "loadAverage1m": {
+                  "start": 2.27,
+                  "end": 2.27
+                },
+                "meanMs": {
+                  "guarded": 0.4046005600000063,
+                  "unguarded": 0.3898719700000015
+                },
+                "guardedOverUnguarded": 1.0377780172296172
+              },
+              {
+                "round": 3,
+                "loadAverage1m": {
+                  "start": 2.27,
+                  "end": 2.27
+                },
+                "meanMs": {
+                  "guarded": 0.41248328999999556,
+                  "unguarded": 0.4022486000000038
+                },
+                "guardedOverUnguarded": 1.0254436932782156
+              },
+              {
+                "round": 4,
+                "loadAverage1m": {
+                  "start": 2.27,
+                  "end": 2.27
+                },
+                "meanMs": {
+                  "guarded": 0.40905483999999886,
+                  "unguarded": 0.40058446999999886
+                },
+                "guardedOverUnguarded": 1.0211450284131085
+              },
+              {
+                "round": 5,
+                "loadAverage1m": {
+                  "start": 2.27,
+                  "end": 2.27
+                },
+                "meanMs": {
+                  "guarded": 0.40211545999999204,
+                  "unguarded": 0.3958276499999988
+                },
+                "guardedOverUnguarded": 1.0158852217625354
+              }
+            ],
+            "guardedOverUnguarded": {
+              "count": 5,
+              "min": 1.0158852217625354,
+              "max": 1.0377780172296172,
+              "mean": 1.0234860724634123,
+              "sampleStandardDeviation": 0.00881946844167424,
+              "confidenceInterval95": {
+                "confidenceLevel": 0.95,
+                "lower": 1.0125370115938663,
+                "upper": 1.0344351333329582,
+                "marginOfError": 0.010949060869545944
+              }
+            }
+          },
+          {
+            "shape": "fan-out",
+            "releasedPerCall": 100,
+            "latency": {
+              "guarded": {
+                "count": 500,
+                "min": 4.0049159999998665,
+                "max": 14.53188900000032,
+                "mean": 8.36993659000003,
+                "sampleStandardDeviation": 2.668251973668533,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 8.135815336754805,
+                  "upper": 8.604057843245256,
+                  "marginOfError": 0.23412125324522493
+                },
+                "p50": 8.219215999999506,
+                "p95": 12.618172000000413,
+                "p99": 13.119755000000168
+              },
+              "unguarded": {
+                "count": 500,
+                "min": 3.9363780000003317,
+                "max": 13.323147000000063,
+                "mean": 8.278038166000016,
+                "sampleStandardDeviation": 2.625275768178301,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 8.0476877871656,
+                  "upper": 8.508388544834432,
+                  "marginOfError": 0.23035037883441586
+                },
+                "p50": 8.206583000000137,
+                "p95": 12.419679999999971,
+                "p99": 12.752434999999878
+              }
+            },
+            "rounds": [
+              {
+                "round": 1,
+                "loadAverage1m": {
+                  "start": 2.27,
+                  "end": 2.27
+                },
+                "meanMs": {
+                  "guarded": 8.480484610000001,
+                  "unguarded": 8.355315590000009
+                },
+                "guardedOverUnguarded": 1.0149807650772402
+              },
+              {
+                "round": 2,
+                "loadAverage1m": {
+                  "start": 2.27,
+                  "end": 2.27
+                },
+                "meanMs": {
+                  "guarded": 8.384352019999978,
+                  "unguarded": 8.242324100000001
+                },
+                "guardedOverUnguarded": 1.017231537886259
+              },
+              {
+                "round": 3,
+                "loadAverage1m": {
+                  "start": 2.27,
+                  "end": 2.56
+                },
+                "meanMs": {
+                  "guarded": 8.381870769999995,
+                  "unguarded": 8.302189919999938
+                },
+                "guardedOverUnguarded": 1.009597570131238
+              },
+              {
+                "round": 4,
+                "loadAverage1m": {
+                  "start": 2.56,
+                  "end": 2.56
+                },
+                "meanMs": {
+                  "guarded": 8.310523780000057,
+                  "unguarded": 8.269387490000135
+                },
+                "guardedOverUnguarded": 1.0049745268376487
+              },
+              {
+                "round": 5,
+                "loadAverage1m": {
+                  "start": 2.56,
+                  "end": 2.56
+                },
+                "meanMs": {
+                  "guarded": 8.292451770000117,
+                  "unguarded": 8.220973730000004
+                },
+                "guardedOverUnguarded": 1.008694595354231
+              }
+            ],
+            "guardedOverUnguarded": {
+              "count": 5,
+              "min": 1.0049745268376487,
+              "max": 1.017231537886259,
+              "mean": 1.0110957990573233,
+              "sampleStandardDeviation": 0.004955317716324621,
+              "confidenceInterval95": {
+                "confidenceLevel": 0.95,
+                "lower": 1.0049439458404554,
+                "upper": 1.0172476522741911,
+                "marginOfError": 0.006151853216867795
+              }
+            }
+          },
+          {
+            "shape": "fan-in",
+            "releasedPerCall": 1,
+            "latency": {
+              "guarded": {
+                "count": 500,
+                "min": 1.221015000000989,
+                "max": 1.867949999999837,
+                "mean": 1.2782871839999679,
+                "sampleStandardDeviation": 0.07925938870605845,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 1.2713327030894563,
+                  "upper": 1.2852416649104794,
+                  "marginOfError": 0.006954480910511643
+                },
+                "p50": 1.2654980000006617,
+                "p95": 1.320041000000856,
+                "p99": 1.7613400000009278
+              },
+              "unguarded": {
+                "count": 500,
+                "min": 1.167924999999741,
+                "max": 1.7291699999987031,
+                "mean": 1.219557098000012,
+                "sampleStandardDeviation": 0.06121742914193212,
+                "confidenceInterval95": {
+                  "confidenceLevel": 0.95,
+                  "lower": 1.2141856782943032,
+                  "upper": 1.224928517705721,
+                  "marginOfError": 0.00537141970570893
+                },
+                "p50": 1.2112059999999474,
+                "p95": 1.2742350000007718,
+                "p99": 1.4657339999994292
+              }
+            },
+            "rounds": [
+              {
+                "round": 1,
+                "loadAverage1m": {
+                  "start": 2.56,
+                  "end": 2.6
+                },
+                "meanMs": {
+                  "guarded": 1.2966910500000994,
+                  "unguarded": 1.2320507600000383
+                },
+                "guardedOverUnguarded": 1.052465606206078
+              },
+              {
+                "round": 2,
+                "loadAverage1m": {
+                  "start": 2.6,
+                  "end": 2.6
+                },
+                "meanMs": {
+                  "guarded": 1.298407849999967,
+                  "unguarded": 1.2415915499999937
+                },
+                "guardedOverUnguarded": 1.0457608623383219
+              },
+              {
+                "round": 3,
+                "loadAverage1m": {
+                  "start": 2.6,
+                  "end": 2.6
+                },
+                "meanMs": {
+                  "guarded": 1.2817484799998966,
+                  "unguarded": 1.227460249999931
+                },
+                "guardedOverUnguarded": 1.0442280961847592
+              },
+              {
+                "round": 4,
+                "loadAverage1m": {
+                  "start": 2.6,
+                  "end": 2.6
+                },
+                "meanMs": {
+                  "guarded": 1.256380420000005,
+                  "unguarded": 1.1957848200000445
+                },
+                "guardedOverUnguarded": 1.050674334534501
+              },
+              {
+                "round": 5,
+                "loadAverage1m": {
+                  "start": 2.6,
+                  "end": 2.6
+                },
+                "meanMs": {
+                  "guarded": 1.258208119999872,
+                  "unguarded": 1.2008981100000529
+                },
+                "guardedOverUnguarded": 1.0477226248610023
+              }
+            ],
+            "guardedOverUnguarded": {
+              "count": 5,
+              "min": 1.0442280961847592,
+              "max": 1.052465606206078,
+              "mean": 1.0481703048249327,
+              "sampleStandardDeviation": 0.0034009784676736193,
+              "confidenceInterval95": {
+                "confidenceLevel": 0.95,
+                "lower": 1.043948109291853,
+                "upper": 1.0523925003580124,
+                "marginOfError": 0.004222195533079609
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -57,18 +57,18 @@
     "typecheck": "tsc -p tsconfig.typecheck.json"
   },
   "dependencies": {
-    "@mantine/charts": "^9.6.1",
-    "@mantine/core": "^9.6.1",
-    "@mantine/hooks": "^9.6.1",
-    "@mantine/notifications": "^9.6.1",
+    "@mantine/charts": "^9.6.2",
+    "@mantine/core": "^9.6.2",
+    "@mantine/hooks": "^9.6.2",
+    "@mantine/notifications": "^9.6.2",
     "@phosphor-icons/react": "^2.1.10",
     "@stablemates/workhorse-dashboard-server": "workspace:*",
     "recharts": "^3.10.1"
   },
   "devDependencies": {
-    "@orpc/client": "1.15.1",
+    "@orpc/client": "1.15.4",
     "@stablemates/workhorse": "workspace:*",
-    "@types/node": "^26.6.1",
+    "@types/node": "^26.6.2",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
@@ -76,11 +76,11 @@
     "react-dom": "^19.3.0",
     "react-grab": "^0.2.0",
     "typescript": "^5.8.3",
-    "vite": "^8.3.0",
+    "vite": "^8.3.1",
     "vitest": "^4.1.11"
   },
   "peerDependencies": {
-    "@stablemates/workhorse": ">=0.3.0 <0.4.0",
+    "@stablemates/workhorse": ">=0.4.0 <0.5.0",
     "react": ">=19 <20",
     "react-dom": ">=19 <20",
     "vite": ">=6 <9"

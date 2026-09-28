@@ -385,7 +385,7 @@ describe("Workhorse demo", () => {
 
     const seeded = await seedDemoData(database);
     expect(seeded).toMatchObject({ seeded: true, historicalTaskCount: 362 });
-    expect(seeded.taskIds).toHaveLength(86);
+    expect(seeded.taskIds).toHaveLength(98);
     expect(await seedDemoData(database)).toEqual({
       seeded: false,
       taskIds: [],
@@ -397,9 +397,11 @@ describe("Workhorse demo", () => {
            FROM (
              -- Throttled acceptance runs inside a SQL exception block, so those rows carry
              -- subtransaction xids of the same showcase transaction rather than its top-level id.
+             -- The fast-tier step commits in its own transaction, like the long-running step.
              SELECT xmin::text AS version FROM workhorse.task
                WHERE id = ANY($1::uuid[])
                  AND task_type NOT IN ('demo.long-running', 'demo.keyed-throttle')
+                 AND NOT 'fast-tier' = ANY(tags)
              UNION ALL SELECT xmin::text FROM public.workhorse_demo_order
             UNION ALL SELECT xmin::text FROM public.workhorse_demo_seed
                WHERE name = 'default-dashboard-v8'
@@ -414,7 +416,7 @@ describe("Workhorse demo", () => {
     ).toMatchObject({ rows: [{ count: 1 }] });
     expect(await pool.query("SELECT count(*)::integer AS count FROM workhorse.task")).toMatchObject(
       {
-        rows: [{ count: 448 }],
+        rows: [{ count: 460 }],
       },
     );
     const blockedTasks = await dashboardClient(app).dashboard.tasks({
@@ -677,10 +679,11 @@ describe("Workhorse demo", () => {
       ],
     });
     const client = dashboardClient(app);
+    // The fast-tier seed adds three due tasks and one delayed task per language.
     await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
-      all: 448,
-      scheduled: 10,
-      queued: 62,
+      all: 460,
+      scheduled: 13,
+      queued: 71,
       completed: 350,
       discarded: 21,
       retried: 22,
@@ -721,11 +724,12 @@ describe("Workhorse demo", () => {
     });
     await expect(
       client.dashboard.tasks({ filter: "all", page: 1, pageSize: 25, count: "exact" }),
-    ).resolves.toMatchObject({ count: "exact", total: 448 });
+    ).resolves.toMatchObject({ count: "exact", total: 460 });
+    // The fast-tier seed adds three due tasks and one delayed task per language.
     await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
-      all: 448,
-      scheduled: 10,
-      queued: 62,
+      all: 460,
+      scheduled: 13,
+      queued: 71,
       completed: 350,
       discarded: 21,
     });
@@ -734,6 +738,9 @@ describe("Workhorse demo", () => {
     await expect(client.dashboard.taskFacets()).resolves.toMatchObject({
       queues: [
         "demo",
+        "demo-fast",
+        "demo-go-fast",
+        "demo-python-fast",
         "emails",
         "orders",
         "partner-api",
@@ -760,7 +767,7 @@ describe("Workhorse demo", () => {
       await client.dashboard.tasks({ filter: "scheduled", page: 1, pageSize: 25 }),
     ).toMatchObject({
       filter: "scheduled",
-      total: 10,
+      total: 13,
       tasks: expect.arrayContaining([expect.objectContaining({ state: "scheduled" })]),
     });
     await expect(
@@ -873,6 +880,9 @@ describe("Workhorse demo", () => {
     });
     expect(queueActivity.groups).toEqual([
       "demo",
+      "demo-fast",
+      "demo-go-fast",
+      "demo-python-fast",
       "emails",
       "orders",
       "partner-api",
@@ -989,7 +999,8 @@ describe("Workhorse demo", () => {
               ready_at = NULL, sequence = NULL, worker_id = NULL, acquired_at = NULL,
               heartbeat_at = NULL, expires_at = NULL, attempt_timeout_at = NULL,
               fence_token = 0, wait_name = NULL, attempt_started_at = NULL,
-              cancel_requested_at = NULL, cancel_requested_by = NULL, cancel_reason = NULL`,
+              cancel_requested_at = NULL, cancel_requested_by = NULL, cancel_reason = NULL,
+              pending_prerequisites = 0, dependency_rejected = false`,
     );
     await pool.query(
       `UPDATE workhorse.task_runtime

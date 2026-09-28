@@ -41,8 +41,8 @@ Rolling out first gives the new release a schema that lacks the functions it cal
 order in which a single narrowing migration and a fleet rollout are both safe, so as long as
 removal is welded to the major release, a major upgrade is an outage by construction.
 
-WH-576 found the same shape in the survey. Every painful upgrade it recorded — pg-boss v10 to v11,
-Graphile Worker 0.14.0 — was a release that removed or rebuilt something while users were mid-fleet.
+WH-576 found the same shape in the survey. Every painful upgrade it recorded — pg-boss v10 to v11
+among them — was a release that removed or rebuilt something while users were mid-fleet.
 River Pro is the counterexample and it is the shape this ADR takes: "Run v6 first, deploy v0.24.0 to
 all River Pro nodes, and run v7 only after the rollout is complete." The removal is a step the
 operator runs when their own fleet is ready, not a step a release performs on their behalf.

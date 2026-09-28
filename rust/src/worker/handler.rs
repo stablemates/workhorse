@@ -33,6 +33,9 @@ pub struct ClaimedTask {
     pub lease_expires_at: DateTime<Utc>,
     /// When the claim was sent, which bounds the first lease locally.
     pub(crate) claim_sent_at: tokio::time::Instant,
+    /// Whether the task came from a fast-tier queue (ADR 0077). Its handler cannot use durable
+    /// execution state, and its completion takes the batched path.
+    pub(crate) fast_tier: bool,
 }
 
 /// Fires once, with the first reason, when the worker stops a handler.

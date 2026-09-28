@@ -9,6 +9,8 @@ import type {
   CancelResult,
   BatchExecutionRecord,
   ClaimedTask,
+  CompletionClaim,
+  CompletionClaimResult,
   CreateChildResult,
   CreateChildrenResult,
   Budget,
@@ -136,11 +138,15 @@ import {
   workerCompletionPrepare,
   workerHeartbeatReservation,
   workerHeartbeatReservationProblem,
+  workerStatementPoolCapacity,
   workerProgressRead,
   workerWaitsRead,
   type WorkerHeartbeatChannel,
 } from "./worker-internal.js";
 import { heartbeatReservationProblem, holdHeartbeatConnection } from "./heartbeat-connection.js";
+import { statementPoolCapacity } from "./connection-pool.js";
+import { FastTierUnsupportedError } from "./errors.js";
+import { queryFencedWrite } from "./queue/fenced-write.js";
 
 export type { MaintenancePhase, MaintenancePhaseResult } from "./queue/retention-maintenance.js";
 
@@ -392,7 +398,8 @@ export class Queue {
       maxActive: definition.maxActive,
       maxActivePerKey: definition.maxActivePerKey ?? null,
     }));
-    const result = await this.database.query<ConcurrencyPolicyRow>(
+    const result = await queryFencedWrite<ConcurrencyPolicyRow>(
+      this.database,
       SQL_STATEMENTS["sync_concurrency_policies_v1"],
       [namespace, JSON.stringify(input), options.prune ?? true],
     );
@@ -740,18 +747,82 @@ export class Queue {
     );
   }
 
+  /**
+   * Completes a fast-tier attempt and claims up to `claim.limit` replacements from `claim.queue` in
+   * the same round trip (ADR 0077). Rejects with `FastTierUnsupportedError` when that queue is
+   * full-tier. Concurrent calls from one worker for one queue share one statement.
+   */
+  async completeAndClaim<TResult extends Json, TPayload extends Json = Json>(
+    task: ClaimedTask,
+    workerId: string,
+    result: TResult,
+    claim: CompletionClaim,
+  ): Promise<CompletionClaimResult<TPayload>> {
+    const serialized = await this.modules.enqueueContracts.validateResult(task, result);
+    return (await this.modules.claimLeaseFence.completeAndClaim(
+      task,
+      workerId,
+      serialized,
+      claim,
+    )) as CompletionClaimResult<TPayload>;
+  }
+
+  /**
+   * Claims up to `limit` tasks from a fast-tier queue. Rejects with `FastTierUnsupportedError` when
+   * the queue is full-tier; `claimMany` claims from either tier.
+   */
+  async claimFast<TPayload extends Json = Json>(
+    workerId: string,
+    limit: number,
+    options: { queue?: string; leaseMs?: number } = {},
+  ): Promise<ClaimedTask<TPayload>[]> {
+    return this.modules.claimLeaseFence.claimFast<TPayload>(workerId, limit, options);
+  }
+
   async [workerCompletionPrepare](
     task: ClaimedTask,
     workerId: string,
     result: Json,
-  ): Promise<() => Promise<boolean>> {
+  ): Promise<(claim?: CompletionClaim) => Promise<CompletionClaimResult>> {
     const serialized = await this.modules.enqueueContracts.validateResult(task, result);
-    return () =>
-      this.modules.claimLeaseFence.complete(task, workerId, result, async () => serialized);
+    const complete = async (): Promise<CompletionClaimResult> => ({
+      accepted: await this.modules.claimLeaseFence.complete(
+        task,
+        workerId,
+        result,
+        async () => serialized,
+      ),
+      claimed: [],
+    });
+    return async (claim) => {
+      if (claim === undefined) return complete();
+      try {
+        return await this.modules.claimLeaseFence.completeAndClaim(
+          task,
+          workerId,
+          serialized,
+          claim,
+        );
+      } catch (error) {
+        // The queue left the fast tier after this worker last claimed from it. complete_v1 settles
+        // an attempt on either tier.
+        if (
+          !(error instanceof FastTierUnsupportedError) ||
+          error.feature !== "batched completion"
+        ) {
+          throw error;
+        }
+        return complete();
+      }
+    };
   }
 
   [workerHeartbeatReservationProblem](): string | undefined {
     return heartbeatReservationProblem(this.database);
+  }
+
+  [workerStatementPoolCapacity](): number | undefined {
+    return statementPoolCapacity(this.database);
   }
 
   [workerHeartbeatReservation](): WorkerHeartbeatChannel | undefined {

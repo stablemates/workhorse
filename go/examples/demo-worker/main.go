@@ -18,13 +18,15 @@ import (
 )
 
 const (
-	languageTaskType        = "demo.language-worker"
-	sharedTaskType          = "demo.shared-worker"
-	goQueue                 = "demo-go"
-	sharedQueue             = "demo-shared"
-	scheduleNamespace       = "workhorse-demo"
-	workerConcurrency       = 3
-	defaultPollMilliseconds = 15_000
+	languageTaskType          = "demo.language-worker"
+	sharedTaskType            = "demo.shared-worker"
+	goQueue                   = "demo-go"
+	goFastQueue               = "demo-go-fast"
+	sharedQueue               = "demo-shared"
+	scheduleNamespace         = "workhorse-demo"
+	fastTierScheduleNamespace = "workhorse-demo-fast-tier"
+	workerConcurrency         = 3
+	defaultPollMilliseconds   = 15_000
 )
 
 func workerID() (string, error) {
@@ -91,6 +93,31 @@ func sharedTask(
 	}, nil
 }
 
+func newWorker(
+	pool *pgxpool.Pool,
+	poll time.Duration,
+	id string,
+	logger *slog.Logger,
+) (*workhorse.Worker, error) {
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queues:              []string{goQueue, sharedQueue, goFastQueue},
+		WorkerID:            id,
+		Concurrency:         workerConcurrency,
+		PollInterval:        poll,
+		ScheduleNamespaces:  []string{scheduleNamespace, fastTierScheduleNamespace},
+		MaintenanceInterval: time.Second,
+		RegistryInterval:    250 * time.Millisecond,
+		ShutdownGracePeriod: 25 * time.Second,
+		Logger:              logger,
+	})
+	if err != nil {
+		return nil, err
+	}
+	worker.Handle(languageTaskType, languageTask)
+	worker.Handle(sharedTaskType, sharedTask)
+	return worker, nil
+}
+
 func main() {
 	runContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -113,22 +140,10 @@ func main() {
 	}
 	defer pool.Close()
 
-	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
-		Queues:              []string{goQueue, sharedQueue},
-		WorkerID:            id,
-		Concurrency:         workerConcurrency,
-		PollInterval:        poll,
-		ScheduleNamespaces:  []string{scheduleNamespace},
-		MaintenanceInterval: time.Second,
-		RegistryInterval:    250 * time.Millisecond,
-		ShutdownGracePeriod: 25 * time.Second,
-		Logger:              slog.New(slog.NewJSONHandler(os.Stdout, nil)),
-	})
+	worker, err := newWorker(pool, poll, id, slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	if err != nil {
 		panic(err)
 	}
-	worker.Handle(languageTaskType, languageTask)
-	worker.Handle(sharedTaskType, sharedTask)
 	if err := worker.Run(runContext); err != nil {
 		panic(err)
 	}

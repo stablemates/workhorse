@@ -64,7 +64,7 @@ describe("reading the release lines out of the changelogs", () => {
     );
   });
 
-  it("resolves all three lines from the repository's own changelogs", async () => {
+  it("resolves every line from the repository's own changelogs", async () => {
     const lines = await readReleaseLines(repositoryRoot);
 
     expect(lines.map((line) => line.id)).toEqual(releaseLines.map((line) => line.id));

@@ -189,6 +189,18 @@
     "expectedReady": 1
   },
   {
+    "id": "busy-worker-refills-slots-with-overlapping-batched-claims",
+    "kind": "slot-refill",
+    "covers": ["batched-slot-refill"],
+    "taskType": "protocol.slot-refill",
+    "concurrency": 8,
+    "taskCount": 24,
+    "settleCheckMs": 50,
+    "expectedClaimLimits": [8, 1, 2],
+    "expectedOverlappingClaims": 2,
+    "expectedMaximumClaimsPerTask": 0.75
+  },
+  {
     "id": "budget-admission-holds-across-queues",
     "kind": "budget-admission-race",
     "covers": ["budget-admission-serialization"],

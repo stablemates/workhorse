@@ -437,3 +437,186 @@ def test_a_handler_is_aborted_when_no_heartbeat_is_accepted_within_the_lease(
     # The attempt recorded a lost lease, so the worker settled nothing through fail_v1. The task
     # returns through lease recovery instead.
     assert not any("fail_v1" in statement for statement in log.statements()), log.statements()
+
+
+# PostgreSQL may end the reserved heartbeat connection while the worker idles between tasks. The
+# lease outlives the whole test, so only a lost reconnect could end an attempt.
+TERMINATION_LEASE_MS = 10_000
+TERMINATION_HEARTBEAT_MS = 100
+
+
+class BlockingTask:
+    """A handler gate: the handler reports that it runs, then blocks until the test releases it."""
+
+    def __init__(self) -> None:
+        self.started = Event()
+        self.release = Event()
+        self.cancelled = False
+
+    def handler(self, _payload: Any, context: HandlerContext) -> dict[str, bool]:
+        self.started.set()
+        while not self.release.wait(0.02):
+            if context.cancellation.cancelled:
+                self.cancelled = True
+                break
+        return {"ok": True}
+
+    async def async_handler(self, _payload: Any, context: AsyncHandlerContext) -> dict[str, bool]:
+        self.started.set()
+        while not self.release.is_set():
+            if context.cancellation.cancelled:
+                self.cancelled = True
+                break
+            await asyncio.sleep(0.02)
+        return {"ok": True}
+
+
+def heartbeat_backends(database_url: str) -> list[int]:
+    """List the backends whose latest statement was a heartbeat round, excluding the observer."""
+    with psycopg.connect(database_url, autocommit=True) as observer:
+        rows = observer.execute(
+            "SELECT pid FROM pg_stat_activity WHERE datname = current_database() "
+            "AND pid <> pg_backend_pid() AND query LIKE '%workhorse.heartbeat_many_v1%'"
+        ).fetchall()
+    return [int(row[0]) for row in rows]
+
+
+def wait_for_heartbeat_backend(database_url: str, other_than: int | None = None) -> int:
+    deadline = monotonic() + 10
+    while monotonic() < deadline:
+        pids = [pid for pid in heartbeat_backends(database_url) if pid != other_than]
+        if pids:
+            assert len(pids) == 1, pids
+            return pids[0]
+        sleep(0.02)
+    raise AssertionError("no backend ran a heartbeat round")
+
+
+def wait_for_outcome(database_url: str, task_id: str) -> Any:
+    deadline = monotonic() + 10
+    while monotonic() < deadline:
+        row = outcome(database_url, task_id)
+        if row is not None:
+            return row
+        sleep(0.02)
+    raise AssertionError("the task never settled")
+
+
+def terminate_the_idle_heartbeat_connection(
+    database_url: str, queue: str, task_type: str, before: BlockingTask, after: BlockingTask
+) -> None:
+    """Drive one task, end the reserved heartbeat backend while idle, then drive a second task."""
+    before_id = enqueue(database_url, f"{task_type}.before", queue)
+    assert before.started.wait(30)
+    reserved = wait_for_heartbeat_backend(database_url)
+    before.release.set()
+    assert wait_for_outcome(database_url, before_id) == ("succeeded",)
+
+    # The idle worker still holds the reserved connection, so the termination hits it between rounds.
+    assert heartbeat_backends(database_url) == [reserved]
+    with psycopg.connect(database_url, autocommit=True) as observer:
+        terminated = observer.execute("SELECT pg_terminate_backend(%s)", (reserved,)).fetchone()
+    assert terminated == (True,)
+    sleep(0.1)
+
+    after_id = enqueue(database_url, f"{task_type}.after", queue)
+    assert after.started.wait(30)
+    claimed = lease_expiry(database_url, after_id)
+    # The first round finds the connection dead and discards it; a later round renews on a new one.
+    replacement = wait_for_heartbeat_backend(database_url, other_than=reserved)
+    assert replacement != reserved
+    wait_for_lease_renewal(database_url, after_id, claimed)
+    after.release.set()
+    assert wait_for_outcome(database_url, after_id) == ("succeeded",)
+    assert before.cancelled is False
+    assert after.cancelled is False
+
+
+def test_a_terminated_idle_heartbeat_connection_is_replaced_on_the_next_round(
+    database_url: str,
+) -> None:
+    """A dead reserved connection fails one round; the worker keeps running and reconnects.
+
+    PostgreSQL can end the reserved heartbeat backend while the worker idles. The failure surfaces
+    only when the next round runs, and that round counts as unknown under SM-808's rule.
+    """
+    queue = "heartbeat-terminated"
+    before = BlockingTask()
+    after = BlockingTask()
+    worker = (
+        Worker(
+            worker_pool,
+            queue=queue,
+            worker_id="python-heartbeat-terminated",
+            lease_ms=TERMINATION_LEASE_MS,
+            heartbeat_ms=TERMINATION_HEARTBEAT_MS,
+            poll_ms=50,
+        )
+        .handle("heartbeat.terminated.before", before.handler)
+        .handle("heartbeat.terminated.after", after.handler)
+    )
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            worker.run()
+        except BaseException as error:
+            errors.append(error)
+
+    running = Thread(target=run)
+    running.start()
+    try:
+        terminate_the_idle_heartbeat_connection(
+            database_url, queue, "heartbeat.terminated", before, after
+        )
+        assert running.is_alive()
+    finally:
+        before.release.set()
+        after.release.set()
+        worker.stop()
+        running.join(30)
+
+    assert not running.is_alive()
+    assert errors == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("driver", ["psycopg", "asyncpg"])
+async def test_a_terminated_idle_async_heartbeat_connection_is_replaced_on_the_next_round(
+    database_url: str, driver: str, async_psycopg_pool, asyncpg_pool
+) -> None:
+    """The async worker's reserved connection recovers from the same termination as the sync one."""
+    queue = f"heartbeat-terminated-{driver}"
+    before = BlockingTask()
+    after = BlockingTask()
+    options: dict[str, Any] = {
+        "queue": queue,
+        "worker_id": f"python-async-heartbeat-terminated-{driver}",
+        "lease_ms": TERMINATION_LEASE_MS,
+        "heartbeat_ms": TERMINATION_HEARTBEAT_MS,
+        "poll_ms": 50,
+    }
+    if driver == "psycopg":
+        worker = AsyncWorker.from_psycopg(async_psycopg_pool, **options)
+    else:
+        worker = AsyncWorker.from_asyncpg(asyncpg_pool, **options)
+    worker.handle("heartbeat.terminated.before", before.async_handler).handle(
+        "heartbeat.terminated.after", after.async_handler
+    )
+
+    running = asyncio.create_task(worker.run())
+    try:
+        await asyncio.to_thread(
+            terminate_the_idle_heartbeat_connection,
+            database_url,
+            queue,
+            "heartbeat.terminated",
+            before,
+            after,
+        )
+        assert not running.done()
+    finally:
+        before.release.set()
+        after.release.set()
+        worker.stop()
+        await asyncio.wait_for(running, timeout=30)

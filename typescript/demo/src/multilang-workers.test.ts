@@ -2,7 +2,10 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  DEMO_FAST_TIER_SCHEDULE_NAMESPACE,
+  DEMO_GO_FAST_QUEUE,
   DEMO_GO_QUEUE,
+  DEMO_PYTHON_FAST_QUEUE,
   DEMO_PYTHON_QUEUE,
   DEMO_QUEUE,
   DEMO_RATE_LIMIT_QUEUE,
@@ -40,7 +43,9 @@ describe("multilanguage demo worker topology", () => {
 
     expect(dockerfile).toContain("FROM golang:1.25-alpine@sha256:");
     expect(dockerfile).toContain("FROM python:3.14-alpine@sha256:");
-    expect(dockerfile).toContain("FROM ghcr.io/astral-sh/uv:0.12.17@sha256:");
+    expect(dockerfile).toMatch(
+      /^FROM ghcr\.io\/astral-sh\/uv:\d+\.\d+\.\d+@sha256:[0-9a-f]{64} AS uv$/m,
+    );
     expect(dockerfile).toContain("COPY python/pyproject.toml python/uv.lock ./python/");
     expect(dockerfile).toContain("--locked");
     expect(dockerfile).toContain("--require-hashes");
@@ -49,9 +54,23 @@ describe("multilanguage demo worker topology", () => {
     expect(developmentLauncher).toContain('"./examples/demo-worker"');
     expect(developmentLauncher).toContain('"python/examples/demo_worker.py"');
     expect(pythonWorker).toContain('SCHEDULE_NAMESPACE = "workhorse-demo"');
-    expect(pythonWorker).toContain("schedule_namespaces=(SCHEDULE_NAMESPACE,)");
-    expect(goWorker).toContain('scheduleNamespace       = "workhorse-demo"');
-    expect(goWorker).toContain("ScheduleNamespaces:  []string{scheduleNamespace}");
+    expect(pythonWorker).toContain(
+      `FAST_TIER_SCHEDULE_NAMESPACE = "${DEMO_FAST_TIER_SCHEDULE_NAMESPACE}"`,
+    );
+    expect(pythonWorker).toContain(`PYTHON_FAST_QUEUE = "${DEMO_PYTHON_FAST_QUEUE}"`);
+    expect(pythonWorker).toContain("queues=(PYTHON_QUEUE, SHARED_QUEUE, PYTHON_FAST_QUEUE)");
+    expect(pythonWorker).toContain(
+      "schedule_namespaces=(SCHEDULE_NAMESPACE, FAST_TIER_SCHEDULE_NAMESPACE)",
+    );
+    expect(goWorker).toContain('scheduleNamespace         = "workhorse-demo"');
+    expect(goWorker).toContain(
+      `fastTierScheduleNamespace = "${DEMO_FAST_TIER_SCHEDULE_NAMESPACE}"`,
+    );
+    expect(goWorker).toContain(`goFastQueue               = "${DEMO_GO_FAST_QUEUE}"`);
+    expect(goWorker).toContain("[]string{goQueue, sharedQueue, goFastQueue}");
+    expect(goWorker).toContain(
+      "ScheduleNamespaces:  []string{scheduleNamespace, fastTierScheduleNamespace}",
+    );
   });
 
   it("enforces the shared handler contract in TypeScript", () => {

@@ -294,7 +294,13 @@ describe("schema installation", () => {
         "last_completed_at",
         "last_completed_local_date",
       ],
-      dashboard_queue_control_v1: ["queue_name", "paused"],
+      dashboard_queue_control_v1: [
+        "queue_name",
+        "paused",
+        "tier",
+        "record_attempts",
+        "record_claims",
+      ],
       dashboard_rate_limit_policy_v1: ["queue_name"],
       dashboard_retention_policy_v1: [
         "singleton",
@@ -422,7 +428,11 @@ describe("schema installation", () => {
           )
         ORDER BY successor.name`,
     );
-    expect(orphaned.rows).toEqual([]);
+    // Protocol 5 retired the _v1 predecessors of these two, so they have no predecessor to find.
+    expect(orphaned.rows).toEqual([
+      { name: "fire_due_schedules_v2" },
+      { name: "sync_schedule_definitions_v2" },
+    ]);
   });
 
   it("gives every function and view a version suffix", async () => {
@@ -476,17 +486,38 @@ describe("schema installation", () => {
       { version: 22, description: "history staging through pg_temp" },
       { version: 23, description: "a canceled dependent releases its edges" },
       { version: 24, description: "row retention lag waits for history retention" },
+      { version: 25, description: "add a fast task tier" },
+      {
+        version: 26,
+        description: "a dependent enqueue holds its prerequisites against completion",
+      },
+      { version: 27, description: "write full-tier enqueue rows set-based" },
+      { version: 28, description: "release dependents per statement" },
+      { version: 29, description: "claim policy limited tasks as a set" },
+      { version: 30, description: "release dependents through a pending-prerequisite counter" },
+      { version: 31, description: "lock a worker's fast-tier rows in task ID order" },
+      { version: 32, description: "a child terminal at creation settles its parent" },
+      {
+        version: 33,
+        description: "lock an enqueue batch's prerequisites before its first request",
+      },
+      { version: 34, description: "reject an oversized fast-tier result per row" },
+      {
+        version: 35,
+        description: "serialize the concurrency capacity notification with claims",
+      },
+      { version: 36, description: "plan dependency release once per session" },
+      { version: 37, description: "report queue tier and history in the dashboard" },
+      { version: 38, description: "detect and repair pending-prerequisite counter drift" },
+      { version: 39, description: "release a fused claim lock before it can deadlock" },
+      { version: 40, description: "govern the dependency counter drift check and repair" },
+      { version: 41, description: "cut the plain full-tier per-task claim and trigger cost" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
       "SELECT version FROM workhorse.protocol_version ORDER BY version",
     );
-    expect(protocols.rows).toEqual([
-      { version: 1 },
-      { version: 2 },
-      { version: 3 },
-      { version: 4 },
-    ]);
+    expect(protocols.rows).toEqual([{ version: 5 }]);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;

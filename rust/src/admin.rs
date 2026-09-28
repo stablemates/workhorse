@@ -67,6 +67,22 @@ string_enum!(
     }
 );
 
+string_enum!(
+    /// Which storage a queue's tasks use (ADR 0077). A fast-tier task keeps one runtime row while
+    /// it is live and one outcome row after it settles, and supports no durable execution.
+    QueueTier {
+        Fast => "fast",
+        Full => "full",
+    }
+);
+
+/// Whether a fast-tier queue records its attempts and claims for the dashboard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QueueHistory {
+    pub record_attempts: bool,
+    pub record_claims: bool,
+}
+
 /// Who performs a control, why, and the idempotency key PostgreSQL retains for it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AdminAudit {
@@ -878,6 +894,38 @@ impl<E: Executor> Admin<E> {
             .await?;
         let deleted: i32 = exactly_one(&rows, "purge_queue_v1")?.try_get("deleted_count")?;
         u64::try_from(deleted).map_err(|_| invalid_column("deleted_count"))
+    }
+
+    /// Moves a queue between tiers. PostgreSQL refuses with [`Error::FastTierUnsupported`] while
+    /// the queue holds a live task, because a live task cannot move between the two storages.
+    pub async fn set_queue_tier(
+        &self,
+        queue: &str,
+        tier: QueueTier,
+        audit: &AdminAudit,
+    ) -> Result<QueueTier, Error> {
+        validate_audit(audit)?;
+        let rows = self
+            .query(sql::SET_QUEUE_TIER, &[&queue, &tier.as_str(), &audit.actor, &audit.reason])
+            .await?;
+        let tier: String = exactly_one(&rows, "set_queue_tier_v1")?.try_get("tier")?;
+        QueueTier::parse(&tier).ok_or_else(|| invalid_column("tier"))
+    }
+
+    /// Changes which history a fast-tier queue records; `None` keeps a setting as it is.
+    pub async fn set_queue_history(
+        &self,
+        queue: &str,
+        record_attempts: Option<bool>,
+        record_claims: Option<bool>,
+    ) -> Result<QueueHistory, Error> {
+        let rows =
+            self.query(sql::SET_QUEUE_HISTORY, &[&queue, &record_attempts, &record_claims]).await?;
+        let row = exactly_one(&rows, "set_queue_history_v1")?;
+        Ok(QueueHistory {
+            record_attempts: row.try_get("record_attempts")?,
+            record_claims: row.try_get("record_claims")?,
+        })
     }
 }
 

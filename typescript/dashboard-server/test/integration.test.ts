@@ -77,11 +77,13 @@ describe("dashboard signal integration", () => {
 describe("dashboard batch execution detail", () => {
   it("returns ordered peers and their matching attempt failures", async () => {
     const queueName = `dashboard-batch-${randomUUID()}`;
-    const taskIds = await Promise.all(
-      [1, 2].map((value) =>
-        queue.enqueue("dashboard-batch", { value }, { queue: queueName, maxAttempts: 1 }),
-      ),
-    );
+    // Concurrent enqueues can commit in either order, and the batch lists members in claim order.
+    const taskIds: string[] = [];
+    for (const value of [1, 2]) {
+      taskIds.push(
+        await queue.enqueue("dashboard-batch", { value }, { queue: queueName, maxAttempts: 1 }),
+      );
+    }
     const worker = new Worker(queue, {
       workerId: "dashboard-batch-worker",
       queue: queueName,

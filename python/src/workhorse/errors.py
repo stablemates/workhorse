@@ -253,9 +253,19 @@ class PurgeIdempotencyConflictError(WorkhorseError):
         super().__init__("PostgreSQL rejected a materially different idempotent queue purge")
 
 
+class FastTierUnsupportedError(WorkhorseError):
+    """A fast-tier queue refused a feature that only the full tier provides."""
+
+    def __init__(self, queue: str, feature: str, ordinal: int | None = None) -> None:
+        self.queue = queue
+        self.feature = feature
+        self.ordinal = ordinal
+        super().__init__(f"Fast-tier queue {queue} does not support {feature}")
+
+
 def _translate_database_error(error: Exception) -> WorkhorseError | None:
     sqlstate = getattr(error, "sqlstate", None) or getattr(error, "code", None)
-    if sqlstate not in {"P1001", "P1003", "P1005"}:
+    if sqlstate not in {"P1001", "P1003", "P1005", "P1007"}:
         return None
     diagnostic = getattr(error, "diag", None)
     raw_detail = getattr(diagnostic, "message_detail", None) or getattr(error, "detail", None)
@@ -273,6 +283,13 @@ def _translate_database_error(error: Exception) -> WorkhorseError | None:
         return EnqueueIdempotencyConflictError(details)
     if sqlstate == "P1005":
         return DependencyLimitExceededError(details)
+    if sqlstate == "P1007":
+        ordinal = details.get("ordinal")
+        return FastTierUnsupportedError(
+            str(details.get("queue", "")),
+            str(details.get("feature", "")),
+            ordinal if isinstance(ordinal, int) else None,
+        )
     return DependencyCycleError(details)
 
 
@@ -290,6 +307,7 @@ __all__ = [
     "DependencyLimitExceededError",
     "EnqueueIdempotencyConflictError",
     "ExecutionTimeoutError",
+    "FastTierUnsupportedError",
     "HumanWaitAlreadyWaitingError",
     "HumanWaitConflictError",
     "HumanWaitIdempotencyConflictError",

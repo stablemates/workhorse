@@ -15,6 +15,9 @@ becomes one segment: one compressed file of JSON lines, one row per event or att
 column kept, plus a small manifest beside it that records the row count, the byte length, and a
 checksum of the file as stored. A day with no rows gets only the manifest.
 
+A [fast-tier queue](305-fast-tier.md) writes little history, so export treats its outcome rows as
+a third relation, `fast_task_outcome`. Workhorse groups those rows by the day each task finished.
+
 Workhorse exports a day only once it is closed and the statistics rollup has passed it. The rollup
 watermark is already the rule for when deletion is safe, so export follows the same rule and always
 runs ahead of deletion. See [320-statistics.md](320-statistics.md).

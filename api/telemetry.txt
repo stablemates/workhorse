@@ -97,6 +97,7 @@ workhorse.child.status
 workhorse.claim.result
 workhorse.cold_export.enabled
 workhorse.complete.accepted
+workhorse.complete.batch_size
 workhorse.enqueue.count
 workhorse.enqueue.outcome
 workhorse.expiration.status
@@ -119,6 +120,7 @@ workhorse.maintenance.timezone
 workhorse.operation.status
 workhorse.progress.status
 workhorse.queue.name
+workhorse.queue.tier
 workhorse.recovery.expired_leases
 workhorse.recovery.retried
 workhorse.recovery.rows_affected

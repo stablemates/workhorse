@@ -44,6 +44,43 @@ export const DEMO_QUEUE = "demo";
 export const DEMO_PYTHON_QUEUE = "demo-python";
 export const DEMO_GO_QUEUE = "demo-go";
 export const DEMO_SHARED_QUEUE = "demo-shared";
+export const DEMO_FAST_QUEUE = "demo-fast";
+export const DEMO_PYTHON_FAST_QUEUE = "demo-python-fast";
+export const DEMO_GO_FAST_QUEUE = "demo-go-fast";
+export const FAST_TIER_SEED_NAME = "fast-tier-dashboard-v1";
+/**
+ * The fast-tier schedules live outside `DEMO_SCHEDULE_NAMESPACE` because web startup replaces that
+ * namespace before it seeds. A schedule there could fire into a fast queue before the seed moves
+ * the queue to the fast tier, and the live task would make the tier change fail.
+ */
+export const DEMO_FAST_TIER_SCHEDULE_NAMESPACE = "workhorse-demo-fast-tier";
+/**
+ * One fast-tier queue per demo language. Each one records a different history, so the Queues page
+ * shows every history label the fast tier can carry.
+ */
+export const DEMO_FAST_TIER_QUEUES = [
+  {
+    queue: DEMO_FAST_QUEUE,
+    language: "typescript",
+    history: { recordAttempts: true, recordClaims: true },
+    scheduleName: "fast-tier.typescript",
+    schedule: "*/5 * * * *",
+  },
+  {
+    queue: DEMO_PYTHON_FAST_QUEUE,
+    language: "python",
+    history: { recordAttempts: false, recordClaims: true },
+    scheduleName: "fast-tier.python",
+    schedule: "1-59/5 * * * *",
+  },
+  {
+    queue: DEMO_GO_FAST_QUEUE,
+    language: "go",
+    history: { recordAttempts: false, recordClaims: false },
+    scheduleName: "fast-tier.go",
+    schedule: "2-59/5 * * * *",
+  },
+] as const;
 export const REPRESENTATIVE_SEED_NAME = "default-dashboard-v8";
 export const LONG_RUNNING_SEED_NAME = "long-running-dashboard-v2";
 export const HISTORICAL_SEED_NAME = "historical-dashboard-v1";

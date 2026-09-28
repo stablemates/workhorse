@@ -1,5 +1,6 @@
 import { Client, Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { dropLocalDatabase } from "../typescript/core/src/drop-local-database.js";
 import { databaseName, localDatabaseUrl } from "../typescript/core/src/local-database.js";
 import {
   assertSweepTarget,
@@ -32,7 +33,7 @@ beforeAll(async () => {
   assertSweepTarget(sourceUrl);
   admin = new Pool({ connectionString: adminUrl(sourceUrl), max: 1 });
   for (const name of [leakedName, liveName]) {
-    await admin.query(`DROP DATABASE IF EXISTS ${identifier(name)} WITH (FORCE)`);
+    await dropLocalDatabase(admin, name);
     await admin.query(`CREATE DATABASE ${identifier(name)}`);
   }
   liveSession = new Client({ connectionString: databaseUrl(sourceUrl, liveName) });
@@ -42,7 +43,7 @@ beforeAll(async () => {
 afterAll(async () => {
   if (liveSession) await liveSession.end();
   for (const name of [leakedName, liveName]) {
-    await admin.query(`DROP DATABASE IF EXISTS ${identifier(name)} WITH (FORCE)`);
+    await dropLocalDatabase(admin, name);
   }
   await admin.end();
 });

@@ -1,4 +1,5 @@
 import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
+import { queryFencedWrite } from "./fenced-write.js";
 import { WorkhorseError } from "../errors.js";
 import { logInfo } from "../telemetry.js";
 import type {
@@ -161,7 +162,8 @@ export class ChildTasksModule extends QueueModule {
       throw new TypeError("Worker ID must be a non-empty string");
     }
     const request = await this.childRequest(parent, type, payload, options);
-    const result = await this.context.database.query<CreateChildRow>(
+    const result = await queryFencedWrite<CreateChildRow>(
+      this.context.database,
       SQL_STATEMENTS["create_child_v1"],
       [parent.id, workerId, parent.fenceToken.toString(), name, JSON.stringify(request)],
     );
@@ -225,7 +227,8 @@ export class ChildTasksModule extends QueueModule {
         };
       }),
     );
-    const result = await this.context.database.query<CreateChildrenRow>(
+    const result = await queryFencedWrite<CreateChildrenRow>(
+      this.context.database,
       SQL_STATEMENTS["create_children_v1"],
       [parent.id, workerId, parent.fenceToken.toString(), JSON.stringify(requests), mode],
     );

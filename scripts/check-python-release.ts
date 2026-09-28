@@ -3,6 +3,7 @@ import { cp, mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { checkRelease } from "./check-release.js";
+import { verifyRelease } from "./verify-release.js";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const releaseDirectory = path.join(repositoryRoot, "python", "dist");
@@ -85,6 +86,10 @@ export async function checkPythonRelease(): Promise<void> {
     await run("pnpm", ["python:test"], {
       WORKHORSE_PYTHON_DISTRIBUTIONS: stagedDistributions,
     });
+    // The post-publish check, run now against the wheel PyPI will receive. A check the package
+    // cannot satisfy fails the rehearsal instead of halting the train after the tag.
+    const wheel = names.find((name) => name.endsWith(".whl"))!;
+    await verifyRelease("python", version, { wheel: path.join(stagedDistributions, wheel) });
 
     await rm(releaseDirectory, { force: true, recursive: true });
     await mkdir(releaseDirectory, { recursive: true });

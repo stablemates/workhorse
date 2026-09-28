@@ -2,7 +2,7 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript and Go `Queue`, `Admin`, and `Worker` remain thin protocol clients.
 
-The current schema version is 23 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
+The current schema version is 40 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
 (`WORKHORSE_SCHEMA_BASELINE_VERSION`). `sql/releases/0006.sql` contains the baseline clean-install
 artifact, which is the 0.2.0 schema. The chain began at 1 and was pruned to this baseline when
 0.1.x support was dropped
@@ -16,12 +16,16 @@ artifact, which is the 0.2.0 schema. The chain began at 1 and was pruned to this
 reporting that step in `MigrateSchemaResult.contractStop`. `contractSchema` applies the one
 contract step pending at the installed version through `workhorse schema contract`, which requires
 `--yes` and first names every worker still live on a retiring protocol. The current migration plan
-is empty.
+has one contract step: `0025-add-a-fast-task-tier.sql` moves schema 24 to 25 and retires
+protocols 1 through 4. `migrateSchema` therefore stops at schema 24 on an older installation, and
+`contractSchema` applies step 25. The additive steps 26 through 40 follow, so a second `migrateSchema`
+run completes the plan. Step 25 ships without the usual retention window, as
+[ADR 0077](decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) §6 records.
 
 A clean installation records `(6, 'baseline')` in `workhorse.schema_migration`, then one row per
 later step.
 `workhorse.protocol_version` records the served
-SQL protocol versions (currently 1) independently of that history; `readProtocolVersions` reads it
+SQL protocol versions (currently exactly 5) independently of that history; `readProtocolVersions` reads it
 and returns null when that table is absent. `migrateSchema` delegates ordered execution to the internal
 `applySchemaMigrationPlan` function. Its `SchemaMigrationPlan` has `baselineVersion`,
 `currentVersion`, `steps`, and `readStep` fields. Each `SchemaMigrationStep` has `fromVersion`,
@@ -63,8 +67,10 @@ function or reinterpret that suffix.
 
 ## SQL protocol conformance
 
-`protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 1. It accepts installed
-schema version 1 and client protocol 1. `protocol/v1/compatibility.json` distinguishes an absent,
+`protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 5. It accepts installed
+schema versions 40 and newer inside the major line, and client protocol 5 only. Schema version 40
+is the floor because the Admin catalogue calls `list_dependency_drift_v1` and
+`repair_dependency_drift_v1`, which that version introduced. `protocol/v1/compatibility.json` distinguishes an absent,
 older, current, or newer installed schema from the client's protocol version. Every incompatible
 case requires refusal before a mutating function runs.
 
@@ -188,7 +194,7 @@ bytes, and `requested_by` contains 1 through 200 characters.
 
 Every non-empty Python mutation first executes `SELECT version FROM workhorse.schema_version ORDER
 BY version`. `Queue` and `AsyncQueue` enqueue through a per-queue cached check instead, so a warm
-enqueue issues only `enqueue_many_v1`. `python/src/workhorse/_protocol.py` accepts schema version 1 and client protocol 1.
+enqueue issues only `enqueue_many_v1`. `python/src/workhorse/_protocol.py` accepts schema version 40 or newer and client protocol 5.
 It refuses an unreadable, missing, older, or newer schema before the mutating statement. Enqueue
 batches contain at most 1000 requests. Default priority is 0, default attempt budget is 25, default
 payload and result limits are 1048576 bytes, and default idempotency retention is 86400000
@@ -403,8 +409,10 @@ child to the parent. The methods
 map `stale`, `conflict`, `limit_exceeded`, and `result_too_large` to the corresponding child errors.
 `ChildResultLimitExceededError` retains `result_bytes` and `result_limit_bytes`.
 
-`concurrency` accepts integers from 1 through 100 and defaults to 1. The dispatcher calls
-`claim_many_v1` with its free-slot count until all slots are occupied or a sweep is empty. Each claim
+`concurrency` accepts integers from 1 through 100 and defaults to 1. The dispatcher refills slots
+with overlapping batched `claim_many_v1` calls under the rules that
+[ADR 0076](decisions/0076-keep-overlapping-batched-claims-in-flight-to-fill-worker-slots.md) sets for
+every SDK, described under the TypeScript worker's claim passes. Each claim
 uses a 30000 millisecond default lease. `lease_ms` accepts 100 through 86400000. `heartbeat_ms`
 defaults to the greater of 100 or one third of `lease_ms`; it must be positive and less than
 `lease_ms`. `maintenance_routine_poll_ms` bounds how often the worker offers the slow retention
@@ -606,8 +614,9 @@ It reports whether the pass ran a handler, so a pass that only released reports 
 one handler goroutine. The queue cursor advances after every claim attempt, so a busy queue cannot
 prevent another configured queue from being checked. An empty sweep waits for `PollInterval` or a
 matching PostgreSQL notification, whichever arrives first. Without an active listener, empty waits
-double through 5000 milliseconds with ±10% jitter. A notification waits a random 0 through 50
-milliseconds before the next claim.
+double through 5000 milliseconds with ±10% jitter. When the worker's last claim found nothing, a
+notification waits a random 0 through 50 milliseconds before the next claim. A worker whose last
+claim found work claims without that wait.
 
 If the pool permits at least two connections, `Worker.Run` acquires one dedicated connection and
 executes `LISTEN workhorse_tasks`. A payload equal to a configured queue name or `*` wakes the claim
@@ -763,17 +772,19 @@ a `tower::Service` over a caller-owned executor, and `dashboard::authorize` adap
 that returns an `Authorization`.
 
 `rust/examples/` holds the runnable quickstart, transaction, dedicated-worker, and orchestration
-programs. `rust/examples/docs.rs` holds the `// docs:start` regions the site embeds, and
-`rust/examples/agent_playbook.rs` is the whole-file region behind the agent playbook. `pnpm rust:clippy`
-compiles every example with `--all-targets`. `site/scripts/check-language-examples.ts` requires each
-Rust fence in `site/content/docs/` and `docs/guides/` to equal one region, and every region to back
-at least one fence.
+programs. `rust/examples/docs.rs` holds the `// docs:start` regions the site embeds,
+`rust/examples/landing.rs` holds the `landing-*` regions behind the landing page's Rust tabs, and
+`rust/examples/agent_playbook.rs` is the whole-file region behind the agent playbook.
+`pnpm rust:clippy` compiles every example with `--all-targets`.
+`site/scripts/check-language-examples.ts` requires each Rust fence in `site/content/docs/` and
+`docs/guides/`, and each Rust snippet in `site/lib/landing-snippets.ts`, to equal one region, and
+every region to back at least one of them.
 
 `support.json` also owns the install commands under its `install` key: `node` is
 `npm install @stablemates/workhorse`, `python` is `pip install stablemates-workhorse`, `go` is
-`go get github.com/stablemates/workhorse/go`, `schema` is
+`go get github.com/stablemates/workhorse/go`, `rust` is `cargo add workhorse`, `schema` is
 `npm exec --no -- workhorse schema install`, and `schemaPinned` is
-`npx --package @stablemates/workhorse@0.3.0 workhorse schema install`. The three language commands
+`npx --package @stablemates/workhorse@0.4.0 workhorse schema install`. The four language commands
 carry no version. The two schema commands are the deployment tool rather than an adoption step, and
 their version must equal the SDK the application depends on: `schema` achieves that by resolving
 the binary from the project's own `node_modules`, which `--no` requires and never installs, and
@@ -782,8 +793,10 @@ the binary from the project's own `node_modules`, which `--no` requires and neve
 product: `README.md` and `typescript/core/README.md` state `node` and `schema`; the
 `dashboard`, `dashboard-server`, `drizzle`, `kysely`, `otel`, `prisma`, and `typeorm` READMEs under
 `typescript/` state `node`; `python/README.md` states `python` and `schemaPinned`; `go/README.md`
-states `go` and `schemaPinned`; `go/examples/README.md` states `go`;
-`site/content/docs/installation.mdx`, `quickstart.mdx`, and `for-ai-agents.mdx` state all five; and
+states `go` and `schemaPinned`; `go/examples/README.md` states `go`; `rust/README.md` states `rust`
+and `schemaPinned`; `site/content/docs/installation.mdx`, `quickstart.mdx`, and `for-ai-agents.mdx`
+state the four language commands and both schema commands, and `installation.mdx` also states
+`schemaDownload`; and
 `site/content/docs/api.mdx` states both schema commands. `typescript/dashboard-contract/README.md`
 is exempt because it installs a type-only development dependency, and the test fails when a
 published package gains a README that is neither governed nor exempt. Three sweeps cover every
@@ -797,7 +810,7 @@ outside a project that already depends on `@stablemates/workhorse`.
 derived rather than authored: it is the newest schema version that introduced an object this release
 calls. `docs/schema-lifecycle.md` states how it is derived and what enforces it.
 
-TypeScript `PROTOCOL_VERSION` is 1. `schemaCompatibilityRefusal(state, clientProtocolVersion)` in
+TypeScript `PROTOCOL_VERSION` is 5, and `MINIMUM_PROTOCOL_VERSION` and `MAXIMUM_PROTOCOL_VERSION` are also 5. `schemaCompatibilityRefusal(state, clientProtocolVersion)` in
 `typescript/core/src/schema.ts` applies the tests in the order `protocol/v1/compatibility.json`
 fixes, and returns a `SchemaCompatibilityRefusal` carrying a `code` and a `message`, or null.
 `clientProtocolVersion` defaults to `PROTOCOL_VERSION`; a caller passes another version only to ask
@@ -814,7 +827,7 @@ database is not a verdict about versions.
 `typescript/core/test/schema-installation.test.ts` asserts the thrown type and code against a real
 database in both directions.
 
-Go `ProtocolVersion` is 1. `CheckCompatibility` takes an installed schema version, a client
+Go `ProtocolVersion` is 5. `CheckCompatibility` takes an installed schema version, a client
 protocol version, and the protocol versions the installed schema declares it serves, and returns
 `*CompatibilityError`. Its `Code` is `schema-not-installed`, `schema-too-old`, `schema-too-new`,
 `client-protocol-too-old`, or `client-protocol-too-new`. It refuses a schema below
@@ -1010,7 +1023,7 @@ flowchart LR
   Worker[TypeScript Worker] -->|claim_many_v1 / heartbeat_many_v1 / acknowledge_cancel_v1| PG
   Operator[Authorized application or operator layer] -->|cancel_v1 with attribution| PG
   Operator -->|list_dead_letters_v1 / redrive_v1 / redrive_many_v1| PG
-  Worker -->|fire_due_schedules_v1 / tick_v1 / split maintenance routines| PG
+  Worker -->|fire_due_schedules_v2 / tick_v1 / split maintenance routines| PG
   Worker -->|register_worker_v1| PG
   PG -->|payload + attempt + fence| Worker
   PG -->|operator pause flag| Worker
@@ -1410,7 +1423,7 @@ erDiagram
   }
 ```
 
-For every accepted task, exactly one of `task_runtime` and `task_outcome` must exist after a committed transition. SQL functions preserve this lifecycle exclusivity atomically.
+For every accepted task, exactly one of `task_runtime` and `task_outcome` must exist after a committed transition. SQL functions preserve this lifecycle exclusivity atomically. A task on a fast-tier queue uses `fast_task_runtime` and `fast_task_outcome` in their place, as [Fast tier](#fast-tier) describes.
 
 ### `task`
 
@@ -1425,9 +1438,9 @@ to 0, and higher values dispatch first. Dispatch reads the raw payload only afte
 been claimed. The retry policy is one of fixed `{delayMs}`, exponential
 `{initialDelayMs,multiplier,maxDelayMs}`, or decorrelated jitter `{baseDelayMs,maxDelayMs}`.
 
-`contract_version` is null for an uncontracted task or contains the `TaskTypeContracts.currentVersion` selected at acceptance. `payload_max_bytes` and `result_max_bytes` default to 1,048,576 and accept configured values through 16,777,216. PostgreSQL measures `octet_length(value::text)` after JSONB canonicalization, and `enqueue_batch_v1` rejects an oversized payload before inserting `task`, `task_runtime`, history, idempotency, or notification effects. `complete_v1` checks the persisted result limit before deleting active runtime.
+`contract_version` is null for an uncontracted task or contains the `TaskTypeContracts.currentVersion` selected at acceptance. `payload_max_bytes` and `result_max_bytes` default to 1,048,576 and accept configured values through 16,777,216. PostgreSQL measures `octet_length(value::text)` after JSONB canonicalization. That text puts a space after each `:` and `,`, and it writes every number without an exponent, so it is never shorter than compact JSON. The TypeScript `Queue` and worker measure the same text with `jsonbTextBytes` in `typescript/core/src/queue/enqueue-contracts.ts`. They skip the exact measure when twice the compact UTF-8 length fits and the JSON has no exponent. `enqueue_batch_v1` rejects an oversized payload before inserting `task`, `task_runtime`, history, idempotency, or notification effects. `complete_v1` checks the persisted result limit before deleting active runtime.
 
-`payload_redact_keys` and `result_redact_keys` each contain at most 50 unique top-level object keys of 1 through 200 characters. When a worker claims a task, `claim_v1` returns the raw payload to its handler. `workhorse.redact_top_level_keys_v1` removes persisted keys for `Admin.getTask`, `Admin.listTasks`, dead-letter listing, and dashboard task detail. Caller-supplied `TaskPayloadProjection.redactKeys` are added to the persisted payload keys. Scalar and array values pass through because top-level key redaction applies only to objects. If either persisted key array is non-empty, `workhorse.redact_error_details_v1` substitutes `RedactedTaskError` and a fixed message before `fail_v1` writes runtime, outcome, attempt, or event errors. `Worker` applies the same rule before recording a handler exception in OpenTelemetry.
+`payload_redact_keys` and `result_redact_keys` each contain at most 50 unique top-level object keys of 1 through 200 characters. When a worker claims a task, `claim_v1` returns the raw payload to its handler. A Go worker that cannot decode a claimed payload skips the handler and fails that attempt through the ordinary fenced failure and retry path, so `Worker.Run` keeps running. `workhorse.redact_top_level_keys_v1` removes persisted keys for `Admin.getTask`, `Admin.listTasks`, dead-letter listing, and dashboard task detail. Caller-supplied `TaskPayloadProjection.redactKeys` are added to the persisted payload keys. Scalar and array values pass through because top-level key redaction applies only to objects. If either persisted key array is non-empty, `workhorse.redact_error_details_v1` substitutes `RedactedTaskError` and a fixed message before `fail_v1` writes runtime, outcome, attempt, or event errors. `Worker` applies the same rule before recording a handler exception in OpenTelemetry.
 
 `QueueOptions.contracts` maps a task type to `currentVersion` and a `versions` record of `TaskContractVersion`. Each version contains optional `payloadSchema` and `resultSchema` JSON Schema Draft 2020-12 documents. `sync_contract_definitions_v1(p_definitions jsonb)` inserts immutable `(task_type, version)` rows into `contract_definition`; supplying different schema, limit, or redaction values for an existing key raises `contract documents are immutable; publish a new version`. `contract_policy` stores `current_version`, `application_current_version`, and `operator_override` separately. Application sync updates `application_current_version` and changes `current_version` only when `operator_override` is false. The internal `override_contract_version_v1` selects an inserted version and sets the override for policy tests. `get_contract_definition_v1(task_type, version)` returns the named version, or resolves the policy version when `version` is null.
 
@@ -1451,13 +1464,23 @@ Each prerequisite may reach at most 100 distinct dependents through unresolved e
 includes direct and transitive descendants. PostgreSQL checks every affected ancestor while the
 touched-component advisory locks keep the pending graph stable.
 
-`EnqueueOptions.dependencies` accepts 1 through 100 unique stable identities plus success, failure, and cancellation policies. `EnqueueOptions.prerequisiteTaskId` remains a deprecated success-oriented shorthand. The TypeScript union rejects both fields on one request. `enqueue_batch_v1` keeps runtime validation for direct SQL and untyped JavaScript callers. It sorts and locks every prerequisite identity inside the caller's transaction. A request which declares no prerequisite runs none of that: `enqueue_batch_v1` guards the prerequisite lock, both outcome scans, the `task_dependency` insert, and dependent resolution on a prerequisite count above zero, so no statement reaches `task_dependency` and its statement trigger never fires. A live prerequisite creates a `blocked` runtime plus `dependency_blocked`. Each terminal prerequisite resolves its edge according to policy. After every edge resolves, `fail` precedes `cancel`, which precedes `release`.
+`EnqueueOptions.dependencies` accepts 1 through 100 unique stable identities plus success, failure, and cancellation policies. `EnqueueOptions.prerequisiteTaskId` remains a deprecated success-oriented shorthand. The TypeScript union rejects both fields on one request. `enqueue_batch_v1` keeps runtime validation for direct SQL and untyped JavaScript callers. It locks every prerequisite inside the caller's transaction with `FOR KEY SHARE`, first the `task_runtime` rows in identity order and then the `task` rows. One statement per table locks the prerequisites of every request in the batch before the first request runs. The collection skips a value that does not match the UUID pattern, and that request's validation raises its usual error. Each request then locks its own prerequisites again, which waits for nothing and counts the rows that exist. Every terminal transition deletes the runtime row before it inserts the outcome whose trigger resolves dependents. The runtime lock therefore makes a concurrent completion, failure, or cancellation wait until the enqueue commits, so its resolver sees the new edge. A transition that committed first has already deleted the row, and the enqueue's outcome reads see its outcome. Key-share locks do not conflict with the non-key updates that claims and heartbeats make, so an open dependent enqueue does not delay dispatch of its prerequisite. The runtime-then-task order matches `complete_v1` and `purge_queue_internal_v1`, so neither side holds one row while it waits for the other. A request which declares no prerequisite runs none of that: `enqueue_batch_v1` guards the prerequisite lock, both outcome scans, the `task_dependency` insert, and dependent resolution on a prerequisite count above zero, so no statement reaches `task_dependency` and its statement trigger never fires. A live prerequisite creates a `blocked` runtime plus `dependency_blocked`. Each terminal prerequisite resolves its edge according to policy. After every edge resolves, `fail` precedes `cancel`, which precedes `release`.
 
-`resolve_task_outcome_dependencies_v1` runs after every `task_outcome` insert. It first calls `workhorse.release_own_dependencies_v1(task_id)`, which sets `released_at` and a `release` resolution on every still-pending edge that enters the terminal task, and returns the number of edges it released. A task settled while it was still blocked would otherwise leave those edges pending forever, and a pending edge is neither a prune candidate nor a removable `prerequisite_task_id`, so it held its prerequisite identity against retention until the dependent identity was purged. Cancellation and deadline materialization are the paths that reach it; a dependent released into dispatch has no pending edge left, so the statement matches nothing on the ordinary path. The resolution is `release` because no prerequisite outcome selected an action: the dependent was already terminal, so the edge changes nothing about it. The trigger then calls `resolve_dependents_v1`. That function locks at most 100 direct dependents in identity order and records each edge's `released_at` plus `resolution`. The dependent stays blocked until every edge resolves. It then chooses `fail`, `cancel`, or `release` by fixed precedence. Release moves the blocked runtime to ready or scheduled, appends one `dependency_released`, and notifies a queue that gained ready work. `dependency_released.details.reason` is `prerequisite_succeeded` after success. It is `prerequisite_failed_policy` when `on_failure` selects `release`. It is `prerequisite_canceled_policy` when `on_cancellation` selects `release`. The enqueue-time terminal short circuit uses `prerequisite_already_succeeded` after success. It uses `prerequisite_terminal_policy` after a failure or cancellation policy release. Failure or cancellation removes the runtime and inserts a synthetic terminal outcome with `DependencyFailed` or `DependencyCanceled`. The outcome trigger applies the same policy recursively to downstream tasks. One outcome transaction can recurse through at most 100 unresolved descendants. It can invoke at most 101 resolver calls. Those calls can inspect at most 10,100 direct pending-edge slots. Runtime locks serialize concurrent prerequisite outcomes at the one state transition, so evidence, FIFO allocation, and notification happen once.
+`task_outcome_resolve_dependencies_insert` is an `AFTER INSERT ... FOR EACH STATEMENT` trigger with the transition table `new_outcomes`. Its function, `resolve_task_outcome_dependencies_v1`, runs once per statement over every outcome that statement inserted. It first sets `released_at` and a `release` resolution on every still-pending edge that enters one of those terminal tasks. A task settled while it was still blocked would otherwise leave those edges pending forever, and a pending edge is neither a prune candidate nor a removable `prerequisite_task_id`, so it held its prerequisite identity against retention until the dependent identity was purged. Cancellation and deadline materialization are the paths that reach it; a dependent released into dispatch has no pending edge left, so the statement matches nothing on the ordinary path. The resolution is `release` because no prerequisite outcome selected an action: the dependent was already terminal, so the edge changes nothing about it. `workhorse.release_own_dependencies_v1(task_id)` remains as the one-task form of that statement. Most outcomes have no pending edge in either direction. The function therefore probes `task_dependency_dependent_pending_idx` and `task_dependency_prerequisite_pending_idx` for the inserted outcomes first, and returns before any write or resolver call when neither finds an edge (SM-948). Otherwise the trigger passes the new terminal identities and states, in identity order, to `workhorse.resolve_dependents_many_v1(p_prerequisite_task_ids uuid[], p_prerequisite_states text[])`. `resolve_dependents_v1(p_prerequisite_task_id, p_prerequisite_state)` keeps its signature and delegates to it with one element. `enqueue_batch_v1` calls `resolve_dependents_many_v1` once with every terminal prerequisite of a batch.
 
-`reject_self_task_dependency_v1` rejects a direct self-edge before the table check and returns SQLSTATE `P1003`. After each insert statement, `validate_task_dependencies_v1` uses the statement transition table to validate all inserted edges together. It finds every pre-existing weakly connected component touched by either endpoint. It locks each task identity in those components in UUID order. Inserts into disconnected components do not share a lock. Inserts which join or mutate the same component serialize before validation. Per-task component locks remain stable when a concurrent transaction merges two components.
+`resolve_dependents_many_v1` works in a fixed lock order. It first locks the `task_runtime` row of every `blocked` dependent reached by a pending edge from the given prerequisites, `FOR NO KEY UPDATE` in `task_id` order. Only then does it touch `task_dependency`. A dependent's own terminal transition also holds its runtime row before its outcome trigger releases the dependent's own edges, so a resolver and that transition cannot wait for each other. The lock does not conflict with the `FOR KEY SHARE` lock an enqueue takes on a prerequisite's runtime row; only the `DELETE` of a dependent that fails or is canceled waits for such an enqueue. Before that `DELETE`, the resolver locks the runtime rows of every rejected dependent `FOR UPDATE` in `task_id` order. An enqueue batch locks its prerequisites in the same order, so neither holds a row the other waits for. The `DELETE` plan alone could lock the rows in any order. Before schema version 33 a batch locked request by request, so one request could hold a row the resolver was about to delete while the next request waited on a row the resolver already held. The resolver then records `released_at` plus `resolution` on every locked dependent's pending edges from the given prerequisites with one `UPDATE`. A second statement subtracts each dependent's resolved edges from `task_runtime.pending_prerequisites` and records any `fail` or `cancel` resolution in `dependency_rejected`. A dependent stays blocked until its counter reaches zero, so a dependent with edges left costs one runtime update and no edge scan. At zero without a rejection it releases after one probe of `task_dependency_dependent_pending_idx` confirms that no edge is still pending, and the counter write joins the release write. At zero after a rejection it reads only its `fail` and `cancel` edges and chooses `fail` before `cancel`, then the lowest prerequisite identity. When a dependent's counter is smaller than the number of edges the call resolved, or equals it while that probe finds a pending edge, the resolver recounts that dependent's pending and rejecting edges instead of subtracting. It stores the recounted values and appends one `dependency_counter_repaired` event whose `details` carry `source` `resolver`, the prerequisite, the recorded counter, the resolved edges, the pending edges, and the recounted flag. Before schema version 38 such a counter violated `task_runtime_pending_prerequisites_check` and rolled back the prerequisite's completion. A counter that is too low by exactly the edges still pending therefore holds the dependent instead of releasing it early; the probe runs only for a dependent about to settle. `pnpm benchmark:dependency-release-guard` measured the probe against a copy of the resolver without it: 8 to 11 µs added to a call releasing one dependent, 60 to 75 µs to a call releasing 100, and about 57 µs to the last edge of 100, on PostgreSQL 18 and 15 ([analysis](benchmarks/2026-09-27-dependency-release-guard-analysis.md)). `settle_dependents_v1` locks each rejected dependent and checks that it has a `fail` or `cancel` edge. A rejected dependent with none gets its pending edges recounted and its flag cleared, and appends one `dependency_counter_repaired` event whose `details` carry `source` `settlement`, the pending edges, and the cleared flag. It stays blocked when edges remain and otherwise releases with `dependency_released.details.reason` `dependency_counter_repaired`. Before this recount such a dependent raised an exception and rolled back the transition that resolved its edge. The resolver hands the rejected and released dependents to `settle_dependents_v1`, which performs the settlement below and returns the number of dependents that left `blocked`. One statement deletes the runtime rows of every dependent that fails or is canceled, appends their `dependency_failed` or `dependency_canceled` events, and inserts their synthetic terminal outcomes in identity order with `DependencyFailed` or `DependencyCanceled`. A second statement moves every released dependent to ready or scheduled, allocates ready sequences in identity order, and appends one `dependency_released` each. The released event names the smallest prerequisite in the call that resolved one of the dependent's edges. The resolver then materializes an already-passed deadline for each released task and sends one `NOTIFY workhorse_tasks` per queue that gained ready work. `dependency_released.details.reason` is `prerequisite_succeeded` after success. It is `prerequisite_failed_policy` when `on_failure` selects `release`. It is `prerequisite_canceled_policy` when `on_cancellation` selects `release`. The enqueue-time terminal short circuit uses `prerequisite_already_succeeded` after success. It uses `prerequisite_terminal_policy` after a failure or cancellation policy release.
 
-The recursive cycle check starts from the inserted prerequisite identities and follows the primary key's `dependent_task_id` prefix. It does not seed from the whole graph. It rejects transitive cycles with SQLSTATE `P1003`. The JSON detail contains `dependentTaskId`, `prerequisiteTaskId`, at most 101 `cycleTaskIds`, and `truncated`. `Queue` maps that detail to `DependencyCycleError`. The same statement trigger enforces both direct edge bounds and the bound of 100 unresolved descendants in a cascade. It raises SQLSTATE `P1005` with `taskId`, `limit`, and `max`, which `Queue` maps to `DependencyLimitExceededError`. Its cascade check walks backward from inserted unresolved edges to affected ancestors, then forward through their unresolved descendants. `task_dependency_prerequisite_idx`, `task_dependency_prerequisite_pending_idx`, and `task_dependency_dependent_pending_idx` keep both traversals scoped to touched components. `enqueue_batch_v1` inserts all prerequisite edges for one accepted task in one statement. The trigger therefore validates that fan-in once.
+`resolve_dependents_many_v1` is declared with `SET plan_cache_mode = force_generic_plan`. Its lock, edge-release, counter, and release statements take the prerequisite and dependent arrays. A custom plan sees a one-element array and costs less than the generic plan, which assumes a default array size. Under the default mode, PL/pgSQL therefore planned all four statements again on every call. In the SM-950 profile, planning took about 1.2 ms per singly released task against about 0.3 ms of execution, and fan-in siblings waited on the dependent's row lock for that time. Every generic plan reaches `task_runtime` through `task_runtime_pkey` and `task_dependency` through `task_dependency_prerequisite_pending_idx` or `task_dependency_dependent_pending_idx`, driven by the arrays, so it stays a key probe at any table size. `settle_dependents_v1` runs the release and rejection statements for the resolver and carries the same setting.
+
+Propagation advances one dependency level per statement. The synthetic outcomes of one level are the last write of their statement, so the statement trigger fires for them after that level's events exist, and resolves the next level as one set. Every event of a level therefore precedes every event of the level below it, and within a level the events follow dependent identity order. One outcome transaction can recurse through at most 100 unresolved descendants, so a cascade is at most 100 levels deep and invokes at most 101 resolver calls. Runtime locks serialize concurrent prerequisite outcomes at the one state transition, so evidence, FIFO allocation, and notification happen once. The resolver locks a level only when it reaches it, so no single order covers a whole cascade. Two cascades that reach overlapping dependents at different levels can therefore lock them in different orders. PostgreSQL then aborts one statement with SQLSTATE `40P01`. The integration test `deadlocks two fenced failures whose cascades meet at different levels` in `typescript/core/test/integration-dependencies.test.ts` reproduces that cycle.
+
+Every SDK therefore sends a fenced write again when PostgreSQL rolls it back with `40P01`, up to 3 attempts in total. A fenced write is a statement that names a task, its worker, and its fence token. Nothing in the rolled-back statement committed, and the fence decides again whether the resend may still act. The retried statements are `complete_v1`, `fail_v1`, `release_owned_v1`, `acknowledge_cancel_v1`, `expire_owned_v1`, `expire_owned_telemetry_v1`, `heartbeat_v1`, `heartbeat_many_v1`, `complete_many_and_claim_v1`, `record_batch_dispatch_v1`, `record_batch_failure_v1`, `create_child_v1`, `create_children_v1`, `save_checkpoint_v1`, `update_progress_v1`, `schedule_wait_v1`, `wait_for_signal_v1`, and `wait_for_human_v1`. The helpers are `queryFencedWrite` with `FENCED_WRITE_DEADLOCK_ATTEMPTS` in TypeScript, `queryFencedWrite` with `fencedWriteDeadlockAttempts` in Go, `fenced_write_rows` and `async_fenced_write_rows` with `FENCED_WRITE_DEADLOCK_ATTEMPTS` in Python's `workhorse/_fenced_write.py`, and `fenced_rows` with `FENCED_WRITE_DEADLOCK_ATTEMPTS` in Rust. A deadlock aborts a caller-owned transaction, so a resend inside one fails with SQLSTATE `25P02`; the helper then raises the original `40P01` instead. Any other error is raised after one send. Statements without a fence are sent once: `enqueue_batch_v1`, `cancel_v1`, `send_signal_v1`, `complete_human_wait_v1`, `claim_many_v1`, `recover_expired_v1`, and every administrative statement raise `40P01` to their caller. The one administrative exception is `sync_concurrency_policies_v1`. Every SDK sends it through the same helper, so it also gets up to 3 attempts, and only `40P01` repeats it. A resend writes the same complete desired set, so a repeated sync is safe.
+
+`reject_self_task_dependency_v1` rejects a direct self-edge before the table check and returns SQLSTATE `P1003`. After each insert statement, `validate_task_dependencies_v1` uses the statement transition table to validate all inserted edges together. It first locks the `task` row of both endpoints of every inserted edge `FOR NO KEY UPDATE` in identity order. That lock does not conflict with the `FOR KEY SHARE` locks that enqueue and foreign key checks take. It then checks whether any inserted dependent is already a prerequisite. When one is, validation takes the full path. It finds every pre-existing weakly connected component touched by either endpoint and locks each task identity in those components in UUID order with a transaction advisory lock. Inserts into disconnected components do not share a lock. Inserts which join or mutate the same component serialize before validation. Per-task component locks remain stable when a concurrent transaction merges two components.
+
+When every inserted dependent is a sink, validation takes the fast path. `enqueue_batch_v1` always takes it, because every dependent it inserts is new. A cycle through a new edge needs an existing edge that names the new dependent as a prerequisite, so the fast path skips the component locks and the cycle check. A new sink changes only the transitive counts of its prerequisites' unresolved upstream cone. Validation locks that cone with the same per-task advisory keys, in UUID order, then walks it again and locks any member a concurrent writer added, until a walk finds no new member. Every task's transitive dependents are a subset of those of some cone source, so it checks only the sources. One walk counts the union of the sources' unresolved dependents and stops after 101. Only a union above 100 counts each source separately, and only a source above 100 runs the exact check, which names the offending ancestor.
+
+On the full path, the recursive cycle check starts from the inserted prerequisite identities and follows the primary key's `dependent_task_id` prefix. It does not seed from the whole graph. It rejects transitive cycles with SQLSTATE `P1003`. The JSON detail contains `dependentTaskId`, `prerequisiteTaskId`, at most 101 `cycleTaskIds`, and `truncated`. `Queue` maps that detail to `DependencyCycleError`. The same statement trigger enforces both direct edge bounds and the bound of 100 unresolved descendants in a cascade. It raises SQLSTATE `P1005` with `taskId`, `limit`, and `max`, which `Queue` maps to `DependencyLimitExceededError`. Its cascade check walks backward from inserted unresolved edges to affected ancestors, then forward through their unresolved descendants. `task_dependency_prerequisite_idx`, `task_dependency_prerequisite_pending_idx`, and `task_dependency_dependent_pending_idx` keep both traversals scoped to touched components. `enqueue_batch_v1` inserts the prerequisite edges of every accepted task in a batch with one statement. The trigger therefore validates the batch's fan-in and fan-out once.
 
 `Admin.getTask` and `Admin.listTasks` expose sorted `prerequisiteTaskIds`, `dependencyPolicy`, the compatible singular `prerequisiteTaskId` when exactly one edge exists, and `blockedReason`. `Admin.getDependencyLineage(taskId, limit)` returns at most 1,000 edges where the identity is either the prerequisite or dependent. Each identity can own at most 100 edges in either direction, so the default read returns its complete one-hop lineage and needs no continuation cursor. A caller-selected lower limit can still set `truncated`. Each `DependencyLineageRecord` contains both identities, all three terminal policies, `createdAt`, nullable `releasedAt`, and nullable `resolution`. `dashboard_task_dependency_v1` exposes the same retained edge evidence to the bounded dashboard task-detail read.
 
@@ -1512,8 +1535,11 @@ records the first accepted result read.
 `create_child_v1(parent_task_id, worker_id, fence_token, child_name, request)` locks and validates
 the exact active, unexpired parent generation. It calls `enqueue_many_v1`, inserts `task_child`, and
 adds a `task_dependency` edge from parent to child with success `release`, failure `fail`, and
-cancellation `cancel`. It then moves the parent from active to blocked and clears ownership in the
-same transaction. A rollback removes the child, lineage, dependency, events, and suspension.
+cancellation `cancel`. It then moves the parent from active to blocked, sets its
+`pending_prerequisites` to its pending edges, and clears ownership in the same transaction. A rollback removes the child, lineage, dependency, events, and suspension.
+A child whose `deadline` has already passed reaches its `task_outcome` inside `enqueue_many_v1`,
+before its edge exists. After the `parent_linked` event, the function therefore passes that outcome
+to `resolve_dependents_many_v1`, which settles the blocked parent in the same transaction.
 Coalescing and additional dependency options are rejected for child requests.
 
 `create_single_child_v1` retains that implementation. The public `create_child_v1` wrapper rejects
@@ -1530,7 +1556,10 @@ the ordinary completion path.
 
 `create_children_v1(parent_task_id, worker_id, fence_token, children, mode)` accepts zero through
 100 unique named requests and mode `settled` or `all_success`. A non-empty first call creates every
-child and dependency edge before it moves the parent to blocked. Replay requires the exact names,
+child and dependency edge before it moves the parent to blocked and sets its
+`pending_prerequisites` to its pending edges. After the `children_created` event it passes every
+child that already holds a `task_outcome`, such as one created past its deadline, to
+`resolve_dependents_many_v1` in one call. Replay requires the exact names,
 normalized requests, and mode. It returns only after every child reaches a terminal state. The
 joined object may not exceed the parent task's `result_max_bytes`; an oversized join returns
 `result_too_large` without copying the object to the client. `children_created` and
@@ -1585,6 +1614,55 @@ The only mutable lifecycle relation. Its check constraint makes state-specific f
 - `blocked`: `run_at` preserves the requested dispatch time; ready, ownership, wait, and attempt-start fields are null; no dispatch partial index contains the row
 - `ready`: `ready_at` and FIFO `sequence` are populated; ownership fields and `wait_name` are null; a resumed timer may preserve `attempt_started_at`
 - `active`: worker, acquisition, heartbeat, expiry, positive fence, and logical `attempt_started_at` are populated; ready placement and `wait_name` are null; the optional cancellation-request timestamp carries optional attribution and reason, each of which may stay null, and neither may appear without the timestamp
+
+`task_runtime.pending_prerequisites` and `task_runtime.dependency_rejected` summarize a blocked
+row's dependency edges. The counter equals the number of its edges whose `released_at` is null.
+The flag is true when a resolved edge chose `fail` or `cancel`. Every other state holds `0` and
+`false`, which `task_runtime_dependency_counter_check` enforces, and
+`task_runtime_pending_prerequisites_check` keeps the counter non-negative. `enqueue_batch_v1` sets
+the counter when it blocks a dependent. `create_single_child_v1` and `create_children_v1` set it
+from the parent's pending edges when they block the parent. `resolve_dependents_many_v1` decrements it
+and releases or terminates the row at zero. Schema version 30 added both columns and backfilled
+them for blocked rows from their edges. Schema version 32 resolved every unreleased parent-to-child
+edge whose child already held an outcome, which releases or settles parents that an earlier
+version left blocked on a child created past its deadline.
+
+Schema version 38 added `dependency_counter_drift_v1(p_limit)` and
+`repair_dependency_counters_v1(p_limit)`. `p_limit` defaults to 1,000 and must be from 1 through
+100,000. The drift function reads blocked rows in `task_id` order without locking them. It returns
+each row whose counter or flag disagrees with its edges, and each row with no pending edge. Its
+`counter_drifted` column marks the first case and `edges_resolved` the second. The repair function
+takes the same candidates, locks them `FOR NO KEY UPDATE` in `task_id` order, and recounts their
+edges under the lock. A row with pending edges gets the recounted counter and flag. A row with no
+pending edge and a rejecting edge fails or is canceled; any other row with no pending edge
+releases with `dependency_released.details.reason` `dependency_counter_repaired`. Each repaired row
+appends one `dependency_counter_repaired` event with `source` `repair`. Both settlements go
+through `settle_dependents_v1`. The repair returns `(task_id, recorded_pending_prerequisites,
+pending_edges, action)` with `action` `recounted`, `released`, or `rejected`. No maintenance pass
+calls either function.
+
+Schema version 40 put the drift check and repair behind a governed operator surface. The operator
+contract is `Admin.listDependencyDrift(limit)`, `Admin.repairDependencyDrift(audit, limit)`, and
+`workhorse admin repair-dependencies`, not the two raw functions. `limit` defaults to 1,000 and must
+be an integer from 1 through `MAX_DEPENDENCY_DRIFT_LIMIT` (100,000); the client rejects any other
+value before it queries. `listDependencyDrift` calls `list_dependency_drift_v1(p_limit)`, which
+returns each drifted row's `task_id`, `queue_name`, `pending_prerequisites`, `pending_edges`,
+`dependency_rejected`, `rejected_edges`, and planned `action`. The plan is `recounted` while a
+pending edge remains, `rejected` after a rejecting resolution, and `released` otherwise. The read
+writes nothing, and the repair recounts under lock, so its action can differ from the plan.
+`repairDependencyDrift` calls `repair_dependency_drift_v1(p_limit, p_requested_by, p_reason,
+p_request_id)`. It rejects a `requested_by` outside 1 through 200 characters, a `reason` outside 1
+through 2,000 characters, and a `request_id` outside 1 through 512 UTF-8 bytes. Each
+`dependency_counter_repaired` event it appends adds `requested_by`, `request_reason`,
+`request_id_preview`, `request_id_digest`, and `request_id_length` to the version 38 details. The
+digest is the first 12 hexadecimal characters of the SHA-256 of the request id; the raw id is not
+stored. The request id correlates the repair and is not an idempotency key: a rerun finds only rows
+that drifted again. `repair_dependency_counters_internal_v1(p_limit, p_audit)` holds the repair body.
+`repair_dependency_counters_v1` keeps its version 38 signature and result and records no audit.
+`workhorse admin repair-dependencies --dry-run` calls the read and needs neither a reason nor
+confirmation. Without `--dry-run`, the command requires `--reason`, `--env`, and confirmation of the
+target `dependencies`, and generates a request id unless `--request-id` supplies one.
+`queue_health_v1` does not report drift.
 
 `task_runtime.priority` duplicates the accepted `task.priority` so claim can remain on the ready index.
 Pending debounce replaces both values in one transaction. Retry, recovery, durable waits, and
@@ -1819,7 +1897,8 @@ supplied value and clears all overrides. `override_retention_policy_v1` and
 `Queue.overrideRetentionPolicy` atomically update selected effective values and add their names.
 `revert_retention_policy_v1` and `Queue.revertRetentionPolicy` copy selected application values back
 and remove their names. `Queue.previewRetentionPolicy` counts at most 10,001 eligible rows per
-category, reports 10,000 plus a capped flag, and performs no writes.
+category, reports 10,000 plus a capped flag, and performs no writes. Its terminal-task count
+includes `fast_task_outcome` rows alongside `task_outcome` rows.
 
 Identity is the attribution anchor. Finite terminal-task retention requires both identity and outcome windows, finite event, attempt, and occurrence windows, and an identity minimum at least as long as every dependent minimum. PostgreSQL rejects configurations that could remove an identity before its retained provenance. Windows are minimums rather than deletion deadlines because bounded cleanup or retained dependent rows can safely extend actual retention.
 
@@ -1909,8 +1988,10 @@ fingerprint only when present, so a request accepted before schema version 3 kee
 `enqueue_debounce_v1` updates it on replacement and `redrive_v1` copies it. A task whose budget has
 no row admits freely, the way a queue with no policy row has no limit.
 
-`claim_v1` delegates to `claim_one_v1(queue, worker, lease_ms, wait_for_budgets)` with waiting
-allowed. Before it reads the clock, the claim samples the first 100 ready rows of its queue in
+`claim_v1` is `claim_many_v1` with a limit of 1, and `claim_many_v1` admits every full-tier batch in
+rounds ([Claim](#claim)). `claim_one_v1(queue, worker, lease_ms, wait_for_budgets)` applies the same
+budget rules to one claim, although no claim path calls it since schema version 41. Before it reads
+the clock, the claim samples the first 100 ready rows of its queue in
 priority order. It takes the exclusive transaction advisory lock `workhorse:budget:<budget_name>`
 for each distinct budget name in that sample, in name order, so two claims that share budgets
 cannot deadlock. It then inspects the 100-row priority window and calls
@@ -1918,16 +1999,19 @@ cannot deadlock. It then inspects the 100-row priority window and calls
 candidate whose budget first appears after the sample is not admitted by that claim.
 `budget_admission_v1` takes the same per-budget lock itself whenever the budget row exists, so the
 count it reads includes every start another claim committed before the lock was granted.
-`claim_many_v1` lets only its first claim wait for a budget lock. Each later claim in the batch uses
+`claim_many_v1` lets only its first round wait for a budget lock. Each later round uses
 `pg_try_advisory_xact_lock` and skips any budget it cannot lock at once, because the batch already
 holds budget locks and waiting on another could deadlock against a batch that holds them in a
-different order. Admission counts active rows through `task_runtime_active_budget_expiry_idx`
+different order. `claim_many_v1` computes each locked budget's room from the same
+count and bucket instead of calling `budget_admission_v1`. Admission counts active rows through `task_runtime_active_budget_expiry_idx`
 whose `expires_at` is later than now, and probes `budget_bucket_v1(budget_name, now, false)`
 without consuming. After the runtime update selects a candidate,
 `budget_bucket_v1(budget_name, now, true)` consumes one token. `budget_bucket` holds one row per
 budget with the refill arithmetic of `rate_limit_bucket_v1`, and deleting a budget cascades its
 bucket. `notify_budget_capacity_v1` fires when an active row naming a budget leaves the active
-state and notifies `workhorse_tasks` for each distinct waiting queue found through
+state. The `WHEN` clauses of `task_runtime_budget_capacity_update` and
+`task_runtime_budget_capacity_delete` repeat that test, so a row without a budget queues no trigger
+event. The function notifies `workhorse_tasks` for each distinct waiting queue found through
 `task_runtime_ready_budget_idx`, at most 100 per release.
 
 `budget_status_v1(budget_names)` reports at most 100 budgets and samples at most 101 ready rows
@@ -1945,7 +2029,7 @@ dashboard `queues` and `system` procedures carry `budgets` and `budgetsCapped` t
 
 ### History
 
-`task_event` is the append-only lifecycle audit. `attempt_history` contains one immutable row for every closed logical attempt, including retry, lease expiry, success, terminal failure, and cancellation after an attempt actually started. Its `started_at` preserves the logical attempt start across timer suspensions, while `claimed_at` identifies the final activation that closed it. Timer suspension itself emits events but does not close attempt history. Both history relations use UTC-daily range partitions with default fallbacks. `history_partition_horizon_days_v1(interval_ms)` returns how many days beyond the current day must exist: 3 for the days the health snapshot demands, plus `ceil(interval_ms / 86,400,000)` for the days the UTC date can advance before the next preparation pass, plus 1 for a pass that starts late. At the default six-hour cadence that is 5, so preparation maintains six days. Clean installation creates that horizon, and `prepare_history_partitions_v1` continuously replenishes and repairs it. The horizon must stay wider than the four days `missing-history-partitions` checks, otherwise every UTC midnight leaves the furthest checked day absent until the next pass.
+`task_event` is the append-only lifecycle audit. A fast-tier task writes to either relation only when its queue opts in ([Fast tier](#fast-tier)). `attempt_history` contains one immutable row for every closed logical attempt, including retry, lease expiry, success, terminal failure, and cancellation after an attempt actually started. Its `started_at` preserves the logical attempt start across timer suspensions, while `claimed_at` identifies the final activation that closed it. Timer suspension itself emits events but does not close attempt history. Both history relations use UTC-daily range partitions with default fallbacks. `history_partition_horizon_days_v1(interval_ms)` returns how many days beyond the current day must exist: 3 for the days the health snapshot demands, plus `ceil(interval_ms / 86,400,000)` for the days the UTC date can advance before the next preparation pass, plus 1 for a pass that starts late. At the default six-hour cadence that is 5, so preparation maintains six days. Clean installation creates that horizon, and `prepare_history_partitions_v1` continuously replenishes and repairs it. The horizon must stay wider than the four days `missing-history-partitions` checks, otherwise every UTC midnight leaves the furthest checked day absent until the next pass.
 
 `task_event.event_id` and `attempt_history.attempt_id` are UUIDv7 values generated by
 `uuid_v7_v1()`. PostgreSQL 15 through 18 does not need an extension. The function starts with the
@@ -2000,13 +2084,13 @@ Full reference in [`rolling-statistics.md`](rolling-statistics.md); the design t
 
 ### `cold_export_policy`, `cold_export_dataset`, and `cold_export_segment`
 
-Cold export copies finalized history days out of PostgreSQL into an operator-owned store and records each copy so retention can wait for it ([ADR 0068](decisions/0068-export-cold-history-behind-the-rollup-watermark.md)). `cold_export_policy` is a singleton with one `enabled` flag, false on a clean install. `cold_export_dataset` holds one row per exported dataset, `task_event` or `attempt_history`, with an exclusive UTC-day-aligned `exported_through` watermark. `cold_export_segment` is the ledger: one row per `(dataset, segment_start)` with `segment_end` one day later, `status` of `exporting` or `complete`, `attempts`, `exporter_id` of 1 through 256 bytes, `lease_expires_at`, `object_key` and `manifest_key` of at most 1,024 bytes, a 64-hex-character `checksum_sha256`, `byte_length`, `row_count`, `last_error`, `started_at`, and `completed_at`. A complete row always carries `row_count`, `byte_length`, and `completed_at`; a row with rows always carries an object key and checksum.
+Cold export copies finalized history days out of PostgreSQL into an operator-owned store and records each copy so retention can wait for it ([ADR 0068](decisions/0068-export-cold-history-behind-the-rollup-watermark.md)). `cold_export_policy` is a singleton with one `enabled` flag, false on a clean install. `cold_export_dataset` holds one row per exported dataset, `task_event`, `attempt_history`, or `fast_task_outcome`, with an exclusive UTC-day-aligned `exported_through` watermark. `cold_export_segment` is the ledger: one row per `(dataset, segment_start)` with `segment_end` one day later, `status` of `exporting` or `complete`, `attempts`, `exporter_id` of 1 through 256 bytes, `lease_expires_at`, `object_key` and `manifest_key` of at most 1,024 bytes, a 64-hex-character `checksum_sha256`, `byte_length`, `row_count`, `last_error`, `started_at`, and `completed_at`. A complete row always carries `row_count`, `byte_length`, and `completed_at`; a row with rows always carries an object key and checksum.
 
 `set_cold_export_policy_v1(p_enabled, p_from)` turns export on or off and returns the status rows. Enabling seeds each dataset without a watermark at `cold_export_oldest_history_day_internal_v1`, the UTC day of the oldest retained partition lower bound or default-partition row, or at the UTC day of `p_from` when given, or at the current UTC day when the dataset is empty. A `p_from` that differs from an existing watermark raises `already started`; `p_from` with `p_enabled = false` raises. Re-enabling advances a watermark that fell below the oldest retained day, because retention deleted those days while export was off. `get_cold_export_status_v1()` returns one row per dataset: `enabled`, `dataset`, `exported_through`, `exportable_through`, `complete_segments`, the `exporting_segment_start` and `exporting_attempts` of a held or abandoned segment, the newest `last_error`, and `updated_at`.
 
-`cold_export_exportable_through_internal_v1(p_now)` is the gate: `LEAST(date_bin('1 day', task_stat_state.rolled_up_through), date_trunc('day', p_now))`, so a day exports only after it closed and the minute rollup passed it. `claim_cold_export_segment_v1(p_dataset, p_exporter_id, p_lease_ms, p_now)` returns nothing while export is off, while another exporter holds an unexpired lease, or while the next day ends after the gate. It first re-leases an `exporting` row whose lease lapsed, incrementing `attempts`, and otherwise opens the day at `exported_through`. The lease is 1,000 through 86,400,000 ms. `read_cold_export_rows_v1(p_dataset, p_from, p_to, p_after_occurred_at, p_after_id, p_limit)` returns `(occurred_at, row_id, record)` pages of 1 through 100,000 rows in `(occurred_at, id)` order, with `record` the `to_jsonb` of the row. `complete_cold_export_segment_v1(p_dataset, p_segment_start, p_attempts, p_object_key, p_manifest_key, p_checksum_sha256, p_byte_length, p_row_count)` raises `not held by attempt` unless the row is `exporting` at exactly `p_attempts`, marks it complete, advances `exported_through` across every contiguous complete day, and returns the new watermark. `fail_cold_export_segment_v1(p_dataset, p_segment_start, p_attempts, p_error)` clears the lease and stores the error under the same fence.
+`cold_export_exportable_through_internal_v1(p_now)` is the gate: `LEAST(date_bin('1 day', task_stat_state.rolled_up_through), date_trunc('day', p_now))`, so a day exports only after it closed and the minute rollup passed it. `claim_cold_export_segment_v1(p_dataset, p_exporter_id, p_lease_ms, p_now)` returns nothing while export is off, while another exporter holds an unexpired lease, or while the next day ends after the gate. It first re-leases an `exporting` row whose lease lapsed, incrementing `attempts`, and otherwise opens the day at `exported_through`. The lease is 1,000 through 86,400,000 ms. `read_cold_export_rows_v1(p_dataset, p_from, p_to, p_after_occurred_at, p_after_id, p_limit)` returns `(occurred_at, row_id, record)` pages of 1 through 100,000 rows in `(occurred_at, id)` order, with `record` the `to_jsonb` of the row. For `fast_task_outcome` the pair is `(finished_at, task_id)`, and the oldest retained day is the UTC day of `min(finished_at)`. `complete_cold_export_segment_v1(p_dataset, p_segment_start, p_attempts, p_object_key, p_manifest_key, p_checksum_sha256, p_byte_length, p_row_count)` raises `not held by attempt` unless the row is `exporting` at exactly `p_attempts`, marks it complete, advances `exported_through` across every contiguous complete day, and returns the new watermark. `fail_cold_export_segment_v1(p_dataset, p_segment_start, p_attempts, p_error)` clears the lease and stores the error under the same fence.
 
-While `cold_export_policy.enabled` is true, `retain_history_v1` clamps `v_event_before` and `v_attempt_before` to the matching `exported_through` after the rollup clamp. A dataset row that is unexpectedly missing clamps to the statistics epoch, `2000-01-01 UTC`, so nothing is deleted. With export off the clamp is skipped entirely and every other retention rule is unchanged.
+While `cold_export_policy.enabled` is true, `retain_history_v1` clamps `v_event_before` and `v_attempt_before` to the matching `exported_through` after the rollup clamp. `prune_terminal_tasks_v1` clamps its fast-tier cutoff to the `fast_task_outcome` watermark the same way ([Fast retention and cold export](#fast-retention-and-cold-export)). A dataset row that is unexpectedly missing clamps to the statistics epoch, `2000-01-01 UTC`, so nothing is deleted. With export off the clamp is skipped entirely and every other retention rule is unchanged.
 
 No exporter ships in this release; the four segment functions are the contract any exporter follows ([ADR 0068](decisions/0068-export-cold-history-behind-the-rollup-watermark.md)). An exporter claims one day of one dataset, reads it in `read_cold_export_rows_v1` pages of 1 through 100,000 rows, writes one JSON-lines object per day named `<prefix>/<dataset>/<YYYY>/<MM>/<DD>/<dataset>-<YYYY>-<MM>-<DD>.ndjson.gz` plus a `.manifest.json` beside it carrying the row count, byte length, and hex SHA-256 of the object as stored, then completes the segment with those values. An empty day completes with a null object key and a manifest only. `Queue.setColdExportPolicy()` and `Queue.getColdExportStatus()` wrap the two policy functions and emit the `workhorse.cold_export_policy.synchronized` log event. Enabling export with no exporter running holds event and attempt retention at the seeded watermark indefinitely.
 
@@ -2017,6 +2101,8 @@ No exporter ships in this release; the four segment functions are the contract a
 `updated_at`. Actor contains 1 through 200 characters, and reason contains 1 through 2,000
 characters. The request ID contains 1 through 512 UTF-8 bytes and is never stored raw. PostgreSQL
 stores a safe preview, the first 12 hexadecimal hash characters, and the character length.
+`set_queue_tier_v1` and `set_queue_history_v1` write the `tier`, `record_attempts`, and
+`record_claims` columns described in [Fast tier](#fast-tier).
 
 `queue_purge_request` is the idempotency and audit record for the four-argument `purge_queue_v1`. One request hash
 owns one queue, actor, and reason fingerprint. An exact replay returns `deleted_count` from the
@@ -2028,7 +2114,7 @@ raises `P1006` before it deletes anything.
 One row per live worker process, keyed by the durable `worker_id` used for leases and attempt history.
 `queue_names` stores the ordered, non-empty set of queues the worker claims. `queue_name` mirrors
 the first member for readers that show one queue.
-`schedule_namespaces` stores the ordered set that the worker offers to `fire_due_schedules_v1`.
+`schedule_namespaces` stores the ordered set that the worker offers to `fire_due_schedules_v2`.
 `register_worker_v1` is a single round trip that publishes `queue_names`, `schedule_namespaces`, `concurrency`, `lease_ms`,
 `heartbeat_ms`, `poll_ms`, `maintenance_interval_ms`, `maintenance_routine_poll_ms`,
 `registry_interval_ms`, `active_slots`, `draining`, `client_protocol_version`, `sdk_language`, and
@@ -2105,7 +2191,8 @@ busy one-second cadence creates unbounded write churn.
 
 ### Declarative schedules
 
-`sync_schedule_definitions_v2` delegates the version 1 definition reconciliation, validates and
+`sync_schedule_definitions_v2` delegates definition reconciliation to the internal helper
+`sync_schedule_definitions_internal_v1`, validates and
 stores `catchup_policy`, and updates `last_evaluated_at` when an evaluation boundary changes. Any
 definition change increments the schedule revision once. `fire_schedule_v1` copies task metadata
 into the occurrence task, so a later deployment cannot reinterpret an already-synchronized
@@ -2192,7 +2279,7 @@ stateDiagram-v2
 
 ### Enqueue
 
-`enqueue_batch_v1` parses and validates at most 1,000 requests against one timestamp, including optional priority, persisted retry policies, and up to 100 dependency identities. Priority defaults to 0 and must be an integer from 0 through 100. It returns `(ordinal, task_id, accepted)` for each input; `accepted` is true only when the statement created the durable task. One statement inserts `task`, optional `task_dependency` edges, `task_runtime` or a policy-selected terminal outcome, and acceptance events. Input ordinality controls returned IDs and ready sequence allocation. Any invalid member rolls back the entire batch. Commit-delivered `NOTIFY workhorse_tasks` is coalesced to one notification per distinct queue that gained ready work.
+`enqueue_batch_v1` parses and validates at most 1,000 requests against one timestamp, including optional priority, persisted retry policies, and up to 100 dependency identities. Priority defaults to 0 and must be an integer from 0 through 100. It returns `(ordinal, task_id, accepted)` for each input; `accepted` is true only when the statement created the durable task. One statement inserts `task`, optional `task_dependency` edges, `task_runtime` or a policy-selected terminal outcome, and acceptance events. Input ordinality controls returned IDs and ready sequence allocation. The loop over requests writes no full-tier task row. For each new full-tier request it validates the request, locks and reads its prerequisites, settles its idempotency key, and buffers its `task` row, `task_runtime` row, `task_dependency` edges, and `enqueued` event details. After the last request, `enqueue_batch_v1` writes `task`, then `task_runtime`, then all edges together with their `dependency_blocked` or `dependency_released` events, each with one statement in input order. It stores in each blocked runtime's `pending_prerequisites` the number of edges it inserts pending: every prerequisite without an outcome plus every terminal prerequisite whose policy rejects. The key-share locks it holds on the prerequisites keep that count exact against a concurrent terminal transition. It then passes every distinct terminal prerequisite to one `resolve_dependents_many_v1` call in identity order, inserts the `enqueued` events in input order, and calls `terminalize_deadline_v1` for each task whose deadline has already passed. Each task therefore keeps the event order that one-row writes produced; only the interleaving between tasks changes. The buffer never hides a prerequisite, because the batch generates every new task identity and a caller can name only a task that existed before the batch. Any invalid member rolls back the entire batch. Commit-delivered `NOTIFY workhorse_tasks` is coalesced to one notification per distinct queue that gained ready work.
 
 `enqueue_many_v1` preserves that contract and returns `(ordinal, task_id, outcome, reason)`. Ordinary requests map `accepted` to `accepted` or `replayed` and return a null `reason`. A batch containing `debounce` or `throttle` requests locks every scoped idempotency, debounce, or throttle key in bytewise order before processing requests in caller order. This keeps mixed batches atomic and prevents overlapping batches from reversing key-lock order.
 
@@ -2228,7 +2315,9 @@ Payload, queue, type, priority, scheduling, retry, contract, tag, deadline, time
 
 Production maintenance is worker-owned and split by cadence and failure domain.
 
-Each worker calls `tick_v1` at most once per configured `maintenanceIntervalMs` (default one second). Under the transaction-scoped `workhorse:tick` advisory lock it records `maintenance_state.last_started_at`, performs bounded promotion and bounded expired-lease recovery, then records `last_completed_at` if both phases avoid an error. Concurrent callers return immediately with `skipped_lock = true` and do not change the state. The same cadence drives in-process schedule evaluation.
+Each worker calls `tick_v1` at most once per configured `maintenanceIntervalMs` (default one second). Under the transaction-scoped `workhorse:tick` advisory lock it records `maintenance_state.last_started_at`, performs bounded promotion and bounded expired-lease recovery, then records `last_completed_at` if both phases avoid an error. Concurrent callers return immediately with `skipped_lock = true` and do not change the state. A skipped tick still spends the caller's interval: the TypeScript and Python workers stamp their last tick time whether or not a phase skipped, and the Go and Rust maintenance loops wait for their next ticker fire. This is intended. The lock holder is promoting and recovering at that moment, so a skip hands the work to it rather than dropping it. A retry that comes due after the holder's promote statement starts waits for the next tick from any worker, which is at most one interval away, the same bound as an uncontended fleet. The same cadence drives in-process schedule evaluation.
+
+A long-running worker registers before its first claim, but it does not wait for its first maintenance pass. The TypeScript `Worker.run()`, the Python `Worker.run()` and `AsyncWorker.run()`, the Go `Worker.Run`, and the Rust `Worker::run` start that pass beside dispatch, so a fresh worker's first claim skips one `tick_v1`, schedule evaluation, and `run_maintenance_v1` round. The Python worker runs that pass on its own thread and makes no other maintenance offer until it returns. A failure in that pass still stops the run, and `run` reports its error. [ADR 0078](decisions/0078-start-a-long-running-workers-first-claim-beside-its-startup-maintenance-pass.md) records this order. A single pass (TypeScript `runOnce()`, Go `RunOnce`, Rust `run_once`) runs maintenance before it claims. The Python `run_once()` does so whenever its maintenance interval has elapsed.
 
 Every TypeScript, Python, and Go worker calls `run_maintenance_v1(p_now)` from its slow maintenance cycle. The function calls `rollup_stats_v1`, `prepare_history_partitions_v1`, `retain_history_v1`, `prune_terminal_storage_v1`, then `prune_worker_registry_v1`. TypeScript offers it on `maintenanceRoutinePollMs`, Python on `maintenance_routine_poll_ms`, and Go on `WorkerOptions.MaintenanceRoutineInterval`. All three default to 60 seconds, which [ADR 0011](decisions/0011-daily-retention-and-split-maintenance.md) decided and [ADR 0072](decisions/0072-converge-the-worker-runtime-defaults.md) holds the three SDKs to. PostgreSQL checks persisted due state under each routine's advisory lock, so extra offers remain no-ops. The statistics rollup defaults to every minute. Partition preparation defaults to every six hours. Terminal storage cleanup defaults to every five minutes. History retention runs once per local date at or after `maintenance_policy.history_retention_local_time` in `maintenance_policy.timezone`. None shares the promotion advisory lock. Partition retirement abandons a DDL lock attempt after 250 ms rather than waiting indefinitely behind dispatch. Each maintenance function keeps its existing phase exception subtransactions, so a reported phase error does not roll back successful sibling phases. An unexpected top-level failure from the first four functions still rejects the pass. Registry pruning alone is caught by the orchestrator and reported as `worker_registry` after the other phases. Terminal storage reports `enqueue_idempotency`, `released_dependencies`, then `terminal_tasks`; released-edge compaction runs first so the same pass can prune a newly unpinned prerequisite.
 
@@ -2251,7 +2340,7 @@ this lifecycle over module-scope instrument creation.
 `@stablemates/workhorse-otel` implements the contract. `registerOpenTelemetry()` has no import side
 effect and returns `registerTelemetryProvider()`'s cleanup function. The adapter declares
 `@opentelemetry/api >=1.9.0 <2`, `@opentelemetry/api-logs >=0.200.0 <0.300.0`, and
-`@stablemates/workhorse >=0.3.0 <0.4.0` as peer dependencies. It resolves tracer, meter,
+`@stablemates/workhorse >=0.4.0 <0.5.0` as peer dependencies. It resolves tracer, meter,
 logger, context, and propagation state from those host-owned API copies. Its synchronous metric and
 log wrappers re-read the OpenTelemetry global provider, preserving SDK registration after adapter
 registration.
@@ -2273,7 +2362,7 @@ Queue and worker operations emit these synchronous instruments:
 | `workhorse.handler.runtime`          | counter, `ms`           | Cumulative handler execution time by queue and task type.                                                                                                                                                                                        |
 | `workhorse.handler.batch.size`       | histogram, `{task}`     | Tasks delivered in one `BatchHandler` invocation, by queue, task type, and bounded full/partial flag.                                                                                                                                            |
 | `workhorse.handler.batch.linger`     | histogram, `ms`         | Time from the first member reaching its coordinator until batch dispatch, with the same attributes.                                                                                                                                              |
-| `workhorse.claim.duration`           | histogram, `ms`         | One `claim_v1` or `claim_many_v1` statement, by queue and the bounded `workhorse.claim.result` values `claimed` and `empty`.                                                                                                                     |
+| `workhorse.claim.duration`           | histogram, `ms`         | One `claim_v1`, `claim_many_v1`, or `complete_many_and_claim_v1` statement, by queue and the bounded `workhorse.claim.result` values `claimed` and `empty`.                                                                                      |
 | `workhorse.leases.expired`           | counter, `{lease}`      | Leases recovered by `recover_expired_v1`; zero-result passes emit nothing.                                                                                                                                                                       |
 | `workhorse.schedule.fired`           | counter, `{occurrence}` | One `fire_schedule_v1` call that returns a task ID, by schedule namespace and name.                                                                                                                                                              |
 | `workhorse.schedule.lag`             | histogram, `s`          | Delay from the planned occurrence to the successful fire, with the schedule attributes.                                                                                                                                                          |
@@ -2382,7 +2471,7 @@ runtime update selects a candidate. Competing worker processes serialize on the 
 one durable token admits one start even when claims overlap. Returning null after exhausting the
 window enters the Worker's normal bounded empty-claim wait instead of a claim loop.
 
-That window reads without locking. `claim_one_v1` takes a row lock, with `FOR UPDATE SKIP LOCKED`,
+That window reads without locking. `claim_one_v1` takes a row lock, with `FOR NO KEY UPDATE SKIP LOCKED`,
 only on the candidate it admits, so a claim that admits nothing leaves every row it read lockable by
 another claim. The admission decision cannot go stale between the read and the lock, because every
 rule that passes over a row holds a lock until the claim transaction ends: `max_active_per_key`
@@ -2393,7 +2482,49 @@ it has no bound. `pnpm benchmark:saturated-claim` measures a claim on a queue wh
 saturated: it writes no row lock and one WAL record, where the window lock wrote 100 row locks and
 101 WAL records.
 
-One runtime update changes the selected row to active and installs worker, global fence, acquisition, heartbeat, and expiry data. The same transaction appends the claim event before returning identity, payload, normalized `retryPolicy`, contract version, result limit, and error-redaction flag. No transaction remains open while user code runs. `Queue.claim` uses `claim_v1`. `claim_many_v1(queue, worker, limit, lease_ms)` accepts a limit from 1 through 100. It invokes the same transition, `claim_one_v1`, repeatedly inside one database call until it reaches the limit or a claim returns no row. Only the first claim of the batch waits for a budget lock.
+One runtime update changes the selected row to active and installs worker, global fence, acquisition, heartbeat, and expiry data. The same transaction appends the claim event before returning identity, payload, normalized `retryPolicy`, contract version, result limit, and error-redaction flag. No transaction remains open while user code runs. `Queue.claim` uses `claim_v1`, which is `claim_many_v1` with a limit of 1. `claim_many_v1(queue, worker, limit, lease_ms)` accepts a limit from 1 through 100. On a fast-tier queue it branches to `fast_claim_v1` instead ([Fast claim](#fast-claim)).
+
+On every full-tier queue, `claim_many_v1` admits the batch as a set. Before schema version 41, a
+queue with no concurrency or rate-limit policy row called `claim_one_v1` once per task. That
+repeated the policy locks, the budget sample, and the key-bucket prune for every start (SM-948). It takes the same shared advisory locks and policy
+row locks once for the whole batch. The policy row locks serialize every policy claim on the queue,
+so no other claim changes the counts and buckets the batch reads until it commits. The batch then
+runs rounds. Each round:
+
+1. Locks the budgets named by the first 100 ready rows, in name order. The first round waits for
+   each lock; a later round uses `pg_try_advisory_xact_lock` and skips a budget it cannot lock. A
+   queue with no ready row that names a budget skips this sample.
+2. Reads the clock once. The first round also prunes up to 100 fully refilled key buckets, as
+   `claim_one_v1` does.
+3. Computes the queue's room: the remaining limit, `max_active` minus the unexpired active count,
+   and the whole tokens in the queue bucket, whichever is smallest. It locks the queue bucket row
+   `FOR UPDATE` to read its tokens. A round with no room ends the batch.
+4. Reads the first 100 admissible ready rows without locking, in priority, sequence, and task-identity
+   order. It computes each key's room from `max_active_per_key` and the key bucket, and each locked
+   budget's room from `budget.max_active` and `budget_bucket`. A budget the claim never locked has no
+   room. A row fits when its rank within its key and its rank within its budget are both within that
+   room.
+   A round with no `max_active_per_key`, no `per_key_limit`, and no locked budget skips the window.
+   It locks the first ready rows up to the queue's room with `FOR NO KEY UPDATE SKIP LOCKED`, keeps them up
+   to the first row that names a budget, and ends the batch after step 6.
+5. Locks up to the queue's room of fitting rows with `FOR NO KEY UPDATE SKIP LOCKED`, as
+   `claim_one_v1` does, so a dependent enqueue's key-share lock hides no ready row. It allocates their
+   fences from `fence_token_seq` in ascending order, activates them in one update, and appends one
+   claim event per row.
+6. Charges the queue bucket, each key bucket, and each budget bucket once for the starts it admitted.
+   A missing bucket starts full, and refill never runs from a clock ahead of the claim.
+
+A round returns its rows in fence order. The batch stops once it fills the limit or the queue's own
+room. It also stops when the window held every ready row and the round activated every fitting row,
+unless some row had both a limited key and a limited budget. Only that mix can leave a greedy
+admission unrealized within one round, so the batch runs another round then. The batch reads the
+policy rows only after it holds their locks, so a policy synchronized before the batch starts applies
+to it. A queue with no policy row, no per-key rule, and no locked budget runs one direct round.
+
+`claim_many_v1` is declared with `SET plan_cache_mode = force_generic_plan`. Its statements over the
+batch arrays have a pessimistic generic row estimate, so under the default mode PL/pgSQL replanned
+them on every call. That replanning doubled the latency of a limit-1 policy claim, and every such
+claim holds the policy row locks.
 
 ### Worker concurrency and lifecycle
 
@@ -2407,11 +2538,30 @@ entry while preserving first occurrence order. `WorkerOptions.queue` remains the
 compatibility option. Supplying both options throws. Omitting both uses `WorkerQueueApi.defaultQueue`.
 One worker identity, pause state, and `concurrency` budget cover the complete configured queue set.
 
-One claim pass requests its currently free slots through `claim_many_v1`. PostgreSQL still performs each
-`claim_v1` transition serially inside that call, so every member independently passes ordering, policy,
-rate-token, and fence checks. The worker advances the queue cursor after every batched queue attempt.
-Each successful claim starts one independent per-task handler task; the fill loop stops when all free
-slots are occupied or every configured queue returns no row.
+Each claim requests a number of slots through `claim_many_v1`. Every member passes ordering, policy,
+rate-token, and fence checks inside that call, and the batch admits its members in rounds ([Claim](#claim)). The worker advances the queue cursor after every batched queue attempt.
+Each claimed task starts one independent per-task handler task. On a queue whose tier probe answers fast, the worker claims and completes through
+`complete_many_and_claim_v1` instead ([Workers on a fast-tier queue](#workers-on-a-fast-tier-queue)).
+
+`dispatchLoop` in `typescript/core/src/worker.ts` keeps more than one claim in flight, as
+[ADR 0076](decisions/0076-keep-overlapping-batched-claims-in-flight-to-fill-worker-slots.md) decides
+for every SDK. A claim in flight reserves its limit, and the free slots are `concurrency` minus the
+running handlers minus the reserved slots. With no claim in flight, any free slot starts a claim for
+all free slots. With a claim in flight, another starts only when the free slots reach
+`dispatchRefillBatch(concurrency)`, which is `ceil(concurrency / 4)`, so at most four claims are in
+flight. The loop waits for the first finished handler, returned claim, or wake, and never awaits a
+claim inline. A claim that returns no row, or only rows of unhandled types that it releases through
+`release_owned_v1`, counts as empty. After an empty claim the loop starts no claim until the poll
+deadline or a dispatch wake newer than that claim. The notification claim delay of
+`NOTIFICATION_CLAIM_DELAY_MS` applies only while `consecutiveEmptyClaims` is above zero, so it spreads
+idle workers without slowing a busy one. A dependency release notifies on every completion, and a
+busy worker that paid the delay on each claim spent most of a chain or fan-in run asleep. The delay
+runs inside the claim, and a claim whose worker paused or stopped
+during the delay is never sent. Tasks that a claim returns after `stop`, `pause`, a handler failure,
+or a claim error still run, because each holds a lease. On stop the loop drains every claim in
+flight, runs the tasks they return, and then awaits every handler. The runtime fixture
+`busy-worker-refills-slots-with-overlapping-batched-claims` pins the claim limits 8, 1, and 2 at
+concurrency 8, two claims in flight, and at most 0.75 claims per task in every SDK.
 This bounds claim and connection pressure without serializing user handlers. A handler slot remains active
 through completion, retry/failure handling, or durable-wait suspension, and every active task owns its own
 worker heartbeat registration, abort controller, fence checks, and final transition.
@@ -2433,7 +2583,7 @@ member's failure through its persisted retry policy and remaining attempt budget
 return, wrong outcome count, or invalid outcome rejects every member. Each per-task execution path still
 submits that failure under its own fence.
 
-PostgreSQL admits each member through an independent `claim_v1` transition inside `claim_many_v1` before the process-local rendezvous.
+PostgreSQL admits each member inside `claim_many_v1` before the process-local rendezvous.
 The batch is not an atomic admission unit. Every admitted member consumes one worker slot, one queue or
 keyed active count, one queue rate token, and one keyed rate token when the matching policy applies. A
 policy can therefore produce a partial batch. Linger time continues to consume each admitted member's
@@ -2480,9 +2630,50 @@ controls do not impose queue weights. `concurrency_policy` enforces a durable ac
 `rate_limit_policy` enforces a durable start-rate budget across worker processes.
 
 An update that moves a governed runtime away from active, or deletes it, runs
-`notify_concurrency_capacity_v1`. The trigger publishes the queue on `workhorse_tasks`. Completion, failure,
-retry release, cancellation, durable wait, and recovery can therefore wake a worker in another process
-without waiting for its fallback poll.
+`notify_concurrency_capacity_v1` before the row changes. The trigger publishes the queue on `workhorse_tasks`
+only when the queue's active rows, counted up to `max_active`, reach `max_active`, or when the row's
+`concurrency_key` has `max_active_per_key` active rows. Only such a release can unblock a claim. Completion,
+failure, retry release, cancellation, durable wait, and recovery can therefore wake a worker in another process
+without waiting for its fallback poll. A release below every cap publishes nothing, because a worker that takes
+a notification while idle delays its next claim. The count includes the row being released and every concurrent release
+that has not committed, so the first release from a full queue always publishes, even when one statement
+releases several rows.
+
+The `WHEN` clauses of `task_runtime_concurrency_capacity_update` and
+`task_runtime_concurrency_capacity_delete` repeat the function's first test. A claim, a promotion, or
+the delete of a row that was never active therefore calls no function. Every release of an active row
+still calls it, even on a queue with no policy row. A policy synchronized while a lease is held must
+see that lease end, and the wait described next orders the release after any open claim.
+
+Before it counts, the trigger locks the queue's `concurrency_policy` row `FOR KEY SHARE`. `claim_one_v1` and
+`claim_many_v1` hold that row `FOR UPDATE` until they commit, so a release waits for an open claim and then
+counts its leases. Without the wait, a claim could fill the queue while a release was open. The release would
+count a queue below `max_active` and stay silent, and a claim that found the queue full would sleep until the
+fallback poll. `FOR KEY SHARE` does not conflict with another release, so releases still run in parallel. The
+count includes active rows whose lease has expired, although claim admission excludes them. A lease that expires
+after a claim finds the queue full therefore cannot hide the cap from a later release.
+
+An expiring lease changes no row, so neither `notify_concurrency_capacity_v1` nor
+`notify_budget_capacity_v1` runs when a lease expires. Claim admission sees the returned capacity at
+once, but a worker whose claim found the queue full keeps sleeping. It finds the capacity at its next
+fallback poll or when `recover_expired_v1` releases the expired row, whichever comes first. That
+release still counts the expired row toward `max_active`, so it publishes the queue, and the budget
+trigger wakes every queue waiting on the budget. Every worker offers `tick_v1` once per maintenance
+interval, one second by default, and each tick recovers a bounded batch of expired rows. The wake
+therefore follows expiry by about one maintenance interval unless more expired leases are waiting
+than one tick recovers. PostgreSQL has no event that fires at a stored timestamp,
+so Workhorse leaves this wake to recovery instead of adding one.
+
+The lock lasts until the releasing transaction commits, not until the trigger returns. A claim on the queue
+therefore waits for the whole release. Workhorse's own releases are single statements that commit at once.
+A TypeScript `Queue` bound to a caller's transaction through `forTransaction` can call `complete`, `fail`,
+`releaseOwned`, `scheduleWait`, or `recoverExpired` there, and claims on that capped queue then wait until the
+caller commits. When `sync_concurrency_policies_v1` prunes a policy, its `DELETE` conflicts with `FOR KEY SHARE`.
+It can therefore deadlock with one transaction that releases tasks from several capped queues, such as the
+tick's `recover_expired_v1`. PostgreSQL aborts one side with `40P01`; both are safe to repeat, because the sync
+writes the complete desired set and the next tick recovers the same leases. Every SDK therefore sends an aborted
+sync again, up to 3 attempts in total. Inside a caller's transaction, the deadlock has already aborted that
+transaction, so the SDK raises the original `40P01` and the caller repeats the transaction.
 
 ### Heartbeat
 
@@ -2516,7 +2707,12 @@ until the run ends. `runOnce()` takes one when the first attempt registers its l
 handler starts, and closes it with the last lease. Each round on the reservation is bounded by
 `heartbeatMs`. A round that exceeds the bound, or whose statement fails, releases the client with an
 error. node-postgres then destroys the connection rather than pooling it, which is the client-side
-cancel, and the next round connects a new one. No session `SET` is involved, so the reservation is
+cancel, and the next round connects a new one. The reservation listens for the client's `error`
+event while it holds the client. An error between rounds, as when PostgreSQL terminates the backend
+of an idle worker, destroys the client the same way and changes no lease. A checked-out
+node-postgres client has no listener of its own, so without this one the error would end the
+process. The Go, Python, and Rust drivers report a lost connection only on the next statement, which
+fails that round and discards the connection. No session `SET` is involved, so the reservation is
 safe under transaction pooling. Go workers use the pool's dedicated heartbeat connection unless `WorkerOptions.SharedHeartbeats` opts out. A Python worker
 takes its dedicated heartbeat connection from the supplied pool.
 
@@ -2602,6 +2798,472 @@ pass after a released-only pass makes no progress.
 
 `enqueue_batch_v1` first validates and canonicalizes every request against one classification timestamp. Keyed requests acquire deterministic sorted scoped-ownership locks before ordinal processing, preventing overlapping batches from deadlocking. Exact equivalents return the retained task ID and skip all acceptance side effects; a mismatch aborts the whole batch. New keyed and unkeyed requests then insert identity, runtime, one `enqueued` event, FIFO placement when ready, and at most one commit-delivered notification per ready queue in caller order. This preserves same-batch duplicates, caller transaction rollback, and ordinary unkeyed behavior.
 
+## Fast tier
+
+A full-tier task pays for durable execution on every transition. Its claim, completion, and retry
+each write a `task_runtime` change, a `task_event` row, and an `attempt_history` row. A queue whose
+handlers never use durable execution pays that cost for nothing. The fast tier removes it: a
+fast-tier task lives in one `fast_task_runtime` row, closes into one `fast_task_outcome` row, and
+writes history only when the queue opts in ([ADR 0077](decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md)).
+The tier belongs to the queue, never to a task or a worker. PostgreSQL routes every transition by
+the queue's current tier, so a client calls the same public functions for both tiers.
+
+For every accepted fast-tier task, exactly one of `fast_task_runtime` and `fast_task_outcome` exists
+after a committed transition, and neither `task_runtime` nor `task_outcome` exists. The stable
+`task` identity row is shared by both tiers.
+
+### Tier and history settings
+
+`queue_control` carries the tier and the opt-in history switches:
+
+- `tier text NOT NULL DEFAULT 'full'`, checked to `fast` or `full`.
+- `record_attempts boolean NOT NULL DEFAULT false`.
+- `record_claims boolean NOT NULL DEFAULT false`.
+
+A queue without a `queue_control` row is full-tier. Every existing queue therefore stays full-tier
+after migration 0025. `dashboard_queue_control_v1` exposes `tier`, `record_attempts`, and
+`record_claims` beside `paused`.
+
+`set_queue_tier_v1(p_queue_name, p_tier, p_requested_by, p_reason)` changes the tier and returns
+the tier now in force. `p_requested_by` contains 1 through 200 characters and `p_reason` 1 through
+2,000. The function takes the queue's exclusive tier lock, then:
+
+- returns at once when the tier is unchanged;
+- raises `P1007` with feature `tier change` when the queue holds any live task in either runtime
+  table, with the message `queue <name> has live tasks, so its tier cannot change`;
+- raises `P1007` with feature `concurrency policies` or `rate-limit policies` when moving to `fast`
+  while a `concurrency_policy` or `rate_limit_policy` row names the queue;
+- otherwise upserts `queue_control.tier`, `updated_by`, `reason`, and `updated_at`.
+
+A queue must therefore be empty to switch tier. Terminal outcomes stay in the table they closed
+into, so a switched queue's old tasks stay readable. `set_queue_tier_v1` does not change `paused`
+or the history switches.
+
+`set_queue_history_v1(p_queue_name, p_record_attempts, p_record_claims)` sets the history switches
+and returns both. A null argument keeps the current value. The function does not check the tier,
+so a full-tier queue may hold settings that take effect once it moves to fast. A change applies to
+claims and completions that start after it commits.
+
+- With `record_attempts`, each closed fast-tier attempt writes one `attempt_history` row instead of
+  an entry in the row's `errors` list. `started_at` equals `claimed_at`, because a fast-tier attempt
+  never suspends.
+- With `record_claims`, each fast claim writes one `claimed` `task_event` carrying `worker_id`,
+  `fence_token` as text, and `expires_at`.
+
+`Admin.setQueueTier(queueName, tier, { actor, reason })` wraps `set_queue_tier_v1`, returns the
+`QueueTier`, and emits the `workhorse.queue.tier_set` log event with `workhorse.queue.tier`.
+`Admin.setQueueHistory(queueName, settings)` takes a partial `QueueHistorySettings`
+(`recordAttempts`, `recordClaims`) and returns the full settings. The other SDKs expose the same
+pair: Python `Admin.set_queue_tier` and `set_queue_history(queue_name, *, record_attempts=None,
+record_claims=None)` returning `QueueHistory`, Go `Admin.SetQueueTier` and `SetQueueHistory` with
+`*bool` switches, and Rust `set_queue_tier` and `set_queue_history`.
+
+### Tier locking
+
+`lock_queue_tiers_v1(p_queue_names text[])` takes a shared transaction advisory lock on
+`'workhorse:queue-tier:' || name` for each distinct queue, in `"C"` collation order, and returns the
+names that are fast-tier. Enqueue, redrive, child creation, and policy synchronization take these
+shared locks before they read the tier. `set_queue_tier_v1` takes the exclusive form of the same
+lock, so a tier change and an enqueue into that queue serialize, and a tier change never observes a
+half-written batch.
+
+### `fast_task_runtime`
+
+One row per live fast-tier task. It copies every field a claim returns, so a claim reads and writes
+this table alone. A retry returns the row to `ready`; any close deletes it.
+
+| Column                                                        | Constraint                                                 |
+| ------------------------------------------------------------- | ---------------------------------------------------------- |
+| `task_id uuid`                                                | Primary key; references `task.id` `ON DELETE CASCADE`      |
+| `queue_name`, `task_type`                                     | Non-empty text                                             |
+| `state`                                                       | `ready` or `active`                                        |
+| `priority integer`                                            | 0 through 100, default 0                                   |
+| `run_at timestamptz`, `sequence bigint`                       | Dispatch order; `run_at` is the release time or retry time |
+| `payload`, `contract_version`, `redact`, `trace_context`      | Copied from the accepted definition                        |
+| `result_max_bytes integer`                                    | 1 through 16,777,216                                       |
+| `retry_policy jsonb`, `max_attempts`, `attempt`               | Attempts 1 through 100; `attempt` defaults to 1            |
+| `fence_token bigint`                                          | Non-negative, default 0                                    |
+| `worker_id`, `claimed_at`, `expires_at`, `attempt_timeout_at` | Set only while active                                      |
+| `deadline_at`                                                 | Finite when set                                            |
+| `execution_timeout_ms bigint`                                 | 1 through 31,536,000,000                                   |
+| `previous_retry_delay_ms bigint`                              | 0 through 31,536,000,000                                   |
+| `cancel_requested_at`, `cancel_requested_by`, `cancel_reason` | Actor 1 through 200 characters; reason 1 through 2,000     |
+| `errors jsonb`, `errors_dropped integer`                      | JSON array, default `[]`; non-negative count               |
+| `enqueued_at timestamptz`                                     | Acceptance time                                            |
+
+`fast_task_runtime_state_shape_check` enforces two shapes. A `ready` row has null `worker_id`,
+`claimed_at`, `expires_at`, `attempt_timeout_at`, and cancellation fields. An `active` row has
+`worker_id`, `claimed_at`, and `expires_at` set and `fence_token` above 0, and its cancellation actor
+and reason require `cancel_requested_at`. A ready row with a future `run_at` plays the role of a
+full-tier `scheduled` row; the tier has no separate scheduled state and no promotion pass.
+
+Three partial indexes serve the three scans:
+
+- `fast_task_runtime_ready_idx` on `(queue_name, priority DESC, run_at, sequence)` where
+  `state = 'ready'` serves the claim.
+- `fast_task_runtime_active_due_idx` on `least(expires_at, attempt_timeout_at, deadline_at)` where
+  `state = 'active'` lets recovery find every overdue active row in one range scan.
+- `fast_task_runtime_ready_deadline_idx` on `(deadline_at)` where `state = 'ready'` and
+  `deadline_at IS NOT NULL` serves ready-row deadline recovery.
+
+The fast tier keeps no heartbeat time, no execution budget across releases, no wait name, and no
+scheduled state. A task's attempt history lives in `errors` unless the queue records attempts.
+`fast_retry_v1` appends one entry per closed attempt with `attempt`, `fence_token` as text,
+`worker_id`, `claimed_at`, `finished_at`, `outcome` (`retry`, `timeout`, or `lease_expired`), and
+`error`. The list holds at most 10 entries. At the cap it drops the oldest entry and increments
+`errors_dropped`, so a reader can tell the list is incomplete.
+
+### `fast_task_outcome`
+
+One row per closed fast-tier task.
+
+| Column                                   | Constraint                                                           |
+| ---------------------------------------- | -------------------------------------------------------------------- |
+| `task_id uuid`                           | Primary key; references `task.id` `ON DELETE CASCADE`                |
+| `queue_name`, `task_type`                | Copied from the runtime row                                          |
+| `state`                                  | `succeeded`, `failed`, or `canceled`                                 |
+| `attempt integer`                        | At least 1; the final attempt                                        |
+| `result jsonb`, `error jsonb`            | Final result or final error                                          |
+| `fence_token`, `worker_id`, `claimed_at` | The final claim; `fence_token` above 0 when set                      |
+| `enqueued_at`, `finished_at`             | `finished_at` defaults to `clock_timestamp()`                        |
+| `errors jsonb`, `errors_dropped`         | Carried over from the runtime row                                    |
+| `closed_as text`                         | Null, `canceled`, `deadline_exceeded`, `timeout`, or `lease_expired` |
+
+`fast_task_outcome_claim_check` requires `fence_token`, `worker_id`, and `claimed_at` to be all null
+or all set. They are null when the task closed while ready, for example a ready cancellation or an
+expired deadline before any claim. `fast_task_outcome_state_shape_check` requires:
+
+- `succeeded`: null `error`, a claim, and null `closed_as`;
+- `failed`: a non-null `error`;
+- `canceled`: a non-null `error` and `closed_as = 'canceled'`.
+
+`closed_as` names the boundary that closed a task when the handler did not. A handler's own
+terminal failure leaves it null. `fast_task_outcome_finished_brin_idx` is a BRIN index on
+`finished_at` for time-range reads. `fast_task_outcome_retention_idx` on `(finished_at, task_id)`
+serves retention and cold export. Migration 0025 runs `ANALYZE` on both new tables, so the planner
+has statistics for them before the first dashboard read.
+
+### Rejected features and `P1007`
+
+A fast-tier queue supports priority, delayed runs, idempotency keys, retry policies, deadlines,
+execution timeouts, heartbeats, cancellation, redrive, pause, purge, and run-now. It rejects every
+feature that needs durable execution or per-task coordination state. PostgreSQL raises the
+rejection through `reject_fast_feature_v1(p_queue_name, p_feature, p_ordinal DEFAULT NULL)`:
+SQLSTATE `P1007`, message `fast-tier queue <name> does not support <feature>`, and `DETAIL` JSON
+`{ queue, feature, ordinal? }`. `ordinal` names the offending request's position in a batch.
+
+| Feature text                                  | Raised by                                                       |
+| --------------------------------------------- | --------------------------------------------------------------- |
+| `concurrency keys`, `budgets`                 | `enqueue_batch_v1`, and `redrive_v1` into a fast queue          |
+| `dependencies`, `prerequisite tasks`          | `enqueue_batch_v1`                                              |
+| `debounce`, `throttle`                        | `enqueue_debounce_v1`, `enqueue_throttle_v1`, `enqueue_many_v1` |
+| `child tasks`                                 | `create_single_child_v1` and `create_children_v1`               |
+| `concurrency policies`, `rate-limit policies` | Policy synchronization and `set_queue_tier_v1`                  |
+| `tier change`                                 | `set_queue_tier_v1` while live tasks exist                      |
+| `batched completion`                          | `complete_many_and_claim_v1` on a full-tier queue               |
+
+A full-tier task that names a fast-tier task as a prerequisite is also rejected. That rejection
+carries `{ feature: "dependencies", taskId, ordinal }` and no `queue` key, because the offending
+queue is the prerequisite's. The `batched completion` message is `queue <name> is not a fast-tier
+queue`.
+
+Every SDK maps `P1007` to one error. TypeScript raises `FastTierUnsupportedError(queue, feature,
+ordinal?)` with the message `Fast-tier queue <queue> does not support <feature>`; `fastTierRejection`
+decodes `DETAIL` and falls back to `unknown` for a missing field. Python raises
+`FastTierUnsupportedError`, Go returns `*FastTierUnsupportedError` matching `ErrFastTierUnsupported`,
+and Rust returns `Error::FastTierUnsupported { queue, feature, ordinal }`.
+
+### Fast enqueue
+
+`enqueue_batch_v1` calls `lock_queue_tiers_v1` for the batch's queues, applies the rejections
+above, and inserts fast-tier requests set-based: one `INSERT` into `task` and one into
+`fast_task_runtime` for all of them. It writes no `task_runtime` row and no `enqueued` event.
+Idempotency keys work as on the full tier. A request whose deadline has already passed closes at
+once through `fast_terminalize_deadline_v1`. The batch notifies `workhorse_tasks` once per ready
+queue, as a full-tier batch does.
+
+### Fast claim
+
+`claim_one_v1` and `claim_many_v1` branch to `fast_claim_v1(p_queue_name, p_worker_id, p_limit,
+p_lease_ms, p_record_claims)` when the queue is fast-tier. A paused queue claims nothing. The claim
+selects ready rows whose `run_at` has arrived and whose deadline has not passed, in `priority DESC,
+run_at, sequence` order with `FOR UPDATE SKIP LOCKED`. It takes each fence from `fence_token_seq`
+and sets `expires_at` from the lease and `attempt_timeout_at` from `execution_timeout_ms`. The
+timeout restarts on every claim, because the tier keeps no execution budget.
+`fast_claim_v1` picks one of two statements, so a queue that does not record claims pays for no
+`task_event` write.
+
+`FOR UPDATE SKIP LOCKED` skips a row that another transaction holds, but it can still wait. When it
+locks a candidate whose ready version another worker has just leased and committed, PostgreSQL
+follows the update chain and waits there without a wait policy. The recheck of `state = 'ready'`
+then rejects the row, but the claim keeps its lock on it until the transaction ends. The owning
+worker's `fast_complete_many_v1` pre-lock or its `fast_heartbeat_many_v1` round can wait on that
+lock while the claim waits on the owner, and PostgreSQL rolled one statement back with SQLSTATE
+`40P01` (SM-934). `fast_claim_v1` therefore runs with `SET lock_timeout = '50ms'`, and runs its
+claim inside a PL/pgSQL `BEGIN ... EXCEPTION WHEN lock_not_available` block. A lock wait that
+reaches 50 ms raises SQLSTATE `55P03`, which rolls the block's subtransaction back, releases every
+row lock the claim took, and returns no rows. The function-level `SET` restores the caller's
+`lock_timeout` on exit, so the timeout covers only the claim. In `complete_many_and_claim_v1` the
+completion is outside that block and still commits. The claim collects its rows into an array
+before it returns any, because a set-returning function cannot withdraw a row it has returned. The
+timeout is far below PostgreSQL's default `deadlock_timeout` of 1 s, so the claim leaves the cycle
+before the deadlock detector runs. A server whose `deadlock_timeout` is below 50 ms can still
+detect the cycle first. Migration `0040-release-a-fused-claim-lock-before-it-can-deadlock.sql`
+(schema 39) replaced `fast_claim_v1` in place, because a claim that returns fewer rows than its
+limit stays within its contract. [ADR
+0081](decisions/0081-release-a-fused-claim-lock-before-it-can-deadlock.md) records the choice and
+its measurement.
+
+A delayed row stays in `fast_task_runtime_ready_idx`, and `run_at <= now` is an index condition, not
+a bound on the scan. The claim therefore reads past every delayed row whose priority is above the
+highest due row, and past the whole queue's backlog when nothing is due. On PostgreSQL 18 a btree
+skip scan makes one index descent per such priority, so the read is bounded by the 101 priorities.
+PostgreSQL 15 through 17 have no skip scan and read every such entry. `pnpm
+benchmark:fast-claim-backlog` measured a million delayed rows above the due work: 0.07 ms added on
+PostgreSQL 18, and a claim of 30 ms on 17 and 43 ms on 15 against about 0.4 ms for its control
+([analysis](benchmarks/2026-09-27-fast-claim-backlog-analysis.md)). [ADR
+0080](decisions/0080-keep-delayed-fast-tier-tasks-in-the-ready-index.md) keeps delayed rows in the
+ready index.
+
+### Completion and fused completion
+
+`complete_v1` branches to `fast_complete_v1`, which calls `fast_complete_many_v1(p_worker_id,
+p_task_ids, p_fence_tokens, p_results)` with one task. That function completes a batch in one
+statement: a fenced `DELETE` from `fast_task_runtime`, one `fast_task_outcome` insert, and one
+`attempt_history` insert per task when the queue records attempts. It returns the accepted task
+IDs. An attempt whose fence, worker, lease, deadline, or attempt timeout no longer matches, or that
+carries a pending cancellation, is left alone and missing from the result. The `DELETE` finds each row by primary key and has no
+`state` predicate, because `fast_task_runtime_state_shape_check` gives a ready row a null
+`worker_id`. The function runs with `plan_cache_mode = force_generic_plan`, so PL/pgSQL does not
+build a custom plan for the statement on every call. The history insert joins `queue_control` on
+`record_attempts` instead of calling `fast_records_attempts_v1` per completed row.
+
+An oversized result fails only its own attempt. After taking its locks, the function selects each
+input whose `octet_length(result::jsonb::text)` exceeds the row's `result_max_bytes`. It passes
+each one, in task ID order, to `fast_fail_v1` with the error `{"name": "TaskValueSizeLimitError",
+"message": "<task_type> result exceeds its configured size limit", "stack": null}` and a null
+retry delay. The task's retry policy then schedules another attempt or finishes it as failed. The
+function leaves those tasks out of the returned IDs and completes the rest of the batch.
+`complete_many_and_claim_v1` still runs its claim. The blast radius therefore differs by tier. On
+the full tier, `complete_v1` raises for an oversized result, and the caller's statement or
+transaction rolls back. On the fast tier, a batch of completions and its fused claim
+survive one oversized row. `fast_complete_v1` keeps the full tier's behavior: it raises for one
+oversized result before it calls `fast_complete_many_v1`. The TypeScript worker measures results
+before it calls, so it reaches this path only through a bug. The Python, Go, and Rust workers do
+not measure results, so for them this path is the enforcement.
+
+Before the `DELETE`, the function locks the caller's rows with `SELECT ... ORDER BY task_id FOR
+UPDATE`, filtered on `task_id = ANY (p_task_ids)` and `worker_id = p_worker_id`.
+`fast_heartbeat_many_v1` takes `FOR NO KEY UPDATE` locks in the same order before its `UPDATE`. The
+`DELETE` plan locks rows in input order, and the heartbeat plan can lock them in
+`fast_task_runtime_active_due_idx` order. Without the shared order, a worker's completion and its
+own heartbeat round could each hold a row the other waits for, and PostgreSQL rolled one back with
+SQLSTATE `40P01`. The fused claim held the completion's locks longer and made that more likely. A
+caller may therefore name its tasks and leases in any order. The full-tier `heartbeat_many_v1`
+branch takes no such lock, because a full-tier completion settles one task per statement.
+
+`heartbeat_many_v1` sends a batch to `fast_heartbeat_many_v1` when the batch names at least one
+`fast_task_runtime` row and no `task_runtime` row. A named task in neither table counts as neither,
+so a heartbeat round that races its worker's own completion keeps the ordered path and reports that
+task `stale`. A batch naming no fast-tier task takes the full-tier `UPDATE ... FROM` unchanged. A
+batch naming both tiers calls `heartbeat_v1` once per lease in `task_id` order, then returns rows in
+input order.
+
+`complete_many_and_claim_v1(p_worker_id, p_task_ids, p_fence_tokens, p_results, p_queue_name,
+p_limit, p_lease_ms)` completes up to 100 tasks and claims up to `p_limit` more from one fast-tier
+queue in one round trip. `p_limit` is 0 through 100 and `p_lease_ms` is 100 through 86,400,000,
+default 30,000. The first row carries `accepted uuid[]`; claimed tasks follow in claim order. A call
+that claims nothing returns one row with null claim columns. A paused queue completes but claims
+nothing. The function raises `P1007` with feature `batched completion` for a full-tier queue.
+
+`Queue.completeAndClaim(task, workerId, result, { queue, limit, leaseMs? })` returns
+`CompletionClaimResult { accepted, claimed }`. Concurrent calls from one worker for one queue and
+lease fuse into one statement at `setImmediate`, chunked at 100 completions and a total claim limit
+of 100. `Queue.claimFast(workerId, limit, { queue?, leaseMs? })` claims through the same function
+with empty arrays and rejects with `FastTierUnsupportedError` for a full-tier queue. When PostgreSQL
+rolls the statement back with SQLSTATE `40P01`, `completeManyAndClaim` sends it again through
+`queryFencedWrite`, up to `FENCED_WRITE_DEADLOCK_ATTEMPTS` (3) times in total, because nothing in it
+committed. Since schema 39 the fused claim leaves a lock wait before it can deadlock ([Fast
+claim](#fast-claim)), so the Go, Python, Rust, and TypeScript workers keep this resend only as a
+safety net. It still covers a server whose `deadlock_timeout` is below the claim's `lock_timeout`, a
+cycle through the completion half of the statement, and the settlement cascades that every fenced
+write shares ([`task_dependency`](#task_dependency)).
+
+### Retry, timeout, heartbeat, and release
+
+`fail_v1`, `timeout_owned_v1`, `expire_owned_v1`, `heartbeat_v1`, `heartbeat_many_v1`,
+`release_owned_v1`, and `acknowledge_cancel_v1` branch to their fast-tier helpers:
+
+- `fast_fail_v1(task, worker, fence, error, retry_delay_ms)` redacts the error and either retries
+  through the PostgreSQL delay selector and `fast_retry_v1`, or closes the task `failed` with null
+  `closed_as`. It returns the next state.
+- `fast_timeout_owned_v1` retries with outcome `timeout`, or closes `failed` with
+  `closed_as = 'timeout'`.
+- `fast_expire_owned_v1` returns `stale`, `cancel_requested`, `deadline_exceeded`,
+  `timeout_exceeded`, or `not_due`.
+- `fast_heartbeat_many_v1(worker, ids, fences, lease_ms)` returns `(ordinal, task_id, status)` and
+  moves only `expires_at`.
+- `fast_release_owned_v1` returns the row to `ready` without consuming the attempt, notifies
+  `workhorse_tasks`, and writes no `released` event.
+- `fast_acknowledge_cancel_v1` closes the task `canceled`.
+
+`fast_retry_v1` resets the claim columns, increments `attempt`, stores the next jitter state, sets
+`run_at` to the end of the retry delay, and takes a new `sequence`. It notifies `workhorse_tasks`
+only when the delay is zero.
+
+### Fast cancellation
+
+`cancel_v1` branches to `fast_cancel_v1(task, requested_by, reason)`, which returns `(status, state,
+current_attempt, requested_at, requested_by, reason, finished_at)`. A ready row closes at once as
+`canceled`. An active row records the request once and stays with its worker, which acknowledges
+it, or with recovery, which closes it when the lease lapses.
+
+### Fast recovery
+
+`recover_expired_v1` calls `fast_recover_expired_v1(limit, retry_delay_ms, now)` with its remaining
+budget. It returns `recovered`, `expired_leases`, `retried`, `retry_dimensions`, and `queues`, which
+`recover_expired_v1` adds to its full-tier counts. It reads ready rows past their deadline through
+`fast_task_runtime_ready_deadline_idx`, and active rows past `least(expires_at, attempt_timeout_at,
+deadline_at)` through one range scan of `fast_task_runtime_active_due_idx`, both with `SKIP LOCKED`.
+
+- A deadline closes the task `failed` with `closed_as = 'deadline_exceeded'`, or `canceled` when a
+  cancellation is pending.
+- An attempt timeout retries with outcome `timeout`, or closes with `closed_as = 'timeout'`.
+- A lapsed lease with a pending cancellation closes `canceled`.
+- Any other lapsed lease retries with outcome `lease_expired`, or closes `failed` with
+  `closed_as = 'lease_expired'`. The error is `{ name: "LeaseExpired", message: "worker lease
+expired" }`.
+
+### Operator operations
+
+`run_task_now_v1` moves a delayed fast-tier row's `run_at` to now. `purge_queue_internal_v1`
+deletes ready fast-tier rows by deleting their `task` identities, which cascades.
+`list_dead_letters_v1` lists failed rows from `fast_task_outcome`, and `redrive_v1` and
+`redrive_many_v1` accept them as sources. A redrive copies the task into its queue's current tier, not the tier it
+closed in. `Admin.getTask`, `list_tasks_v1`, and `list_task_timeline_v1` include both fast tables.
+
+### Fast retention and cold export
+
+`prune_terminal_tasks_v1(p_identity_before, p_outcome_before, p_history_before, p_limit)` runs a
+fast-tier pass with whatever budget the full-tier pass leaves. A fast outcome is deletable when:
+
+- `finished_at` is earlier than `p_outcome_before`;
+- `finished_at` is earlier than the fast history cutoff, which is `p_history_before`, clamped to
+  the `fast_task_outcome` dataset's `exported_through` while cold export is enabled, or to
+  `2000-01-01 UTC` when that dataset row is missing;
+- the `task` identity's `created_at` is earlier than `p_identity_before`;
+- no `task_event`, `attempt_history`, `schedule_occurrence`, `enqueue_idempotency`, or
+  `task_redrive` row references the task.
+
+The pass reads in `(finished_at, task_id)` order with `FOR UPDATE OF task SKIP LOCKED` and deletes
+the `task` identity, which cascades to the outcome.
+
+Cold export has a third dataset, `fast_task_outcome`, admitted by the `cold_export_dataset` and
+`cold_export_segment` checks. Its oldest day is the UTC day of `min(finished_at)`.
+`read_cold_export_rows_v1` returns `(finished_at, task_id, to_jsonb(outcome))` for it, keyed on
+`(finished_at, task_id)`. `ColdExportDataset` is `"task_event" | "attempt_history" |
+"fast_task_outcome"`.
+
+### Fast read models
+
+The dashboard views union both tiers, so a fast-tier task appears with the same columns as a
+full-tier one.
+
+- `dashboard_task_runtime_v1` shows a ready row with a future `run_at` as `scheduled`. It reports
+  null `heartbeat_at` and the last `errors` entry as `error`.
+- `dashboard_task_outcome_v1` reports `run_at` as `COALESCE(claimed_at, enqueued_at)`.
+- `dashboard_attempt_history_v1` derives one row per `errors` entry and one for the final attempt,
+  with `attempt_id` `md5(task_id || ':' || attempt || ':attempt')`. It skips an attempt that already
+  has a recorded `attempt_history` row.
+- `dashboard_task_event_v1` derives an `enqueued` event with details `{ tier: "fast" }`, a `claimed`
+  event unless a recorded one exists, and a terminal event named `COALESCE(closed_as, state)`.
+- `dashboard_task_result_v1` reads the result from either outcome table.
+
+`queue_health_v1` counts live fast-tier rows in its state counts and its deadline and timeout
+pressure, reporting a delayed ready row as `scheduled`. It unions fast outcomes into its terminal
+counts under the same scan cap. A fast outcome's `history_through_at` is its
+`finished_at`. `aggregate_stats_v1` derives the enqueue, attempt, and terminal counts of fast-tier
+tasks from the two fast tables, because they write no events.
+
+### Workers on a fast-tier queue
+
+A worker does not configure the tier. Each SDK worker probes a queue with a fast claim through
+`complete_many_and_claim_v1`. A `P1007` answer marks the queue full-tier for 30 seconds, and the
+worker claims through `claim_many_v1` until the next probe. The interval is
+`TIER_PROBE_INTERVAL_MS` in TypeScript, `_TIER_PROBE_INTERVAL_SECONDS` in Python, and
+`TIER_PROBE_INTERVAL` in Rust. A stale belief is safe, because PostgreSQL routes each claim by the
+current tier.
+
+A fast-tier completion uses the fused statement. A `batched completion` rejection means the queue
+left the fast tier, so the worker falls back to `complete_v1`. Every SDK worker
+fuses a completion with a refill claim, for `freeSlots() + 1` tasks under the refill-batch rule, and
+hand the slot over directly. In Python, `Worker._reserve_completion_claim` reserves those slots and
+`Worker._send_batched_completion` sends one statement per queue and cohort at a time. Completions
+that arrive while it is in flight share the next statement, split into chunks of at most 100 tasks
+and 100 claimed slots. `Worker._send_completion_chunk` names each chunk's tasks in task ID order.
+When PostgreSQL rolls the chunk back with SQLSTATE `40P01`, `_fenced_write_rows` sends the chunk
+again, up to `FENCED_WRITE_DEADLOCK_ATTEMPTS` (3) times in total, because nothing in it committed. The Go worker's
+limit is the free slots plus one, capped by the free slots of the completing task's cohort plus one.
+The Rust worker's limit follows the Go rule.
+
+The TypeScript and Python workers split their slots into cohorts so that fused completions do not
+run in lockstep ([ADR 0076](decisions/0076-keep-overlapping-batched-claims-in-flight-to-fill-worker-slots.md#cohorts-for-batched-completions)).
+`WorkerOptions.cohorts` is a safe integer from 1 through `concurrency`. Without it,
+`defaultDispatchCohorts(concurrency, spareConnections)` returns 1 below concurrency 8, and otherwise
+`ceil(concurrency / 8)` clamped to 2 through 8. When the queue's database is itself a pool with a
+positive `options.max`, `Queue[workerStatementPoolCapacity]()` reports that size, and
+`spareConnections` is `max` minus 1 for the listener when `supportsTaskNotifications()` holds,
+minus 1 for the heartbeat connection unless `sharedHeartbeats` is true. The default is then capped
+at `spareConnections`, and never below 1: pools of 3, 4, 6 and 10 connections give a
+concurrency-64 worker 1, 2, 4 and 8 cohorts. A database with an attached pool, such as a Prisma or
+Kysely adapter, runs statements outside that pool, so its default is not capped. An explicit
+`cohorts` is never capped. Python's `Worker(cohorts=...)` takes an integer from 1 through
+`concurrency`, and `_dispatch_cohorts(concurrency, spare_connections)` applies the same default.
+`spare_connections` is the pool's `max_size`, or its `get_max_size()`, minus 1 for the listener,
+minus 1 for the heartbeat connection unless `shared_heartbeats` is true. A pool whose size is
+unknown leaves the default uncapped. Cohort `i` owns `floor(concurrency / cohorts)`
+slots, plus one when `i < concurrency % cohorts`. `ClaimLeaseFenceModule` batches concurrent
+completions by worker, queue, lease, and `CompletionClaim.cohort`, so a batch never spans cohorts.
+A fused claim asks for at most its cohort's free slots, and the tasks it leases join that cohort.
+While no claim is in flight, a plain claim fills the cohort with the most free slots, and the
+first claim asks for one cohort's share. While any configured queue answers full-tier, the worker
+ignores cohorts and dispatches as one group.
+
+The Go worker splits its slots the same way. `WorkerOptions.Cohorts` is an integer from 1 through
+`Concurrency`, and `NewWorker` rejects any other explicit value with `worker cohorts must be between
+1 and the concurrency`. Zero selects `defaultDispatchCohorts(concurrency, spareConnections)`, which
+uses the TypeScript rule. `spareConnections` is the pool's `MaxConns`, minus 1 for the listener
+unless `PollingOnly` is set, minus 1 for the heartbeat connection unless `SharedHeartbeats` is set.
+An explicit `Cohorts` is never capped. The worker's `completionBatcher` groups concurrent fast-tier
+completions by queue and cohort, and keeps one `complete_many_and_claim_v1` call in flight per group.
+A call carries at most `completionBatchLimit` (100) completions, and its claim limits sum to at most 100. The call names its tasks in task ID order, and `heartbeat_many_v1` names its leases in the
+same order. The fused claim releases a lock it would otherwise keep on a candidate another worker
+leased first ([Fast claim](#fast-claim)). When PostgreSQL still rolls a statement back with SQLSTATE
+`40P01`, `queryFencedWrite` sends it again, up to `fencedWriteDeadlockAttempts` (3) times in total.
+
+The Rust worker follows the same rules. Its `default_cohorts` caps the default at the pool's
+`max_size`, minus 1 for the heartbeat connection unless `shared_heartbeats` is true; its listener
+opens a connection outside the pool. `Inner::complete_batched` sends the completions of one queue
+and cohort that finish in the same scheduler turn as one `complete_many_and_claim_v1` statement of
+at most 100 completions. When that statement raises `FastTierUnsupported`, each completion falls
+back to `complete_v1`. The worker sorts each statement's task ids. When PostgreSQL still rolls a
+statement back with SQLSTATE `40P01`, `fenced_rows` sends it again, up to
+`FENCED_WRITE_DEADLOCK_ATTEMPTS` (3) times in total, because nothing in it committed.
+
+A fast-tier handler context rejects durable execution locally with `FastTierUnsupportedError` for
+the task's queue:
+
+| Call                                        | Feature text    |
+| ------------------------------------------- | --------------- |
+| `setProgress`                               | `progress`      |
+| `checkpoint`                                | `checkpoints`   |
+| `sleep`, `sleepUntil`                       | `durable waits` |
+| `waitForSignal`                             | `signal waits`  |
+| `waitForHuman`                              | `human waits`   |
+| `runChild`, `runChildren`, `runChildrenAll` | `child tasks`   |
+
+The rejection is a handler failure, so the attempt follows the task's retry policy.
+
 ## Read models and health
 
 `Admin.getTask(id)` joins the stable `task` identity and accepted definition to both lifecycle relations and coalesces the one that exists, preserving `retryPolicy` plus cancellation-request metadata for active work.
@@ -2661,13 +3323,13 @@ Core owns the dashboard's relational read contract. The version 1 views expose t
 - `dashboard_task_outcome_v1`: `task_id`, `state`, `current_attempt`, `run_at`, `error`, `finished_at`, `updated_at`. `result` is absent; read it through `dashboard_task_result_v1`.
 - `dashboard_task_progress_v1`: `task_id`, `progress_value`, `revision`, `attempt`, `fence_token`, `worker_id`, `created_at`, `updated_at`.
 - `dashboard_task_query_v1`: `task_id`, `queue_name`, `task_type`, `created_at`. The routing projection is indexed on `queue_name` and on `task_type`. A facet list therefore seeks one row per distinct value, and a task list filtered by queue or task type prunes on the same indexes.
-- `dashboard_task_runtime_v1`: `task_id`, `queue_name`, `state`, `current_attempt`, `fence_token`, `run_at`, `ready_at`, `worker_id`, `acquired_at`, `heartbeat_at`, `expires_at`, `attempt_timeout_at`, `wait_name`, `attempt_started_at`, `cancel_requested_at`, `cancel_requested_by`, `cancel_reason`, `error`, `updated_at`.
+- `dashboard_task_runtime_v1`: `task_id`, `queue_name`, `state`, `current_attempt`, `fence_token`, `run_at`, `ready_at`, `worker_id`, `acquired_at`, `heartbeat_at`, `expires_at`, `attempt_timeout_at`, `wait_name`, `attempt_started_at`, `cancel_requested_at`, `cancel_requested_by`, `cancel_reason`, `error`, `updated_at`, `priority`.
 - `dashboard_task_v1`: `id`, `queue_name`, `task_type`, `concurrency_key`, `payload`, `payload_redact_keys`, `result_redact_keys`, `tags`, `max_attempts`, `retry_policy`, `deadline_at`, `execution_timeout_ms`, `created_at`, `priority`. `payload` is `redact_top_level_keys_v1(payload, payload_redact_keys)`; the key arrays are projected so a reader can report how many keys were withheld.
 - `dashboard_task_wait_v1`: `task_id`, `wait_name`, `mode`, `duration_ms`, `requested_wake_at`, `wake_at`, `attempt`, `fence_token`, `worker_id`, `created_at`.
 - `dashboard_maintenance_policy_v1`: `singleton`, `timezone`, `partition_preparation_interval_ms`, `terminal_cleanup_interval_ms`, `history_retention_local_time`, `statistics_rollup_interval_ms`, `statistics_group_limit`, `statistics_recompute_buckets`, `updated_at`.
 - `dashboard_maintenance_run_v1`: `run_id`, `routine_name`, `started_at`, `completed_at`, `outcome`, `rows_affected`, `phases`.
 - `dashboard_maintenance_state_v1`: `routine_name`, `last_started_at`, `last_completed_at`, `last_completed_local_date`.
-- `dashboard_queue_control_v1`: `queue_name`, `paused`.
+- `dashboard_queue_control_v1`: `queue_name`, `paused`, `tier`, `record_attempts`, `record_claims`.
 - `dashboard_rate_limit_policy_v1`: `queue_name`.
 - `dashboard_retention_policy_v1`: `singleton`, `task_event_retention_days`, `attempt_history_retention_days`.
 - `dashboard_schedule_definition_v1`: `namespace`, `schedule_name`, `cron_expression`, `timezone`, `queue_name`, `task_type`, `configured_enabled`, `paused`, `paused_by`, `paused_reason`, `paused_at`, `revision`, `updated_at`, `priority`.
@@ -2834,8 +3496,11 @@ total, phase timings, and phase errors.
 calls `queue_health_v1()` once per invocation. If the task estimate is at least 50,000, it runs one
 `EXPLAIN (FORMAT JSON)` probe for each known queue and terminal state and reads `Plan Rows`.
 Every probe uses `dashboard_task_v1` and `dashboard_task_outcome_v1`. Below the threshold, it runs
-one exact grouped terminal-count query. `dashboard_iso_v1(p_value timestamptz)` renders procedure
-timestamps in UTC with millisecond precision and a `Z` suffix.
+one exact grouped terminal-count query. Since schema version 37, each queue row carries `tier`,
+`recordAttempts`, and `recordClaims` from `queue_control`. A queue without a control row reports
+`full`, `false`, and `false`. An older schema omits the three keys, and the Queues page shows a dash
+in its Tier column. `dashboard_iso_v1(p_value timestamptz)` renders procedure timestamps in UTC with
+millisecond precision and a `Z` suffix.
 
 `dashboard_human_waits_v1(p_input jsonb)` accepts `canComplete` and `canSignal`. It returns the
 first 50 human waits in `(created_at, task_id, token_name)` order. It returns the first 50 signal
@@ -3241,6 +3906,8 @@ The TypeScript runtime emits `workhorse.enqueue`, `workhorse.claim`, `workhorse.
 `workhorse.queue.name`, because spans are sampled event records rather than metric dimensions.
 Single-request enqueue spans also carry the bounded `workhorse.enqueue.outcome` returned by
 PostgreSQL.
+A worker probes an unfamiliar queue with a fast claim. When the queue is on the full tier, the
+`workhorse.claim` span ends without an error status and carries `workhorse.queue.tier = "full"`.
 Workhorse emits at most eight attributes on one span and exports
 `TRACE_ATTRIBUTE_COUNT_LIMIT = 8` for matching SDK span limits.
 
@@ -3276,7 +3943,7 @@ histograms still record them.
 `workhorse.worker_registry.pruned` uses debug when no stale registrations exist.
 
 Info event names are `workhorse.tasks.promoted`, `workhorse.leases.recovered`,
-`workhorse.queue.paused`, `workhorse.queue.resumed`, `workhorse.queue.purged`,
+`workhorse.queue.paused`, `workhorse.queue.resumed`, `workhorse.queue.tier_set`, `workhorse.queue.purged`,
 `workhorse.schedules.synchronized`, `workhorse.schedule.fired`,
 `workhorse.tasks.redrive_processed`, `workhorse.task.run_now_requested`,
 `workhorse.task.cancellation_processed`, `workhorse.task.cancellation_acknowledged`,
@@ -3490,8 +4157,9 @@ Workhorse owns the following SQLSTATE registry. `schema-sqlstates.test.ts` scans
 | `P1004`  | Child creation lost the parent lease | SQL converts it to the child operation's `stale` status |
 | `P1005`  | Dependency graph bound exceeded      | `DependencyLimitExceededError`                          |
 | `P1006`  | Purge idempotency conflict           | `PurgeIdempotencyConflictError`                         |
+| `P1007`  | Fast-tier queue rejects a feature    | `FastTierUnsupportedError`                              |
 
-`Queue` decodes each exposed error's diagnostics from `DETAIL`. A payload failing shape validation is discarded in favor of sanitized placeholder details rather than propagated, since `DETAIL` is diagnostic text an operator or an ORM can also write.
+`Queue` decodes each exposed error's diagnostics from `DETAIL`. [Rejected features and `P1007`](#rejected-features-and-p1007) lists every feature text and the matching Python, Go, and Rust errors. A payload failing shape validation is discarded in favor of sanitized placeholder details rather than propagated, since `DETAIL` is diagnostic text an operator or an ORM can also write.
 
 `expectOneRow(result, source)` takes the single row a statement is defined to return and throws `MissingRowError` naming `source` when the result is empty. An empty result from a set-returning function that declares one row means the installed schema and this client disagree.
 
@@ -3648,9 +4316,9 @@ a value that is not an object with string `createdAt`, `taskId`, and `name` fiel
 exiting 64. This command lists boundaries only; `admin signal` and `admin complete-human` answer them.
 
 Guarded commands are `admin cancel <task-id>`, `admin redrive <task-id>`, `admin pause <queue>`,
-`admin resume <queue>`, `admin purge <queue>`, `admin pause-worker <worker-id>`, and
-`admin resume-worker <worker-id>`, `admin redrive-many`, `admin signal <task-id>`, and
-`admin complete-human <task-id>`. Two independent checks gate every mutation:
+`admin resume <queue>`, `admin purge <queue>`, `admin set-tier <queue>`, `admin set-history <queue>`,
+`admin pause-worker <worker-id>`, `admin resume-worker <worker-id>`, `admin redrive-many`,
+`admin signal <task-id>`, and `admin complete-human <task-id>`. Two independent checks gate every mutation:
 
 1. **Explicit target environment.** The command requires `--env <database>`, and
    `WorkhorseAdminClient.confirmEnvironment` compares it against `current_database()` on the live
@@ -3663,7 +4331,8 @@ Guarded commands are `admin cancel <task-id>`, `admin redrive <task-id>`, `admin
    queue name, or worker id — at a prompt written to stderr; a mismatched answer changes nothing
    and exits 1. A non-interactive session without `--yes` is a usage error.
 
-Every guarded command except `admin cancel`, `admin signal`, and `admin complete-human` requires `--reason`.
+Every guarded command except `admin cancel`, `admin signal`, `admin complete-human`, and
+`admin set-history` requires `--reason`.
 They record `--actor` (default `workhorse-admin`). Existing controls default `--request-id` to a random UUID;
 bulk recovery execution and external-wait delivery require it explicitly. Redrive and purge use the
 request identity for idempotency; scripts must preserve it on retries. `admin purge` prints the deleted row count and emits it as
@@ -3705,6 +4374,26 @@ JSON output is `SignalDeliveryResult` or `HumanWaitCompletionResult`, with dates
 `delivered`, `completed`, and `duplicate` succeed. `not_found`, `not_waiting`, `already_delivered`,
 `already_completed`, and `stale` exit 1; conflicts also fail without replacing the accepted answer.
 
+`admin set-tier <queue> --tier <fast|full>` calls `Admin.setQueueTier` with `--actor` and
+`--reason` and emits `{queue, tier}` under `--json`. It rejects `--request-id` with exit 64, because
+`set_queue_tier_v1` records none. A `P1007` refusal from `set_queue_tier_v1` prints `Refused:` and
+exits 1. The command words the refusal itself instead of printing the `FastTierUnsupportedError`
+message, which calls every refused queue fast-tier. Feature `tier change` prints that the queue has
+live tasks; a policy feature prints that the queue cannot move to the fast tier.
+`admin set-history <queue>` takes `--record-attempts <on|off>`, `--record-claims <on|off>`, or both,
+and calls `Admin.setQueueHistory`; an omitted flag keeps its setting. It emits
+`{queue, tier, recordAttempts, recordClaims}` under `--json`. Because `set_queue_history_v1` records no
+audit, the command rejects `--actor`, `--reason`, and `--request-id` with exit 64.
+`set_queue_history_v1` accepts any queue name and upserts its `queue_control` row, so the command
+reads `queue_control` and `Admin.queueMetricSnapshot` before the change. It writes a `Note:` to
+stderr when the queue is on the full tier, whose history the switches do not change. It writes a
+`Warning:` to stderr when the queue had neither a control row nor a live task, which usually means a
+misspelled name. Neither message changes the exit code.
+`admin queues` reads `tier`, `record_attempts`, and `record_claims` from `queue_control` into
+`AdminQueueStatus`. A queue without a control row reports `full` with both switches off. Its table
+adds `TIER` and `HISTORY` columns, which the TUI queues view shares. `HISTORY` is `all` for a
+full-tier queue, and otherwise `none` or the enabled switches, such as `attempts,claims`.
+
 `admin pause-worker` and `admin resume-worker` write `workhorse.worker_registry.paused` through
 `Admin.setWorkerPaused` and emit the stored `WorkerPauseResult` — `workerId`, `paused`, `pausedBy`,
 `reason`, `pausedAt`, and `lastHeartbeatAt` — under `--json`. A worker id carrying no registration
@@ -3728,9 +4417,9 @@ interactive stdin and stdout is refused with exit 1.
 
 ## Operational limits
 
-- The canonical artifact installs version 23, the whole current schema. Version 6 is the migration
+- The canonical artifact installs version 24, the whole current schema. Version 6 is the migration
   baseline and is frozen as `sql/releases/0006.sql`. A schema change is an upgrade rather than a
-  reinstall: `migrateSchema` applies the ordered steps under `sql/migrations/`, which run from 6 to 23. A database below 6 is not carried forward
+  reinstall: `migrateSchema` applies the ordered steps under `sql/migrations/`, which run from 6 to 24. A database below 6 is not carried forward
   ([ADR 0073](decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)).
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
   `uuid_v7_v1()` uses core UUID and byte functions rather than `pgcrypto` or `uuid-ossp`.
@@ -3777,7 +4466,8 @@ interactive stdin and stdout is refused with exit 1.
   That subscriber still observes an `UNLISTEN` failure. The listener keeps its `error` handler until
   release, and a throwing `onNotificationError` never stops the listener.
 - Notification-capable `Worker.run()` uses a 5,000 ms default fallback poll with ±10% jitter. A
-  notification adds a random delay from 0 through 50 ms before claiming. An explicit `pollMs`
+  notification that arrives after an empty claim adds a random delay from 0 through 50 ms before
+  claiming. An explicit `pollMs`
   replaces the fallback base. While no listener is active, consecutive empty waits double through a
   5,000 ms cap, with ±10% jitter. Query-only adapters start at 250 ms. `runOnce()` retains the 250 ms
   compatibility default and never opens a listener. Every pass uses authoritative `claim_many_v1`
