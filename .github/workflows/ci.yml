@@ -1,6 +1,8 @@
-# Public CI policy lives in docs/decisions/0043-public-ci-and-release-policy.md. Pull requests and
-# pushes run the newest supported combination. Daily runs verify packed installs, and weekly runs
-# exercise every language/database combination declared in support.json.
+# Public CI policy lives in docs/decisions/0043-public-ci-and-release-policy.md and
+# docs/decisions/0082-run-each-language-suite-once-per-change.md. Pull requests and pushes run each
+# language's suite once, on the newest supported combination. Daily runs verify packed installs.
+# Weekly runs exercise every language/database combination declared in support.json and every
+# variation of a suite, such as Go's race detector and Rust without optional features.
 name: CI
 
 on:
@@ -46,6 +48,7 @@ jobs:
       typescript: ${{ steps.matrix.outputs.typescript }}
       python: ${{ steps.matrix.outputs.python }}
       go: ${{ steps.matrix.outputs.go }}
+      rust: ${{ steps.matrix.outputs.rust }}
       packed: ${{ steps.matrix.outputs.packed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -289,6 +292,7 @@ jobs:
       - run: pnpm db:reset:test
       - run: pnpm go:test
       - run: pnpm go:test:race
+        if: github.event.schedule == '17 4 * * 0'
 
   runtime-smoke:
     name: runtime smoke (${{ matrix.runtime }})
@@ -377,15 +381,18 @@ jobs:
       - run: pnpm test:packed
 
   rust:
-    name: Rust protocol and release harness
-    # Pull requests, pushes, and the weekly compatibility schedule run this lane. The daily packed
-    # schedule intentionally skips it; the aggregate required job accepts that planned skip.
+    name: Rust (postgres ${{ matrix.postgres }})
+    needs: plan
     if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.plan.outputs.rust) }}
     services:
       postgres:
-        image: postgres:18-alpine
+        image: postgres:${{ matrix.postgres }}-alpine
         env:
           POSTGRES_USER: workhorse
           POSTGRES_PASSWORD: workhorse
@@ -422,16 +429,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes postgresql-common
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install --yes postgresql-client-18
-          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+          sudo apt-get install --yes postgresql-client-${{ matrix.postgres }}
+          echo "/usr/lib/postgresql/${{ matrix.postgres }}/bin" >> "$GITHUB_PATH"
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:reset:test
+      # `rust:test` runs the whole suite once, with every optional feature on.
       - run: pnpm rust:gates
       # The snapshot builds rustdoc JSON on the pinned toolchain, so it runs here, where that
       # toolchain and the Cargo cache already are, rather than in the static job. See ADR 0079.
       - run: pnpm rust-api:check
-      - run: pnpm rust:integration
+      - run: pnpm rust:test:no-features
+        if: github.event.schedule == '17 4 * * 0'
       - run: pnpm rust:package-check
+        if: github.event.schedule == '17 4 * * 0'
 
   demo:
     name: demo and site smoke

@@ -149,12 +149,17 @@ when an unlisted fixture does not pass, and when a listed fixture passes. A Rust
 `docs/parity.md` cites passing fixtures or one test function that `pnpm rust:integration` runs.
 `pnpm parity:check` rejects any other evidence.
 
+`pnpm rust:test` runs the whole workspace once with every optional feature on, and CI runs it on
+every change. `pnpm rust:test:no-features` runs it with the default features, and the weekly CI
+schedule runs it. `pnpm rust:integration` runs only the PostgreSQL targets.
+
 Run the scoped checks from the repository root:
 
 ```sh
 pnpm rust:format:check
 pnpm rust:clippy
 pnpm rust:test
+pnpm rust:test:no-features
 pnpm rust:integration
 pnpm rust:package-check
 pnpm rust:release-check
