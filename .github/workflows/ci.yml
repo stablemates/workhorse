@@ -412,7 +412,9 @@ jobs:
         with:
           toolchain: 1.89.0 # Pinned to the rust version in mise.toml.
           components: rustfmt, clippy
-          cache-workspaces: rust
+          # The Cargo workspace is the repository root, so the action's default caches `target/`.
+          # Naming `rust` here cached a `rust/target` that never exists, and every run rebuilt
+          # the whole dependency graph.
           # The action defaults to `-D warnings`; `rust:clippy` already denies warnings itself.
           rustflags: ""
       - name: Install matching PostgreSQL client
