@@ -11,7 +11,11 @@ import {
   SUPPORTED_POSTGRES_MAJORS,
 } from "../src/support.js";
 import { publishedPackages } from "../../../scripts/packages.js";
-import { buildCiMatrices, WEEKLY_COMPATIBILITY_SCHEDULE } from "../../../scripts/ci-matrix.js";
+import {
+  buildCiMatrices,
+  RUBY_TESTED,
+  WEEKLY_COMPATIBILITY_SCHEDULE,
+} from "../../../scripts/ci-matrix.js";
 
 // A supported-version contract is only worth stating if the statement and the thing that tests it
 // cannot drift apart. support.json is the source of truth; everything below is a consumer of it,
@@ -56,6 +60,7 @@ interface SupportManifest {
     readonly go: string;
     readonly node: string;
     readonly pnpm: string;
+    readonly ruby: string;
     readonly rust: string;
     readonly uv: string;
   };
@@ -194,6 +199,7 @@ describe("supported version constants", () => {
       node: manifest.toolchains.node,
       pnpm: manifest.toolchains.pnpm,
       python: manifest.support.python.minimum,
+      ruby: manifest.toolchains.ruby,
       rust: manifest.toolchains.rust,
       uv: manifest.toolchains.uv,
     });
@@ -377,6 +383,7 @@ describe("continuous integration", () => {
     expect(pullRequest.python.include).toEqual([{ python: "3.14", postgres: 18 }]);
     expect(pullRequest.go.include).toEqual([{ go: "1.25", postgres: 18 }]);
     expect(pullRequest.rust.include).toEqual([{ postgres: 18 }]);
+    expect(pullRequest.ruby.include).toEqual([{ ruby: "4.0", postgres: 18 }]);
     expect(pullRequest.packed.include).toEqual([{ node: 24 }]);
     expect(push).toEqual(pullRequest);
 
@@ -389,6 +396,9 @@ describe("continuous integration", () => {
     expect(full.go.include).toHaveLength(manifest.support.postgres.tested.length);
     expect(full.rust.include).toEqual(
       manifest.support.postgres.tested.map((postgres) => ({ postgres })),
+    );
+    expect(full.ruby.include).toHaveLength(
+      RUBY_TESTED.length * manifest.support.postgres.tested.length,
     );
     expect(full.packed.include).toEqual([{ node: 24 }]);
     for (const node of manifest.support.node.tested) {
@@ -413,7 +423,7 @@ describe("continuous integration", () => {
     expect(workflow).toContain("schedule:");
     expect(workflow).toContain("name: required");
     expect(workflow).toContain(
-      "needs: [plan, static, unit, typescript, python, go, runtime-smoke, packed, rust, demo]",
+      "needs: [plan, static, unit, typescript, python, go, runtime-smoke, packed, rust, ruby, demo]",
     );
     expect(workflow).toContain('cron: "17 4 * * 0" # Weekly full compatibility matrix.');
     expect(workflow.match(/- cron:/g)).toHaveLength(1);
@@ -424,12 +434,12 @@ describe("continuous integration", () => {
       workflow.match(
         /if: github\.event_name != 'schedule' \|\| github\.event\.schedule == '17 4 \* \* 0'/g,
       ),
-    ).toHaveLength(8);
+    ).toHaveLength(9);
     expect(workflow).toContain('all(.[]; .result == "success" or .result == "skipped")');
     expect(workflow).toContain(
       "name: demo and site smoke\n    if: github.event_name != 'schedule'",
     );
-    expect(workflow.match(/max-parallel: 2/g)).toHaveLength(4);
+    expect(workflow.match(/max-parallel: 2/g)).toHaveLength(5);
     expect(workflow).toContain("pnpm --silent exec tsx scripts/ci-matrix.ts");
   });
 
@@ -445,6 +455,9 @@ describe("continuous integration", () => {
     expect(workflow).toContain(`- run: pnpm rust:package-check${weekly}`);
     expect(workflow).not.toContain("pnpm rust:integration");
     expect(workflow).toContain("matrix: ${{ fromJSON(needs.plan.outputs.rust) }}");
+    expect(workflow).toContain("matrix: ${{ fromJSON(needs.plan.outputs.ruby) }}");
+    expect(workflow).toContain("- run: pnpm ruby:gates");
+    expect(scripts["ruby:gates"]).toContain("WORKHORSE_REQUIRE_DATABASE=1 pnpm ruby:test");
 
     expect(scripts["rust:test"]).toContain("cargo test --workspace --all-features");
     expect(scripts["rust:test:no-features"]).toContain("cargo test --workspace");

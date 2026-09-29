@@ -1,0 +1,14 @@
+# frozen_string_literal: true
+
+require "rake/testtask"
+require "rubocop/rake_task"
+
+Rake::TestTask.new(:test) do |task|
+  task.libs << "lib" << "test"
+  task.test_files = FileList["test/**/*_test.rb"]
+  task.warning = true
+end
+
+RuboCop::RakeTask.new(:lint)
+
+task default: %i[lint test]

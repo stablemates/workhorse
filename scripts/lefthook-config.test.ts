@@ -25,4 +25,10 @@ describe("lefthook Rust and generated-artifact routing", () => {
     expect(config).toContain("run: mise exec -- pnpm parity:check");
     expect(config).toContain("run: mise exec -- pnpm rust:conformance:check");
   });
+
+  it("routes staged Ruby files to RuboCop and the generated catalogue to its check", () => {
+    expect(config).toContain('glob: "ruby/**"');
+    expect(config).toContain("run: mise exec -- pnpm ruby:lint");
+    expect(config).toContain("ruby/lib/stablemates/workhorse/sql_catalogue_generated.rb}");
+  });
 });

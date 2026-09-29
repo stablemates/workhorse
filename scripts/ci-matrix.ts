@@ -14,11 +14,18 @@ interface Matrix<T> {
 
 export const WEEKLY_COMPATIBILITY_SCHEDULE = "17 4 * * 0";
 
+/**
+ * The Ruby releases the gem supports, per ADR 0075. The gem is unreleased, so they live here
+ * rather than in `support.json` until its first release publishes a support policy.
+ */
+export const RUBY_TESTED = ["3.3", "3.4", "4.0"] as const;
+
 export interface CiMatrices {
   readonly typescript: Matrix<{ readonly node: number; readonly postgres: number }>;
   readonly python: Matrix<{ readonly python: string; readonly postgres: number }>;
   readonly go: Matrix<{ readonly go: string; readonly postgres: number }>;
   readonly rust: Matrix<{ readonly postgres: number }>;
+  readonly ruby: Matrix<{ readonly ruby: string; readonly postgres: number }>;
   readonly packed: Matrix<{ readonly node: number }>;
 }
 
@@ -40,7 +47,13 @@ export function buildCiMatrices(support: Support, eventName: string, schedule = 
   const newestNode = support.node.tested.at(-1);
   const newestPostgres = support.postgres.tested.at(-1);
   const newestPython = support.python.tested.at(-1);
-  if (newestNode === undefined || newestPostgres === undefined || newestPython === undefined)
+  const newestRuby = RUBY_TESTED.at(-1);
+  if (
+    newestNode === undefined ||
+    newestPostgres === undefined ||
+    newestPython === undefined ||
+    newestRuby === undefined
+  )
     throw new Error("CI support lists cannot be empty");
 
   if (eventName !== "schedule" || schedule !== WEEKLY_COMPATIBILITY_SCHEDULE) {
@@ -55,6 +68,7 @@ export function buildCiMatrices(support: Support, eventName: string, schedule = 
         include: [{ go: goVersion, postgres: newestPostgres }],
       },
       rust: { include: [{ postgres: newestPostgres }] },
+      ruby: { include: [{ ruby: newestRuby, postgres: newestPostgres }] },
       packed: { include: [{ node: newestNode }] },
     };
   }
@@ -73,6 +87,7 @@ export function buildCiMatrices(support: Support, eventName: string, schedule = 
       })),
     },
     rust: { include: support.postgres.tested.map((postgres) => ({ postgres })) },
+    ruby: { include: crossProduct("ruby", RUBY_TESTED, "postgres", support.postgres.tested) },
     packed: { include: [{ node: newestNode }] },
   };
 }

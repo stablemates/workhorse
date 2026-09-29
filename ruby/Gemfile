@@ -1,0 +1,12 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+gemspec
+
+group :development do
+  gem "activerecord", ">= 8.0", "< 9"
+  gem "minitest", "~> 5.25"
+  gem "rake", "~> 13.2"
+  gem "rubocop", "~> 1.75", require: false
+end

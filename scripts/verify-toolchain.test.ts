@@ -288,6 +288,16 @@ describe("the tools a repository command starts", () => {
     ]);
   });
 
+  it("checks Bundler once ruby is pinned, including inside a shell script", () => {
+    expect(toolsNamedBy("bundle", ["exec", "rake"], checkable)).toEqual([]);
+    expect(
+      toolsNamedBy("sh", ["-c", "cd ruby && bundle exec rake test"], new Set(["ruby"])),
+    ).toEqual([
+      { tool: "ruby", executable: "ruby" },
+      { tool: "bundle", executable: "bundle" },
+    ]);
+  });
+
   it("checks nothing for a command no pin covers", () => {
     expect(toolsNamedBy("tsx", ["scripts/portless.ts"], checkable)).toEqual([]);
   });
