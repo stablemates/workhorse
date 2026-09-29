@@ -41,11 +41,13 @@ import {
   type EventsLocationState,
 } from "../events-location.js";
 import {
+  parseTaskLocation,
   taskCursorSpent,
   taskDetailNavigation,
   taskListingHeadHref,
   taskListingKey,
   taskListingPinned,
+  taskLocationHref,
 } from "../task-location.js";
 import { notifyDashboard, notifyEnqueueTest, notifyFailure } from "../notifications.js";
 import type { MaintenancePolicyDefinition, MaintenancePolicySetting } from "@stablemates/workhorse";
@@ -980,8 +982,8 @@ export function useDashboardController(
       <CronPage
         data={loadState.data.value}
         togglingSchedule={togglingSchedule.value}
-        taskTypeHref={(taskType) =>
-          mountedHref(basePath, `/tasks?type=${encodeURIComponent(taskType)}`)
+        scheduleTasksHref={(queue, taskType) =>
+          mountedHref(basePath, taskLocationHref({ ...parseTaskLocation(""), queue, taskType }))
         }
         setSchedulePaused={(namespace, name, paused) =>
           void toggleSchedule(namespace, name, paused)

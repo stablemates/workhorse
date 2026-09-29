@@ -85,12 +85,13 @@ export function CronPage({
   data,
   togglingSchedule,
   setSchedulePaused,
-  taskTypeHref,
+  scheduleTasksHref,
 }: {
   data: DashboardCronPage;
   togglingSchedule: string | null;
   setSchedulePaused: (namespace: string, name: string, paused: boolean) => void;
-  taskTypeHref: (taskType: string) => string;
+  /** The task listing has no schedule filter, so the link narrows by destination queue and type. */
+  scheduleTasksHref: (queue: string | null, taskType: string) => string;
 }) {
   const schedules = presentSchedules(data);
   const [expandedMaintenance, setExpandedMaintenance] = useState<string | null>(null);
@@ -382,13 +383,13 @@ export function CronPage({
                             )
                           ) : (
                             <Anchor
-                              href={taskTypeHref(schedule.type)}
+                              href={scheduleTasksHref(schedule.queue, schedule.type)}
                               target="_blank"
                               rel="noopener noreferrer"
                               size="sm"
                               fw={600}
                               td="underline"
-                              aria-label={`View tasks of type ${schedule.type} in a new window`}
+                              aria-label={`View tasks of type ${schedule.type} in the ${schedule.queue} queue in a new window`}
                             >
                               <Group component="span" gap={4} wrap="nowrap" justify="flex-end">
                                 <span>{schedule.occurrenceCount ?? 0}</span>

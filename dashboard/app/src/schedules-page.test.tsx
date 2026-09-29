@@ -89,7 +89,8 @@ describe("schedules page", () => {
           data: page,
           togglingSchedule: null,
           setSchedulePaused: () => undefined,
-          taskTypeHref: (taskType: string) => `/tasks?type=${encodeURIComponent(taskType)}`,
+          scheduleTasksHref: (queue: string | null, taskType: string) =>
+            `/tasks?${new URLSearchParams({ queue: queue ?? "", type: taskType })}`,
         }),
       ),
     );
@@ -105,7 +106,10 @@ describe("schedules page", () => {
     expect(html).not.toContain(">Enabled<");
     expect(html).toContain(formatExact("2026-08-26T11:59:59.010Z"));
     expect(html).toContain("23 retained");
-    expect(html).toContain('href="/tasks?type=invoice.generate"');
+    expect(html).toContain('href="/tasks?queue=billing&amp;type=invoice.generate"');
+    expect(html).toContain(
+      'aria-label="View tasks of type invoice.generate in the billing queue in a new window"',
+    );
     expect(html).toContain('target="_blank"');
     expect(html).not.toContain(">system<");
     expect(resumeScheduleWarnings.skip).toContain("skip occurrences missed");
