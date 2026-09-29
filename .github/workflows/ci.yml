@@ -1,8 +1,8 @@
 # Public CI policy lives in docs/decisions/0043-public-ci-and-release-policy.md and
 # docs/decisions/0082-run-each-language-suite-once-per-change.md. Pull requests and pushes run each
-# language's suite once, on the newest supported combination. Daily runs verify packed installs.
-# Weekly runs exercise every language/database combination declared in support.json and every
-# variation of a suite, such as Go's race detector and Rust without optional features.
+# language's suite once, on the newest supported combination. Weekly runs exercise every
+# language/database combination declared in support.json, every variation of a suite, such as Go's
+# race detector and Rust without optional features, and every package check.
 name: CI
 
 on:
@@ -11,7 +11,6 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    - cron: "43 3 * * *" # Daily packed-install verification.
     - cron: "17 4 * * 0" # Weekly full compatibility matrix.
   workflow_dispatch:
 
@@ -293,6 +292,8 @@ jobs:
       - run: pnpm go:test
       - run: pnpm go:test:race
         if: github.event.schedule == '17 4 * * 0'
+      - run: pnpm go:package-check
+        if: github.event.schedule == '17 4 * * 0'
 
   runtime-smoke:
     name: runtime smoke (${{ matrix.runtime }})
@@ -342,7 +343,7 @@ jobs:
   packed:
     name: packed install (node ${{ matrix.node }})
     needs: plan
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '43 3 * * *'
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 4 * * 0'
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 40
     strategy:

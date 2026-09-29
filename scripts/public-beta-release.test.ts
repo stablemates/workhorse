@@ -158,7 +158,7 @@ describe("the public beta line", () => {
   /**
    * The packed smoke checks the notice inside each tarball, so it needs the same definition these
    * tests use. It used to restate the sentence, and the two drifted the moment the wording changed:
-   * the packed job runs on the daily cron rather than on a pull request, so five green pull requests
+   * the packed job runs on a schedule rather than on a pull request, so five green pull requests
    * shipped a notice it still rejected. This keeps it a reader of the notice, not a second author.
    */
   it("keeps the packed smoke a reader of the notice rather than a second author of it", async () => {

@@ -30,7 +30,18 @@ Every variation of a suite runs on the weekly compatibility schedule:
 - the full language and PostgreSQL matrix for TypeScript, Python, Go and Rust;
 - Go's suite under the race detector, through `pnpm go:test:race`;
 - Rust's suite without optional features, through `pnpm rust:test:no-features`;
-- the Rust crate package check, through `pnpm rust:package-check`.
+- a package check for each language.
+
+A package check builds the artifact a registry would receive and installs it in a clean consumer.
+TypeScript runs the packed-install test, Go runs `pnpm go:package-check`, and Rust runs
+`pnpm rust:package-check`. These checks moved from the daily schedule and from pull requests. The
+daily schedule is gone.
+
+Python needs no separate weekly step. Its suite already builds the wheel and source distribution
+and installs each in a clean environment, once bare and once per driver extra. That also covers
+its only optional feature: none of those installs has OpenTelemetry, so the examples run on the
+no-op telemetry path. Go and TypeScript make OpenTelemetry a required dependency, so they have no
+variation without it.
 
 `pnpm rust:test` runs the whole Rust workspace once with `--all-features`. It replaces the pair of
 runs that `rust:test` and `rust:integration` made in CI. `pnpm rust:integration` stays as a focused
@@ -38,16 +49,17 @@ local command and as the list of targets that parity evidence may cite. Every ta
 runs under `rust:test`.
 
 `pnpm check` still runs the race detector, and the release workflows still run their full release
-checks. Neither gates pull request feedback.
-
-The daily packed-install run is unchanged. It does not delay a change.
+checks. Neither gates pull request feedback. `pnpm go:release-check` now runs the release tag and
+changelog checks, then the same staged-proxy check as `pnpm go:package-check`.
 
 ## Consequences
 
 A change gets one result per language, and the Rust and Go lanes stop setting the wait for every
 pull request.
 
-A regression that only a variation exposes surfaces up to a week later. Examples are a data race or
-Rust code that compiles only with a feature on. The scheduled-failure issue from ADR 0043 reports
+A regression that only a variation exposes surfaces up to a week later. Examples are a data race,
+Rust code that compiles only with a feature on, or a file a package leaves out. Before this
+decision, the packed-install run found packaging regressions within a day. Every release path
+still runs its package check before it publishes, so a broken artifact cannot ship. The scheduled-failure issue from ADR 0043 reports
 it. A contributor who touches concurrent Go code or feature-gated Rust code should run
 `pnpm go:test:race` or `pnpm rust:test:no-features` before asking for review.

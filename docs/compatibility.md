@@ -33,8 +33,8 @@ This boundary is about correctness only. It is not a performance claim; see
 | PostgreSQL | 15, 16, 17, 18 | 15      | 15: 2027-11-11, 16: 2028-11-09, 17: 2029-11-08, 18: 2030-11-14 | No extension beyond the default `plpgsql` is installed. |
 
 Pull requests and pushes run the newest Node.js and PostgreSQL versions. The weekly schedule runs
-every Node.js and PostgreSQL combination. The daily schedule runs the packed-package test on the
-newest Node.js version, and manual runs combine the latest-version lanes with that packed test.
+every Node.js and PostgreSQL combination. It also runs the packed-package test on the newest
+Node.js version, and manual runs combine the latest-version lanes with that packed test.
 Demo and site smoke tests are temporarily disabled.
 
 Package managers: the repository is developed with pnpm, and the packed-install test installs the
@@ -57,7 +57,8 @@ lane exercises enqueue through pgx transactions, pgx pools, and `database/sql` w
 also compiles and runs a separate module through a local `replace` directive. Another external
 module builds every Go example through the public import path. These tests prove the exported module
 surface without repository-only imports. Pull requests and pushes run Go against the newest
-PostgreSQL. The weekly schedule runs Go against every supported PostgreSQL major.
+PostgreSQL. The weekly schedule runs Go against every supported PostgreSQL major. It also serves the
+module zip from a staged proxy and consumes it from a clean module, as the release rehearsal does.
 
 ### Raising a floor
 
