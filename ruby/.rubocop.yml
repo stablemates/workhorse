@@ -1,36 +1,21 @@
+# RuboCop runs the lint. Standard supplies the rule configuration; this file adds only what
+# Standard leaves to the project.
+require:
+  - standard
+
+plugins:
+  - standard-custom
+  - standard-performance
+  - rubocop-performance
+
+inherit_gem:
+  standard: config/base.yml
+  standard-custom: config/base.yml
+  standard-performance: config/base.yml
+
 AllCops:
   TargetRubyVersion: 3.3
-  NewCops: enable
   SuggestExtensions: false
   Exclude:
     - lib/stablemates/workhorse/sql_catalogue_generated.rb
     - vendor/**/*
-
-Style/Documentation:
-  Exclude:
-    - test/**/*
-
-Metrics/AbcSize:
-  Max: 60
-Metrics/ClassLength:
-  Max: 500
-Metrics/CyclomaticComplexity:
-  Max: 24
-Metrics/PerceivedComplexity:
-  Max: 24
-Metrics/MethodLength:
-  Max: 40
-Metrics/ModuleLength:
-  Max: 300
-Metrics/ParameterLists:
-  Max: 8
-Metrics/BlockLength:
-  Exclude:
-    - test/**/*
-    - "*.gemspec"
-
-Layout/LineLength:
-  Max: 120
-
-Style/StringLiterals:
-  EnforcedStyle: double_quotes

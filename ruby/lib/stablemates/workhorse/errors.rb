@@ -13,7 +13,7 @@ module Stablemates
 
       def initialize(code)
         @code = code
-        super("workhorse compatibility check refused: #{code.to_s.tr('_', '-')}")
+        super("workhorse compatibility check refused: #{code.to_s.tr("_", "-")}")
       end
     end
 

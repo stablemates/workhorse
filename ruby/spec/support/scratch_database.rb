@@ -7,8 +7,8 @@ require "uri"
 #
 # A database test never uses the checkout's `test` database directly. It derives a scratch
 # database from `DATABASE_URL_TEST`, named after that database plus a per-process digest, installs
-# `sql/schema/current.sql` into it, and drops it when the run ends. `pnpm db:sweep` recognizes the
-# same name shape if a teardown never runs.
+# `sql/schema/current.sql` into it, and `spec_helper.rb` drops it after the suite. `pnpm db:sweep`
+# recognizes the same name shape if that hook never runs.
 #
 # Without `DATABASE_URL_TEST` a local run skips with a visible reason. CI, or
 # `WORKHORSE_REQUIRE_DATABASE=1`, turns that skip into a failure, and a database that is set but
@@ -84,7 +84,6 @@ module ScratchDatabase
       end
       # Owned from here on, so a failed schema install still drops the database.
       @name = name
-      Minitest.after_run { drop }
       scratch_url = replace_database(source, name)
       connection = PG.connect(scratch_url, connect_timeout: CONNECT_TIMEOUT)
       begin

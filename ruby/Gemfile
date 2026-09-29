@@ -6,7 +6,8 @@ gemspec
 
 group :development do
   gem "activerecord", ">= 8.0", "< 9"
-  gem "minitest", "~> 5.25"
   gem "rake", "~> 13.2"
-  gem "rubocop", "~> 1.75", require: false
+  gem "rspec", "~> 3.13"
+  gem "rubocop", "~> 1.88", require: false
+  gem "standard", "~> 1.56", require: false
 end

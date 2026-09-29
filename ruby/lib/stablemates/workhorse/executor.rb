@@ -66,7 +66,7 @@ module Stablemates
         when "P1007"
           fields = details(detail)
           FastTierUnsupportedError.new(fields.fetch("queue", "unknown"), fields.fetch("feature", "unknown"),
-                                       fields["ordinal"])
+            fields["ordinal"])
         else DatabaseError.new(error.message, sqlstate)
         end
       end

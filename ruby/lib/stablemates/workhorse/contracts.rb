@@ -10,7 +10,7 @@ module Stablemates
       :sensitive_result_keys
     ) do
       def initialize(payload_schema: true, result_schema: true, max_payload_bytes: nil, max_result_bytes: nil,
-                     sensitive_payload_keys: [], sensitive_result_keys: [])
+        sensitive_payload_keys: [], sensitive_result_keys: [])
         super
       end
     end
@@ -116,10 +116,10 @@ module Stablemates
         return @schema if fragment.empty?
 
         target = if fragment.start_with?("/")
-                   pointer(fragment)
-                 else
-                   @anchors[fragment]
-                 end
+          pointer(fragment)
+        else
+          @anchors[fragment]
+        end
         raise ArgumentError, "invalid contract schema: #{reference} does not resolve" if target.nil?
 
         target
@@ -338,7 +338,7 @@ module Stablemates
         }
       end
 
-      def limit(value) = value.nil? || value.zero? ? SqlCatalogue::DEFAULT_TASK_VALUE_MAX_BYTES : value
+      def limit(value) = (value.nil? || value.zero?) ? SqlCatalogue::DEFAULT_TASK_VALUE_MAX_BYTES : value
     end
   end
 end

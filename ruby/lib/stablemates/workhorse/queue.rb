@@ -22,9 +22,9 @@ module Stablemates
       SIGNAL_STATUSES = %i[delivered duplicate not_waiting already_delivered stale not_found].freeze
       HUMAN_WAIT_STATUSES = %i[completed duplicate not_waiting already_completed stale not_found].freeze
       private_constant :DEFAULT_MAX_ATTEMPTS, :DEFAULT_IDEMPOTENCY_TTL_MS, :MAX_TASK_DEPENDENCIES,
-                       :MAX_EXTERNAL_VALUE_BYTES, :OUTCOMES, :NON_REPLACEABLE_REASONS, :DEPENDENCY_POLICIES,
-                       :DEBOUNCE_SCHEDULES, :CATCHUP_POLICIES, :CANCEL_STATUSES, :TASK_STATES,
-                       :SIGNAL_STATUSES, :HUMAN_WAIT_STATUSES
+        :MAX_EXTERNAL_VALUE_BYTES, :OUTCOMES, :NON_REPLACEABLE_REASONS, :DEPENDENCY_POLICIES,
+        :DEBOUNCE_SCHEDULES, :CATCHUP_POLICIES, :CANCEL_STATUSES, :TASK_STATES,
+        :SIGNAL_STATUSES, :HUMAN_WAIT_STATUSES
 
       attr_reader :default_queue
 
@@ -99,7 +99,7 @@ module Stablemates
         task_id = Values.task_id(task_id)
         document = validate_delivery("signal", "signal payload", name, payload, idempotency_key, requested_by)
         row = deliver(SqlCatalogue::SEND_SIGNAL_V1, "send_signal_v1", task_id, name, document, idempotency_key,
-                      requested_by)
+          requested_by)
         raise SignalIdempotencyConflictError.new(task_id, name) if row.fetch("status") == "conflict"
 
         SignalDeliveryResult.new(
@@ -116,9 +116,9 @@ module Stablemates
       def complete_human_wait(task_id, name, result, idempotency_key:, requested_by:)
         task_id = Values.task_id(task_id)
         document = validate_delivery("human wait", "human wait result", name, result, idempotency_key,
-                                     requested_by)
+          requested_by)
         row = deliver(SqlCatalogue::COMPLETE_HUMAN_WAIT_V1, "complete_human_wait_v1", task_id, name, document,
-                      idempotency_key, requested_by)
+          idempotency_key, requested_by)
         raise HumanWaitIdempotencyConflictError.new(task_id, name) if row.fetch("status") == "conflict"
 
         HumanWaitCompletionResult.new(
@@ -155,7 +155,7 @@ module Stablemates
         end
         assert_compatible
         @executor.rows(SqlCatalogue::SYNC_SCHEDULE_DEFINITIONS_V2,
-                       [namespace, Values.json(document), boolean(prune, "prune").to_s])
+          [namespace, Values.json(document), boolean(prune, "prune").to_s])
         nil
       end
 
@@ -209,7 +209,7 @@ module Stablemates
         end
         Values.check_json(request.payload, "payload")
         input = task_input(request.task_type, request.payload, request.queue, request.priority,
-                           request.concurrency_key, request.max_attempts, request.retry_policy)
+          request.concurrency_key, request.max_attempts, request.retry_policy)
         keyed = request.idempotency || request.debounce || request.throttle
         input["runAt"] = Values.timestamp(request.run_at || now, "run at") if request.run_at || !keyed
         input["deadline"] = request.deadline && Values.timestamp(request.deadline, "deadline")
@@ -225,13 +225,13 @@ module Stablemates
         input
       end
 
+      def optional_integer?(value, range) = value.nil? || (value.is_a?(Integer) && range.cover?(value))
+
       def validate_options(request)
         keyed = [request.idempotency, request.debounce, request.throttle].compact
         raise ArgumentError, "cannot combine idempotency, debounce, or throttle" if keyed.length > 1
-        raise ArgumentError, "priority must be between 0 and 100" unless
-          request.priority.nil? || (request.priority.is_a?(Integer) && request.priority.between?(0, 100))
-        raise ArgumentError, "max attempts must be positive" unless
-          request.max_attempts.nil? || (request.max_attempts.is_a?(Integer) && request.max_attempts >= 0)
+        raise ArgumentError, "priority must be between 0 and 100" unless optional_integer?(request.priority, 0..100)
+        raise ArgumentError, "max attempts must be positive" unless optional_integer?(request.max_attempts, 0..)
         if request.debounce && request.run_at
           raise ArgumentError, "debounced enqueue uses its PostgreSQL-owned window instead of run at"
         end
@@ -259,12 +259,12 @@ module Stablemates
 
         Values.check_json(retry_policy, "retry policy")
         {
-          "queue" => queue.nil? || queue.empty? ? @default_queue : queue,
+          "queue" => (queue.nil? || queue.empty?) ? @default_queue : queue,
           "type" => task_type,
           "payload" => payload,
           "priority" => priority || 0,
           "concurrencyKey" => non_empty(optional_string(concurrency_key, "concurrency key")),
-          "maxAttempts" => max_attempts.nil? || max_attempts.zero? ? DEFAULT_MAX_ATTEMPTS : max_attempts,
+          "maxAttempts" => (max_attempts.nil? || max_attempts.zero?) ? DEFAULT_MAX_ATTEMPTS : max_attempts,
           "retryPolicy" => retry_policy,
           "contractVersion" => nil,
           "payloadMaxBytes" => SqlCatalogue::DEFAULT_TASK_VALUE_MAX_BYTES,
@@ -277,7 +277,7 @@ module Stablemates
       def dependencies_document(dependencies)
         {
           "prerequisiteTaskIds" => dependencies.prerequisite_task_ids
-                                               .map { |id| Values.task_id(id, "prerequisite task ID") }.sort,
+            .map { |id| Values.task_id(id, "prerequisite task ID") }.sort,
           "onSuccess" => choice(dependencies.on_success, DEPENDENCY_POLICIES, "on success"),
           "onFailure" => choice(dependencies.on_failure, DEPENDENCY_POLICIES, "on failure"),
           "onCancellation" => choice(dependencies.on_cancellation, DEPENDENCY_POLICIES, "on cancellation")
@@ -324,13 +324,13 @@ module Stablemates
 
         Values.check_json(task.payload, "payload")
         task_input(task.task_type, task.payload, task.queue, task.priority, task.concurrency_key,
-                   task.max_attempts, task.retry_policy).merge(
-                     "name" => required_string(definition.name, "name"),
-                     "schedule" => required_string(definition.schedule, "schedule"),
-                     "timezone" => required_string(definition.timezone, "timezone"),
-                     "catchupPolicy" => choice(definition.catchup_policy, CATCHUP_POLICIES, "catchup policy"),
-                     "enabled" => boolean(definition.enabled, "enabled")
-                   )
+          task.max_attempts, task.retry_policy).merge(
+            "name" => required_string(definition.name, "name"),
+            "schedule" => required_string(definition.schedule, "schedule"),
+            "timezone" => required_string(definition.timezone, "timezone"),
+            "catchupPolicy" => choice(definition.catchup_policy, CATCHUP_POLICIES, "catchup policy"),
+            "enabled" => boolean(definition.enabled, "enabled")
+          )
       end
 
       # Validates a contracted payload and stamps the contract fields PostgreSQL enforces.
@@ -387,7 +387,7 @@ module Stablemates
         reason = row.fetch("reason")
         raise UnexpectedStatusError.new(:enqueue, outcome) unless OUTCOMES.include?(outcome)
         raise invalid_result unless
-          outcome == "non_replaceable" ? NON_REPLACEABLE_REASONS.include?(reason) : reason.nil?
+          (outcome == "non_replaceable") ? NON_REPLACEABLE_REASONS.include?(reason) : reason.nil?
 
         EnqueueResult.new(task_id: row.fetch("task_id"), outcome: outcome.to_sym)
       end
@@ -442,7 +442,7 @@ module Stablemates
       end
 
       def choice(value, allowed, label)
-        raise ArgumentError, "#{label} must be one of #{allowed.map(&:inspect).join(', ')}" unless
+        raise ArgumentError, "#{label} must be one of #{allowed.map(&:inspect).join(", ")}" unless
           allowed.include?(value)
 
         value.to_s
@@ -456,7 +456,7 @@ module Stablemates
 
       def scope(value) = non_empty(optional_string(value, "scope")) || "default"
 
-      def non_empty(value) = value.nil? || value.empty? ? nil : value
+      def non_empty(value) = (value.nil? || value.empty?) ? nil : value
 
       def required_string(value, label)
         raise ArgumentError, "#{label} must be a non-empty String" unless value.is_a?(String) && !value.empty?

@@ -13,9 +13,9 @@ module Stablemates
       :dependencies
     ) do
       def initialize(task_type:, payload:, queue: nil, priority: nil, concurrency_key: nil, budget: nil,
-                     run_at: nil, deadline: nil, execution_timeout: nil, max_attempts: nil,
-                     retry_policy: nil, tags: nil, idempotency: nil, debounce: nil, throttle: nil,
-                     dependencies: nil)
+        run_at: nil, deadline: nil, execution_timeout: nil, max_attempts: nil,
+        retry_policy: nil, tags: nil, idempotency: nil, debounce: nil, throttle: nil,
+        dependencies: nil)
         super
       end
     end
@@ -59,7 +59,7 @@ module Stablemates
       :task_type, :payload, :queue, :priority, :concurrency_key, :max_attempts, :retry_policy
     ) do
       def initialize(task_type:, payload:, queue: nil, priority: 0, concurrency_key: nil, max_attempts: nil,
-                     retry_policy: nil)
+        retry_policy: nil)
         super
       end
     end

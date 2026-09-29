@@ -17,7 +17,7 @@ module Stablemates
         return :client_protocol_too_new if client_protocol_version > SqlCatalogue::MAXIMUM_PROTOCOL_VERSION
         return nil if served_protocol_versions.empty? || served_protocol_versions.include?(client_protocol_version)
 
-        client_protocol_version < served_protocol_versions.min ? :schema_too_new : :schema_too_old
+        (client_protocol_version < served_protocol_versions.min) ? :schema_too_new : :schema_too_old
       end
 
       # [installed schema version or nil, served protocol versions]. A missing schema reads as not
