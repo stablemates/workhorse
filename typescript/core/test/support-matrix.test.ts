@@ -371,15 +371,14 @@ describe("continuous integration", () => {
     const manifest = await readSupportManifest();
     const pullRequest = buildCiMatrices(manifest.support, "pull_request");
     const push = buildCiMatrices(manifest.support, "push");
-    const daily = buildCiMatrices(manifest.support, "schedule", "43 3 * * *");
     const full = buildCiMatrices(manifest.support, "schedule", WEEKLY_COMPATIBILITY_SCHEDULE);
 
     expect(pullRequest.typescript.include).toEqual([{ node: 24, postgres: 18 }]);
     expect(pullRequest.python.include).toEqual([{ python: "3.14", postgres: 18 }]);
     expect(pullRequest.go.include).toEqual([{ go: "1.25", postgres: 18 }]);
+    expect(pullRequest.rust.include).toEqual([{ postgres: 18 }]);
     expect(pullRequest.packed.include).toEqual([{ node: 24 }]);
     expect(push).toEqual(pullRequest);
-    expect(daily).toEqual(pullRequest);
 
     expect(full.typescript.include).toHaveLength(
       manifest.support.node.tested.length * manifest.support.postgres.tested.length,
@@ -388,6 +387,9 @@ describe("continuous integration", () => {
       manifest.support.python.tested.length * manifest.support.postgres.tested.length,
     );
     expect(full.go.include).toHaveLength(manifest.support.postgres.tested.length);
+    expect(full.rust.include).toEqual(
+      manifest.support.postgres.tested.map((postgres) => ({ postgres })),
+    );
     expect(full.packed.include).toEqual([{ node: 24 }]);
     for (const node of manifest.support.node.tested) {
       for (const postgres of manifest.support.postgres.tested) {
@@ -413,10 +415,10 @@ describe("continuous integration", () => {
     expect(workflow).toContain(
       "needs: [plan, static, unit, typescript, python, go, runtime-smoke, packed, rust, demo]",
     );
-    expect(workflow).toContain('cron: "43 3 * * *" # Daily packed-install verification.');
     expect(workflow).toContain('cron: "17 4 * * 0" # Weekly full compatibility matrix.');
+    expect(workflow.match(/- cron:/g)).toHaveLength(1);
     expect(workflow).toContain(
-      "if: github.event_name == 'workflow_dispatch' || github.event.schedule == '43 3 * * *'",
+      "if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 4 * * 0'",
     );
     expect(
       workflow.match(
@@ -427,9 +429,27 @@ describe("continuous integration", () => {
     expect(workflow).toContain(
       "name: demo and site smoke\n    if: github.event_name != 'schedule'",
     );
-    expect(workflow.match(/max-parallel: 2/g)).toHaveLength(3);
+    expect(workflow.match(/max-parallel: 2/g)).toHaveLength(4);
     expect(workflow).toContain("pnpm --silent exec tsx scripts/ci-matrix.ts");
-    expect(workflow).toContain("pnpm go:test:race");
+  });
+
+  it("runs each language suite once per change and every variation weekly", async () => {
+    const workflow = await read(".github/workflows/ci.yml");
+    const scripts = (await readManifest("package.json")).scripts as Record<string, string>;
+    const weekly = "\n        if: github.event.schedule == '17 4 * * 0'";
+
+    // ADR 0083: a variation of a suite never delays a pull request.
+    expect(workflow).toContain(`- run: pnpm go:test\n      - run: pnpm go:test:race${weekly}`);
+    expect(workflow).toContain(`- run: pnpm rust:test:no-features${weekly}`);
+    expect(workflow).toContain(`- run: pnpm go:package-check${weekly}`);
+    expect(workflow).toContain(`- run: pnpm rust:package-check${weekly}`);
+    expect(workflow).not.toContain("pnpm rust:integration");
+    expect(workflow).toContain("matrix: ${{ fromJSON(needs.plan.outputs.rust) }}");
+
+    expect(scripts["rust:test"]).toContain("cargo test --workspace --all-features");
+    expect(scripts["rust:test:no-features"]).toContain("cargo test --workspace");
+    expect(scripts["rust:test:no-features"]).not.toContain("--features");
+    expect(scripts["rust:gates"]).toContain("pnpm rust:test");
     // All four language lines are scanned for advisories in the same task, or one line's tree
     // silently stops being checked.
     expect(workflow).toContain(

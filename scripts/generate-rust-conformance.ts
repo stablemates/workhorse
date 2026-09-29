@@ -62,7 +62,7 @@ Generated from \`protocol/v1\` at protocol version ${manifest.protocolVersion} a
 \`rust/tests/protocol_conformance.rs\` executes every \`protocol/v1\` fixture through the Rust
 adapters against a scratch PostgreSQL database. A fixture either passes or appears on the
 expected-unsupported list with the Issue that owns the gap. The runner fails when an unlisted
-fixture does not pass, and when a listed fixture passes. \`pnpm rust:integration\` runs it in CI.
+fixture does not pass, and when a listed fixture passes. \`pnpm rust:test\` runs it in CI.
 
 ## Fixture inventory
 

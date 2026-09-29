@@ -9,7 +9,7 @@
  * The zip drops directory entries because the module zip format has none; with them, `go mod
  * verify` reports the extracted module as modified.
  *
- * Usage: pnpm go:release-check X.Y.Z
+ * Usage: pnpm go:release-check X.Y.Z, or `pnpm go:package-check` for the module zip alone.
  */
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -67,8 +67,19 @@ async function stageProxy(proxy: string, version: string): Promise<void> {
   await run("zip", ["--delete", "--quiet", archive, "*/"]);
 }
 
-export async function checkGoRelease(version: string): Promise<void> {
-  await checkRelease("go", `go/v${version}`);
+/**
+ * The version the package check stages. Nothing publishes it, and the staged proxy answers for it
+ * before proxy.golang.org is asked.
+ */
+const packageCheckVersion = "0.0.0-package-check";
+
+/**
+ * Serve the module at `HEAD` from a staged proxy and consume it from a clean module.
+ *
+ * It needs no release tag or changelog entry, so the weekly CI run can prove the module zip
+ * between releases.
+ */
+export async function checkGoPackage(version = packageCheckVersion): Promise<void> {
   const proxy = await mkdtemp(path.join(tmpdir(), "workhorse-go-release-"));
   try {
     await stageProxy(proxy, version);
@@ -78,12 +89,19 @@ export async function checkGoRelease(version: string): Promise<void> {
   }
 }
 
+export async function checkGoRelease(version: string): Promise<void> {
+  await checkRelease("go", `go/v${version}`);
+  await checkGoPackage(version);
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
-  const version = process.argv[2];
-  if (!version || process.argv.length > 3) {
-    process.stderr.write("Usage: pnpm go:release-check X.Y.Z\n");
+  const argument = process.argv[2];
+  if (!argument || process.argv.length > 3) {
+    process.stderr.write("Usage: pnpm go:release-check X.Y.Z | pnpm go:package-check\n");
     process.exitCode = 64;
+  } else if (argument === "--package") {
+    await checkGoPackage();
   } else {
-    await checkGoRelease(version);
+    await checkGoRelease(argument);
   }
 }

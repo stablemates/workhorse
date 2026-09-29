@@ -1,6 +1,6 @@
 # ADR 0043: Run latest-version CI continuously and compatibility checks on schedules
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by [ADR 0083](0083-run-each-language-suite-once-per-change.md)
 - **Date:** 2026-08-25
 - **Related:** Plane WH-438
 

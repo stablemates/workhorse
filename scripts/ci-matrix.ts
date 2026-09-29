@@ -18,6 +18,7 @@ export interface CiMatrices {
   readonly typescript: Matrix<{ readonly node: number; readonly postgres: number }>;
   readonly python: Matrix<{ readonly python: string; readonly postgres: number }>;
   readonly go: Matrix<{ readonly go: string; readonly postgres: number }>;
+  readonly rust: Matrix<{ readonly postgres: number }>;
   readonly packed: Matrix<{ readonly node: number }>;
 }
 
@@ -53,6 +54,7 @@ export function buildCiMatrices(support: Support, eventName: string, schedule = 
       go: {
         include: [{ go: goVersion, postgres: newestPostgres }],
       },
+      rust: { include: [{ postgres: newestPostgres }] },
       packed: { include: [{ node: newestNode }] },
     };
   }
@@ -70,6 +72,7 @@ export function buildCiMatrices(support: Support, eventName: string, schedule = 
         postgres,
       })),
     },
+    rust: { include: support.postgres.tested.map((postgres) => ({ postgres })) },
     packed: { include: [{ node: newestNode }] },
   };
 }
