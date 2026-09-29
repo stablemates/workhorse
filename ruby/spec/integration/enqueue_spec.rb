@@ -63,7 +63,7 @@ RSpec.describe "Queue#enqueue against PostgreSQL" do
     invalid = [W::EnqueueRequest.new(task_type: "a", payload: {}),
       W::EnqueueRequest.new(task_type: "a", payload: {}, priority: 101)]
     expect { queue.enqueue_many(invalid) }
-      .to raise_error(ArgumentError, "enqueue request 2: invalid enqueue options: priority must be between 0 and 100")
+      .to raise_error(ArgumentError, "enqueue request 2: priority must be an Integer between 0 and 100")
     expect(task_count).to eq(1), "a refused batch writes nothing"
   end
 

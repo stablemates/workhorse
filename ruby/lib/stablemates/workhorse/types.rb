@@ -70,8 +70,9 @@ module Stablemates
       def initialize(name:, schedule:, task:, timezone: "UTC", catchup_policy: :skip, enabled: true) = super
     end
 
-    # A token bucket: +limit+ admissions per +interval_ms+, with at most +burst+ in reserve.
-    RateLimit = Data.define(:limit, :interval_ms, :burst)
+    # A token bucket: +limit+ admissions per +interval+ seconds, with at most +burst+ in reserve.
+    # PostgreSQL stores the interval in whole milliseconds.
+    RateLimit = Data.define(:limit, :interval, :burst)
 
     # The concurrency limit a sync gives one queue. +max_active_per_key+ may be nil.
     ConcurrencyPolicyDefinition = Data.define(:queue, :max_active, :max_active_per_key) do
@@ -135,12 +136,27 @@ module Stablemates
         value.downcase
       end
 
-      # Whole milliseconds from a Numeric count of seconds.
-      def milliseconds(value, label)
-        raise ArgumentError, "#{label} must be a Numeric count of seconds" unless value.is_a?(Numeric)
+      # Whole milliseconds from a finite Numeric count of seconds, within +range+ milliseconds.
+      # An ActiveSupport::Duration is Numeric and converts the same way.
+      def milliseconds(value, label, range)
+        milliseconds = whole_milliseconds(value)
+        return milliseconds if milliseconds && range.cover?(milliseconds)
 
-        (value.to_f * 1000).round
+        raise ArgumentError, "#{label} must be a finite Numeric count of seconds between " \
+          "#{seconds(range.begin)} and #{seconds(range.end)}"
       end
+
+      def whole_milliseconds(value)
+        return nil unless value.is_a?(Numeric)
+
+        seconds = value.to_f
+        seconds.finite? ? (seconds * 1000).round : nil
+      rescue RangeError, NoMethodError
+        nil
+      end
+
+      # Seconds from whole milliseconds: an Integer when exact, otherwise a Float.
+      def seconds(milliseconds) = (milliseconds % 1000).zero? ? milliseconds / 1000 : milliseconds / 1000.0
 
       # The protocol's timestamp text for a Time.
       def timestamp(value, label)

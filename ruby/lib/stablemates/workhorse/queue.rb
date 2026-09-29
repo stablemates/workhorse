@@ -23,10 +23,26 @@ module Stablemates
       HUMAN_WAIT_STATUSES = %i[completed duplicate not_waiting already_completed stale not_found].freeze
       # Times one fenced write is sent at most when PostgreSQL rolls it back as a deadlock victim.
       FENCED_WRITE_DEADLOCK_ATTEMPTS = 3
+      # The protocol's bounds, checked here so an invalid request raises before any statement.
+      MAX_DURATION_MS = 31_536_000_000
+      MAX_RATE_INTERVAL_MS = 86_400_000
+      MAX_POLICY_VALUE = 1_000_000
+      MAX_POLICY_DEFINITIONS = 10_000
+      MAX_NAME_BYTES = 256
+      MAX_KEY_BYTES = 512
+      MAX_TAGS = 20
+      MAX_TAG_LENGTH = 100
+      RETRY_POLICY_FIELDS = {
+        "fixed" => %w[delayMs],
+        "exponential" => %w[initialDelayMs multiplier maxDelayMs],
+        "decorrelated-jitter" => %w[baseDelayMs maxDelayMs]
+      }.freeze
       private_constant :DEFAULT_MAX_ATTEMPTS, :DEFAULT_IDEMPOTENCY_TTL_MS, :MAX_TASK_DEPENDENCIES,
         :MAX_EXTERNAL_VALUE_BYTES, :OUTCOMES, :NON_REPLACEABLE_REASONS, :DEPENDENCY_POLICIES,
         :DEBOUNCE_SCHEDULES, :CATCHUP_POLICIES, :CANCEL_STATUSES, :TASK_STATES,
-        :SIGNAL_STATUSES, :HUMAN_WAIT_STATUSES, :FENCED_WRITE_DEADLOCK_ATTEMPTS
+        :SIGNAL_STATUSES, :HUMAN_WAIT_STATUSES, :FENCED_WRITE_DEADLOCK_ATTEMPTS, :MAX_DURATION_MS,
+        :MAX_RATE_INTERVAL_MS, :MAX_POLICY_VALUE, :MAX_POLICY_DEFINITIONS, :MAX_NAME_BYTES,
+        :MAX_KEY_BYTES, :MAX_TAGS, :MAX_TAG_LENGTH, :RETRY_POLICY_FIELDS
 
       attr_reader :default_queue
 
@@ -155,9 +171,9 @@ module Stablemates
         rescue ArgumentError => e
           raise ArgumentError, "schedule definition #{index + 1}: invalid schedule definition: #{e.message}"
         end
+        params = [namespace, Values.json(document), boolean(prune, "prune").to_s]
         assert_compatible
-        @executor.rows(SqlCatalogue::SYNC_SCHEDULE_DEFINITIONS_V2,
-          [namespace, Values.json(document), boolean(prune, "prune").to_s])
+        @executor.rows(SqlCatalogue::SYNC_SCHEDULE_DEFINITIONS_V2, params)
         nil
       end
 
@@ -177,9 +193,11 @@ module Stablemates
       # Makes +definitions+ the namespace's concurrency policies and returns the stored policies.
       # +prune+ removes the namespace's other policies.
       def sync_concurrency_policies(namespace, definitions, prune: true)
-        document = sync_document(definitions, ConcurrencyPolicyDefinition, "concurrency policy") do |definition|
-          {"queue" => definition.queue, "maxActive" => definition.max_active,
-           "maxActivePerKey" => definition.max_active_per_key}
+        document = sync_document(definitions, ConcurrencyPolicyDefinition, "concurrency policy", :queue) do |definition|
+          max_active = integer(definition.max_active, 1..MAX_POLICY_VALUE, "max active")
+          per_key = definition.max_active_per_key
+          {"queue" => definition.queue, "maxActive" => max_active,
+           "maxActivePerKey" => per_key && integer(per_key, 1..max_active, "max active per key")}
         end
         rows = fenced_write(SqlCatalogue::SYNC_CONCURRENCY_POLICIES_V1, sync_params(namespace, document, prune))
         rows.map { |row| Policies.concurrency_policy(row) }
@@ -188,7 +206,7 @@ module Stablemates
       # Makes +definitions+ the namespace's rate limit policies and returns the stored policies.
       # +prune+ removes the namespace's other policies.
       def sync_rate_limit_policies(namespace, definitions, prune: true)
-        document = sync_document(definitions, RateLimitPolicyDefinition, "rate limit policy") do |definition|
+        document = sync_document(definitions, RateLimitPolicyDefinition, "rate limit policy", :queue) do |definition|
           {"queue" => definition.queue, "rate" => rate_limit_document(definition.rate, "rate"),
            "perKey" => definition.per_key && rate_limit_document(definition.per_key, "per key")}
         end
@@ -199,8 +217,12 @@ module Stablemates
       # Makes +definitions+ the namespace's budgets and returns the stored budgets. +prune+
       # removes the namespace's other budgets.
       def sync_budgets(namespace, definitions, prune: true)
-        document = sync_document(definitions, BudgetDefinition, "budget") do |definition|
-          {"name" => definition.name, "maxActive" => definition.max_active,
+        document = sync_document(definitions, BudgetDefinition, "budget", :name) do |definition|
+          raise ArgumentError, "budget requires max active, rate, or both" if
+            definition.max_active.nil? && definition.rate.nil?
+
+          {"name" => definition.name,
+           "maxActive" => definition.max_active && integer(definition.max_active, 1..MAX_POLICY_VALUE, "max active"),
            "rate" => definition.rate && rate_limit_document(definition.rate, "rate")}
         end
         rows = @executor.rows(SqlCatalogue::SYNC_BUDGETS_V1, sync_params(namespace, document, prune))
@@ -243,13 +265,13 @@ module Stablemates
           raise ArgumentError, "invalid enqueue options: #{e.message}"
         end
         Values.check_json(request.payload, "payload")
-        input = task_input(request.task_type, request.payload, request.queue, request.priority,
-          request.concurrency_key, request.max_attempts, request.retry_policy)
+        input = task_input(request)
         keyed = request.idempotency || request.debounce || request.throttle
         input["runAt"] = Values.timestamp(request.run_at || now, "run at") if request.run_at || !keyed
         input["deadline"] = request.deadline && Values.timestamp(request.deadline, "deadline")
-        input["budget"] = non_empty(optional_string(request.budget, "budget"))
-        timeout = request.execution_timeout && Values.milliseconds(request.execution_timeout, "execution timeout")
+        input["budget"] = optional_bytes(request.budget, MAX_NAME_BYTES, "budget")
+        timeout = request.execution_timeout &&
+          Values.milliseconds(request.execution_timeout, "execution timeout", 0..MAX_DURATION_MS)
         input["executionTimeoutMs"] = timeout&.zero? ? nil : timeout
         input["prerequisiteTaskId"] = nil
         input["dependencies"] = request.dependencies && dependencies_document(request.dependencies)
@@ -260,13 +282,9 @@ module Stablemates
         input
       end
 
-      def optional_integer?(value, range) = value.nil? || (value.is_a?(Integer) && range.cover?(value))
-
       def validate_options(request)
         keyed = [request.idempotency, request.debounce, request.throttle].compact
         raise ArgumentError, "cannot combine idempotency, debounce, or throttle" if keyed.length > 1
-        raise ArgumentError, "priority must be between 0 and 100" unless optional_integer?(request.priority, 0..100)
-        raise ArgumentError, "max attempts must be positive" unless optional_integer?(request.max_attempts, 0..)
         if request.debounce && request.run_at
           raise ArgumentError, "debounced enqueue uses its PostgreSQL-owned window instead of run at"
         end
@@ -286,21 +304,19 @@ module Stablemates
           ids.length > MAX_TASK_DEPENDENCIES
       end
 
-      # The fields an enqueued or scheduled task shares.
-      def task_input(task_type, payload, queue, priority, concurrency_key, max_attempts, retry_policy)
-        required_string(task_type, "task type")
-        queue = optional_string(queue, "queue")
-        raise ArgumentError, "retry policy must be a Hash" unless retry_policy.nil? || retry_policy.is_a?(Hash)
-
-        Values.check_json(retry_policy, "retry policy")
+      # The fields an enqueued or scheduled task shares, from an EnqueueRequest or a ScheduledTask.
+      # A nil or zero +max_attempts+ takes the default.
+      def task_input(task)
+        max_attempts = task.max_attempts
         {
-          "queue" => (queue.nil? || queue.empty?) ? @default_queue : queue,
-          "type" => task_type,
-          "payload" => payload,
-          "priority" => priority || 0,
-          "concurrencyKey" => non_empty(optional_string(concurrency_key, "concurrency key")),
-          "maxAttempts" => (max_attempts.nil? || max_attempts.zero?) ? DEFAULT_MAX_ATTEMPTS : max_attempts,
-          "retryPolicy" => retry_policy,
+          "queue" => optional_bytes(task.queue, MAX_NAME_BYTES, "queue") || @default_queue,
+          "type" => required_string(task.task_type, "task type"),
+          "payload" => task.payload,
+          "priority" => task.priority.nil? ? 0 : integer(task.priority, 0..100, "priority"),
+          "concurrencyKey" => optional_bytes(task.concurrency_key, MAX_NAME_BYTES, "concurrency key"),
+          "maxAttempts" => (max_attempts.nil? || max_attempts == 0) ? DEFAULT_MAX_ATTEMPTS :
+            integer(max_attempts, 1..100, "max attempts"),
+          "retryPolicy" => retry_policy(task.retry_policy),
           "contractVersion" => nil,
           "payloadMaxBytes" => SqlCatalogue::DEFAULT_TASK_VALUE_MAX_BYTES,
           "resultMaxBytes" => SqlCatalogue::DEFAULT_TASK_VALUE_MAX_BYTES,
@@ -322,9 +338,9 @@ module Stablemates
       def idempotency_document(idempotency)
         raise ArgumentError, "idempotency must be an Idempotency" unless idempotency.is_a?(Idempotency)
 
-        ttl = Values.milliseconds(idempotency.ttl, "idempotency TTL")
+        ttl = Values.milliseconds(idempotency.ttl, "idempotency TTL", 0..MAX_DURATION_MS)
         {
-          "key" => required_string(idempotency.key, "idempotency key"),
+          "key" => required_bytes(idempotency.key, MAX_KEY_BYTES, "idempotency key"),
           "scope" => scope(idempotency.scope),
           "ttlMs" => ttl.zero? ? DEFAULT_IDEMPOTENCY_TTL_MS : ttl
         }
@@ -334,9 +350,9 @@ module Stablemates
         raise ArgumentError, "debounce must be a Debounce" unless debounce.is_a?(Debounce)
 
         {
-          "key" => required_string(debounce.key, "debounce key"),
+          "key" => required_bytes(debounce.key, MAX_KEY_BYTES, "debounce key"),
           "scope" => scope(debounce.scope),
-          "windowMs" => Values.milliseconds(debounce.window, "debounce window"),
+          "windowMs" => Values.milliseconds(debounce.window, "debounce window", 1..MAX_DURATION_MS),
           "schedule" => choice(debounce.schedule, DEBOUNCE_SCHEDULES, "debounce schedule")
         }
       end
@@ -345,27 +361,24 @@ module Stablemates
         raise ArgumentError, "throttle must be a Throttle" unless throttle.is_a?(Throttle)
 
         {
-          "key" => required_string(throttle.key, "throttle key"),
+          "key" => required_bytes(throttle.key, MAX_KEY_BYTES, "throttle key"),
           "scope" => scope(throttle.scope),
-          "windowMs" => Values.milliseconds(throttle.window, "throttle window")
+          "windowMs" => Values.milliseconds(throttle.window, "throttle window", 1..MAX_DURATION_MS)
         }
       end
 
       def schedule_document(definition)
         task = definition.task
         raise ArgumentError, "task must be a ScheduledTask" unless task.is_a?(ScheduledTask)
-        raise ArgumentError, "priority must be between 0 and 100" unless
-          task.priority.is_a?(Integer) && task.priority.between?(0, 100)
 
         Values.check_json(task.payload, "payload")
-        task_input(task.task_type, task.payload, task.queue, task.priority, task.concurrency_key,
-          task.max_attempts, task.retry_policy).merge(
-            "name" => required_string(definition.name, "name"),
-            "schedule" => required_string(definition.schedule, "schedule"),
-            "timezone" => required_string(definition.timezone, "timezone"),
-            "catchupPolicy" => choice(definition.catchup_policy, CATCHUP_POLICIES, "catchup policy"),
-            "enabled" => boolean(definition.enabled, "enabled")
-          )
+        task_input(task).merge(
+          "name" => required_string(definition.name, "name"),
+          "schedule" => required_string(definition.schedule, "schedule"),
+          "timezone" => required_string(definition.timezone, "timezone"),
+          "catchupPolicy" => choice(definition.catchup_policy, CATCHUP_POLICIES, "catchup policy"),
+          "enabled" => boolean(definition.enabled, "enabled")
+        )
       end
 
       # Validates a contracted payload and stamps the contract fields PostgreSQL enforces.
@@ -452,16 +465,28 @@ module Stablemates
         exactly_one(@executor.rows(statement, [task_id, name, document, idempotency_key, requested_by]), function)
       end
 
-      # The JSON array a policy sync sends, one object per definition the block encodes.
-      def sync_document(definitions, type, label)
+      # The JSON array a policy sync sends, one object per definition the block encodes. Each
+      # definition's +name+ attribute must be unique.
+      def sync_document(definitions, type, label, name)
         raise ArgumentError, "definitions must be an Array of #{type.name.split("::").last}" unless
           definitions.is_a?(Array) && definitions.all?(type)
+        raise ArgumentError, "#{label} definitions exceed the limit of #{MAX_POLICY_DEFINITIONS}" if
+          definitions.length > MAX_POLICY_DEFINITIONS
 
-        Values.json(definitions.map { |definition| yield definition }, "#{label} definitions")
+        document = definitions.each_with_index.map do |definition, index|
+          required_bytes(definition.public_send(name), MAX_NAME_BYTES, name.to_s)
+          yield definition
+        rescue ArgumentError => e
+          raise ArgumentError, "#{label} definition #{index + 1}: #{e.message}"
+        end
+        names = definitions.map(&name)
+        raise ArgumentError, "#{label} #{name} names must be unique" unless names.uniq.length == names.length
+
+        Values.json(document, "#{label} definitions")
       end
 
       def sync_params(namespace, document, prune)
-        required_string(namespace, "namespace")
+        required_bytes(namespace, MAX_NAME_BYTES, "namespace")
         params = [namespace, document, boolean(prune, "prune").to_s]
         assert_compatible
         params
@@ -470,7 +495,44 @@ module Stablemates
       def rate_limit_document(rate, label)
         raise ArgumentError, "#{label} must be a RateLimit" unless rate.is_a?(RateLimit)
 
-        {"limit" => rate.limit, "intervalMs" => rate.interval_ms, "burst" => rate.burst}
+        {
+          "limit" => integer(rate.limit, 1..MAX_POLICY_VALUE, "#{label} limit"),
+          "intervalMs" => Values.milliseconds(rate.interval, "#{label} interval", 1..MAX_RATE_INTERVAL_MS),
+          "burst" => integer(rate.burst, 1..MAX_POLICY_VALUE, "#{label} burst")
+        }
+      end
+
+      # +policy+ after checking the shape and bounds PostgreSQL's retry policy accepts.
+      def retry_policy(policy)
+        return nil if policy.nil?
+        raise ArgumentError, "retry policy must be a Hash" unless policy.is_a?(Hash)
+
+        Values.check_json(policy, "retry policy")
+        type = policy["type"]
+        fields = RETRY_POLICY_FIELDS[type] or
+          raise ArgumentError, "retry policy type must be fixed, exponential, or decorrelated-jitter"
+        raise ArgumentError, "#{type} retry policy requires exactly type, #{fields.join(", ")}" unless
+          policy.keys.sort == [*fields, "type"].sort
+
+        fields.each do |field|
+          range = (field == "multiplier") ? 1..100 : 0..MAX_DURATION_MS
+          value = policy[field]
+          raise ArgumentError, "retry policy #{field} must be an integer between #{range.begin} and #{range.end}" unless
+            whole?(value) && range.cover?(value)
+        end
+        floor = policy["initialDelayMs"] || policy["baseDelayMs"]
+        raise ArgumentError, "retry policy maxDelayMs must be at least #{floor}" if floor && policy["maxDelayMs"] < floor
+
+        policy
+      end
+
+      def whole?(value) = value.is_a?(Integer) || (value.is_a?(Float) && value == value.floor)
+
+      def integer(value, range, label)
+        raise ArgumentError, "#{label} must be an Integer between #{range.begin} and #{range.end}" unless
+          value.is_a?(Integer) && range.cover?(value)
+
+        value
       end
 
       # Sends a fenced write, and sends it again when PostgreSQL chose it as a deadlock victim.
@@ -512,7 +574,10 @@ module Stablemates
 
       def tags(values)
         return [] if values.nil?
-        raise ArgumentError, "tags must be an Array of Strings" unless values.is_a?(Array) && values.all?(String)
+        unless values.is_a?(Array) && values.length <= MAX_TAGS &&
+            values.all? { |tag| tag.is_a?(String) && tag.length.between?(1, MAX_TAG_LENGTH) }
+          raise ArgumentError, "tags must be an Array of at most #{MAX_TAGS} Strings of 1 to #{MAX_TAG_LENGTH} characters"
+        end
 
         values
       end
@@ -530,7 +595,7 @@ module Stablemates
         value
       end
 
-      def scope(value) = non_empty(optional_string(value, "scope")) || "default"
+      def scope(value) = optional_bytes(value, MAX_NAME_BYTES, "scope") || "default"
 
       def non_empty(value) = (value.nil? || value.empty?) ? nil : value
 
@@ -542,6 +607,21 @@ module Stablemates
 
       def optional_string(value, label)
         raise ArgumentError, "#{label} must be a String" unless value.nil? || value.is_a?(String)
+
+        value
+      end
+
+      def required_bytes(value, max, label)
+        raise ArgumentError, "#{label} must contain between 1 and #{max} UTF-8 bytes" unless
+          value.is_a?(String) && value.bytesize.between?(1, max)
+
+        value
+      end
+
+      # +value+, or nil when it is nil or empty. A String longer than +max+ UTF-8 bytes raises.
+      def optional_bytes(value, max, label)
+        value = non_empty(optional_string(value, label))
+        raise ArgumentError, "#{label} must contain at most #{max} UTF-8 bytes" if value && value.bytesize > max
 
         value
       end

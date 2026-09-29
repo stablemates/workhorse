@@ -112,7 +112,7 @@ RSpec.describe "Queue client operations against PostgreSQL" do
       task: W::ScheduledTask.new(task_type: "ping", payload: {}, priority: 101))
     expect { queue.sync_schedules(namespace, [invalid], prune: false) }
       .to raise_error(ArgumentError,
-        "schedule definition 1: invalid schedule definition: priority must be between 0 and 100")
+        "schedule definition 1: invalid schedule definition: priority must be an Integer between 0 and 100")
   end
 
   it "validates payloads against synced contracts and stamps contract fields" do
@@ -172,13 +172,13 @@ RSpec.describe "Queue client operations against PostgreSQL" do
     expect(concurrency.first.updated_at).to be_a(Time)
 
     rate = queue.list_rate_limit_policies(queues: [emails, reports]).sort_by(&:queue)
-    expect(rate.first.rate).to eq(W::RateLimit.new(limit: 10, interval_ms: 1000, burst: 20))
-    expect(rate.first.per_key).to eq(W::RateLimit.new(limit: 1, interval_ms: 1000, burst: 1))
+    expect(rate.first.rate).to eq(W::RateLimit.new(limit: 10, interval: 1, burst: 20))
+    expect(rate.first.per_key).to eq(W::RateLimit.new(limit: 1, interval: 1, burst: 1))
     expect(rate.last.per_key).to be_nil
 
     budgets = queue.list_budgets(names: [budget])
     expect(budgets.map { |row| [row.name, row.max_active, row.rate] })
-      .to eq([[budget, 8, W::RateLimit.new(limit: 60, interval_ms: 60_000, burst: 60)]])
+      .to eq([[budget, 8, W::RateLimit.new(limit: 60, interval: 60, burst: 60)]])
     expect(queue.list_budgets.length).to be >= 1
   end
 
@@ -186,7 +186,7 @@ RSpec.describe "Queue client operations against PostgreSQL" do
     namespace = "ns-#{@queue_name}"
     emails = "#{@queue_name}-emails"
     reports = "#{@queue_name}-reports"
-    rate = W::RateLimit.new(limit: 10, interval_ms: 1000, burst: 20)
+    rate = W::RateLimit.new(limit: 10, interval: 1, burst: 20)
 
     stored = queue.sync_concurrency_policies(namespace, [
       W::ConcurrencyPolicyDefinition.new(queue: emails, max_active: 10, max_active_per_key: 2),

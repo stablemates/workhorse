@@ -43,7 +43,7 @@ module Stablemates
 
         RateLimit.new(
           limit: limit,
-          interval_ms: Values.parse_integer(row.fetch("#{prefix}interval_ms")),
+          interval: Values.seconds(Values.parse_integer(row.fetch("#{prefix}interval_ms"))),
           burst: Values.parse_integer(row.fetch("#{prefix}burst"))
         )
       end
