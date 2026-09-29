@@ -426,7 +426,8 @@ The step narrows `workhorse.protocol_version` from versions 1 through 4 to exact
 `fire_due_schedules_v1` and `sync_schedule_definitions_v1`, which protocol 2 superseded with their
 `_v2` forms. It retains no shim, so a client built for protocol 4 fails its compatibility check at
 startup instead of calling a missing function. `MINIMUM_PROTOCOL_VERSION` and `PROTOCOL_VERSION` are
-both 5, and `protocol/v1/manifest.json` sets `schema.minimumVersion` to 25.
+both 5. Migration 0025 set `schema.minimumVersion` in `protocol/v1/manifest.json` to 25; later
+migrations raised it, and 0.5.0 requires 43.
 
 [ADR 0077](decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) §6 allows
 this for one release. It amends
@@ -442,8 +443,11 @@ The cutover is offline:
 1. Stop every worker and every producer.
 2. Run `workhorse schema migrate`. It applies nothing past schema version 24 and reports the pending
    contract step.
-3. Run `workhorse schema contract --yes`, which applies migration 0025.
-4. Start the new release.
+3. Run `workhorse schema contract --yes`, which applies migration 0025 and stops at schema
+   version 25.
+4. Run `workhorse schema migrate` again. It applies the additive steps after 0025 and reaches the
+   release's schema version, 43 for 0.5.0.
+5. Start the new release.
 
 Every queue starts full-tier, so live tasks stay where they are and no history needs a backfill.
 Nothing changes until an operator moves an empty queue to the fast tier.

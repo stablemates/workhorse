@@ -169,6 +169,21 @@ version. The same step is available from the CLI as `workhorse schema migrate`, 
 already-current schema is left unchanged. Development schemas at retired versions below the
 baseline still require a reset.
 
+### Upgrade a 0.4.x database offline
+
+The upgrade from 0.4.x to 0.5.0 crosses a contract step, so it cannot roll.
+`workhorse schema migrate` stops before that step, and a 0.4.x worker fails once it lands.
+
+1. Stop every worker and every producer.
+2. Run `workhorse schema migrate`. It stops at schema version 24 and reports the pending contract
+   step.
+3. Run `workhorse schema contract --yes`. It applies the contract step and reaches version 25.
+4. Run `workhorse schema migrate` again. It applies the additive steps and reaches version 43.
+5. Start 0.5.0.
+
+Every queue stays on the full tier after the upgrade. From 0.5.0 on, a minor upgrade is an ordinary
+rolling deployment again.
+
 ## Verify before the new release starts
 
 Migrating and starting are two steps, and a deploy should not cross between them on hope. Run
