@@ -438,7 +438,7 @@ describe("continuous integration", () => {
     const scripts = (await readManifest("package.json")).scripts as Record<string, string>;
     const weekly = "\n        if: github.event.schedule == '17 4 * * 0'";
 
-    // ADR 0082: a variation of a suite never delays a pull request.
+    // ADR 0083: a variation of a suite never delays a pull request.
     expect(workflow).toContain(`- run: pnpm go:test\n      - run: pnpm go:test:race${weekly}`);
     expect(workflow).toContain(`- run: pnpm rust:test:no-features${weekly}`);
     expect(workflow).toContain(`- run: pnpm go:package-check${weekly}`);

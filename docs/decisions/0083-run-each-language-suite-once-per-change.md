@@ -1,4 +1,4 @@
-# ADR 0082: Run each language suite once per change and every variation weekly
+# ADR 0083: Run each language suite once per change and every variation weekly
 
 - **Status:** Accepted
 - **Date:** 2026-09-28

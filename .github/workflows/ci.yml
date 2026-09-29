@@ -1,5 +1,5 @@
 # Public CI policy lives in docs/decisions/0043-public-ci-and-release-policy.md and
-# docs/decisions/0082-run-each-language-suite-once-per-change.md. Pull requests and pushes run each
+# docs/decisions/0083-run-each-language-suite-once-per-change.md. Pull requests and pushes run each
 # language's suite once, on the newest supported combination. Weekly runs exercise every
 # language/database combination declared in support.json, every variation of a suite, such as Go's
 # race detector and Rust without optional features, and every package check.
