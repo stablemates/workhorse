@@ -313,6 +313,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "shard the admission counters",
     kind: "additive",
   },
+  {
+    fromVersion: 43,
+    toVersion: 44,
+    file: "0045-schedule-run-retention-health-respects-daily-cleanup.sql",
+    description: "make schedule-run retention health respect daily cleanup",
+    kind: "additive",
+  },
 ];
 
 /**

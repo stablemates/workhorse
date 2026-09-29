@@ -66,6 +66,11 @@ Cleanup is deliberately bounded: a limited number of tasks, partitions, and rows
 the incoming rate outruns it, tables grow. This shows up as retention lag in queue health
 rather than as a stall, and the fix is usually a shorter window rather than a bigger batch.
 
+Schedule runs are cleaned up only by the daily history pass, so they expire between passes by
+design. Workhorse therefore judges their lag against that pass. Health reports schedule runs when
+the latest pass left late rows behind. It also reports them when the next pass is overdue and
+expired runs remain.
+
 Health also reports how many rows are sitting in the fallback partitions used when partition
 maintenance falls behind, so that condition can't stay invisible.
 

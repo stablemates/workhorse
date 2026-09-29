@@ -2586,13 +2586,22 @@ AS $$
           p_policy->>'partition_retention_lag_ms'),
         (4, 'attemptHistory', p_snapshot->>'attempt_history_lag_ms',
           p_policy->>'partition_retention_lag_ms'),
-        (5, 'scheduleOccurrences', p_snapshot->>'schedule_occurrence_lag_ms',
-          p_policy->>'row_retention_lag_ms'),
         (6, 'statistics', p_snapshot->>'statistics_lag_ms',
           p_policy->>'row_retention_lag_ms')
     ) retention(position, category, observed_text, budget_text)
     WHERE retention.observed_text IS NOT NULL
       AND retention.observed_text::numeric > retention.budget_text::numeric
+    UNION ALL
+    SELECT 115, jsonb_build_object(
+      'code', 'retention-lag', 'severity', 'degraded',
+      'observed', (p_snapshot->>'schedule_occurrence_lag_ms')::numeric,
+      'budget', (p_policy->>'row_retention_lag_ms')::numeric,
+      'category', 'scheduleOccurrences'
+    ) WHERE (p_snapshot->>'schedule_occurrence_pass_lag_ms')::numeric
+        > (p_policy->>'row_retention_lag_ms')::numeric
+      OR ((p_snapshot->>'schedule_occurrence_due_lag_ms')::numeric
+            > (p_policy->>'row_retention_lag_ms')::numeric
+          AND (p_snapshot->>'schedule_occurrence_lag_ms')::numeric > 0)
     UNION ALL
     SELECT 130, jsonb_build_object(
       'code', 'eligible-history-partitions', 'severity', 'degraded',
@@ -2657,7 +2666,8 @@ DECLARE
   v_document jsonb;
   v_observations jsonb;
 BEGIN
-  SELECT to_jsonb(snapshot) || jsonb_build_object(
+  SELECT (to_jsonb(snapshot) - 'schedule_occurrence_pass_lag_ms'
+           - 'schedule_occurrence_due_lag_ms') || jsonb_build_object(
            'status', workhorse.evaluate_queue_health_v1(to_jsonb(snapshot), to_jsonb(policy)),
            'budgets', jsonb_build_object(
              'promotionLagMs', policy.promotion_lag_ms,
@@ -2769,6 +2779,31 @@ BEGIN
           -- into a cost that trips JIT compilation, and compiling this statement costs a full second.
           WITH policy AS (
             SELECT * FROM workhorse.retention_policy WHERE singleton LIMIT 1
+          ), maintenance AS (
+            -- A start at or after the local retention time counts as that day's pass, and a
+            -- completed date covers its day even when a forced pass ran earlier. A routine that
+            -- never started owes the latest scheduled pass.
+            SELECT state.last_started_at, state.last_completed_local_date,
+                   GREATEST(
+                     (CASE
+                        WHEN local_clock.started IS NULL THEN
+                          CASE WHEN local_clock.now::time >= policy.history_retention_local_time
+                            THEN local_clock.now::date ELSE local_clock.now::date - 1 END
+                        WHEN local_clock.started::time >= policy.history_retention_local_time
+                          THEN local_clock.started::date + 1
+                        ELSE local_clock.started::date
+                      END + policy.history_retention_local_time) AT TIME ZONE policy.timezone,
+                     (state.last_completed_local_date + 1 + policy.history_retention_local_time)
+                       AT TIME ZONE policy.timezone
+                   ) AS next_due_at
+              FROM workhorse.maintenance_state state
+              CROSS JOIN workhorse.maintenance_policy policy
+              CROSS JOIN LATERAL (
+                SELECT clock_timestamp() AT TIME ZONE policy.timezone AS now,
+                       state.last_started_at AT TIME ZONE policy.timezone AS started
+              ) local_clock
+             WHERE state.routine_name = 'history_retention' AND policy.singleton
+             LIMIT 1
           ), terminal_outcome AS NOT MATERIALIZED (
             -- A fast-tier outcome has no history boundary of its own. Its history rows, if the queue
             -- recorded any, end when it finished.
@@ -2833,6 +2868,10 @@ BEGIN
                 ORDER BY occurred_at, attempt_id LIMIT 1) AS oldest_default_attempt_history_at,
               (SELECT occurrence_at FROM workhorse.schedule_occurrence ORDER BY occurrence_at LIMIT 1)
                 AS oldest_schedule_occurrence_at,
+              -- A row fired after the pass could not have been left behind by that pass.
+              (SELECT occurrence_at FROM workhorse.schedule_occurrence
+                WHERE fired_at <= (SELECT last_started_at FROM maintenance)
+                ORDER BY occurrence_at LIMIT 1) AS oldest_schedule_occurrence_at_last_pass,
               (SELECT min(bucket_start) FROM (
                  SELECT bucket_start FROM workhorse.task_stat_bucket
                  UNION ALL SELECT bucket_start FROM workhorse.task_stat_bucket_hour
@@ -2939,6 +2978,21 @@ BEGIN
                         - make_interval(days => policy.schedule_occurrence_retention_days)
                         - boundaries.oldest_schedule_occurrence_at) * 1000) END
                    AS schedule_occurrence_lag_ms,
+                 CASE WHEN policy.schedule_occurrence_retention_days IS NULL
+                             OR boundaries.oldest_schedule_occurrence_at_last_pass IS NULL THEN NULL
+                      -- A retention change resets completion; earlier passes used another window.
+                      WHEN maintenance.last_completed_local_date IS NULL
+                           AND maintenance.last_started_at < policy.updated_at THEN 0
+                      ELSE GREATEST(0, COALESCE(extract(epoch FROM
+                        maintenance.last_started_at
+                        - make_interval(days => policy.schedule_occurrence_retention_days)
+                        - boundaries.oldest_schedule_occurrence_at_last_pass) * 1000, 0)) END
+                   AS schedule_occurrence_pass_lag_ms,
+                 CASE WHEN policy.schedule_occurrence_retention_days IS NULL
+                             OR boundaries.oldest_schedule_occurrence_at IS NULL THEN NULL
+                      ELSE GREATEST(0, extract(epoch FROM
+                        clock_timestamp() - maintenance.next_due_at) * 1000) END
+                   AS schedule_occurrence_due_lag_ms,
                  CASE WHEN policy.statistics_retention_days IS NULL
                         OR boundaries.oldest_statistics_at IS NULL THEN NULL
                       ELSE GREATEST(0, extract(epoch FROM
@@ -2947,7 +3001,8 @@ BEGIN
                         - boundaries.oldest_statistics_at) * 1000) END
                    AS statistics_lag_ms,
                  eligible.*, default_rows.*
-            FROM policy CROSS JOIN boundaries CROSS JOIN eligible CROSS JOIN default_rows
+            FROM policy CROSS JOIN maintenance CROSS JOIN boundaries CROSS JOIN eligible
+              CROSS JOIN default_rows
         ), dependencies AS (
           SELECT LEAST(blocked_tasks, 10000)::text
                    AS dependency_blocked_tasks,
@@ -19116,10 +19171,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (40, 'govern the dependency counter drift check and repair'),
   (41, 'cut the plain full-tier per-task claim and trigger cost'),
   (42, 'keep JIT compilation out of the task detail read'),
-  (43, 'shard the admission counters')
+  (43, 'shard the admission counters'),
+  (44, 'make schedule-run retention health respect daily cleanup')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (43) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (44) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

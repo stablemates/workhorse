@@ -2,7 +2,7 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript, Python, Go, and Rust `Queue`, `Admin`, and `Worker` remain thin protocol clients.
 
-The current schema version is 43 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
+The current schema version is 44 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
 (`WORKHORSE_SCHEMA_BASELINE_VERSION`). `sql/releases/0006.sql` contains the baseline clean-install
 artifact, which is the 0.2.0 schema. The chain began at 1 and was pruned to this baseline when
 0.1.x support was dropped
@@ -18,8 +18,8 @@ contract step pending at the installed version through `workhorse schema contrac
 `--yes` and first names every worker still live on a retiring protocol. The current migration plan
 has one contract step: `0025-add-a-fast-task-tier.sql` moves schema 24 to 25 and retires
 protocols 1 through 4. `migrateSchema` therefore stops at schema 24 on an older installation, and
-`contractSchema` applies step 25. The additive steps 26 through 43 follow, so a second `migrateSchema`
-run completes the plan. Their files run from `0026` to `0044`: file number `0035` was reserved and
+`contractSchema` applies step 25. The additive steps 26 through 44 follow, so a second `migrateSchema`
+run completes the plan. Their files run from `0026` to `0045`: file number `0035` was reserved and
 never used, so from `0036` on a file's number is one above the version it produces. Step 25 ships without the usual retention window, as
 [ADR 0077](decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) §6 records.
 
@@ -60,7 +60,7 @@ failure leaves the earlier statements applied at the starting version and report
 `Workhorse migration <file> failed part-way and rolled nothing back`. `lock_timeout` is not set for
 such a step.
 
-An installed version below the baseline 6 or above the current 43, a version no step starts from, and
+An installed version below the baseline 6 or above the current 44, a version no step starts from, and
 a `workhorse.schema_version` table without exactly one row fail without running a migration.
 `typescript/core/test/schema-migrations.test.ts` migrates every frozen artifact under
 `sql/releases/` and requires schema-only dump equality with a clean installation.
@@ -3412,6 +3412,13 @@ values used for the returned verdict; callers cannot supply per-call thresholds.
 `workhorse health --json` writes the same `QueueHealth` object and exits 2 when the level is not `healthy`. `createDashboardQueueHealthReader` reads the raw `queue_health_v1()` document with one SQL statement. It once called `Admin.health()`, but its consumers now hand the document back to PostgreSQL as procedure input, and a converted `QueueHealth` would need converting back. It shares an in-flight read and its document for 3,000 milliseconds. The readers in one host workspace's `DashboardRpcContext` use that cache. A failed read is never cached. The Go `backend.queueHealth` method and the Python `DashboardBackend._queue_health` method keep the same cache with the same bound. `dashboard_system_v1` and `dashboard_settings_v1` call `queue_health_v1` inside PostgreSQL instead. `DashboardSystemPage.status` carries `level` and the raw reasons. The SPA derives human wording through `healthCheckMessages` and adds no thresholds. `DashboardSystemPage.kpis` also projects `dependencies`, `children`, and `externalWaits` from the same snapshot for current-pressure drill-downs. `dashboard_system_v1` groups ready rows by `queue_name` and `priority`. Each `DashboardSystemQueueRow.priorityBacklog` returns `priority`, `ready`, and `oldestReadyMs`, ordered by priority descending. PostgreSQL orders queue rows by `queue_name`; the SPA applies display-risk order.
 
 Retention health includes the persisted policy, oldest retained timestamps, per-category cleanup lag, counts of fully eligible event and attempt partitions, and bounded row counts for both default partitions. Fallback counts are exact through 10,000 rows; `defaultHistoryRowsCapped` marks 10,001 as a lower bound. Live tasks are excluded from terminal identity lag. Terminal identity and terminal outcome lag count only rows that `prune_terminal_tasks_v1` could delete now: a row also waits until its `history_through_at` is earlier than the `history_retained_before` of the `history_retention` routine. That cutoff advances once a day, so a row held only by it is not lag; a stalled history pass shows up as task event and attempt history lag instead. History lag is based only on fully droppable partitions or expired default rows, not the intentionally retained partial boundary day.
+
+Schedule runs are deleted only by the daily `history_retention` routine, so the oldest run ages by up to a day between passes. Their `retention-lag` reason therefore follows that routine rather than `schedule_occurrence_lag_ms`, which stays the raw time past the occurrence window and remains the reason's `observed` value. `queue_health_v1` computes two internal lags and removes both from the public document:
+
+- `schedule_occurrence_pass_lag_ms` measures the oldest row with `fired_at` at or before `maintenance_state.last_started_at`, as of that start, against `schedule_occurrence_retention_days`. A failing or incomplete pass still records its start, so rows it left behind stay visible. It is 0 when `last_completed_local_date` is NULL and the pass started before `retention_policy.updated_at`: a retention-policy change resets completion, and that pass used the earlier window. A maintenance-policy change also resets completion but keeps the window, so it does not trigger this guard.
+- `schedule_occurrence_due_lag_ms` is the time since the first scheduled pass after the latest start fell due. A start at or after `history_retention_local_time` in `maintenance_policy.timezone` counts as that local day's pass, so the next pass falls due at that time on the following day. A `last_completed_local_date` covers its whole local day, which accounts for a forced pass before the scheduled time. Without a recorded start, the latest scheduled time at or before now is due. The lag keeps growing while no pass starts, and incomplete event or attempt retention does not affect it.
+
+`evaluate_queue_health_v1` reports schedule runs when the pass lag exceeds `row_retention_lag_ms`, or when the due lag exceeds it while `schedule_occurrence_lag_ms` is above 0. Between on-time passes, expired runs alone do not degrade health. Every other row category keeps the direct `row_retention_lag_ms` comparison.
 
 ## Dashboard package boundary
 

@@ -24,6 +24,53 @@ const stored = async () =>
           FROM workhorse.task_stat_bucket GROUP BY task_type ORDER BY task_type`)
   ).rows;
 
+const scheduleRunLagReported = async () =>
+  (await queue.health()).status.reasons.some(
+    (reason) => reason.code === "retention-lag" && reason.category === "scheduleOccurrences",
+  );
+
+const addScheduleRun = async (hoursPastWindow: number, firedHoursAgo: number) => {
+  await pool.query(
+    `INSERT INTO workhorse.schedule_definition(
+       namespace, schedule_name, cron_expression, queue_name, task_type, payload, max_attempts
+     ) VALUES ('integration', 'health-cadence', '0 * * * *', 'default', 'health-cadence',
+               '{}'::jsonb, 3)
+     ON CONFLICT DO NOTHING`,
+  );
+  await pool.query(
+    `INSERT INTO workhorse.schedule_occurrence(namespace, schedule_name, occurrence_at, fired_at)
+     VALUES ('integration', 'health-cadence',
+             clock_timestamp() - interval '14 days' - make_interval(secs => $1::float8 * 3600),
+             clock_timestamp() - make_interval(secs => $2::float8 * 3600))`,
+    [hoursPastWindow, firedHoursAgo],
+  );
+};
+
+// Records a pass that started at its scheduled local time, so the next one falls due a day later.
+const recordPass = async (
+  startedHoursAgo: number,
+  completedLocalDate: "started" | "earlier" | null,
+) => {
+  await pool.query(
+    `WITH pass AS (
+       SELECT date_trunc('second', clock_timestamp() - make_interval(secs => $1::float8 * 3600)) AS at
+     ), maintenance AS (
+       UPDATE workhorse.maintenance_policy
+          SET history_retention_local_time = ((SELECT at FROM pass) AT TIME ZONE 'UTC')::time
+     ), retention AS (
+       UPDATE workhorse.retention_policy SET updated_at = clock_timestamp() - interval '3 days'
+     )
+     UPDATE workhorse.maintenance_state
+        SET last_started_at = pass.at,
+            last_completed_local_date = CASE $2::text
+              WHEN 'started' THEN (pass.at AT TIME ZONE 'UTC')::date
+              WHEN 'earlier' THEN (pass.at AT TIME ZONE 'UTC')::date - 2 END
+       FROM pass
+      WHERE routine_name = 'history_retention'`,
+    [startedHoursAgo, completedLocalDate],
+  );
+};
+
 describe("retention maintenance", () => {
   it("keeps an operator maintenance-time override until it is reverted", async () => {
     await queue.syncMaintenancePolicy(
@@ -1527,6 +1574,89 @@ describe("retention maintenance", () => {
     expect(released.status.reasons).toContainEqual(
       expect.objectContaining({ code: "retention-lag", category: "taskIdentity" }),
     );
+  });
+
+  describe("schedule-run retention health", () => {
+    // The fixture keeps schedule runs for 14 days and allows 6 hours of row-retention lag.
+    const budgetMs = 21_600_000;
+
+    it("ignores schedule runs that expire between daily passes", async () => {
+      await addScheduleRun(8 - 1 / 60, 9);
+      await recordPass(8, "started");
+
+      const health = await queue.health();
+      expect(health.retentionLagMs.scheduleOccurrences).toBeGreaterThan(budgetMs);
+      expect(await scheduleRunLagReported()).toBe(false);
+    });
+
+    it("reports schedule runs a pass left behind and clears them once passes catch up", async () => {
+      await queue.syncRetentionPolicy({ ...defaultRetentionPolicy, occurrenceRowsPerPass: 1 });
+      await addScheduleRun(10, 24);
+      await addScheduleRun(9, 24);
+
+      await queue.retainHistory({ force: true });
+      expect(await scheduleRunLagReported()).toBe(true);
+
+      await queue.retainHistory({ force: true });
+      expect(await scheduleRunLagReported()).toBe(false);
+    });
+
+    it("ignores schedule runs fired after the latest pass started", async () => {
+      await addScheduleRun(15, 1);
+      await recordPass(8, null);
+
+      expect(await scheduleRunLagReported()).toBe(false);
+    });
+
+    it("reports an overdue pass only after the budget and while expired runs remain", async () => {
+      await addScheduleRun(8, 9);
+      await recordPass(29, "started");
+      expect(await scheduleRunLagReported()).toBe(false);
+
+      await recordPass(31, "started");
+      expect(await scheduleRunLagReported()).toBe(true);
+
+      await pool.query(`DELETE FROM workhorse.schedule_occurrence`);
+      await addScheduleRun(-1, 9);
+      expect(await scheduleRunLagReported()).toBe(false);
+    });
+
+    it("follows the latest start while other history keeps a pass incomplete", async () => {
+      // Incomplete event retention reruns the pass every tick, so its last completed date goes stale.
+      await addScheduleRun(6, 6);
+      await recordPass(7, "earlier");
+
+      expect(await scheduleRunLagReported()).toBe(false);
+    });
+
+    it("stops measuring a pass that ran under a replaced retention window", async () => {
+      await addScheduleRun(15, 9);
+      await recordPass(8, null);
+      expect(await scheduleRunLagReported()).toBe(true);
+
+      await queue.syncRetentionPolicy({
+        ...defaultRetentionPolicy,
+        scheduleOccurrenceRetentionDays: 13,
+      });
+      expect(await scheduleRunLagReported()).toBe(false);
+    });
+
+    it("keeps the raw budget for other retention categories", async () => {
+      const evaluated = await pool.query<{
+        status: { reasons: Array<{ code: string; category?: string }> };
+      }>(
+        `SELECT workhorse.evaluate_queue_health_v1(
+           (workhorse.queue_health_v1() - 'status') || jsonb_build_object(
+             'task_identity_lag_ms', $1::numeric + 1
+           ),
+           to_jsonb(workhorse.get_queue_health_policy_v1())
+         ) AS status`,
+        [budgetMs],
+      );
+      expect(evaluated.rows[0]?.status.reasons).toContainEqual(
+        expect.objectContaining({ code: "retention-lag", category: "taskIdentity" }),
+      );
+    });
   });
 
   it("prepares more history days than the snapshot demands over a full preparation interval", async () => {

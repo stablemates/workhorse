@@ -1,14 +1,14 @@
 [
   {
     "id": "current",
-    "installedSchemaVersion": 43,
+    "installedSchemaVersion": 44,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [5],
     "compatible": true
   },
   {
     "id": "schema-newer-inside-major-line",
-    "installedSchemaVersion": 44,
+    "installedSchemaVersion": 45,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [5],
     "compatible": true,
