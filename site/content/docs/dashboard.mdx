@@ -204,7 +204,7 @@ credentials out of the file.
 An embedded dashboard uses your application's authentication through its authorization callback.
 The callback runs before the interface, assets, compatibility check, and every RPC method. Return
 a verified principal using the language-specific type shown above. An unauthenticated result denies
-the request, while TypeScript and Go can also return a custom response.
+the request, while TypeScript, Go, and Rust can also return a custom response.
 
 Every backend replaces actor text from the browser with the verified principal before a mutation.
 The resulting `auditActor` and `requestedBy` fields record who acted, but never decide who may.

@@ -378,6 +378,19 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
     go: { file: "worker_fast_tier_test.go", pattern: "StaleCompletion" },
   },
   {
+    capability: "Fused fast-tier completion and refill claim in slot cohorts",
+    rust: {
+      file: "worker_postgres.rs",
+      test: "an_abandoned_batching_worker_reruns_no_more_tasks_than_its_concurrency",
+    },
+    typescript: { file: "worker-dispatch.test.ts", pattern: "refills each cohort on its own" },
+    python: { file: "test_worker_dispatch.py", pattern: "fused_claims_stay_within_their_cohort" },
+    go: {
+      file: "worker_dispatch_internal_test.go",
+      pattern: "FusedCompletionClaimsOnlyItsCohortsFreeSlots",
+    },
+  },
+  {
     capability: "Unhandled task type released to its queue",
     rust: { fixtures: ["runtime/missing-handler-releases-the-task-with-its-attempt-intact"] },
     typescript: { file: "integration-claim-lease-fence.test.ts", pattern: "unregistered type" },
@@ -911,6 +924,29 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
       pattern: "schedule_catchup_limit: int = 100",
     },
     go: { value: "100", file: "go/worker.go", pattern: "scheduleCatchupLimit = 100" },
+  },
+  {
+    setting: "Dispatch cohorts",
+    rust: {
+      value: "1 below concurrency 8, else concurrency / 8 within 2 to 8",
+      file: "rust/src/worker/mod.rs",
+      pattern: "concurrency.div_ceil(8).clamp(2, 8)",
+    },
+    typescript: {
+      value: "1 below concurrency 8, else concurrency / 8 within 2 to 8",
+      file: "typescript/core/src/worker.ts",
+      pattern: "Math.min(8, Math.max(2, Math.ceil(concurrency / 8)))",
+    },
+    python: {
+      value: "1 below concurrency 8, else concurrency / 8 within 2 to 8",
+      file: "python/src/workhorse/worker.py",
+      pattern: "min(8, max(2, -(-concurrency // 8)))",
+    },
+    go: {
+      value: "1 below concurrency 8, else concurrency / 8 within 2 to 8",
+      file: "go/worker.go",
+      pattern: "min(8, max(2, (concurrency+7)/8))",
+    },
   },
   {
     setting: "Shutdown grace, then",

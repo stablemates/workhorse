@@ -32,19 +32,20 @@ has no listener, and its worker logs one warning when it starts.
 ## How do I budget connections?
 
 A notification-capable pool holds one connection for the listener no matter how many workers share
-it, so a listening pool needs room for the listener plus claims. A pool capped at one connection
-polls instead of listening. Behind any pooler that cannot deliver notifications the listener slot
+it, so a listening pool needs room for the listener plus claims. A pool too small to spare a
+connection polls instead of listening. Behind any pooler that cannot deliver notifications the listener slot
 is held without delivering anything, which is budget spent on both the client pool and the
 pooler's client cap.
 
 Heartbeats need headroom of their own. If handlers hold every pooled connection, a heartbeat queued
-behind them never runs, and every lease lapses at once. Every worker therefore keeps one dedicated
-heartbeat connection per pool, shared the way the listener is. Budget that connection on top of the
+behind them never runs, and every lease lapses at once. Every worker therefore keeps a dedicated
+heartbeat connection. TypeScript and Go workers on one pool share it the way they share the
+listener, and a Rust worker holds its own. Budget that connection on top of the
 listener and whatever handlers take. If the pool cannot spare it, or states no size, the worker
 refuses to start and says why. Set `sharedHeartbeats` to send heartbeats through the shared pool
 instead, and accept that busy handlers can then delay renewal. The heartbeat connection runs only
 self-contained statements, so it works behind a transaction-mode pooler. Go names that opt-out
-`SharedHeartbeats`.
+`SharedHeartbeats`, and Python and Rust name it `shared_heartbeats`.
 
 On a fast-tier queue, a busy worker in any language splits its slots into cohorts, and each cohort
 can hold a connection of its own. When the pool states its size, the worker picks no more cohorts

@@ -266,11 +266,12 @@ application embeds the dashboard, use shared application authorization before sc
 ## Count connections before replicas
 
 Let `R` be worker replicas and `P` be each node-postgres pool maximum. The tier can open `R × P`
-client connections. Notification-assisted dispatch reserves one connection inside every pool, so
-`R` replicas reserve `R` listeners and leave at most `R × (P - 1)` worker-pool slots for queries.
+client connections. Notification-assisted dispatch reserves one connection inside every pool.
+Unless `sharedHeartbeats` is set, heartbeats reserve another, so `R` replicas leave at most
+`R × (P - 2)` worker-pool slots for queries.
 
-Two replicas with `max: 10` can open 20 client connections. Two can remain on `LISTEN`, leaving 18
-for claims, heartbeats, handlers, and maintenance. Add dashboard, producer, and migration pools
+Two replicas with `max: 10` can open 20 client connections. Two can remain on `LISTEN` and two on
+heartbeats, leaving 16 for claims, handlers, and maintenance. Add dashboard, producer, and migration pools
 before comparing the total with your database or pooler's client limit.
 
 Transaction-mode PgBouncer keeps queue operations correct but breaks the session behind `LISTEN`.

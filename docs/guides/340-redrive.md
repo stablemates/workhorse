@@ -4,7 +4,7 @@ A task used up all its attempts and gave up. Later you discover the API it was c
 been down for an hour. The task would work fine now.
 
 Redriving is an operator saying: make me a fresh copy of this task and run it.
-TypeScript and Go application code make that request through `Admin`. Python uses `Admin` or
+TypeScript, Go, and Rust application code make that request through `Admin`. Python uses `Admin` or
 `AsyncAdmin`. Each operator client stays separate from the application-shaped `Queue` client.
 An operator without a terminal asks for the same thing from the dashboard, in the listing that
 shows the failed tasks, one task or one filtered batch at a time.

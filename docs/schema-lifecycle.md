@@ -47,9 +47,9 @@ Every schema change ships as an ordered, immutable step:
    version from the baseline to the current one. A database installed before the chain was pruned
    also carries the rows below the baseline that it really applied.
 3. Advance the compatibility manifest (`protocol/v1/manifest.json`,
-   `protocol/v1/compatibility.json`) and the Python and Go client bounds
-   (`python/src/workhorse/_protocol.py`, `go/compatibility.go`) with the same schema version. The
-   package build generates its clean-install artifact from the tracked source.
+   `protocol/v1/compatibility.json`) with the same schema version, then run
+   `pnpm sql-catalogues:generate`. It writes the client bounds into every SDK's generated statement
+   catalogue. The package build generates its clean-install artifact from the tracked source.
 4. When a version has shipped in a published release, freeze its clean-install artifact as
    `sql/releases/<NNNN>.sql`. Released artifacts and released migrations are never edited, and a
    released migration never renames a function or reinterprets its `_vN` suffix.

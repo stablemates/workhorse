@@ -1,8 +1,8 @@
 # Workhorse architecture
 
-Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript and Go `Queue`, `Admin`, and `Worker` remain thin protocol clients.
+Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript, Python, Go, and Rust `Queue`, `Admin`, and `Worker` remain thin protocol clients.
 
-The current schema version is 40 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
+The current schema version is 43 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
 (`WORKHORSE_SCHEMA_BASELINE_VERSION`). `sql/releases/0006.sql` contains the baseline clean-install
 artifact, which is the 0.2.0 schema. The chain began at 1 and was pruned to this baseline when
 0.1.x support was dropped
@@ -18,8 +18,9 @@ contract step pending at the installed version through `workhorse schema contrac
 `--yes` and first names every worker still live on a retiring protocol. The current migration plan
 has one contract step: `0025-add-a-fast-task-tier.sql` moves schema 24 to 25 and retires
 protocols 1 through 4. `migrateSchema` therefore stops at schema 24 on an older installation, and
-`contractSchema` applies step 25. The additive steps 26 through 40 follow, so a second `migrateSchema`
-run completes the plan. Step 25 ships without the usual retention window, as
+`contractSchema` applies step 25. The additive steps 26 through 43 follow, so a second `migrateSchema`
+run completes the plan. Their files run from `0026` to `0044`: file number `0035` was reserved and
+never used, so from `0036` on a file's number is one above the version it produces. Step 25 ships without the usual retention window, as
 [ADR 0077](decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) §6 records.
 
 A clean installation records `(6, 'baseline')` in `workhorse.schema_migration`, then one row per
@@ -59,7 +60,8 @@ failure leaves the earlier statements applied at the starting version and report
 `Workhorse migration <file> failed part-way and rolled nothing back`. `lock_timeout` is not set for
 such a step.
 
-Versions below 43, versions above 47, gaps, and mixed version rows fail without running a migration.
+An installed version below the baseline 6 or above the current 43, a version no step starts from, and
+a `workhorse.schema_version` table without exactly one row fail without running a migration.
 `typescript/core/test/schema-migrations.test.ts` migrates every frozen artifact under
 `sql/releases/` and requires schema-only dump equality with a clean installation.
 SQL protocol functions keep their independent `_vN` suffix. A schema migration does not rename a
@@ -110,7 +112,7 @@ each language holds its worker at the end of every empty claim so the enqueue la
 rather than on whichever step the runner reached. `enqueueStallMs` then delays the enqueue past one
 whole step, so an executor that only counts empty polls fails on every run instead of once under
 load. The TypeScript suite
-runs every fixture through `Worker`; Python and Go runtimes must run the same fixtures.
+runs every fixture through `Worker`; Python, Go, and Rust runtimes must run the same fixtures.
 
 `protocol/v1/failures.json` pins the JSON error envelope a worker passes to `fail_v1`. An
 unredacted envelope carries exactly `name`, `message`, and `stack`; `stack` is a string or null. A
@@ -127,19 +129,20 @@ in the chain that implements `ErrorNamer`, the declared name of an exported conc
 `ErrorStacker`, and records null otherwise. `errors.As` walks the chain, so a wrapped error still
 names and stacks the failure it reports. Both interface lookups ignore an empty string.
 
-An error that names nothing is the one value the three cannot share, because each language's base
-error type names itself: TypeScript and Go record `Error` and Python records `Exception`.
+An error that names nothing is the one value the languages cannot share, because each language's base
+error type names itself: TypeScript, Go, and Rust record `Error` and Python records `Exception`.
 `failures.json` pins that per language rather than leaving it to drift. `HandlerPanicError` carries
 the stack captured where `callHandler` or `callBatchHandler` recovered the panic, so a Go panic
 records the same three fields as a TypeScript or Python exception.
 
-JSON numbers are the other place the three runtimes differ. PostgreSQL stores a `jsonb` number at
+JSON numbers are the other place the runtimes differ. PostgreSQL stores a `jsonb` number at
 full precision. Python decodes a JSON integer as an unbounded `int`. TypeScript and Go decode it as
 an IEEE-754 double, so an integer beyond 2^53 - 1 in magnitude arrives rounded and no error is
 raised. Go's `decodeContractJSON` is the exception: contract validation decodes with
 `json.Number`, because a schema bound must be checked against the stored value rather than against
-a double. Workhorse does not reject a value past that bound, because PostgreSQL accepts it and one
-language reads it correctly; `docs/parity.md` records the bound and tells a caller to send a larger
+a double. Rust decodes through `serde_json` without `arbitrary_precision`, so an integer stays exact
+within the signed and unsigned 64-bit ranges and becomes a double beyond them. Workhorse does not reject a value past that bound, because PostgreSQL accepts it and some
+languages read it correctly; `docs/parity.md` records the bound and tells a caller to send a larger
 identifier as a string.
 
 `protocol/v1/requests.json` maps public enqueue inputs to exact PostgreSQL JSON. TypeScript
@@ -2182,15 +2185,15 @@ the first member for readers that show one queue.
 `registry_interval_ms`, `active_slots`, `draining`, `client_protocol_version`, `sdk_language`, and
 `sdk_version`, then returns the PostgreSQL-owned `paused`
 flag. TypeScript uses `WorkerOptions.registryIntervalMs`, Python uses `registry_interval_ms`, and Go
-uses `WorkerOptions.RegistryInterval`; each defaults to five seconds. TypeScript and Python accept
-zero to opt out, while Go uses `WorkerOptions.DisableRegistry`. The dashboard shows the reported
+uses `WorkerOptions.RegistryInterval`, and Rust uses `WorkerOptions::registry_interval`; each defaults to five seconds. TypeScript and Python accept
+zero to opt out, while Go uses `WorkerOptions.DisableRegistry` and Rust uses `WorkerOptions::disable_registry`. The dashboard shows the reported
 process values read-only because changing them requires a deployment.
 
 `client_protocol_version`, `sdk_language`, and `sdk_version` record what the registering process is,
 and all three are nullable, because the SQL protocol is callable directly and a client that reports
 nothing is a fact to record rather than a caller to reject. Each SDK stamps its
 own values and no caller supplies them: TypeScript reports `typescript`, Python reports `python`,
-and Go reports `go`, each with its published package version. `sdk_language` holds 1 through 40
+Go reports `go`, and Rust reports `rust`, each with its published package version. `sdk_language` holds 1 through 40
 characters and `sdk_version` holds 1 through 64; `client_protocol_version` is 1 or greater. A
 refresh overwrites all three rather than merging, so a downgraded worker stops claiming a build it
 no longer runs. `worker_client_protocols_v1()` returns one row per distinct
@@ -2341,7 +2344,7 @@ stateDiagram-v2
 
 ### Enqueue
 
-`enqueue_batch_v1` parses and validates at most 1,000 requests against one timestamp, including optional priority, persisted retry policies, and up to 100 dependency identities. Priority defaults to 0 and must be an integer from 0 through 100. It returns `(ordinal, task_id, accepted)` for each input; `accepted` is true only when the statement created the durable task. One statement inserts `task`, optional `task_dependency` edges, `task_runtime` or a policy-selected terminal outcome, and acceptance events. Input ordinality controls returned IDs and ready sequence allocation. The loop over requests writes no full-tier task row. For each new full-tier request it validates the request, locks and reads its prerequisites, settles its idempotency key, and buffers its `task` row, `task_runtime` row, `task_dependency` edges, and `enqueued` event details. After the last request, `enqueue_batch_v1` writes `task`, then `task_runtime`, then all edges together with their `dependency_blocked` or `dependency_released` events, each with one statement in input order. It stores in each blocked runtime's `pending_prerequisites` the number of edges it inserts pending: every prerequisite without an outcome plus every terminal prerequisite whose policy rejects. The key-share locks it holds on the prerequisites keep that count exact against a concurrent terminal transition. It then passes every distinct terminal prerequisite to one `resolve_dependents_many_v1` call in identity order, inserts the `enqueued` events in input order, and calls `terminalize_deadline_v1` for each task whose deadline has already passed. Each task therefore keeps the event order that one-row writes produced; only the interleaving between tasks changes. The buffer never hides a prerequisite, because the batch generates every new task identity and a caller can name only a task that existed before the batch. Any invalid member rolls back the entire batch. Commit-delivered `NOTIFY workhorse_tasks` is coalesced to one notification per distinct queue that gained ready work.
+`enqueue_batch_v1` parses and validates at most 1,000 requests against one timestamp, including optional priority, persisted retry policies, and up to 100 dependency identities. Priority defaults to 0 and must be an integer from 0 through 100. It returns `(ordinal, task_id, accepted)` for each input; `accepted` is true only when the statement created the durable task. One `enqueue_batch_v1` call writes `task`, optional `task_dependency` edges, `task_runtime` or a policy-selected terminal outcome, and acceptance events in the caller's transaction. Input ordinality controls returned IDs and ready sequence allocation. The loop over requests writes no full-tier task row. For each new full-tier request it validates the request, locks and reads its prerequisites, settles its idempotency key, and buffers its `task` row, `task_runtime` row, `task_dependency` edges, and `enqueued` event details. After the last request, `enqueue_batch_v1` writes `task`, then `task_runtime`, then all edges together with their `dependency_blocked` or `dependency_released` events, each with one statement in input order. It stores in each blocked runtime's `pending_prerequisites` the number of edges it inserts pending: every prerequisite without an outcome plus every terminal prerequisite whose policy rejects. The key-share locks it holds on the prerequisites keep that count exact against a concurrent terminal transition. It then passes every distinct terminal prerequisite to one `resolve_dependents_many_v1` call in identity order, inserts the `enqueued` events in input order, and calls `terminalize_deadline_v1` for each task whose deadline has already passed. Each task therefore keeps the event order that one-row writes produced; only the interleaving between tasks changes. The buffer never hides a prerequisite, because the batch generates every new task identity and a caller can name only a task that existed before the batch. Any invalid member rolls back the entire batch. When a batch has more than one invalid member, the request loop reports the first member it rejects in input order. The loop runs before the edge insert, so a loop rejection wins over a dependency bound. Each bound check names the lowest task identity that exceeds it, whatever the input order. Commit-delivered `NOTIFY workhorse_tasks` is coalesced to one notification per distinct queue that gained ready work.
 
 `enqueue_many_v1` preserves that contract and returns `(ordinal, task_id, outcome, reason)`. Ordinary requests map `accepted` to `accepted` or `replayed` and return a null `reason`. A batch containing `debounce` or `throttle` requests locks every scoped idempotency, debounce, or throttle key in bytewise order before processing requests in caller order. This keeps mixed batches atomic and prevents overlapping batches from reversing key-lock order.
 
@@ -2381,7 +2384,7 @@ Each worker calls `tick_v1` at most once per configured `maintenanceIntervalMs` 
 
 A long-running worker registers before its first claim, but it does not wait for its first maintenance pass. The TypeScript `Worker.run()`, the Python `Worker.run()` and `AsyncWorker.run()`, the Go `Worker.Run`, and the Rust `Worker::run` start that pass beside dispatch, so a fresh worker's first claim skips one `tick_v1`, schedule evaluation, and `run_maintenance_v1` round. The Python worker runs that pass on its own thread and makes no other maintenance offer until it returns. A failure in that pass still stops the run, and `run` reports its error. [ADR 0078](decisions/0078-start-a-long-running-workers-first-claim-beside-its-startup-maintenance-pass.md) records this order. A single pass (TypeScript `runOnce()`, Go `RunOnce`, Rust `run_once`) runs maintenance before it claims. The Python `run_once()` does so whenever its maintenance interval has elapsed.
 
-Every TypeScript, Python, and Go worker calls `run_maintenance_v1(p_now)` from its slow maintenance cycle. The function calls `rollup_stats_v1`, `prepare_history_partitions_v1`, `retain_history_v1`, `prune_terminal_storage_v1`, then `prune_worker_registry_v1`. TypeScript offers it on `maintenanceRoutinePollMs`, Python on `maintenance_routine_poll_ms`, and Go on `WorkerOptions.MaintenanceRoutineInterval`. All three default to 60 seconds, which [ADR 0011](decisions/0011-daily-retention-and-split-maintenance.md) decided and [ADR 0072](decisions/0072-converge-the-worker-runtime-defaults.md) holds the three SDKs to. PostgreSQL checks persisted due state under each routine's advisory lock, so extra offers remain no-ops. The statistics rollup defaults to every minute. Partition preparation defaults to every six hours. Terminal storage cleanup defaults to every five minutes. History retention runs once per local date at or after `maintenance_policy.history_retention_local_time` in `maintenance_policy.timezone`. None shares the promotion advisory lock. Partition retirement abandons a DDL lock attempt after 250 ms rather than waiting indefinitely behind dispatch. Each maintenance function keeps its existing phase exception subtransactions, so a reported phase error does not roll back successful sibling phases. An unexpected top-level failure from the first four functions still rejects the pass. Registry pruning alone is caught by the orchestrator and reported as `worker_registry` after the other phases. Terminal storage reports `enqueue_idempotency`, `released_dependencies`, then `terminal_tasks`; released-edge compaction runs first so the same pass can prune a newly unpinned prerequisite.
+Every TypeScript, Python, Go, and Rust worker calls `run_maintenance_v1(p_now)` from its slow maintenance cycle. The function calls `rollup_stats_v1`, `prepare_history_partitions_v1`, `retain_history_v1`, `prune_terminal_storage_v1`, then `prune_worker_registry_v1`. TypeScript offers it on `maintenanceRoutinePollMs`, Python on `maintenance_routine_poll_ms`, Go on `WorkerOptions.MaintenanceRoutineInterval`, and Rust on `WorkerOptions::maintenance_routine_interval`. All four default to 60 seconds, which [ADR 0011](decisions/0011-daily-retention-and-split-maintenance.md) decided and [ADR 0072](decisions/0072-converge-the-worker-runtime-defaults.md) holds the SDKs to. PostgreSQL checks persisted due state under each routine's advisory lock, so extra offers remain no-ops. The statistics rollup defaults to every minute. Partition preparation defaults to every six hours. Terminal storage cleanup defaults to every five minutes. History retention runs once per local date at or after `maintenance_policy.history_retention_local_time` in `maintenance_policy.timezone`. None shares the promotion advisory lock. Partition retirement abandons a DDL lock attempt after 250 ms rather than waiting indefinitely behind dispatch. Each maintenance function keeps its existing phase exception subtransactions, so a reported phase error does not roll back successful sibling phases. An unexpected top-level failure from the first four functions still rejects the pass. Registry pruning alone is caught by the orchestrator and reported as `worker_registry` after the other phases. Terminal storage reports `enqueue_idempotency`, `released_dependencies`, then `terminal_tasks`; released-edge compaction runs first so the same pass can prune a newly unpinned prerequisite.
 
 Terminal-task pruning selects a bounded candidate window of identities with outcomes, both minimum windows elapsed, no live runtime, no retained schedule occurrence, and history boundaries behind the global retained-through watermark. The bounded delete cascades outcome, checkpoints, and waits. History insert triggers serialize with parent deletion and move the watermark backward for late old history, while queue purge explicitly removes history before identity.
 
@@ -2525,9 +2528,9 @@ token.
 
 Priority dispatch has no aging or fair-share control. A sustained stream of higher-priority ready work can starve lower-priority rows in the same queue.
 
-When the queue's first 100 ready rows name budgets, `claim_v1` also takes one exclusive advisory lock per budget name, in name order, before reading the clock. It checks each candidate with `budget_admission_v1`, so a saturated budget is passed over inside the same 100-row window. Claims of unrelated budgets do not serialize. A queue with no budget-named ready work takes no budget lock and keeps the one-row fast path. A claim that passes over a saturated budget locks no ready row. See [`budget`](#budget-and-budget_bucket).
+When the queue's first 100 ready rows name budgets, `claim_policy_batch_v1` also takes one exclusive advisory lock per budget name, in name order, before reading the clock. It checks each candidate with `budget_admission_v1`, so a saturated budget is passed over inside the same 100-row window. Claims of unrelated budgets do not serialize. It reads budget room together with shard room. A queue with no budget-named ready work takes no budget lock. A claim that passes over a saturated budget locks no ready row. See [`budget`](#budget-and-budget_bucket).
 
-If concurrency-key or rate-key limits apply, `claim_v1` inspects at most the first 100 ready rows by
+If concurrency-key or rate-key limits apply, `claim_policy_batch_v1` inspects at most the first 100 ready rows by
 priority descending, FIFO sequence, and task identity. It selects the earliest candidate whose queue-scoped key has concurrency capacity and
 a rate token. Saturated or throttled candidates remain ready, so later admissible work can proceed
 without an unbounded prefix scan. The transaction consumes queue and key tokens only after its
@@ -2535,13 +2538,13 @@ runtime update selects a candidate. Competing worker processes serialize on each
 one durable token admits one start even when claims overlap. Returning null after exhausting the
 window enters the Worker's normal bounded empty-claim wait instead of a claim loop.
 
-That window reads without locking. `claim_one_v1` takes a row lock, with `FOR NO KEY UPDATE SKIP LOCKED`,
-only on the candidate it admits, so a claim that admits nothing leaves every row it read lockable by
+That window reads without locking. `claim_policy_batch_v1` takes a row lock, with `FOR NO KEY UPDATE SKIP LOCKED`,
+only on the candidates it admits, so a claim that admits nothing leaves every row it read lockable by
 another claim. The admission decision cannot go stale between the read and the lock, because every
 rule that passes over a row holds a lock until the claim transaction ends. `max_active_per_key`
 and a per-key rate cap give the queue one admission shard, whose lock the claim holds. A budget
-holds `workhorse:budget:<budget_name>`. The one-row fast path locks the first ready row it
-can take, and refuses that row when it names a budget the claim never locked, because reading past
+holds `workhorse:budget:<budget_name>`. A direct round locks the first ready rows it
+can take, and stops at the first row that names a budget the claim never locked, because reading past
 it has no bound. `pnpm benchmark:saturated-claim` measures a claim on a queue whose keys are all
 saturated: it writes no row lock and one WAL record, where the window lock wrote 100 row locks and
 101 WAL records.
@@ -2720,8 +2723,8 @@ active rows, counted up to `max_active`, reach `max_active`, or when the row's `
 `max_active_per_key` active rows. Only such a release can unblock a claim. A full shard counts even
 when the queue has room, because a claim that has not committed may have filled the other shards. Completion,
 failure, retry release, cancellation, durable wait, and recovery can therefore wake a worker in another process
-without waiting for its fallback poll. A release below every cap publishes nothing, because a worker that takes
-a notification while idle delays its next claim. The count includes the row being released and every concurrent release
+without waiting for its fallback poll. A release below every cap publishes nothing, unless an open claim holds its shard or a sync changed the
+shard count, as described below. A worker that takes a notification while idle delays its next claim. The count includes the row being released and every concurrent release
 that has not committed, so the first release from a full queue always publishes, even when one statement
 releases several rows.
 
@@ -2763,7 +2766,8 @@ release never waits for a shard lock. Before schema version 43 the release waite
 so a pruning sync could deadlock with one transaction that released tasks from several capped
 queues. A sync can still meet `40P01` from a caller's transaction that claims from several queues.
 The sync is safe to repeat, because it writes the complete desired set. Every SDK therefore sends an
-aborted sync again, up to 3 attempts in total. Inside a caller's transaction,
+aborted `sync_concurrency_policies_v1` again, up to 3 attempts in total. `sync_rate_limit_policies_v1`
+is sent once, and its caller receives the `40P01`. Inside a caller's transaction,
 the deadlock has already aborted that transaction, so the SDK raises the original `40P01` and the
 caller repeats the transaction.
 
@@ -2771,12 +2775,14 @@ caller repeats the transaction.
 
 `heartbeat_v1` performs one `UPDATE` against the exact active `task_id`, `worker_id`, and `fence_token`. It takes no advisory or concurrency-policy row lock because renewal does not change admission counts. The function returns `accepted`, `cancel_requested`, `deadline_exceeded`, `timeout_exceeded`, or `stale`, and changes heartbeat, expiry, and `updated_at` only for `accepted`.
 
-`heartbeat_many_v1(p_worker_id, p_leases jsonb)` accepts one through 100 `{ taskId, fenceToken, leaseMs }` entries. One `UPDATE ... FROM` renews every matching generation and returns `(ordinal, task_id, status)` in input order, with missing or mismatched generations reported as `stale`. TypeScript, Python, and Go workers keep one non-overlapping heartbeat timer per worker and send every active lease through this function. Per-task deadline timers and abort signals remain independent.
+`heartbeat_many_v1(p_worker_id, p_leases jsonb)` accepts one through 100 `{ taskId, fenceToken, leaseMs }` entries. One `UPDATE ... FROM` renews every matching generation and returns `(ordinal, task_id, status)` in input order, with missing or mismatched generations reported as `stale`. TypeScript, Python, Go, and Rust workers keep one non-overlapping heartbeat round per worker and send every active lease through this function. Per-task deadline timers and abort signals remain independent.
 
-A heartbeat round that throws leaves every task running in all three SDKs, and the next round
+A heartbeat round that throws leaves every task running in every SDK, and the next round
 retries. The round's result says nothing about ownership, so the worker never aborts or fails a task
 for it. Each attempt instead keeps a local lease watchdog: `TaskAttempt` in TypeScript, the
-per-attempt expiration thread in Python, and the attempt's watchdog timer in Go. The watchdog
+per-attempt expiration thread in Python, the attempt's watchdog timer in Go, and the `watchdog` timer in Rust's `Inner::execute`, which cancels the
+`CancellationToken` with `CancelReason::LeaseLost`. A Rust task leaves the heartbeat round when its
+handler returns. The watchdog
 measures from the moment the claim request left, and every `accepted` heartbeat moves it to the
 moment that round's request left. Both moments precede the database's renewal, so the local window
 never outlasts the stored `expires_at`. Once one lease passes without a newer accepted renewal, the
@@ -2806,7 +2812,10 @@ node-postgres client has no listener of its own, so without this one the error w
 process. The Go, Python, and Rust drivers report a lost connection only on the next statement, which
 fails that round and discards the connection. No session `SET` is involved, so the reservation is
 safe under transaction pooling. Go workers use the pool's dedicated heartbeat connection unless `WorkerOptions.SharedHeartbeats` opts out. A Python worker
-takes its dedicated heartbeat connection from the supplied pool.
+takes its dedicated heartbeat connection from the supplied pool. A Rust worker reserves one pooled
+heartbeat connection unless `WorkerOptions::shared_heartbeats` is set. It bounds a round on that
+connection by one heartbeat interval and discards the connection when the round fails. A round under
+`shared_heartbeats` borrows like any other statement and is not bounded.
 
 ### Cancellation
 
@@ -2877,9 +2886,9 @@ closed. A worker whose fence PostgreSQL no longer recognizes receives `stale`.
 
 Each SDK releases a task of an unregistered type through it and records the `released` handler
 outcome. A pass whose claims were all unrunnable counts as empty for the poll backoff, so a task no
-deployed worker handles is re-claimed on the poll cadence rather than in a loop. `Worker.RunOnce` and
-`run_once()` report such a pass as unprocessed, and `runOnce()` waits the poll interval on the pass
-that follows one. The shared `missing-handler` runtime fixture asserts in all three SDKs that the
+deployed worker handles is re-claimed on the poll cadence rather than in a loop. `Worker.RunOnce`, Python
+`run_once()`, and Rust `Worker::run_once` report such a pass as unprocessed, and `runOnce()` waits the poll interval on the pass
+that follows one. The shared `missing-handler` runtime fixture asserts in every SDK that the
 pass after a released-only pass makes no progress.
 
 ### Terminal transitions
@@ -2942,8 +2951,9 @@ claims and completions that start after it commits.
 - With `record_claims`, each fast claim writes one `claimed` `task_event` carrying `worker_id`,
   `fence_token` as text, and `expires_at`.
 
-`Admin.setQueueTier(queueName, tier, { actor, reason })` wraps `set_queue_tier_v1`, returns the
-`QueueTier`, and emits the `workhorse.queue.tier_set` log event with `workhorse.queue.tier`.
+`Admin.setQueueTier(queueName, tier, { actor, reason, requestId })` validates the whole `AdminAudit`
+and wraps `set_queue_tier_v1`. It passes only `actor` and `reason`, so the tier change records no
+request ID. It returns the `QueueTier` and emits the `workhorse.queue.tier_set` log event with `workhorse.queue.tier`.
 `Admin.setQueueHistory(queueName, settings)` takes a partial `QueueHistorySettings`
 (`recordAttempts`, `recordClaims`) and returns the full settings. The other SDKs expose the same
 pair: Python `Admin.set_queue_tier` and `set_queue_history(queue_name, *, record_attempts=None,
@@ -3131,7 +3141,7 @@ build a custom plan for the statement on every call. The history insert joins `q
 `record_attempts` instead of calling `fast_records_attempts_v1` per completed row.
 
 An oversized result fails only its own attempt. After taking its locks, the function selects each
-input whose `octet_length(result::jsonb::text)` exceeds the row's `result_max_bytes`. It passes
+input whose `octet_length(COALESCE(result, 'null')::text)` exceeds the row's `result_max_bytes`. It passes
 each one, in task ID order, to `fast_fail_v1` with the error `{"name": "TaskValueSizeLimitError",
 "message": "<task_type> result exceeds its configured size limit", "stack": null}` and a null
 retry delay. The task's retry policy then schedules another attempt or finishes it as failed. The
@@ -3282,23 +3292,23 @@ tasks from the two fast tables, because they write no events.
 A worker does not configure the tier. Each SDK worker probes a queue with a fast claim through
 `complete_many_and_claim_v1`. A `P1007` answer marks the queue full-tier for 30 seconds, and the
 worker claims through `claim_many_v1` until the next probe. The interval is
-`TIER_PROBE_INTERVAL_MS` in TypeScript, `_TIER_PROBE_INTERVAL_SECONDS` in Python, and
-`TIER_PROBE_INTERVAL` in Rust. A stale belief is safe, because PostgreSQL routes each claim by the
+`TIER_PROBE_INTERVAL_MS` in TypeScript, `_TIER_PROBE_INTERVAL_SECONDS` in Python,
+`fastTierProbeInterval` in Go, and `TIER_PROBE_INTERVAL` in Rust. A stale belief is safe, because PostgreSQL routes each claim by the
 current tier.
 
 A fast-tier completion uses the fused statement. A `batched completion` rejection means the queue
 left the fast tier, so the worker falls back to `complete_v1`. Every SDK worker
 fuses a completion with a refill claim, for `freeSlots() + 1` tasks under the refill-batch rule, and
-hand the slot over directly. In Python, `Worker._reserve_completion_claim` reserves those slots and
+hands the slot over directly. In Python, `Worker._reserve_completion_claim` reserves those slots and
 `Worker._send_batched_completion` sends one statement per queue and cohort at a time. Completions
 that arrive while it is in flight share the next statement, split into chunks of at most 100 tasks
 and 100 claimed slots. `Worker._send_completion_chunk` names each chunk's tasks in task ID order.
-When PostgreSQL rolls the chunk back with SQLSTATE `40P01`, `_fenced_write_rows` sends the chunk
+When PostgreSQL rolls the chunk back with SQLSTATE `40P01`, `fenced_write_rows` sends the chunk
 again, up to `FENCED_WRITE_DEADLOCK_ATTEMPTS` (3) times in total, because nothing in it committed. The Go worker's
 limit is the free slots plus one, capped by the free slots of the completing task's cohort plus one.
 The Rust worker's limit follows the Go rule.
 
-The TypeScript and Python workers split their slots into cohorts so that fused completions do not
+Every SDK worker splits its slots into cohorts so that fused completions do not
 run in lockstep ([ADR 0076](decisions/0076-keep-overlapping-batched-claims-in-flight-to-fill-worker-slots.md#cohorts-for-batched-completions)).
 `WorkerOptions.cohorts` is a safe integer from 1 through `concurrency`. Without it,
 `defaultDispatchCohorts(concurrency, spareConnections)` returns 1 below concurrency 8, and otherwise
@@ -3333,7 +3343,9 @@ same order. The fused claim releases a lock it would otherwise keep on a candida
 leased first ([Fast claim](#fast-claim)). When PostgreSQL still rolls a statement back with SQLSTATE
 `40P01`, `queryFencedWrite` sends it again, up to `fencedWriteDeadlockAttempts` (3) times in total.
 
-The Rust worker follows the same rules. Its `default_cohorts` caps the default at the pool's
+The Rust worker follows the same rules. `WorkerOptions::cohorts` is an `Option<usize>`; a value
+outside 1 through `concurrency` fails with `worker cohorts must be between 1 and concurrency`, and
+an explicit value is never capped. Its `default_cohorts` caps the default at the pool's
 `max_size`, minus 1 for the heartbeat connection unless `shared_heartbeats` is true; its listener
 opens a connection outside the pool. `Inner::complete_batched` sends the completions of one queue
 and cohort that finish in the same scheduler turn as one `complete_many_and_claim_v1` statement of
@@ -3574,8 +3586,9 @@ registrations whose `schedule_namespaces` contains the definition namespace and 
 `history_partitions`, `history_retention`, and `terminal_storage` from
 `dashboard_maintenance_state_v1`, the supplied tick cadence, the policy, and the current database
 time. The Schedules page uses the tick state's completion time as the built-in tick row's last run.
-Each application schedule's occurrence count links to `/tasks?type=<task type>` in a new browser
-tab. Application rows return `configuredEnabled`, `paused`, `pausedBy`, `pausedReason`, `pausedAt`,
+Each application schedule's occurrence count links to `/tasks?queue=<queue>&type=<task type>` in a new browser
+tab. The task listing has no schedule filter, so the link narrows by the schedule's destination queue
+as well as its task type. Application rows return `configuredEnabled`, `paused`, `pausedBy`, `pausedReason`, `pausedAt`,
 and effective `active`. Compact rows show the queue, evaluator count, and Pause or Resume action. A
 deployment-disabled definition shows `Config off`; focusable tooltips carry the task type,
 priority, worker wording, pause durability, and full maintenance status.
@@ -3618,7 +3631,7 @@ estimates with history.
 The concurrency utilization of a live task comes from the supplied `health` document, or from
 `queue_health_v1()` when the caller supplied none. The function returns SQL `NULL` when `id` does
 not exist. TypeScript replaces the returned `durability: null` with
-`DashboardDurabilityProjector`; Python and Go leave it null.
+`DashboardDurabilityProjector`; Python, Go, and Rust leave it null.
 
 `current` carries the terminal result once, under `current.outcome.result`. A result exists only
 once a task finishes, so the second copy beside it doubled what a large result cost to open and

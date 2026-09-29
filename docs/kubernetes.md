@@ -278,11 +278,13 @@ process-local; use an embedded dashboard with shared host authentication before 
 
 Let `R` be worker replicas and `P` be the node-postgres pool maximum inside each worker process.
 The worker tier can open `R × P` client connections. A notification-capable pool reserves one of
-its own connections for the shared `LISTEN` listener, so `R` replicas reserve `R` listeners and
-leave at most `R × (P - 1)` pool slots for queries.
+its own connections for the shared `LISTEN` listener. Unless `sharedHeartbeats` is set, the pool
+also reserves one heartbeat connection. `R` replicas therefore leave at most `R × (P - 2)` pool
+slots for queries.
 
 For example, two replicas with `max: 10` can open 20 client connections. Two connections can remain
-on `LISTEN`, leaving 18 worker-pool slots for claims, heartbeats, handlers, and maintenance. Add the
+on `LISTEN` and two on heartbeats, leaving 16 worker-pool slots for claims, handlers, and
+maintenance. Add the
 dashboard pool, producer pools, and the transient migration Job before comparing the total with the
 database or pooler's client limit.
 

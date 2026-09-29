@@ -106,8 +106,9 @@ The crate never installs or migrates the shared PostgreSQL schema.
 
 ### Current state
 
-The workspace in the repository-root `Cargo.toml` holds one crate. `rust/` builds the `workhorse`
-package, the one crate ADR 0074 publishes.
+The workspace in the repository-root `Cargo.toml` holds four crates: `rust/` builds the `workhorse`
+package, and `rust/demo-worker`, `rust/tools/api-snapshot`, and `rust/tools/fast-claim-stress` stay
+unpublished. `workhorse` is the one crate ADR 0074 publishes.
 
 - `Queue` in `src/queue.rs` and `Admin` in `src/admin.rs` are the ADR 0074 clients.
 - `Worker` in `src/worker/` claims, runs, heartbeats, and settles tasks, and drains within a grace

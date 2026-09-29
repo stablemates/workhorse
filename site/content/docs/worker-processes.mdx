@@ -98,8 +98,9 @@ the whole unit rather than running it half-alive.
 ## One process, one pool
 
 Give each process its own pool and let the adapter's `close` shut it down after the last worker
-drains. Size total capacity across replicas: heartbeats, handler queries, and maintenance share
-those connections. Each worker also registers itself in PostgreSQL on its `registryIntervalMs`
+drains. Size total capacity across replicas. The notification listener and, unless
+`sharedHeartbeats` is set, the heartbeat connection each hold one; handler queries and maintenance
+share the rest. Each worker also registers itself in PostgreSQL on its `registryIntervalMs`
 cadence, which is what lets a dashboard on another machine see the fleet — see
 [Operations](/docs/operations).
 

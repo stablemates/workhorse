@@ -200,7 +200,7 @@ changes only that occurrence, not the schedule or its next fire.
 
 Startup synchronizes a namespaced one-minute heartbeat, a five-minute report, a one-minute lightweight
 long-running schedule, and the staggered feature-family definitions through `Queue.syncSchedules`.
-All three workers evaluate due schedules in-process with advisory-lock coordination and SQL-level
+All four workers evaluate due schedules in-process with advisory-lock coordination and SQL-level
 occurrence deduplication. The Schedules view reports the live evaluator count for each namespace.
 Its maintenance rows use `Maintenance` as the destination because workers call those PostgreSQL
 functions directly; they are not tasks sent to a queue. The view distinguishes the application heartbeat from four worker-owned maintenance entries: the fast tick, partition preparation, daily history retention at the configured local time, and terminal/idempotency cleanup. PostgreSQL stores the global IANA maintenance timezone, local retention time, and routine due state. The heartbeat's
@@ -217,7 +217,7 @@ For the deployable production shape, build and start the compiled demo explicitl
 pnpm demo:production
 ```
 
-That path creates the optimized dashboard bundle, then starts the Hono process and all three worker
+That path creates the optimized dashboard bundle, then starts the Hono process and all four worker
 processes without Vite, HMR, or React Grab. It does not reset the database, which makes it suitable
 as the basis for future public deployment work.
 
