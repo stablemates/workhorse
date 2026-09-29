@@ -58,6 +58,14 @@ function settingsPage(
   } as DashboardSettingsPage;
 }
 
+const retentionLag = (category: "scheduleOccurrences" | "taskIdentity") => ({
+  code: "retention-lag" as const,
+  severity: "degraded" as const,
+  observed: 108_000_000,
+  budget: 21_600_000,
+  category,
+});
+
 describe("dashboard presentation policy", () => {
   it("derives settings advice and its English summary in the SPA", () => {
     const [ceiling] = deriveSettingsRecommendations(
@@ -125,6 +133,36 @@ describe("dashboard presentation policy", () => {
     }
     expect(criticalChecks[1]!.advice).toContain("maintenance has not run recently");
     expect(criticalChecks[1]!.helpHref).toBe("https://workhorse.run/docs/maintenance");
+  });
+
+  it("points late schedule runs at the daily history-retention pass", () => {
+    const scheduleOnly = healthCheckMessages([retentionLag("scheduleOccurrences")])
+      .degradedChecks[0]!;
+    expect(scheduleOnly.advice).toContain("daily history-retention pass");
+    expect(scheduleOnly.advice).toContain("occurrence rows per pass");
+    expect(scheduleOnly.advice).not.toContain("shorten the cleanup intervals");
+
+    const mixed = healthCheckMessages([
+      retentionLag("taskIdentity"),
+      retentionLag("scheduleOccurrences"),
+    ]).degradedChecks[0]!;
+    expect(mixed.message).toBe("Retention cleanup is late for task records, schedule runs");
+    expect(mixed.advice).toContain("shorten the cleanup intervals");
+    expect(mixed.advice).toContain("daily history-retention pass");
+
+    const retentionSummary = (reasons: ReturnType<typeof retentionLag>[]) =>
+      deriveSettingsRecommendations(settingsPage({ reasons })).find(
+        ({ id }) => id === "retention-lag",
+      );
+    const scheduleSummary = retentionSummary([retentionLag("scheduleOccurrences")]);
+    expect(scheduleSummary!.summary).toContain("daily history-retention pass");
+    expect(scheduleSummary!.summary).not.toContain("current cadence");
+    const mixedSummary = retentionSummary([
+      retentionLag("taskIdentity"),
+      retentionLag("scheduleOccurrences"),
+    ]);
+    expect(mixedSummary!.summary).toContain("current cadence");
+    expect(mixedSummary!.summary).toContain("daily history-retention pass");
   });
 
   it("derives retry labels, worker state, and queue ordering from measurements", () => {

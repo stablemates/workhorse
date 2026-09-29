@@ -514,6 +514,7 @@ describe("schema installation", () => {
       { version: 41, description: "cut the plain full-tier per-task claim and trigger cost" },
       { version: 42, description: "keep JIT compilation out of the task detail read" },
       { version: 43, description: "shard the admission counters" },
+      { version: 44, description: "make schedule-run retention health respect daily cleanup" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

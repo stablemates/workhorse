@@ -41,6 +41,11 @@ const retentionCategorySettings: Readonly<Record<string, string[]>> = {
   statistics: ["statisticsRowsPerPass"],
 };
 
+// Schedule runs age by up to a day between passes, so their advice differs from per-pass limits.
+const scheduleRunRetentionAdvice =
+  "Schedule-run cleanup belongs to the daily history-retention pass. Check that run on the " +
+  "Schedules page; if it left rows behind, raise the occurrence rows per pass on the Settings page.";
+
 function hours(ms: number): string {
   return `${(ms / 3_600_000).toFixed(1)}h`;
 }
@@ -94,9 +99,15 @@ export function deriveSettingsRecommendations(
       settings: [
         ...new Set(categories.flatMap((category) => retentionCategorySettings[category] ?? [])),
       ],
-      summary:
-        `Retention for ${categories.join(", ")} is ${hours(worst)} past its window. ` +
-        `Cleanup is not keeping up at the current cadence and per-pass limits.`,
+      summary: [
+        `Retention for ${categories.join(", ")} is ${hours(worst)} past its window.`,
+        categories.some((category) => category !== "scheduleOccurrences")
+          ? "Cleanup is not keeping up at the current cadence and per-pass limits."
+          : null,
+        categories.includes("scheduleOccurrences") ? scheduleRunRetentionAdvice : null,
+      ]
+        .filter((sentence) => sentence !== null)
+        .join(" "),
       measured: Object.fromEntries([
         ...retentionReasons.map((reason) => [`${reason.category}LagMs`, reason.observed] as const),
         ["budgetMs", retentionReasons[0]!.budget],
@@ -188,6 +199,7 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
   const criticalChecks: HealthCheckMessage[] = [];
   const degradedChecks: HealthCheckMessage[] = [];
   const lateRetentionLabels: string[] = [];
+  const lateRetentionCategories: DashboardRetentionCategory[] = [];
   for (const reason of reasons) {
     switch (reason.code) {
       case "expired-leases":
@@ -257,6 +269,7 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
       case "retention-lag":
         if (reason.category) {
           lateRetentionLabels.push(retentionCategoryLabels[reason.category].toLowerCase());
+          lateRetentionCategories.push(reason.category);
         }
         break;
       case "eligible-history-partitions":
@@ -309,9 +322,15 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
   if (lateRetentionLabels.length > 0) {
     degradedChecks.push({
       message: `Retention cleanup is late for ${lateRetentionLabels.join(", ")}`,
-      advice:
-        "Cleanup is not keeping up with its retention windows at the current cadence. Raise " +
-        "the per-pass limits or shorten the cleanup intervals shown on the Settings page.",
+      advice: [
+        lateRetentionCategories.some((category) => category !== "scheduleOccurrences")
+          ? "Cleanup is not keeping up with its retention windows at the current cadence. Raise " +
+            "the per-pass limits or shorten the cleanup intervals shown on the Settings page."
+          : null,
+        lateRetentionCategories.includes("scheduleOccurrences") ? scheduleRunRetentionAdvice : null,
+      ]
+        .filter((sentence) => sentence !== null)
+        .join(" "),
       helpHref: docs("maintenance"),
     });
   }
