@@ -45,7 +45,10 @@ stages set it, so neither published image carries the ceiling.
 
 Both builds keep the Go build and module caches in BuildKit cache mounts, which persist in the
 builder between image builds. The site build compiles every Go documentation example as a gate, and
-the demo build compiles its Go worker; with a warm cache, each recompiles only what changed. The
+the demo build compiles its Go worker; with a warm cache, each recompiles only what changed. The demo
+build also keeps the Cargo registry and target directory in cache mounts for its Rust worker. The
+`rust-build` stage's image tag pins the same toolchain as `rust-toolchain.toml`, so the build downloads
+no toolchain. The
 caches never reach an image. Pruning the builder's cache, for example with `docker builder prune`,
 makes the next build of each image cold and slower, not different.
 
@@ -179,8 +182,13 @@ supply:
 demo mode and environment labels, the single-admin credentials, telemetry, seeding, and the shutdown
 grace period.
 
+The primary URL must not require TLS. The Rust worker connects without TLS, so it accepts a URL whose
+`sslmode` is `disable` or `prefer`, or a Unix socket, and refuses `sslmode=require`. A refused
+connection stops the Rust worker, and the entry point then stops the container. The secondary URL
+reaches only a TypeScript worker, so this constraint does not apply to it.
+
 Each demo workspace should have a dedicated role and database. The primary workspace runs TypeScript,
-Python, and Go workers. When `DATABASE_URL_SECONDARY` is set, both launchers add one dedicated
+Python, Go, and Rust workers. When `DATABASE_URL_SECONDARY` is set, both launchers add one dedicated
 TypeScript worker for staging, with two execution slots and its own connection pool. The launcher
 maps the secondary URL to that child process only and sets `WORKHORSE_DEMO_WORKSPACE=staging`.
 The container supervises and drains this worker alongside the primary workers.
@@ -191,7 +199,10 @@ scheduled work, and expired deadlines. Startup markers prevent repeated seed ins
 marked `fast-tier-dashboard-v1`. It moves the new, empty queues `demo-fast`, `demo-python-fast`, and
 `demo-go-fast` to the fast tier, enqueues a small batch, and syncs their schedules in the
 `workhorse-demo-fast-tier` namespace. An existing primary database gains this step on its next start,
-with no migration and no reset. Existing
+with no migration and no reset. A later step, marked `fast-tier-rust-dashboard-v1`, does the same for
+the Rust worker. It moves the new, empty queue `demo-rust-fast` to the fast tier, records attempts but
+not claims, and enqueues a small batch there and on `demo-rust`. It then syncs all four fast-tier
+schedules. A primary database that already carries every earlier marker runs this step once. Existing
 staging history is retained, and admission policies also govern tasks left by the previous seed.
 Fresh production history includes task-specific customer, email, order, and report context.
 Each URL must resolve from inside the deployed container, so a loopback address on the build machine
@@ -223,8 +234,8 @@ and the kernel kills the process. That kill carries no message and no stack, so 
 unexplained restart rather than as a memory problem.
 
 The container runs four Node processes: the supervisor, the server, the TypeScript worker, and the
-staging worker. Each holds about 80 MiB outside its heap, and the Python and Go workers hold under
-60 MiB together, so four ceilings and that overhead must fit the limit. Changing one value alone
+staging worker. Each holds about 80 MiB outside its heap, and the Python, Go, and Rust workers hold
+under 70 MiB together, so four ceilings and that overhead must fit the limit. Changing one value alone
 breaks the pair. A larger limit without a larger ceiling is capacity the demo will not use, and a
 smaller limit without a smaller ceiling restores the silent kill.
 `typescript/demo/src/container-memory.test.ts` reads both files and fails when they disagree.
@@ -235,6 +246,9 @@ the container's resident set peaked at 821 MiB of the 1024 MiB it is allowed, an
 process held about 290 MiB. With the ceiling the container peaked at 611 MiB and no process was
 killed. Nothing fails at the uncapped peak today, because the demo's working set is small. Anything
 that grows that working set reaches the container limit before V8 collects.
+
+The Rust worker's figure came later, from the same limits and both workspaces. Its resident set
+peaked at 5 MiB. The Python worker peaked at 42 MiB and the Go worker at 15 MiB in the same run.
 
 The demo answers a fixed public surface. `GET /up` and `GET /robots.txt` respond without touching
 the dashboard host. `GET` requests under the dashboard path serve the application shell, and `GET`
@@ -419,7 +433,7 @@ next release on, the ordinary pipeline step applies again.
 The demo host is the soak site for
 [ADR 0056](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0056-set-the-1-0-0-exit-criteria.md)
 Gate 4, which holds the 1.0.0 tag on one database running 30 consecutive days under continuous
-work. It already runs TypeScript, Python, and Go workers against one PostgreSQL database, so the
+work. It already runs TypeScript, Python, Go, and Rust workers against one PostgreSQL database, so the
 evidence is a matter of leaving it alone rather than building anything.
 
 While a soak window is open:

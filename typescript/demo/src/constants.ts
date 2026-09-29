@@ -43,10 +43,12 @@ export const DEMO_BATCH_LINGER_MS = 2_000;
 export const DEMO_QUEUE = "demo";
 export const DEMO_PYTHON_QUEUE = "demo-python";
 export const DEMO_GO_QUEUE = "demo-go";
+export const DEMO_RUST_QUEUE = "demo-rust";
 export const DEMO_SHARED_QUEUE = "demo-shared";
 export const DEMO_FAST_QUEUE = "demo-fast";
 export const DEMO_PYTHON_FAST_QUEUE = "demo-python-fast";
 export const DEMO_GO_FAST_QUEUE = "demo-go-fast";
+export const DEMO_RUST_FAST_QUEUE = "demo-rust-fast";
 export const FAST_TIER_SEED_NAME = "fast-tier-dashboard-v1";
 /**
  * The fast-tier schedules live outside `DEMO_SCHEDULE_NAMESPACE` because web startup replaces that
@@ -81,6 +83,19 @@ export const DEMO_FAST_TIER_QUEUES = [
     schedule: "2-59/5 * * * *",
   },
 ] as const;
+/**
+ * The Rust worker joined the demo after `FAST_TIER_SEED_NAME` had run, so its fast-tier queue has
+ * its own seed marker. Its history records attempts without claims, the one combination the other
+ * fast-tier queues leave out.
+ */
+export const RUST_SEED_NAME = "fast-tier-rust-dashboard-v1";
+export const DEMO_RUST_FAST_TIER_QUEUE = {
+  queue: DEMO_RUST_FAST_QUEUE,
+  language: "rust",
+  history: { recordAttempts: true, recordClaims: false },
+  scheduleName: "fast-tier.rust",
+  schedule: "3-59/5 * * * *",
+} as const;
 export const REPRESENTATIVE_SEED_NAME = "default-dashboard-v8";
 export const LONG_RUNNING_SEED_NAME = "long-running-dashboard-v2";
 export const HISTORICAL_SEED_NAME = "historical-dashboard-v1";
@@ -97,7 +112,7 @@ export const DEMO_WORKER_POLL_MS = 15_000;
  * runtime so the polyglot topology is visible; the integration harness still exercises generated
  * identities independently.
  */
-export const DEMO_WORKER_CONCURRENCY = [3, 3, 3] as const;
+export const DEMO_WORKER_CONCURRENCY = [3, 3, 3, 3] as const;
 /**
  * Worker identities attached to the seeded historical attempts.
  *
@@ -191,6 +206,7 @@ export const HEARTBEAT_SCHEDULE_NAME = "heartbeat";
 export const TYPESCRIPT_WORKER_SCHEDULE_NAME = "language-worker.typescript";
 export const PYTHON_WORKER_SCHEDULE_NAME = "language-worker.python";
 export const GO_WORKER_SCHEDULE_NAME = "language-worker.go";
+export const RUST_WORKER_SCHEDULE_NAME = "language-worker.rust";
 export const SHARED_WORKER_SCHEDULE_NAME = "shared-worker";
 export const REPORT_SCHEDULE_NAME = "demo.report";
 export const LONG_RUNNING_SCHEDULE_NAME = "demo.long-running";

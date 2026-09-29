@@ -1,17 +1,17 @@
 # What does the demo prove?
 
 The demo proves that a normal TypeScript application can enqueue and inspect tasks which TypeScript,
-Python, and Go workers execute through their public SDKs. It is a product example, not the
+Python, Go, and Rust workers execute through their public SDKs. It is a product example, not the
 compatibility or performance test suite.
 
 ## Application boundary
 
-The Hono process and three language worker processes share only PostgreSQL. The web process uses
+The Hono process and four language worker processes share only PostgreSQL. The web process uses
 Drizzle for an application-owned transaction that inserts an order and enqueues its task atomically.
 Each worker owns its own database client and registers itself in `workhorse.worker_registry`, so the
 dashboard discovers the fleet without process-local controller objects.
 
-Each runtime owns a queue for its application handlers. TypeScript, Python, and Go also compete for
+Each runtime owns a queue for its application handlers. TypeScript, Python, Go, and Rust also compete for
 one runtime-neutral task on `demo-shared`, which exercises compatible claim and settlement through
 every public SDK. The TypeScript worker separately serves the rate-limited `partner-api` queue.
 

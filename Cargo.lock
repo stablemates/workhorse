@@ -1920,6 +1920,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "workhorse-demo-worker"
+version = "0.0.0"
+dependencies = [
+ "deadpool-postgres",
+ "serde_json",
+ "tokio",
+ "tokio-postgres",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "workhorse",
+]
+
+[[package]]
 name = "workhorse-fast-claim-stress"
 version = "0.0.0"
 dependencies = [

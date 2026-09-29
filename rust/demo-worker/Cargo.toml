@@ -1,0 +1,24 @@
+[package]
+name = "workhorse-demo-worker"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.89"
+license = "Apache-2.0"
+publish = false
+description = "The Rust worker process the Workhorse demo runs beside its TypeScript, Python, and Go workers."
+
+[[bin]]
+name = "workhorse-rust-demo-worker"
+path = "src/main.rs"
+
+[dependencies]
+workhorse = { path = ".." }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio-postgres = { version = "0.7", features = ["with-serde_json-1", "with-uuid-1"] }
+deadpool-postgres = "0.14"

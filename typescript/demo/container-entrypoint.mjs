@@ -55,6 +55,14 @@ const processes = [
       WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-go",
     },
   },
+  {
+    name: "Rust worker",
+    command: "/usr/local/bin/workhorse-rust-demo-worker",
+    arguments: [],
+    environment: {
+      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-rust",
+    },
+  },
 ];
 
 if (process.env.DATABASE_URL_SECONDARY) {
