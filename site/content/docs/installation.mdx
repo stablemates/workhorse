@@ -122,7 +122,7 @@ A Python, Go, or Rust project has no `node_modules` to resolve the binary from, 
 package and the version:
 
 ```bash
-npx --package @stablemates/workhorse@0.4.0 workhorse schema install
+npx --package @stablemates/workhorse@0.5.0 workhorse schema install
 ```
 
 Pin that to the version of `stablemates-workhorse`, `github.com/stablemates/workhorse/go`, or the
@@ -169,6 +169,21 @@ version. The same step is available from the CLI as `workhorse schema migrate`, 
 already-current schema is left unchanged. Development schemas at retired versions below the
 baseline still require a reset.
 
+### Upgrade a 0.4.x database offline
+
+The upgrade from 0.4.x to 0.5.0 crosses a contract step, so it cannot roll.
+`workhorse schema migrate` stops before that step, and a 0.4.x worker fails once it lands.
+
+1. Stop every worker and every producer.
+2. Run `workhorse schema migrate`. It stops at schema version 24 and reports the pending contract
+   step.
+3. Run `workhorse schema contract --yes`. It applies the contract step and reaches version 25.
+4. Run `workhorse schema migrate` again. It applies the additive steps and reaches version 43.
+5. Start 0.5.0.
+
+Every queue stays on the full tier after the upgrade. From 0.5.0 on, a minor upgrade is an ordinary
+rolling deployment again.
+
 ## Verify before the new release starts
 
 Migrating and starting are two steps, and a deploy should not cross between them on hope. Run
@@ -210,11 +225,11 @@ release instead. Download that asset from the release for the version your appli
 then apply it:
 
 ```bash
-curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.4.0/schema.sql
+curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.5.0/schema.sql
 psql "$DATABASE_URL" -f schema.sql
 ```
 
-The [`v0.4.0` release](https://github.com/stablemates/workhorse/releases/tag/v0.4.0) is the page
+The [`v0.5.0` release](https://github.com/stablemates/workhorse/releases/tag/v0.5.0) is the page
 that carries the file. Change both version numbers together when you pin a different one: the
 schema the file creates is the schema that release's SDK expects.
 

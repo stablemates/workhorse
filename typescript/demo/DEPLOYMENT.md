@@ -414,9 +414,10 @@ therefore makes this release one offline cutover. For this release only, deploy 
 3. From the same image, run `workhorse schema contract --yes` against each database. Each run
    applies 0025 and leaves the database at version 25. Without `--yes`, the command applies nothing
    and names any old worker that still heartbeated inside its lease.
-4. Deploy the new release as usual. Its pre-deploy hook finds version 25, applies the additive
-   steps after it, installs the demo's own tables, and verifies both workspaces before any
-   container starts.
+4. From the same image, run `workhorse schema migrate` again against each database. It applies the
+   additive steps after 0025 and leaves the database at version 43.
+5. Deploy the new release as usual. Its pre-deploy hook finds version 43, installs the demo's own
+   tables, and verifies both workspaces before any container starts.
 
 The CLI reads the database from `--database-url`, `WORKHORSE_DATABASE_URL`, or `DATABASE_URL`. Pass
 the URL through the environment, as the role env file does, so no credential appears on a command
