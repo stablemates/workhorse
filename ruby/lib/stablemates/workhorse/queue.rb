@@ -21,10 +21,12 @@ module Stablemates
       TASK_STATES = %i[blocked scheduled ready active succeeded failed canceled].freeze
       SIGNAL_STATUSES = %i[delivered duplicate not_waiting already_delivered stale not_found].freeze
       HUMAN_WAIT_STATUSES = %i[completed duplicate not_waiting already_completed stale not_found].freeze
+      # Times one fenced write is sent at most when PostgreSQL rolls it back as a deadlock victim.
+      FENCED_WRITE_DEADLOCK_ATTEMPTS = 3
       private_constant :DEFAULT_MAX_ATTEMPTS, :DEFAULT_IDEMPOTENCY_TTL_MS, :MAX_TASK_DEPENDENCIES,
         :MAX_EXTERNAL_VALUE_BYTES, :OUTCOMES, :NON_REPLACEABLE_REASONS, :DEPENDENCY_POLICIES,
         :DEBOUNCE_SCHEDULES, :CATCHUP_POLICIES, :CANCEL_STATUSES, :TASK_STATES,
-        :SIGNAL_STATUSES, :HUMAN_WAIT_STATUSES
+        :SIGNAL_STATUSES, :HUMAN_WAIT_STATUSES, :FENCED_WRITE_DEADLOCK_ATTEMPTS
 
       attr_reader :default_queue
 
@@ -170,6 +172,39 @@ module Stablemates
           @contracts_enabled = true
         end
         nil
+      end
+
+      # Makes +definitions+ the namespace's concurrency policies and returns the stored policies.
+      # +prune+ removes the namespace's other policies.
+      def sync_concurrency_policies(namespace, definitions, prune: true)
+        document = sync_document(definitions, ConcurrencyPolicyDefinition, "concurrency policy") do |definition|
+          {"queue" => definition.queue, "maxActive" => definition.max_active,
+           "maxActivePerKey" => definition.max_active_per_key}
+        end
+        rows = fenced_write(SqlCatalogue::SYNC_CONCURRENCY_POLICIES_V1, sync_params(namespace, document, prune))
+        rows.map { |row| Policies.concurrency_policy(row) }
+      end
+
+      # Makes +definitions+ the namespace's rate limit policies and returns the stored policies.
+      # +prune+ removes the namespace's other policies.
+      def sync_rate_limit_policies(namespace, definitions, prune: true)
+        document = sync_document(definitions, RateLimitPolicyDefinition, "rate limit policy") do |definition|
+          {"queue" => definition.queue, "rate" => rate_limit_document(definition.rate, "rate"),
+           "perKey" => definition.per_key && rate_limit_document(definition.per_key, "per key")}
+        end
+        rows = @executor.rows(SqlCatalogue::SYNC_RATE_LIMIT_POLICIES_V1, sync_params(namespace, document, prune))
+        rows.map { |row| Policies.rate_limit_policy(row) }
+      end
+
+      # Makes +definitions+ the namespace's budgets and returns the stored budgets. +prune+
+      # removes the namespace's other budgets.
+      def sync_budgets(namespace, definitions, prune: true)
+        document = sync_document(definitions, BudgetDefinition, "budget") do |definition|
+          {"name" => definition.name, "maxActive" => definition.max_active,
+           "rate" => definition.rate && rate_limit_document(definition.rate, "rate")}
+        end
+        rows = @executor.rows(SqlCatalogue::SYNC_BUDGETS_V1, sync_params(namespace, document, prune))
+        rows.map { |row| Policies.budget(row) }
       end
 
       # The concurrency policies of +queues+, or of every queue when +queues+ is nil or empty.
@@ -415,6 +450,47 @@ module Stablemates
       def deliver(statement, function, task_id, name, document, idempotency_key, requested_by)
         assert_compatible
         exactly_one(@executor.rows(statement, [task_id, name, document, idempotency_key, requested_by]), function)
+      end
+
+      # The JSON array a policy sync sends, one object per definition the block encodes.
+      def sync_document(definitions, type, label)
+        raise ArgumentError, "definitions must be an Array of #{type.name.split("::").last}" unless
+          definitions.is_a?(Array) && definitions.all?(type)
+
+        Values.json(definitions.map { |definition| yield definition }, "#{label} definitions")
+      end
+
+      def sync_params(namespace, document, prune)
+        required_string(namespace, "namespace")
+        params = [namespace, document, boolean(prune, "prune").to_s]
+        assert_compatible
+        params
+      end
+
+      def rate_limit_document(rate, label)
+        raise ArgumentError, "#{label} must be a RateLimit" unless rate.is_a?(RateLimit)
+
+        {"limit" => rate.limit, "intervalMs" => rate.interval_ms, "burst" => rate.burst}
+      end
+
+      # Sends a fenced write, and sends it again when PostgreSQL chose it as a deadlock victim.
+      #
+      # PostgreSQL rolls back the whole statement, and a resend writes the same complete desired
+      # set. A deadlock aborts a caller-owned transaction, so a resend there fails with 25P02, and
+      # the caller gets the original deadlock instead.
+      def fenced_write(statement, params)
+        deadlock = nil
+        attempt = 1
+        begin
+          @executor.rows(statement, params)
+        rescue DatabaseError => e
+          raise deadlock if deadlock && e.sqlstate == "25P02"
+          raise if attempt >= FENCED_WRITE_DEADLOCK_ATTEMPTS || e.sqlstate != "40P01"
+
+          deadlock = e
+          attempt += 1
+          retry
+        end
       end
 
       def list(statement, names, label)

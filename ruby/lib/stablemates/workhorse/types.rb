@@ -73,6 +73,21 @@ module Stablemates
     # A token bucket: +limit+ admissions per +interval_ms+, with at most +burst+ in reserve.
     RateLimit = Data.define(:limit, :interval_ms, :burst)
 
+    # The concurrency limit a sync gives one queue. +max_active_per_key+ may be nil.
+    ConcurrencyPolicyDefinition = Data.define(:queue, :max_active, :max_active_per_key) do
+      def initialize(queue:, max_active:, max_active_per_key: nil) = super
+    end
+
+    # The rate limit a sync gives one queue. +per_key+ is a RateLimit or nil.
+    RateLimitPolicyDefinition = Data.define(:queue, :rate, :per_key) do
+      def initialize(queue:, rate:, per_key: nil) = super
+    end
+
+    # One named budget that tasks in any queue can name. Set +max_active+, +rate+, or both.
+    BudgetDefinition = Data.define(:name, :max_active, :rate) do
+      def initialize(name:, max_active: nil, rate: nil) = super
+    end
+
     # A stored concurrency policy for one queue.
     ConcurrencyPolicy = Data.define(:namespace, :queue, :max_active, :max_active_per_key, :updated_at)
 

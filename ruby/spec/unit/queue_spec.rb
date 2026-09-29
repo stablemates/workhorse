@@ -84,4 +84,49 @@ RSpec.describe Stablemates::Workhorse::Queue do
   it "requires an executor that responds to with" do
     expect { described_class.new(Object.new) }.to raise_error(ArgumentError)
   end
+
+  it "sends each policy sync as its namespace, JSON definitions, and prune" do
+    executor = FakeExecutor.new
+    queue = described_class.new(executor)
+    rate = W::RateLimit.new(limit: 10, interval_ms: 1000, burst: 20)
+    queue.sync_concurrency_policies("app", [W::ConcurrencyPolicyDefinition.new(queue: "q", max_active: 3)])
+    queue.sync_rate_limit_policies("app", [W::RateLimitPolicyDefinition.new(queue: "q", rate: rate)], prune: false)
+    queue.sync_budgets("app", [W::BudgetDefinition.new(name: "b", rate: rate)])
+
+    expect(executor.statements.map(&:last)).to eq([
+      ["app", '[{"queue":"q","maxActive":3,"maxActivePerKey":null}]', "true"],
+      ["app", '[{"queue":"q","rate":{"limit":10,"intervalMs":1000,"burst":20},"perKey":null}]', "false"],
+      ["app", '[{"name":"b","maxActive":null,"rate":{"limit":10,"intervalMs":1000,"burst":20}}]', "true"]
+    ])
+  end
+
+  it "refuses an invalid policy sync before any statement" do
+    executor = FakeExecutor.new
+    queue = described_class.new(executor)
+    policy = W::ConcurrencyPolicyDefinition.new(queue: "q", max_active: 1)
+    expect { queue.sync_concurrency_policies("", [policy]) }
+      .to raise_error(ArgumentError, "namespace must be a non-empty String")
+    expect { queue.sync_concurrency_policies("app", [policy], prune: nil) }
+      .to raise_error(ArgumentError, "prune must be true or false")
+    expect { queue.sync_budgets("app", [policy]) }
+      .to raise_error(ArgumentError, "definitions must be an Array of BudgetDefinition")
+    expect { queue.sync_rate_limit_policies("app", [W::RateLimitPolicyDefinition.new(queue: "q", rate: 5)]) }
+      .to raise_error(ArgumentError, "rate must be a RateLimit")
+    expect(executor.statements).to be_empty
+  end
+
+  it "resends a concurrency policy sync that PostgreSQL chose as a deadlock victim" do
+    failures = [W::DatabaseError.new("deadlock detected", "40P01")]
+    executor = FakeExecutor.new { failures.empty? ? [] : raise(failures.shift) }
+    described_class.new(executor).sync_concurrency_policies("app", [])
+    expect(executor.statements.length).to eq(2)
+
+    deadlock = W::DatabaseError.new("deadlock detected", "40P01")
+    aborted = [deadlock, W::DatabaseError.new("current transaction is aborted", "25P02")]
+    caller_owned = described_class.new(FakeExecutor.new { raise(aborted.shift) })
+    expect { caller_owned.sync_concurrency_policies("app", []) }.to raise_error(deadlock)
+
+    always = described_class.new(FakeExecutor.new { raise W::DatabaseError.new("deadlock detected", "40P01") })
+    expect { always.sync_concurrency_policies("app", []) }.to raise_error(W::DatabaseError, "deadlock detected")
+  end
 end

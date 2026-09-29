@@ -397,9 +397,9 @@ module Stablemates::Workhorse
     def health; end
 
     def sync_schedules(namespace, schedules, prune: true); end
-    def sync_concurrency_policies(policies); end
-    def sync_rate_limit_policies(policies); end
-    def sync_budgets(budgets); end
+    def sync_concurrency_policies(namespace, definitions, prune: true); end
+    def sync_rate_limit_policies(namespace, definitions, prune: true); end
+    def sync_budgets(namespace, definitions, prune: true); end
     def sync_contracts(contracts); end
 
     def list_concurrency_policies(queues: nil); end
@@ -418,6 +418,11 @@ does, so Ruby has no `*_with_result` twin. Task inspection belongs to `Admin`.
 
 The external-wait options mirror Python's. SM-898 takes their exact keyword names from Python's
 `send_signal` and `complete_human_wait`. It changes nothing else in this block.
+
+The policy and budget syncs take a namespace and `prune`, as `sync_schedules` does and as the
+protocol's `sync_*_v1` functions and the other four SDKs do. The namespace owns the rows a sync
+writes. With `prune: true`, a sync removes the namespace's rows that `definitions` omits. SM-898
+amended this block from list-only signatures, which could name no namespace and never keep rows.
 
 ### Admin surface
 

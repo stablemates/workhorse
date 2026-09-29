@@ -181,4 +181,41 @@ RSpec.describe "Queue client operations against PostgreSQL" do
       .to eq([[budget, 8, W::RateLimit.new(limit: 60, interval_ms: 60_000, burst: 60)]])
     expect(queue.list_budgets.length).to be >= 1
   end
+
+  it "syncs policies and budgets per namespace, pruning what a sync omits" do
+    namespace = "ns-#{@queue_name}"
+    emails = "#{@queue_name}-emails"
+    reports = "#{@queue_name}-reports"
+    rate = W::RateLimit.new(limit: 10, interval_ms: 1000, burst: 20)
+
+    stored = queue.sync_concurrency_policies(namespace, [
+      W::ConcurrencyPolicyDefinition.new(queue: emails, max_active: 10, max_active_per_key: 2),
+      W::ConcurrencyPolicyDefinition.new(queue: reports, max_active: 3)
+    ])
+    expect(stored.map { |policy| [policy.namespace, policy.queue, policy.max_active, policy.max_active_per_key] }
+      .sort).to eq([[namespace, emails, 10, 2], [namespace, reports, 3, nil]])
+
+    queue.sync_concurrency_policies(namespace, [W::ConcurrencyPolicyDefinition.new(queue: emails, max_active: 4)],
+      prune: false)
+    expect(queue.list_concurrency_policies(queues: [emails, reports]).map { |policy| [policy.queue, policy.max_active] }
+      .sort).to eq([[emails, 4], [reports, 3]])
+
+    queue.sync_concurrency_policies(namespace, [W::ConcurrencyPolicyDefinition.new(queue: emails, max_active: 4)])
+    expect(queue.list_concurrency_policies(queues: [emails, reports]).map(&:queue)).to eq([emails])
+    expect { queue.sync_concurrency_policies("other-#{namespace}", [W::ConcurrencyPolicyDefinition.new(queue: emails, max_active: 1)]) }
+      .to raise_error(W::DatabaseError, /owned by another namespace/)
+
+    limits = queue.sync_rate_limit_policies(namespace, [W::RateLimitPolicyDefinition.new(queue: emails, rate: rate, per_key: rate)])
+    expect(limits.map { |policy| [policy.queue, policy.rate, policy.per_key] }).to eq([[emails, rate, rate]])
+
+    budget = "budget-#{@queue_name}"
+    budgets = queue.sync_budgets(namespace, [W::BudgetDefinition.new(name: budget, max_active: 8)])
+    expect(budgets.map { |row| [row.namespace, row.name, row.max_active, row.rate] }).to eq([[namespace, budget, 8, nil]])
+
+    expect(queue.sync_concurrency_policies(namespace, [])).to eq([])
+    expect(queue.sync_rate_limit_policies(namespace, [])).to eq([])
+    expect(queue.sync_budgets(namespace, [])).to eq([])
+    expect(queue.list_concurrency_policies(queues: [emails])).to eq([])
+    expect(queue.list_budgets(names: [budget])).to eq([])
+  end
 end
