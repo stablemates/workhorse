@@ -17038,9 +17038,16 @@ AS $$
     FROM parameters CROSS JOIN diagnostics CROSS JOIN waits CROSS JOIN signal_waits;
 $$;
 
+-- The final select cross joins every section CTE with the task row, so any row estimate above one
+-- for the task multiplies through every join. The LIMIT 1 on the task CTE is a planner fact, not
+-- semantics: the identity is a primary key, and each joined view holds at most one row for it.
+-- Without it the plan estimated tens of millions of rows, and PostgreSQL compiled it with JIT on
+-- every call. Compiling cost seconds against a one-millisecond execution (SM-965). JIT also stays
+-- off, because the section reads still grow their estimates with history.
 CREATE OR REPLACE FUNCTION workhorse.dashboard_task_detail_v1(p_input jsonb)
 RETURNS jsonb
 LANGUAGE sql
+SET jit = off
 AS $$
   WITH parameters AS (
     SELECT (p_input->>'id')::uuid AS task_id,
@@ -17073,6 +17080,7 @@ AS $$
       LEFT JOIN workhorse.dashboard_task_progress_v1 progress ON progress.task_id = j.id
       LEFT JOIN workhorse.dashboard_signal_wait_v1 signal_wait
         ON signal_wait.task_id = j.id AND signal_wait.signal_name = runtime.wait_name
+     LIMIT 1
   ), task_values AS (
     -- The payload and the result are measured once here, because both the outcome and the document
     -- below decide on the same two sizes and re-measuring a megabyte twice is the cost this bound
@@ -18791,10 +18799,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (38, 'detect and repair pending-prerequisite counter drift'),
   (39, 'release a fused claim lock before it can deadlock'),
   (40, 'govern the dependency counter drift check and repair'),
-  (41, 'cut the plain full-tier per-task claim and trigger cost')
+  (41, 'cut the plain full-tier per-task claim and trigger cost'),
+  (42, 'keep JIT compilation out of the task detail read')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (41) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (42) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

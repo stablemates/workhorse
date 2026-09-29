@@ -512,6 +512,7 @@ describe("schema installation", () => {
       { version: 39, description: "release a fused claim lock before it can deadlock" },
       { version: 40, description: "govern the dependency counter drift check and repair" },
       { version: 41, description: "cut the plain full-tier per-task claim and trigger cost" },
+      { version: 42, description: "keep JIT compilation out of the task detail read" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

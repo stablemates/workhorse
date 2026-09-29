@@ -298,6 +298,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "cut the plain full-tier per-task claim and trigger cost",
     kind: "additive",
   },
+  {
+    fromVersion: 41,
+    toVersion: 42,
+    file: "0043-keep-jit-out-of-the-task-detail-read.sql",
+    description: "keep JIT compilation out of the task detail read",
+    kind: "additive",
+  },
 ];
 
 /**

@@ -75,6 +75,7 @@ describe("dashboard procedure plans", () => {
           AND routine.proname IN (
             'dashboard_activity_v1',
             'dashboard_events_v1',
+            'dashboard_task_detail_v1',
             'dashboard_tasks_cursor_v1',
             'dashboard_tasks_v1'
           )
@@ -87,6 +88,7 @@ describe("dashboard procedure plans", () => {
         proconfig: ["jit=off", "enable_sort=off"],
       },
       { proname: "dashboard_events_v1", proconfig: ["jit=off"] },
+      { proname: "dashboard_task_detail_v1", proconfig: ["jit=off"] },
       { proname: "dashboard_tasks_cursor_v1", proconfig: ["jit=off"] },
       { proname: "dashboard_tasks_v1", proconfig: ["jit=off"] },
     ]);
