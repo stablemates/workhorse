@@ -15,6 +15,92 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 `0.1.0` the schema upgrades in place: every release ships ordered, immutable migrations, and inside
 a major line a migration only adds. Breaking changes are always listed with upgrade steps.
 
+## 0.5.0 — 2026-09-28
+
+The npm packages, Python distribution, Go module, and Rust crate release from one source commit.
+
+Requires **schema v43**, Node.js **22** or newer, and PostgreSQL **15** or newer.
+
+**Breaking: a 0.4.x database upgrades offline, across one contract step.** Migration 0025 adds the
+fast tier and SQL protocol version 5. It is a contract step shipped in a minor release, which
+[ADR 0077](docs/decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) §6
+allows once. It narrows the protocol to exactly 5 and drops `fire_due_schedules_v1` and
+`sync_schedule_definitions_v1` without a shim, so a 0.4.x process fails its compatibility check
+against the new schema. `workhorse schema migrate` stops before a contract step. Upgrade in this
+order:
+
+1. Stop every worker and every producer.
+2. Run `workhorse schema migrate`. It applies nothing past schema version 24 and reports the pending
+   contract step.
+3. Run `workhorse schema contract --yes`, which applies migration 0025 and leaves schema version 25.
+4. Run `workhorse schema migrate` again. It applies migrations 0026 through 0044 and leaves schema
+   version 43.
+5. Start the processes from this release.
+
+Every queue starts full-tier, so live tasks stay where they are and no history needs a backfill.
+
+**Breaking: a process from this release refuses a schema below version 43.** The compatibility
+floor moves from schema version 18 to 43 and the protocol floor from 1 to 5, because the SDKs now
+call functions that migrations up to 0044 add.
+
+**Add a fast task tier.** A fast-tier queue records one `fast_task_outcome` row per task instead of
+the attempt and event history, and keeps its live state in `fast_task_runtime`. Tasks take
+`uuidv7` identities, and `complete_many_and_claim_v1` completes a batch and claims the refill in
+one statement. A fast-tier queue refuses dependencies, child tasks, concurrency keys, budgets,
+debounce, throttle, and concurrency or rate-limit policies with SQLSTATE `P1007`. The client raises
+that as `FastTierUnsupportedError`, naming the queue, the feature, and the batch ordinal. A queue
+moves tiers only while it is empty
+([ADR 0077](docs/decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md)).
+
+- Add `Admin.setQueueTier(queue, tier, audit)` and `Admin.setQueueHistory(queue, settings)`, with the
+  `QueueTier` and `QueueHistorySettings` types. `setQueueHistory` opts a fast-tier queue into
+  attempt or claim history. The CLI adds the guarded `workhorse admin set-tier` and
+  `workhorse admin set-history`, and `workhorse admin queues` reports each queue's tier and history.
+- Batch fast-tier completions with a fused refill claim. The worker's `cohorts` option splits its
+  slots into fixed shares that each complete and claim together. The default is 1 below a
+  concurrency of 8 and otherwise one cohort per eight slots, between 2 and 8, capped by the pool's
+  spare connections. `Queue` adds `completeAndClaim` and `claimFast`, with the `CompletionClaim` and
+  `CompletionClaimResult` types.
+- Fail only the oversized row when a fast-tier batch carries a result past the size limit, instead
+  of the whole batch. The client measures a result the way PostgreSQL does.
+- Add `fast_task_outcome` to `ColdExportDataset`.
+- Keep overlapping batched claims in flight, so a worker fills free slots while a claim is still
+  running
+  ([ADR 0076](docs/decisions/0076-keep-overlapping-batched-claims-in-flight-to-fill-worker-slots.md)).
+- Claim policy- and rate-limited tasks as a set, and send a capacity notification only when a
+  release frees a full cap. The notification is serialized with claims, so a worker cannot miss it.
+- Shard the admission counters, so claims on a governed queue no longer serialize on one counter
+  row ([ADR 0082](docs/decisions/0082-shard-the-admission-counters.md)). A plain full-tier claim
+  also costs less.
+- Skip the notification claim delay while claims keep finding work.
+- Start a long-running worker's first claim beside its startup maintenance pass
+  ([ADR 0078](docs/decisions/0078-start-a-long-running-workers-first-claim-beside-its-startup-maintenance-pass.md)).
+- Release dependents through a pending-prerequisite counter, planned once per session and applied
+  per statement. A dependent enqueue holds its prerequisites against completion, and an enqueue
+  batch locks its prerequisites before its first request.
+- Enqueue full-tier batches set-based. A batch with several invalid members can report a different
+  member's error than before.
+- Settle a parent whose child is already terminal when it is created. Migration 0032 repairs parents
+  an earlier release left waiting.
+- Detect and repair dependency counter drift. `Admin.listDependencyDrift(limit?)` lists it,
+  `Admin.repairDependencyDrift(audit, limit?)` repairs it, and `MAX_DEPENDENCY_DRIFT_LIMIT` bounds
+  both. `workhorse admin repair-dependencies` runs the same repair, with `--dry-run` to list it; a
+  repair needs `--reason`, `--env`, and confirmation. Each repaired dependent records a
+  `dependency_counter_repaired` event, which the dashboard's event filter offers.
+- Lock fast-tier rows in task ID order, and release a fused claim's row locks before they can
+  deadlock
+  ([ADR 0081](docs/decisions/0081-release-a-fused-claim-lock-before-it-can-deadlock.md)).
+- Resend a fenced write and the concurrency policy sync when PostgreSQL chooses them as a deadlock
+  victim, up to three attempts. Inside a caller's transaction the original deadlock error is raised.
+- Keep the worker running when its heartbeat connection's backend is terminated.
+- Add a Tier column to the dashboard Queues page. `dashboard_queues_v1` returns `tier`,
+  `recordAttempts`, and `recordClaims`.
+- Keep JIT compilation out of the dashboard task detail read, and link a schedule's tasks to that
+  schedule's queue on the Schedules page.
+- Add the `workhorse.complete.batch_size` and `workhorse.queue.tier` metrics and the
+  `workhorse.queue.tier_set` log event.
+- Move every optional package's peer range on `@stablemates/workhorse` to `>=0.5.0 <0.6.0`.
+
 ## 0.4.0 — 2026-09-23
 
 The npm packages, Python distribution, Go module, and Rust crate release from one source commit.

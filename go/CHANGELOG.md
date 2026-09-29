@@ -8,6 +8,68 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## 0.5.0 — 2026-09-28
+
+The npm packages, Python distribution, Go module, and Rust crate release from one source commit.
+
+Requires **schema v43** and Go **1.25** or newer.
+
+**Breaking: a 0.4.x database upgrades offline, across one contract step.** Migration 0025 adds the
+fast tier and SQL protocol version 5. It is a contract step shipped in a minor release, which
+[ADR 0077](../docs/decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) §6
+allows once. It narrows the protocol to exactly 5 and drops `fire_due_schedules_v1` and
+`sync_schedule_definitions_v1` without a shim, so a 0.4.x process fails its compatibility check
+against the new schema. `workhorse schema migrate` stops before a contract step. Upgrade in this
+order:
+
+1. Stop every worker and every producer.
+2. Run `workhorse schema migrate`. It applies nothing past schema version 24 and reports the pending
+   contract step.
+3. Run `workhorse schema contract --yes`, which applies migration 0025 and leaves schema version 25.
+4. Run `workhorse schema migrate` again. It applies migrations 0026 through 0044 and leaves schema
+   version 43.
+5. Start the processes from this release.
+
+Every queue starts full-tier, so live tasks stay where they are and no history needs a backfill.
+
+**Breaking: a process from this release refuses a schema below version 43.** The compatibility
+floor moves from schema version 18 to 43 and the protocol floor from 1 to 5, because the SDK now
+calls functions that migrations up to 0044 add.
+
+**Add a fast task tier.** A fast-tier queue records one `fast_task_outcome` row per task instead of
+the attempt and event history, and completes a batch and claims its refill in one statement. It
+refuses dependencies, child tasks, concurrency keys, budgets, debounce, throttle, and concurrency or
+rate-limit policies with SQLSTATE `P1007`. A queue moves tiers only while it is empty
+([ADR 0077](../docs/decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md)).
+
+- Add `Admin.SetQueueTier` and `Admin.SetQueueHistory`, with the `QueueTier` and `QueueHistory`
+  types. `SetQueueHistory` opts a fast-tier queue into attempt or claim history.
+- Return `FastTierUnsupportedError` for a `P1007` refusal, naming the queue, the feature, and the
+  batch ordinal. It matches `ErrFastTierUnsupported` under `errors.Is`.
+- Batch fast-tier completions with a fused refill claim. `WorkerOptions.Cohorts` splits the slots
+  into fixed shares that each complete and claim together. The default is 1 below a concurrency of 8
+  and otherwise one cohort per eight slots, between 2 and 8, capped by the pool's spare connections.
+- Keep the worker running when a task's payload is a JSON string. The payload used to be decoded
+  twice, and the error ended `Run` and stranded the lease.
+- Keep overlapping batched claims in flight, so a worker fills free slots while a claim is still
+  running
+  ([ADR 0076](../docs/decisions/0076-keep-overlapping-batched-claims-in-flight-to-fill-worker-slots.md)).
+- Skip the notification claim delay while claims keep finding work.
+- Resend a fenced write and the concurrency policy sync when PostgreSQL chooses them as a deadlock
+  victim, up to three attempts. Inside a caller's transaction the original deadlock error is raised.
+- Claim policy- and rate-limited tasks as a set, and shard the admission counters so claims on a
+  governed queue no longer serialize
+  ([ADR 0082](../docs/decisions/0082-shard-the-admission-counters.md)). A plain full-tier claim
+  also costs less.
+- Release dependents through a pending-prerequisite counter, and settle a parent whose child is
+  already terminal when it is created. Migration 0032 repairs parents an earlier release left
+  waiting. A full-tier enqueue batch with several invalid members can report a different member's
+  error than before.
+- Release a fused claim's row locks before they can deadlock
+  ([ADR 0081](../docs/decisions/0081-release-a-fused-claim-lock-before-it-can-deadlock.md)).
+- Add a Tier column to the embedded dashboard Queues page, and link a schedule's tasks to that
+  schedule's queue on the Schedules page.
+
 ## 0.4.0 — 2026-09-23
 
 The npm packages, Python distribution, Go module, and Rust crate release from one source commit.
