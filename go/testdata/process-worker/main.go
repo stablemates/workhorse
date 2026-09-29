@@ -25,14 +25,22 @@ func main() {
 	}
 	defer pool.Close()
 
+	// The crash test waits for a killed worker's lease to expire, so the other modes keep a short
+	// lease. The drain test asserts a completion, so its lease and grace period outlast any stall a
+	// loaded host can impose: a stall longer than one lease makes the worker give up the attempt as
+	// lease_lost and exit cleanly without an outcome.
+	leaseDuration, heartbeatInterval, shutdownGracePeriod := 200*time.Millisecond, 50*time.Millisecond, 2*time.Second
+	if mode == "drain" {
+		leaseDuration, heartbeatInterval, shutdownGracePeriod = 30*time.Second, time.Second, 30*time.Second
+	}
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
 		Queue:               queueName,
 		WorkerID:            workerID,
-		LeaseDuration:       200 * time.Millisecond,
-		HeartbeatInterval:   50 * time.Millisecond,
+		LeaseDuration:       leaseDuration,
+		HeartbeatInterval:   heartbeatInterval,
 		PollInterval:        5 * time.Millisecond,
 		MaintenanceInterval: 20 * time.Millisecond,
-		ShutdownGracePeriod: 2 * time.Second,
+		ShutdownGracePeriod: shutdownGracePeriod,
 		PollingOnly:         true,
 	})
 	if err != nil {
