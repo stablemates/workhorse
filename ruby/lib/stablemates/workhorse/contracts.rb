@@ -33,7 +33,14 @@ module Stablemates
         required type uniqueItems
       ].freeze
       MAX_DEPTH = 256
-      private_constant :DIALECT, :SCHEMA_VALUES, :SCHEMA_ARRAYS, :SCHEMA_MAPS, :PLAIN_KEYWORDS, :MAX_DEPTH
+      TYPES = %w[array boolean integer null number object string].freeze
+      NUMBERS = %w[exclusiveMaximum exclusiveMinimum maximum minimum].freeze
+      COUNTS = %w[maxContains maxItems maxLength maxProperties minContains minItems minLength minProperties].freeze
+      STRINGS = %w[$comment description format pattern title].freeze
+      BOOLEANS = %w[deprecated readOnly uniqueItems writeOnly].freeze
+      ANCHOR = /\A[A-Za-z_][-A-Za-z0-9._]*\z/
+      private_constant :DIALECT, :SCHEMA_VALUES, :SCHEMA_ARRAYS, :SCHEMA_MAPS, :PLAIN_KEYWORDS, :MAX_DEPTH, :TYPES,
+        :NUMBERS, :COUNTS, :STRINGS, :BOOLEANS, :ANCHOR
 
       # The profile violation in +schema+, or nil.
       def self.profile_violation(schema, path = "$")
@@ -55,18 +62,60 @@ module Stablemates
         elsif SCHEMA_VALUES.include?(keyword)
           profile_violation(value, path)
         elsif SCHEMA_ARRAYS.include?(keyword)
-          return "#{path} must be an array" unless value.is_a?(Array)
+          return "#{path} must be a non-empty array" unless value.is_a?(Array) && !value.empty?
 
           value.each_with_index.lazy.filter_map { |child, index| profile_violation(child, "#{path}[#{index}]") }.first
         elsif SCHEMA_MAPS.include?(keyword)
           return "#{path} must be an object" unless value.is_a?(Hash)
 
           value.lazy.filter_map { |name, child| profile_violation(child, "#{path}.#{name}") }.first
-        elsif !PLAIN_KEYWORDS.include?(keyword)
+        elsif PLAIN_KEYWORDS.include?(keyword)
+          value_violation(keyword, value, path)
+        else
           "#{path} is outside the Workhorse contract profile"
         end
       end
       private_class_method :keyword_violation
+
+      # The Draft 2020-12 meta-schema's rule for the value of +keyword+, as a violation or nil.
+      def self.value_violation(keyword, value, path)
+        case keyword
+        when "type"
+          "#{path} must name a JSON type or a non-empty array of unique JSON types" unless type_names?(value)
+        when "enum", "examples" then "#{path} must be an array" unless value.is_a?(Array)
+        when "multipleOf" then "#{path} must be a number greater than 0" unless number?(value) && value.positive?
+        when *NUMBERS then "#{path} must be a number" unless number?(value)
+        when *COUNTS then "#{path} must be a non-negative integer" unless count?(value)
+        when *STRINGS then "#{path} must be a string" unless value.is_a?(String)
+        when *BOOLEANS then "#{path} must be a boolean" unless [true, false].include?(value)
+        when "required" then "#{path} must be an array of unique strings" unless names?(value)
+        when "dependentRequired"
+          unless value.is_a?(Hash) && value.each_value.all? { |names| names?(names) }
+            "#{path} must map each property to an array of unique strings"
+          end
+        when "$anchor" then "#{path} must be a plain-name anchor" unless value.is_a?(String) && value.match?(ANCHOR)
+        end
+      end
+      private_class_method :value_violation
+
+      def self.type_names?(value)
+        return TYPES.include?(value) if value.is_a?(String)
+
+        value.is_a?(Array) && !value.empty? && value.all? { |type| TYPES.include?(type) } && value.uniq.size == value.size
+      end
+      private_class_method :type_names?
+
+      def self.names?(value)
+        value.is_a?(Array) && value.all?(String) && value.uniq.size == value.size
+      end
+      private_class_method :names?
+
+      def self.number?(value) = value.is_a?(Integer) || (value.is_a?(Float) && value.finite?)
+      private_class_method :number?
+
+      # A non-negative integer, which JSON may write as 3.0.
+      def self.count?(value) = number?(value) && value >= 0 && (value % 1).zero?
+      private_class_method :count?
 
       attr_reader :schema
 
@@ -85,15 +134,36 @@ module Stablemates
 
       private
 
-      # Compiles every pattern and checks every reference, so +valid?+ cannot fail on the schema.
+      # Collects every anchor, then compiles every pattern and checks every reference, so +valid?+
+      # cannot fail on the schema and a reference may name an anchor that comes later.
       def prepare(schema)
+        collect_anchors(schema)
+        compile(schema)
+      end
+
+      def collect_anchors(schema)
         return unless schema.is_a?(Hash)
 
-        @anchors[schema["$anchor"]] = schema if schema["$anchor"].is_a?(String)
+        if schema.key?("$anchor")
+          anchor = schema["$anchor"]
+          raise ArgumentError, "invalid contract schema: anchor #{anchor} is duplicated" if @anchors.key?(anchor)
+
+          @anchors[anchor] = schema
+        end
+        each_subschema(schema) { |child| collect_anchors(child) }
+      end
+
+      def compile(schema)
+        return unless schema.is_a?(Hash)
+
         pattern(schema["pattern"]) if schema.key?("pattern")
         schema.fetch("patternProperties", {}).each_key { |source| pattern(source) }
-        each_subschema(schema) { |child| prepare(child) }
-        resolve(schema["$ref"]) if schema.key?("$ref")
+        each_subschema(schema) { |child| compile(child) }
+        return unless schema.key?("$ref")
+
+        target = resolve(schema["$ref"])
+        violation = ContractSchema.profile_violation(target, schema["$ref"])
+        raise ArgumentError, "invalid contract schema: #{violation}" if violation
       end
 
       def each_subschema(schema, &)
@@ -106,8 +176,8 @@ module Stablemates
       end
 
       def pattern(source)
-        @patterns[source] ||= Regexp.new(source)
-      rescue RegexpError, TypeError => e
+        @patterns[source] ||= EcmaPattern.compile(source)
+      rescue ArgumentError => e
         raise ArgumentError, "invalid contract schema: pattern #{source.inspect} does not compile: #{e.message}"
       end
 
