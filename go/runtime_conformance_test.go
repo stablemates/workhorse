@@ -444,7 +444,7 @@ const budgetRaceClaimStatement = "SELECT * FROM workhorse.claim_v1($1::text, $2:
 // executeBudgetAdmissionRaceFixture commits a budgeted task on one queue while that queue's
 // claim is already past its first read, and holds a second claim of the same budget open on
 // another queue until the first claim has admitted or started waiting. The first claim's queue
-// carries a rate policy so a test session can park it on the queue's token-bucket row, which
+// carries a rate policy so a test session can park it on the queue's admission shards, which
 // every claim locks after it has sampled its ready rows.
 func executeBudgetAdmissionRaceFixture(t *testing.T, fixture workerRuntimeFixture) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "budget-admission-race-fixture")
@@ -471,7 +471,7 @@ func executeBudgetAdmissionRaceFixture(t *testing.T, fixture workerRuntimeFixtur
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// One unbudgeted start creates the late queue's token-bucket row for the blocker to lock.
+	// One unbudgeted start proves the late queue admits before the blocker parks its claim.
 	if _, err := queue.Enqueue(ctx, fixture.TaskType, map[string]any{"role": "bucket"}, workhorse.EnqueueOptions{
 		Queue: lateQueue,
 	}); err != nil {
@@ -508,8 +508,9 @@ func executeBudgetAdmissionRaceFixture(t *testing.T, fixture workerRuntimeFixtur
 	if _, err := blocker.Exec(ctx, "BEGIN"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := blocker.Exec(ctx, `SELECT 1 FROM workhorse.rate_limit_bucket
-		WHERE queue_name = $1 AND bucket_scope = 'queue' FOR UPDATE`, lateQueue); err != nil {
+	if _, err := blocker.Exec(ctx, `SELECT pg_advisory_xact_lock(
+		hashtextextended('workhorse:admission-shard:' || $1 || ':' || shard, 0))
+		FROM generate_series(0, 7) AS shard`, lateQueue); err != nil {
 		t.Fatal(err)
 	}
 
@@ -520,7 +521,7 @@ func executeBudgetAdmissionRaceFixture(t *testing.T, fixture workerRuntimeFixtur
 		lateSettled.Store(true)
 		lateClaim <- budgetRaceClaimResult{claims: claims, err: err}
 	}()
-	waitForBudgetRace(t, name+": the late claim never reached the bucket row", func() bool {
+	waitForBudgetRace(t, name+": the late claim never reached the admission shards", func() bool {
 		return backendWaitsOnLock(t, ctx, pool, latePID, nil)
 	})
 

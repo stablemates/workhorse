@@ -61,10 +61,9 @@ it("passes dashboard/v1 through the Go embedded backend", { timeout: 120_000 }, 
        per_key_interval_ms=excluded.per_key_interval_ms,per_key_burst=excluded.per_key_burst`,
   );
   await database.pool.query(
-    `INSERT INTO workhorse.rate_limit_bucket(
-       queue_name,bucket_scope,bucket_key,tokens,refilled_at)
-     VALUES ('conformance-demo','queue','',0.5,clock_timestamp()+interval '1 hour')
-     ON CONFLICT(queue_name,bucket_scope,bucket_key) DO UPDATE
+    `INSERT INTO workhorse.admission_shard(queue_name,shard,tokens,refilled_at)
+     VALUES ('conformance-demo',0,0.5,clock_timestamp()+interval '1 hour')
+     ON CONFLICT(queue_name,shard) DO UPDATE
        SET tokens=excluded.tokens,refilled_at=excluded.refilled_at`,
   );
   const selected = await database.pool.query<{ id: string; current_attempt: number }>(

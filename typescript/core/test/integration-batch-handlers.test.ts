@@ -580,6 +580,9 @@ describe("batch handlers", () => {
     await expect(worker.runOnce()).resolves.toBe(true);
     await expect(worker.runOnce()).resolves.toBe(false);
     await pool.query("DELETE FROM workhorse.rate_limit_bucket WHERE queue_name = $1", [queueName]);
+    await pool.query("UPDATE workhorse.admission_shard SET tokens = NULL WHERE queue_name = $1", [
+      queueName,
+    ]);
     await sleep(20);
     await expect(worker.runOnce()).resolves.toBe(true);
     expect(batches).toEqual([

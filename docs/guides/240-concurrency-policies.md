@@ -44,9 +44,21 @@ The policy counts active tasks whose leases have not expired. If a worker disapp
 
 This makes the policy a dispatch budget, not a mutex. A stale handler can overlap its replacement after lease expiry. Fence tokens still prevent that stale generation from recording a result.
 
-When a task leaves a full queue or a full key, PostgreSQL wakes workers listening for that queue. A release below every cap wakes no worker, because no claim was waiting on it. Polling remains the correctness fallback if a notification is lost.
+When a task leaves a full queue, a full key, or a full [admission shard](#many-workers-at-one-cap), PostgreSQL wakes workers listening for that queue. Any other release wakes no worker, because no claim was waiting on it. Polling remains the correctness fallback if a notification is lost.
 
 An expiring lease changes no row, so it wakes no worker. A claim can use that capacity at once, but a worker whose claim found the queue full keeps sleeping. That worker finds the capacity at its next poll, or when maintenance recovers the expired lease. Recovery is a release from a full queue, so it wakes waiting workers.
+
+## Many workers at one cap
+
+A queue cap is one number that every claim must respect. If every claim locked that number, claims of the queue would run one at a time, however many workers the fleet has.
+
+Workhorse splits a queue's cap into shares, one for each admission shard. The shares add up to the cap, and each active lease counts against one shard. A claim locks a shard, spends that shard's share, and borrows other shards only when its own share runs short. It borrows only a shard that no other claim holds. Two claims that hold different shards therefore admit at the same time.
+
+A claim that holds some shards can see room on a shard it does not hold. It never spends that room, because another claim may be spending it now. The total stays within the cap, so sharding never admits past it. A claim that stops short for that reason wakes another worker, which finds the room once the other claim commits.
+
+Workhorse keeps no shard for a queue without a queue-wide rule. A queue with a per-key rule keeps one shard, because its keyed admission must see the whole queue. `Queue.syncConcurrencyPolicies` and `Queue.syncRateLimitPolicies` rebuild a queue's shards each time they run, so the shares always match the current policy.
+
+A release from a full shard wakes workers even when other shards have room. The releasing transaction cannot see a claim that has not committed, and that claim may have filled the other shards.
 
 ## Avoiding a blocked queue
 

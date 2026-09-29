@@ -68,9 +68,9 @@ function or reinterpret that suffix.
 ## SQL protocol conformance
 
 `protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 5. It accepts installed
-schema versions 40 and newer inside the major line, and client protocol 5 only. Schema version 40
-is the floor because the Admin catalogue calls `list_dependency_drift_v1` and
-`repair_dependency_drift_v1`, which that version introduced. `protocol/v1/compatibility.json` distinguishes an absent,
+schema versions 43 and newer inside the major line, and client protocol 5 only. Schema version 43
+is the floor because the rate-limit operator read sums the `admission_shard` rows that version
+introduced. `protocol/v1/compatibility.json` distinguishes an absent,
 older, current, or newer installed schema from the client's protocol version. Every incompatible
 case requires refusal before a mutating function runs.
 
@@ -194,7 +194,7 @@ bytes, and `requested_by` contains 1 through 200 characters.
 
 Every non-empty Python mutation first executes `SELECT version FROM workhorse.schema_version ORDER
 BY version`. `Queue` and `AsyncQueue` enqueue through a per-queue cached check instead, so a warm
-enqueue issues only `enqueue_many_v1`. `python/src/workhorse/_protocol.py` accepts schema version 40 or newer and client protocol 5.
+enqueue issues only `enqueue_many_v1`. `python/src/workhorse/_protocol.py` accepts schema version 43 or newer and client protocol 5.
 It refuses an unreadable, missing, older, or newer schema before the mutating statement. Enqueue
 batches contain at most 1000 requests. Default priority is 0, default attempt budget is 25, default
 payload and result limits are 1048576 bytes, and default idempotency retention is 86400000
@@ -1277,6 +1277,13 @@ erDiagram
     timestamptz refilled_at
   }
 
+  admission_shard {
+    text queue_name PK
+    smallint shard PK
+    numeric tokens
+    timestamptz refilled_at
+  }
+
   task {
     uuid id PK
     text queue_name
@@ -1937,8 +1944,10 @@ result cap. An omitted or empty Python sequence and a nil or empty Go slice read
 `Queue.rateLimitPolicies(queueNames)` remains as a deprecated TypeScript alias for the rest of the
 `0.x` line and is removed in `1.0.0`.
 
-`rate_limit_bucket` stores mutable queue and key token balances separately from policy provenance.
-`rate_limit_bucket_v1` computes elapsed time from `clock_timestamp()`, clamps negative elapsed time
+`rate_limit_bucket` stores mutable key token balances separately from policy provenance. Since
+schema version 43 the queue bucket lives on the queue's
+[admission shards](#admission_shard); a `bucket_scope` `queue` row written earlier is inert.
+Each shard refills with the same arithmetic at its share of the rate. `rate_limit_bucket_v1` computes elapsed time from `clock_timestamp()`, clamps negative elapsed time
 to zero, adds `elapsed_ms * limit / interval_ms`, and caps the result at `burst`. One admitted start
 consumes one token in the claim transaction. Completion, failure, cancellation, durable suspension,
 and lease expiry never refund a token. Process clock skew cannot create capacity because application
@@ -1956,6 +1965,59 @@ array observes every policy subject to the cap; a non-empty array filters exact 
 the cap. `QueueHealth.rateLimitPolicies` includes the same observations and sets `capped` when either
 limit applies. OpenTelemetry exports configured starts per second, available queue tokens, throttled
 ready depth, and next-eligibility delay using queue name as the only policy dimension.
+Since schema version 43 the available queue tokens are the refilled tokens of the queue's
+admission shards, summed.
+
+### `admission_shard`
+
+A queue's `max_active` and its rate bucket are each one number that every claim must respect. When
+every claim locked that number, claims of one governed queue ran one at a time (SM-932). Schema
+version 43 splits both numbers into shares, one per admission shard, so claims that hold different
+shards admit at the same time. [ADR 0082](decisions/0082-shard-the-admission-counters.md) records
+the decision.
+
+`admission_shard_count_v1(max_active, max_active_per_key, rate_burst, per_key_limit)` gives a
+queue's shard count:
+
+- 0 when the queue has neither `max_active` nor a rate policy;
+- 1 when the queue has `max_active_per_key` or `per_key_limit`, because keyed admission must see
+  the whole queue;
+- otherwise `LEAST(8, max_active, rate_burst)`, ignoring whichever is null, so every share is at
+  least 1.
+
+`admission_share_v1(total, shards, shard)` returns `total / shards`, plus 1 for each shard below
+`total % shards`. The shares of shards 0 through `shards - 1` sum to the total. The concurrency
+share of a shard is its share of `max_active`, and its rate share is its share of `rate_burst`. A
+shard refills at `rate_limit * share / (rate_interval_ms * rate_burst)` tokens per millisecond and
+holds at most its share.
+
+`admission_shard` has one row per queue and shard: `queue_name`, `shard` (a non-negative
+`smallint`), `tokens`, and `refilled_at`, with primary key `(queue_name, shard)`. It has no foreign
+key, so a queue with only a concurrency policy still has rows. `tokens` is null when the queue has
+no rate policy, and it is never negative. `task_runtime.admission_shard` records the shard an active
+lease counts against. A lease written before version 43 has a null shard and counts against shard 0. A shard's active count is the queue's unexpired active leases whose
+`COALESCE(admission_shard, 0) % shards` equals the shard.
+
+`rebalance_admission_shards_v1(queue, now)` rebuilds a queue's rows:
+
+1. Takes the exclusive advisory lock `workhorse:admission-shards:<queue>`, then each shard lock
+   `workhorse:admission-shard:<queue>:<n>` for `n` from 0 through 7, in order, waiting for each.
+2. Reads both policies and computes the new shard count.
+3. Computes the total tokens. With no rate policy the total is null. With no stored row, or with a
+   stored null `tokens`, the total is `rate_burst`. Otherwise it refills each stored row to `now` at
+   its old share and caps the sum at `rate_burst`, so a rebalance never creates tokens.
+4. Deletes the stored rows and inserts one row per new shard, with `total * share / rate_burst`
+   tokens and the later of `now` and the latest stored `refilled_at`.
+
+`sync_concurrency_policies_v1` and `sync_rate_limit_policies_v1` rebalance every queue they upsert
+or prune, after their row changes. A claim rebalances a queue whose stored rows do not match its
+policies, which happens only after a policy row changed outside synchronization. Deleting a policy
+row directly leaves its shard rows in place. They are inert while the queue has no queue-wide rule,
+and the next rebalance replaces them.
+
+A claim holds its shard locks until it commits. A claim that holds a shard waits for no other shard,
+so claims cannot deadlock on shards. The one exception holds every shard: a claim that rebalances
+took them in order.
 
 ### `budget` and `budget_bucket`
 
@@ -2452,12 +2514,14 @@ transaction. The handler restarts from entry and receives that retained result a
 
 ### Claim
 
-`claim_v1` takes shared advisory locks for concurrency and rate-policy deployment, then locks any
-matching policy rows before admission. It computes acquisition and lease timestamps after those
+`claim_v1` takes shared advisory locks for concurrency and rate-policy deployment, then reads the
+matching policy rows without locking them. On a governed queue it then holds at least one
+[admission shard](#admission_shard). It computes acquisition and lease timestamps after those
 potentially blocking locks. Without a concurrency policy, it selects the strict-priority head through
 `task_runtime_ready_idx`. With one, it counts only unexpired active rows through
-`task_runtime_active_queue_key_expiry_idx` and stops when queue capacity is full. With a rate policy,
-it refills the queue bucket from PostgreSQL time and returns null when no queue token exists.
+`task_runtime_active_queue_key_expiry_idx` and stops when its held shards are full. With a rate
+policy, it refills the held shards from PostgreSQL time and returns null when they hold no whole
+token.
 
 Priority dispatch has no aging or fair-share control. A sustained stream of higher-priority ready work can starve lower-priority rows in the same queue.
 
@@ -2467,16 +2531,16 @@ If concurrency-key or rate-key limits apply, `claim_v1` inspects at most the fir
 priority descending, FIFO sequence, and task identity. It selects the earliest candidate whose queue-scoped key has concurrency capacity and
 a rate token. Saturated or throttled candidates remain ready, so later admissible work can proceed
 without an unbounded prefix scan. The transaction consumes queue and key tokens only after its
-runtime update selects a candidate. Competing worker processes serialize on the rate-policy row, so
+runtime update selects a candidate. Competing worker processes serialize on each shard lock, so
 one durable token admits one start even when claims overlap. Returning null after exhausting the
 window enters the Worker's normal bounded empty-claim wait instead of a claim loop.
 
 That window reads without locking. `claim_one_v1` takes a row lock, with `FOR NO KEY UPDATE SKIP LOCKED`,
 only on the candidate it admits, so a claim that admits nothing leaves every row it read lockable by
 another claim. The admission decision cannot go stale between the read and the lock, because every
-rule that passes over a row holds a lock until the claim transaction ends: `max_active_per_key`
-holds the `concurrency_policy` row, a per-key rate cap holds the `rate_limit_policy` row, and a
-budget holds `workhorse:budget:<budget_name>`. The one-row fast path locks the first ready row it
+rule that passes over a row holds a lock until the claim transaction ends. `max_active_per_key`
+and a per-key rate cap give the queue one admission shard, whose lock the claim holds. A budget
+holds `workhorse:budget:<budget_name>`. The one-row fast path locks the first ready row it
 can take, and refuses that row when it names a budget the claim never locked, because reading past
 it has no bound. `pnpm benchmark:saturated-claim` measures a claim on a queue whose keys are all
 saturated: it writes no row lock and one WAL record, where the window lock wrote 100 row locks and
@@ -2484,47 +2548,67 @@ saturated: it writes no row lock and one WAL record, where the window lock wrote
 
 One runtime update changes the selected row to active and installs worker, global fence, acquisition, heartbeat, and expiry data. The same transaction appends the claim event before returning identity, payload, normalized `retryPolicy`, contract version, result limit, and error-redaction flag. No transaction remains open while user code runs. `Queue.claim` uses `claim_v1`, which is `claim_many_v1` with a limit of 1. `claim_many_v1(queue, worker, limit, lease_ms)` accepts a limit from 1 through 100. On a fast-tier queue it branches to `fast_claim_v1` instead ([Fast claim](#fast-claim)).
 
-On every full-tier queue, `claim_many_v1` admits the batch as a set. Before schema version 41, a
-queue with no concurrency or rate-limit policy row called `claim_one_v1` once per task. That
-repeated the policy locks, the budget sample, and the key-bucket prune for every start (SM-948). It takes the same shared advisory locks and policy
-row locks once for the whole batch. The policy row locks serialize every policy claim on the queue,
-so no other claim changes the counts and buckets the batch reads until it commits. The batch then
-runs rounds. Each round:
+On every full-tier queue, `claim_many_v1` admits the batch as a set through
+`claim_policy_batch_v1`. Before schema version 41, a queue with no concurrency or rate-limit policy
+row called `claim_one_v1` once per task. That repeated the policy locks, the budget sample, and the
+key-bucket prune for every start (SM-948). The batch takes the same shared advisory locks once and
+reads both policies. On a governed queue it then computes the shard count and a home shard,
+`pg_backend_pid() % shards`. When the stored `admission_shard` rows do not match that count, it
+calls `rebalance_admission_shards_v1` and holds every shard. The batch then runs rounds. Each round:
 
-1. Locks the budgets named by the first 100 ready rows, in name order. The first round waits for
-   each lock; a later round uses `pg_try_advisory_xact_lock` and skips a budget it cannot lock. A
-   queue with no ready row that names a budget skips this sample.
-2. Reads the clock once. The first round also prunes up to 100 fully refilled key buckets, as
+1. Locks the budgets named by the first 100 ready rows, in name order. Only a first round that did
+   not rebalance waits for each lock; any other round uses `pg_try_advisory_xact_lock` and skips a
+   budget it cannot lock. A queue with no ready row that names a budget skips this sample.
+2. In the first round, takes the first shard lock it can get at once, starting at home. When every
+   shard is held, it waits for the home shard. A batch that may not wait for locks instead returns
+   nothing and publishes the queue on `workhorse_tasks`.
+3. Reads the clock once. The first round also prunes up to 100 fully refilled key buckets, as
    `claim_one_v1` does.
-3. Computes the queue's room: the remaining limit, `max_active` minus the unexpired active count,
-   and the whole tokens in the queue bucket, whichever is smallest. It locks the queue bucket row
-   `FOR UPDATE` to read its tokens. A round with no room ends the batch.
-4. Reads the first 100 admissible ready rows without locking, in priority, sequence, and task-identity
+4. Reads every shard's room and refilled tokens. A shard's room is its concurrency share minus its
+   unexpired active leases; its tokens are its refilled balance, capped at its rate share. The held
+   room is the room of the held shards, reduced by any shard the batch does not hold that is over its
+   share. That overdraft comes from leases counted on a shard before a rebalance. The held tokens are
+   the whole tokens of the held shards. The queue's room is the smaller of the two, and of the
+   remaining limit.
+5. When that room is below what the whole queue could start, borrows other shards. Starting at home, it
+   tries the lock of each shard it does not hold that has room and tokens, without waiting, and
+   stops once it holds enough. Home is included, because the first round may have passed over it. It then reads the shards again. A shard another claim holds is never
+   counted, so the batch never spends room another claim may be spending. A round with no room ends
+   the batch.
+6. Reads the first 100 admissible ready rows without locking, in priority, sequence, and task-identity
    order. It computes each key's room from `max_active_per_key` and the key bucket, and each locked
    budget's room from `budget.max_active` and `budget_bucket`. A budget the claim never locked has no
    room. A row fits when its rank within its key and its rank within its budget are both within that
    room.
    A round with no `max_active_per_key`, no `per_key_limit`, and no locked budget skips the window.
    It locks the first ready rows up to the queue's room with `FOR NO KEY UPDATE SKIP LOCKED`, keeps them up
-   to the first row that names a budget, and ends the batch after step 6.
-5. Locks up to the queue's room of fitting rows with `FOR NO KEY UPDATE SKIP LOCKED`, as
+   to the first row that names a budget, and ends the batch after step 8.
+7. Locks up to the queue's room of fitting rows with `FOR NO KEY UPDATE SKIP LOCKED`, as
    `claim_one_v1` does, so a dependent enqueue's key-share lock hides no ready row. It allocates their
    fences from `fence_token_seq` in ascending order, activates them in one update, and appends one
-   claim event per row.
-6. Charges the queue bucket, each key bucket, and each budget bucket once for the starts it admitted.
-   A missing bucket starts full, and refill never runs from a clock ahead of the claim.
+   claim event per row. The update sets `admission_shard` for each row, filling the held shards'
+   room in held order. Without a concurrency policy every row takes the first held shard.
+8. Charges the held shards, in held order, each key bucket, and each budget bucket once for the
+   starts it admitted. A shard gives at most the tokens it holds. A missing bucket starts full, and
+   refill never runs from a clock ahead of the claim.
 
 A round returns its rows in fence order. The batch stops once it fills the limit or the queue's own
 room. It also stops when the window held every ready row and the round activated every fitting row,
 unless some row had both a limited key and a limited budget. Only that mix can leave a greedy
 admission unrealized within one round, so the batch runs another round then. The batch reads the
-policy rows only after it holds their locks, so a policy synchronized before the batch starts applies
-to it. A queue with no policy row, no per-key rule, and no locked budget runs one direct round.
+policy rows only after it holds the shared deployment locks, so a policy synchronized before the
+batch starts applies to it. A queue with no policy row, no per-key rule, and no locked budget runs
+one direct round.
 
-`claim_many_v1` is declared with `SET plan_cache_mode = force_generic_plan`. Its statements over the
-batch arrays have a pessimistic generic row estimate, so under the default mode PL/pgSQL replanned
-them on every call. That replanning doubled the latency of a limit-1 policy claim, and every such
-claim holds the policy row locks.
+A batch can stop at a full held room while a shard it could not lock had room. The batch then
+publishes the queue on `workhorse_tasks` before it returns. Another worker claims that room once the
+shard's holder commits, so a queue never waits with room for longer than one claim round.
+
+`claim_many_v1` and `claim_policy_batch_v1` are declared with
+`SET plan_cache_mode = force_generic_plan`. Their statements over the batch arrays have a
+pessimistic generic row estimate, so under the default mode PL/pgSQL replanned them on every call.
+That replanning doubled the latency of a limit-1 policy claim, and every such claim holds a shard
+lock.
 
 ### Worker concurrency and lifecycle
 
@@ -2631,8 +2715,10 @@ controls do not impose queue weights. `concurrency_policy` enforces a durable ac
 
 An update that moves a governed runtime away from active, or deletes it, runs
 `notify_concurrency_capacity_v1` before the row changes. The trigger publishes the queue on `workhorse_tasks`
-only when the queue's active rows, counted up to `max_active`, reach `max_active`, or when the row's
-`concurrency_key` has `max_active_per_key` active rows. Only such a release can unblock a claim. Completion,
+when the row's [admission shard](#admission_shard) has its share of active rows, when the queue's
+active rows, counted up to `max_active`, reach `max_active`, or when the row's `concurrency_key` has
+`max_active_per_key` active rows. Only such a release can unblock a claim. A full shard counts even
+when the queue has room, because a claim that has not committed may have filled the other shards. Completion,
 failure, retry release, cancellation, durable wait, and recovery can therefore wake a worker in another process
 without waiting for its fallback poll. A release below every cap publishes nothing, because a worker that takes
 a notification while idle delays its next claim. The count includes the row being released and every concurrent release
@@ -2645,13 +2731,16 @@ the delete of a row that was never active therefore calls no function. Every rel
 still calls it, even on a queue with no policy row. A policy synchronized while a lease is held must
 see that lease end, and the wait described next orders the release after any open claim.
 
-Before it counts, the trigger locks the queue's `concurrency_policy` row `FOR KEY SHARE`. `claim_one_v1` and
-`claim_many_v1` hold that row `FOR UPDATE` until they commit, so a release waits for an open claim and then
-counts its leases. Without the wait, a claim could fill the queue while a release was open. The release would
-count a queue below `max_active` and stay silent, and a claim that found the queue full would sleep until the
-fallback poll. `FOR KEY SHARE` does not conflict with another release, so releases still run in parallel. The
-count includes active rows whose lease has expired, although claim admission excludes them. A lease that expires
-after a claim finds the queue full therefore cannot hide the cap from a later release.
+Before it counts, the trigger tries `pg_try_advisory_xact_lock_shared` on the lock of the row's
+shard, `COALESCE(admission_shard, 0) % shards`. A claim holds that lock until it commits, and it may
+have filled the shard with leases the count cannot see. When the trigger cannot take the lock at
+once, it therefore publishes the queue without counting. It never waits, so a release never blocks
+behind an open claim, and releases still run in parallel. A claim that wants the shard after the
+trigger holds it waits for the release to commit and then counts it. With the lock held, the trigger
+reads both policies again. It publishes the queue when the policy is gone or the shard count
+changed, because the shard it computed may no longer be the one a claim counts the row in. The
+count includes active rows whose lease has expired, although claim admission excludes them. A lease
+that expires after a claim finds a shard full therefore cannot hide the cap from a later release.
 
 An expiring lease changes no row, so neither `notify_concurrency_capacity_v1` nor
 `notify_budget_capacity_v1` runs when a lease expires. Claim admission sees the returned capacity at
@@ -2664,16 +2753,19 @@ therefore follows expiry by about one maintenance interval unless more expired l
 than one tick recovers. PostgreSQL has no event that fires at a stored timestamp,
 so Workhorse leaves this wake to recovery instead of adding one.
 
-The lock lasts until the releasing transaction commits, not until the trigger returns. A claim on the queue
-therefore waits for the whole release. Workhorse's own releases are single statements that commit at once.
-A TypeScript `Queue` bound to a caller's transaction through `forTransaction` can call `complete`, `fail`,
-`releaseOwned`, `scheduleWait`, or `recoverExpired` there, and claims on that capped queue then wait until the
-caller commits. When `sync_concurrency_policies_v1` prunes a policy, its `DELETE` conflicts with `FOR KEY SHARE`.
-It can therefore deadlock with one transaction that releases tasks from several capped queues, such as the
-tick's `recover_expired_v1`. PostgreSQL aborts one side with `40P01`; both are safe to repeat, because the sync
-writes the complete desired set and the next tick recovers the same leases. Every SDK therefore sends an aborted
-sync again, up to 3 attempts in total. Inside a caller's transaction, the deadlock has already aborted that
-transaction, so the SDK raises the original `40P01` and the caller repeats the transaction.
+The shared shard lock lasts until the releasing transaction commits, not until the trigger returns.
+A claim that wants that shard waits for the release, and other claims take a free shard. Workhorse's
+own releases are single statements that commit at once. A TypeScript `Queue` bound to a caller's
+transaction through `forTransaction` can call `complete`, `fail`, `releaseOwned`, `scheduleWait`, or
+`recoverExpired` there, and claims that want the released rows' shards then wait until the caller
+commits. A synchronization rebalances each affected queue and waits for every shard lock, but a
+release never waits for a shard lock. Before schema version 43 the release waited on the policy row,
+so a pruning sync could deadlock with one transaction that released tasks from several capped
+queues. A sync can still meet `40P01` from a caller's transaction that claims from several queues.
+The sync is safe to repeat, because it writes the complete desired set. Every SDK therefore sends an
+aborted sync again, up to 3 attempts in total. Inside a caller's transaction,
+the deadlock has already aborted that transaction, so the SDK raises the original `40P01` and the
+caller repeats the transaction.
 
 ### Heartbeat
 

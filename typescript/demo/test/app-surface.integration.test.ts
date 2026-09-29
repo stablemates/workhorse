@@ -1129,12 +1129,15 @@ describe("Workhorse demo", () => {
     workhorse.start();
 
     try {
-      await pool.query(
-        `UPDATE workhorse.rate_limit_bucket
-            SET refilled_at = clock_timestamp() - interval '1 hour'
-          WHERE queue_name = $1`,
-        [DEMO_RATE_LIMIT_QUEUE],
-      );
+      // The queue's tokens live on its admission shards and each key's tokens in its own bucket.
+      for (const table of ["admission_shard", "rate_limit_bucket"]) {
+        await pool.query(
+          `UPDATE workhorse.${table}
+              SET refilled_at = clock_timestamp() - interval '1 hour'
+            WHERE queue_name = $1`,
+          [DEMO_RATE_LIMIT_QUEUE],
+        );
+      }
       await waitFor(
         async () => {
           const result = await pool.query<{ count: number }>(

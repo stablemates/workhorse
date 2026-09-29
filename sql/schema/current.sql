@@ -348,8 +348,9 @@ CREATE TABLE IF NOT EXISTS workhorse.rate_limit_policy (
   )
 );
 
--- One row for the queue bucket plus one sparse row for each concurrency key that has attempted a
--- start. Policy deletion cascades state so redeployment starts with a full bucket deliberately.
+-- One sparse row for each concurrency key that has attempted a start. The queue bucket lives in
+-- admission_shard (ADR 0082); a queue row written before schema version 43 is inert. Policy
+-- deletion cascades state so redeployment starts with a full bucket deliberately.
 CREATE TABLE IF NOT EXISTS workhorse.rate_limit_bucket (
   queue_name text NOT NULL REFERENCES workhorse.rate_limit_policy(queue_name) ON DELETE CASCADE,
   bucket_scope text NOT NULL CHECK (bucket_scope IN ('queue', 'key')),
@@ -363,6 +364,128 @@ CREATE TABLE IF NOT EXISTS workhorse.rate_limit_bucket (
 );
 CREATE INDEX IF NOT EXISTS rate_limit_bucket_queue_refill_idx
   ON workhorse.rate_limit_bucket(queue_name, bucket_scope, refilled_at);
+
+-- The queue-wide admission counters, split into shards so policy claims on one queue stop
+-- serializing on one row (ADR 0082). A queue with a concurrency or rate-limit policy has one row per
+-- shard, numbered from zero. Each shard owns an equal share of max_active and of the queue rate
+-- bucket, and a claim that holds a shard's advisory lock is the only writer of that shard's
+-- capacity. Null tokens mean the shard's bucket is full. rebalance_admission_shards_v1 sets the
+-- shard count and conserves the queue's tokens when a policy changes.
+CREATE TABLE IF NOT EXISTS workhorse.admission_shard (
+  queue_name text NOT NULL,
+  shard smallint NOT NULL CHECK (shard >= 0),
+  tokens numeric CHECK (tokens >= 0),
+  refilled_at timestamptz NOT NULL,
+  PRIMARY KEY (queue_name, shard)
+);
+
+-- One shard's share of a queue-wide total. The shares of shards 0 to p_shards - 1 sum to p_total,
+-- and the lower shards take the remainder.
+CREATE OR REPLACE FUNCTION workhorse.admission_share_v1(
+  p_total integer,
+  p_shards integer,
+  p_shard integer
+) RETURNS integer
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT p_total / p_shards + (p_shard < p_total % p_shards)::integer
+$$;
+
+-- The number of admission shards a queue's policies allow. A queue with no queue-wide rule has
+-- none. A per-key rule counts across the whole queue, so a queue with one keeps a single shard. Any
+-- other queue has at most 8 shards, and never more than max_active or the rate burst, so every
+-- shard's share is at least one.
+CREATE OR REPLACE FUNCTION workhorse.admission_shard_count_v1(
+  p_max_active integer,
+  p_max_active_per_key integer,
+  p_rate_burst integer,
+  p_per_key_limit integer
+) RETURNS integer
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT CASE
+    WHEN p_max_active IS NULL AND p_rate_burst IS NULL THEN 0
+    WHEN p_max_active_per_key IS NOT NULL OR p_per_key_limit IS NOT NULL THEN 1
+    ELSE LEAST(8, p_max_active, p_rate_burst)
+  END
+$$;
+
+-- Give a queue the shard rows its current policies allow. The function takes the queue's
+-- rebalance lock and then every shard lock in shard order, waiting for each, so no claim holds a
+-- shard while the rows change. It refills the stored shards to p_now, sums their tokens, and spreads
+-- that sum over the new shards by share. A queue whose stored rows are missing or hold a full shard
+-- starts full. The sum never exceeds the burst, so a rebalance never creates capacity. It keeps the
+-- latest refill time, so refill never runs from a clock ahead of an earlier charge.
+CREATE OR REPLACE FUNCTION workhorse.rebalance_admission_shards_v1(
+  p_queue_name text,
+  p_now timestamptz
+) RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_policy workhorse.concurrency_policy%ROWTYPE;
+  v_rate_policy workhorse.rate_limit_policy%ROWTYPE;
+  v_shards integer;
+  v_stored integer;
+  v_refilled_at timestamptz;
+  v_any_full boolean;
+  v_total numeric;
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:admission-shards:' || p_queue_name, 0));
+  FOR v_shard IN 0..7 LOOP
+    PERFORM pg_advisory_xact_lock(
+      hashtextextended('workhorse:admission-shard:' || p_queue_name || ':' || v_shard, 0)
+    );
+  END LOOP;
+  SELECT policy.* INTO v_policy
+    FROM workhorse.concurrency_policy policy WHERE policy.queue_name = p_queue_name;
+  SELECT policy.* INTO v_rate_policy
+    FROM workhorse.rate_limit_policy policy WHERE policy.queue_name = p_queue_name;
+  v_shards := workhorse.admission_shard_count_v1(
+    v_policy.max_active, v_policy.max_active_per_key, v_rate_policy.rate_burst,
+    v_rate_policy.per_key_limit
+  );
+  SELECT count(*)::integer, max(stored.refilled_at), COALESCE(bool_or(stored.tokens IS NULL), false)
+    INTO v_stored, v_refilled_at, v_any_full
+    FROM workhorse.admission_shard stored
+   WHERE stored.queue_name = p_queue_name;
+  IF v_rate_policy.queue_name IS NULL THEN
+    v_total := NULL;
+  ELSIF v_stored = 0 OR v_any_full THEN
+    v_total := v_rate_policy.rate_burst;
+  ELSE
+    SELECT LEAST(v_rate_policy.rate_burst::numeric, sum(LEAST(
+             refilled.share::numeric,
+             refilled.tokens + GREATEST(
+               0::numeric,
+               extract(epoch FROM p_now - refilled.refilled_at) * 1000
+             ) * v_rate_policy.rate_limit::numeric * refilled.share
+               / (v_rate_policy.rate_interval_ms::numeric * v_rate_policy.rate_burst)
+           )))
+      INTO v_total
+      FROM (
+        SELECT stored.tokens, stored.refilled_at,
+               workhorse.admission_share_v1(
+                 v_rate_policy.rate_burst, v_stored,
+                 (row_number() OVER (ORDER BY stored.shard))::integer - 1
+               ) AS share
+          FROM workhorse.admission_shard stored
+         WHERE stored.queue_name = p_queue_name
+      ) refilled;
+  END IF;
+  DELETE FROM workhorse.admission_shard stored WHERE stored.queue_name = p_queue_name;
+  IF v_shards > 0 THEN
+    INSERT INTO workhorse.admission_shard(queue_name, shard, tokens, refilled_at)
+    SELECT p_queue_name, slot.shard,
+           v_total * workhorse.admission_share_v1(v_rate_policy.rate_burst, v_shards, slot.shard)
+             / v_rate_policy.rate_burst,
+           GREATEST(p_now, COALESCE(v_refilled_at, p_now))
+      FROM generate_series(0, v_shards - 1) AS slot(shard);
+  END IF;
+END;
+$$;
 
 -- Deployment-synchronized budgets that span queues (ADR 0067). A task names at most one budget.
 -- A missing row means the named budget imposes no limit.
@@ -1121,6 +1244,9 @@ CREATE TABLE IF NOT EXISTS workhorse.task_runtime (
   pending_prerequisites integer NOT NULL DEFAULT 0
     CONSTRAINT task_runtime_pending_prerequisites_check CHECK (pending_prerequisites >= 0),
   dependency_rejected boolean NOT NULL DEFAULT false,
+  -- The admission shard whose capacity an active lease counts against (ADR 0082). A lease counts
+  -- against this value modulo the queue's shard count, and a null value counts against shard 0.
+  admission_shard smallint,
   CHECK (wait_name IS NULL OR (wait_name <> '' AND char_length(wait_name) <= 200)),
   CHECK (
     (cancel_requested_at IS NULL AND cancel_requested_by IS NULL AND cancel_reason IS NULL)
@@ -1183,46 +1309,86 @@ CREATE INDEX IF NOT EXISTS task_runtime_timeout_idx
   ON workhorse.task_runtime (attempt_timeout_at, task_id)
   WHERE state = 'active' AND attempt_timeout_at IS NOT NULL;
 
+-- Wake a worker when a release can unblock a claim that a concurrency cap held back. A claim
+-- admits only against the admission shards it holds (ADR 0082), so a release frees room in the
+-- shard its lease counted against.
 CREATE OR REPLACE FUNCTION workhorse.notify_concurrency_capacity_v1()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
   v_policy workhorse.concurrency_policy%ROWTYPE;
+  v_rate_policy workhorse.rate_limit_policy%ROWTYPE;
+  v_shards integer;
+  v_shard integer;
+  v_share integer;
 BEGIN
   IF OLD.state <> 'active' OR (TG_OP <> 'DELETE' AND NEW.state = 'active') THEN
     RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
   END IF;
-  -- A claim holds the policy row FOR UPDATE until it commits. Waiting for it here means the count
-  -- below sees every lease a committed or open claim took, so a claim that fills the queue while
-  -- this release is open cannot hide the cap. KEY SHARE does not conflict with another release, and
-  -- the count runs under a snapshot taken after the wait.
   SELECT * INTO v_policy FROM workhorse.concurrency_policy policy
-   WHERE policy.queue_name = OLD.queue_name
-   FOR KEY SHARE;
-  -- Only a release from a full queue or key can unblock a waiting claim. Every other release would
-  -- wake a worker that no cap held back, and a woken worker delays its claim. This runs before the
-  -- row changes, so the first row a statement releases from a full queue still counts itself. A
+   WHERE policy.queue_name = OLD.queue_name;
+  IF NOT FOUND THEN
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+  END IF;
+  SELECT * INTO v_rate_policy FROM workhorse.rate_limit_policy policy
+   WHERE policy.queue_name = OLD.queue_name;
+  v_shards := workhorse.admission_shard_count_v1(
+    v_policy.max_active, v_policy.max_active_per_key, v_rate_policy.rate_burst,
+    v_rate_policy.per_key_limit
+  );
+  v_shard := COALESCE(OLD.admission_shard, 0) % v_shards;
+  v_share := workhorse.admission_share_v1(v_policy.max_active, v_shards, v_shard);
+  -- A claim holds its shard's lock until it commits. A claim that is still open may have filled
+  -- this shard, and the count below cannot see its leases. This release therefore notifies unless
+  -- it can hold the shard in share mode at once. It never waits, and a claim that wants the shard
+  -- after this point waits for this release to commit and then sees it.
+  IF NOT pg_try_advisory_xact_lock_shared(
+    hashtextextended('workhorse:admission-shard:' || OLD.queue_name || ':' || v_shard, 0)
+  ) THEN
+    PERFORM pg_notify('workhorse_tasks', OLD.queue_name);
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+  END IF;
+  -- A synchronization can change the shard count between the first read and the lock. The shard
+  -- this release computed may then not be the one a claim counts it in, so the release notifies.
+  SELECT * INTO v_policy FROM workhorse.concurrency_policy policy
+   WHERE policy.queue_name = OLD.queue_name;
+  SELECT * INTO v_rate_policy FROM workhorse.rate_limit_policy policy
+   WHERE policy.queue_name = OLD.queue_name;
+  IF v_policy.queue_name IS NULL OR workhorse.admission_shard_count_v1(
+       v_policy.max_active, v_policy.max_active_per_key, v_rate_policy.rate_burst,
+       v_rate_policy.per_key_limit
+     ) <> v_shards THEN
+    PERFORM pg_notify('workhorse_tasks', OLD.queue_name);
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+  END IF;
+  -- Only a release from a full shard, queue, or key can unblock a waiting claim. Every other release
+  -- would wake a worker that no cap held back, and a woken worker delays its claim. This runs before
+  -- the row changes, so the first row a statement releases from a full shard still counts itself. A
   -- concurrent release that has not committed still counts as active, so it cannot hide the cap.
   -- A claim counts only unexpired leases, but this count includes expired ones. It therefore counts
-  -- every lease a claim may have counted when it found the queue full: a lease that expired after
+  -- every lease a claim may have counted when it found the shard full: a lease that expired after
   -- that claim must not hide the cap from this release.
-  IF FOUND AND (
-       (SELECT count(*) FROM (
-          SELECT 1 FROM workhorse.task_runtime active
-           WHERE active.queue_name = OLD.queue_name AND active.state = 'active'
-           LIMIT v_policy.max_active
-        ) capped) = v_policy.max_active
-       OR (
-         v_policy.max_active_per_key IS NOT NULL AND OLD.concurrency_key IS NOT NULL
-         AND (SELECT count(*) FROM (
-                SELECT 1 FROM workhorse.task_runtime active
-                 WHERE active.queue_name = OLD.queue_name
-                   AND active.concurrency_key = OLD.concurrency_key
-                   AND active.state = 'active'
-                 LIMIT v_policy.max_active_per_key
-              ) capped) = v_policy.max_active_per_key
-       )
+  IF (SELECT count(*) FROM (
+        SELECT 1 FROM workhorse.task_runtime active
+         WHERE active.queue_name = OLD.queue_name AND active.state = 'active'
+           AND COALESCE(active.admission_shard, 0) % v_shards = v_shard
+         LIMIT v_share
+      ) capped) = v_share
+     OR (SELECT count(*) FROM (
+           SELECT 1 FROM workhorse.task_runtime active
+            WHERE active.queue_name = OLD.queue_name AND active.state = 'active'
+            LIMIT v_policy.max_active
+         ) capped) = v_policy.max_active
+     OR (
+       v_policy.max_active_per_key IS NOT NULL AND OLD.concurrency_key IS NOT NULL
+       AND (SELECT count(*) FROM (
+              SELECT 1 FROM workhorse.task_runtime active
+               WHERE active.queue_name = OLD.queue_name
+                 AND active.concurrency_key = OLD.concurrency_key
+                 AND active.state = 'active'
+               LIMIT v_policy.max_active_per_key
+            ) capped) = v_policy.max_active_per_key
      ) THEN
     PERFORM pg_notify('workhorse_tasks', OLD.queue_name);
   END IF;
@@ -1232,9 +1398,8 @@ $$;
 
 -- Only a row that leaves the active state can free capacity. The WHEN clauses repeat the function's
 -- own first test, so a claim, a promotion, or the delete of a row that never started calls no
--- function (SM-948). The release of an active row still calls it on every queue: a policy created
--- while the lease was held must see that release, and the FOR KEY SHARE wait orders it after any
--- open claim.
+-- function (SM-948). The release of an active row still calls it on every queue, because a policy
+-- created while the lease was held must see that release.
 CREATE OR REPLACE TRIGGER task_runtime_concurrency_capacity_update
 BEFORE UPDATE OF state ON workhorse.task_runtime
 FOR EACH ROW WHEN (OLD.state = 'active' AND NEW.state <> 'active')
@@ -3045,17 +3210,28 @@ BEGIN
           SELECT policy.*, observed.now,
                  GREATEST(observed.now, COALESCE(bucket.refilled_at, observed.now))
                    AS refill_baseline,
-                 LEAST(policy.rate_burst::numeric, COALESCE(
-                   bucket.tokens + GREATEST(
-                     0::numeric,
-                     extract(epoch FROM observed.now - bucket.refilled_at) * 1000
-                   ) * policy.rate_limit::numeric / policy.rate_interval_ms::numeric,
-                   policy.rate_burst::numeric
-                 )) AS available_tokens
+                 LEAST(policy.rate_burst::numeric, COALESCE(bucket.tokens, policy.rate_burst::numeric))
+                   AS available_tokens
             FROM policies policy CROSS JOIN observed
-            LEFT JOIN workhorse.rate_limit_bucket bucket
-              ON bucket.queue_name = policy.queue_name
-             AND bucket.bucket_scope = 'queue' AND bucket.bucket_key = ''
+            CROSS JOIN LATERAL (
+              SELECT max(shard_row.refilled_at) AS refilled_at,
+                     sum(LEAST(shard_row.share::numeric, COALESCE(
+                       shard_row.tokens + GREATEST(
+                         0::numeric,
+                         extract(epoch FROM observed.now - shard_row.refilled_at) * 1000
+                       ) * policy.rate_limit::numeric * shard_row.share
+                         / (policy.rate_interval_ms::numeric * policy.rate_burst),
+                       shard_row.share::numeric
+                     ))) AS tokens
+                FROM (
+                  SELECT stored.tokens, stored.refilled_at,
+                         policy.rate_burst / count(*) OVER ()
+                           + ((row_number() OVER (ORDER BY stored.shard) - 1)
+                              < policy.rate_burst % count(*) OVER ())::integer AS share
+                    FROM workhorse.admission_shard stored
+                   WHERE stored.queue_name = policy.queue_name
+                ) shard_row
+            ) bucket
         )
         SELECT policy.namespace, policy.queue_name, policy.rate_limit,
                policy.rate_interval_ms, policy.rate_burst, policy.per_key_limit,
@@ -4775,7 +4951,8 @@ END;
 $$;
 
 -- Synchronize queue concurrency policies as deployment-owned desired state. Omitted rows are pruned
--- by default, so one deployment cannot leave stale admission budgets behind indefinitely.
+-- by default, so one deployment cannot leave stale admission budgets behind indefinitely. Each
+-- affected queue then gets the admission shards its new policies allow (ADR 0082).
 CREATE OR REPLACE FUNCTION workhorse.sync_concurrency_policies_v1(
   p_namespace text,
   p_definitions jsonb,
@@ -4890,6 +5067,7 @@ BEGIN
       FROM unnest(v_notify_queues) AS affected(queue_name)
      ORDER BY affected.queue_name
   LOOP
+    PERFORM workhorse.rebalance_admission_shards_v1(v_queue_name, clock_timestamp());
     PERFORM pg_notify('workhorse_tasks', v_queue_name);
   END LOOP;
 
@@ -4902,8 +5080,9 @@ BEGIN
 END;
 $$;
 
--- Synchronize queue rate limits as deployment-owned desired state. A policy update keeps accrued
--- bucket state, clamps it to the new burst on the next observation, and never manufactures starts.
+-- Synchronize queue rate limits as deployment-owned desired state. A policy update keeps the tokens
+-- a queue has accrued. The synchronization refills the queue's admission shards, clamps their sum to
+-- the new burst, and spreads it over the new shards, so it never manufactures starts (ADR 0082).
 CREATE OR REPLACE FUNCTION workhorse.sync_rate_limit_policies_v1(
   p_namespace text,
   p_definitions jsonb,
@@ -5061,6 +5240,7 @@ BEGIN
       FROM unnest(v_notify_queues) AS affected(queue_name)
      ORDER BY affected.queue_name
   LOOP
+    PERFORM workhorse.rebalance_admission_shards_v1(v_queue_name, clock_timestamp());
     PERFORM pg_notify('workhorse_tasks', v_queue_name);
   END LOOP;
   RETURN QUERY
@@ -9038,293 +9218,55 @@ BEGIN
 END;
 $$;
 
--- Policy-aware claim. Governed queues serialize the short admission transaction through policy
--- rows, count only unexpired active leases, refill durable rate tokens from PostgreSQL time, and
--- inspect at most the highest-priority 100 ready rows. Concurrency remains a dispatch budget rather than a
--- guarantee that expired handler code has stopped executing. Budget capacity is counted across
--- queues (ADR 0067), so a claim locks every budget named in its priority window, one advisory lock
--- per budget name, before it reads the clock. It takes those locks in name order so two claims
--- that share budgets cannot deadlock. A claim that already holds budget locks from an earlier claim
--- in the same transaction passes p_wait_for_budgets = false: it takes only the locks it can get
--- without waiting and leaves rows naming any other budget for a later claim.
--- A claim that can pass over a row reads its window without locking and locks only the candidate it
--- takes (SM-801), so a claim that admits nothing writes no row lock. The admission decision cannot
--- go stale between that read and the lock: max_active_per_key holds the concurrency policy row,
--- a per-key rate cap holds the rate-limit policy row, and a budget holds its advisory lock, each
--- until this transaction ends. A queue with no policy, no per-key rate cap, and no budget lock
--- keeps the one-row fast path, which locks the first ready row it can take. That row holds the line
--- when it names a budget this claim never locked, because reading past it has no bound.
--- No claim path calls it since SM-948; it remains a protocol function that claims one task.
-CREATE OR REPLACE FUNCTION workhorse.claim_one_v1(
-  p_queue_name text,
-  p_worker_id text,
-  p_lease_ms integer,
-  p_wait_for_budgets boolean
-) RETURNS TABLE (
-  task_id uuid, task_type text, priority integer, payload jsonb, contract_version text, result_max_bytes integer,
-  redact_error_details boolean,
-  trace_context jsonb,
-  attempt integer, max_attempts integer,
-  retry_policy jsonb, deadline_at timestamptz, execution_timeout_ms bigint,
-  attempt_timeout_at timestamptz, fence_token bigint, lease_expires_at timestamptz
-)
-LANGUAGE plpgsql
-AS $$
-DECLARE
-  v_runtime workhorse.task_runtime%ROWTYPE;
-  v_policy workhorse.concurrency_policy%ROWTYPE;
-  v_rate_policy workhorse.rate_limit_policy%ROWTYPE;
-  v_rate_status record;
-  v_active integer;
-  v_budget_name text;
-  v_budget_names text[] := '{}';
-  v_task_id uuid;
-  v_candidate_budget text;
-  v_fence bigint;
-  v_now timestamptz;
-  v_expires timestamptz;
-  v_control workhorse.queue_control%ROWTYPE;
-BEGIN
-  IF p_worker_id IS NULL OR p_worker_id = '' THEN RAISE EXCEPTION 'worker_id must not be empty'; END IF;
-  IF p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
-    RAISE EXCEPTION 'lease_ms must be between 100 and 86400000';
-  END IF;
-  SELECT * INTO v_control FROM workhorse.queue_control control
-   WHERE control.queue_name = p_queue_name;
-  IF FOUND AND v_control.tier = 'fast' THEN
-    IF NOT v_control.paused THEN
-      RETURN QUERY SELECT * FROM workhorse.fast_claim_v1(
-        p_queue_name, p_worker_id, 1, p_lease_ms, v_control.record_claims
-      );
-    END IF;
-    RETURN;
-  END IF;
-  -- Shared queue locks allow unrelated claims to overlap while serializing first policy creation
-  -- and pruning against deployment synchronization for this queue.
-  PERFORM pg_advisory_xact_lock_shared(
-    hashtextextended('workhorse:concurrency-policy:' || p_queue_name, 0)
-  );
-  PERFORM pg_advisory_xact_lock_shared(
-    hashtextextended('workhorse:rate-limit-policy:' || p_queue_name, 0)
-  );
-  SELECT policy.* INTO v_policy
-    FROM workhorse.concurrency_policy policy
-   WHERE policy.queue_name = p_queue_name
-   FOR UPDATE;
-  SELECT policy.* INTO v_rate_policy
-    FROM workhorse.rate_limit_policy policy
-   WHERE policy.queue_name = p_queue_name
-   FOR UPDATE;
-  -- Budget admission counts across queues. Lock each budget the priority window can name, in name
-  -- order, before reading the clock. The window may still reach a row whose budget committed after
-  -- this sample; that row is not admitted, because its lock was never taken in order.
-  FOR v_budget_name IN
-    SELECT DISTINCT sample.budget_name
-      FROM (
-        SELECT runtime.budget_name
-          FROM workhorse.task_runtime runtime
-         WHERE runtime.state = 'ready' AND runtime.queue_name = p_queue_name
-         ORDER BY runtime.priority DESC, runtime.sequence, runtime.task_id
-         LIMIT 100
-      ) sample
-     WHERE sample.budget_name IS NOT NULL
-     ORDER BY sample.budget_name
-  LOOP
-    IF p_wait_for_budgets THEN
-      PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:budget:' || v_budget_name, 0));
-    ELSIF NOT pg_try_advisory_xact_lock(
-      hashtextextended('workhorse:budget:' || v_budget_name, 0)
-    ) THEN
-      CONTINUE;
-    END IF;
-    v_budget_names := v_budget_names || v_budget_name;
-  END LOOP;
-  v_now := clock_timestamp();
-  v_expires := v_now + make_interval(secs => p_lease_ms::double precision / 1000.0);
-  WITH oldest_key_buckets AS MATERIALIZED (
-    SELECT bucket.bucket_key, bucket.tokens, bucket.refilled_at
-      FROM workhorse.rate_limit_bucket bucket
-     WHERE bucket.queue_name = p_queue_name AND bucket.bucket_scope = 'key'
-     ORDER BY bucket.refilled_at, bucket.bucket_key
-     FOR UPDATE SKIP LOCKED
-     LIMIT 100
-  ), full_key_buckets AS (
-    SELECT oldest.bucket_key
-      FROM oldest_key_buckets oldest
-     WHERE v_rate_policy.per_key_limit IS NULL OR LEAST(
-       v_rate_policy.per_key_burst::numeric,
-       oldest.tokens + GREATEST(
-         0::numeric,
-         extract(epoch FROM v_now - oldest.refilled_at) * 1000
-       ) * v_rate_policy.per_key_limit::numeric / v_rate_policy.per_key_interval_ms::numeric
-     ) >= v_rate_policy.per_key_burst
-  )
-  DELETE FROM workhorse.rate_limit_bucket bucket
-   USING full_key_buckets refilled
-   WHERE bucket.queue_name = p_queue_name AND bucket.bucket_scope = 'key'
-     AND bucket.bucket_key = refilled.bucket_key;
-  IF v_policy.queue_name IS NOT NULL THEN
-    SELECT count(*)::integer INTO v_active
-      FROM workhorse.task_runtime active
-     WHERE active.state = 'active'
-       AND active.queue_name = p_queue_name
-       AND active.expires_at > v_now;
-    IF v_active >= v_policy.max_active THEN RETURN; END IF;
-  END IF;
-
-  SELECT * INTO STRICT v_rate_status FROM workhorse.rate_limit_bucket_v1(
-    p_queue_name, 'queue', '', v_rate_policy.rate_limit, v_rate_policy.rate_interval_ms,
-    v_rate_policy.rate_burst, v_now, false
-  );
-  IF NOT v_rate_status.allowed THEN RETURN; END IF;
-
-  v_fence := nextval('workhorse.fence_token_seq');
-  IF v_policy.queue_name IS NULL AND v_rate_policy.per_key_limit IS NULL
-     AND cardinality(v_budget_names) = 0 THEN
-    -- No admission rule passes over a row here, so the first ready row this claim can lock is the
-    -- row it takes. SKIP LOCKED walks past rows other claims already hold. A row whose budget
-    -- committed after this claim sampled its budget names holds the line rather than being passed
-    -- over, because reading past it has no bound.
-    SELECT runtime.task_id, runtime.budget_name INTO v_task_id, v_candidate_budget
-      FROM workhorse.task_runtime runtime
-      JOIN workhorse.task task ON task.id = runtime.task_id
-     WHERE runtime.state = 'ready' AND runtime.queue_name = p_queue_name
-       AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
-       AND (task.execution_timeout_ms IS NULL
-         OR runtime.execution_used_ms < task.execution_timeout_ms)
-       AND NOT EXISTS (
-         SELECT 1 FROM workhorse.queue_control control
-          WHERE control.queue_name = p_queue_name AND control.paused
-       )
-     ORDER BY runtime.priority DESC, runtime.sequence, runtime.task_id
-     FOR NO KEY UPDATE OF runtime SKIP LOCKED
-     LIMIT 1;
-    IF v_candidate_budget IS NOT NULL THEN RETURN; END IF;
-  ELSE
-    -- An admission rule can pass over a row, so the window reads without locking and only the
-    -- chosen candidate is locked. A claim that admits nothing leaves every sampled row unlocked.
-    WITH ready_window AS MATERIALIZED (
-      SELECT runtime.task_id, runtime.concurrency_key, runtime.budget_name, runtime.priority,
-             runtime.sequence
-        FROM workhorse.task_runtime runtime
-        JOIN workhorse.task task ON task.id = runtime.task_id
-       WHERE runtime.state = 'ready' AND runtime.queue_name = p_queue_name
-         AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
-         AND (task.execution_timeout_ms IS NULL
-           OR runtime.execution_used_ms < task.execution_timeout_ms)
-         AND NOT EXISTS (
-           SELECT 1 FROM workhorse.queue_control control
-            WHERE control.queue_name = p_queue_name AND control.paused
-         )
-       ORDER BY runtime.priority DESC, runtime.sequence, runtime.task_id
-       LIMIT 100
-    ), admissible AS (
-      SELECT ready.task_id, ready.priority, ready.sequence
-        FROM ready_window ready
-        CROSS JOIN LATERAL workhorse.rate_limit_bucket_v1(
-          p_queue_name, 'key', ready.concurrency_key, v_rate_policy.per_key_limit,
-          v_rate_policy.per_key_interval_ms, v_rate_policy.per_key_burst, v_now, false
-        ) keyed_rate
-       WHERE (
-         v_policy.queue_name IS NULL
-         OR v_policy.max_active_per_key IS NULL
-         OR ready.concurrency_key IS NULL
-         OR (
-            SELECT count(*)
-              FROM workhorse.task_runtime active
-             WHERE active.state = 'active'
-               AND active.queue_name = p_queue_name
-               AND active.concurrency_key = ready.concurrency_key
-               AND active.expires_at > v_now
-          ) < v_policy.max_active_per_key
-       ) AND keyed_rate.allowed
-         AND CASE
-           WHEN ready.budget_name IS NULL THEN true
-           WHEN ready.budget_name = ANY(v_budget_names)
-             THEN workhorse.budget_admission_v1(ready.budget_name, v_now)
-           ELSE false
-         END
-    )
-    SELECT runtime.task_id INTO v_task_id
-      FROM admissible
-      JOIN workhorse.task_runtime runtime ON runtime.task_id = admissible.task_id
-     WHERE runtime.state = 'ready'
-     ORDER BY admissible.priority DESC, admissible.sequence, admissible.task_id
-     FOR NO KEY UPDATE OF runtime SKIP LOCKED
-     LIMIT 1;
-  END IF;
-  IF v_task_id IS NULL THEN RETURN; END IF;
-
-  UPDATE workhorse.task_runtime runtime
-     SET state = 'active', fence_token = v_fence, worker_id = p_worker_id,
-         acquired_at = v_now, heartbeat_at = v_now, expires_at = v_expires,
-         ready_at = NULL, sequence = NULL, wait_name = NULL,
-         attempt_started_at = COALESCE(runtime.attempt_started_at, v_now),
-         attempt_timeout_at = CASE
-           WHEN task.execution_timeout_ms IS NULL THEN NULL
-           ELSE v_now + make_interval(secs =>
-             (task.execution_timeout_ms - runtime.execution_used_ms)::double precision / 1000.0)
-         END,
-         error = NULL, updated_at = v_now
-    FROM workhorse.task task
-   WHERE runtime.task_id = v_task_id AND runtime.state = 'ready' AND task.id = runtime.task_id
-     AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
-  RETURNING runtime.* INTO v_runtime;
-  IF NOT FOUND THEN RETURN; END IF;
-
-  PERFORM * FROM workhorse.rate_limit_bucket_v1(
-    p_queue_name, 'queue', '', v_rate_policy.rate_limit, v_rate_policy.rate_interval_ms,
-    v_rate_policy.rate_burst, v_now, true
-  );
-  PERFORM * FROM workhorse.rate_limit_bucket_v1(
-    p_queue_name, 'key', v_runtime.concurrency_key, v_rate_policy.per_key_limit,
-    v_rate_policy.per_key_interval_ms, v_rate_policy.per_key_burst, v_now, true
-  );
-  IF v_runtime.budget_name IS NOT NULL THEN
-    PERFORM * FROM workhorse.budget_bucket_v1(v_runtime.budget_name, v_now, true);
-  END IF;
-
-  INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
-    VALUES (v_runtime.task_id, v_runtime.current_attempt, 'claimed',
-      jsonb_build_object('worker_id', p_worker_id, 'fence_token', v_fence::text, 'expires_at', v_expires));
-  RETURN QUERY
-    SELECT task.id, task.task_type, task.priority, task.payload, task.contract_version, task.result_max_bytes,
-           cardinality(task.payload_redact_keys) > 0 OR cardinality(task.result_redact_keys) > 0,
-           task.trace_context,
-           v_runtime.current_attempt, task.max_attempts,
-           task.retry_policy, task.deadline_at, task.execution_timeout_ms,
-           v_runtime.attempt_timeout_at, v_fence, v_expires
-      FROM workhorse.task task WHERE task.id = v_runtime.task_id;
-END;
-$$;
-
--- Claim several tasks through one client round trip. A fast-tier queue branches to fast_claim_v1.
--- Every other queue admits the batch as a set (SM-915). A queue with no concurrency or rate-limit
--- policy once repeated claim_one_v1 per task, which repeated the policy locks, the budget sample and
--- the key-bucket cleanup for every start; it now takes the same set path (SM-948). It locks the
--- policy rows and the window's budgets once, reads the clock once, and derives from one read of the
--- 100-row window how many rows each concurrency key and each budget can still start: the room left
--- under max_active_per_key and max_active, and the whole tokens left in the per-key and budget
--- buckets. A row whose key or budget has no room is dropped, and the rest are ranked within their
--- key and within their budget in claim order. A row is admitted when both ranks fit, and the batch
--- takes at most as many rows as the queue's own active room and whole queue tokens allow. It then
--- locks only the admitted rows, activates them, appends their claim events, and charges every
--- bucket once with the number of starts it admitted. A round never admits more than claim_one_v1
--- would. It can admit fewer when a row has both a limited key and a limited budget, because such a
--- row can use a key rank and then miss its budget rank. The first row that claim_one_v1 would take
--- always fits both ranks, so a round admits nothing only when claim_one_v1 would admit nothing. A
--- short round is repeated from a fresh window, with budget locks it can take without waiting, until
--- the limit, an empty round, exhausted queue capacity, or a window that no further round can change.
--- A round on a queue with no per-key rule and no locked budget skips the window. It locks the first
--- ready rows up to the queue's room directly, stops at a row that names a budget, and ends the batch.
--- The function plans every statement generically. Statements over the batch arrays otherwise keep a
+-- Claim up to p_limit tasks from a full-tier queue. claim_many_v1 claims every full-tier batch
+-- through it (SM-948), and claim_one_v1 claims through it for a queue with a concurrency or
+-- rate-limit policy, so a single claim and a batch share one admission path.
+--
+-- Queue-wide capacity lives in admission shards (ADR 0082). Each shard owns an equal share of
+-- max_active and of the queue rate bucket, and a claim may spend a shard's capacity only while it
+-- holds that shard's advisory lock. A claim first tries the shards in turn from a home shard that
+-- its backend chooses, and keeps the first it gets. When no shard is free it waits for its home
+-- shard, unless it may not wait. When its shards cannot fill the batch, it borrows further shards
+-- with a lock it can take at once. Claims on different shards therefore admit in parallel, and the
+-- shared policy advisory locks still hold every deployment synchronization back until they commit.
+--
+-- The queue-wide caps hold exactly. A claim counts the unexpired active leases of each shard, and a
+-- lease counts against its admission_shard modulo the shard count. A claim admits at most the room
+-- of the shards it holds. It also subtracts the overdraft of every shard it does not hold, so leases
+-- a shard took under an earlier shard count cannot push the queue past max_active. A shard's tokens
+-- refill at its share of the queue rate, and a claim charges only the shards it holds. A claim that
+-- stops short while another claim held a shard it wanted notifies the queue, so the capacity it
+-- could not reach wakes a worker. A queue whose shard rows do not match its policies is rebalanced
+-- first, under every shard lock. A queue with no concurrency or rate-limit policy has no shards,
+-- because no queue-wide rule limits its claims.
+--
+-- A queue with a per-key rule has one shard, so every claim on it serializes as before. Within the
+-- shards it holds, a claim admits the batch as a set (SM-915). It locks the window's budgets once
+-- per round, reads the clock once, and derives from one read of the 100-row window how many rows
+-- each concurrency key and each budget can still start: the room left under max_active_per_key and
+-- the whole tokens left in the per-key and budget buckets. A row whose key or budget has no room is
+-- dropped, and the rest are ranked within their key and within their budget in claim order. A row
+-- is admitted when both ranks fit, and the batch takes at most as many rows as the held shards
+-- allow. It then locks only the admitted rows, activates them, appends their claim events, and
+-- charges every bucket once with the number of starts it admitted. A row that has both a limited
+-- key and a limited budget can use a key rank and then miss its budget rank, so a round can admit
+-- fewer rows than one-at-a-time claims would. A short round is repeated from a fresh window, with
+-- budget locks it can take without waiting, until the limit, an empty round, exhausted capacity, or
+-- a window that no further round can change. A round on a queue with no per-key rule and no locked
+-- budget skips the window. It locks the first ready rows up to the room directly, stops at a row
+-- that names a budget, and ends the batch.
+--
+-- Only the first round may wait for a budget lock, and only before the claim holds a shard. A claim
+-- that holds a shard never waits for another lock, so claims that hold shards cannot deadlock. The
+-- function plans every statement generically. Statements over the batch arrays otherwise keep a
 -- custom plan, because the generic estimate for an array parameter is pessimistic, and replanning
 -- them on every call doubled the latency of a claim.
-CREATE OR REPLACE FUNCTION workhorse.claim_many_v1(
+CREATE OR REPLACE FUNCTION workhorse.claim_policy_batch_v1(
   p_queue_name text,
   p_worker_id text,
   p_limit integer,
-  p_lease_ms integer DEFAULT 30000
+  p_lease_ms integer,
+  p_wait_for_budgets boolean
 ) RETURNS TABLE (
   task_id uuid, task_type text, priority integer, payload jsonb, contract_version text, result_max_bytes integer,
   redact_error_details boolean,
@@ -9338,7 +9280,6 @@ SET plan_cache_mode = force_generic_plan
 AS $$
 DECLARE
   v_claimed integer;
-  v_control workhorse.queue_control%ROWTYPE;
   v_policy workhorse.concurrency_policy%ROWTYPE;
   v_rate_policy workhorse.rate_limit_policy%ROWTYPE;
   v_budget_name text;
@@ -9359,34 +9300,41 @@ DECLARE
   v_budgets text[];
   v_total integer := 0;
   v_direct boolean;
+  v_index integer;
+  v_shards integer;
+  v_home integer;
+  v_shard integer;
+  v_held integer[] := '{}';
+  v_rebalanced boolean := false;
+  v_skipped boolean := false;
+  v_short boolean := false;
+  v_capped_out boolean := false;
+  v_shard_room integer[];
+  v_shard_tokens numeric[];
+  v_conc_room integer;
+  v_rate_room integer;
+  v_all_room integer;
+  v_all_tokens integer;
+  v_want integer;
+  v_gain_room integer;
+  v_gain_tokens numeric;
+  v_slots integer[];
+  v_left integer;
+  v_part integer;
+  v_rest numeric;
+  v_charge numeric;
+  v_charged integer[];
+  v_charges numeric[];
 BEGIN
-  IF p_limit NOT BETWEEN 1 AND 100 THEN
-    RAISE EXCEPTION 'limit must be between 1 and 100';
-  END IF;
-  -- A fast-tier queue has no admission policy to apply row by row, so it claims the whole batch in
-  -- one statement.
-  SELECT * INTO v_control FROM workhorse.queue_control control
-   WHERE control.queue_name = p_queue_name;
-  IF FOUND AND v_control.tier = 'fast' THEN
-    IF p_worker_id IS NULL OR p_worker_id = '' THEN
-      RAISE EXCEPTION 'worker_id must not be empty';
-    END IF;
-    IF p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
-      RAISE EXCEPTION 'lease_ms must be between 100 and 86400000';
-    END IF;
-    IF NOT v_control.paused THEN
-      RETURN QUERY SELECT * FROM workhorse.fast_claim_v1(
-        p_queue_name, p_worker_id, p_limit, p_lease_ms, v_control.record_claims
-      );
-    END IF;
-    RETURN;
-  END IF;
   IF p_worker_id IS NULL OR p_worker_id = '' THEN RAISE EXCEPTION 'worker_id must not be empty'; END IF;
   IF p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
     RAISE EXCEPTION 'lease_ms must be between 100 and 86400000';
   END IF;
-  -- The same locks claim_one_v1 takes. The policy row locks serialize every policy claim on this
-  -- queue, so no other claim changes the counts and buckets this batch reads until it commits.
+  IF p_limit NOT BETWEEN 1 AND 100 THEN
+    RAISE EXCEPTION 'limit must be between 1 and 100';
+  END IF;
+  -- Shared queue locks allow claims to overlap while holding every deployment synchronization of
+  -- this queue's policies, and the rebalance it performs, back until this claim commits.
   PERFORM pg_advisory_xact_lock_shared(
     hashtextextended('workhorse:concurrency-policy:' || p_queue_name, 0)
   );
@@ -9394,18 +9342,30 @@ BEGIN
     hashtextextended('workhorse:rate-limit-policy:' || p_queue_name, 0)
   );
   SELECT policy.* INTO v_policy
-    FROM workhorse.concurrency_policy policy
-   WHERE policy.queue_name = p_queue_name
-   FOR UPDATE;
+    FROM workhorse.concurrency_policy policy WHERE policy.queue_name = p_queue_name;
   SELECT policy.* INTO v_rate_policy
-    FROM workhorse.rate_limit_policy policy
-   WHERE policy.queue_name = p_queue_name
-   FOR UPDATE;
+    FROM workhorse.rate_limit_policy policy WHERE policy.queue_name = p_queue_name;
+  v_shards := workhorse.admission_shard_count_v1(
+    v_policy.max_active, v_policy.max_active_per_key, v_rate_policy.rate_burst,
+    v_rate_policy.per_key_limit
+  );
+  v_home := CASE WHEN v_shards > 0 THEN pg_backend_pid() % v_shards END;
+  -- A queue whose shard rows do not match its policies has not been rebalanced since a policy
+  -- changed outside deployment synchronization. The rebalance leaves this claim holding every shard.
+  -- A queue with no policy has no shards, and its stored rows are left alone.
+  IF v_shards > 0 AND NOT EXISTS (
+    SELECT 1 FROM workhorse.admission_shard stored
+     WHERE stored.queue_name = p_queue_name
+    HAVING count(*) = v_shards AND max(stored.shard) = v_shards - 1
+  ) THEN
+    PERFORM workhorse.rebalance_admission_shards_v1(p_queue_name, clock_timestamp());
+    v_rebalanced := true;
+    v_held := ARRAY(SELECT generate_series(0, v_shards - 1));
+  END IF;
 
   LOOP
-    -- Lock each budget the window can name, in name order, before reading the clock. Only the
-    -- first round may wait; a later round already holds budget locks and takes only the ones it can
-    -- get at once.
+    -- Lock each budget the window can name, in name order, before reading the clock. Only a first
+    -- round that holds no shard may wait; any other round takes only the locks it can get at once.
     -- A queue with no ready row that names a budget skips the sample.
     IF EXISTS (
       SELECT 1 FROM workhorse.task_runtime runtime
@@ -9425,7 +9385,7 @@ BEGIN
          ORDER BY sample.budget_name
       LOOP
         CONTINUE WHEN v_budget_name = ANY(v_budget_names);
-        IF v_first_round THEN
+        IF v_first_round AND p_wait_for_budgets AND NOT v_rebalanced THEN
           PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:budget:' || v_budget_name, 0));
         ELSIF NOT pg_try_advisory_xact_lock(
           hashtextextended('workhorse:budget:' || v_budget_name, 0)
@@ -9434,6 +9394,32 @@ BEGIN
         END IF;
         v_budget_names := v_budget_names || v_budget_name;
       END LOOP;
+    END IF;
+
+    IF v_first_round AND NOT v_rebalanced AND v_shards > 0 THEN
+      -- Take the first shard that is free, starting at home. When every shard is busy, wait for the
+      -- home shard, or give up when this claim may not wait.
+      FOR v_index IN 0..v_shards - 1 LOOP
+        v_shard := (v_home + v_index) % v_shards;
+        IF pg_try_advisory_xact_lock(
+          hashtextextended('workhorse:admission-shard:' || p_queue_name || ':' || v_shard, 0)
+        ) THEN
+          v_held := ARRAY[v_shard];
+          EXIT;
+        END IF;
+      END LOOP;
+      IF cardinality(v_held) = 0 THEN
+        IF NOT p_wait_for_budgets THEN
+          v_skipped := true;
+          v_short := true;
+          v_capped_out := true;
+          EXIT;
+        END IF;
+        PERFORM pg_advisory_xact_lock(
+          hashtextextended('workhorse:admission-shard:' || p_queue_name || ':' || v_home, 0)
+        );
+        v_held := ARRAY[v_home];
+      END IF;
     END IF;
     v_now := clock_timestamp();
     v_expires := v_now + make_interval(secs => p_lease_ms::double precision / 1000.0);
@@ -9464,34 +9450,91 @@ BEGIN
     END IF;
     v_first_round := false;
 
-    -- The queue's own room: unexpired active leases under max_active and whole queue tokens.
+    -- Read every shard's room and refilled tokens. A shard's room is its share of max_active less
+    -- its unexpired active leases, and a null value means no rule limits it. The held room adds the
+    -- overdraft of every shard this claim does not hold. When the held shards cannot cover what the
+    -- whole queue could start, borrow the shards that have capacity and are free now, then read again.
+    -- A queue with no shards has no queue-wide rule, so its room stays null.
+    v_room := NULL;
+    v_short := false;
+    FOR v_index IN 1..2 LOOP
+      EXIT WHEN v_shards = 0;
+      WITH shard AS (
+        SELECT slot.shard,
+               CASE WHEN v_policy.queue_name IS NOT NULL THEN
+                 workhorse.admission_share_v1(v_policy.max_active, v_shards, slot.shard)
+                   - COALESCE(active.leases, 0)
+               END AS room,
+               CASE WHEN v_rate_policy.queue_name IS NOT NULL THEN LEAST(
+                 workhorse.admission_share_v1(v_rate_policy.rate_burst, v_shards, slot.shard)::numeric,
+                 COALESCE(
+                   stored.tokens + GREATEST(
+                     0::numeric,
+                     extract(epoch FROM v_now - stored.refilled_at) * 1000
+                   ) * v_rate_policy.rate_limit::numeric
+                     * workhorse.admission_share_v1(v_rate_policy.rate_burst, v_shards, slot.shard)
+                     / (v_rate_policy.rate_interval_ms::numeric * v_rate_policy.rate_burst),
+                   workhorse.admission_share_v1(v_rate_policy.rate_burst, v_shards, slot.shard)::numeric
+                 )
+               ) END AS tokens,
+               slot.shard = ANY(v_held) AS held
+          FROM generate_series(0, v_shards - 1) AS slot(shard)
+          LEFT JOIN (
+            SELECT COALESCE(active.admission_shard, 0) % v_shards AS shard,
+                   count(*)::integer AS leases
+              FROM workhorse.task_runtime active
+             WHERE active.state = 'active' AND active.queue_name = p_queue_name
+               AND active.expires_at > v_now
+             GROUP BY 1
+          ) active ON active.shard = slot.shard
+          LEFT JOIN workhorse.admission_shard stored
+            ON stored.queue_name = p_queue_name AND stored.shard = slot.shard
+      )
+      SELECT array_agg(shard.room ORDER BY shard.shard),
+             array_agg(shard.tokens ORDER BY shard.shard),
+             -- GREATEST and LEAST skip a null, so a queue with no concurrency policy tests for it.
+             CASE WHEN v_policy.queue_name IS NOT NULL THEN LEAST(
+               sum(GREATEST(shard.room, 0)) FILTER (WHERE shard.held),
+               sum(shard.room) FILTER (WHERE shard.held)
+                 + COALESCE(sum(LEAST(shard.room, 0)) FILTER (WHERE NOT shard.held), 0)
+             ) END::integer,
+             floor(sum(shard.tokens) FILTER (WHERE shard.held))::integer,
+             sum(shard.room)::integer,
+             floor(sum(shard.tokens))::integer
+        INTO v_shard_room, v_shard_tokens, v_conc_room, v_rate_room, v_all_room, v_all_tokens
+        FROM shard;
+      v_room := LEAST(v_conc_room, v_rate_room);
+      v_want := LEAST(p_limit - v_total, v_all_room, v_all_tokens);
+      v_short := v_room < v_want;
+      EXIT WHEN v_index = 2 OR NOT v_short OR cardinality(v_held) = v_shards;
+      v_gain_room := 0;
+      v_gain_tokens := 0;
+      FOR v_offset IN 0..v_shards - 1 LOOP
+        v_shard := (v_home + v_offset) % v_shards;
+        CONTINUE WHEN v_shard = ANY(v_held)
+          OR COALESCE(v_shard_room[v_shard + 1], 1) <= 0
+          OR COALESCE(v_shard_tokens[v_shard + 1], 1) <= 0;
+        IF pg_try_advisory_xact_lock(
+          hashtextextended('workhorse:admission-shard:' || p_queue_name || ':' || v_shard, 0)
+        ) THEN
+          v_held := v_held || v_shard;
+          v_gain_room := v_gain_room + COALESCE(v_shard_room[v_shard + 1], 0);
+          v_gain_tokens := v_gain_tokens + COALESCE(v_shard_tokens[v_shard + 1], 0);
+          EXIT WHEN (v_conc_room IS NULL OR v_conc_room + v_gain_room >= v_want)
+            AND (v_rate_room IS NULL OR v_rate_room + v_gain_tokens >= v_want);
+        ELSE
+          v_skipped := true;
+        END IF;
+      END LOOP;
+    END LOOP;
+
     v_take := p_limit - v_total;
     v_queue_capped := false;
-    IF v_policy.queue_name IS NOT NULL THEN
-      SELECT v_policy.max_active - count(*)::integer INTO v_room
-        FROM workhorse.task_runtime active
-       WHERE active.state = 'active'
-         AND active.queue_name = p_queue_name
-         AND active.expires_at > v_now;
-      IF v_room <= v_take THEN v_take := v_room; v_queue_capped := true; END IF;
+    IF v_room <= v_take THEN v_take := v_room; v_queue_capped := true; END IF;
+    IF v_take <= 0 THEN
+      v_capped_out := true;
+      EXIT;
     END IF;
-    IF v_rate_policy.rate_limit IS NOT NULL THEN
-      SELECT floor(LEAST(
-               v_rate_policy.rate_burst::numeric,
-               bucket.tokens + GREATEST(
-                 0::numeric,
-                 extract(epoch FROM v_now - bucket.refilled_at) * 1000
-               ) * v_rate_policy.rate_limit::numeric / v_rate_policy.rate_interval_ms::numeric
-             ))::integer
-        INTO v_room
-        FROM workhorse.rate_limit_bucket bucket
-       WHERE bucket.queue_name = p_queue_name AND bucket.bucket_scope = 'queue'
-         AND bucket.bucket_key = ''
-       FOR UPDATE;
-      IF NOT FOUND THEN v_room := v_rate_policy.rate_burst; END IF;
-      IF v_room <= v_take THEN v_take := v_room; v_queue_capped := true; END IF;
-    END IF;
-    EXIT WHEN v_take <= 0;
 
     v_direct := v_policy.max_active_per_key IS NULL AND v_rate_policy.per_key_limit IS NULL
       AND cardinality(v_budget_names) = 0;
@@ -9647,6 +9690,19 @@ BEGIN
     v_claimed := COALESCE(cardinality(v_picked), 0);
     EXIT WHEN v_claimed = 0;
 
+    -- Spread the picked rows over the held shards' room. A queue with no concurrency policy puts
+    -- them all on the first held shard, because only the rate bucket limits it.
+    v_slots := '{}';
+    v_left := v_claimed;
+    FOREACH v_shard IN ARRAY v_held LOOP
+      EXIT WHEN v_left = 0;
+      v_part := CASE WHEN v_policy.queue_name IS NULL THEN v_left
+        ELSE LEAST(v_left, GREATEST(v_shard_room[v_shard + 1], 0)) END;
+      CONTINUE WHEN v_part = 0;
+      v_slots := v_slots || array_fill(v_shard, ARRAY[v_part]);
+      v_left := v_left - v_part;
+    END LOOP;
+
     SELECT array_agg(fence ORDER BY fence) INTO v_fences
       FROM (
         SELECT nextval('workhorse.fence_token_seq') AS fence
@@ -9664,7 +9720,8 @@ BEGIN
                ELSE v_now + make_interval(secs =>
                  (task.execution_timeout_ms - runtime.execution_used_ms)::double precision / 1000.0)
              END,
-             error = NULL, updated_at = v_now
+             error = NULL, updated_at = v_now,
+             admission_shard = v_slots[array_position(v_picked, runtime.task_id)]
         FROM workhorse.task task
        WHERE runtime.task_id = ANY(v_picked) AND runtime.state = 'ready'
          AND task.id = runtime.task_id
@@ -9688,22 +9745,28 @@ BEGIN
       FROM activated;
     v_claimed := COALESCE(cardinality(v_ids), 0);
 
-    -- Charge each bucket once for the starts this round admitted. A missing bucket starts full,
-    -- as in rate_limit_bucket_v1 and budget_bucket_v1, and refill never runs from a clock ahead of
-    -- this claim.
-    IF v_claimed > 0 AND v_rate_policy.rate_limit IS NOT NULL THEN
-      INSERT INTO workhorse.rate_limit_bucket AS bucket(
-        queue_name, bucket_scope, bucket_key, tokens, refilled_at
-      ) VALUES (p_queue_name, 'queue', '', v_rate_policy.rate_burst - v_claimed, v_now)
-      ON CONFLICT (queue_name, bucket_scope, bucket_key) DO UPDATE
-         SET tokens = LEAST(
-               v_rate_policy.rate_burst::numeric,
-               bucket.tokens + GREATEST(
-                 0::numeric,
-                 extract(epoch FROM v_now - bucket.refilled_at) * 1000
-               ) * v_rate_policy.rate_limit::numeric / v_rate_policy.rate_interval_ms::numeric
-             ) - v_claimed,
-             refilled_at = GREATEST(v_now, bucket.refilled_at);
+    -- Charge each bucket once for the starts this round admitted. The queue charge falls on the
+    -- held shards in order, and each shard gives at most the tokens it holds. A missing bucket
+    -- starts full, as in rate_limit_bucket_v1 and budget_bucket_v1, and refill never runs from a
+    -- clock ahead of this claim.
+    IF v_claimed > 0 AND v_rate_policy.queue_name IS NOT NULL THEN
+      v_rest := v_claimed;
+      v_charged := '{}';
+      v_charges := '{}';
+      FOREACH v_shard IN ARRAY v_held LOOP
+        EXIT WHEN v_rest <= 0;
+        v_charge := LEAST(v_shard_tokens[v_shard + 1], v_rest);
+        CONTINUE WHEN v_charge <= 0;
+        v_charged := v_charged || v_shard;
+        v_charges := v_charges || (v_shard_tokens[v_shard + 1] - v_charge);
+        v_rest := v_rest - v_charge;
+      END LOOP;
+      INSERT INTO workhorse.admission_shard AS shard_row(queue_name, shard, tokens, refilled_at)
+      SELECT p_queue_name, charged.shard, charged.tokens, v_now
+        FROM unnest(v_charged, v_charges) AS charged(shard, tokens)
+      ON CONFLICT (queue_name, shard) DO UPDATE
+         SET tokens = EXCLUDED.tokens,
+             refilled_at = GREATEST(v_now, shard_row.refilled_at);
     END IF;
     IF v_claimed > 0 AND v_rate_policy.per_key_limit IS NOT NULL THEN
       INSERT INTO workhorse.rate_limit_bucket(
@@ -9771,14 +9834,266 @@ BEGIN
         JOIN workhorse.task_runtime runtime ON runtime.task_id = claimed.task_id
        ORDER BY claimed.ordinality;
     v_total := v_total + v_claimed;
-    -- A round stops the batch when it fills the limit or the queue's own room. A direct round
-    -- always stops it, because a short one found no further row it could take. A window round also
-    -- stops the batch when its window held every ready row, no row had both a limited key and a
-    -- limited budget, and it activated every row that fit, because then it admitted every row
-    -- claim_one_v1 would have admitted.
-    EXIT WHEN v_direct OR v_total >= p_limit OR (v_queue_capped AND v_claimed >= v_take)
+    v_capped_out := v_queue_capped AND v_claimed >= v_take;
+    -- A round stops the batch when it fills the limit or the held room. A direct round always stops
+    -- it, because a short one found no further row it could take. A window round also stops the
+    -- batch when its window held every ready row, no row had both a limited key and a limited
+    -- budget, and it activated every row that fit.
+    EXIT WHEN v_direct OR v_total >= p_limit OR v_capped_out
       OR (v_window < 100 AND NOT v_mixed AND v_claimed >= v_fit);
   END LOOP;
+  -- Capacity this claim could not reach sat in a shard another claim held. Wake a worker for it,
+  -- so a queue never waits with room for longer than one claim round.
+  IF v_skipped AND v_short AND v_capped_out THEN
+    PERFORM pg_notify('workhorse_tasks', p_queue_name);
+  END IF;
+END;
+$$;
+
+-- Claim one task. A fast-tier queue branches to fast_claim_v1, and a queue with a concurrency or
+-- rate-limit policy admits through claim_policy_batch_v1 with a limit of one (ADR 0082). This body
+-- claims from a queue with no policy. Concurrency remains a dispatch budget rather than a guarantee
+-- that expired handler code has stopped executing, and a claim inspects at most the
+-- highest-priority 100 ready rows. Budget capacity is counted across queues (ADR 0067), so a claim
+-- locks every budget named in its priority window, one advisory lock per budget name, before it
+-- reads the clock. It takes those locks in name order so two claims that share budgets cannot
+-- deadlock. A claim that already holds budget locks from an earlier claim in the same transaction
+-- passes p_wait_for_budgets = false: it takes only the locks it can get without waiting and leaves
+-- rows naming any other budget for a later claim.
+-- A claim whose window names a locked budget reads the window without locking and locks only the
+-- candidate it takes (SM-801), so a claim that admits nothing writes no row lock. The admission
+-- decision cannot go stale between that read and the lock, because a budget holds its advisory lock
+-- until this transaction ends. A claim with no budget lock keeps the one-row fast path, which locks
+-- the first ready row it can take. That row holds the line when it names a budget this claim never
+-- locked, because reading past it has no bound.
+-- No claim path calls it since SM-948; it remains a protocol function that claims one task.
+CREATE OR REPLACE FUNCTION workhorse.claim_one_v1(
+  p_queue_name text,
+  p_worker_id text,
+  p_lease_ms integer,
+  p_wait_for_budgets boolean
+) RETURNS TABLE (
+  task_id uuid, task_type text, priority integer, payload jsonb, contract_version text, result_max_bytes integer,
+  redact_error_details boolean,
+  trace_context jsonb,
+  attempt integer, max_attempts integer,
+  retry_policy jsonb, deadline_at timestamptz, execution_timeout_ms bigint,
+  attempt_timeout_at timestamptz, fence_token bigint, lease_expires_at timestamptz
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_runtime workhorse.task_runtime%ROWTYPE;
+  v_budget_name text;
+  v_budget_names text[] := '{}';
+  v_task_id uuid;
+  v_candidate_budget text;
+  v_fence bigint;
+  v_now timestamptz;
+  v_expires timestamptz;
+  v_control workhorse.queue_control%ROWTYPE;
+BEGIN
+  IF p_worker_id IS NULL OR p_worker_id = '' THEN RAISE EXCEPTION 'worker_id must not be empty'; END IF;
+  IF p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
+    RAISE EXCEPTION 'lease_ms must be between 100 and 86400000';
+  END IF;
+  SELECT * INTO v_control FROM workhorse.queue_control control
+   WHERE control.queue_name = p_queue_name;
+  IF FOUND AND v_control.tier = 'fast' THEN
+    IF NOT v_control.paused THEN
+      RETURN QUERY SELECT * FROM workhorse.fast_claim_v1(
+        p_queue_name, p_worker_id, 1, p_lease_ms, v_control.record_claims
+      );
+    END IF;
+    RETURN;
+  END IF;
+  -- Shared queue locks allow unrelated claims to overlap while serializing first policy creation
+  -- and pruning against deployment synchronization for this queue. A queue with a policy admits
+  -- through its admission shards.
+  PERFORM pg_advisory_xact_lock_shared(
+    hashtextextended('workhorse:concurrency-policy:' || p_queue_name, 0)
+  );
+  PERFORM pg_advisory_xact_lock_shared(
+    hashtextextended('workhorse:rate-limit-policy:' || p_queue_name, 0)
+  );
+  IF EXISTS (
+    SELECT 1 FROM workhorse.concurrency_policy policy WHERE policy.queue_name = p_queue_name
+  ) OR EXISTS (
+    SELECT 1 FROM workhorse.rate_limit_policy policy WHERE policy.queue_name = p_queue_name
+  ) THEN
+    RETURN QUERY SELECT * FROM workhorse.claim_policy_batch_v1(
+      p_queue_name, p_worker_id, 1, p_lease_ms, p_wait_for_budgets
+    );
+    RETURN;
+  END IF;
+  -- Budget admission counts across queues. Lock each budget the priority window can name, in name
+  -- order, before reading the clock. The window may still reach a row whose budget committed after
+  -- this sample; that row is not admitted, because its lock was never taken in order.
+  FOR v_budget_name IN
+    SELECT DISTINCT sample.budget_name
+      FROM (
+        SELECT runtime.budget_name
+          FROM workhorse.task_runtime runtime
+         WHERE runtime.state = 'ready' AND runtime.queue_name = p_queue_name
+         ORDER BY runtime.priority DESC, runtime.sequence, runtime.task_id
+         LIMIT 100
+      ) sample
+     WHERE sample.budget_name IS NOT NULL
+     ORDER BY sample.budget_name
+  LOOP
+    IF p_wait_for_budgets THEN
+      PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:budget:' || v_budget_name, 0));
+    ELSIF NOT pg_try_advisory_xact_lock(
+      hashtextextended('workhorse:budget:' || v_budget_name, 0)
+    ) THEN
+      CONTINUE;
+    END IF;
+    v_budget_names := v_budget_names || v_budget_name;
+  END LOOP;
+  v_now := clock_timestamp();
+  v_expires := v_now + make_interval(secs => p_lease_ms::double precision / 1000.0);
+  v_fence := nextval('workhorse.fence_token_seq');
+  IF cardinality(v_budget_names) = 0 THEN
+    -- No admission rule passes over a row here, so the first ready row this claim can lock is the
+    -- row it takes. SKIP LOCKED walks past rows other claims already hold. A row whose budget
+    -- committed after this claim sampled its budget names holds the line rather than being passed
+    -- over, because reading past it has no bound.
+    SELECT runtime.task_id, runtime.budget_name INTO v_task_id, v_candidate_budget
+      FROM workhorse.task_runtime runtime
+      JOIN workhorse.task task ON task.id = runtime.task_id
+     WHERE runtime.state = 'ready' AND runtime.queue_name = p_queue_name
+       AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
+       AND (task.execution_timeout_ms IS NULL
+         OR runtime.execution_used_ms < task.execution_timeout_ms)
+       AND NOT EXISTS (
+         SELECT 1 FROM workhorse.queue_control control
+          WHERE control.queue_name = p_queue_name AND control.paused
+       )
+     ORDER BY runtime.priority DESC, runtime.sequence, runtime.task_id
+     FOR NO KEY UPDATE OF runtime SKIP LOCKED
+     LIMIT 1;
+    IF v_candidate_budget IS NOT NULL THEN RETURN; END IF;
+  ELSE
+    -- A budget can pass over a row, so the window reads without locking and only the chosen
+    -- candidate is locked. A claim that admits nothing leaves every sampled row unlocked.
+    WITH ready_window AS MATERIALIZED (
+      SELECT runtime.task_id, runtime.concurrency_key, runtime.budget_name, runtime.priority,
+             runtime.sequence
+        FROM workhorse.task_runtime runtime
+        JOIN workhorse.task task ON task.id = runtime.task_id
+       WHERE runtime.state = 'ready' AND runtime.queue_name = p_queue_name
+         AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
+         AND (task.execution_timeout_ms IS NULL
+           OR runtime.execution_used_ms < task.execution_timeout_ms)
+         AND NOT EXISTS (
+           SELECT 1 FROM workhorse.queue_control control
+            WHERE control.queue_name = p_queue_name AND control.paused
+         )
+       ORDER BY runtime.priority DESC, runtime.sequence, runtime.task_id
+       LIMIT 100
+    ), admissible AS (
+      SELECT ready.task_id, ready.priority, ready.sequence
+        FROM ready_window ready
+       WHERE CASE
+           WHEN ready.budget_name IS NULL THEN true
+           WHEN ready.budget_name = ANY(v_budget_names)
+             THEN workhorse.budget_admission_v1(ready.budget_name, v_now)
+           ELSE false
+         END
+    )
+    SELECT runtime.task_id INTO v_task_id
+      FROM admissible
+      JOIN workhorse.task_runtime runtime ON runtime.task_id = admissible.task_id
+     WHERE runtime.state = 'ready'
+     ORDER BY admissible.priority DESC, admissible.sequence, admissible.task_id
+     FOR NO KEY UPDATE OF runtime SKIP LOCKED
+     LIMIT 1;
+  END IF;
+  IF v_task_id IS NULL THEN RETURN; END IF;
+
+  UPDATE workhorse.task_runtime runtime
+     SET state = 'active', fence_token = v_fence, worker_id = p_worker_id,
+         acquired_at = v_now, heartbeat_at = v_now, expires_at = v_expires,
+         ready_at = NULL, sequence = NULL, wait_name = NULL,
+         attempt_started_at = COALESCE(runtime.attempt_started_at, v_now),
+         attempt_timeout_at = CASE
+           WHEN task.execution_timeout_ms IS NULL THEN NULL
+           ELSE v_now + make_interval(secs =>
+             (task.execution_timeout_ms - runtime.execution_used_ms)::double precision / 1000.0)
+         END,
+         error = NULL, updated_at = v_now
+    FROM workhorse.task task
+   WHERE runtime.task_id = v_task_id AND runtime.state = 'ready' AND task.id = runtime.task_id
+     AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
+  RETURNING runtime.* INTO v_runtime;
+  IF NOT FOUND THEN RETURN; END IF;
+
+  IF v_runtime.budget_name IS NOT NULL THEN
+    PERFORM * FROM workhorse.budget_bucket_v1(v_runtime.budget_name, v_now, true);
+  END IF;
+
+  INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
+    VALUES (v_runtime.task_id, v_runtime.current_attempt, 'claimed',
+      jsonb_build_object('worker_id', p_worker_id, 'fence_token', v_fence::text, 'expires_at', v_expires));
+  RETURN QUERY
+    SELECT task.id, task.task_type, task.priority, task.payload, task.contract_version, task.result_max_bytes,
+           cardinality(task.payload_redact_keys) > 0 OR cardinality(task.result_redact_keys) > 0,
+           task.trace_context,
+           v_runtime.current_attempt, task.max_attempts,
+           task.retry_policy, task.deadline_at, task.execution_timeout_ms,
+           v_runtime.attempt_timeout_at, v_fence, v_expires
+      FROM workhorse.task task WHERE task.id = v_runtime.task_id;
+END;
+$$;
+
+-- Claim several tasks through one client round trip. A fast-tier queue branches to fast_claim_v1.
+-- Every other queue admits the batch as a set in claim_policy_batch_v1 (SM-915). A queue with no
+-- concurrency or rate-limit policy once repeated claim_one_v1 per task, which repeated the policy
+-- locks, the budget sample and the key-bucket cleanup for every start; it now takes the same set
+-- path (SM-948). A queue with a policy admits through its admission shards (ADR 0082).
+CREATE OR REPLACE FUNCTION workhorse.claim_many_v1(
+  p_queue_name text,
+  p_worker_id text,
+  p_limit integer,
+  p_lease_ms integer DEFAULT 30000
+) RETURNS TABLE (
+  task_id uuid, task_type text, priority integer, payload jsonb, contract_version text, result_max_bytes integer,
+  redact_error_details boolean,
+  trace_context jsonb,
+  attempt integer, max_attempts integer,
+  retry_policy jsonb, deadline_at timestamptz, execution_timeout_ms bigint,
+  attempt_timeout_at timestamptz, fence_token bigint, lease_expires_at timestamptz
+)
+LANGUAGE plpgsql
+SET plan_cache_mode = force_generic_plan
+AS $$
+DECLARE
+  v_control workhorse.queue_control%ROWTYPE;
+BEGIN
+  IF p_limit NOT BETWEEN 1 AND 100 THEN
+    RAISE EXCEPTION 'limit must be between 1 and 100';
+  END IF;
+  -- A fast-tier queue has no admission policy to apply row by row, so it claims the whole batch in
+  -- one statement.
+  SELECT * INTO v_control FROM workhorse.queue_control control
+   WHERE control.queue_name = p_queue_name;
+  IF FOUND AND v_control.tier = 'fast' THEN
+    IF p_worker_id IS NULL OR p_worker_id = '' THEN
+      RAISE EXCEPTION 'worker_id must not be empty';
+    END IF;
+    IF p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
+      RAISE EXCEPTION 'lease_ms must be between 100 and 86400000';
+    END IF;
+    IF NOT v_control.paused THEN
+      RETURN QUERY SELECT * FROM workhorse.fast_claim_v1(
+        p_queue_name, p_worker_id, p_limit, p_lease_ms, v_control.record_claims
+      );
+    END IF;
+    RETURN;
+  END IF;
+  RETURN QUERY SELECT * FROM workhorse.claim_policy_batch_v1(
+    p_queue_name, p_worker_id, p_limit, p_lease_ms, true
+  );
 END;
 $$;
 
@@ -18800,10 +19115,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (39, 'release a fused claim lock before it can deadlock'),
   (40, 'govern the dependency counter drift check and repair'),
   (41, 'cut the plain full-tier per-task claim and trigger cost'),
-  (42, 'keep JIT compilation out of the task detail read')
+  (42, 'keep JIT compilation out of the task detail read'),
+  (43, 'shard the admission counters')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (42) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (43) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

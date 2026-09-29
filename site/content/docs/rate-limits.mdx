@@ -85,6 +85,11 @@ The claim transaction consumes tokens, and PostgreSQL supplies the refill time. 
 skew cannot mint capacity, and two competing workers cannot spend the same token — the same
 property that makes claims safe makes throttling exact.
 
+The queue bucket is split across the queue's
+[admission shards](/docs/concurrency-policies#many-workers-one-cap), so claims of one queue do not
+wait on one another. Each shard refills its own share, and the shares add up to the rate and the
+burst. A claim spends only the tokens of the shards it holds, so the bucket never overspends.
+
 Tokens are never refunded. The budget measures starts: a task that succeeds, fails, waits, or loses
 its lease keeps its token spent, and every retry start consumes a fresh one. Size the limit for
 attempts, not for tasks.

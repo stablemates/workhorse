@@ -22,7 +22,7 @@ export interface BudgetAdmissionRaceOutcome {
  * Commits a budgeted task on one queue while that queue's claim is already past its first read, and
  * holds a second claim of the same budget open on another queue until the first claim has admitted
  * or started waiting. The first claim's queue carries a rate policy so a test session can park it on
- * the queue's token-bucket row, which every claim locks after it has sampled its ready rows.
+ * the queue's admission shards, which every claim locks after it has sampled its ready rows.
  */
 export async function raceBudgetAdmission(
   pool: Pool,
@@ -34,7 +34,7 @@ export async function raceBudgetAdmission(
   const holderQueue = `${race.name}-holder`;
   await queue.syncBudgets(race.name, [{ name: budget, maxActive: race.maxActive }]);
   await queue.syncRateLimitPolicies(race.name, [{ queue: lateQueue, rate: race.queueRate }]);
-  // One unbudgeted start creates the late queue's token-bucket row for the blocker to lock.
+  // One unbudgeted start proves the late queue admits before the blocker parks its claim.
   await queue.enqueue(race.taskType, { role: "bucket" }, { queue: lateQueue });
   if ((await queue.claim(`${race.name}-bucket`, { queue: lateQueue })) === null) {
     throw new Error("the late queue did not admit its unbudgeted start");
@@ -49,8 +49,9 @@ export async function raceBudgetAdmission(
     const latePid = await backendPid(late);
     await blocker.query("BEGIN");
     await blocker.query(
-      `SELECT 1 FROM workhorse.rate_limit_bucket
-        WHERE queue_name = $1 AND bucket_scope = 'queue' FOR UPDATE`,
+      `SELECT pg_advisory_xact_lock(
+                hashtextextended('workhorse:admission-shard:' || $1 || ':' || shard, 0))
+         FROM generate_series(0, 7) AS shard`,
       [lateQueue],
     );
 
@@ -61,7 +62,7 @@ export async function raceBudgetAdmission(
       .finally(() => {
         lateSettled = true;
       });
-    await waitFor(`${race.name}: the late claim never reached the bucket row`, async () =>
+    await waitFor(`${race.name}: the late claim never reached the admission shards`, async () =>
       waitsOn(pool, latePid, null),
     );
 

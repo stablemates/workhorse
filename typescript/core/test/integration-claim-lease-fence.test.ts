@@ -1349,8 +1349,9 @@ describe("claim lease fence", () => {
 
     try {
       await blocker.query("BEGIN");
+      // A policy synchronization holds this lock, and every claim of the queue waits for it.
       await blocker.query(
-        "SELECT 1 FROM workhorse.concurrency_policy WHERE queue_name = $1 FOR UPDATE",
+        "SELECT pg_advisory_xact_lock(hashtextextended('workhorse:concurrency-policy:' || $1, 0))",
         [queueName],
       );
       const claiming = queue.claim("timestamp-worker", { queue: queueName, leaseMs: 100 });
@@ -1542,9 +1543,9 @@ describe("claim lease fence", () => {
     ]);
     expect(claims.filter((claim) => claim !== null)).toHaveLength(1);
     await pool.query(
-      `UPDATE workhorse.rate_limit_bucket
+      `UPDATE workhorse.admission_shard
           SET refilled_at = clock_timestamp() - interval '60 seconds'
-        WHERE queue_name = $1 AND bucket_scope = 'queue'`,
+        WHERE queue_name = $1`,
       [queueName],
     );
     await expect(queue.claim("atomic-rate-worker-c", { queue: queueName })).resolves.not.toBeNull();
@@ -1641,14 +1642,83 @@ describe("claim lease fence", () => {
     );
   });
 
+  it.each([
+    { cap: "concurrency", maxActive: 4 as number | undefined, burst: undefined },
+    { cap: "rate", maxActive: undefined, burst: 4 as number | undefined },
+  ])(
+    "admits exactly the $cap cap across admission shards another claim holds",
+    async ({ maxActive, burst }) => {
+      // Four shards own one start each. An open claim spends its own shard, and a claim from another
+      // session cannot see that start. It must still spend only the three shards it can lock.
+      const queueName = `shard-boundary-${randomUUID()}`;
+      if (maxActive !== undefined) {
+        await queue.syncConcurrencyPolicies("test", [{ queue: queueName, maxActive }]);
+      }
+      if (burst !== undefined) {
+        await queue.syncRateLimitPolicies("test", [
+          { queue: queueName, rate: { limit: 1, intervalMs: 3_600_000, burst } },
+        ]);
+      }
+      const shards = await pool.query<{ n: number }>(
+        "SELECT count(*)::int AS n FROM workhorse.admission_shard WHERE queue_name = $1",
+        [queueName],
+      );
+      expect(shards.rows[0]!.n).toBe(4);
+
+      const holder = await pool.connect();
+      const listener = await pool.connect();
+      const notifications: string[] = [];
+      listener.on("notification", (message) => notifications.push(message.payload ?? ""));
+      try {
+        await listener.query("LISTEN workhorse_tasks");
+        await queue.enqueueMany(
+          Array.from({ length: 10 }, (_, ordinal) => ({
+            type: "shard-boundary",
+            payload: { ordinal },
+            options: { queue: queueName },
+          })),
+        );
+        await holder.query("BEGIN");
+        await expect(
+          holder.query(SQL_STATEMENTS.claim_many_v1, [queueName, "shard-holder", 1, 30_000]),
+        ).resolves.toMatchObject({ rowCount: 1 });
+        notifications.length = 0;
+
+        await expect(
+          queue.claimMany("shard-borrower", 10, { queue: queueName }),
+        ).resolves.toHaveLength(3);
+        // The borrower stopped short at a shard with room, so it wakes a worker for that room.
+        await waitForDatabaseCondition(async () => notifications.includes(queueName));
+        await holder.query("COMMIT");
+
+        await expect(queue.claimMany("shard-over", 10, { queue: queueName })).resolves.toHaveLength(
+          0,
+        );
+        const active = await pool.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM workhorse.task_runtime
+            WHERE queue_name = $1 AND state = 'active'`,
+          [queueName],
+        );
+        expect(active.rows[0]!.n).toBe(4);
+      } finally {
+        await holder.query("ROLLBACK").catch(() => undefined);
+        await listener.query("UNLISTEN workhorse_tasks").catch(() => undefined);
+        holder.release();
+        listener.release();
+      }
+    },
+  );
+
   it("publishes concurrency capacity only when a release leaves a full queue or key", async () => {
     // A release below every cap cannot unblock a claim, so it must not wake a busy worker.
     const suffix = randomUUID();
     const totalQueue = `capacity-total-${suffix}`;
     const keyQueue = `capacity-key-${suffix}`;
+    const spareQueue = `capacity-spare-${suffix}`;
     await queue.syncConcurrencyPolicies("test", [
       { queue: totalQueue, maxActive: 3 },
       { queue: keyQueue, maxActive: 50, maxActivePerKey: 1 },
+      { queue: spareQueue, maxActive: 50 },
     ]);
     await queue.enqueueMany([
       ...Array.from({ length: 6 }, (_, ordinal) => ({
@@ -1660,6 +1730,11 @@ describe("claim lease fence", () => {
         type: "capacity",
         payload: { ordinal },
         options: { queue: keyQueue, concurrencyKey: "only-key" },
+      })),
+      ...Array.from({ length: 2 }, (_, ordinal) => ({
+        type: "capacity",
+        payload: { ordinal },
+        options: { queue: spareQueue },
       })),
     ]);
     const listener = await pool.connect();
@@ -1680,8 +1755,18 @@ describe("claim lease fence", () => {
       await expect(queue.complete(full[0]!, "capacity-worker", null)).resolves.toBe(true);
       await expect(published(totalQueue)).resolves.toBe(1);
 
+      // Each of the queue's three admission shards owns one start, so this release leaves a full
+      // shard even though the queue has room. A claim that has not committed may hold the other
+      // shards, and this release cannot see what it admitted.
       await expect(queue.complete(full[1]!, "capacity-worker", null)).resolves.toBe(true);
-      await expect(published(totalQueue)).resolves.toBe(0);
+      await expect(published(totalQueue)).resolves.toBe(1);
+
+      // Two starts fill neither the queue nor the shard they count against.
+      const spare = await queue.claimMany("capacity-worker", 2, { queue: spareQueue });
+      expect(spare).toHaveLength(2);
+      await published(spareQueue);
+      await expect(queue.complete(spare[0]!, "capacity-worker", null)).resolves.toBe(true);
+      await expect(published(spareQueue)).resolves.toBe(0);
 
       // One statement releases every row of a full queue, and its first row still sees the cap.
       await expect(
@@ -1899,9 +1984,9 @@ describe("claim lease fence", () => {
     await expect(queue.claim("continuous-rate-a", { queue: queueName })).resolves.not.toBeNull();
     await expect(queue.claim("continuous-rate-b", { queue: queueName })).resolves.not.toBeNull();
     await pool.query(
-      `UPDATE workhorse.rate_limit_bucket
+      `UPDATE workhorse.admission_shard
           SET refilled_at = clock_timestamp() - interval '250 milliseconds'
-        WHERE queue_name = $1 AND bucket_scope = 'queue'`,
+        WHERE queue_name = $1`,
       [queueName],
     );
 
@@ -1911,9 +1996,9 @@ describe("claim lease fence", () => {
     await expect(queue.claim("continuous-rate-c", { queue: queueName })).resolves.toBeNull();
 
     await pool.query(
-      `UPDATE workhorse.rate_limit_bucket
+      `UPDATE workhorse.admission_shard
           SET refilled_at = clock_timestamp() - interval '550 milliseconds'
-        WHERE queue_name = $1 AND bucket_scope = 'queue'`,
+        WHERE queue_name = $1`,
       [queueName],
     );
     await expect(queue.claim("continuous-rate-c", { queue: queueName })).resolves.not.toBeNull();
@@ -2008,9 +2093,9 @@ describe("claim lease fence", () => {
     );
     await expect(queue.claim("rate-retry-worker", { queue: queueName })).resolves.toBeNull();
     await pool.query(
-      `UPDATE workhorse.rate_limit_bucket
+      `UPDATE workhorse.admission_shard
           SET refilled_at = clock_timestamp() - interval '61 seconds'
-        WHERE queue_name = $1 AND bucket_scope = 'queue'`,
+        WHERE queue_name = $1`,
       [queueName],
     );
     await expect(queue.claim("rate-retry-worker", { queue: queueName })).resolves.toMatchObject({
@@ -2029,9 +2114,9 @@ describe("claim lease fence", () => {
     ]);
     await expect(queue.claim("clock-rate-worker", { queue: queueName })).resolves.not.toBeNull();
     const skewed = await pool.query<{ refilled_at: Date }>(
-      `UPDATE workhorse.rate_limit_bucket
+      `UPDATE workhorse.admission_shard
           SET refilled_at = clock_timestamp() + interval '1 hour'
-        WHERE queue_name = $1 AND bucket_scope = 'queue'
+        WHERE queue_name = $1
         RETURNING refilled_at`,
       [queueName],
     );
@@ -2042,8 +2127,8 @@ describe("claim lease fence", () => {
     await expect(queue.claim("clock-rate-worker", { queue: queueName })).resolves.toBeNull();
     await expect(
       pool.query<{ refilled_at: Date }>(
-        `SELECT refilled_at FROM workhorse.rate_limit_bucket
-          WHERE queue_name = $1 AND bucket_scope = 'queue'`,
+        `SELECT refilled_at FROM workhorse.admission_shard
+          WHERE queue_name = $1`,
         [queueName],
       ),
     ).resolves.toMatchObject({ rows: [{ refilled_at: skewed.rows[0]!.refilled_at }] });

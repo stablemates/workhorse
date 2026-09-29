@@ -10,6 +10,10 @@ Workhorse uses a token bucket for each governed queue. Time refills tokens at th
 and each task start consumes one token. The burst value controls how many tokens survive an idle
 period.
 
+The queue bucket is split across the queue's
+[admission shards](240-concurrency-policies.md#many-workers-at-one-cap), so claims of one queue
+do not wait for each other. The shares add up to the rate and the burst.
+
 You can also configure an independent bucket for each concurrency key. This lets one customer wait
 for its own refill while another customer's task starts. A task without a key uses only the queue
 bucket.

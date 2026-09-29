@@ -1,14 +1,14 @@
 [
   {
     "id": "current",
-    "installedSchemaVersion": 40,
+    "installedSchemaVersion": 43,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [5],
     "compatible": true
   },
   {
     "id": "schema-newer-inside-major-line",
-    "installedSchemaVersion": 41,
+    "installedSchemaVersion": 44,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [5],
     "compatible": true,
@@ -16,7 +16,7 @@
   },
   {
     "id": "served-protocol-undeclared",
-    "installedSchemaVersion": 40,
+    "installedSchemaVersion": 43,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [],
     "compatible": true,
@@ -52,8 +52,18 @@
     "note": "The served protocol matches, so only the schema floor refuses this client."
   },
   {
+    "id": "schema-before-the-admission-shards",
+    "installedSchemaVersion": 42,
+    "clientProtocolVersion": 5,
+    "servedProtocolVersions": [5],
+    "compatible": false,
+    "refusalCode": "schema-too-old",
+    "refusal": "Refuse every mutation until the schema is migrated: the release reads admission shards schema 42 does not carry.",
+    "note": "The served protocol matches, so only the schema floor refuses this client."
+  },
+  {
     "id": "schema-serves-only-older-protocols",
-    "installedSchemaVersion": 40,
+    "installedSchemaVersion": 43,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [4],
     "compatible": false,
@@ -72,7 +82,7 @@
   },
   {
     "id": "schema-no-longer-serves-client",
-    "installedSchemaVersion": 40,
+    "installedSchemaVersion": 43,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [6],
     "compatible": false,
@@ -81,7 +91,7 @@
   },
   {
     "id": "client-protocol-too-old",
-    "installedSchemaVersion": 40,
+    "installedSchemaVersion": 43,
     "clientProtocolVersion": 4,
     "servedProtocolVersions": [5],
     "compatible": false,
@@ -91,7 +101,7 @@
   },
   {
     "id": "client-protocol-too-new",
-    "installedSchemaVersion": 40,
+    "installedSchemaVersion": 43,
     "clientProtocolVersion": 6,
     "servedProtocolVersions": [5],
     "compatible": false,
