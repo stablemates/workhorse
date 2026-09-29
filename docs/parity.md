@@ -197,7 +197,6 @@ the rule stands for any capability added after it.
 | Redrive                                    | Supported  | Supported | Supported |
 | Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported |
 | Durable operator worker pause              | Supported  | Supported | Supported |
-| Audited dependency counter repair          | Supported  | Absent    | Supported |
 
 <!-- END GENERATED PARITY PRODUCT -->
 
@@ -217,7 +216,6 @@ through its own public SDK.
 | Dead-letter listing and redrive            | Supported  | Supported | Supported | Supported |
 | Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported | Supported |
 | Durable operator worker pause              | Supported  | Supported | Supported | Supported |
-| Audited dependency counter repair          | Supported  | Absent    | Absent    | Absent    |
 | Embedded dashboard backend                 | Supported  | Supported | Supported | Supported |
 
 <!-- END GENERATED PARITY OPERATOR -->
@@ -225,9 +223,7 @@ through its own public SDK.
 TypeScript, Go, and Rust expose these methods through dedicated public `Admin` clients. Python provides
 synchronous `Admin` over Psycopg and `AsyncAdmin` over Psycopg or asyncpg. Their embedded dashboards
 call the same clients for shared operator reads and controls. Cancellation remains
-application-shaped, so every queue client exposes it with audit attribution. Dependency counter
-repair is an operator step rather than an application call, so only the TypeScript `Admin` client
-and the `workhorse admin repair-dependencies` command expose it.
+application-shaped, so every queue client exposes it with audit attribution.
 
 The embedded dashboard backend row records which language can serve the dashboard from its own HTTP
 server ([ADR 0029](decisions/0029-embeddable-dashboard-backends.md)). A cell is Supported only when

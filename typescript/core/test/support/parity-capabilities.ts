@@ -585,22 +585,6 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
     go: { file: "admin_test.go", pattern: "SetWorkerPaused" },
   },
   {
-    capability: "Audited dependency counter repair",
-    rust: {
-      absent:
-        "No Admin method; operators run `workhorse admin repair-dependencies` against the same database",
-    },
-    typescript: { file: "integration-dependencies.test.ts", pattern: "repairDependencyDrift" },
-    python: {
-      absent:
-        "No Admin method; operators run `workhorse admin repair-dependencies` against the same database",
-    },
-    go: {
-      absent:
-        "No Admin method; operators run `workhorse admin repair-dependencies` against the same database",
-    },
-  },
-  {
     capability: "Embedded dashboard backend",
     typescript: {
       file: "../../dashboard-server/test/conformance.test.ts",
@@ -688,15 +672,6 @@ export const PRODUCT_PARITY_ROWS: readonly ProductParityRow[] = [
       file: "integration-admin-cli.test.ts",
       patterns: ["pause-worker", "resume-worker"],
     },
-  },
-  {
-    capability: "Audited dependency counter repair",
-    postgresql: {
-      file: "integration-dependencies.test.ts",
-      pattern: "repair_dependency_drift|repairDependencyDrift",
-    },
-    dashboard: { absent: "The dashboard neither reports nor repairs dependency counter drift" },
-    cli: { file: "integration-admin-cli.test.ts", pattern: "repair-dependencies" },
   },
 ];
 
