@@ -42,6 +42,19 @@ pub fn poll_interval(value: Option<&str>) -> Result<Option<Duration>, Error> {
     Ok((milliseconds > 0).then(|| Duration::from_millis(milliseconds)))
 }
 
+/// Reads `WORKHORSE_DEMO_MODE`; only the development demo waits for a missing schema.
+///
+/// The production demo keeps a read-only startup, so its worker refuses a missing schema at once.
+pub fn waits_for_schema(mode: Option<&str>) -> Result<bool, Error> {
+    match mode {
+        Some("development") => Ok(true),
+        None | Some("" | "production") => Ok(false),
+        Some(_) => Err(Error::InvalidArgument(
+            "WORKHORSE_DEMO_MODE must be either development or production".into(),
+        )),
+    }
+}
+
 pub fn connection_pool(url: &str) -> Result<Pool, Box<dyn std::error::Error>> {
     let config = url.parse()?;
     Ok(Pool::builder(Manager::new(config, NoTls)).max_size(WORKER_CONCURRENCY + 4).build()?)

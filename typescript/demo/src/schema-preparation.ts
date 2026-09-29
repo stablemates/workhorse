@@ -1,4 +1,7 @@
-import { isMissingDatabaseRelationError } from "@stablemates/workhorse";
+import { setTimeout as delay } from "node:timers/promises";
+import { isMissingDatabaseRelationError, SchemaCompatibilityError } from "@stablemates/workhorse";
+
+const SCHEMA_RETRY_MS = 500;
 
 export interface ApplicationSchemaOperations {
   assertCompatible(): Promise<void>;
@@ -32,6 +35,33 @@ export async function prepareApplicationSchema(
     await operations.install();
   }
   await operations.installDemo();
+}
+
+/**
+ * Hold a development worker until the demo server has installed the Workhorse schema.
+ *
+ * The launcher starts the server and every worker at once, and only the development server installs
+ * the schema. Every other refusal fails at once. Production keeps a read-only startup, so a missing
+ * schema fails at once there too.
+ */
+export async function awaitWorkerSchema(
+  mode: "development" | "production",
+  assertCompatible: () => Promise<void>,
+  onWait: () => void,
+  retryMs = SCHEMA_RETRY_MS,
+): Promise<void> {
+  for (let waiting = false; ; waiting = true) {
+    try {
+      await assertCompatible();
+      return;
+    } catch (error) {
+      const missing =
+        error instanceof SchemaCompatibilityError && error.code === "schema-not-installed";
+      if (mode === "production" || !missing) throw error;
+    }
+    if (!waiting) onWait();
+    await delay(retryMs);
+  }
 }
 
 /** Prepare both the Workhorse runtime schema and the demo application's own tables. */

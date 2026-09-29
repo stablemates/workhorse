@@ -1,7 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { SchemaCompatibilityError } from "@stablemates/workhorse";
 import { describe, expect, it, vi } from "vitest";
 import {
+  awaitWorkerSchema,
   prepareApplicationSchema,
   prepareSchema,
   type ApplicationSchemaOperations,
@@ -137,6 +139,52 @@ describe("demo schema preparation", () => {
     expect(subject.install).not.toHaveBeenCalled();
     expect(subject.migrate).not.toHaveBeenCalled();
     expect(subject.installDemo).not.toHaveBeenCalled();
+  });
+});
+
+function missing(): SchemaCompatibilityError {
+  return new SchemaCompatibilityError("schema-not-installed", "missing", {
+    installedVersion: null,
+    expectedVersion: 1,
+  });
+}
+
+describe("demo worker schema wait", () => {
+  it("waits in development until the server installs the schema", async () => {
+    const assertCompatible = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(missing())
+      .mockRejectedValueOnce(missing())
+      .mockResolvedValue(undefined);
+    const onWait = vi.fn<() => void>();
+
+    await awaitWorkerSchema("development", assertCompatible, onWait, 1);
+
+    expect(assertCompatible).toHaveBeenCalledTimes(3);
+    expect(onWait).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a missing schema at once in production", async () => {
+    const error = missing();
+    const assertCompatible = vi.fn<() => Promise<void>>().mockRejectedValue(error);
+
+    await expect(
+      awaitWorkerSchema("production", assertCompatible, vi.fn<() => void>(), 1),
+    ).rejects.toBe(error);
+    expect(assertCompatible).toHaveBeenCalledOnce();
+  });
+
+  it("refuses an incompatible development schema at once", async () => {
+    const error = new SchemaCompatibilityError("schema-too-old", "old", {
+      installedVersion: 1,
+      expectedVersion: 2,
+    });
+    const assertCompatible = vi.fn<() => Promise<void>>().mockRejectedValue(error);
+
+    await expect(
+      awaitWorkerSchema("development", assertCompatible, vi.fn<() => void>(), 1),
+    ).rejects.toBe(error);
+    expect(assertCompatible).toHaveBeenCalledOnce();
   });
 });
 

@@ -1,6 +1,6 @@
 use tokio::sync::watch;
 use workhorse_demo_worker::{
-    build_worker, connection_pool, poll_interval, wait_for_schema, worker_id,
+    build_worker, connection_pool, poll_interval, wait_for_schema, waits_for_schema, worker_id,
 };
 
 /// Resolves once SIGINT or SIGTERM arrives, for as many waiters as subscribe.
@@ -33,10 +33,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|value| !value.is_empty())
         .ok_or("DATABASE_URL_PRIMARY is required")?;
     let poll = poll_interval(std::env::var("WORKHORSE_WORKER_POLL_MS").ok().as_deref())?;
+    let waits = waits_for_schema(std::env::var("WORKHORSE_DEMO_MODE").ok().as_deref())?;
     let pool = connection_pool(&url)?;
     let worker = build_worker(pool.clone(), worker_id(), poll, Some(url.parse()?))?;
 
-    if !wait_for_schema(&pool, signalled(stop.clone())).await? {
+    if waits && !wait_for_schema(&pool, signalled(stop.clone())).await? {
         return Ok(());
     }
     worker.run(signalled(stop)).await?;

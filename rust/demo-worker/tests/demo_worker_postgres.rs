@@ -11,8 +11,8 @@ use tokio_postgres::Client;
 use uuid::Uuid;
 use workhorse::{Admin, AdminAudit, EnqueueOptions, Queue, QueueTier, TaskState};
 use workhorse_demo_worker::{
-    build_worker, connection_pool, wait_for_schema, LANGUAGE_TASK_TYPE, RUST_FAST_QUEUE,
-    RUST_QUEUE, SHARED_QUEUE, SHARED_TASK_TYPE,
+    build_worker, connection_pool, wait_for_schema, waits_for_schema, LANGUAGE_TASK_TYPE,
+    RUST_FAST_QUEUE, RUST_QUEUE, SHARED_QUEUE, SHARED_TASK_TYPE,
 };
 
 const WAIT: Duration = Duration::from_secs(15);
@@ -153,4 +153,12 @@ async fn the_rust_demo_worker_waits_for_a_missing_schema_until_shutdown() {
     assert!(!waiting.is_finished(), "the worker stopped waiting for a missing schema");
     stop.send(()).unwrap();
     assert!(!tokio::time::timeout(WAIT, waiting).await.unwrap().unwrap().unwrap());
+}
+
+#[test]
+fn only_the_development_demo_waits_for_the_schema() {
+    assert!(waits_for_schema(Some("development")).unwrap());
+    assert!(!waits_for_schema(Some("production")).unwrap());
+    assert!(!waits_for_schema(None).unwrap());
+    assert!(waits_for_schema(Some("staging")).is_err());
 }

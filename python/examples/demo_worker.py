@@ -2,13 +2,21 @@ from __future__ import annotations
 
 import os
 import socket
+import time
 from collections.abc import Mapping
 from typing import Any
 from uuid import uuid4
 
 from psycopg_pool import ConnectionPool
 
-from workhorse import HandlerContext, Json, Worker, run_worker_process
+from workhorse import (
+    HandlerContext,
+    Json,
+    ProtocolCompatibilityError,
+    Worker,
+    assert_schema_compatible,
+    run_worker_process,
+)
 
 LANGUAGE_TASK_TYPE = "demo.language-worker"
 SHARED_TASK_TYPE = "demo.shared-worker"
@@ -19,6 +27,7 @@ SCHEDULE_NAMESPACE = "workhorse-demo"
 FAST_TIER_SCHEDULE_NAMESPACE = "workhorse-demo-fast-tier"
 WORKER_CONCURRENCY = 3
 DEFAULT_POLL_MS = 15_000
+SCHEMA_RETRY_SECONDS = 0.5
 
 
 def database_url(environment: Mapping[str, str] = os.environ) -> str:
@@ -26,6 +35,35 @@ def database_url(environment: Mapping[str, str] = os.environ) -> str:
     if not value:
         raise RuntimeError("DATABASE_URL_PRIMARY is required")
     return value
+
+
+def waits_for_schema(environment: Mapping[str, str] = os.environ) -> bool:
+    """Only the development demo waits for a missing schema; production refuses at once."""
+    mode = environment.get("WORKHORSE_DEMO_MODE") or "production"
+    if mode not in ("development", "production"):
+        raise RuntimeError("WORKHORSE_DEMO_MODE must be either development or production")
+    return mode == "development"
+
+
+def wait_for_schema(pool: ConnectionPool, retry_seconds: float = SCHEMA_RETRY_SECONDS) -> None:
+    """Wait while the demo server has not installed the schema yet.
+
+    In development the server installs the schema on first start, so a worker that starts beside
+    it can see an empty database. Every other compatibility refusal fails at once.
+    """
+    logged = False
+    while True:
+        try:
+            with pool.connection() as connection:
+                assert_schema_compatible(connection)
+            return
+        except ProtocolCompatibilityError as error:
+            if error.code != "schema-not-installed":
+                raise
+        if not logged:
+            print("Waiting for the demo server to install the Workhorse schema", flush=True)
+            logged = True
+        time.sleep(retry_seconds)
 
 
 def language_task(payload: Any, context: HandlerContext) -> dict[str, Json]:
@@ -73,6 +111,8 @@ def main() -> None:
         max_size=WORKER_CONCURRENCY + 3,
         kwargs={"autocommit": True},
     ) as pool:
+        if waits_for_schema():
+            wait_for_schema(pool)
         run_worker_process(build_worker(pool, poll_ms))
 
 

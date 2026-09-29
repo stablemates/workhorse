@@ -94,8 +94,14 @@ describe("multilanguage demo worker topology", () => {
     expect(rustWorker).toContain(
       "SCHEDULE_NAMESPACE.into(),\n                FAST_TIER_SCHEDULE_NAMESPACE.into(),",
     );
-    // The worker waits out a missing schema instead of failing before the server installs it.
+    // In development each worker waits out a missing schema instead of failing before the server
+    // installs it. Production keeps a read-only startup and refuses at once.
     expect(rustWorker).toContain("CompatibilityCode::SchemaNotInstalled");
+    expect(rustWorker).toContain('Some("development") => Ok(true)');
+    expect(pythonWorker).toContain('error.code != "schema-not-installed"');
+    expect(pythonWorker).toContain('return mode == "development"');
+    expect(goWorker).toContain("compatibility.Code != workhorse.SchemaNotInstalled");
+    expect(goWorker).toContain('case "development":');
   });
 
   it("enforces the shared handler contract in TypeScript", () => {
