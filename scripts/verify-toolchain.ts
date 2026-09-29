@@ -74,9 +74,10 @@ const toolchainCommands: Record<string, Record<string, ToolProbe>> = {
     rustfmt: { arguments: ["--version"], identity: new RegExp(String.raw`^rustfmt ${version}`) },
   },
   ruby: {
+    // Bundler 4 prints the bare version; Bundler 2, which Ruby 3.4 bundles, prefixes its name.
     bundle: {
       arguments: ["--version"],
-      identity: new RegExp(String.raw`^Bundler version ${version}`),
+      identity: new RegExp(String.raw`^(?:Bundler version )?${version}`),
     },
   },
 };
