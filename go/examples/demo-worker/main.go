@@ -27,6 +27,7 @@ const (
 	fastTierScheduleNamespace = "workhorse-demo-fast-tier"
 	workerConcurrency         = 3
 	defaultPollMilliseconds   = 15_000
+	schemaRetryInterval       = 500 * time.Millisecond
 )
 
 func workerID() (string, error) {
@@ -46,6 +47,44 @@ func databaseURL() (string, error) {
 		return value, nil
 	}
 	return "", errors.New("DATABASE_URL_PRIMARY is required")
+}
+
+// waitsForSchema reports whether the worker should wait for a missing schema, which only the
+// development demo does. The production demo keeps a read-only startup and refuses at once.
+func waitsForSchema() (bool, error) {
+	switch mode := os.Getenv("WORKHORSE_DEMO_MODE"); mode {
+	case "development":
+		return true, nil
+	case "", "production":
+		return false, nil
+	default:
+		return false, errors.New("WORKHORSE_DEMO_MODE must be either development or production")
+	}
+}
+
+// waitForSchema waits while the demo server has not installed the schema yet.
+//
+// In development the server installs the schema on first start, so a worker that starts beside it
+// can see an empty database. Every other compatibility refusal fails at once. It returns the
+// context's error when shutdown arrives first.
+func waitForSchema(ctx context.Context, executor workhorse.Executor, logger *slog.Logger) error {
+	logged := false
+	for {
+		err := workhorse.AssertSchemaCompatible(ctx, executor)
+		var compatibility *workhorse.CompatibilityError
+		if !errors.As(err, &compatibility) || compatibility.Code != workhorse.SchemaNotInstalled {
+			return err
+		}
+		if !logged {
+			logger.Info("Waiting for the demo server to install the Workhorse schema")
+			logged = true
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(schemaRetryInterval):
+		}
+	}
 }
 
 func pollInterval() (time.Duration, error) {
@@ -130,6 +169,10 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	waits, err := waitsForSchema()
+	if err != nil {
+		panic(err)
+	}
 	id, err := workerID()
 	if err != nil {
 		panic(err)
@@ -140,7 +183,16 @@ func main() {
 	}
 	defer pool.Close()
 
-	worker, err := newWorker(pool, poll, id, slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	if waits {
+		if err := waitForSchema(runContext, workhorse.NewPGXExecutor(pool), logger); err != nil {
+			if runContext.Err() != nil {
+				return
+			}
+			panic(err)
+		}
+	}
+	worker, err := newWorker(pool, poll, id, logger)
 	if err != nil {
 		panic(err)
 	}

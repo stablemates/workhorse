@@ -121,3 +121,32 @@ def test_worker_completes_a_task_on_its_fast_tier_queue(database_url: str) -> No
         "succeeded",
         {"language": "python", "runtime": "python", "attempt": 1},
     )
+
+
+def test_only_the_development_demo_waits_for_the_schema() -> None:
+    assert demo_worker.waits_for_schema({"WORKHORSE_DEMO_MODE": "development"})
+    assert not demo_worker.waits_for_schema({"WORKHORSE_DEMO_MODE": "production"})
+    assert not demo_worker.waits_for_schema({})
+    with pytest.raises(RuntimeError, match="WORKHORSE_DEMO_MODE"):
+        demo_worker.waits_for_schema({"WORKHORSE_DEMO_MODE": "staging"})
+
+
+@pytest.mark.integration
+def test_worker_waits_for_a_missing_schema_until_it_is_installed(database_url: str) -> None:
+    with ConnectionPool(
+        database_url, min_size=1, max_size=2, kwargs={"autocommit": True}, open=True
+    ) as pool:
+        demo_worker.wait_for_schema(pool, retry_seconds=0.05)
+
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute("DROP SCHEMA workhorse CASCADE")
+        waiting = Thread(target=demo_worker.wait_for_schema, args=(pool, 0.05))
+        waiting.start()
+        time.sleep(0.5)
+        assert waiting.is_alive(), "the worker stopped waiting for a missing schema"
+
+        schema = (Path(__file__).parents[2] / "sql/schema/current.sql").read_text()
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute(schema)
+        waiting.join(timeout=10)
+        assert not waiting.is_alive(), "the wait did not end once the schema existed"
