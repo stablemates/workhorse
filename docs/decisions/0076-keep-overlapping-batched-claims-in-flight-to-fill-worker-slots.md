@@ -7,7 +7,7 @@
   (a long-running worker starts its first claim beside its startup maintenance pass)
 - **Related:** [ADR 0071](0071-give-every-worker-a-pool-and-a-dedicated-heartbeat-connection.md),
   [ADR 0072](0072-converge-the-worker-runtime-defaults.md),
-  [ADR 0075](https://github.com/stablemates/workhorse/pull/236)
+  [ADR 0075](0075-shape-the-ruby-sdk-as-one-gem-with-an-active-job-adapter.md)
 
 ## Context
 
