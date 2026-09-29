@@ -102,7 +102,7 @@ becomes a no-op.
   Workhorse fires its first occurrence only. If several fields land on one instant, Workhorse
   creates one occurrence.
 - **Hashed fields stay stable across worker languages.** An `H` field spreads schedules to a
-  repeatable offset, so TypeScript, Python, and Go workers agree on the same occurrence.
+  repeatable offset, so workers in every language agree on the same occurrence.
 - **Cancelling one fired task doesn't disable the schedule.** The definition and the tasks it
   creates have separate lifecycles — tomorrow's occurrence still runs.
 

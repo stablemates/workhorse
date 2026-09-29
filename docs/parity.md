@@ -1,7 +1,7 @@
 # Language feature parity
 
 This is the authoritative per-language support matrix for the Workhorse SDKs, anchored to schema
-version 18. It owns one question: which language can use which capability today. What each
+version 43. It owns one question: which language can use which capability today. What each
 capability does, and its exact limits, stay owned by [docs/features.md](features.md); this
 document never restates them.
 
@@ -59,27 +59,28 @@ telemetry, and graceful shutdown.
 
 <!-- BEGIN GENERATED PARITY WORKER -->
 
-| Capability                                   | TypeScript | Python    | Go        | Rust      |
-| -------------------------------------------- | ---------- | --------- | --------- | --------- |
-| Claiming and handler execution               | Supported  | Supported | Supported | Supported |
-| Bounded worker concurrency                   | Supported  | Supported | Supported | Supported |
-| Fast task tier with one outcome row per task | Supported  | Supported | Supported | Supported |
-| Unhandled task type released to its queue    | Supported  | Supported | Supported | Supported |
-| Heartbeats, lease recovery, fenced ownership | Supported  | Supported | Supported | Supported |
-| Cooperative cancellation delivery            | Supported  | Supported | Supported | Supported |
-| Notification-assisted dispatch with polling  | Supported  | Supported | Supported | Supported |
-| Durable checkpoints (handler context)        | Supported  | Supported | Supported | Supported |
-| Durable timers (`sleep` / `sleepUntil`)      | Supported  | Supported | Supported | Supported |
-| Signal and human-decision waits              | Supported  | Supported | Supported | Supported |
-| Linked child fan-out and result join         | Supported  | Supported | Supported | Supported |
-| Latest-value progress reporting              | Supported  | Supported | Supported | Supported |
-| Batch handler delivery                       | Supported  | Supported | Supported | Supported |
-| Schedule firing (database cron evaluation)   | Supported  | Supported | Supported | Supported |
-| Worker fleet registration and remote pause   | Supported  | Supported | Supported | Supported |
-| Graceful stop and signal drain               | Supported  | Supported | Supported | Supported |
-| Retention maintenance participation          | Supported  | Supported | Supported | Supported |
-| OpenTelemetry tracing and metrics            | Supported  | Supported | Supported | Supported |
-| Shared runtime fixtures executed             | Supported  | Supported | Supported | Supported |
+| Capability                                                  | TypeScript | Python    | Go        | Rust      |
+| ----------------------------------------------------------- | ---------- | --------- | --------- | --------- |
+| Claiming and handler execution                              | Supported  | Supported | Supported | Supported |
+| Bounded worker concurrency                                  | Supported  | Supported | Supported | Supported |
+| Fast task tier with one outcome row per task                | Supported  | Supported | Supported | Supported |
+| Fused fast-tier completion and refill claim in slot cohorts | Supported  | Supported | Supported | Supported |
+| Unhandled task type released to its queue                   | Supported  | Supported | Supported | Supported |
+| Heartbeats, lease recovery, fenced ownership                | Supported  | Supported | Supported | Supported |
+| Cooperative cancellation delivery                           | Supported  | Supported | Supported | Supported |
+| Notification-assisted dispatch with polling                 | Supported  | Supported | Supported | Supported |
+| Durable checkpoints (handler context)                       | Supported  | Supported | Supported | Supported |
+| Durable timers (`sleep` / `sleepUntil`)                     | Supported  | Supported | Supported | Supported |
+| Signal and human-decision waits                             | Supported  | Supported | Supported | Supported |
+| Linked child fan-out and result join                        | Supported  | Supported | Supported | Supported |
+| Latest-value progress reporting                             | Supported  | Supported | Supported | Supported |
+| Batch handler delivery                                      | Supported  | Supported | Supported | Supported |
+| Schedule firing (database cron evaluation)                  | Supported  | Supported | Supported | Supported |
+| Worker fleet registration and remote pause                  | Supported  | Supported | Supported | Supported |
+| Graceful stop and signal drain                              | Supported  | Supported | Supported | Supported |
+| Retention maintenance participation                         | Supported  | Supported | Supported | Supported |
+| OpenTelemetry tracing and metrics                           | Supported  | Supported | Supported | Supported |
+| Shared runtime fixtures executed                            | Supported  | Supported | Supported | Supported |
 
 <!-- END GENERATED PARITY WORKER -->
 
@@ -87,7 +88,7 @@ telemetry, and graceful shutdown.
 
 A capability row answers whether a language can do something. It says nothing about what that
 language does when the caller configures nothing, and that is the behavior an operator actually
-runs. Three runtimes can agree on every row above and still drain, poll, and retry differently out
+runs. Four runtimes can agree on every row above and still drain, poll, and retry differently out
 of the box.
 
 The table below is the whole list. A default differs only where the host language forces it, which
@@ -96,31 +97,36 @@ differs today, and the reason follows the table.
 
 <!-- BEGIN GENERATED PARITY DEFAULTS -->
 
-| Setting                                 | TypeScript                      | Python                          | Go                                  | Rust                                |
-| --------------------------------------- | ------------------------------- | ------------------------------- | ----------------------------------- | ----------------------------------- |
-| Worker concurrency                      | 1                               | 1                               | 1                                   | 1                                   |
-| Lease duration                          | 30000 ms                        | 30000 ms                        | 30000 ms                            | 30000 ms                            |
-| Heartbeat interval                      | Lease duration / 3              | Lease duration / 3              | Lease duration / 3                  | Lease duration / 3                  |
-| Claim poll interval (subscription live) | 5000 ms                         | 5000 ms                         | 5000 ms                             | 5000 ms                             |
-| Claim poll interval (polling only)      | 250 ms                          | 250 ms                          | 250 ms                              | 250 ms                              |
-| Empty-claim backoff ceiling             | 5000 ms                         | 5000 ms                         | 5000 ms                             | 5000 ms                             |
-| Maintenance tick interval               | 1000 ms                         | 1000 ms                         | 1000 ms                             | 1000 ms                             |
-| Maintenance routine offer interval      | 60000 ms                        | 60000 ms                        | 60000 ms                            | 60000 ms                            |
-| Worker registry interval                | 5000 ms                         | 5000 ms                         | 5000 ms                             | 5000 ms                             |
-| Schedule catch-up limit                 | 100                             | 100                             | 100                                 | 100                                 |
-| Shutdown grace, then                    | 25000 ms, then exit the process | 25000 ms, then exit the process | 25000 ms, then abandon the handlers | 25000 ms, then abandon the handlers |
-| Handler retry delay override            | `retryDelayMs`, unset           | `retry_delay_ms`, unset         | `RetryDelay`, unset                 | `retry_delay`, unset                |
+| Setting                                 | TypeScript                                                | Python                                                    | Go                                                        | Rust                                                      |
+| --------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- |
+| Worker concurrency                      | 1                                                         | 1                                                         | 1                                                         | 1                                                         |
+| Lease duration                          | 30000 ms                                                  | 30000 ms                                                  | 30000 ms                                                  | 30000 ms                                                  |
+| Heartbeat interval                      | Lease duration / 3                                        | Lease duration / 3                                        | Lease duration / 3                                        | Lease duration / 3                                        |
+| Claim poll interval (subscription live) | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   |
+| Claim poll interval (polling only)      | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    |
+| Empty-claim backoff ceiling             | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   |
+| Maintenance tick interval               | 1000 ms                                                   | 1000 ms                                                   | 1000 ms                                                   | 1000 ms                                                   |
+| Maintenance routine offer interval      | 60000 ms                                                  | 60000 ms                                                  | 60000 ms                                                  | 60000 ms                                                  |
+| Worker registry interval                | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   |
+| Schedule catch-up limit                 | 100                                                       | 100                                                       | 100                                                       | 100                                                       |
+| Dispatch cohorts                        | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 |
+| Shutdown grace, then                    | 25000 ms, then exit the process                           | 25000 ms, then exit the process                           | 25000 ms, then abandon the handlers                       | 25000 ms, then abandon the handlers                       |
+| Handler retry delay override            | `retryDelayMs`, unset                                     | `retry_delay_ms`, unset                                   | `RetryDelay`, unset                                       | `retry_delay`, unset                                      |
 
 <!-- END GENERATED PARITY DEFAULTS -->
 
-Two rows carry a condition the setting name alone cannot.
+Three rows carry a condition the setting name alone cannot.
 
 - **Claim poll interval.** A worker claims on one of two schedules. While its `LISTEN` subscription
   is live, a notification wakes it, so polling is only a fallback and the worker waits the ceiling
   between empty claims. A worker that cannot subscribe, because a connection pooler forbids
   `LISTEN` or the caller asked for polling only, starts at 250 ms and doubles toward that same
   ceiling. Most deployments therefore never use the shorter interval.
-- **Maintenance routine offer interval.** All three tick maintenance every 1000 ms, which bounds
+- **Dispatch cohorts.** A worker splits its slots into cohorts so fused fast-tier completions do
+  not run in lockstep. The quotient rounds up, and a worker that knows its pool size caps the
+  default at the connections left after its listener and heartbeat connection. An explicit
+  cohort count is never capped.
+- **Maintenance routine offer interval.** All four tick maintenance every 1000 ms, which bounds
   dispatch latency. The slower retention routines keep their own minute, because PostgreSQL owns
   the global due decision and a faster offer only adds rejected calls.
 
@@ -128,35 +134,38 @@ The shutdown deadline agrees at 25000 ms, and it sits under the 30 second termin
 container platform gives a process by default. What follows that deadline cannot agree, and it is
 the one accepted exception.
 
-A TypeScript or Python worker owns a process, so its deadline ends that process. A Go `Worker` runs
-inside a caller's process, and a library that ends someone else's process is wrong. Its deadline
+A TypeScript or Python worker owns a process, so its deadline ends that process. A Go or Rust
+`Worker` runs inside a caller's process, and a library that ends someone else's process is wrong. Its deadline
 cancels the handlers, gives them one short window to unwind, then stops renewing the leases of
-whatever still runs and returns `ErrShutdownIncomplete`. The caller decides whether to exit.
+whatever still runs and returns `ErrShutdownIncomplete` in Go or `Error::ShutdownIncomplete` in
+Rust. The caller decides whether to exit.
 
 PostgreSQL sees the same thing either way. An abandoned handler holds a lease no one renews, so
 `recover_expired_telemetry_v1` recovers its task exactly as it recovers the task of a process that
-exited at its own deadline. What differs is what the handler observes: a Go handler observes
-cancellation, where a TypeScript or Python handler observes termination.
+exited at its own deadline. What differs is what the handler observes: a Go or Rust handler
+observes cancellation, where a TypeScript or Python handler observes termination.
 
 The retry delay override sends one attempt's delay to `fail_v1` in place of the persisted policy's
-choice. All three SDKs carry it and all three leave it unset, so the persisted retry policy chooses
+choice. All four SDKs carry it and all four leave it unset, so the persisted retry policy chooses
 every delay until a caller says otherwise.
 
 ## Integer semantics
 
-PostgreSQL stores a `jsonb` number at full precision, but the three SDKs do not read one the same
-way. Python decodes a JSON integer as a Python `int`, which is unbounded. TypeScript and Go decode
+PostgreSQL stores a `jsonb` number at full precision, but the four SDKs do not read one the same
+way. Python decodes a JSON integer as a Python `int`, which is unbounded. Rust's `serde_json` holds
+an integer exactly within the signed and unsigned 64-bit ranges. TypeScript and Go decode
 it as an IEEE-754 double, which holds integers exactly only up to 2^53 - 1.
 
 So a payload, result, checkpoint, or progress value that carries an integer larger than
 9007199254740991 in magnitude is not portable. Enqueued from Python and handled in Python, it
-survives. Enqueued from Python and handled by a TypeScript or Go worker, it arrives rounded: the
-worker never sees the value the caller sent, and never reports an error.
+survives, and a Rust worker keeps it while it fits in 64 bits. Enqueued from Python and handled
+by a TypeScript or Go worker, it arrives rounded: the worker never sees the value the caller sent,
+and never reports an error.
 
-Workhorse does not reject such a value, because PostgreSQL accepts it and one language reads it
+Workhorse does not reject such a value, because PostgreSQL accepts it and some languages read it
 correctly. Send an identifier beyond that bound as a string instead. Within the bound every SDK
 round-trips an integer exactly, and `typescript/core/test/json-integers.test.ts`,
-`python/tests/test_json_integers.py`, and `go/json_integers_test.go` hold each language to that.
+`python/tests/test_json_integers.py`, and `go/json_integers_test.go` hold those languages to that.
 
 Linear owns the SDK roadmap, sequencing, blockers, and completion state in the `stablemates`
 workspace, `SM` team, and `workhorse` project. This document changes only
@@ -188,6 +197,7 @@ the rule stands for any capability added after it.
 | Redrive                                    | Supported  | Supported | Supported |
 | Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported |
 | Durable operator worker pause              | Supported  | Supported | Supported |
+| Audited dependency counter repair          | Supported  | Absent    | Supported |
 
 <!-- END GENERATED PARITY PRODUCT -->
 
@@ -207,26 +217,28 @@ through its own public SDK.
 | Dead-letter listing and redrive            | Supported  | Supported | Supported | Supported |
 | Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported | Supported |
 | Durable operator worker pause              | Supported  | Supported | Supported | Supported |
+| Audited dependency counter repair          | Supported  | Absent    | Absent    | Absent    |
 | Embedded dashboard backend                 | Supported  | Supported | Supported | Supported |
 
 <!-- END GENERATED PARITY OPERATOR -->
 
-TypeScript and Go expose these methods through dedicated public `Admin` clients. Python provides
+TypeScript, Go, and Rust expose these methods through dedicated public `Admin` clients. Python provides
 synchronous `Admin` over Psycopg and `AsyncAdmin` over Psycopg or asyncpg. Their embedded dashboards
 call the same clients for shared operator reads and controls. Cancellation remains
-application-shaped, so every queue client exposes it with audit attribution.
+application-shaped, so every queue client exposes it with audit attribution. Dependency counter
+repair is an operator step rather than an application call, so only the TypeScript `Admin` client
+and the `workhorse admin repair-dependencies` command expose it.
 
 The embedded dashboard backend row records which language can serve the dashboard from its own HTTP
 server ([ADR 0029](decisions/0029-embeddable-dashboard-backends.md)). A cell is Supported only when
 that backend passes the shared `dashboard/v1` HTTP fixtures. [ADR
 0074](decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md) gives Rust a `tower::Service`
-backend behind the `dashboard` feature before 1.0.0. Until it ships, a Rust deployment runs the
-standalone dashboard against its database.
+backend behind the `dashboard` feature.
 
 ## Schema tooling is TypeScript-only, deliberately
 
 Schema installation and migration ship in `@stablemates/workhorse` and nowhere else. That is a
-decision, not a gap in the matrix, so no row above records it as Absent for Python and Go.
+decision, not a gap in the matrix, so no row above records it as Absent for Python, Go, and Rust.
 
 Two reasons hold it there. No component can own an automatic migration, because no component is a
 singleton: the dashboard and every worker deploy on many nodes as part of an ordinary application
@@ -234,10 +246,10 @@ deploy, so a component that migrated itself would be many concurrent migrators r
 deliberate step. And `applySchemaMigrationPlan` is the most safety-critical code in this
 repository — an advisory lock, a post-lock version guard, gap rejection, transaction-control
 rejection, per-step atomic rollback, and a concurrent-migrator race that must be read as success.
-One implementation of that is worth more than three filled cells
+One implementation of that is worth more than four filled cells
 ([ADR 0053](decisions/0053-start-migrations-at-0-1-0-and-keep-them-additive.md)).
 
-A Python or Go deployment therefore runs the TypeScript CLI as a pipeline step, at the version its
+A Python, Go, or Rust deployment therefore runs the TypeScript CLI as a pipeline step, at the version its
 own SDK declares, and verifies with `workhorse schema status --json` before starting. What every
 language does ship is the startup check that reads the result: the "Public startup schema
 compatibility check" row above is Supported everywhere, and it is what turns a missed migration
@@ -253,8 +265,11 @@ against a schema it cannot speak, not that every language grows a second migrati
 If a cell says Supported, tests in this repository must exercise that capability in that language.
 The conformance fixtures under `protocol/v1/` are the intended enforcement point. The TypeScript
 suite runs the SQL fixtures through `scripts/verify-sql-protocol.ts` and the runtime fixtures through
-`Worker`. All three languages execute `protocol/v1/contracts.json`. The Python suite runs the SQL fixtures through `python/tests/test_protocol_conformance.py`
-and every runtime fixture through `python/tests/test_worker_runtime_conformance.py`.
+`Worker`. All four languages execute `protocol/v1/contracts.json`. The Python suite runs the SQL
+fixtures through `python/tests/test_protocol_conformance.py` and every runtime fixture through
+`python/tests/test_worker_runtime_conformance.py`. The Rust suite runs every `protocol/v1` fixture
+category through `rust/tests/protocol_conformance.rs`, and
+`rust/tests/conformance/expected-unsupported.json` lists no exception.
 
 `scripts/generate-parity-tables.ts` renders every capability matrix from
 `typescript/core/test/support/parity-capabilities.ts`. `pnpm parity:check` fails if the checked-in

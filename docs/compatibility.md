@@ -25,17 +25,18 @@ This boundary is about correctness only. It is not a performance claim; see
 
 ## Supported versions
 
-| Runtime    | Supported      | Minimum | End of life                                                    | Notes                                                   |
-| ---------- | -------------- | ------- | -------------------------------------------------------------- | ------------------------------------------------------- |
-| Node.js    | 22, 24         | 22      | 22: 2027-04-30, 24: 2028-04-30                                 | Even-numbered releases only. `engines.node` is `>=22`.  |
-| Python     | 3.12–3.14      | 3.12    | 3.12: 2028-10, 3.13: 2029-10, 3.14: 2030-10                    | `stablemates-workhorse` ships one `py3-none-any` wheel. |
-| Go         | 1.25 and newer | 1.25    | No date; Go supports its two most recent releases              | pgx v5.11.0 is the minimum and the tested version.      |
-| PostgreSQL | 15, 16, 17, 18 | 15      | 15: 2027-11-11, 16: 2028-11-09, 17: 2029-11-08, 18: 2030-11-14 | No extension beyond the default `plpgsql` is installed. |
+| Runtime    | Supported      | Minimum | End of life                                                    | Notes                                                    |
+| ---------- | -------------- | ------- | -------------------------------------------------------------- | -------------------------------------------------------- |
+| Node.js    | 22, 24         | 22      | 22: 2027-04-30, 24: 2028-04-30                                 | Even-numbered releases only. `engines.node` is `>=22`.   |
+| Python     | 3.12–3.14      | 3.12    | 3.12: 2028-10, 3.13: 2029-10, 3.14: 2030-10                    | `stablemates-workhorse` ships one `py3-none-any` wheel.  |
+| Go         | 1.25 and newer | 1.25    | No date; Go supports its two most recent releases              | pgx v5.11.0 is the minimum and the tested version.       |
+| Rust       | 1.89 and newer | 1.89    | No date; Rust supports only its latest stable release          | Tokio with `tokio-postgres` 0.7 and `deadpool-postgres`. |
+| PostgreSQL | 15, 16, 17, 18 | 15      | 15: 2027-11-11, 16: 2028-11-09, 17: 2029-11-08, 18: 2030-11-14 | No extension beyond the default `plpgsql` is installed.  |
 
 Pull requests and pushes run the newest Node.js and PostgreSQL versions. The weekly schedule runs
 every Node.js and PostgreSQL combination. It also runs the packed-package test on the newest
 Node.js version, and manual runs combine the latest-version lanes with that packed test.
-Demo and site smoke tests are temporarily disabled.
+Pull requests and pushes also run the demo and site smoke tests.
 
 Package managers: the repository is developed with pnpm, and the packed-install test installs the
 published tarballs with pnpm. npm and yarn are not exercised in CI; the packages are plain ESM with
@@ -59,6 +60,14 @@ module builds every Go example through the public import path. These tests prove
 surface without repository-only imports. Pull requests and pushes run Go against the newest
 PostgreSQL. The weekly schedule runs Go against every supported PostgreSQL major. It also serves the
 module zip from a staged proxy and consumes it from a clean module, as the release rehearsal does.
+The race detector runs only on that weekly schedule.
+
+The Rust crate declares Rust 1.89 as its minimum and runs on Tokio through tokio-postgres and
+deadpool-postgres. Pull requests and pushes run its suite once, with every optional feature, against
+the newest PostgreSQL. The weekly schedule runs it against every supported PostgreSQL major. It also
+runs the suite without optional features and packages the crate into a clean consumer, as the
+release gate does. [ADR 0083](decisions/0083-run-each-language-suite-once-per-change.md) records
+this split.
 
 ### Raising a floor
 
@@ -291,8 +300,8 @@ Ten packages ship from this repository. `@stablemates/workhorse` is the TypeScri
 
 The nine TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional TypeScript package always declares the core version it was released with as a peer range.
-The Python package and the Go module declare no TypeScript peer range; SQL protocol 1 and schema
-version 1 are their compatibility boundary instead. Their version numbers still match the npm
+The Python package, the Go module, and the Rust crate declare no TypeScript peer range; SQL protocol
+5 and schema version 43 are their compatibility boundary instead. Their version numbers still match the npm
 packages, because every line releases from one commit.
 
 Every release publishes one version to npm, PyPI, and the Go module proxy from one source commit.
@@ -306,7 +315,7 @@ remove, retype, or reinterpret a shipped view, so a core release remains compati
 dashboard it shipped beside. At 1.0.0 the dashboard's peer range on `@stablemates/workhorse` widens
 from the minor line to the major line; see [Retention and removal](#retention-and-removal).
 
-The shared browser bundle carries no SDK version. The TypeScript, Python, or Go host supplies its
+The shared browser bundle carries no SDK version. The TypeScript, Python, Go, or Rust host supplies its
 own published version when it renders the application, so the dashboard reports the package that
 serves it and a version-only release does not change the bundle.
 
@@ -331,10 +340,12 @@ and `scripts/install-commands.test.ts` fails a URL that names a different versio
 release step does not attach. A tag pushed before that step existed has no release and no asset;
 the first release that carries one is `v0.1.0`.
 
-Each line carries its own tag on that one commit, because the three registries have separate build
-and publication identities and the Go module proxy resolves a subdirectory module only from a
-`go/`-prefixed tag. [ADR 0050](decisions/0050-release-0-1-0-without-a-prerelease-suffix.md) records
-that the three tags name one commit and one version number.
+Each line carries its own tag on that one commit, because npm, PyPI, and the Go module proxy have
+separate build and publication identities. The Go module proxy also resolves a subdirectory module
+only from a `go/`-prefixed tag. The crate publishes from the TypeScript `vX.Y.Z` tag, so four
+registries share three tags.
+[ADR 0050](decisions/0050-release-0-1-0-without-a-prerelease-suffix.md) records that the tags name
+one commit and one version number.
 
 The Python package releases from its own `python/vX.Y.Z` tag. The tag must match
 `python/pyproject.toml` and a heading in `python/CHANGELOG.md`. `.github/workflows/release-python.yml`
@@ -439,7 +450,7 @@ function a release actually touches.
 `scripts/generate-sql-catalogues.ts` derives the set from the readers rather than from a hand list,
 so a new read governs its target on the next generate:
 
-- The manifest's statement catalogue, which is the SQL all three SDKs send. `assertNoInlineTypeScriptSql`
+- The manifest's statement catalogue, which is the SQL all four SDKs send. `assertNoInlineTypeScriptSql`
   and the Python binding check keep it the only source of SDK statements.
 - The three dashboard backends, `typescript/dashboard-server/src/server`, `go/dashboard`, and
   `python/src/workhorse/dashboard`, each of which builds its own SQL.
@@ -588,17 +599,19 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
 - **Task payloads are caller-owned JSON.** Workhorse stores and returns them unchanged. Trace context
   and other Workhorse metadata are kept beside the payload, never merged into it.
 - **The dashboard wire contract is versioned separately.** `dashboard/v1` pins the oRPC envelopes,
-  HTML placeholders, request order, and procedure schemas used by the TypeScript, Python, and Go
+  HTML placeholders, request order, and procedure schemas used by the TypeScript, Python, Go, and Rust
   backends. Applications should embed a shipped backend rather than call those procedures as a
   public operator API.
 
-The TypeScript, Python, and Go clients and workers implement this protocol. Python runs the same
+The TypeScript, Python, Go, and Rust clients and workers implement this protocol. Python runs the same
 canonical SQL fixtures and request mapping through Psycopg, plus transaction integration through
 Psycopg async and asyncpg. Its synchronous and asynchronous workers share one lifecycle core; the
 asynchronous surface uses native Psycopg or asyncpg query and notification connections. The Go
 worker supports bounded multi-queue dispatch, fenced ownership, cooperative
 cancellation, durable checkpoints, durable timers, and graceful drain. Repository tests compile
-and exercise external module consumers before a release can create the module tag.
+and exercise external module consumers before a release can create the module tag. The Rust crate
+runs every `protocol/v1` fixture category through `rust/tests/protocol_conformance.rs`, and
+`rust/tests/conformance/expected-unsupported.json` lists no exception.
 
 ## Release process
 
@@ -819,7 +832,7 @@ summary. Read that report. Do not infer registry state from whichever npm comman
 
 Recover by re-cutting the whole train at the next patch version.
 [ADR 0050](decisions/0050-release-0-1-0-without-a-prerelease-suffix.md) requires one version across
-the three registries, so every package moves, not only the ones that failed. The packages that did
+the four registries, so every package moves, not only the ones that failed. The packages that did
 publish stay published, because removal is unavailable and would break anyone who installed them.
 Deprecate each with `npm deprecate <name>@<version>` so an installer is pointed at the version that
 replaces it.

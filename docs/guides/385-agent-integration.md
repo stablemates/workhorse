@@ -1,7 +1,7 @@
 # How does an AI coding agent integrate Workhorse?
 
 An AI coding agent reads documentation by fetching URLs. It cannot click a language tab, so an
-HTML page hides two of the three languages from it. Workhorse publishes an agent-facing layer that
+HTML page hides every language but one from it. Workhorse publishes an agent-facing layer that
 solves discovery first, then walks one integration end to end.
 
 ## Read the Markdown, not the HTML
@@ -37,9 +37,10 @@ state and result.
 
 ## How the examples stay true
 
-The site page carries one complete program per language. Site checks compile all three: TypeScript
+The site page carries one complete program per language. Site checks compile all four: TypeScript
 through the type checker, Python through the formatter and the type checker, and Go through the
-formatter and the compiler. The cross-SDK name sweep that guards the feature pages does not cover
+formatter and the compiler. Rust examples must match regions in `rust/examples`, which
+`cargo clippy` compiles. The cross-SDK name sweep that guards the feature pages does not cover
 this page, because compiling its programs is the stronger check.
 
 ## Next

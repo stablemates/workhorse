@@ -23,7 +23,7 @@ Separating workers from the web tier used to mean the operator dashboard could n
 runtime state from process-local `Worker` objects, so it only ever knew about workers sharing its
 own process.
 
-The worker registry removes that constraint. TypeScript, Python, and Go workers upsert
+The worker registry removes that constraint. TypeScript, Python, Go, and Rust workers upsert
 `workhorse.worker_registry` on their configured cadence with declared concurrency, busy slots, and
 drain state, together with the client protocol version and the SDK they run. Each refresh reads the
 operator-requested pause flag in the same round trip. A dashboard mounted anywhere reads the fleet
@@ -249,7 +249,7 @@ Restart=on-failure
 ## Operational guidance
 
 - Give every process its own database pool and close it only after workers drain.
-- Budget pool capacity across process replicas. Notification-assisted dispatch reserves one shared listener connection per node-postgres pool; claims, heartbeats, handler queries, and maintenance use the remaining pool capacity.
+- Budget pool capacity across process replicas. Notification-assisted dispatch reserves one shared listener connection per node-postgres pool, and heartbeats reserve another unless `sharedHeartbeats` is set; claims, handler queries, and maintenance use the remaining pool capacity.
 - Keep the process-level deadline below the orchestrator grace period.
 - Keep task leases long enough to tolerate normal heartbeat jitter, but short enough to meet recovery objectives after hard termination.
 - Treat an unexpected worker-loop failure as process-fatal and let the supervisor restart a clean process.

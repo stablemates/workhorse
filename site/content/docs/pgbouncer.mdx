@@ -47,7 +47,7 @@ session-mode PgBouncer:
 
 A notification-capable pool holds one connection for the listener no matter how many `Queue` or
 `Worker` objects share it, so a listening pool needs room for the listener plus claims. A pool
-capped at one connection polls instead of listening. Behind any pooler that cannot deliver
+too small to spare a connection polls instead of listening. Behind any pooler that cannot deliver
 notifications the listener slot is held without delivering anything — budget for it on both
 sides, or drop the capability.
 
@@ -57,8 +57,10 @@ heartbeat connection per pool, shared the way the listener is, so budget it on t
 and your handlers. If the pool cannot spare it, or states no size, the worker refuses to start and
 says why. Set `sharedHeartbeats` to send heartbeats through the shared pool instead, and accept
 that busy handlers can then delay renewal. The heartbeat connection runs only self-contained
-statements, so it works in every pool mode. Go workers reserve one heartbeat connection from the shared pool (or opt out with `SharedHeartbeats`). A Python worker opens its own
-heartbeat connection from the supplied Psycopg or asyncpg pool.
+statements, so it works in every pool mode. Go workers share one heartbeat connection per pool
+the same way, and `SharedHeartbeats` opts out. A Python worker opens its own heartbeat connection
+from the supplied Psycopg or asyncpg pool. A Rust worker reserves its own pooled heartbeat
+connection. Python and Rust name the opt-out `shared_heartbeats`.
 
 On a [fast-tier](/docs/fast-tier) queue, a busy worker in any language splits its slots into
 cohorts, and each cohort can hold a connection of its own. When the pool states its size, the
