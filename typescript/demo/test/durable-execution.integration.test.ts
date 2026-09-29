@@ -721,13 +721,13 @@ describe("Workhorse demo", () => {
             namespace: DEMO_SCHEDULE_NAMESPACE,
             name: HEARTBEAT_SCHEDULE_NAME,
             occurrenceCount: 1,
-            evaluatorCount: 3,
+            evaluatorCount: DEMO_WORKER_CONCURRENCY.length,
           }),
           expect.objectContaining({
             namespace: DEMO_SCHEDULE_NAMESPACE,
             name: LONG_RUNNING_SCHEDULE_NAME,
             occurrenceCount: 1,
-            evaluatorCount: 3,
+            evaluatorCount: DEMO_WORKER_CONCURRENCY.length,
           }),
         ]),
       );

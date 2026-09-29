@@ -5,8 +5,8 @@ This is the end-to-end product demo for Workhorse. It lets you create test tasks
 The demo uses Hono as its web server and Drizzle through Workhorse's ORM adapter. Seed data includes
 a transactionally created order and durable task, and worker-owned scheduling drives recurring work.
 
-**The demo runs each worker in a separate process.** The Hono server and TypeScript, Python, and Go
-workers share nothing but PostgreSQL. Workers announce themselves in
+**The demo runs each worker in a separate process.** The Hono server and TypeScript, Python, Go, and
+Rust workers share nothing but PostgreSQL. Workers announce themselves in
 `workhorse.worker_registry`, the dashboard reads the fleet from there, and operator pause travels
 through SQL. The browser refreshes on a bounded polling interval.
 
@@ -75,7 +75,7 @@ pnpm demo
 
 The command uses the purpose-guarded development primary and secondary databases, compiles the
 server-side runtime packages, then starts a watched Hono server and dedicated TypeScript, Python,
-and Go worker processes. Run `pnpm dev:reset` first when every repository database needs a clean
+Go, and Rust worker processes. Run `pnpm dev:reset` first when every repository database needs a clean
 schema. Everything is served from `http://workhorse.localhost:43155/`, mounted at `/`; the demo
 intentionally exposes no ad hoc public task API. Set `WORKHORSE_WORKER_POLL_MS` to override the
 workers' 15-second idle polling delay.
@@ -132,18 +132,24 @@ small batch on each queue, and schedules in the `workhorse-demo-fast-tier` names
 every five minutes. A database that already carries every earlier marker gains this step on its next
 start. Staging keeps its own seed and has no fast-tier queue.
 
+A later seed step, marked `fast-tier-rust-dashboard-v1`, brings the Rust worker into a database that
+already ran every earlier step. It moves `demo-rust-fast` to the fast tier, recording attempts but not
+claims, and enqueues a small batch there and on `demo-rust`. It then adds the Rust queue to the
+`workhorse-demo-fast-tier` schedules. The ordinary schedule sync gives `demo-rust` its own recurring task.
+
 Open `http://workhorse.localhost:43155/tasks` for the Mantine operator dashboard. Its full-width
 application shell keeps the header and responsive sidebar in place while browser URLs switch between
 `/tasks`, `/cron`, `/system`, and `/workers`. Task filters are nested under Current Tasks and persist as
 the `filter` query parameter, with pagination persisted as `page`.
 
-The demo runs **three** named worker processes with three execution slots each. The TypeScript
-worker claims application tasks from `demo` and rate-limited work from `partner-api`. Python and Go
-claim their runtime-specific tasks from `demo-python` and `demo-go`. Each runtime also claims its own
-fast-tier queue: `demo-fast`, `demo-python-fast`, and `demo-go-fast`. All three workers also compete
+The demo runs **four** named worker processes with three execution slots each. The TypeScript
+worker claims application tasks from `demo` and rate-limited work from `partner-api`. Python, Go, and
+Rust claim their runtime-specific tasks from `demo-python`, `demo-go`, and `demo-rust`. Each runtime also
+claims its own fast-tier queue: `demo-fast`, `demo-python-fast`, `demo-go-fast`, and `demo-rust-fast`.
+All four workers also compete
 for `demo-shared`, whose single handler has the same contract in every SDK.
 
-The production identities begin with `demo-typescript-`, `demo-python-`, and `demo-go-`, so the
+The production identities begin with `demo-typescript-`, `demo-python-`, `demo-go-`, and `demo-rust-`, so the
 Workers page makes the runtime topology explicit while every overlapping deployment process keeps a
 unique lease owner. The dashboard still discovers them entirely through
 PostgreSQL; the mount passes no declared worker list. Worker status is explicit: `busy` owns an active lease,
@@ -161,7 +167,7 @@ at the worker's next registration refresh and any handler already running finish
 The demo declares three slots for each worker. Each worker shares those slots between its owned
 queue or queues and `demo-shared`.
 Core workers may configure an integer from 1 through 100 and publish
-`{ concurrency, activeSlots, draining }` to the registry, but the demo's three-worker shape is for
+`{ concurrency, activeSlots, draining }` to the registry, but the demo's four-worker shape is for
 lifecycle and queue visibility, not a measured throughput comparison. Use the
 `worker-concurrency` lifecycle benchmark against a `_bench` database for invariant-gated concurrency
 evidence, and do not infer performance from the dashboard.

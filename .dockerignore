@@ -24,6 +24,8 @@ dist
 **/.next
 .build
 **/.venv
+target
+**/target
 coverage
 **/coverage
 docs/benchmarks/results

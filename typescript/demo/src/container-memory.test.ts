@@ -25,8 +25,11 @@ const NODE_PROCESSES = 4;
  */
 const NON_HEAP_MIB_PER_NODE_PROCESS = 80;
 
-/** Resident set of the Python and Go demo workers together, measured at 39 MiB and 15 MiB. */
-const OTHER_RUNTIME_MIB = 60;
+/**
+ * Resident set of the Python, Go, and Rust demo workers together. Their peaks under the deployment
+ * limits measured 42 MiB, 15 MiB, and 5 MiB.
+ */
+const OTHER_RUNTIME_MIB = 70;
 
 function dockerfileRuntimeStage(dockerfile: string): string {
   const runtime = dockerfile.indexOf("AS runtime");
@@ -47,7 +50,7 @@ describe("demo container memory", () => {
     expect(runtime).toMatch(/^ENV NODE_OPTIONS=--max-old-space-size=\d+$/m);
   });
 
-  it("fits every ceiling and both other runtimes inside the documented limit", async () => {
+  it("fits every ceiling and the other runtimes inside the documented limit", async () => {
     const [dockerfile, deployment] = await Promise.all([
       readFile(resolve("Dockerfile"), "utf8"),
       readFile(resolve("typescript/demo/DEPLOYMENT.md"), "utf8"),

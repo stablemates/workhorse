@@ -10,6 +10,24 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 go build -o /opt/workhorse-go-demo-worker ./examples/demo-worker
 
+FROM rust:1.89.0-alpine@sha256:4b800f2e72e04be908e5f634c504c741bd943b763d1d8ad7b096cc340e1b5b46 AS rust-build
+
+# The Alpine Rust image omits the C runtime objects that linking a procedural macro needs.
+RUN apk add --no-cache musl-dev
+WORKDIR /workhorse
+ARG BUILD_CONCURRENCY=4
+ENV CARGO_BUILD_JOBS=${BUILD_CONCURRENCY}
+# Cargo needs every workspace member's manifest, so the whole rust/ tree comes along. The image tag
+# pins the toolchain that rust-toolchain.toml names; that file stays out so rustup fetches nothing.
+COPY Cargo.toml Cargo.lock ./
+COPY rust/ ./rust/
+# The registry and target caches persist in the builder between image builds, like the Go caches.
+# The binary leaves the cached target directory in the same step, because the mount does not.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/workhorse/target \
+    cargo build --locked --release -p workhorse-demo-worker \
+  && cp target/release/workhorse-rust-demo-worker /opt/workhorse-rust-demo-worker
+
 FROM ghcr.io/astral-sh/uv:0.12.19@sha256:04d046b13e60d6bcec73cbc5e1cad25d680dea90c8573340950a0ac2d1aef424 AS uv
 
 FROM python:3.14-alpine@sha256:9e9fde4d32eedce0b661d9ab91e826b62dddf28e928c230ec55f1866cac66b01 AS python-build
@@ -91,7 +109,8 @@ ENV PORT=3000
 # grow to 4288 MB. It then defers collection until the container limit is reached first and the
 # kernel kills the process with no message and no stack. The container runs four Node processes —
 # the supervisor, the server, the TypeScript worker, and the staging worker — and each also holds
-# about 80 MiB outside the heap, so four ceilings plus the Python and Go workers must fit 1 GiB.
+# about 80 MiB outside the heap, so four ceilings plus the Python, Go, and Rust workers must fit
+# 1 GiB.
 ENV NODE_OPTIONS=--max-old-space-size=128
 ENV WORKHORSE_DEMO_MODE=production
 ENV WORKHORSE_DEMO_LOG_DIRECTORY=/opt/workhorse-demo/logs
@@ -100,6 +119,7 @@ ENV PYTHONPATH=/opt/workhorse-python
 WORKDIR /opt/workhorse-demo
 COPY --from=build --chown=node:node /opt/workhorse-demo/ ./
 COPY --from=go-build /opt/workhorse-go-demo-worker /usr/local/bin/workhorse-go-demo-worker
+COPY --from=rust-build /opt/workhorse-rust-demo-worker /usr/local/bin/workhorse-rust-demo-worker
 COPY --from=python-build /opt/workhorse-python /opt/workhorse-python
 COPY --chown=node:node python/examples/demo_worker.py /opt/workhorse-python-worker.py
 RUN apk add --no-cache libpq python3

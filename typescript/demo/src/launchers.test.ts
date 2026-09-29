@@ -59,9 +59,9 @@ async function launchPlan(
 describe.each(["scripts/dev.ts", "typescript/demo/container-entrypoint.mjs"])("%s", (path) => {
   it("starts exactly one isolated staging worker only when its database exists", async () => {
     const { launches: primaryOnly } = await launchPlan(path);
-    expect(primaryOnly).toHaveLength(4);
+    expect(primaryOnly).toHaveLength(5);
     const { launches: withStaging } = await launchPlan(path, "postgres://secondary/staging");
-    expect(withStaging).toHaveLength(5);
+    expect(withStaging).toHaveLength(6);
     const staging = withStaging.filter(({ env }) => env.WORKHORSE_DEMO_WORKSPACE === "staging");
     expect(staging).toHaveLength(1);
     expect(staging[0]!.env).toMatchObject({
@@ -70,7 +70,7 @@ describe.each(["scripts/dev.ts", "typescript/demo/container-entrypoint.mjs"])("%
     });
     expect(
       withStaging
-        .slice(0, 4)
+        .slice(0, 5)
         .every(({ env }) => env.DATABASE_URL_PRIMARY === "postgres://primary/demo"),
     ).toBe(true);
     expect(staging[0]!.args).toEqual(withStaging[1]!.args);
@@ -89,7 +89,7 @@ describe("typescript/demo/container-entrypoint.mjs start order", () => {
     );
     expect(launchedAtFirstHealthCheck[0]).toBe(1);
     expect(launches[0]!.env.WORKHORSE_DEMO_SERVICE_NAME).toBe("workhorse-demo-server");
-    expect(launches).toHaveLength(5);
+    expect(launches).toHaveLength(6);
   });
 
   it("starts no worker when the server exits before it answers", async () => {

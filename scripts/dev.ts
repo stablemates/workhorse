@@ -61,6 +61,15 @@ const commands: Array<{
       WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-go",
     },
   },
+  {
+    command: "cargo",
+    arguments: ["run", "--quiet", "-p", "workhorse-demo-worker"],
+    env: {
+      ...process.env,
+      WORKHORSE_DEMO_MODE: mode,
+      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-rust",
+    },
+  },
 ];
 
 if (process.env.DATABASE_URL_SECONDARY) {

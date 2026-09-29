@@ -64,6 +64,9 @@ import {
   DEMO_PERSISTENT_RETRY_POLICIES,
   DEMO_PYTHON_QUEUE,
   DEMO_QUEUE,
+  DEMO_RUST_FAST_QUEUE,
+  DEMO_RUST_FAST_TIER_QUEUE,
+  DEMO_RUST_QUEUE,
   DEMO_RATE_LIMIT,
   DEMO_RATE_LIMIT_PER_KEY,
   DEMO_RATE_LIMIT_POLICY_NAMESPACE,
@@ -97,6 +100,8 @@ import {
   ORDER_TASK_TYPE,
   PYTHON_WORKER_SCHEDULE_NAME,
   RECURRING_TASK_TYPE,
+  RUST_SEED_NAME,
+  RUST_WORKER_SCHEDULE_NAME,
   REPORT_TASK_TYPE,
   REPORT_SCHEDULE_NAME,
   REPRESENTATIVE_SEED_NAME,
@@ -600,7 +605,7 @@ function heartbeatSchedule(enabled = true) {
 function languageWorkerSchedule(
   name: string,
   schedule: string,
-  language: "typescript" | "python" | "go",
+  language: "typescript" | "python" | "go" | "rust",
   queue: string,
   enabled = true,
 ) {
@@ -848,6 +853,13 @@ export async function syncDemoSchedules(database: Pool): Promise<void> {
       true,
     ),
     languageWorkerSchedule(GO_WORKER_SCHEDULE_NAME, "2-59/3 * * * *", "go", DEMO_GO_QUEUE, true),
+    languageWorkerSchedule(
+      RUST_WORKER_SCHEDULE_NAME,
+      "1-59/4 * * * *",
+      "rust",
+      DEMO_RUST_QUEUE,
+      true,
+    ),
     sharedWorkerSchedule(true),
     reportSchedule(true),
     longRunningSchedule(true),
@@ -1649,7 +1661,9 @@ async function seedRateLimitDemoData(database: DemoDatabase): Promise<string[]> 
   });
 }
 
-function fastTierSchedule(entry: (typeof DEMO_FAST_TIER_QUEUES)[number]) {
+type FastTierEntry = (typeof DEMO_FAST_TIER_QUEUES)[number] | typeof DEMO_RUST_FAST_TIER_QUEUE;
+
+function fastTierSchedule(entry: FastTierEntry) {
   const schedule = languageWorkerSchedule(
     entry.scheduleName,
     entry.schedule,
@@ -1657,6 +1671,34 @@ function fastTierSchedule(entry: (typeof DEMO_FAST_TIER_QUEUES)[number]) {
     entry.queue,
   );
   return { ...schedule, task: { ...schedule.task, tags: [...schedule.task.tags, "fast-tier"] } };
+}
+
+/** The seeded batch for one fast-tier queue: a plain, a priority, a delayed, and a guarded task. */
+function fastTierTaskOptions(entry: FastTierEntry, now: number): EnqueueOptions[] {
+  const tags = ["demo-test", "language-worker", entry.language, "fast-tier"];
+  return [
+    { queue: entry.queue, maxAttempts: 1, tags },
+    { queue: entry.queue, maxAttempts: 1, priority: 10, tags: [...tags, "priority"] },
+    {
+      queue: entry.queue,
+      maxAttempts: 1,
+      runAt: new Date(now + 60_000),
+      tags: [...tags, "delayed"],
+    },
+    {
+      queue: entry.queue,
+      maxAttempts: 3,
+      retryPolicy: { type: "fixed", delayMs: 1_000 },
+      deadline: new Date(now + 60 * 60_000),
+      executionTimeoutMs: 30_000,
+      idempotency: {
+        key: `fast-tier-${entry.language}`,
+        scope: "workhorse-demo:fast-tier",
+        ttlMs: DEMO_IDEMPOTENCY_TTL_MS,
+      },
+      tags: [...tags, "idempotency", "deadline"],
+    },
+  ];
 }
 
 /**
@@ -1690,39 +1732,68 @@ async function seedFastTierDemoData(database: DemoDatabase): Promise<string[]> {
     const taskIds: string[] = [];
     const now = Date.now();
     for (const entry of DEMO_FAST_TIER_QUEUES) {
-      const payload = { language: entry.language };
-      const tags = ["demo-test", "language-worker", entry.language, "fast-tier"];
-      const variants: EnqueueOptions[] = [
-        { queue: entry.queue, maxAttempts: 1, tags },
-        { queue: entry.queue, maxAttempts: 1, priority: 10, tags: [...tags, "priority"] },
-        {
-          queue: entry.queue,
-          maxAttempts: 1,
-          runAt: new Date(now + 60_000),
-          tags: [...tags, "delayed"],
-        },
-        {
-          queue: entry.queue,
-          maxAttempts: 3,
-          retryPolicy: { type: "fixed", delayMs: 1_000 },
-          deadline: new Date(now + 60 * 60_000),
-          executionTimeoutMs: 30_000,
-          idempotency: {
-            key: `fast-tier-${entry.language}`,
-            scope: "workhorse-demo:fast-tier",
-            ttlMs: DEMO_IDEMPOTENCY_TTL_MS,
-          },
-          tags: [...tags, "idempotency", "deadline"],
-        },
-      ];
-      for (const options of variants) {
-        taskIds.push(await workhorse.queue.enqueue(LANGUAGE_WORKER_TASK_TYPE, payload, options));
+      for (const options of fastTierTaskOptions(entry, now)) {
+        taskIds.push(
+          await workhorse.queue.enqueue(
+            LANGUAGE_WORKER_TASK_TYPE,
+            { language: entry.language },
+            options,
+          ),
+        );
       }
     }
 
     await workhorse.queue.syncSchedules(
       DEMO_FAST_TIER_SCHEDULE_NAMESPACE,
       DEMO_FAST_TIER_QUEUES.map(fastTierSchedule),
+    );
+    return taskIds;
+  });
+}
+
+/**
+ * Bring the Rust worker's queues into a demo that already ran `FAST_TIER_SEED_NAME`. The step moves
+ * `demo-rust-fast` to the fast tier before it enqueues anything there. It then replaces the
+ * fast-tier schedule namespace with every language's schedule, because a sync removes any schedule
+ * it does not name.
+ */
+async function seedRustDemoData(database: DemoDatabase): Promise<string[]> {
+  return database.transaction(async (transaction) => {
+    const marker = await transaction.execute<{ name: string }>(sql`
+      INSERT INTO public.workhorse_demo_seed (name)
+      VALUES (${RUST_SEED_NAME})
+      ON CONFLICT (name) DO NOTHING
+      RETURNING name
+    `);
+    if (marker.rows.length === 0) return [];
+
+    const workhorse = createDrizzleAdapter(transaction, {
+      defaultQueue: DEMO_RUST_QUEUE,
+      queueOptions: DEMO_QUEUE_OPTIONS,
+    });
+    const entry = DEMO_RUST_FAST_TIER_QUEUE;
+    await workhorse.admin.setQueueTier(DEMO_RUST_FAST_QUEUE, "fast", {
+      actor: "workhorse-demo-seed",
+      reason: "Show the Rust worker on the fast tier of the demo dashboard",
+      requestId: `${RUST_SEED_NAME}:${DEMO_RUST_FAST_QUEUE}`,
+    });
+    await workhorse.admin.setQueueHistory(DEMO_RUST_FAST_QUEUE, entry.history);
+
+    const payload = { language: entry.language };
+    const taskIds = [
+      await workhorse.queue.enqueue(LANGUAGE_WORKER_TASK_TYPE, payload, {
+        queue: DEMO_RUST_QUEUE,
+        maxAttempts: 1,
+        tags: ["demo-test", "language-worker", entry.language],
+      }),
+    ];
+    for (const options of fastTierTaskOptions(entry, Date.now())) {
+      taskIds.push(await workhorse.queue.enqueue(LANGUAGE_WORKER_TASK_TYPE, payload, options));
+    }
+
+    await workhorse.queue.syncSchedules(
+      DEMO_FAST_TIER_SCHEDULE_NAMESPACE,
+      [...DEMO_FAST_TIER_QUEUES, DEMO_RUST_FAST_TIER_QUEUE].map(fastTierSchedule),
     );
     return taskIds;
   });
@@ -2208,12 +2279,14 @@ export async function seedDemoData(database: DemoDatabase) {
 
   const historicalTaskCount = await seedHistoricalDemoData(database);
   const fastTierTaskIds = await seedFastTierDemoData(database);
+  const rustTaskIds = await seedRustDemoData(database);
   const taskIds = [
     ...rateLimitTaskIds,
     ...longRunningTaskIds,
     ...featureShowcaseTaskIds,
     ...representativeSeed.taskIds,
     ...fastTierTaskIds,
+    ...rustTaskIds,
   ];
   return {
     seeded: taskIds.length > 0 || historicalTaskCount > 0,
