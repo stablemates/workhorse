@@ -42,8 +42,8 @@ module Stablemates
       private_constant :DIALECT, :SCHEMA_VALUES, :SCHEMA_ARRAYS, :SCHEMA_MAPS, :PLAIN_KEYWORDS, :MAX_DEPTH, :TYPES,
         :NUMBERS, :COUNTS, :STRINGS, :BOOLEANS, :ANCHOR
 
-      # The profile violation in +schema+, or nil.
-      def self.profile_violation(schema, path = "$")
+      # The profile violation in +schema+, or nil. Internal to the SDK.
+      def self.profile_violation(schema, path = "$") # :nodoc:
         return nil if [true, false].include?(schema)
         return "#{path} must be an object or boolean JSON Schema" unless schema.is_a?(Hash)
 
@@ -348,7 +348,7 @@ module Stablemates
     private_constant :PayloadContract
 
     # Loads and renders contracts. Internal to the SDK.
-    module Contracts
+    module Contracts # :nodoc:
       module_function
 
       # The current contract PostgreSQL holds for +task_type+, or its +version+ when given, or nil

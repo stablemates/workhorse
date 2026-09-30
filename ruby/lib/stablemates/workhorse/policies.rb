@@ -3,7 +3,7 @@
 module Stablemates
   module Workhorse
     # Decodes the rows the policy list statements return. Internal to the SDK.
-    module Policies
+    module Policies # :nodoc:
       module_function
 
       def concurrency_policy(row)

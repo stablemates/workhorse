@@ -3,7 +3,7 @@
 module Stablemates
   module Workhorse
     # The startup check every SDK runs before its first mutation. Internal to the SDK.
-    module Compatibility
+    module Compatibility # :nodoc:
       NOT_INSTALLED = %w[42P01 3F000].freeze
       private_constant :NOT_INSTALLED
 

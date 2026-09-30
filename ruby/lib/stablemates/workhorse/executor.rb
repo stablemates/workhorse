@@ -7,7 +7,7 @@ module Stablemates
     # An executor is a PG::Connection, a ConnectionPool of them, or any object whose +with+ yields
     # one. The SDK changes no session state: it passes a type map with each call and sets one on
     # each result, so the caller's connection keeps its own type maps and +search_path+.
-    class Executor
+    class Executor # :nodoc:
       # Yields one PG::Connection the caller owns.
       class Connection
         def initialize(connection)

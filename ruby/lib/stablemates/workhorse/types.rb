@@ -136,7 +136,7 @@ module Stablemates
 
     # Encodes and decodes the values that cross the protocol, without coercing a non-JSON value.
     # Internal to the SDK; not part of its governed surface.
-    module Values
+    module Values # :nodoc:
       UUID = /\A\h{8}-\h{4}-\h{4}-\h{4}-\h{12}\z/
       private_constant :UUID
 

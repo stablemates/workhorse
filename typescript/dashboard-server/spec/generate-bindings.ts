@@ -583,8 +583,8 @@ function generateRuby(contract: DashboardContract): string {
 module Stablemates
   module Workhorse
     class Dashboard
-      # The dashboard/v1 procedure names and request schemas.
-      module V1
+      # The dashboard/v1 procedure names and request schemas. Internal to the SDK.
+      module V1 # :nodoc:
         # Every dashboard/v1 procedure, in contract order.
         PROCEDURES = [
 ${procedures}
