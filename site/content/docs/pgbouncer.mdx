@@ -60,7 +60,7 @@ that busy handlers can then delay renewal. The heartbeat connection runs only se
 statements, so it works in every pool mode. Go workers share one heartbeat connection per pool
 the same way, and `SharedHeartbeats` opts out. A Python worker opens its own heartbeat connection
 from the supplied Psycopg or asyncpg pool. A Rust worker reserves its own pooled heartbeat
-connection. Python and Rust name the opt-out `shared_heartbeats`.
+connection, and so does a Ruby worker. Python, Rust, and Ruby name the opt-out `shared_heartbeats`.
 
 On a [fast-tier](/docs/fast-tier) queue, a busy worker in any language splits its slots into
 cohorts, and each cohort can hold a connection of its own. When the pool states its size, the

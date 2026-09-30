@@ -4,23 +4,24 @@ description: The tested runtimes and database versions for every SDK, what "supp
 ---
 
 You need to know two things before adopting a queue: will it run on your stack, and what does
-"supported" actually prove. Workhorse ships four SDKs — TypeScript, Python, Go, and Rust — over one
+"supported" actually prove. Workhorse ships five SDKs — TypeScript, Python, Go, Rust, and Ruby — over one
 PostgreSQL schema. A version counts as supported only when continuous integration runs the full
 suite against it. Workhorse may run elsewhere, but untested versions do not carry the same
 correctness evidence.
 
 ## The tested matrix
 
-| Runtime    | Supported      | Minimum | End of life                                                    | Notes                                                    |
-| ---------- | -------------- | ------- | -------------------------------------------------------------- | -------------------------------------------------------- |
-| Node.js    | 22, 24         | 22      | 22: 2027-04-30, 24: 2028-04-30                                 | Even-numbered releases only. `engines.node` is `>=22`.   |
-| Python     | 3.12–3.14      | 3.12    | 3.12: 2028-10, 3.13: 2029-10, 3.14: 2030-10                    | `stablemates-workhorse` ships one `py3-none-any` wheel.  |
-| Go         | 1.25 and newer | 1.25    | No date; Go supports its two most recent releases              | pgx v5.11.0 is the minimum and the tested version.       |
-| Rust       | 1.89 and newer | 1.89    | No date; Rust supports only its latest stable release          | Tokio with `tokio-postgres` 0.7 and `deadpool-postgres`. |
-| PostgreSQL | 15, 16, 17, 18 | 15      | 15: 2027-11-11, 16: 2028-11-09, 17: 2029-11-08, 18: 2030-11-14 | No extension beyond the default `plpgsql` is installed.  |
+| Runtime    | Supported      | Minimum | End of life                                                    | Notes                                                       |
+| ---------- | -------------- | ------- | -------------------------------------------------------------- | ----------------------------------------------------------- |
+| Node.js    | 22, 24         | 22      | 22: 2027-04-30, 24: 2028-04-30                                 | Even-numbered releases only. `engines.node` is `>=22`.      |
+| Python     | 3.12–3.14      | 3.12    | 3.12: 2028-10, 3.13: 2029-10, 3.14: 2030-10                    | `stablemates-workhorse` ships one `py3-none-any` wheel.     |
+| Go         | 1.25 and newer | 1.25    | No date; Go supports its two most recent releases              | pgx v5.11.0 is the minimum and the tested version.          |
+| Rust       | 1.89 and newer | 1.89    | No date; Rust supports only its latest stable release          | Tokio with `tokio-postgres` 0.7 and `deadpool-postgres`.    |
+| Ruby       | 3.3, 3.4, 4.0  | 3.3     | 3.3: 2027-03, 3.4: 2028-03, 4.0: 2029-03                       | `pg` 1.6 alone, behind `connection_pool`, or Active Record. |
+| PostgreSQL | 15, 16, 17, 18 | 15      | 15: 2027-11-11, 16: 2028-11-09, 17: 2029-11-08, 18: 2030-11-14 | No extension beyond the default `plpgsql` is installed.     |
 
 Your application needs one of those language runtimes and a PostgreSQL server at or above its
-minimum. It does not need the others: a Python, Go, or Rust service runs on its own language alone.
+minimum. It does not need the others: a Python, Go, Rust, or Ruby service runs on its own language alone.
 Node.js appears in one other place, and only one — the machine that runs your deployment's schema
 step, because schema tooling ships in the TypeScript package.
 
@@ -28,7 +29,8 @@ The End of life column is the upstream project's own retirement date for each ve
 from the project that publishes it rather than decided here. A version keeps its place in the table
 until that date passes, so the column tells you when to plan an upgrade instead of learning it from
 a release that already dropped the version. Go and Rust carry no date because their policies are
-relative to the current release rather than to a calendar.
+relative to the current release rather than to a calendar. Ruby's dates are the months its
+maintainers expect each branch to reach end of life.
 
 Pull requests and pushes exercise the newest version of each language against the newest PostgreSQL
 for fast feedback. The weekly schedule runs every combination in the table. A regression on any of
@@ -57,7 +59,7 @@ PostgreSQL upgrade.
 
 The other half of that question is when a version leaves the table. A minimum rises in a minor
 release, and only after the version being dropped has reached its own end of life upstream — the
-Node.js, Python, Go, Rust, and PostgreSQL projects decide that, not this one. A version still
+Node.js, Python, Go, Rust, Ruby, and PostgreSQL projects decide that, not this one. A version still
 supported upstream keeps its place even when dropping it would shorten the matrix.
 
 The table names a version as scheduled for removal, with its upstream date, before the release that
@@ -66,7 +68,7 @@ upgrade is a database migration you schedule rather than a package bump. Nothing
 a release you have already installed: it keeps running against the database you built it for, and
 what a dropped runtime loses is future releases.
 
-Dependency ranges — `pg`, Psycopg, asyncpg, pgx, `tokio-postgres` — move under the same rule and in
+Dependency ranges — `pg`, Psycopg, asyncpg, pgx, `tokio-postgres`, the `pg` gem — move under the same rule and in
 the same kind of release, whether the range is widening to admit a new upstream major or narrowing
 to drop a retired one.
 
@@ -84,7 +86,7 @@ runtime; CommonJS loading is outside the supported package format.
 Every SDK reads and writes the schema, but only `@stablemates/workhorse` installs and migrates it.
 `workhorse schema install`, `workhorse schema migrate`, `workhorse schema contract`, and
 `workhorse schema status` are commands
-of that package, and a Python, Go, or Rust deployment runs them with `npx` at the SDK version its
+of that package, and a Python, Go, Rust, or Ruby deployment runs them with `npx` at the SDK version its
 application depends on. That is why the machine running your deployment needs Node.js even when your
 application does not.
 
@@ -108,7 +110,7 @@ release rolls out at its own pace.
 
 Assert compatibility when a process starts, before it claims or changes work:
 `assertSchemaCompatible` in TypeScript, `assert_schema_compatible` in Python,
-`AssertSchemaCompatible` in Go, and `assert_compatible` in Rust. [Installation](/docs/installation)
+`AssertSchemaCompatible` in Go, and `assert_compatible` in Rust and Ruby. [Installation](/docs/installation)
 shows each call and the errors a refusal raises.
 
 `workhorse schema migrate` applies immutable, forward-only steps from the supported baseline. Each
@@ -118,12 +120,12 @@ still require a reset.
 
 ## One protocol across every SDK
 
-Python, Go, and Rust use the versioned SQL functions and JSON fixtures under `protocol/v1/` as their
+Python, Go, Rust, and Ruby use the versioned SQL functions and JSON fixtures under `protocol/v1/` as their
 compatibility boundary. The fixtures require each client to reject an incompatible schema or
 protocol before mutation, then verify canonical requests, results, transitions, and structured
 errors.
 
-The dashboard transport has its own `dashboard/v1` contract. TypeScript, Python, Go, and Rust
+The dashboard transport has its own `dashboard/v1` contract. TypeScript, Python, Go, Rust, and Ruby
 backends use its shared procedure schemas, HTML placeholders, request order, and HTTP fixtures.
 Embed a shipped backend for operator access; use `Queue` for application operations and `Admin` for
 operator integrations.
@@ -153,6 +155,12 @@ The Rust `workhorse` crate runs on Tokio over `tokio-postgres` and `deadpool-pos
 Enable them with `cargo add workhorse --features dashboard,opentelemetry`. A build without
 `dashboard` compiles no HTTP dependency. Like the Python package, the crate declares no range on
 the TypeScript packages, and its version matches theirs.
+
+The Ruby `stablemates-workhorse` gem runs on the `pg` gem. It accepts a single connection, a
+`connection_pool`, or an Active Record connection through `ActiveRecordExecutor`. Telemetry turns on
+when the application loads the OpenTelemetry API gems, and the gem declares no dependency on them.
+Rails applications can also run jobs through the [Active Job adapter](/docs/active-job). The gem
+is not on RubyGems yet, so an application installs it from the repository until its first release.
 
 ## Bun and Deno
 
@@ -188,7 +196,7 @@ The dashboard and core may use different patch releases within the same minor li
 server reads core-owned versioned views and functions, so a core patch remains compatible when its
 migration preserves those contracts.
 
-The shared browser bundle carries no SDK version. The TypeScript, Python, Go, or Rust host supplies
+The shared browser bundle carries no SDK version. The TypeScript, Python, Go, Rust, or Ruby host supplies
 its own published version when it renders the application, so the dashboard reports the package
 that serves it and a version-only release does not change the bundle.
 
@@ -211,6 +219,9 @@ The `workhorse` crate records its versions in `rust/CHANGELOG.md` and publishes 
 `vX.Y.Z` tag as the TypeScript packages. Its release gate packages the crate, builds a clean
 consumer from that archive, and enqueues one task. After npm publishes, crates.io trusted
 publishing uploads the crate when its version matches the tag.
+
+The Ruby gem records its changes in `ruby/CHANGELOG.md`. It has no release yet, so no registry
+carries it and no tag publishes it.
 
 The repository is public and these paths run. Pull requests and pushes to `main` run each
 language's suite once, on the newest supported versions. The weekly schedule runs the full

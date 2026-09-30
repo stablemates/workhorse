@@ -9,7 +9,7 @@ task renews its lease and delivers ownership signals through its context cancell
 Both workers can open a dedicated notification connection and offer recurring namespaces for
 PostgreSQL to evaluate.
 `AsyncWorker` uses native Psycopg or asyncpg connections, while its handlers and durable context
-methods are awaitable. TypeScript, Python, Go, and Rust workers all participate in the worker registry.
+methods are awaitable. TypeScript, Python, Go, Rust, and Ruby workers all participate in the worker registry.
 Python's `handle_batch` follows the grouping contract in
 [315-batch-handlers.md](315-batch-handlers.md).
 

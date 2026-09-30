@@ -13,6 +13,8 @@
  *
  * Every Rust snippet is a copy of one `landing-*` region in
  * rust/examples/landing.rs, which `pnpm rust:clippy` compiles.
+ * Every Ruby snippet is a copy of one `landing-*` region in
+ * ruby/examples/landing.rb, which a documentation spec runs against PostgreSQL.
  * `scripts/check-language-examples.ts` fails when a copy and its region differ.
  */
 export const landingSnippets = {
@@ -101,6 +103,15 @@ pub async fn run(pool: Pool) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }`,
 
+  heroRuby: `def self.run(pool)
+  Stablemates::Workhorse::Queue.new(pool).enqueue("email.welcome", {"to" => "ada@example.com"})
+
+  worker = Stablemates::Workhorse::Worker.new(pool, concurrency: 4)
+  worker.handle("email.welcome") do |payload, _context|
+    {"deliveredTo" => payload["to"]}
+  end
+  Stablemates::Workhorse.run_worker_process(worker)
+end`,
   languageTypeScript: `import { Pool, Queue } from "@stablemates/workhorse";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -226,6 +237,16 @@ pub async fn create_order(
     Ok(())
 }`,
 
+  enqueueRuby: `def self.create_order(pool, order_id, total)
+  pool.with do |connection|
+    connection.transaction do |transaction|
+      transaction.exec_params("INSERT INTO orders (id, total) VALUES ($1, $2)", [order_id, total])
+
+      # Same transaction: the task exists exactly when the order does.
+      Stablemates::Workhorse::Queue.new(transaction).enqueue("order.confirm", {"orderId" => order_id})
+    end
+  end
+end`,
   checkpoints: `worker.handle("invoice.issue", async (payload, ctx) => {
   // Runs once. Every later activation replays the stored result.
   const charge = await ctx.checkpoint("charge", () =>
@@ -324,6 +345,21 @@ pub fn register_invoice(worker: &Worker) {
     });
 }`,
 
+  checkpointsRuby: `def self.charge_card(amount) = {"id" => "ch_#{amount}"}
+
+def self.render_invoice(charge_id) = {"chargeId" => charge_id}
+
+def self.register_invoice(worker)
+  worker.handle("invoice.issue") do |invoice, context|
+    # Runs once. Every later activation replays the stored result.
+    charge = context.checkpoint("charge") { charge_card(invoice.fetch("amount")) }
+
+    pdf = context.checkpoint("render") { render_invoice(charge["id"]) }
+
+    puts "email #{invoice.fetch("email")} #{pdf}"
+    {"chargeId" => charge["id"]}
+  end
+end`,
   sleep: `worker.handle("order.settle", async (payload, ctx) => {
   const order = await ctx.checkpoint("place", () =>
     placeOrder(payload),
@@ -399,6 +435,18 @@ pub fn register_settlement(worker: &Worker) {
     });
 }`,
 
+  sleepRuby: `def self.place_order(payload) = {"orderId" => payload["orderId"]}
+
+def self.register_settlement(worker)
+  worker.handle("order.settle") do |payload, context|
+    order = context.checkpoint("place") { place_order(payload) }
+
+    # Slot released here. The process can restart, deploy, or die.
+    context.sleep("settlement-window", 60 * 60)
+
+    {"settled" => order["orderId"]}
+  end
+end`,
   retries: `await queue.enqueue(
   "match.reminder",
   { matchId },
@@ -491,6 +539,20 @@ pub async fn remind(
     queue.enqueue("match.reminder", &json!({ "matchId": match_id }), options).await
 }`,
 
+  retriesRuby: `def self.remind(queue, match_id, kickoff)
+  queue.enqueue("match.reminder", {"matchId" => match_id},
+    # Pointless after kickoff, whatever else happens.
+    deadline: kickoff,
+    # Any single attempt is stuck after 30 seconds.
+    execution_timeout: 30,
+    max_attempts: 5,
+    retry_policy: {
+      "type" => "exponential",
+      "initialDelayMs" => 1_000,
+      "multiplier" => 2,
+      "maxDelayMs" => 60_000
+    })
+end`,
   idempotency: `const taskId = await queue.enqueue(
   "invoice.capture",
   { invoiceId: "inv-1" },
@@ -561,6 +623,14 @@ pub async fn capture(queue: &Queue<Pool>) -> Result<EnqueueResult, Error> {
     queue.enqueue("invoice.capture", &json!({ "invoiceId": "inv-1" }), options).await
 }`,
 
+  idempotencyRuby: `# A retried webhook gets the same task_id back instead of a second capture.
+def self.capture(queue)
+  queue.enqueue("invoice.capture", {"invoiceId" => "inv-1"},
+    queue: "billing",
+    idempotency: Stablemates::Workhorse::Idempotency.new(
+      key: "capture:inv-1", scope: "tenant-42", ttl: 86_400
+    ))
+end`,
   schedules: `// Run on every deployment with the complete list.
 await queue.syncSchedules(
   "billing",
@@ -672,6 +742,18 @@ pub async fn run(pool: Pool) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }`,
 
+  schedulesRuby: `def self.run(pool)
+  # Run on every deployment with the complete list.
+  task = Stablemates::Workhorse::ScheduledTask.new(task_type: "invoices.generate", payload: {})
+  schedule = Stablemates::Workhorse::ScheduleDefinition.new(
+    name: "nightly-invoice-run", schedule: "0 2 * * *", task: task
+  )
+  Stablemates::Workhorse::Queue.new(pool).sync_schedules("billing", [schedule], prune: true)
+
+  # Any worker in the namespace fires due schedules itself.
+  worker = Stablemates::Workhorse::Worker.new(pool, schedule_namespaces: ["billing"])
+  Stablemates::Workhorse.run_worker_process(worker)
+end`,
   flowControl: `await queue.syncConcurrencyPolicies("workers", [
   // At most 20 mail tasks active; at most 2 per tenant.
   { queue: "mail", maxActive: 20, maxActivePerKey: 2 },
@@ -793,6 +875,22 @@ pub async fn configure(
     Ok(())
 }`,
 
+  flowControlRuby: `def self.configure(queue, message_id, tenant_id)
+  # At most 20 mail tasks active; at most 2 per tenant.
+  mail = Stablemates::Workhorse::ConcurrencyPolicyDefinition.new(
+    queue: "mail", max_active: 20, max_active_per_key: 2
+  )
+  queue.sync_concurrency_policies("workers", [mail], prune: false)
+
+  provider = Stablemates::Workhorse::RateLimitPolicyDefinition.new(
+    queue: "provider-api",
+    rate: Stablemates::Workhorse::RateLimit.new(limit: 100, interval: 1, burst: 200)
+  )
+  queue.sync_rate_limit_policies("workers", [provider], prune: false)
+
+  queue.enqueue("mail.send", {"messageId" => message_id},
+    queue: "mail", concurrency_key: "tenant:#{tenant_id}")
+end`,
   dependencies: `const inventoryId = await queue.enqueue(
   "inventory.reserve",
   { orderId },
@@ -908,6 +1006,25 @@ pub fn register_fulfillment(worker: &Worker) {
     });
 }`,
 
+  dependenciesRuby: `def self.confirm(queue, order_id)
+  order = {"orderId" => order_id}
+  inventory = queue.enqueue("inventory.reserve", order)
+
+  dependencies = Stablemates::Workhorse::Dependencies.new(
+    prerequisite_task_ids: [inventory.task_id],
+    on_success: :release,
+    on_failure: :cancel,
+    on_cancellation: :cancel
+  )
+  queue.enqueue("order.confirm", order, dependencies: dependencies)
+end
+
+def self.register_fulfillment(worker)
+  worker.handle("order.fulfill") do |order, context|
+    receipt = context.run_child("charge", "payment.capture", {"orderId" => order["id"]}, queue: "payments")
+    {"receipt" => receipt}
+  end
+end`,
   coalescing: `const options = {
   debounce: {
     key: documentId,
@@ -1008,6 +1125,14 @@ pub async fn reindex(
     Ok(())
 }`,
 
+  coalescingRuby: `def self.reindex(queue, document_id, quiet_period)
+  debounce = Stablemates::Workhorse::Debounce.new(
+    key: document_id, window: quiet_period, schedule: :reset, scope: "search-index"
+  )
+  first = queue.enqueue("search.reindex", {"documentId" => document_id, "revision" => 1}, debounce: debounce)
+  latest = queue.enqueue("search.reindex", {"documentId" => document_id, "revision" => 2}, debounce: debounce)
+  puts "#{first.outcome} #{latest.outcome}"
+end`,
   externalWaits: `worker.handle("release.publish", async (release, ctx) => {
   const scan = await ctx.waitForSignal("security-scan");
 
@@ -1123,6 +1248,21 @@ pub async fn deliver_scan(
     Ok(())
 }`,
 
+  externalWaitsRuby: `def self.register_release(worker)
+  worker.handle("release.publish") do |release, context|
+    scan = context.wait_for_signal("security-scan")
+
+    request = {"releaseId" => release["id"], "scan" => scan}
+    review = context.wait_for_human("release-approval", request)
+
+    {"published" => review["approved"]}
+  end
+end
+
+def self.deliver_scan(queue, task_id, result, delivery_id)
+  queue.send_signal(task_id, "security-scan", result,
+    idempotency_key: delivery_id, requested_by: "security-scanner")
+end`,
   batchHandlers: `worker.handleBatch(
   "email.send",
   { maxSize: batchSize, lingerMs: batchLingerMs },
@@ -1190,6 +1330,11 @@ pub fn register_email_batch(worker: &Worker, batch_size: usize, linger: Duration
     );
 }`,
 
+  batchHandlersRuby: `def self.register_email_batch(worker, batch_size, linger)
+  worker.handle_batch("email.send", max_size: batch_size, linger: linger) do |items|
+    items.map { |item| {status: :succeeded, result: item.payload} }
+  end
+end`,
   cancellation: `worker.handle("rows.export", async (payload, ctx) => {
   for (const row of payload.rows) {
     // Stop between items…
@@ -1276,6 +1421,17 @@ pub async fn configure_export(
     Ok(())
 }`,
 
+  cancellationRuby: `def self.configure_export(queue, worker, task_id)
+  worker.handle("rows.export") do |rows, context|
+    rows.each do |row|
+      context.cancellation.check!
+      puts "upload #{row}"
+    end
+    {"stopped" => false}
+  end
+
+  queue.cancel(task_id, requested_by: "operator@example.com", reason: "customer withdrew the request")
+end`,
   deadLetters: `const admin = new Admin(pool);
 const page = await admin.listDeadLetters({
   queue: "billing",
@@ -1362,6 +1518,18 @@ pub async fn redrive_billing(admin: &Admin<Pool>) -> Result<(), Error> {
     Ok(())
 }`,
 
+  deadLettersRuby: `def self.redrive_billing(admin)
+  page = admin.list_dead_letters(queue: "billing", error_name: "CardDeclined", limit: 100)
+
+  page.items.each do |failure|
+    audit = Stablemates::Workhorse::AdminAudit.new(
+      actor: "operator@example.com",
+      reason: "provider incident resolved",
+      request_id: "incident-2026-08-03:#{failure.task_id}"
+    )
+    admin.redrive(failure.task_id, audit: audit)
+  end
+end`,
   operateDashboard: `import { createDashboardHost } from "@stablemates/workhorse-dashboard/server";
 
 const host = createDashboardHost({
@@ -1449,6 +1617,19 @@ pub fn mount(pool: Pool) -> Result<axum::Router, workhorse::Error> {
     Ok(axum::Router::new().nest_service("/workhorse", host))
 }`,
 
+  operateDashboardRuby: `def self.admin_session(env) = env["HTTP_X_ADMIN"]
+
+def self.mount(pool)
+  dashboard = Stablemates::Workhorse::Dashboard.new(
+    pool,
+    path: "/workhorse",
+    authorize: lambda do |env|
+      actor = admin_session(env)
+      actor ? Stablemates::Workhorse::Dashboard::Principal.new(actor: actor) : false
+    end
+  )
+  Rack::Builder.new { map("/workhorse") { run dashboard } }
+end`,
   operateHealth: `const admin = new Admin(pool);
 const health = await admin.health();
 
@@ -1532,6 +1713,14 @@ pub async fn inspect(pool: &Pool) -> Result<(), Error> {
     Ok(())
 }`,
 
+  operateHealthRuby: `def self.inspect(pool)
+  health = Stablemates::Workhorse::Queue.new(pool).health
+  puts health["status"]["reasons"] unless health["status"]["level"] == "healthy"
+
+  # Cross-state listing on a dedicated projection: reading it never slows dispatch down.
+  live = Stablemates::Workhorse::Admin.new(pool).list_tasks(states: [:active, :scheduled], limit: 100)
+  puts live.items.length
+end`,
   operateFleet: `const admin = new Admin(pool);
 for (const entry of await admin.listWorkers()) {
   if (entry.queue !== "billing") continue;
@@ -1613,6 +1802,19 @@ pub async fn pause_billing(pool: &Pool) -> Result<(), Error> {
     Ok(())
 }`,
 
+  operateFleetRuby: `def self.pause_billing(pool)
+  admin = Stablemates::Workhorse::Admin.new(pool)
+  admin.list_workers.each do |entry|
+    next unless entry.queue == "billing"
+
+    audit = Stablemates::Workhorse::AdminAudit.new(
+      actor: "operator@example.com",
+      reason: "rolling deploy",
+      request_id: "deploy-2026-08-23:#{entry.worker_id}"
+    )
+    admin.set_worker_paused(entry.worker_id, true, audit: audit)
+  end
+end`,
   ormDrizzle: `import { createDrizzleAdapter } from "@stablemates/workhorse-drizzle";
 import { drizzle } from "drizzle-orm/node-postgres";
 
@@ -1776,74 +1978,113 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     run_worker_process(&worker).await?;
     Ok(())
 }`,
+  deployRuby: `def self.run
+  pool = ConnectionPool.new(size: 10) { PG.connect(ENV.fetch("DATABASE_URL")) }
+
+  worker = Stablemates::Workhorse::Worker.new(pool,
+    queues: ["email"],
+    concurrency: 8,
+    # Bounded graceful drain on SIGTERM.
+    shutdown_grace: 25)
+  worker.handle("email.send") { |email, _context| {"sent" => email["to"]} }
+  Stablemates::Workhorse.run_worker_process(worker)
+end`,
 } as const;
 
 export type LandingSnippetId = keyof typeof landingSnippets;
 
 /** One verified snippet per supported language for every numbered landing feature. */
 export const landingFeatureSnippets = {
-  enqueue: { typescript: "enqueue", python: "enqueuePython", go: "enqueueGo", rust: "enqueueRust" },
+  enqueue: {
+    typescript: "enqueue",
+    python: "enqueuePython",
+    go: "enqueueGo",
+    rust: "enqueueRust",
+    ruby: "enqueueRuby",
+  },
   checkpoints: {
     typescript: "checkpoints",
     python: "checkpointsPython",
     go: "checkpointsGo",
     rust: "checkpointsRust",
+    ruby: "checkpointsRuby",
   },
-  sleep: { typescript: "sleep", python: "sleepPython", go: "sleepGo", rust: "sleepRust" },
-  retries: { typescript: "retries", python: "retriesPython", go: "retriesGo", rust: "retriesRust" },
+  sleep: {
+    typescript: "sleep",
+    python: "sleepPython",
+    go: "sleepGo",
+    rust: "sleepRust",
+    ruby: "sleepRuby",
+  },
+  retries: {
+    typescript: "retries",
+    python: "retriesPython",
+    go: "retriesGo",
+    rust: "retriesRust",
+    ruby: "retriesRuby",
+  },
   idempotency: {
     typescript: "idempotency",
     python: "idempotencyPython",
     go: "idempotencyGo",
     rust: "idempotencyRust",
+    ruby: "idempotencyRuby",
   },
   schedules: {
     typescript: "schedules",
     python: "schedulesPython",
     go: "schedulesGo",
     rust: "schedulesRust",
+    ruby: "schedulesRuby",
   },
   flowControl: {
     typescript: "flowControl",
     python: "flowControlPython",
     go: "flowControlGo",
     rust: "flowControlRust",
+    ruby: "flowControlRuby",
   },
   dependencies: {
     typescript: "dependencies",
     python: "dependenciesPython",
     go: "dependenciesGo",
     rust: "dependenciesRust",
+    ruby: "dependenciesRuby",
   },
   coalescing: {
     typescript: "coalescing",
     python: "coalescingPython",
     go: "coalescingGo",
     rust: "coalescingRust",
+    ruby: "coalescingRuby",
   },
   externalWaits: {
     typescript: "externalWaits",
     python: "externalWaitsPython",
     go: "externalWaitsGo",
     rust: "externalWaitsRust",
+    ruby: "externalWaitsRuby",
   },
   batchHandlers: {
     typescript: "batchHandlers",
     python: "batchHandlersPython",
     go: "batchHandlersGo",
     rust: "batchHandlersRust",
+    ruby: "batchHandlersRuby",
   },
   cancellation: {
     typescript: "cancellation",
     python: "cancellationPython",
     go: "cancellationGo",
     rust: "cancellationRust",
+    ruby: "cancellationRuby",
   },
   deadLetters: {
     typescript: "deadLetters",
     python: "deadLettersPython",
     go: "deadLettersGo",
     rust: "deadLettersRust",
+    ruby: "deadLettersRuby",
   },
 } as const satisfies Record<
   string,
@@ -1853,6 +2094,7 @@ export const landingFeatureSnippets = {
       python: LandingSnippetId;
       go: LandingSnippetId;
       rust: LandingSnippetId;
+      ruby: LandingSnippetId;
     }
 >;
 
@@ -1860,26 +2102,41 @@ export type LandingFeatureSnippetId = keyof typeof landingFeatureSnippets;
 
 /** Other landing examples whose SDK behavior is supported in every language. */
 export const landingSupplementalSnippets = {
-  hero: { typescript: "hero", python: "heroPython", go: "heroGo", rust: "heroRust" },
+  hero: {
+    typescript: "hero",
+    python: "heroPython",
+    go: "heroGo",
+    rust: "heroRust",
+    ruby: "heroRuby",
+  },
   operateDashboard: {
     typescript: "operateDashboard",
     python: "operateDashboardPython",
     go: "operateDashboardGo",
     rust: "operateDashboardRust",
+    ruby: "operateDashboardRuby",
   },
   operateHealth: {
     typescript: "operateHealth",
     python: "operateHealthPython",
     go: "operateHealthGo",
     rust: "operateHealthRust",
+    ruby: "operateHealthRuby",
   },
   operateFleet: {
     typescript: "operateFleet",
     python: "operateFleetPython",
     go: "operateFleetGo",
     rust: "operateFleetRust",
+    ruby: "operateFleetRuby",
   },
-  deploy: { typescript: "deploy", python: "deployPython", go: "deployGo", rust: "deployRust" },
+  deploy: {
+    typescript: "deploy",
+    python: "deployPython",
+    go: "deployGo",
+    rust: "deployRust",
+    ruby: "deployRuby",
+  },
 } as const satisfies Record<
   string,
   {
@@ -1887,67 +2144,86 @@ export const landingSupplementalSnippets = {
     python: LandingSnippetId;
     go: LandingSnippetId;
     rust: LandingSnippetId;
+    ruby: LandingSnippetId;
   }
 >;
 
 /** Shiki language overrides for snippets that are not TypeScript. */
 export const landingSnippetLanguages: Partial<
-  Record<LandingSnippetId, "python" | "go" | "rust" | "ts">
+  Record<LandingSnippetId, "python" | "go" | "rust" | "ruby" | "ts">
 > = {
   heroPython: "python",
   heroGo: "go",
   heroRust: "rust",
+  heroRuby: "ruby",
   languagePython: "python",
   languageGo: "go",
   enqueuePython: "python",
   enqueueGo: "go",
   enqueueRust: "rust",
+  enqueueRuby: "ruby",
   checkpointsPython: "python",
   checkpointsGo: "go",
   checkpointsRust: "rust",
+  checkpointsRuby: "ruby",
   sleepPython: "python",
   sleepGo: "go",
   sleepRust: "rust",
+  sleepRuby: "ruby",
   retriesPython: "python",
   retriesGo: "go",
   retriesRust: "rust",
+  retriesRuby: "ruby",
   idempotencyPython: "python",
   idempotencyGo: "go",
   idempotencyRust: "rust",
+  idempotencyRuby: "ruby",
   schedulesPython: "python",
   schedulesGo: "go",
   schedulesRust: "rust",
+  schedulesRuby: "ruby",
   flowControlPython: "python",
   flowControlGo: "go",
   flowControlRust: "rust",
+  flowControlRuby: "ruby",
   dependenciesPython: "python",
   dependenciesGo: "go",
   dependenciesRust: "rust",
+  dependenciesRuby: "ruby",
   coalescingPython: "python",
   coalescingGo: "go",
   coalescingRust: "rust",
+  coalescingRuby: "ruby",
   externalWaitsPython: "python",
   externalWaitsGo: "go",
   externalWaitsRust: "rust",
+  externalWaitsRuby: "ruby",
   batchHandlersPython: "python",
   batchHandlersGo: "go",
   batchHandlersRust: "rust",
+  batchHandlersRuby: "ruby",
   cancellationPython: "python",
   cancellationGo: "go",
   cancellationRust: "rust",
+  cancellationRuby: "ruby",
   deadLettersPython: "python",
   deadLettersGo: "go",
   deadLettersRust: "rust",
+  deadLettersRuby: "ruby",
   operateDashboardPython: "python",
   operateDashboardGo: "go",
   operateDashboardRust: "rust",
+  operateDashboardRuby: "ruby",
   operateHealthPython: "python",
   operateHealthGo: "go",
   operateHealthRust: "rust",
+  operateHealthRuby: "ruby",
   operateFleetPython: "python",
   operateFleetGo: "go",
   operateFleetRust: "rust",
+  operateFleetRuby: "ruby",
   deployPython: "python",
   deployGo: "go",
   deployRust: "rust",
+  deployRuby: "ruby",
 };

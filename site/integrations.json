@@ -107,6 +107,15 @@
       "verifiedOn": "2026-09-02"
     },
     {
+      "slug": "active-job",
+      "name": "Active Job",
+      "category": "frameworks",
+      "tier": "documented",
+      "summary": "Runs a Rails application's Active Job jobs on Workhorse through the Ruby gem's adapter.",
+      "boundary": "perform never receives a handler context, so durable execution and the other context features stay native-only.",
+      "verifiedOn": "2026-09-30"
+    },
+    {
       "slug": "pgbouncer",
       "name": "PgBouncer",
       "category": "poolers",
@@ -129,7 +138,7 @@
       "name": "Dashboard",
       "category": "operator-surfaces",
       "tier": "verified",
-      "summary": "Embeds the operator interface in a TypeScript, Python, Go, or Rust HTTP server.",
+      "summary": "Embeds the operator interface in a TypeScript, Python, Go, Rust, or Ruby HTTP server.",
       "boundary": "The dashboard reads PostgreSQL through the versioned dashboard contract and owns no authorization of its own.",
       "package": "@stablemates/workhorse-dashboard",
       "peer": "react",

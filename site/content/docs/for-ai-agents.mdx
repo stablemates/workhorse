@@ -42,7 +42,7 @@ deployment step. A TypeScript project runs the binary it depends on:
 npm exec --no -- workhorse schema install
 ```
 
-A Python, Go, or Rust project has no Node.js dependency tree to resolve that binary from, so it names the
+A Python, Go, Rust, or Ruby project has no Node.js dependency tree to resolve that binary from, so it names the
 version instead, which must equal the SDK version the application depends on:
 
 ```bash
@@ -51,9 +51,9 @@ npx --package @stablemates/workhorse@0.5.0 workhorse schema install
 
 That command needs Node.js on the machine that runs your deployment, and
 [Compatibility](/docs/compatibility.md) names the version. The application itself does not need
-Node: a Python, Go, or Rust service installs the schema this way and then runs without it. Assert
+Node: a Python, Go, Rust, or Ruby service installs the schema this way and then runs without it. Assert
 compatibility when the application starts, with `assertSchemaCompatible` in TypeScript,
-`assert_schema_compatible` in Python, `AssertSchemaCompatible` in Go, or `assert_compatible` in Rust.
+`assert_schema_compatible` in Python, `AssertSchemaCompatible` in Go, or `assert_compatible` in Rust and Ruby.
 
 Install the SDK your application uses:
 
@@ -62,17 +62,23 @@ npm install @stablemates/workhorse
 pip install stablemates-workhorse
 go get github.com/stablemates/workhorse/go
 cargo add workhorse
+bundle add stablemates-workhorse --git https://github.com/stablemates/workhorse --glob ruby/stablemates-workhorse.gemspec
+bundle add connection_pool
 ```
+
+The Ruby gem is not on RubyGems yet, so until its first release Bundler fetches it from the
+repository. The Ruby SDK also needs the `connection_pool` gem.
 
 **Enqueue inside the transaction that writes your application data.** This is what replaces an
 outbox. Each language hands the transaction over differently: TypeScript passes the transaction
 client as the fourth argument to `enqueue`, Python constructs the `Queue` over the connection whose
 transaction is open, and Go wraps the transaction with `workhorse.NewPGXExecutor(tx)`. Rust
-constructs the `Queue` over the open transaction, as Python does.
+constructs the `Queue` over the open transaction, as Python does, and so does Ruby.
 
 **Register a handler.** The example below calls the bounded run method so it can finish. A
 production worker process calls the continuous one instead: `worker.run()` in TypeScript,
-`worker.run()` in Python, `worker.Run(ctx)` in Go, and `run_worker_process` in Rust.
+`worker.run()` in Python, `worker.Run(ctx)` in Go, `run_worker_process` in Rust, and
+`Stablemates::Workhorse.run_worker_process(worker)` in Ruby.
 
 **Choose the failure policy at enqueue.** `maxAttempts` and `retryPolicy` set the retry budget.
 `deadline` and `executionTimeoutMs` are separate bounds, and each is terminal on its own even when
@@ -89,8 +95,8 @@ version skew becomes a startup failure under load rather than a deployment failu
 the deployment command above, plus a compatibility assertion at startup.
 
 **An external effect that is not restart-safe.** A handler that sends before it finishes sends again
-on every retry. The remedy is `context.checkpoint(name, operation)` in TypeScript, Python, and Rust, and
-`handler.Checkpoint(name, operation)` in Go: the operation runs once, and a replay reuses the
+on every retry. The remedy is `context.checkpoint(name, operation)` in TypeScript, Python, and Rust,
+`context.checkpoint(name) { … }` in Ruby, and `handler.Checkpoint(name, operation)` in Go: the operation runs once, and a replay reuses the
 recorded value instead of running it again. An idempotency key on the remote call, an outbox, an
 inbox, or a compensation path are the alternatives when a checkpoint does not fit.
 
@@ -100,7 +106,7 @@ Each example opens PostgreSQL, enqueues `order.created` inside the transaction t
 order, sets a failure policy, runs a worker whose handler wraps its external send in a checkpoint,
 and reads the durable result.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts verify
     import { Admin, Pool, Queue, Worker } from "@stablemates/workhorse";
@@ -352,17 +358,49 @@ and reads the durable result.
     }
     ```
   </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    require "connection_pool"
+    require "pg"
+    require "stablemates/workhorse"
+
+    def send_confirmation_email(order_id) = "receipt-for-#{order_id}"
+
+    url = ENV.fetch("DATABASE_URL")
+    pool = ConnectionPool.new(size: 4) { PG.connect(url) }
+
+    enqueued = pool.with do |connection|
+      connection.transaction do |transaction|
+        transaction.exec_params("INSERT INTO orders (id, status) VALUES ($1, $2)", ["order-42", "new"])
+        Stablemates::Workhorse::Queue.new(transaction).enqueue("order.created", {"orderId" => "order-42"},
+          max_attempts: 5, retry_policy: {"type" => "fixed", "delayMs" => 1_000})
+      end # An exception inside the block rolls the transaction back.
+    end
+
+    worker = Stablemates::Workhorse::Worker.new(pool, polling_only: true)
+    worker.handle("order.created") do |payload, context|
+      order_id = payload.fetch("orderId")
+      # The send runs once. A replay reuses the recorded receipt.
+      receipt = context.checkpoint("confirmation-email") { send_confirmation_email(order_id) }
+      {"processedOrderId" => order_id, "receipt" => receipt}
+    end
+    worker.run_once # Production workers call Stablemates::Workhorse.run_worker_process(worker).
+
+    task = Stablemates::Workhorse::Admin.new(pool).get_task(enqueued.task_id)
+    puts "#{task.state} #{task.result}" if task
+    ```
+  </Tab>
 </Tabs>
 
 Two asymmetries to expect. Go's `RetryPolicy` is a `map[string]any` where TypeScript has a typed
-union. Python's is a mapping and Rust's is a JSON object, so only TypeScript rejects a malformed
+union. Python's is a mapping, Rust's is a JSON object, and Ruby's is a Hash, so only TypeScript rejects a malformed
 policy at compile time.
 Every language does have a schema compatibility assertion, named above.
 
 ## Confirm the task settled
 
 Read the task back by its identifier: `Admin.getTask` in TypeScript, `Admin.get_task` in Python,
-`Admin.GetTask` in Go, and `Admin::get_task` in Rust, as each example does. A settled task reports its state and its result. Until
+`Admin.GetTask` in Go, `Admin::get_task` in Rust, and `Admin#get_task` in Ruby, as each example does. A settled task reports its state and its result. Until
 then it reports the state it is in, which is how you tell a slow worker from a missing one.
 
 ## Next

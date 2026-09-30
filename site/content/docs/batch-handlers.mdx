@@ -3,12 +3,12 @@ title: Batch handlers
 description: Process several tasks of one type through a shared application call while preserving per-task outcomes.
 ---
 
-Use TypeScript's `Worker.handleBatch`, Go's `Worker.HandleBatch`, Python's `Worker.handle_batch`, or
-Rust's `Worker::handle_batch` when one application call can process several tasks more efficiently.
+Use TypeScript's `Worker.handleBatch`, Go's `Worker.HandleBatch`, Python's `Worker.handle_batch`,
+Rust's `Worker::handle_batch`, or Ruby's `Worker#handle_batch` when one application call can process several tasks more efficiently.
 Each member keeps its own durable identity, lease, fence, retry budget, checkpoints, progress, and
 cancellation.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     worker.handleBatch("email.send", { maxSize: 20, lingerMs: 50 }, async (items) => {
@@ -61,6 +61,13 @@ cancellation.
     );
     ```
   </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    worker.handle_batch("email.send", max_size: 20, linger: 0.05) do |items|
+      items.map { {status: :succeeded, result: {"sent" => true}} }
+    end
+    ```
+  </Tab>
 </Tabs>
 
 `maxSize` caps the group, while `lingerMs` lets a partial group wait briefly for peers. Claims still
@@ -81,6 +88,10 @@ standard cancellation context, checkpoint operation, `GetProgress`, and `SetProg
 Rust passes `max_size` and `linger` through `BatchOptions`. Its callback receives `BatchItem`
 values, each with a payload and its own `HandlerContext`. It returns one `BatchResult::Succeeded` or
 `BatchResult::Failed` per item, in item order.
+
+Ruby passes `max_size:` and `linger:` as keywords. Its block receives `BatchHandlerItem` values,
+each with a payload and its own `BatchHandlerContext`. It returns one hash per item, in item order:
+`{status: :succeeded, result: value}` or `{status: :failed, error: exception}`.
 
 Workhorse records each shared invocation before the callback starts. The task drawer shows the
 batch size and links the other members. If the shared callback fails, the drawer identifies that

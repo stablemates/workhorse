@@ -17,7 +17,7 @@ Build the key from the business operation that should happen once: an order ID, 
 a webhook delivery ID. A timestamp or random value cannot identify a replay, so it defeats the
 mechanism.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     const taskId = await queue.enqueue("invoice.capture", { invoiceId }, {
@@ -65,6 +65,13 @@ mechanism.
         .await?;
     ```
   </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    result = queue.enqueue("invoice.capture", {"invoiceId" => invoice_id},
+      queue: "billing",
+      idempotency: Stablemates::Workhorse::Idempotency.new(key: "capture:#{invoice_id}", scope: "invoice-capture"))
+    ```
+  </Tab>
 </Tabs>
 
 If the same scope and key still exist, an equivalent request returns the original task ID.
@@ -79,7 +86,7 @@ works well when every key already carries a feature prefix.
 
 Use `enqueueWithResult` when application behavior or diagnostics need more than the stable task ID:
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     const result = await queue.enqueueWithResult(
@@ -123,6 +130,13 @@ Use `enqueueWithResult` when application behavior or diagnostics need more than 
     println!("{:?} {}", result.outcome, result.task_id);
     ```
   </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    result = queue.enqueue("invoice.capture", {"invoiceId" => invoice_id},
+      idempotency: Stablemates::Workhorse::Idempotency.new(key: key, scope: "invoice-capture"))
+    puts "#{result.outcome} #{result.task_id}"
+    ```
+  </Tab>
 </Tabs>
 
 `result.outcome` is an `EnqueueOutcome`: `accepted` for a new task, `replayed` for an equivalent
@@ -142,8 +156,8 @@ silently win.
 
 Every SDK raises a typed idempotency conflict: `EnqueueIdempotencyConflictError` in TypeScript and
 Python, `EnqueueIdempotencyConflictError` through `errors.As` in Go, and
-`Error::EnqueueIdempotencyConflict` in Rust. The error names the
-existing task and conflicting fields without accepting the changed request.
+`Error::EnqueueIdempotencyConflict` in Rust, and `EnqueueIdempotencyConflictError` in Ruby. The error
+names the existing task and conflicting fields without accepting the changed request.
 
 An omitted `runAt` remains omitted in the fingerprint. A later replay of an immediate task
 therefore does not conflict with the original acceptance time.

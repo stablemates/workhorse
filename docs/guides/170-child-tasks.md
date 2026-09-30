@@ -74,6 +74,23 @@ if let Some(ChildOutcome::Failed(error)) = results.get("fraud") {
 }
 ```
 
+Ruby handlers pass `ChildTaskRequest` values to `run_children`. The set method returns a Hash from
+each name to a `ChildOutcome`, whose `status` is `:succeeded`, `:failed`, or `:canceled`.
+
+```ruby
+outcomes = context.run_children([
+  Stablemates::Workhorse::ChildTaskRequest.new(name: "fraud", task_type: "orders.check-fraud", payload: order),
+  Stablemates::Workhorse::ChildTaskRequest.new(name: "inventory", task_type: "orders.reserve", payload: order)
+])
+
+fraud = outcomes.fetch("fraud")
+if fraud.status == :failed
+  {"accepted" => false, "reason" => fraud.error["message"]}
+else
+  {"accepted" => true}
+end
+```
+
 An empty set returns immediately. A non-empty set suspends the parent once, and PostgreSQL releases
 it only after every child reaches a terminal state. A failed or canceled child stays in the returned
 set, so the parent decides its own result.

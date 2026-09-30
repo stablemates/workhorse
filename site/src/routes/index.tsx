@@ -131,7 +131,7 @@ const features: readonly Feature[] = [
     title: "Sleep for an hour or a month without holding a worker.",
     lede: (
       <>
-        TypeScript&apos;s <code>ctx.sleep</code>, Python&apos;s and Rust&apos;s{" "}
+        TypeScript&apos;s <code>ctx.sleep</code>, Python&apos;s, Rust&apos;s, and Ruby&apos;s{" "}
         <code>context.sleep</code>, and Go&apos;s <code>handler.Sleep</code> commit a named timer in
         PostgreSQL and give the worker slot back. When the timer is due, the handler restarts and
         its checkpoints replay.
@@ -235,9 +235,9 @@ const features: readonly Feature[] = [
     lede: (
       <>
         Debounce replaces a pending payload while updates settle. <code>enqueueWithResult</code>,{" "}
-        <code>enqueue_with_result</code>, <code>EnqueueWithResult</code>, and Rust&apos;s{" "}
-        <code>enqueue</code> return the retained task and a typed outcome, so diagnostics show
-        whether Workhorse replaced or coalesced it.
+        <code>enqueue_with_result</code>, <code>EnqueueWithResult</code>, and the Rust and Ruby{" "}
+        <code>enqueue</code> methods return the retained task and a typed outcome, so diagnostics
+        show whether Workhorse replaced or coalesced it.
       </>
     ),
     file: "indexing.ts",
@@ -332,8 +332,8 @@ const operatingNote = (
 
 const dashboardNote = (
   <>
-    TypeScript, Python, Go, and Rust embed the same packaged dashboard through their native HTTP
-    interfaces. Each host needs a database connection, with no worker runtime or extra service.
+    TypeScript, Python, Go, Rust, and Ruby embed the same packaged dashboard through their native
+    HTTP interfaces. Each host needs a database connection, with no worker runtime or extra service.
   </>
 );
 
@@ -363,9 +363,15 @@ const dashboardTabs: readonly CodeTab[] = [
     note: dashboardNote,
     snippet: landingSupplementalSnippets.operateDashboard.rust,
   },
+  {
+    label: "ruby",
+    file: "config.ru",
+    note: dashboardNote,
+    snippet: landingSupplementalSnippets.operateDashboard.ruby,
+  },
 ];
 
-/** Operational SDK calls, grouped separately to stay within the eight-tab CSS contract. */
+/** Operational SDK calls, grouped separately to stay within the ten-tab CSS contract. */
 const healthFleetTabs: readonly CodeTab[] = [
   {
     label: "health ts",
@@ -392,6 +398,12 @@ const healthFleetTabs: readonly CodeTab[] = [
     snippet: landingSupplementalSnippets.operateHealth.rust,
   },
   {
+    label: "health rb",
+    file: "monitor.rb",
+    note: operatingNote,
+    snippet: landingSupplementalSnippets.operateHealth.ruby,
+  },
+  {
     label: "fleet ts",
     file: "pause-fleet.ts",
     note: operatingNote,
@@ -414,6 +426,12 @@ const healthFleetTabs: readonly CodeTab[] = [
     file: "pause_fleet.rs",
     note: operatingNote,
     snippet: landingSupplementalSnippets.operateFleet.rust,
+  },
+  {
+    label: "fleet rb",
+    file: "pause_fleet.rb",
+    note: operatingNote,
+    snippet: landingSupplementalSnippets.operateFleet.ruby,
   },
 ];
 
@@ -452,6 +470,11 @@ const deployTabs: readonly CodeTab[] = [
     file: "worker.rs",
     snippet: landingSupplementalSnippets.deploy.rust,
   },
+  {
+    label: "ruby",
+    file: "bin/worker",
+    snippet: landingSupplementalSnippets.deploy.ruby,
+  },
 ];
 
 /**
@@ -484,11 +507,12 @@ function FeatureSection({ feature, index }: { feature: Feature; index: number })
   const snippets = landingFeatureSnippets[feature.snippet];
   const tabs: readonly CodeTab[] = [
     { label: "typescript", file: feature.file, snippet: snippets.typescript },
-    ...("python" in snippets && "go" in snippets && "rust" in snippets
+    ...("python" in snippets && "go" in snippets && "rust" in snippets && "ruby" in snippets
       ? [
           { label: "python", file: `${baseFile}.py`, snippet: snippets.python },
           { label: "go", file: `${baseFile}.go`, snippet: snippets.go },
           { label: "rust", file: `${baseFile.replaceAll("-", "_")}.rs`, snippet: snippets.rust },
+          { label: "ruby", file: `${baseFile.replaceAll("-", "_")}.rb`, snippet: snippets.ruby },
         ]
       : []),
   ];
@@ -975,8 +999,9 @@ function HomePage() {
                 One config file is a production worker.
               </h2>
               <p className="mt-3 text-pretty text-[16px] leading-relaxed text-fd-muted-foreground">
-                TypeScript, Python, Go, and Rust connect process signals to bounded drain and fleet
-                registration. Active handlers finish before the supervisor replaces the process.
+                TypeScript, Python, Go, Rust, and Ruby connect process signals to bounded drain and
+                fleet registration. Active handlers finish before the supervisor replaces the
+                process.
               </p>
               <p className="mt-4">
                 <a

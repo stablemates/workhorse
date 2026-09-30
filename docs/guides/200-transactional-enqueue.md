@@ -88,10 +88,26 @@ transaction.commit().await?;
 If an error returns before `commit`, dropping the transaction rolls it back, and the task goes
 with your row.
 
+## With pg
+
+Ruby has no transaction argument either. `Queue.new` accepts a `PG::Connection`, a
+`ConnectionPool`, or the connection inside `transaction`. Pass it the transaction:
+
+```ruby
+connection.transaction do |transaction|
+  transaction.exec_params("INSERT INTO account (id, email) VALUES ($1, $2)", [id, email])
+  Stablemates::Workhorse::Queue.new(transaction).enqueue("account.created", {"accountId" => id})
+end
+```
+
+If the block raises, the `pg` gem rolls the transaction back, and the task goes with your row.
+A Rails application can pass an `ActiveRecordExecutor` instead, and the queue joins the open
+Active Record transaction.
+
 ## With an ORM provider
 
 If your TypeScript application talks to PostgreSQL through an ORM, use that ORM's Workhorse
-package instead of managing a raw client next to it. Python, Go, and Rust have no equivalent
+package instead of managing a raw client next to it. Python, Go, Rust, and Ruby have no equivalent
 package, so they pass their own connection or transaction as the sections above show. Each
 provider wraps the database object you already own and exposes `forTransaction`, which returns a
 `Queue` bound to your open transaction. The provider never commits, rolls back, or closes that

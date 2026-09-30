@@ -222,7 +222,7 @@ for (const guidePath of crossSdkGuidePaths) {
   const source = readFileSync(resolve(siteRoot, "content/docs", guidePath), "utf8");
   const languageTabs = [
     ...source.matchAll(
-      /<Tabs items=\{\["TypeScript", "Python", "Go"(?:, "Rust")?\]\}>([\s\S]*?)<\/Tabs>/g,
+      /<Tabs items=\{\["TypeScript", "Python", "Go"(?:, "Rust")?(?:, "Ruby")?\]\}>([\s\S]*?)<\/Tabs>/g,
     ),
   ];
   if (languageTabs.length === 0) throw new Error(`${guidePath} has no cross-SDK feature examples`);
@@ -294,15 +294,18 @@ function assertVerifiedLanguageSnippets(
     python?: LandingSnippetId;
     go?: LandingSnippetId;
     rust?: LandingSnippetId;
+    ruby?: LandingSnippetId;
   },
 ) {
   if (
     snippets.python === undefined ||
     snippets.go === undefined ||
     snippets.rust === undefined ||
+    snippets.ruby === undefined ||
     landingSnippetLanguages[snippets.python] !== "python" ||
     landingSnippetLanguages[snippets.go] !== "go" ||
-    landingSnippetLanguages[snippets.rust] !== "rust"
+    landingSnippetLanguages[snippets.rust] !== "rust" ||
+    landingSnippetLanguages[snippets.ruby] !== "ruby"
   ) {
     throw new Error(`landing example ${name} has unverified language snippets`);
   }
@@ -340,23 +343,12 @@ for (const pattern of examplePatterns) {
   }
 }
 
-// Rust examples live as `// docs:start <name>` regions in `rust/examples/`, where `cargo clippy
-// --all-targets` compiles them in CI. Every `rust` fence in the documentation and every Rust landing
-// snippet must equal one region after both lose their common indentation, and every region must
-// appear somewhere, so a page cannot carry Rust the compiler never saw.
-const rustExamplesRoot = resolve(repositoryRoot, "rust/examples");
-const rustRegions = new Map<string, string>();
-for (const name of readdirSync(rustExamplesRoot).filter((entry) => entry.endsWith(".rs"))) {
-  const source = readFileSync(resolve(rustExamplesRoot, name), "utf8");
-  for (const region of source.matchAll(
-    /^[ \t]*\/\/ docs:start (\S+)[ \t]*\n([\s\S]*?)\n[ \t]*\/\/ docs:end[ \t]*$/gm,
-  )) {
-    if (rustRegions.has(region[1]!)) throw new Error(`Rust docs region ${region[1]} is duplicated`);
-    rustRegions.set(region[1]!, dedent(region[2]!));
-  }
-}
-if (rustRegions.size === 0) throw new Error("rust/examples has no documentation regions");
-
+// Rust and Ruby examples live as `docs:start <name>` regions in `rust/examples/` and
+// `ruby/examples/`. `cargo clippy --all-targets` compiles the Rust regions in CI, and a documentation
+// spec runs the Ruby regions against PostgreSQL. Every `rust` or `ruby` fence in the documentation
+// and every landing snippet in either language must equal one region after both lose their common
+// indentation, and every region must appear somewhere, so a page cannot carry code that no compiler
+// or spec saw.
 function dedent(code: string): string {
   const lines = code.split("\n");
   const indent = Math.min(
@@ -365,49 +357,83 @@ function dedent(code: string): string {
   return lines.map((line) => (line.trim() === "" ? "" : line.slice(indent))).join("\n");
 }
 
-const usedRustRegions = new Set<string>();
-const regionBySource = new Map([...rustRegions].map(([name, code]) => [code, name]));
-for (const fencePath of goFencePaths) {
-  const source = readFileSync(resolve(repositoryRoot, fencePath), "utf8");
-  const backticks = "`".repeat(3);
-  const declared = [...source.matchAll(new RegExp(`^[ \\t]*${backticks}rust\\b`, "gm"))].length;
-  const fences = [
-    ...source.matchAll(
-      new RegExp(`^([ \\t]*)${backticks}rust\\n([\\s\\S]*?)\\n[ \\t]*${backticks}[ \\t]*$`, "gm"),
-    ),
-  ];
-  if (fences.length !== declared) {
-    throw new Error(`${fencePath} has a Rust fence this check could not read`);
-  }
-  for (const [index, fence] of fences.entries()) {
-    const region = regionBySource.get(dedent(fence[2]!));
-    if (region === undefined) {
-      throw new Error(
-        `${fencePath} Rust example ${index + 1} matches no docs region in rust/examples`,
-      );
+function assertDocumentationRegions(
+  language: "rust" | "ruby",
+  label: string,
+  extension: string,
+  comment: string,
+) {
+  const examplesDirectory = `${language}/examples`;
+  const examplesRoot = resolve(repositoryRoot, examplesDirectory);
+  const regions = new Map<string, string>();
+  for (const name of readdirSync(examplesRoot).filter((entry) => entry.endsWith(extension))) {
+    const source = readFileSync(resolve(examplesRoot, name), "utf8");
+    for (const region of source.matchAll(
+      new RegExp(
+        `^[ \\t]*${comment} docs:start (\\S+)[ \\t]*\\n([\\s\\S]*?)\\n[ \\t]*${comment} docs:end[ \\t]*$`,
+        "gm",
+      ),
+    )) {
+      if (regions.has(region[1]!))
+        throw new Error(`${label} docs region ${region[1]} is duplicated`);
+      regions.set(region[1]!, dedent(region[2]!));
     }
-    usedRustRegions.add(region);
   }
-}
-// The landing page's Rust snippets are strings in lib/landing-snippets.ts, not fences, so each one
-// has to equal a region verbatim.
-for (const [snippet, language] of Object.entries(landingSnippetLanguages)) {
-  if (language !== "rust") continue;
-  const region = regionBySource.get(landingSnippets[snippet as LandingSnippetId]);
-  if (region === undefined) {
-    throw new Error(`landing snippet ${snippet} matches no docs region in rust/examples`);
+  if (regions.size === 0) throw new Error(`${examplesDirectory} has no documentation regions`);
+
+  const used = new Set<string>();
+  const regionBySource = new Map([...regions].map(([name, code]) => [code, name]));
+  for (const fencePath of goFencePaths) {
+    const source = readFileSync(resolve(repositoryRoot, fencePath), "utf8");
+    const backticks = "`".repeat(3);
+    const declared = [...source.matchAll(new RegExp(`^[ \\t]*${backticks}${language}\\b`, "gm"))]
+      .length;
+    const fences = [
+      ...source.matchAll(
+        new RegExp(
+          `^([ \\t]*)${backticks}${language}\\n([\\s\\S]*?)\\n[ \\t]*${backticks}[ \\t]*$`,
+          "gm",
+        ),
+      ),
+    ];
+    if (fences.length !== declared) {
+      throw new Error(`${fencePath} has a ${label} fence this check could not read`);
+    }
+    for (const [index, fence] of fences.entries()) {
+      const region = regionBySource.get(dedent(fence[2]!));
+      if (region === undefined) {
+        throw new Error(
+          `${fencePath} ${label} example ${index + 1} matches no docs region in ${examplesDirectory}`,
+        );
+      }
+      used.add(region);
+    }
   }
-  usedRustRegions.add(region);
-}
-for (const name of rustRegions.keys()) {
-  if (!usedRustRegions.has(name)) throw new Error(`Rust docs region ${name} appears on no page`);
+  // The landing page's snippets are strings in lib/landing-snippets.ts, not fences, so each one has
+  // to equal a region verbatim.
+  for (const [snippet, snippetLanguage] of Object.entries(landingSnippetLanguages)) {
+    if (snippetLanguage !== language) continue;
+    const region = regionBySource.get(landingSnippets[snippet as LandingSnippetId]);
+    if (region === undefined) {
+      throw new Error(`landing snippet ${snippet} matches no docs region in ${examplesDirectory}`);
+    }
+    used.add(region);
+  }
+  for (const name of regions.keys()) {
+    if (!used.has(name)) throw new Error(`${label} docs region ${name} appears on no page`);
+  }
 }
 
-// Every tab group that carries Go carries Rust, except where the Rust API the example needs has not
-// landed. Each exclusion names the Issue that removes it, and an exclusion a page no longer needs
-// fails the check.
+assertDocumentationRegions("rust", "Rust", ".rs", "//");
+assertDocumentationRegions("ruby", "Ruby", ".rb", "#");
+
+// Every tab group that carries Go carries Rust and then Ruby, except where the API the example needs
+// has not landed in that SDK. Each exclusion names the Issue that removes it, and an exclusion a page
+// no longer needs fails the check.
 const rustPendingPages: Record<string, string> = {};
 const rustPendingExamples: Record<string, string> = {};
+const rubyPendingPages: Record<string, string> = {};
+const rubyPendingExamples: Record<string, string> = {};
 for (const name of readdirSync(resolve(siteRoot, "content/docs")).filter((entry) =>
   entry.endsWith(".mdx"),
 )) {
@@ -415,22 +441,27 @@ for (const name of readdirSync(resolve(siteRoot, "content/docs")).filter((entry)
   const sections = name === "examples.mdx" ? examplePatterns : [source];
   for (const section of sections) {
     const title = name === "examples.mdx" ? section.match(/^## (.+)$/m)![1]! : undefined;
-    const pending = title === undefined ? rustPendingPages[name] : rustPendingExamples[title];
     const groups = [...section.matchAll(/<Tabs items=\{\[([^\]]*)\]\}>/g)].map(
       (match) => match[1]!,
     );
     const goGroups = groups.filter((items) => items.includes('"Go"'));
-    const rustGroups = goGroups.filter((items) => items.endsWith('"Go", "Rust"'));
     const label = title === undefined ? name : `${name} ${title}`;
-    if (pending !== undefined) {
-      if (goGroups.length === 0 || rustGroups.length === goGroups.length) {
-        throw new Error(`${label} no longer needs its pending-Rust exclusion (${pending})`);
+    for (const [tab, suffix, pendingPages, pendingExamples] of [
+      ["Rust", /"Go", "Rust"(?:, "Ruby")?$/, rustPendingPages, rustPendingExamples],
+      ["Ruby", /"Rust", "Ruby"$/, rubyPendingPages, rubyPendingExamples],
+    ] as const) {
+      const pending = title === undefined ? pendingPages[name] : pendingExamples[title];
+      const tabGroups = goGroups.filter((items) => suffix.test(items));
+      if (pending !== undefined) {
+        if (goGroups.length === 0 || tabGroups.length === goGroups.length) {
+          throw new Error(`${label} no longer needs its pending-${tab} exclusion (${pending})`);
+        }
+      } else if (tabGroups.length !== goGroups.length) {
+        throw new Error(`${label} has a tab group with Go but no ${tab}`);
       }
-    } else if (rustGroups.length !== goGroups.length) {
-      throw new Error(`${label} has a tab group with Go but no Rust`);
-    }
-    if (section.split('<Tab value="Rust">').length - 1 !== rustGroups.length) {
-      throw new Error(`${label} lists Rust in a tab group without a Rust tab`);
+      if (section.split(`<Tab value="${tab}">`).length - 1 !== tabGroups.length) {
+        throw new Error(`${label} lists ${tab} in a tab group without a ${tab} tab`);
+      }
     }
   }
 }
@@ -438,17 +469,18 @@ for (const name of readdirSync(resolve(siteRoot, "content/docs")).filter((entry)
 // The agent playbook page names SDK identifiers in prose that no compiler sees. Tier 1 is the
 // compilation of its `verify` fences below. Tier 2 requires every backticked identifier the prose
 // attributes to a language to appear in that language's `verify` fence on the same page, or in the
-// page's one Rust fence, which the docs-region check above ties to a compiled example. Tier 3
+// page's one Rust or Ruby fence, which the docs-region check above ties to an executed example. Tier 3
 // admits the identifiers no fence exercises through a fixed allowlist, and each entry names the
 // source file that must still define it.
-type PlaybookLanguage = "ts" | "python" | "go" | "rust";
+type PlaybookLanguage = "ts" | "python" | "go" | "rust" | "ruby";
 const playbookLanguageNames: Record<string, PlaybookLanguage> = {
   TypeScript: "ts",
   Python: "python",
   Go: "go",
   Rust: "rust",
+  Ruby: "ruby",
 };
-const playbookLanguagePattern = /TypeScript|Python|Go|Rust/g;
+const playbookLanguagePattern = /TypeScript|Python|Go|Rust|Ruby/g;
 // Identifiers named in the playbook's prose that its fences do not exercise, paired with the source
 // file that defines each one. An entry the prose no longer needs fails the check, so the list cannot
 // outlive the sentence it serves.
@@ -464,9 +496,9 @@ const playbookProseAllowlist: Record<string, string> = {
   executionTimeoutMs: "typescript/core/src/types.ts",
 };
 const playbookFences = Object.fromEntries(
-  (["ts", "python", "go", "rust"] as const).map((language) => {
+  (["ts", "python", "go", "rust", "ruby"] as const).map((language) => {
     const fence = "`".repeat(3);
-    const info = language === "rust" ? "rust" : `${language} verify`;
+    const info = language === "rust" || language === "ruby" ? language : `${language} verify`;
     const matches = [
       ...agentIntegrationSource.matchAll(
         new RegExp(`${fence}${info}\\n([\\s\\S]*?)\\n {0,4}${fence}`, "g"),
@@ -492,7 +524,7 @@ function playbookProseLanguages(sentence: string, start: number, end: number): P
   const following = sentence
     .slice(end)
     .match(
-      /^ in ((?:(?:TypeScript|Python|Go|Rust)(?:,? (?:and|or) |, ))*(?:TypeScript|Python|Go|Rust))/,
+      /^ in ((?:(?:TypeScript|Python|Go|Rust|Ruby)(?:,? (?:and|or) |, ))*(?:TypeScript|Python|Go|Rust|Ruby))/,
     );
   const attributed = following
     ? [...following[1]!.matchAll(playbookLanguagePattern)].map((match) => match[0])

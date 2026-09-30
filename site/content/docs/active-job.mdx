@@ -1,0 +1,211 @@
+---
+title: Can I run my Rails jobs on Workhorse?
+description: What the Ruby gem's Active Job adapter runs, how to start its worker, and when a job should move to the native API.
+---
+
+Yes. The Ruby gem ships an Active Job adapter, so a Rails application can run its existing job
+classes on Workhorse. The adapter keeps Active Job's call sites, retries, and callbacks. It gives up
+the features that need a handler context, because `perform` never receives one. A job that needs
+those features moves to a native handler, and its callers do not change.
+
+The adapter requires Active Job 8.0 or later.
+
+## Select the adapter
+
+Name the adapter in `config/application.rb` or in one environment file.
+
+```ruby
+config.active_job.queue_adapter = :stablemates_workhorse
+```
+
+`require "stablemates/workhorse"` registers the adapter when Active Job loads. The adapter enqueues
+through `ActiveRecord::Base`'s connection, so it needs no pool of its own in the web process.
+
+## Choose a default job or a typed job
+
+A job class without a task type is a default job. Workhorse stores it as an `active_job` task whose
+payload is the serialized job. Only the Ruby worker runs it, and every Active Job argument type
+works.
+
+A typed job names its own task type. Include the options module once in `ApplicationJob`.
+
+```ruby
+class ApplicationJob < ActiveJob::Base
+  include Stablemates::Workhorse::ActiveJob::Options
+end
+```
+
+Then declare the task type on the job class.
+
+```ruby
+class ClassifyImageJob < ApplicationJob
+  queue_as :ml
+  workhorse_options task_type: "images.classify", max_attempts: 5
+
+  def perform(payload)
+    Classifier.run(payload["blob_id"], model: payload["model"])
+  end
+end
+```
+
+A typed job takes exactly one argument: a JSON `Hash` with String keys. That `Hash` is the task
+payload, so a Python, Go, TypeScript, or Rust worker can handle the same task type. Any other
+argument list raises `ArgumentError` before anything is written.
+
+`workhorse_options` accepts four keys:
+
+- `task_type` makes the class a typed job.
+- `max_attempts` sets the task's attempt budget.
+- `tags` adds tags beside the two the adapter adds: `active_job:<class>` and
+  `active_job_id:<job_id>`.
+- `concurrency_key` is a String or a callable that receives the job.
+
+Any other key raises `ArgumentError` when the class loads.
+
+## Enqueue as you already do
+
+`perform_later`, `set(wait:)`, `set(wait_until:)`, `queue_as`, and `set(priority:)` all map onto
+the task.
+
+```ruby
+ClassifyImageJob.perform_later({"blob_id" => 42, "model" => "v3"})
+ClassifyImageJob.set(wait: 10.minutes).perform_later({"blob_id" => 43, "model" => "v3"})
+ClassifyImageJob.set(priority: 90).perform_later({"blob_id" => 44, "model" => "v3"})
+SyncInventoryJob.perform_later("sku-1")
+```
+
+`perform_all_later` enqueues its jobs in atomic chunks.
+
+### Higher priority runs first
+
+Workhorse runs a higher priority first. Solid Queue runs a lower number first. The adapter passes
+the number through unchanged, so the dashboard and every SDK show the value the job set. Review
+each `priority` when you migrate a Solid Queue application.
+
+A priority must be nil or an Integer from 0 through 100. Any other value raises
+`ActiveJob::EnqueueError`, which Active Job records as the job's `enqueue_error`.
+
+## Enqueue inside your transaction
+
+The adapter enqueues through Active Record, so an enqueue inside a transaction commits and rolls
+back with it. Rails can also defer the enqueue until after commit, and the adapter cannot change
+that choice. Rails does not defer through 8.1, and `load_defaults "8.2"` turns deferral on.
+
+A job that must commit atomically with its caller's rows turns deferral off.
+
+```ruby
+class ReceiptJob < ApplicationJob
+  self.enqueue_after_transaction_commit = false
+
+  def perform(order_id)
+    Mailer.receipt(order_id)
+  end
+end
+```
+
+The receipt task then exists only if the order update commits.
+
+```ruby
+ActiveRecord::Base.transaction do
+  Order.find(order_id).update!(status: "paid")
+  ReceiptJob.perform_later(order_id)
+end
+```
+
+## Run the worker from `bin/workhorse`
+
+The web process never runs jobs. Start a worker as its own process from a script such as
+`bin/workhorse`. The script first requires `../config/environment` so that the application and its
+job classes load. It then builds a worker over its own connection pool.
+
+```ruby
+pool = ConnectionPool.new(size: 6) { PG.connect(ENV.fetch("DATABASE_URL")) }
+worker = Stablemates::Workhorse::Worker.new(pool, queues: %w[default ml], concurrency: 5)
+Stablemates::Workhorse::ActiveJob.handle(worker, jobs: [ClassifyImageJob])
+worker.handle("invoice.charge") { |payload, _context| Billing.charge(payload["invoice_id"]) }
+Stablemates::Workhorse.run_worker_process(worker)
+```
+
+`ActiveJob.handle` registers one handler for every default job and one handler for each typed job
+in `jobs:`. List every typed job there. Workhorse releases a task whose type has no handler, so an
+unlisted typed job waits forever. Rails also does not load job classes eagerly in development.
+`handle` raises `ArgumentError` for a listed class without a task type, and for two classes that
+declare the same one.
+
+The same worker can run native handlers beside Active Job jobs. `run_worker_process` handles
+termination signals, and Active Job continuations stop at a step boundary when the worker stops.
+[Worker processes](/docs/worker-processes) covers the process shape.
+
+## Decide who owns retries
+
+Active Job and Workhorse both retry, and a default job reaches both.
+
+- `retry_on` stays in Active Job. It enqueues a new task with the same `job_id`, and the current
+  task succeeds.
+- `discard_on` completes the task.
+- An exception that escapes Active Job fails the attempt. Workhorse then retries the task under
+  its own attempt budget.
+- A worker that dies mid-job loses its lease, and Workhorse runs the job again.
+
+That last pair makes a double retry possible. When `retry_on` exhausts its attempts without a
+block, Active Job re-raises the error. The task then retries under the Workhorse budget, which is
+generous by default.
+
+A job that wants Active Job to own every retry allows one Workhorse attempt.
+
+```ruby
+class SyncInventoryJob < ApplicationJob
+  workhorse_options max_attempts: 1
+  retry_on Timeout::Error, wait: 5.seconds, attempts: 3
+
+  def perform(sku)
+    Inventory.sync(sku)
+  end
+end
+```
+
+With `max_attempts: 1`, a crash dead-letters the job instead of rerunning it. An operator can
+still redrive it from the dashboard. Keep the default budget when you prefer crash recovery to a
+possible double retry.
+
+A typed job leaves every retry to Workhorse, so its retries behave the same in every language.
+Calling `retry_job` from a typed job raises `ArgumentError`, and the attempt fails.
+
+## Know what stays native-only
+
+`perform` receives no handler context. So an Active Job job cannot reach these features:
+
+- durable checkpoints, durable timers, and signal or human-decision waits;
+- child fan-out and result joins, progress reporting, and batch delivery;
+- persisted retry policies, deadlines, and execution timeouts;
+- enqueue idempotency, debounce, and throttle;
+- task dependencies, recurring schedules, and cancellation a running job can observe.
+
+Payload contracts apply to typed jobs only, and no Active Job job stores a result.
+
+## Move a job to the native API
+
+Move a job when it needs one of the features above, or when another language must run it. Start
+from a typed job, because its payload is already the task payload. Replace its entry in `jobs:`
+with a native handler for the same task type.
+
+```ruby
+worker.handle("images.classify") do |payload, context|
+  features = context.checkpoint("features") { Classifier.extract(payload["blob_id"]) }
+  context.checkpoint("label") { Classifier.label(features, model: payload["model"]) }
+end
+```
+
+`ClassifyImageJob.perform_later` keeps enqueuing the same task, so no call site changes. A default
+job becomes a typed job first, which changes its arguments to one `Hash`.
+
+## Next
+
+- [Worker processes](/docs/worker-processes) — run and drain workers outside the web process
+- [Retries](/docs/retries) — attempt budgets, backoff, and crash recovery
+- [Durable execution](/docs/durable-execution) — reuse completed work on another attempt
+
+---
+
+Adapter mapping, option bounds, and handler behavior:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#sql-protocol-conformance).

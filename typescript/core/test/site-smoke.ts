@@ -214,15 +214,15 @@ try {
   }
 
   // The file is one copy of every documentation page, so it tracks the corpus:
-  // 49 pages hold about 327 KB of source and the generated file is about 320 KB.
+  // 51 pages hold about 419 KB of source and the generated file is about 405 KB.
   // The bound sits a quarter above that, because a generator that starts
   // repeating content roughly doubles the file while a new page adds a few KB.
   // Site smoke is skipped on main pushes, so raise this deliberately rather than
   // to clear whichever pull request happens to add the page that crosses it.
   const llmsFullText = await (await fetch(`${baseUrl}/llms-full.txt`)).text();
   const llmsFullBytes = Buffer.byteLength(llmsFullText, "utf8");
-  if (llmsFullBytes > 400_000) {
-    throw new Error(`llms-full.txt grew to ${llmsFullBytes} bytes, well past its 320 KB shape`);
+  if (llmsFullBytes > 505_000) {
+    throw new Error(`llms-full.txt grew to ${llmsFullBytes} bytes, well past its 405 KB shape`);
   }
 
   // The router's lead is the prose above its first `##`. It has to name the
@@ -323,6 +323,7 @@ try {
     'aria-label="python"',
     'aria-label="go"',
     'aria-label="rust"',
+    'aria-label="ruby"',
   ]);
 
   // Shiki writes a token's colours as a class, and one generated stylesheet
@@ -337,7 +338,7 @@ try {
     );
   }
   const landingBytes = Buffer.byteLength(landingHtml, "utf8");
-  if (landingBytes > 440_000) {
+  if (landingBytes > 495_000) {
     throw new Error(`The landing page grew to ${landingBytes} bytes, past its shape`);
   }
 

@@ -1,4 +1,5 @@
 import cargoManifest from "../../rust/Cargo.toml?raw";
+import gemspec from "../../ruby/stablemates-workhorse.gemspec?raw";
 import support from "../../support.json";
 
 import { WorkhorseMark } from "@/components/logo";
@@ -13,15 +14,19 @@ import { demoUrl, siteConfig } from "@/lib/site";
  * is the failure ADR 0058 removed from `/docs/releases`, and `support.json` is
  * the repository's source of truth for every minimum.
  *
- * Every SDK runtime is named. Workhorse publishes a TypeScript, a Python, a Go,
- * and a Rust line, so a line that named only Node left three of them off the one
- * sentence that says what Workhorse runs on.
+ * Every SDK runtime is named. Workhorse carries a TypeScript, a Python, a Go, a
+ * Rust, and a Ruby line, so a line that named only Node left four of them off the
+ * one sentence that says what Workhorse runs on.
  *
  * The Rust floor is the crate's own `rust-version`, which Cargo enforces, so the
- * footer reads it from `rust/Cargo.toml` as the README alignment test does.
+ * footer reads it from `rust/Cargo.toml` as the README alignment test does. The
+ * Ruby floor is the gem's `required_ruby_version`, for the same reason.
  */
 const rustVersion = /^rust-version = "([^"]+)"$/m.exec(cargoManifest)?.[1];
 if (!rustVersion) throw new Error("rust/Cargo.toml declares no rust-version");
+const rubyVersion = /^\s*spec\.required_ruby_version = ">= ([^"]+)"$/m.exec(gemspec)?.[1];
+if (!rubyVersion)
+  throw new Error("ruby/stablemates-workhorse.gemspec declares no required_ruby_version");
 
 const runtimes = [
   `PostgreSQL ${support.support.postgres.minimum}+`,
@@ -31,6 +36,7 @@ const runtimes = [
   // surface prints the language version a reader installs (support-matrix).
   `Go ${support.support.go.minimum.replace(/\.0$/, "")}+`,
   `Rust ${rustVersion}+`,
+  `Ruby ${rubyVersion}+`,
 ].join(" · ");
 
 const columns = [

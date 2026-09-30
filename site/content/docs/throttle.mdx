@@ -6,7 +6,7 @@ description: Accept one equivalent task during a busy window and coalesce later 
 Throttle keeps an acceptance window in PostgreSQL. The first request creates a task; an equivalent
 request before the window closes returns the same identity with a `coalesced` outcome.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     const result = await queue.enqueueWithResult("email.digest", { accountId }, {
@@ -49,6 +49,12 @@ request before the window closes returns the same identity with a `coalesced` ou
             },
         )
         .await?;
+    ```
+  </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    result = queue.enqueue("email.digest", {"accountId" => account_id},
+      throttle: Stablemates::Workhorse::Throttle.new(key: account_id, window: digest_window, scope: "digest"))
     ```
   </Tab>
 </Tabs>

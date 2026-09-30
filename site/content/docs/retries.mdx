@@ -14,7 +14,7 @@ when the next attempt runs, and what survives in between.
 a thrown error or a crashed worker's expired lease — spends one. When the budget is gone,
 the database deletes the runtime row and writes an immutable failed outcome.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("provider.sync", { accountId }, { maxAttempts: 5 });
@@ -47,6 +47,11 @@ the database deletes the runtime row and writes an immutable failed outcome.
         .await?;
     ```
   </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    queue.enqueue("provider.sync", {"accountId" => account_id}, max_attempts: 5)
+    ```
+  </Tab>
 </Tabs>
 
 The budget check happens in SQL, always. A worker override can change retry timing, but no
@@ -60,7 +65,7 @@ Retrying instantly is usually wrong: if a provider is down, hammering it just bu
 PostgreSQL validates it at enqueue time. Pending keyed debounce may replace that definition before
 dispatch. Three shapes exist:
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     const jitter = { type: "decorrelated-jitter", baseDelayMs: 1_000, maxDelayMs: 60_000 };
@@ -99,6 +104,12 @@ dispatch. Three shapes exist:
             },
         )
         .await?;
+    ```
+  </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    jitter = {"type" => "decorrelated-jitter", "baseDelayMs" => 1_000, "maxDelayMs" => 60_000}
+    queue.enqueue("provider.sync", {"accountId" => account_id}, retry_policy: jitter, max_attempts: 5)
     ```
   </Tab>
 </Tabs>

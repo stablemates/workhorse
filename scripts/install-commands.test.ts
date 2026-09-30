@@ -21,9 +21,9 @@ import { publishedPackages, repositoryRoot } from "./packages.js";
 //
 // A TypeScript project needs no pin. `npm exec --no` runs the binary from `node_modules`, which is
 // the application's own dependency, so the versions match by construction and `--no` refuses to
-// fetch anything when it is absent. A Python, Go, or Rust project has no `node_modules` to resolve
-// from, so its command names the version explicitly, and the rule below is what keeps that literal equal
-// to the version this repository publishes.
+// fetch anything when it is absent. A Python, Go, Rust, or Ruby project has no `node_modules` to
+// resolve from, so its command names the version explicitly, and the rule below is what keeps that
+// literal equal to the version this repository publishes.
 
 const execFileAsync = promisify(execFile);
 
@@ -31,6 +31,7 @@ type InstallCommand =
   | "go"
   | "node"
   | "python"
+  | "ruby"
   | "rust"
   | "schema"
   | "schemaDownload"
@@ -55,7 +56,7 @@ interface GovernedSurface {
  * without having to carry a canonical command of their own.
  */
 const governedSurfaces: readonly GovernedSurface[] = [
-  { file: "README.md", commands: ["node", "schema"] },
+  { file: "README.md", commands: ["node", "ruby", "schema"] },
   { file: "typescript/core/README.md", commands: ["node", "schema"] },
   { file: "typescript/dashboard/README.md", commands: ["node"] },
   { file: "typescript/dashboard-server/README.md", commands: ["node"] },
@@ -68,17 +69,18 @@ const governedSurfaces: readonly GovernedSurface[] = [
   { file: "go/README.md", commands: ["go", "schemaPinned"] },
   { file: "go/examples/README.md", commands: ["go"] },
   { file: "rust/README.md", commands: ["rust", "schemaPinned"] },
+  { file: "ruby/README.md", commands: ["ruby", "schemaPinned"] },
   {
     file: "site/content/docs/installation.mdx",
-    commands: ["go", "node", "python", "rust", "schema", "schemaDownload", "schemaPinned"],
+    commands: ["go", "node", "python", "ruby", "rust", "schema", "schemaDownload", "schemaPinned"],
   },
   {
     file: "site/content/docs/quickstart.mdx",
-    commands: ["go", "node", "python", "rust", "schema", "schemaPinned"],
+    commands: ["go", "node", "python", "ruby", "rust", "schema", "schemaPinned"],
   },
   {
     file: "site/content/docs/for-ai-agents.mdx",
-    commands: ["go", "node", "python", "rust", "schema", "schemaPinned"],
+    commands: ["go", "node", "python", "ruby", "rust", "schema", "schemaPinned"],
   },
   { file: "site/content/docs/api.mdx", commands: ["schema", "schemaPinned"] },
 ];
@@ -124,11 +126,13 @@ const versionPatterns: readonly { readonly label: string; readonly pattern: RegE
   { label: "Python version", pattern: /stablemates-workhorse\S*(?:[=<>~!]=|@)\S+/ },
   { label: "Go version", pattern: /stablemates\/workhorse\/go@\S+/ },
   { label: "Rust version", pattern: /cargo add workhorse@\S+/ },
+  { label: "Ruby version", pattern: /bundle add stablemates-workhorse\b.*--version\b/ },
+  { label: "Gemfile version", pattern: /gem "stablemates-workhorse", ["'~<>=\d]/ },
 ];
 
 /** Install commands, extracted so a version is reported against the command that carries it. */
 const installCommandPattern =
-  /(?:npm (?:install|i)|pnpm add|yarn add|bun add|pip install|pipx install|uv add|go get|cargo add|npx --package)[^\n`]*/g;
+  /(?:npm (?:install|i)|pnpm add|yarn add|bun add|pip install|pipx install|uv add|go get|cargo add|bundle add|gem "stablemates-workhorse"|npx --package)[^\n`]*/g;
 
 /**
  * The schema tool, which is the one command that must name a version.

@@ -14,7 +14,7 @@ Pass `contracts` through the third `Queue` constructor argument, or through an a
 `queueOptions`. Each task type names a `currentVersion` for newly accepted tasks and retains every
 version that live or redrivable tasks may still carry.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     const contracts = {
@@ -77,10 +77,26 @@ version that live or redrivable tasks may still carry.
     queue.sync_contracts(&contracts).await?;
     ```
   </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    queue.sync_contracts(
+      "mail.send" => Stablemates::Workhorse::TaskTypeContracts.new(
+        current_version: "mail-current",
+        versions: {
+          "mail-current" => Stablemates::Workhorse::TaskContractVersion.new(
+            payload_schema: {"type" => "object", "required" => ["recipient"]},
+            result_schema: {"type" => "object"},
+            sensitive_payload_keys: ["accessToken"]
+          )
+        }
+      )
+    )
+    ```
+  </Tab>
 </Tabs>
 
-Call `queue.syncContracts()` during application startup. Python and Rust expose `sync_contracts`,
-and Go exposes `SyncContracts`. PostgreSQL inserts an immutable document for every version and keeps
+Call `queue.syncContracts()` during application startup. Python, Rust, and Ruby expose
+`sync_contracts`, and Go exposes `SyncContracts`. PostgreSQL inserts an immutable document for every version and keeps
 the current version in a separate policy row, so an operator override survives the next deploy.
 
 After synchronization, the TypeScript client caches the selected document for each task type. If an

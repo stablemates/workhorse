@@ -2,10 +2,9 @@ import resolved from "@/.source/releases.json";
 import type { ResolvedReleaseLine } from "@/lib/releases";
 
 /**
- * The published versions of the four lines, rendered from
+ * The published versions of the release lines, rendered from
  * `site/.source/releases.json` after `scripts/gen-docs-index.ts` has read them
- * out of `CHANGELOG.md`, `python/CHANGELOG.md`, `go/CHANGELOG.md`, and
- * `rust/CHANGELOG.md`.
+ * out of each line's changelog. A line with no release yet says so.
  *
  * Reading the generated file rather than typing the versions is the whole point
  * of the page: a stale table here would turn the support policy in `SECURITY.md`
@@ -68,11 +67,21 @@ export function ReleaseTable() {
                   </a>
                   <span className="ml-2 text-fd-muted-foreground">on {line.registry}</span>
                 </td>
-                <td className={`${cell} font-mono text-[13px]`}>{line.current.version}</td>
-                <td className={cell}>
-                  <Released date={line.current.date} />
-                </td>
-                <td className={cell}>Yes</td>
+                {line.current ? (
+                  <>
+                    <td className={`${cell} font-mono text-[13px]`}>{line.current.version}</td>
+                    <td className={cell}>
+                      <Released date={line.current.date} />
+                    </td>
+                    <td className={cell}>Yes</td>
+                  </>
+                ) : (
+                  <>
+                    <td className={`${cell} text-fd-muted-foreground`}>Not yet released</td>
+                    <td className={`${cell} text-fd-muted-foreground`}>—</td>
+                    <td className={`${cell} text-fd-muted-foreground`}>—</td>
+                  </>
+                )}
               </tr>
             ))}
           </tbody>

@@ -23,8 +23,8 @@ Two boundaries keep this matrix small:
 
 Ruby is the fifth SDK, shipped as the `stablemates-workhorse` gem ([ADR
 0075](decisions/0075-shape-the-ruby-sdk-as-one-gem-with-an-active-job-adapter.md)). Its client, `Admin` client,
-dashboard backend, and worker runtime ship today. Its durable handler context, fast task tier, and
-batch delivery are Planned. The integer semantics below compare the other four SDKs.
+dashboard backend, worker runtime, durable handler context, fast task tier, and batch delivery ship
+today. The integer semantics below compare the other four SDKs.
 
 ## Client (enqueue side)
 
