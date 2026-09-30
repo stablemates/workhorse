@@ -393,10 +393,12 @@ module Conformance
       seen = Concurrent::Array.new
       with_pool do |pool|
         subject = worker(pool, fixture, concurrency: fixture["concurrency"])
-        subject.handle_batch(fixture["taskType"], max_size: fixture["batchMaxSize"], linger: 0.1) do |payloads, context|
-          seen.concat(payloads.map { |payload| payload["key"] })
+        subject.handle_batch(fixture["taskType"], max_size: fixture["batchMaxSize"], linger: 0.1) do |items|
+          seen.concat(items.map { |item| item.payload["key"] })
           subject.pause
-          payloads.zip(context.tasks).map do |payload, task|
+          items.map do |item|
+            payload = item.payload
+            task = item.context.task
             if payload["outcome"] == "succeed" || task.attempt > 1
               {status: :succeeded, result: {"attempt" => task.attempt}}
             else

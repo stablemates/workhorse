@@ -313,7 +313,7 @@ module Stablemates::Workhorse
 
     def handle(task_type, &handler) = self          # handler.call(payload, context) -> result
     def handle_batch(task_type, max_size:, linger:, &handler) = self
-                                                     # handler.call(items, batch_context) -> results
+                                                     # handler.call(items) -> results
 
     def run; end                                     # blocks until stop, then drains
     def run_once; end                                # -> true when a task ran
@@ -504,6 +504,7 @@ module Stablemates::Workhorse
     def task; end            # ClaimedTask
     def cancellation; end    # CancellationToken
 
+    def get_checkpoint(name); end         # -> TaskCheckpoint or nil
     def checkpoint(name, &block); end
     def sleep(name, seconds); end
     def sleep_until(name, time); end
@@ -518,9 +519,12 @@ module Stablemates::Workhorse
     def set_progress(progress); end
   end
 
+  BatchHandlerItem = Data.define(:payload, :context)   # context: BatchHandlerContext
+
   class BatchHandlerContext
-    def tasks; end
-    def cancellation; end
+    def task; end            # the member's ClaimedTask
+    def cancellation; end    # the member's CancellationToken
+    def get_checkpoint(name); end
     def checkpoint(name, &block); end
     def get_progress; end
     def set_progress(progress); end
@@ -532,6 +536,18 @@ Checkpoint replay runs the block only when no checkpoint of that name exists. Co
 that share one name share one in-flight request, as in Python and Rust. `run_children` keys its
 outcomes by child name. `BatchHandlerContext` has no suspending or child primitives, as ADR 0030
 requires.
+
+A batch handler receives one `BatchHandlerItem` per member, and each item holds the member's
+payload and its own context. SM-986 amended this block. It first gave the whole batch one context
+with a `tasks` list, one cancellation, and batch-wide checkpoint and progress calls. A durable call
+writes under one task's lease and fence, so a batch-wide call could name no single owner. A member
+could not replay its own checkpoint once a retry put it in a batch of different composition. And one
+progress value could not describe members that advance separately. A per-member context fences each
+write on its member's lease, replays that member's checkpoints whatever batch it lands in, and
+keeps one progress per task. TypeScript's `BatchHandlerItem` and `BatchHandlerContext` in
+`typescript/core/src/worker.ts`, and Python's in `python/src/workhorse/types.py`, have the same
+shape. The member context wraps the member's `HandlerContext`, so a fast-tier member rejects
+`checkpoint` and `set_progress` with `FastTierUnsupportedError` before any write.
 
 ### Suspension
 
