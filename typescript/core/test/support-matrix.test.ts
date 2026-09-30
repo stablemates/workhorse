@@ -206,6 +206,11 @@ describe("supported version constants", () => {
     expect(
       manifest.toolchains.go.startsWith(manifest.support.go.minimum.replace(/\.0$/, ".")),
     ).toBe(true);
+    // `pnpm check` runs the site smoke on this pin, so CI runs it on the same one. Otherwise a
+    // Node major that changes URL parsing fails every local check while CI stays green.
+    expect(
+      /name: demo and site smoke\n(?:    .*\n)*?\s+node-version: (\S+)/.exec(workflow)?.[1],
+    ).toBe(mise.tools.node);
   });
 
   it("builds every container image on the Node major the toolchains pin", async () => {
