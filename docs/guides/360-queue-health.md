@@ -57,9 +57,18 @@ and the budget it broke. Codes split into two severities:
   by concurrency or rate-limit policies.
 
 Because the codes are stable strings, automation can branch on them instead of parsing prose.
-The `workhorse health --json` command exits non-zero on any exceeded budget. The dashboard words
-the same reasons for humans. Both read the identical evaluation, so one place decides what
-unhealthy means.
+The `workhorse health --json` command exits non-zero on any exceeded budget.
+
+The dashboard lists every check with its own status, so passing checks remain visible beside failures.
+Critical and degraded checks appear first, with resolution advice.
+Rate limits show “Throttling” when ready tasks wait for tokens.
+Concurrency limits and shared budgets show “Limiting” when they hold ready tasks back.
+These are neutral operating states on the dashboard.
+The dashboard does not display an aggregate verdict; the underlying `QueueHealth.status` still carries the database's evaluation.
+The time range controls the separate Activity over time section.
+That section labels [statistics](320-statistics.md) as “Full + fast tiers”.
+Health checks and Current operations show the latest snapshot.
+Changing the range also refreshes that snapshot.
 
 The database owns the budgets, so every SDK and dashboard backend receives the same verdict.
 Application sync records defaults, while operator overrides survive later deploys. The snapshot's

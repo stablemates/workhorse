@@ -630,3 +630,74 @@ html[data-mantine-color-scheme="dark"] .mantine-Badge-root[data-variant="light"]
     opacity: 1;
   }
 }
+
+.system-section {
+  border-top: 1px solid var(--mantine-color-default-border);
+  padding-top: var(--mantine-spacing-lg);
+}
+
+.system-current-kpis {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.system-current-kpis > :nth-child(n + 3) {
+  border-top: 1px solid var(--mantine-color-default-border);
+}
+
+.system-current-kpis > :nth-child(even) {
+  border-left: 1px solid var(--mantine-color-default-border);
+}
+
+.system-current-kpis > :last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 62em) {
+  .system-current-kpis {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .system-current-kpis > :nth-child(n + 2) {
+    border-top: 1px solid var(--mantine-color-default-border);
+    border-left: 0;
+  }
+}
+
+.system-health-checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.system-health-check {
+  display: grid;
+  grid-template-columns: minmax(10rem, 1fr) 6rem minmax(0, 3fr);
+  grid-template-areas: "name status details";
+  align-items: start;
+  gap: var(--mantine-spacing-md);
+  padding: var(--mantine-spacing-sm) var(--mantine-spacing-md);
+  border-top: 1px solid var(--mantine-color-default-border);
+}
+
+.system-health-check__name {
+  grid-area: name;
+}
+
+.system-health-check__status {
+  grid-area: status;
+}
+
+.system-health-check__details {
+  grid-area: details;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 48em) {
+  .system-health-check {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "name status" "details details";
+    row-gap: var(--mantine-spacing-xs);
+  }
+}

@@ -100,7 +100,7 @@ describe("dashboard presentation policy", () => {
   });
 
   it("words health reason codes with resolution advice and folds retention categories", () => {
-    const { criticalChecks, degradedChecks } = healthCheckMessages([
+    const { criticalChecks, degradedChecks, expectedChecks } = healthCheckMessages([
       { code: "expired-leases", severity: "critical", observed: 1, budget: 0 },
       { code: "missing-history-partitions", severity: "critical", observed: 2, budget: 0 },
       {
@@ -123,11 +123,13 @@ describe("dashboard presentation policy", () => {
       "Daily history storage is missing",
     ]);
     expect(degradedChecks.map(({ message }) => message)).toEqual([
-      "Concurrency policy blocks ready tasks on payments",
       "Retention cleanup is late for task events",
     ]);
+    expect(expectedChecks.map(({ message }) => message)).toEqual([
+      "Queue payments has 3+ ready tasks waiting for concurrency capacity",
+    ]);
     // Every check tells the operator what to do next and where to read more.
-    for (const check of [...criticalChecks, ...degradedChecks]) {
+    for (const check of [...criticalChecks, ...degradedChecks, ...expectedChecks]) {
       expect(check.advice.length).toBeGreaterThan(0);
       expect(check.helpHref).toMatch(/^https:\/\/workhorse\.run\/docs\//);
     }

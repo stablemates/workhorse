@@ -224,7 +224,7 @@ export function QueuePressure({
             <Text fw={650}>Queue backlog</Text>
             <HelpButton
               label="Queue backlog"
-              help="This table ranks queues by their current backlog. Rates cover the selected window. Select a row to see its tasks."
+              help="This table ranks queues by their current backlog. These counts do not depend on the time range. Select a row to see its tasks."
             />
           </Group>
           <Text c="dimmed" size="xs">
@@ -236,7 +236,7 @@ export function QueuePressure({
         </Badge>
       </Group>
       <ScrollArea>
-        <Table highlightOnHover verticalSpacing={6} horizontalSpacing="sm" miw={1180}>
+        <Table highlightOnHover verticalSpacing={6} horizontalSpacing="sm" miw={980}>
           <Table.Thead>
             <Table.Tr>
               <Table.Th>Queue</Table.Th>
@@ -256,8 +256,6 @@ export function QueuePressure({
                 </Group>
               </Table.Th>
               <Table.Th ta="right">Retrying</Table.Th>
-              <Table.Th ta="right">Added/min</Table.Th>
-              <Table.Th ta="right">Finished/min</Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
@@ -339,8 +337,6 @@ export function QueuePressure({
                     )}
                   </Table.Td>
                   <Table.Td ta="right">{queue.retrying}</Table.Td>
-                  <Table.Td ta="right">{formatRate(queue.enqueuedPerMinute)}</Table.Td>
-                  <Table.Td ta="right">{formatRate(queue.completedPerMinute)}</Table.Td>
                 </Table.Tr>
               );
             })}
@@ -360,35 +356,77 @@ export function QueuePressure({
     </Paper>
   );
 }
-export function SystemKpiList({
+export function QueueActivity({
   data,
   navigate,
 }: {
   data: DashboardSystemPage;
   navigate: (href: string) => void;
 }) {
+  return (
+    <Paper withBorder>
+      <Box p="md">
+        <Group gap={4} wrap="nowrap">
+          <Text fw={650}>Queue activity</Text>
+          <HelpButton
+            label="Queue activity"
+            help="These rates cover the selected time range. Select a queue to see its tasks."
+          />
+        </Group>
+        <Text c="dimmed" size="xs">
+          Tasks added and finished per minute in the selected range
+        </Text>
+      </Box>
+      <ScrollArea>
+        <Table highlightOnHover verticalSpacing={6} horizontalSpacing="sm" miw={440}>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>Queue</Table.Th>
+              <Table.Th ta="right">Added/min</Table.Th>
+              <Table.Th ta="right">Finished/min</Table.Th>
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {data.queues.map((queue) => (
+              <Table.Tr
+                key={queue.queue}
+                tabIndex={0}
+                style={{ cursor: "pointer" }}
+                onClick={() => navigate(`/tasks?queue=${encodeURIComponent(queue.queue)}`)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    navigate(`/tasks?queue=${encodeURIComponent(queue.queue)}`);
+                  }
+                }}
+              >
+                <Table.Td>
+                  <Code fz="xs" style={{ background: "transparent", padding: 0 }}>
+                    {queue.queue}
+                  </Code>
+                </Table.Td>
+                <Table.Td ta="right">{formatRate(queue.enqueuedPerMinute)}</Table.Td>
+                <Table.Td ta="right">{formatRate(queue.completedPerMinute)}</Table.Td>
+              </Table.Tr>
+            ))}
+          </Table.Tbody>
+        </Table>
+      </ScrollArea>
+    </Paper>
+  );
+}
+export function SystemWindowKpis({ data }: { data: DashboardSystemPage }) {
   const errorColor =
     data.kpis.errorRate.current >= systemErrorRateWarning
       ? "red"
       : data.kpis.errorRate.current >= systemErrorRateCaution
         ? "yellow"
         : "teal";
-  const backlogColor =
-    (data.kpis.backlog.oldestReadyMs ?? 0) > systemOldestReadyWarningMs ? "yellow" : "blue";
   const recentOutcomes = data.outcomes.slice(-30);
   const queueWaitPercentiles = [
     { label: "p50", duration: data.kpis.queueWait.p50Ms },
     { label: "p95", duration: data.kpis.queueWait.p95Ms },
     { label: "p99", duration: data.kpis.queueWait.p99Ms },
   ];
-  const deadline = data.kpis.deadline ?? {
-    pending: 0,
-    overdue: 0,
-    dueWithinMinute: 0,
-    earliestAt: null,
-    activeTimeouts: 0,
-    overdueTimeouts: 0,
-  };
 
   return (
     // One panel of hairline-separated rows, sized to sit beside the activity chart.
@@ -415,16 +453,6 @@ export function SystemKpiList({
           ]}
         />
       </HealthKpi>
-      <HealthKpi
-        divided
-        title="Ready backlog"
-        value={data.kpis.backlog.ready}
-        detail={`Oldest task ${formatDuration(data.kpis.backlog.oldestReadyMs)}`}
-        help="This count shows tasks that are ready for workers. An older task can mean that its queue is draining slowly."
-        scope="now"
-        color={backlogColor}
-        icon={<ListChecks size={16} />}
-      />
       <HealthKpi
         divided
         title="Failed attempts"
@@ -460,6 +488,47 @@ export function SystemKpiList({
       />
       <HealthKpi
         divided
+        title="Recovered leases"
+        value={data.kpis.lease.recovered}
+        detail="Attempts closed after their leases expired"
+        help="This count shows attempts that ended because their leases expired during the selected time range."
+        scope={data.window}
+        color="blue"
+        icon={<Pulse size={16} />}
+      />
+    </Paper>
+  );
+}
+export function SystemKpiList({
+  data,
+  navigate,
+}: {
+  data: DashboardSystemPage;
+  navigate: (href: string) => void;
+}) {
+  const backlogColor =
+    (data.kpis.backlog.oldestReadyMs ?? 0) > systemOldestReadyWarningMs ? "yellow" : "blue";
+  const deadline = data.kpis.deadline ?? {
+    pending: 0,
+    overdue: 0,
+    dueWithinMinute: 0,
+    earliestAt: null,
+    activeTimeouts: 0,
+    overdueTimeouts: 0,
+  };
+
+  return (
+    <Paper withBorder className="system-current-kpis">
+      <HealthKpi
+        title="Ready backlog"
+        value={data.kpis.backlog.ready}
+        detail={`Oldest task ${formatDuration(data.kpis.backlog.oldestReadyMs)}`}
+        help="This count shows tasks that are ready for workers. An older task can mean that its queue is draining slowly."
+        scope="now"
+        color={backlogColor}
+        icon={<ListChecks size={16} />}
+      />
+      <HealthKpi
         title="Retries in backoff"
         value={data.kpis.retry.backoff}
         detail={`${data.kpis.retry.dueSoon} due in the next 5m`}
@@ -469,17 +538,15 @@ export function SystemKpiList({
         icon={<ArrowCounterClockwise size={16} />}
       />
       <HealthKpi
-        divided
         title="Expired leases"
         value={data.kpis.lease.expired}
-        detail={`${data.kpis.lease.expiringSoon} expire in 30s · ${data.kpis.lease.recovered} recovered/${data.window}`}
-        help="This count shows active tasks whose leases expired. It also shows leases nearing expiry and tasks recovered during the selected window."
+        detail={`${data.kpis.lease.expiringSoon} expire in 30s`}
+        help="This count shows active tasks whose leases expired. It also shows leases nearing expiry."
         scope="now"
         color={data.kpis.lease.expired > 0 ? "red" : "teal"}
         icon={<Pulse size={16} />}
       />
       <HealthKpi
-        divided
         title="Overdue tasks"
         value={deadline.overdue}
         detail={`${deadline.dueWithinMinute} due in 1m · ${deadline.overdueTimeouts} timed-out attempts awaiting reap`}
@@ -495,7 +562,6 @@ export function SystemKpiList({
         icon={<Clock size={16} />}
       />
       <HealthKpi
-        divided
         title="Blocked dependencies"
         value={
           <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
@@ -526,7 +592,6 @@ export function SystemKpiList({
         icon={<FunnelSimple size={16} />}
       />
       <HealthKpi
-        divided
         title="Waiting parents"
         value={data.kpis.children.waitingParents}
         detail={`${data.kpis.children.pendingChildren} pending children · ${data.kpis.children.unjoinedResults} unjoined results · ${data.kpis.children.failedParents} failed parents · ${data.kpis.children.canceledParents} canceled parents${data.kpis.children.capped ? " · Counts reached the scan limit" : ""}`}
@@ -542,7 +607,6 @@ export function SystemKpiList({
         icon={<UserFocus size={16} />}
       />
       <HealthKpi
-        divided
         title="Pending external waits"
         value={
           <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
