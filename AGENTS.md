@@ -55,6 +55,9 @@ Co-Authored-By: claude-fable-5-1 <noreply@anthropic.com>
 
 ## Keep an agent pull request to one commit
 
+A squash merge puts every commit message on the branch into the body of the commit on `main`. One
+commit keeps that body a single current message with correct trailers.
+
 An agent's pull request branch holds exactly one commit on top of its base. Review, CI, and
 follow-up changes amend that commit. When the base moves, rebase onto it and keep one commit.
 
