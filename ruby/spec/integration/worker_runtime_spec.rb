@@ -12,7 +12,9 @@ module RecordedTelemetry
   class Tracer < OpenTelemetry::Trace::Tracer
     def start_span(name, with_parent: nil, attributes: nil, kind: nil, **)
       parent = OpenTelemetry::Trace.current_span(with_parent).context
-      context = OpenTelemetry::Trace::SpanContext.new(trace_id: parent.valid? ? parent.trace_id : nil)
+      # A root span needs a real trace ID; a nil one reads as valid and breaks trace injection.
+      trace_id = parent.valid? ? parent.trace_id : OpenTelemetry::Trace.generate_trace_id
+      context = OpenTelemetry::Trace::SpanContext.new(trace_id: trace_id)
       RecordedSpan.new(Span.new(name, kind, (attributes || {}).dup, parent, nil, false), context)
     end
   end

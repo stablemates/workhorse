@@ -1,2 +1,4 @@
 .bundle/
 vendor/
+# Each run resolves the current Rails main.
+gemfiles/rails_main.gemfile.lock

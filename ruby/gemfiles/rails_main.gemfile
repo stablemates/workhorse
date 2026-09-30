@@ -1,0 +1,12 @@
+# frozen_string_literal: true
+
+# The development bundle against Rails main, which CI runs without blocking a merge. It has no
+# lockfile, so each run resolves the current main.
+@rails_declared = true
+eval_gemfile File.expand_path("../Gemfile", __dir__)
+
+group :development do
+  git "https://github.com/rails/rails.git", branch: "main" do
+    %w[actionpack activejob activerecord railties].each { |name| gem name }
+  end
+end

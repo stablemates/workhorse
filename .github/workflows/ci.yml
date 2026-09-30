@@ -495,6 +495,93 @@ jobs:
       - run: pnpm db:reset:test
       - run: pnpm ruby:gates
 
+  ruby-rails:
+    name: Ruby Active Job on Rails 8.0
+    # The ruby job runs the adapter against Rails 8.1 on every change. The older release is a
+    # variation, so it runs weekly as ADR 0083 describes.
+    needs: plan
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 4 * * 0'
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: workhorse
+          POSTGRES_PASSWORD: workhorse
+          POSTGRES_DB: workhorse_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U workhorse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test
+      BUNDLE_GEMFILE: ${{ github.workspace }}/ruby/gemfiles/rails_8_0.gemfile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
+        with:
+          ruby-version: "3.4"
+          working-directory: ruby
+          bundler-cache: true
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:reset:test
+      - run: pnpm ruby:test:active-job
+
+  ruby-rails-main:
+    name: Ruby Active Job on Rails main
+    needs: plan
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 4 * * 0'
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 20
+    # Rails main previews the next release, so this job reports without blocking a merge, and the
+    # required job leaves it out. Its gemfile has no lockfile, so each run resolves the current main.
+    continue-on-error: true
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: workhorse
+          POSTGRES_PASSWORD: workhorse
+          POSTGRES_DB: workhorse_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U workhorse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test
+      BUNDLE_GEMFILE: ${{ github.workspace }}/ruby/gemfiles/rails_main.gemfile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
+        with:
+          ruby-version: "3.4"
+          working-directory: ruby
+          bundler-cache: true
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:reset:test
+      - run: pnpm ruby:test:active-job
+
   demo:
     name: demo and site smoke
     if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
@@ -540,7 +627,21 @@ jobs:
   required:
     name: required
     if: always()
-    needs: [plan, static, unit, typescript, python, go, runtime-smoke, packed, rust, ruby, demo]
+    needs:
+      [
+        plan,
+        static,
+        unit,
+        typescript,
+        python,
+        go,
+        runtime-smoke,
+        packed,
+        rust,
+        ruby,
+        ruby-rails,
+        demo,
+      ]
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 5
     env:
@@ -566,6 +667,8 @@ jobs:
         packed,
         rust,
         ruby,
+        ruby-rails,
+        ruby-rails-main,
         demo,
         required,
       ]
