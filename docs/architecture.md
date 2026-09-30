@@ -18,8 +18,8 @@ contract step pending at the installed version through `workhorse schema contrac
 `--yes` and first names every worker still live on a retiring protocol. The current migration plan
 has one contract step: `0025-add-a-fast-task-tier.sql` moves schema 24 to 25 and retires
 protocols 1 through 4. `migrateSchema` therefore stops at schema 24 on an older installation, and
-`contractSchema` applies step 25. The additive steps 26 through 44 follow, so a second `migrateSchema`
-run completes the plan. Their files run from `0026` to `0045`: file number `0035` was reserved and
+`contractSchema` applies step 25. The additive steps 26 through 45 follow, so a second `migrateSchema`
+run completes the plan. Their files run from `0026` to `0046`: file number `0035` was reserved and
 never used, so from `0036` on a file's number is one above the version it produces. Step 25 ships without the usual retention window, as
 [ADR 0077](decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) §6 records.
 
@@ -3422,7 +3422,7 @@ Retention health includes the persisted policy, oldest retained timestamps, per-
 Schedule runs are deleted only by the daily `history_retention` routine, so the oldest run ages by up to a day between passes. Their `retention-lag` reason therefore follows that routine rather than `schedule_occurrence_lag_ms`, which stays the raw time past the occurrence window and remains the reason's `observed` value. `queue_health_v1` computes two internal lags and removes both from the public document:
 
 - `schedule_occurrence_pass_lag_ms` measures the oldest row with `fired_at` at or before `maintenance_state.last_started_at`, as of that start, against `schedule_occurrence_retention_days`. A failing or incomplete pass still records its start, so rows it left behind stay visible. It is 0 when `last_completed_local_date` is NULL and the pass started before `retention_policy.updated_at`: a retention-policy change resets completion, and that pass used the earlier window. A maintenance-policy change also resets completion but keeps the window, so it does not trigger this guard.
-- `schedule_occurrence_due_lag_ms` is the time since the first scheduled pass after the latest start fell due. A start at or after `history_retention_local_time` in `maintenance_policy.timezone` counts as that local day's pass, so the next pass falls due at that time on the following day. A `last_completed_local_date` covers its whole local day, which accounts for a forced pass before the scheduled time. Without a recorded start, the latest scheduled time at or before now is due. The lag keeps growing while no pass starts, and incomplete event or attempt retention does not affect it.
+- `schedule_occurrence_due_lag_ms` is the time since the first scheduled pass after the latest start fell due. A start at or after `history_retention_local_time` in `maintenance_policy.timezone` counts as that local day's pass, so the next pass falls due at that time on the following day. A `last_completed_local_date` covers its whole local day, which accounts for a forced pass before the scheduled time. Without a recorded start or completed date, the first scheduled time at or after the oldest run passed its window is due. That pass was the first that could delete the run, and its time stays fixed until a pass starts. The lag keeps growing while no pass starts, and incomplete event or attempt retention does not affect it.
 
 `evaluate_queue_health_v1` reports schedule runs when the pass lag exceeds `row_retention_lag_ms`, or when the due lag exceeds it while `schedule_occurrence_lag_ms` is above 0. Between on-time passes, expired runs alone do not degrade health. Every other row category keeps the direct `row_retention_lag_ms` comparison.
 

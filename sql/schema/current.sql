@@ -2781,14 +2781,12 @@ BEGIN
             SELECT * FROM workhorse.retention_policy WHERE singleton LIMIT 1
           ), maintenance AS (
             -- A start at or after the local retention time counts as that day's pass, and a
-            -- completed date covers its day even when a forced pass ran earlier. A routine that
-            -- never started owes the latest scheduled pass.
+            -- completed date covers its day even when a forced pass ran earlier. A routine with
+            -- neither has no due time here; the due lag measures it from the oldest expired run.
             SELECT state.last_started_at, state.last_completed_local_date,
+                   policy.timezone, policy.history_retention_local_time,
                    GREATEST(
                      (CASE
-                        WHEN local_clock.started IS NULL THEN
-                          CASE WHEN local_clock.now::time >= policy.history_retention_local_time
-                            THEN local_clock.now::date ELSE local_clock.now::date - 1 END
                         WHEN local_clock.started::time >= policy.history_retention_local_time
                           THEN local_clock.started::date + 1
                         ELSE local_clock.started::date
@@ -2799,8 +2797,7 @@ BEGIN
               FROM workhorse.maintenance_state state
               CROSS JOIN workhorse.maintenance_policy policy
               CROSS JOIN LATERAL (
-                SELECT clock_timestamp() AT TIME ZONE policy.timezone AS now,
-                       state.last_started_at AT TIME ZONE policy.timezone AS started
+                SELECT state.last_started_at AT TIME ZONE policy.timezone AS started
               ) local_clock
              WHERE state.routine_name = 'history_retention' AND policy.singleton
              LIMIT 1
@@ -2988,10 +2985,31 @@ BEGIN
                         - make_interval(days => policy.schedule_occurrence_retention_days)
                         - boundaries.oldest_schedule_occurrence_at_last_pass) * 1000, 0)) END
                    AS schedule_occurrence_pass_lag_ms,
+                 -- A routine that never ran owes the first scheduled pass after the oldest run
+                 -- expired, so its lag keeps growing instead of restarting every day. The
+                 -- comparison uses instants because a daylight-saving change can put a scheduled
+                 -- time later than an expiry whose local time-of-day is later.
                  CASE WHEN policy.schedule_occurrence_retention_days IS NULL
                              OR boundaries.oldest_schedule_occurrence_at IS NULL THEN NULL
                       ELSE GREATEST(0, extract(epoch FROM
-                        clock_timestamp() - maintenance.next_due_at) * 1000) END
+                        clock_timestamp() - COALESCE(maintenance.next_due_at, (
+                          SELECT CASE
+                                   WHEN same_day.at >= expired.at THEN same_day.at
+                                   ELSE (expired.local_date + 1 + maintenance.history_retention_local_time)
+                                          AT TIME ZONE maintenance.timezone END
+                            FROM (
+                              SELECT expiry.at, (expiry.at AT TIME ZONE maintenance.timezone)::date
+                                       AS local_date
+                                FROM (
+                                  SELECT boundaries.oldest_schedule_occurrence_at + make_interval(
+                                           days => policy.schedule_occurrence_retention_days) AS at
+                                ) expiry
+                            ) expired
+                            CROSS JOIN LATERAL (
+                              SELECT (expired.local_date + maintenance.history_retention_local_time)
+                                       AT TIME ZONE maintenance.timezone AS at
+                            ) same_day
+                        ))) * 1000) END
                    AS schedule_occurrence_due_lag_ms,
                  CASE WHEN policy.statistics_retention_days IS NULL
                         OR boundaries.oldest_statistics_at IS NULL THEN NULL
@@ -19172,10 +19190,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (41, 'cut the plain full-tier per-task claim and trigger cost'),
   (42, 'keep JIT compilation out of the task detail read'),
   (43, 'shard the admission counters'),
-  (44, 'make schedule-run retention health respect daily cleanup')
+  (44, 'make schedule-run retention health respect daily cleanup'),
+  (45, 'date an unrun history pass from the oldest expired schedule run')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (44) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (45) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
