@@ -1,0 +1,11 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Runs this application's jobs on a Workhorse worker until TERM or INT.
+require_relative "../config/environment"
+require "connection_pool"
+
+pool = ConnectionPool.new(size: 3) { PG.connect(ENV.fetch("DATABASE_URL")) }
+worker = Stablemates::Workhorse::Worker.new(pool, queues: [ENV.fetch("WORKHORSE_QUEUE")], concurrency: 2)
+Stablemates::Workhorse::ActiveJob.handle(worker, jobs: [TypedGreetingJob])
+Stablemates::Workhorse.run_worker_process(worker)

@@ -32,3 +32,8 @@ other SDKs carry, because every tag names one release of all of them.
   Record pool is smaller than `concurrency`.
 - Add `run_worker_process`, which stops the worker on `TERM` or `INT` and exits at once on a second
   signal, and `run_worker_processes`, which forks, supervises, and restarts worker processes.
+- Add the Active Job adapter, selected with `config.active_job.queue_adapter =
+:stablemates_workhorse`. It requires Active Job 8.0 or later. A default job runs under the
+  `active_job` task type. A typed job declares its task type with `workhorse_options` and carries
+  one JSON `Hash`, so another SDK can enqueue or run it. `Stablemates::Workhorse::ActiveJob.handle`
+  registers both formats on a `Worker`.

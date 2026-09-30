@@ -34,5 +34,13 @@ module Stablemates
   # A PostgreSQL-backed durable task queue. PostgreSQL owns every state transition; this gem
   # submits and controls tasks through protocol functions.
   module Workhorse
+    # Naming the Active Job module loads it, and Active Job with it, as a worker script does.
+    autoload :ActiveJob, "stablemates/workhorse/active_job"
   end
+end
+
+# Rails loads the Active Job adapter when Active Job loads, so the adapter name resolves.
+# Without Rails, require "stablemates/workhorse/active_job" after Active Job.
+if defined?(ActiveSupport.on_load)
+  ActiveSupport.on_load(:active_job) { require "stablemates/workhorse/active_job" }
 end

@@ -894,7 +894,7 @@ export interface ActiveJobParityRow {
   typedJob: ActiveJobParityCell;
 }
 
-const adapter = { planned: "SM-902" } as const;
+const activeJobSpec = "integration/active_job_spec.rb";
 const noContext = { nativeOnly: "`perform` receives no handler context" } as const;
 const noOption = { nativeOnly: "Active Job has no option for it" } as const;
 const noWaiting = { nativeOnly: "Active Job has no model of one job waiting on another" } as const;
@@ -906,23 +906,56 @@ const noWaiting = { nativeOnly: "Active Job has no model of one job waiting on a
  * enqueues through `ActiveJob::QueueAdapters::StablematesWorkhorseAdapter` instead.
  */
 export const ACTIVE_JOB_PARITY_ROWS: readonly ActiveJobParityRow[] = [
-  ...[
-    "Transactional enqueue in a caller-owned tx",
-    "Atomic batch enqueue",
-    "Delayed enqueue (`runAt` / `run_at`)",
-    "Priority",
-    "Tags and max attempts",
-    "Concurrency keys",
-    "Enqueue trace-context propagation",
-    "Claiming and handler execution",
-    "Bounded worker concurrency",
-    "Heartbeats, lease recovery, fenced ownership",
-    "Graceful stop and signal drain",
-  ].map((capability) => ({ capability, defaultJob: adapter, typedJob: adapter })),
+  ...(
+    [
+      [
+        "Transactional enqueue in a caller-owned tx",
+        "commits and rolls back a perform_later of either format with the caller's Active Record transaction",
+      ],
+      [
+        "Atomic batch enqueue",
+        "enqueues perform_all_later jobs of both formats in one batch and records enqueue_error on an invalid priority",
+      ],
+      [
+        "Delayed enqueue (`runAt` / `run_at`)",
+        "sets run_at from set(wait:) and set(wait_until:) for both formats",
+      ],
+      [
+        "Priority",
+        "passes queue_as and priority through for both formats and refuses an out-of-range priority",
+      ],
+      [
+        "Tags and max attempts",
+        "tags each task with its job class and job ID and applies workhorse_options",
+      ],
+      ["Concurrency keys", "sets a concurrency key from a String or a lambda over the job"],
+      ["Enqueue trace-context propagation", "records the enqueuing trace context for both formats"],
+      ["Claiming and handler execution", "runs a default job and a typed job through the worker"],
+      [
+        "Bounded worker concurrency",
+        "runs no more jobs of either format at once than the worker's concurrency",
+      ],
+      [
+        "Heartbeats, lease recovery, fenced ownership",
+        "reruns a job of either format whose worker died mid-perform",
+      ],
+      [
+        "Graceful stop and signal drain",
+        "drains a running job of either format when the worker stops",
+      ],
+    ] as const
+  ).map(([capability, example]) => {
+    const evidence = { file: activeJobSpec, example };
+    return { capability, defaultJob: evidence, typedJob: evidence };
+  }),
   {
     capability: "Payload and result contracts",
     defaultJob: { nativeOnly: "a default job's payload is Active Job's own serialization" },
-    typedJob: { ...adapter, limit: "Payload only" },
+    typedJob: {
+      file: activeJobSpec,
+      example: "applies the payload contract synced for a typed task type at enqueue",
+      limit: "Payload only",
+    },
   },
   ...["Persisted retry policies", "Absolute deadlines and execution timeouts"].map(
     (capability) => ({ capability, defaultJob: noOption, typedJob: noOption }),

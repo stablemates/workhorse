@@ -587,6 +587,42 @@ at once. Children still running `shutdown_grace` seconds after the first signal 
 `SIGKILL`. The method returns after every child has exited, and raises `NotImplementedError` on a
 platform without `Process.fork`.
 
+Ruby `ActiveJob::QueueAdapters::StablematesWorkhorseAdapter` is the Active Job adapter that
+`config.active_job.queue_adapter = :stablemates_workhorse` selects. `require "stablemates/workhorse"`
+registers an `ActiveSupport.on_load(:active_job)` hook that loads it, and loading it under Active
+Job older than 8.0 raises `LoadError`. `StablematesWorkhorseAdapter.new(executor = nil)` enqueues
+through `ActiveRecordExecutor.new(ActiveRecord::Base)` when `executor` is nil, so an enqueue joins
+the caller's Active Record transaction when `enqueue_after_transaction_commit` is false.
+`enqueue_all` enqueues in atomic chunks of `MAX_ENQUEUE_BATCH_SIZE`. It sets `enqueue_error` and
+skips a job whose priority it refuses, and returns how many jobs it enqueued.
+
+A job class without a task type is a default job. Its task type is `active_job`, and its payload is
+`job.serialize`. A class that includes `Stablemates::Workhorse::ActiveJob::Options` and calls
+`workhorse_options task_type:` is a typed job. Its only argument must be one JSON `Hash` with String
+keys, and that `Hash` is the task payload. Any other argument raises `ArgumentError` before a
+statement runs. A payload key such as `_aj_globalid` stays a plain key.
+`workhorse_options` accepts `task_type`, `max_attempts`, `tags`, and `concurrency_key` and raises
+`ArgumentError` for any other key when the class loads. `task_type` is a non-empty String of at
+most 256 bytes other than `active_job`. `max_attempts` is an Integer from 1 through 100. `tags` holds
+at most 18 Strings of 1 to 100 characters. `concurrency_key` is a non-empty String or a callable
+that receives the job. The adapter prepends the tags `active_job:<class name>`, omitted when longer
+than 100 characters, and `active_job_id:<job_id>`. `queue_as` sets the task queue, and `set(wait:)`
+and `set(wait_until:)` set `run_at`. A priority other than nil or an Integer from 0 through 100
+raises `ActiveJob::EnqueueError`, which Active Job records as `enqueue_error`.
+
+`Stablemates::Workhorse::ActiveJob.handle(worker, jobs: [])` registers the `active_job` handler
+and one handler for each typed class in `jobs`. It raises `ArgumentError` for a listed class
+without a task type and for two classes that declare the same task type. The default handler calls
+`ActiveJob::Base.execute` with `provider_job_id` set to the task ID. `retry_on` enqueues a new task
+and completes the current one, `discard_on` completes it, and an exception Active Job re-raises
+fails the attempt under the task's retry policy. The typed handler builds the job from the payload,
+sets `executions` to the attempt number minus 1, and calls `perform_now` inside the `execute`
+callbacks. Its `job_id` comes from the `active_job_id:` tag, or the task ID for a task another SDK
+enqueued. A typed job's `retry_job` raises `ArgumentError`, which fails the attempt without a
+second task. `StablematesWorkhorseAdapter#stopping?` returns `Worker#stopping?` for the worker
+running the current job, so an Active Job continuation stops at a step boundary and resumes as a
+new task.
+
 Python `Queue` accepts a caller-owned Psycopg connection. `AsyncQueue` accepts a caller-owned
 Psycopg `AsyncConnection` or asyncpg `Connection`. The clients never call `commit`, `rollback`, or
 `close`. `python/tests/test_driver_integration.py` verifies commit and rollback visibility through

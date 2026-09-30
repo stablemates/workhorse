@@ -5,14 +5,20 @@ source "https://rubygems.org"
 gemspec
 
 group :development do
-  gem "actionpack", ">= 8.0", "< 9"
-  gem "activerecord", ">= 8.0", "< 9"
+  # A gemfile under gemfiles/ declares another Rails before it evaluates this one.
+  unless @rails_declared
+    gem "actionpack", ">= 8.0", "< 9"
+    gem "activejob", ">= 8.0", "< 9"
+    gem "activerecord", ">= 8.0", "< 9"
+    gem "railties", ">= 8.0", "< 9"
+  end
   gem "opentelemetry-api", "~> 1.11"
   gem "opentelemetry-metrics-api", "~> 0.8"
   gem "rack", ">= 3.1", "< 4"
-  gem "railties", ">= 8.0", "< 9"
   gem "rake", "~> 13.2"
   gem "rspec", "~> 3.13"
   gem "rubocop", "~> 1.88", require: false
   gem "standard", "~> 1.56", require: false
+  # Sitrox's unrelated gem, which defines a top-level Workhorse beside this SDK.
+  gem "workhorse", "~> 1.5", require: false
 end

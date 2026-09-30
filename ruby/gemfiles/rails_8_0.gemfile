@@ -1,0 +1,9 @@
+# frozen_string_literal: true
+
+# The development bundle against Rails 8.0. CI selects it with BUNDLE_GEMFILE.
+@rails_declared = true
+eval_gemfile File.expand_path("../Gemfile", __dir__)
+
+group :development do
+  %w[actionpack activejob activerecord railties].each { |name| gem name, "~> 8.0.0" }
+end

@@ -139,6 +139,7 @@ module Stablemates
         @wake = Concurrent::Event.new
         @notified = Concurrent::AtomicBoolean.new(false)
         @stop_version = Concurrent::AtomicFixnum.new
+        @run_version = nil
         @locally_paused = Concurrent::AtomicBoolean.new(false)
         @remotely_paused = Concurrent::AtomicBoolean.new(false)
         @active = Concurrent::Map.new
@@ -195,6 +196,15 @@ module Stablemates
       # Whether this worker or an operator paused it.
       def paused? = @locally_paused.true? || @remotely_paused.true?
 
+      # Whether a stop has begun for the current run. The Active Job adapter reports it.
+      def stopping? # :nodoc:
+        version = @run_version
+        !version.nil? && stop_requested?(version)
+      end
+
+      # The executor over the worker's pool. The Active Job adapter reads task tags through it.
+      attr_reader :executor # :nodoc:
+
       private
 
       def worker_executor(pool, shared_heartbeats)
@@ -238,6 +248,7 @@ module Stablemates
       # --- Run loop ---------------------------------------------------------------------------
 
       def run_loop(continuous, version)
+        @run_version = version
         @queue.assert_compatible
         @instance_id = SecureRandom.uuid
         @registered.make_false

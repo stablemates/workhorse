@@ -422,9 +422,28 @@ describe("continuous integration", () => {
     expect(workflow).toContain("permissions:\n  contents: read");
     expect(workflow).toContain("schedule:");
     expect(workflow).toContain("name: required");
-    expect(workflow).toContain(
-      "needs: [plan, static, unit, typescript, python, go, runtime-smoke, packed, rust, ruby, demo]",
-    );
+    const requiredNeeds = /name: required\n    if: always\(\)\n    needs:\s*\[([^\]]*)\]/.exec(
+      workflow,
+    )?.[1];
+    expect(
+      requiredNeeds
+        ?.split(",")
+        .map((need) => need.trim())
+        .filter(Boolean),
+    ).toEqual([
+      "plan",
+      "static",
+      "unit",
+      "typescript",
+      "python",
+      "go",
+      "runtime-smoke",
+      "packed",
+      "rust",
+      "ruby",
+      "ruby-rails",
+      "demo",
+    ]);
     expect(workflow).toContain('cron: "17 4 * * 0" # Weekly full compatibility matrix.');
     expect(workflow.match(/- cron:/g)).toHaveLength(1);
     expect(workflow).toContain(
@@ -458,6 +477,18 @@ describe("continuous integration", () => {
     expect(workflow).toContain("matrix: ${{ fromJSON(needs.plan.outputs.ruby) }}");
     expect(workflow).toContain("- run: pnpm ruby:gates");
     expect(scripts["ruby:gates"]).toContain("WORKHORSE_REQUIRE_DATABASE=1 pnpm ruby:test");
+    // ADR 0075: the default lockfile tests the Active Job adapter against Rails 8.1 on every change.
+    // Rails 8.0 gates weekly, and Rails main reports weekly without gating.
+    expect(workflow).toContain(
+      "BUNDLE_GEMFILE: ${{ github.workspace }}/ruby/gemfiles/rails_8_0.gemfile",
+    );
+    expect(workflow).toContain(
+      "BUNDLE_GEMFILE: ${{ github.workspace }}/ruby/gemfiles/rails_main.gemfile",
+    );
+    expect(workflow).toMatch(
+      /name: Ruby Active Job on Rails main\n(?:    .*\n)*?    continue-on-error: true\n/,
+    );
+    expect(workflow.match(/- run: pnpm ruby:test:active-job/g)).toHaveLength(2);
 
     expect(scripts["rust:test"]).toContain("cargo test --workspace --all-features");
     expect(scripts["rust:test:no-features"]).toContain("cargo test --workspace");

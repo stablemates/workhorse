@@ -4,7 +4,8 @@ The Ruby queue client for the Workhorse durable task queue for PostgreSQL.
 
 > **Unreleased:** this gem is under construction and not yet published. It enqueues, cancels,
 > delivers signals, completes human waits, and syncs schedules and contracts. It runs workers and
-> carries the operator client and the dashboard. Durable handler steps arrive in a later release.
+> carries the operator client, the dashboard, and an Active Job adapter. Durable handler steps
+> arrive in a later release.
 
 An AI agent should read [the Workhorse documentation index](https://workhorse.run/llms.txt) first.
 
@@ -100,6 +101,63 @@ end
 
 Under Rails, each handler runs inside the Rails executor. Size the Active Record pool to at least
 the worker's `concurrency`; `run` warns when it is smaller.
+
+## Run Active Job jobs
+
+A Rails application selects the adapter by name:
+
+```ruby
+# config/application.rb
+require "stablemates/workhorse"
+
+config.active_job.queue_adapter = :stablemates_workhorse
+```
+
+The adapter enqueues through Active Record, so a `perform_later` inside a transaction commits and
+rolls back with the caller's rows. Active Job can instead defer the enqueue until after commit. Rails
+defers nothing through 8.1, and `load_defaults "8.2"` turns deferral on. A deferred job is enqueued
+only after the commit, so a crash in between loses it. Deferral stays a valid choice. A job that
+must commit with its caller's rows turns it off:
+
+```ruby
+class ApplicationJob < ActiveJob::Base
+  self.enqueue_after_transaction_commit = false
+end
+```
+
+A default job needs nothing more. It runs under the `active_job` task type with Active Job's own
+serialization as its payload, and `retry_on` and `discard_on` behave as they do on any adapter. A
+typed job declares its own task type and takes one JSON `Hash` with String keys, so any SDK can
+enqueue or handle it. Its retries belong to the Workhorse retry policy, so `retry_job` raises.
+
+```ruby
+class ApplicationJob < ActiveJob::Base
+  include Stablemates::Workhorse::ActiveJob::Options
+end
+
+class WelcomeJob < ApplicationJob
+  workhorse_options task_type: "email.welcome", max_attempts: 5, tags: ["email"]
+
+  def perform(payload) = Mailer.welcome(payload.fetch("userId")).deliver_now
+end
+```
+
+The gem adds no Railtie or Rake task. A short script starts the worker. `handle` registers the
+default task type and each typed class the script lists:
+
+```ruby
+#!/usr/bin/env ruby
+# bin/workhorse
+require_relative "../config/environment"
+
+pool = ConnectionPool.new(size: 5) { PG.connect(ENV.fetch("DATABASE_URL")) }
+worker = Stablemates::Workhorse::Worker.new(pool, queues: ["default"], concurrency: 4)
+Stablemates::Workhorse::ActiveJob.handle(worker, jobs: [WelcomeJob])
+Stablemates::Workhorse.run_worker_process(worker)
+```
+
+A continuation checks `stopping?`, which turns true once the worker begins to stop, and resumes
+as a new task. Workhorse runs higher priorities first, from 0 through 100.
 
 ## Operate queues and tasks
 

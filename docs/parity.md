@@ -104,34 +104,34 @@ and carries one JSON `Hash`, so any SDK can enqueue or handle it.
 
 <!-- BEGIN GENERATED PARITY ACTIVE JOB -->
 
-| Capability                                   | Default job       | Typed job                       |
-| -------------------------------------------- | ----------------- | ------------------------------- |
-| Transactional enqueue in a caller-owned tx   | [Planned][SM-902] | [Planned][SM-902]               |
-| Atomic batch enqueue                         | [Planned][SM-902] | [Planned][SM-902]               |
-| Delayed enqueue (`runAt` / `run_at`)         | [Planned][SM-902] | [Planned][SM-902]               |
-| Priority                                     | [Planned][SM-902] | [Planned][SM-902]               |
-| Tags and max attempts                        | [Planned][SM-902] | [Planned][SM-902]               |
-| Concurrency keys                             | [Planned][SM-902] | [Planned][SM-902]               |
-| Enqueue trace-context propagation            | [Planned][SM-902] | [Planned][SM-902]               |
-| Claiming and handler execution               | [Planned][SM-902] | [Planned][SM-902]               |
-| Bounded worker concurrency                   | [Planned][SM-902] | [Planned][SM-902]               |
-| Heartbeats, lease recovery, fenced ownership | [Planned][SM-902] | [Planned][SM-902]               |
-| Graceful stop and signal drain               | [Planned][SM-902] | [Planned][SM-902]               |
-| Payload and result contracts                 | Native only       | Payload only, [Planned][SM-902] |
-| Persisted retry policies                     | Native only       | Native only                     |
-| Absolute deadlines and execution timeouts    | Native only       | Native only                     |
-| Enqueue idempotency                          | Native only       | Native only                     |
-| Keyed debounce                               | Native only       | Native only                     |
-| Keyed throttle                               | Native only       | Native only                     |
-| Task dependencies with terminal policies     | Native only       | Native only                     |
-| Recurring schedule definition sync           | Native only       | Native only                     |
-| Cooperative cancellation delivery            | Native only       | Native only                     |
-| Durable checkpoints (handler context)        | Native only       | Native only                     |
-| Durable timers (`sleep` / `sleepUntil`)      | Native only       | Native only                     |
-| Signal and human-decision waits              | Native only       | Native only                     |
-| Linked child fan-out and result join         | Native only       | Native only                     |
-| Latest-value progress reporting              | Native only       | Native only                     |
-| Batch handler delivery                       | Native only       | Native only                     |
+| Capability                                   | Default job | Typed job               |
+| -------------------------------------------- | ----------- | ----------------------- |
+| Transactional enqueue in a caller-owned tx   | Supported   | Supported               |
+| Atomic batch enqueue                         | Supported   | Supported               |
+| Delayed enqueue (`runAt` / `run_at`)         | Supported   | Supported               |
+| Priority                                     | Supported   | Supported               |
+| Tags and max attempts                        | Supported   | Supported               |
+| Concurrency keys                             | Supported   | Supported               |
+| Enqueue trace-context propagation            | Supported   | Supported               |
+| Claiming and handler execution               | Supported   | Supported               |
+| Bounded worker concurrency                   | Supported   | Supported               |
+| Heartbeats, lease recovery, fenced ownership | Supported   | Supported               |
+| Graceful stop and signal drain               | Supported   | Supported               |
+| Payload and result contracts                 | Native only | Payload only, Supported |
+| Persisted retry policies                     | Native only | Native only             |
+| Absolute deadlines and execution timeouts    | Native only | Native only             |
+| Enqueue idempotency                          | Native only | Native only             |
+| Keyed debounce                               | Native only | Native only             |
+| Keyed throttle                               | Native only | Native only             |
+| Task dependencies with terminal policies     | Native only | Native only             |
+| Recurring schedule definition sync           | Native only | Native only             |
+| Cooperative cancellation delivery            | Native only | Native only             |
+| Durable checkpoints (handler context)        | Native only | Native only             |
+| Durable timers (`sleep` / `sleepUntil`)      | Native only | Native only             |
+| Signal and human-decision waits              | Native only | Native only             |
+| Linked child fan-out and result join         | Native only | Native only             |
+| Latest-value progress reporting              | Native only | Native only             |
+| Batch handler delivery                       | Native only | Native only             |
 
 <!-- END GENERATED PARITY ACTIVE JOB -->
 
@@ -356,7 +356,6 @@ stops the published view from becoming another source of truth.
 
 <!-- BEGIN GENERATED PARITY LINEAR LINKS -->
 
-[SM-902]: https://linear.app/stablemates/issue/SM-902
 [SM-981]: https://linear.app/stablemates/issue/SM-981
 [SM-982]: https://linear.app/stablemates/issue/SM-982
 
