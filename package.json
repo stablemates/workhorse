@@ -164,6 +164,8 @@
     "ruby:lint": "pnpm ruby:install && tsx scripts/with-env.ts sh -c 'cd ruby && bundle exec rake lint'",
     "ruby:test": "pnpm ruby:install && tsx scripts/with-env.ts sh -c 'cd ruby && bundle exec rake test'",
     "ruby:gates": "pnpm ruby:lint && WORKHORSE_REQUIRE_DATABASE=1 pnpm ruby:test",
+    "ruby:package-check": "tsx scripts/with-env.ts tsx scripts/check-ruby-release.ts",
+    "ruby:release-check": "pnpm ruby:gates && pnpm ruby:package-check",
     "ruby:test:active-job": "pnpm ruby:install && WORKHORSE_REQUIRE_DATABASE=1 tsx scripts/with-env.ts sh -c 'cd ruby && bundle exec rspec spec/integration/active_job_spec.rb spec/integration/active_job_rails_spec.rb'",
     "rust:package-check": "tsx scripts/with-env.ts tsx scripts/check-rust-release.ts",
     "rust:release-check": "pnpm rust:gates && pnpm rust:package-check",

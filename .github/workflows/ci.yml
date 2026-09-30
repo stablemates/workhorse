@@ -495,6 +495,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:reset:test
       - run: pnpm ruby:gates
+      - run: pnpm ruby:package-check
+        if: github.event.schedule == '17 4 * * 0'
 
   ruby-rails:
     name: Ruby Active Job on Rails 8.0

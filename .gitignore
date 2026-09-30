@@ -42,3 +42,6 @@ rust/target/
 rust/*.crate
 
 /target/
+
+# `rake build` and `rake release` write the built gem here.
+ruby/pkg/

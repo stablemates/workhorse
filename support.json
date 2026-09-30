@@ -10,6 +10,14 @@
     "schemaPinned": "npx --package @stablemates/workhorse@0.5.0 workhorse schema install"
   },
   "support": {
+    "activejob": {
+      "endOfLife": {
+        "8.0": "2026-11-07",
+        "8.1": "2027-10-10"
+      },
+      "minimum": "8.0",
+      "tested": ["8.0", "8.1"]
+    },
     "go": {
       "minimum": "1.25.0"
     },
@@ -39,6 +47,15 @@
       },
       "minimum": "3.12",
       "tested": ["3.12", "3.13", "3.14"]
+    },
+    "ruby": {
+      "endOfLife": {
+        "3.3": "2027-03-31",
+        "3.4": null,
+        "4.0": null
+      },
+      "minimum": "3.3",
+      "tested": ["3.3", "3.4", "4.0"]
     }
   },
   "toolchains": {

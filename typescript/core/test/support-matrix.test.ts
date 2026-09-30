@@ -11,11 +11,7 @@ import {
   SUPPORTED_POSTGRES_MAJORS,
 } from "../src/support.js";
 import { publishedPackages } from "../../../scripts/packages.js";
-import {
-  buildCiMatrices,
-  RUBY_TESTED,
-  WEEKLY_COMPATIBILITY_SCHEDULE,
-} from "../../../scripts/ci-matrix.js";
+import { buildCiMatrices, WEEKLY_COMPATIBILITY_SCHEDULE } from "../../../scripts/ci-matrix.js";
 
 // A supported-version contract is only worth stating if the statement and the thing that tests it
 // cannot drift apart. support.json is the source of truth; everything below is a consumer of it,
@@ -34,11 +30,19 @@ async function readManifest(relativePath: string): Promise<Record<string, unknow
   return JSON.parse(await read(relativePath)) as Record<string, unknown>;
 }
 
-/** Upstream end-of-life dates, keyed by the version string as the matrix lists it. */
-type EndOfLifeDates = Record<string, string>;
+/**
+ * Upstream end-of-life dates, keyed by the version string as the matrix lists it. `null` records
+ * that upstream has not announced a date for that version yet.
+ */
+type EndOfLifeDates = Record<string, string | null>;
 
 interface SupportManifest {
   readonly support: {
+    readonly activejob: {
+      readonly endOfLife: EndOfLifeDates;
+      readonly minimum: string;
+      readonly tested: string[];
+    };
     readonly go: { readonly minimum: string };
     readonly node: {
       readonly endOfLife: EndOfLifeDates;
@@ -51,6 +55,11 @@ interface SupportManifest {
       readonly tested: number[];
     };
     readonly python: {
+      readonly endOfLife: EndOfLifeDates;
+      readonly minimum: string;
+      readonly tested: string[];
+    };
+    readonly ruby: {
       readonly endOfLife: EndOfLifeDates;
       readonly minimum: string;
       readonly tested: string[];
@@ -72,16 +81,18 @@ async function readSupportManifest(): Promise<SupportManifest> {
 
 /** Display names for the manifest's runtime keys, as both documentation tables spell them. */
 const RUNTIME_NAMES = {
+  activejob: "Active Job",
   go: "Go",
   node: "Node.js",
   postgres: "PostgreSQL",
   python: "Python",
+  ruby: "Ruby",
 } satisfies Record<keyof SupportManifest["support"], string>;
 
 // Go is deliberately absent: its policy is relative to whichever two releases are current, so the
 // Go project publishes no date to transcribe, and recording one would make this repository the
 // authority on a schedule it does not own. See "Raising a floor" in docs/compatibility.md.
-const DATED_RUNTIMES = ["node", "postgres", "python"] as const;
+const DATED_RUNTIMES = ["activejob", "node", "postgres", "python", "ruby"] as const;
 
 interface DatedVersion {
   /** The runtime as the documentation names it, for example `Node.js`. */
@@ -97,7 +108,7 @@ interface DatedVersion {
 /**
  * The instant a recorded end-of-life date has passed.
  *
- * Node.js and PostgreSQL publish a day. The Python developer guide publishes only a month for a
+ * Node.js, PostgreSQL, Ruby, and Rails publish a day. The Python developer guide publishes only a month for a
  * version that has not retired yet, so a month-precision entry stands for the whole month and this
  * returns the start of the following one. Either way the answer is the moment after the last
  * instant upstream could still mean, so the check never fires early.
@@ -111,14 +122,14 @@ function endOfLifePassedAt(date: string): number {
     : Date.UTC(Number(year), Number(month) - 1, Number(day) + 1);
 }
 
+/** Every recorded date. A version whose date upstream has not announced has nothing to pass. */
 function datedVersions(manifest: SupportManifest): DatedVersion[] {
   return DATED_RUNTIMES.flatMap((runtime) =>
-    Object.entries(manifest.support[runtime].endOfLife).map(([version, date]) => ({
-      runtime: RUNTIME_NAMES[runtime],
-      version,
-      date,
-      passedAt: endOfLifePassedAt(date),
-    })),
+    Object.entries(manifest.support[runtime].endOfLife).flatMap(([version, date]) =>
+      date === null
+        ? []
+        : [{ runtime: RUNTIME_NAMES[runtime], version, date, passedAt: endOfLifePassedAt(date) }],
+    ),
   );
 }
 
@@ -137,7 +148,7 @@ function retiredVersions(manifest: SupportManifest, now: number): string[] {
 /** The `End of life` cell both documentation tables carry for one runtime. */
 function endOfLifeCell(dates: EndOfLifeDates): string {
   return Object.entries(dates)
-    .map(([version, date]) => `${version}: ${date}`)
+    .map(([version, date]) => `${version}: ${date ?? "not announced"}`)
     .join(", ");
 }
 
@@ -163,6 +174,9 @@ function markdownTable(source: string, heading: string): Record<string, Record<s
     ]),
   );
 }
+
+/** The Active Job minor a Bundler lockfile resolved. */
+const lockedActiveJob = (source: string) => /^ {4}activejob \((\d+\.\d+)\./m.exec(source)?.[1];
 
 describe("supported version constants", () => {
   it("matches the repository support manifest", async () => {
@@ -269,6 +283,33 @@ describe("supported version constants", () => {
     );
   });
 
+  it("matches the Ruby gem and the Active Job bundles CI runs", async () => {
+    const [manifest, gemspec, adapter, lockfile, rails80Lockfile, workflow] = await Promise.all([
+      readSupportManifest(),
+      read("ruby/stablemates-workhorse.gemspec"),
+      read("ruby/lib/stablemates/workhorse/active_job.rb"),
+      read("ruby/Gemfile.lock"),
+      read("ruby/gemfiles/rails_8_0.gemfile.lock"),
+      read(".github/workflows/ci.yml"),
+    ]);
+    const { activejob, ruby } = manifest.support;
+
+    expect(ruby.tested[0]).toBe(ruby.minimum);
+    expect(activejob.tested[0]).toBe(activejob.minimum);
+    // RubyGems enforces the Ruby floor and the adapter refuses to load below the Active Job one,
+    // so the manifest cannot claim a floor the gem does not hold.
+    expect(gemspec).toContain(`spec.required_ruby_version = ">= ${ruby.minimum}"`);
+    expect(adapter).toContain(
+      `::ActiveJob.gem_version >= Gem::Version.new("${activejob.minimum}")`,
+    );
+    // The default bundle runs the newest tested Active Job in every Ruby lane, and the `ruby-rails`
+    // job runs the floor through its own gemfile. Those two lockfiles are the tested versions.
+    expect([lockedActiveJob(rails80Lockfile), lockedActiveJob(lockfile)]).toEqual(activejob.tested);
+    expect(workflow).toContain(
+      "BUNDLE_GEMFILE: ${{ github.workspace }}/ruby/gemfiles/rails_8_0.gemfile",
+    );
+  });
+
   it("keeps each list sorted, non-empty, and anchored at its minimum", () => {
     expect(SUPPORTED_NODE_MAJORS.length).toBeGreaterThan(0);
     expect(SUPPORTED_POSTGRES_MAJORS.length).toBeGreaterThan(0);
@@ -307,12 +348,28 @@ describe("upstream end of life", () => {
     expect(Object.keys(manifest.support.go)).toEqual(["minimum"]);
   });
 
+  it("dates every floor, and leaves a date unannounced only while upstream has not set one", async () => {
+    const manifest = await readSupportManifest();
+
+    // Ruby names a branch's end only once the branch enters security maintenance, so a newer
+    // branch has no date to transcribe and `null` says so rather than guessing one. The floor
+    // retires first, so it must always carry a date, or the check below could never fire.
+    for (const runtime of DATED_RUNTIMES) {
+      const entry = manifest.support[runtime];
+      expect(entry.endOfLife[String(entry.minimum)]).toEqual(expect.any(String));
+    }
+    for (const runtime of ["activejob", "node", "postgres", "python"] as const) {
+      expect(Object.values(manifest.support[runtime].endOfLife)).not.toContain(null);
+    }
+  });
+
   it("transcribes each date at the precision its upstream schedule publishes", async () => {
     const manifest = await readSupportManifest();
 
-    // nodejs/Release and the PostgreSQL versioning policy both name a day. The Python developer
-    // guide names only a month until a version actually retires, and rounding that to a day would
-    // invent a date the schedule does not state.
+    // nodejs/Release, the PostgreSQL versioning policy, Ruby's maintenance branches page, and the
+    // Rails maintenance policy all name a day. The Python developer guide names only a month until
+    // a version actually retires, and rounding that to a day would invent a date the schedule does
+    // not state.
     for (const entry of datedVersions(manifest)) {
       const precision = entry.runtime === "Python" ? /^\d{4}-\d{2}$/ : /^\d{4}-\d{2}-\d{2}$/;
       expect(entry.date).toMatch(precision);
@@ -403,7 +460,7 @@ describe("continuous integration", () => {
       manifest.support.postgres.tested.map((postgres) => ({ postgres })),
     );
     expect(full.ruby.include).toHaveLength(
-      RUBY_TESTED.length * manifest.support.postgres.tested.length,
+      manifest.support.ruby.tested.length * manifest.support.postgres.tested.length,
     );
     expect(full.packed.include).toEqual([{ node: 24 }]);
     for (const node of manifest.support.node.tested) {
@@ -477,6 +534,7 @@ describe("continuous integration", () => {
     expect(workflow).toContain(`- run: pnpm rust:test:no-features${weekly}`);
     expect(workflow).toContain(`- run: pnpm go:package-check${weekly}`);
     expect(workflow).toContain(`- run: pnpm rust:package-check${weekly}`);
+    expect(workflow).toContain(`- run: pnpm ruby:package-check${weekly}`);
     expect(workflow).not.toContain("pnpm rust:integration");
     expect(workflow).toContain("matrix: ${{ fromJSON(needs.plan.outputs.rust) }}");
     expect(workflow).toContain("matrix: ${{ fromJSON(needs.plan.outputs.ruby) }}");
@@ -603,7 +661,7 @@ describe("continuous integration", () => {
     const workflow = await read(".github/workflows/release.yml");
     const job = workflow.slice(
       workflow.indexOf("\n  crates-io:"),
-      workflow.indexOf("\n  github-release:"),
+      workflow.indexOf("\n  rubygems:"),
     );
 
     expect(workflow).toContain(
@@ -620,6 +678,37 @@ describe("continuous integration", () => {
     expect(job).toContain('if [ "v$crate" = "$GITHUB_REF_NAME" ]; then');
     expect(job).toContain("cargo publish --package workhorse --locked");
     expect(job).not.toContain("secrets.");
+  });
+
+  it("publishes the Ruby gem through RubyGems trusted publishing on matching tags", async () => {
+    const workflow = await read(".github/workflows/release.yml");
+    const scripts = (await readManifest("package.json")).scripts as Record<string, string>;
+    const rakefile = await read("ruby/Rakefile");
+    const job = workflow.slice(
+      workflow.indexOf("\n  rubygems:"),
+      workflow.indexOf("\n  github-release:"),
+    );
+
+    expect(workflow).toContain(
+      "- run: pnpm ruby:release-check\n        env:\n          DATABASE_URL_TEST: postgres://",
+    );
+    expect(scripts["ruby:release-check"]).toBe("pnpm ruby:gates && pnpm ruby:package-check");
+    expect(scripts["ruby:package-check"]).toContain("scripts/check-ruby-release.ts");
+    expect(job).toContain("if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true");
+    expect(job).toContain("needs: publish");
+    // RubyGems.org mints a key only for the trusted publisher registered on the gem, which names
+    // this workflow file and this environment. Renaming either stops publication.
+    expect(job).toContain("environment: rubygems");
+    expect(job).toContain("id-token: write");
+    expect(job).toContain("contents: read");
+    expect(job).not.toContain("contents: write");
+    expect(job).toContain('if [ "v$gem" = "$GITHUB_REF_NAME" ]; then');
+    expect(job).toContain("uses: rubygems/release-gem@");
+    expect(job).toContain("working-directory: ruby");
+    expect(job).not.toContain("bundler-cache: true");
+    expect(job).not.toContain("secrets.");
+    // The action runs `rake release`, which only Bundler's gem tasks define.
+    expect(rakefile).toContain('require "bundler/gem_tasks"');
   });
 
   it("publishes Python distributions from a checked, versioned tag", async () => {
@@ -827,6 +916,16 @@ describe("documentation", () => {
         Supported: `${pythonTested[0]}–${pythonTested.at(-1)}`,
         Minimum: manifest.support.python.minimum,
         "End of life": endOfLifeCell(manifest.support.python.endOfLife),
+      },
+      Ruby: {
+        Supported: manifest.support.ruby.tested.join(", "),
+        Minimum: manifest.support.ruby.minimum,
+        "End of life": endOfLifeCell(manifest.support.ruby.endOfLife),
+      },
+      "Active Job": {
+        Supported: manifest.support.activejob.tested.join(", "),
+        Minimum: manifest.support.activejob.minimum,
+        "End of life": endOfLifeCell(manifest.support.activejob.endOfLife),
       },
     } satisfies Record<string, { Supported: string; Minimum: string; "End of life": string }>;
     for (const [runtime, cells] of Object.entries(expectedSupport)) {
