@@ -124,14 +124,15 @@ module Stablemates
       end
     end
 
-    # A payload does not satisfy the task type's current contract version.
+    # A payload or a result does not satisfy its task type's contract version. +part+ names which.
     class ContractValidationError < Error
-      attr_reader :task_type, :version
+      attr_reader :task_type, :version, :part
 
-      def initialize(task_type, version)
+      def initialize(task_type, version, part = "payload")
         @task_type = task_type
         @version = version
-        super("#{task_type} payload does not satisfy contract version #{version}")
+        @part = part
+        super("#{task_type} #{part} does not satisfy contract version #{version}")
       end
     end
 

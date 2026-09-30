@@ -23,36 +23,36 @@ Two boundaries keep this matrix small:
 
 Ruby is the fifth SDK, shipped as the `stablemates-workhorse` gem ([ADR
 0075](decisions/0075-shape-the-ruby-sdk-as-one-gem-with-an-active-job-adapter.md)). Its client, `Admin` client,
-and dashboard backend ship today. Its worker runtime is Planned. So the sections below that compare
-worker runtimes speak of the four languages that ship one.
+dashboard backend, and worker runtime ship today. Its durable handler context, fast task tier, and
+batch delivery are Planned. The integer semantics below compare the other four SDKs.
 
 ## Client (enqueue side)
 
 <!-- BEGIN GENERATED PARITY CLIENT -->
 
-| Capability                                 | TypeScript | Python    | Go        | Rust      | Ruby              |
-| ------------------------------------------ | ---------- | --------- | --------- | --------- | ----------------- |
-| Transactional enqueue in a caller-owned tx | Supported  | Supported | Supported | Supported | Supported         |
-| Atomic batch enqueue                       | Supported  | Supported | Supported | Supported | Supported         |
-| Delayed enqueue (`runAt` / `run_at`)       | Supported  | Supported | Supported | Supported | Supported         |
-| Priority                                   | Supported  | Supported | Supported | Supported | Supported         |
-| Tags and max attempts                      | Supported  | Supported | Supported | Supported | Supported         |
-| Persisted retry policies                   | Supported  | Supported | Supported | Supported | Supported         |
-| Absolute deadlines and execution timeouts  | Supported  | Supported | Supported | Supported | Supported         |
-| Enqueue idempotency                        | Supported  | Supported | Supported | Supported | Supported         |
-| Keyed debounce                             | Supported  | Supported | Supported | Supported | Supported         |
-| Keyed throttle                             | Supported  | Supported | Supported | Supported | Supported         |
-| Task dependencies with terminal policies   | Supported  | Supported | Supported | Supported | Supported         |
-| Concurrency keys                           | Supported  | Supported | Supported | Supported | Supported         |
-| Concurrency policy management              | Supported  | Supported | Supported | Supported | Supported         |
-| Rate-limit policy management               | Supported  | Supported | Supported | Supported | Supported         |
-| Named budget management                    | Supported  | Supported | Supported | Supported | Supported         |
-| Recurring schedule definition sync         | Supported  | Supported | Supported | Supported | Supported         |
-| Payload and result contracts               | Supported  | Supported | Supported | Supported | Supported         |
-| Compatibility refusal before mutation      | Supported  | Supported | Supported | Supported | Supported         |
-| Public startup schema compatibility check  | Supported  | Supported | Supported | Supported | Supported         |
-| SQL protocol conformance fixtures executed | Supported  | Supported | Supported | Supported | Supported         |
-| Enqueue trace-context propagation          | Supported  | Supported | Supported | Supported | [Planned][SM-900] |
+| Capability                                 | TypeScript | Python    | Go        | Rust      | Ruby      |
+| ------------------------------------------ | ---------- | --------- | --------- | --------- | --------- |
+| Transactional enqueue in a caller-owned tx | Supported  | Supported | Supported | Supported | Supported |
+| Atomic batch enqueue                       | Supported  | Supported | Supported | Supported | Supported |
+| Delayed enqueue (`runAt` / `run_at`)       | Supported  | Supported | Supported | Supported | Supported |
+| Priority                                   | Supported  | Supported | Supported | Supported | Supported |
+| Tags and max attempts                      | Supported  | Supported | Supported | Supported | Supported |
+| Persisted retry policies                   | Supported  | Supported | Supported | Supported | Supported |
+| Absolute deadlines and execution timeouts  | Supported  | Supported | Supported | Supported | Supported |
+| Enqueue idempotency                        | Supported  | Supported | Supported | Supported | Supported |
+| Keyed debounce                             | Supported  | Supported | Supported | Supported | Supported |
+| Keyed throttle                             | Supported  | Supported | Supported | Supported | Supported |
+| Task dependencies with terminal policies   | Supported  | Supported | Supported | Supported | Supported |
+| Concurrency keys                           | Supported  | Supported | Supported | Supported | Supported |
+| Concurrency policy management              | Supported  | Supported | Supported | Supported | Supported |
+| Rate-limit policy management               | Supported  | Supported | Supported | Supported | Supported |
+| Named budget management                    | Supported  | Supported | Supported | Supported | Supported |
+| Recurring schedule definition sync         | Supported  | Supported | Supported | Supported | Supported |
+| Payload and result contracts               | Supported  | Supported | Supported | Supported | Supported |
+| Compatibility refusal before mutation      | Supported  | Supported | Supported | Supported | Supported |
+| Public startup schema compatibility check  | Supported  | Supported | Supported | Supported | Supported |
+| SQL protocol conformance fixtures executed | Supported  | Supported | Supported | Supported | Supported |
+| Enqueue trace-context propagation          | Supported  | Supported | Supported | Supported | Supported |
 
 <!-- END GENERATED PARITY CLIENT -->
 
@@ -66,26 +66,26 @@ telemetry, and graceful shutdown.
 
 | Capability                                                  | TypeScript | Python    | Go        | Rust      | Ruby              |
 | ----------------------------------------------------------- | ---------- | --------- | --------- | --------- | ----------------- |
-| Claiming and handler execution                              | Supported  | Supported | Supported | Supported | [Planned][SM-900] |
-| Bounded worker concurrency                                  | Supported  | Supported | Supported | Supported | [Planned][SM-900] |
-| Fast task tier with one outcome row per task                | Supported  | Supported | Supported | Supported | [Planned][SM-900] |
-| Fused fast-tier completion and refill claim in slot cohorts | Supported  | Supported | Supported | Supported | [Planned][SM-900] |
-| Unhandled task type released to its queue                   | Supported  | Supported | Supported | Supported | [Planned][SM-900] |
-| Heartbeats, lease recovery, fenced ownership                | Supported  | Supported | Supported | Supported | [Planned][SM-900] |
-| Cooperative cancellation delivery                           | Supported  | Supported | Supported | Supported | [Planned][SM-900] |
-| Notification-assisted dispatch with polling                 | Supported  | Supported | Supported | Supported | [Planned][SM-900] |
-| Durable checkpoints (handler context)                       | Supported  | Supported | Supported | Supported | [Planned][SM-900] |
-| Durable timers (`sleep` / `sleepUntil`)                     | Supported  | Supported | Supported | Supported | [Planned][SM-900] |
-| Signal and human-decision waits                             | Supported  | Supported | Supported | Supported | [Planned][SM-900] |
-| Linked child fan-out and result join                        | Supported  | Supported | Supported | Supported | [Planned][SM-900] |
-| Latest-value progress reporting                             | Supported  | Supported | Supported | Supported | [Planned][SM-900] |
-| Batch handler delivery                                      | Supported  | Supported | Supported | Supported | [Planned][SM-900] |
-| Schedule firing (database cron evaluation)                  | Supported  | Supported | Supported | Supported | [Planned][SM-900] |
-| Worker fleet registration and remote pause                  | Supported  | Supported | Supported | Supported | [Planned][SM-900] |
-| Graceful stop and signal drain                              | Supported  | Supported | Supported | Supported | [Planned][SM-900] |
-| Retention maintenance participation                         | Supported  | Supported | Supported | Supported | [Planned][SM-900] |
-| OpenTelemetry tracing and metrics                           | Supported  | Supported | Supported | Supported | [Planned][SM-900] |
-| Shared runtime fixtures executed                            | Supported  | Supported | Supported | Supported | [Planned][SM-900] |
+| Claiming and handler execution                              | Supported  | Supported | Supported | Supported | Supported         |
+| Bounded worker concurrency                                  | Supported  | Supported | Supported | Supported | Supported         |
+| Fast task tier with one outcome row per task                | Supported  | Supported | Supported | Supported | [Planned][SM-982] |
+| Fused fast-tier completion and refill claim in slot cohorts | Supported  | Supported | Supported | Supported | [Planned][SM-982] |
+| Unhandled task type released to its queue                   | Supported  | Supported | Supported | Supported | Supported         |
+| Heartbeats, lease recovery, fenced ownership                | Supported  | Supported | Supported | Supported | Supported         |
+| Cooperative cancellation delivery                           | Supported  | Supported | Supported | Supported | Supported         |
+| Notification-assisted dispatch with polling                 | Supported  | Supported | Supported | Supported | Supported         |
+| Durable checkpoints (handler context)                       | Supported  | Supported | Supported | Supported | [Planned][SM-981] |
+| Durable timers (`sleep` / `sleepUntil`)                     | Supported  | Supported | Supported | Supported | [Planned][SM-981] |
+| Signal and human-decision waits                             | Supported  | Supported | Supported | Supported | [Planned][SM-981] |
+| Linked child fan-out and result join                        | Supported  | Supported | Supported | Supported | [Planned][SM-981] |
+| Latest-value progress reporting                             | Supported  | Supported | Supported | Supported | [Planned][SM-981] |
+| Batch handler delivery                                      | Supported  | Supported | Supported | Supported | [Planned][SM-982] |
+| Schedule firing (database cron evaluation)                  | Supported  | Supported | Supported | Supported | Supported         |
+| Worker fleet registration and remote pause                  | Supported  | Supported | Supported | Supported | Supported         |
+| Graceful stop and signal drain                              | Supported  | Supported | Supported | Supported | Supported         |
+| Retention maintenance participation                         | Supported  | Supported | Supported | Supported | Supported         |
+| OpenTelemetry tracing and metrics                           | Supported  | Supported | Supported | Supported | Supported         |
+| Shared runtime fixtures executed                            | Supported  | Supported | Supported | Supported | Supported         |
 
 <!-- END GENERATED PARITY WORKER -->
 
@@ -143,31 +143,31 @@ Job cell can be Supported only while the native Ruby cell for the same capabilit
 
 A capability row answers whether a language can do something. It says nothing about what that
 language does when the caller configures nothing, and that is the behavior an operator actually
-runs. Four runtimes can agree on every row above and still drain, poll, and retry differently out
+runs. Five runtimes can agree on every row above and still drain, poll, and retry differently out
 of the box.
 
-The table below is the whole list. The Ruby column stays Planned until the Ruby worker runtime
-ships. A default differs only where the host language forces it, which
+The table below is the whole list. The Ruby dispatch cohorts stay Planned until the Ruby fast task
+tier ships. A default differs only where the host language forces it, which
 [ADR 0072](decisions/0072-converge-the-worker-runtime-defaults.md) records as the rule. One row
 differs today, and the reason follows the table.
 
 <!-- BEGIN GENERATED PARITY DEFAULTS -->
 
-| Setting                                 | TypeScript                                                | Python                                                    | Go                                                        | Rust                                                      | Ruby              |
-| --------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | ----------------- |
-| Worker concurrency                      | 1                                                         | 1                                                         | 1                                                         | 1                                                         | [Planned][SM-900] |
-| Lease duration                          | 30000 ms                                                  | 30000 ms                                                  | 30000 ms                                                  | 30000 ms                                                  | [Planned][SM-900] |
-| Heartbeat interval                      | Lease duration / 3                                        | Lease duration / 3                                        | Lease duration / 3                                        | Lease duration / 3                                        | [Planned][SM-900] |
-| Claim poll interval (subscription live) | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   | [Planned][SM-900] |
-| Claim poll interval (polling only)      | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    | [Planned][SM-900] |
-| Empty-claim backoff ceiling             | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   | [Planned][SM-900] |
-| Maintenance tick interval               | 1000 ms                                                   | 1000 ms                                                   | 1000 ms                                                   | 1000 ms                                                   | [Planned][SM-900] |
-| Maintenance routine offer interval      | 60000 ms                                                  | 60000 ms                                                  | 60000 ms                                                  | 60000 ms                                                  | [Planned][SM-900] |
-| Worker registry interval                | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   | [Planned][SM-900] |
-| Schedule catch-up limit                 | 100                                                       | 100                                                       | 100                                                       | 100                                                       | [Planned][SM-900] |
-| Dispatch cohorts                        | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | [Planned][SM-900] |
-| Shutdown grace, then                    | 25000 ms, then exit the process                           | 25000 ms, then exit the process                           | 25000 ms, then abandon the handlers                       | 25000 ms, then abandon the handlers                       | [Planned][SM-900] |
-| Handler retry delay override            | `retryDelayMs`, unset                                     | `retry_delay_ms`, unset                                   | `RetryDelay`, unset                                       | `retry_delay`, unset                                      | [Planned][SM-900] |
+| Setting                                 | TypeScript                                                | Python                                                    | Go                                                        | Rust                                                      | Ruby                                |
+| --------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | ----------------------------------- |
+| Worker concurrency                      | 1                                                         | 1                                                         | 1                                                         | 1                                                         | 1                                   |
+| Lease duration                          | 30000 ms                                                  | 30000 ms                                                  | 30000 ms                                                  | 30000 ms                                                  | 30000 ms                            |
+| Heartbeat interval                      | Lease duration / 3                                        | Lease duration / 3                                        | Lease duration / 3                                        | Lease duration / 3                                        | Lease duration / 3                  |
+| Claim poll interval (subscription live) | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                             |
+| Claim poll interval (polling only)      | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    | 250 ms                              |
+| Empty-claim backoff ceiling             | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                             |
+| Maintenance tick interval               | 1000 ms                                                   | 1000 ms                                                   | 1000 ms                                                   | 1000 ms                                                   | 1000 ms                             |
+| Maintenance routine offer interval      | 60000 ms                                                  | 60000 ms                                                  | 60000 ms                                                  | 60000 ms                                                  | 60000 ms                            |
+| Worker registry interval                | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                             |
+| Schedule catch-up limit                 | 100                                                       | 100                                                       | 100                                                       | 100                                                       | 100                                 |
+| Dispatch cohorts                        | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | [Planned][SM-982]                   |
+| Shutdown grace, then                    | 25000 ms, then exit the process                           | 25000 ms, then exit the process                           | 25000 ms, then abandon the handlers                       | 25000 ms, then abandon the handlers                       | 25000 ms, then abandon the handlers |
+| Handler retry delay override            | `retryDelayMs`, unset                                     | `retry_delay_ms`, unset                                   | `RetryDelay`, unset                                       | `retry_delay`, unset                                      | `retry_delay`, unset                |
 
 <!-- END GENERATED PARITY DEFAULTS -->
 
@@ -182,7 +182,7 @@ Three rows carry a condition the setting name alone cannot.
   not run in lockstep. The quotient rounds up, and a worker that knows its pool size caps the
   default at the connections left after its listener and heartbeat connection. An explicit
   cohort count is never capped.
-- **Maintenance routine offer interval.** All four tick maintenance every 1000 ms, which bounds
+- **Maintenance routine offer interval.** All five tick maintenance every 1000 ms, which bounds
   dispatch latency. The slower retention routines keep their own minute, because PostgreSQL owns
   the global due decision and a faster offer only adds rejected calls.
 
@@ -190,19 +190,19 @@ The shutdown deadline agrees at 25000 ms, and it sits under the 30 second termin
 container platform gives a process by default. What follows that deadline cannot agree, and it is
 the one accepted exception.
 
-A TypeScript or Python worker owns a process, so its deadline ends that process. A Go or Rust
+A TypeScript or Python worker owns a process, so its deadline ends that process. A Go, Rust, or Ruby
 `Worker` runs inside a caller's process, and a library that ends someone else's process is wrong. Its deadline
 cancels the handlers, gives them one short window to unwind, then stops renewing the leases of
-whatever still runs and returns `ErrShutdownIncomplete` in Go or `Error::ShutdownIncomplete` in
-Rust. The caller decides whether to exit.
+whatever still runs. It returns `ErrShutdownIncomplete` in Go or `Error::ShutdownIncomplete` in
+Rust, and raises `ShutdownIncompleteError` in Ruby. The caller decides whether to exit.
 
 PostgreSQL sees the same thing either way. An abandoned handler holds a lease no one renews, so
 `recover_expired_telemetry_v1` recovers its task exactly as it recovers the task of a process that
-exited at its own deadline. What differs is what the handler observes: a Go or Rust handler
+exited at its own deadline. What differs is what the handler observes: a Go, Rust, or Ruby handler
 observes cancellation, where a TypeScript or Python handler observes termination.
 
 The retry delay override sends one attempt's delay to `fail_v1` in place of the persisted policy's
-choice. All four SDKs carry it and all four leave it unset, so the persisted retry policy chooses
+choice. All five SDKs carry it and all five leave it unset, so the persisted retry policy chooses
 every delay until a caller says otherwise.
 
 ## Integer semantics
@@ -356,7 +356,8 @@ stops the published view from becoming another source of truth.
 
 <!-- BEGIN GENERATED PARITY LINEAR LINKS -->
 
-[SM-900]: https://linear.app/stablemates/issue/SM-900
 [SM-902]: https://linear.app/stablemates/issue/SM-902
+[SM-981]: https://linear.app/stablemates/issue/SM-981
+[SM-982]: https://linear.app/stablemates/issue/SM-982
 
 <!-- END GENERATED PARITY LINEAR LINKS -->

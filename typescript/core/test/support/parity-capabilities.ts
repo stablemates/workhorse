@@ -461,7 +461,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Enqueue trace-context propagation",
-    ruby: { planned: "SM-900" },
+    ruby: { fixtures: ["runtime/enqueue-trace-context-reaches-handler"] },
     rust: { file: "enqueue_postgres.rs", test: "enqueue_propagates_the_current_trace_context" },
     typescript: {
       file: "sql-protocol-conformance.test.ts",
@@ -478,7 +478,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
 export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Claiming and handler execution",
-    ruby: { planned: "SM-900" },
+    ruby: { file: "integration/worker_spec.rb", example: "completes a task and stores its result" },
     rust: { file: "worker_postgres.rs", test: "the_handler_result_reaches_the_task_outcome" },
     typescript: { file: "integration-claim-lease-fence.test.ts", pattern: "claim" },
     python: { file: "test_worker.py", pattern: "handler" },
@@ -486,7 +486,12 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Bounded worker concurrency",
-    ruby: { planned: "SM-900" },
+    ruby: {
+      fixtures: [
+        "runtime/busy-worker-refills-slots-with-overlapping-batched-claims",
+        "runtime/budget-admission-holds-across-queues",
+      ],
+    },
     rust: {
       file: "worker_postgres.rs",
       test: "concurrent_handlers_stay_within_the_concurrency_limit",
@@ -497,7 +502,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Fast task tier with one outcome row per task",
-    ruby: { planned: "SM-900" },
+    ruby: { planned: "SM-982" },
     rust: {
       file: "worker_postgres.rs",
       test: "a_crashed_fast_worker_loses_no_task_and_records_one_outcome_each",
@@ -508,7 +513,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Fused fast-tier completion and refill claim in slot cohorts",
-    ruby: { planned: "SM-900" },
+    ruby: { planned: "SM-982" },
     rust: {
       file: "worker_postgres.rs",
       test: "an_abandoned_batching_worker_reruns_no_more_tasks_than_its_concurrency",
@@ -522,7 +527,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Unhandled task type released to its queue",
-    ruby: { planned: "SM-900" },
+    ruby: { fixtures: ["runtime/missing-handler-releases-the-task-with-its-attempt-intact"] },
     rust: { fixtures: ["runtime/missing-handler-releases-the-task-with-its-attempt-intact"] },
     typescript: { file: "integration-claim-lease-fence.test.ts", pattern: "unregistered type" },
     python: { file: "test_worker.py", pattern: "unregistered_type" },
@@ -530,7 +535,13 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Heartbeats, lease recovery, fenced ownership",
-    ruby: { planned: "SM-900" },
+    ruby: {
+      fixtures: [
+        "runtime/heartbeats-never-overlap",
+        "runtime/failed-heartbeat-rounds-keep-the-attempt-running",
+        "runtime/deadline-settles-after-database-first-heartbeat",
+      ],
+    },
     rust: {
       fixtures: [
         "runtime/heartbeats-never-overlap",
@@ -544,7 +555,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Cooperative cancellation delivery",
-    ruby: { planned: "SM-900" },
+    ruby: { fixtures: ["runtime/cooperative-cancellation-reaches-handler"] },
     rust: { fixtures: ["runtime/cooperative-cancellation-reaches-handler"] },
     typescript: { file: "integration-claim-lease-fence.test.ts", pattern: "cancel" },
     python: { file: "test_worker.py", pattern: "cancel" },
@@ -552,7 +563,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Notification-assisted dispatch with polling",
-    ruby: { planned: "SM-900" },
+    ruby: {
+      file: "integration/worker_runtime_spec.rb",
+      example: "wakes an idle worker on a notification well before its fallback poll",
+    },
     rust: {
       file: "worker_postgres.rs",
       test: "a_notification_wakes_an_idle_worker_before_its_poll",
@@ -563,7 +577,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Durable checkpoints (handler context)",
-    ruby: { planned: "SM-900" },
+    ruby: { planned: "SM-981" },
     rust: { fixtures: ["runtime/durable-wait-suspension-and-checkpoint-replay"] },
     typescript: { file: "integration-checkpoints-progress-waits.test.ts", pattern: "checkpoint" },
     python: { file: "test_worker.py", pattern: "checkpoint" },
@@ -571,7 +585,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Durable timers (`sleep` / `sleepUntil`)",
-    ruby: { planned: "SM-900" },
+    ruby: { planned: "SM-981" },
     rust: {
       file: "durable_postgres.rs",
       test: "sleep_suspends_until_its_wake_time_and_a_past_wake_time_returns_at_once",
@@ -582,7 +596,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Signal and human-decision waits",
-    ruby: { planned: "SM-900" },
+    ruby: { planned: "SM-981" },
     rust: {
       file: "durable_postgres.rs",
       test: "signal_and_human_waits_resume_with_what_was_delivered",
@@ -593,7 +607,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Linked child fan-out and result join",
-    ruby: { planned: "SM-900" },
+    ruby: { planned: "SM-981" },
     rust: { file: "durable_postgres.rs", test: "run_children_reports_how_each_child_ended" },
     typescript: { file: "integration-child-tasks.test.ts", pattern: "child" },
     python: { file: "test_worker_child_tasks.py", pattern: "child" },
@@ -601,7 +615,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Latest-value progress reporting",
-    ruby: { planned: "SM-900" },
+    ruby: { planned: "SM-981" },
     rust: {
       file: "durable_postgres.rs",
       test: "progress_round_trips_and_a_quick_change_is_rate_limited",
@@ -612,7 +626,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Batch handler delivery",
-    ruby: { planned: "SM-900" },
+    ruby: { planned: "SM-982" },
     rust: { file: "worker_postgres.rs", test: "a_batch_handler_receives_its_members_in_one_call" },
     typescript: { file: "integration-batch-handlers.test.ts", pattern: "batch" },
     python: { file: "test_worker.py", pattern: "batch" },
@@ -620,7 +634,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Schedule firing (database cron evaluation)",
-    ruby: { planned: "SM-900" },
+    ruby: {
+      file: "integration/worker_runtime_spec.rb",
+      example: "fires due schedules in its namespaces during maintenance",
+    },
     rust: { file: "worker_postgres.rs", test: "maintenance_fires_due_schedules_in_its_namespaces" },
     typescript: { file: "integration-cron-schedules.test.ts", pattern: "fireSchedule" },
     python: { file: "test_worker_schedules.py", pattern: "schedule" },
@@ -628,7 +645,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Worker fleet registration and remote pause",
-    ruby: { planned: "SM-900" },
+    ruby: {
+      file: "integration/worker_runtime_spec.rb",
+      example: "registers the worker process and stops claiming while an operator pauses it",
+    },
     rust: {
       file: "worker_postgres.rs",
       test: "an_operator_pause_stops_claims_until_it_is_cleared",
@@ -639,7 +659,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Graceful stop and signal drain",
-    ruby: { planned: "SM-900" },
+    ruby: {
+      file: "integration/worker_process_spec.rb",
+      example: "drains the running handler on TERM and exits 0",
+    },
     rust: { file: "worker_postgres.rs", test: "a_stuck_handler_is_abandoned_when_grace_ends" },
     typescript: { file: "worker-process.test.ts", pattern: "drain" },
     python: { file: "test_worker_process.py", pattern: "drain" },
@@ -647,7 +670,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Retention maintenance participation",
-    ruby: { planned: "SM-900" },
+    ruby: {
+      file: "integration/worker_runtime_spec.rb",
+      example: "runs terminal storage maintenance",
+    },
     rust: { file: "worker_postgres.rs", test: "a_worker_runs_terminal_storage_maintenance" },
     typescript: { file: "integration-retention-maintenance.test.ts", pattern: "retain" },
     python: { file: "test_worker.py", pattern: "participates_in_slow_maintenance" },
@@ -655,7 +681,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "OpenTelemetry tracing and metrics",
-    ruby: { planned: "SM-900" },
+    ruby: {
+      file: "integration/worker_runtime_spec.rb",
+      example: "continues the enqueuing trace in the handler span and records the shared metrics",
+    },
     rust: { file: "worker_postgres.rs", test: "worker_metrics_reach_the_global_meter_provider" },
     typescript: { file: "telemetry.test.ts", pattern: "span" },
     python: { file: "test_worker_telemetry.py", pattern: "span" },
@@ -663,7 +692,16 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Shared runtime fixtures executed",
-    ruby: { planned: "SM-900" },
+    ruby: {
+      fixtures: [
+        "runtime/enqueue-trace-context-reaches-handler",
+        "runtime/stop-drains-active-slots-without-new-claims",
+        "runtime/budget-admission-holds-across-queues",
+        "runtime/empty-polls-back-off-with-jitter",
+        "runtime/failing-maintenance-phase-leaves-the-worker-claiming",
+        "runtime/json-values-survive-the-payload-and-result-round-trip",
+      ],
+    },
     rust: {
       fixtures: [
         "runtime/enqueue-trace-context-reaches-handler",
@@ -945,7 +983,7 @@ export interface ParityDefaultRow {
   python: ParityDefaultCell | { absent: string };
   go: ParityDefaultCell | { absent: string };
   rust?: ParityDefaultCell | { absent: string } | { planned: string };
-  ruby?: ParityDefaultCell | { absent: string } | { planned: string };
+  ruby: ParityDefaultCell | { absent: string } | { planned: string };
 }
 
 /**
@@ -970,6 +1008,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
       pattern: "concurrency: int = 1",
     },
     go: { value: "1", file: "go/worker.go", pattern: "concurrency = 1" },
+    ruby: {
+      value: "1",
+      file: "ruby/lib/stablemates/workhorse/worker.rb",
+      pattern: "concurrency: 1, lease: 30,",
+    },
   },
   {
     setting: "Lease duration",
@@ -993,6 +1036,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
       file: "go/worker.go",
       pattern: "defaultWorkerLease         = 30 * time.Second",
     },
+    ruby: {
+      value: "30000 ms",
+      file: "ruby/lib/stablemates/workhorse/worker.rb",
+      pattern: "concurrency: 1, lease: 30,",
+    },
   },
   {
     setting: "Heartbeat interval",
@@ -1012,6 +1060,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
       pattern: "max(100, lease_ms // 3)",
     },
     go: { value: "Lease duration / 3", file: "go/worker.go", pattern: "leaseDuration / 3" },
+    ruby: {
+      value: "Lease duration / 3",
+      file: "ruby/lib/stablemates/workhorse/worker.rb",
+      pattern: "[100, @lease_ms / 3].max",
+    },
   },
   {
     setting: "Claim poll interval (subscription live)",
@@ -1034,6 +1087,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
       value: "5000 ms",
       file: "go/worker.go",
       pattern: "defaultNotificationPollInterval = maximumEmptyPollInterval",
+    },
+    ruby: {
+      value: "5000 ms",
+      file: "ruby/lib/stablemates/workhorse/worker.rb",
+      pattern: "NOTIFICATION_POLL_MS = 5_000",
     },
   },
   {
@@ -1058,6 +1116,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
       file: "go/worker.go",
       pattern: "defaultWorkerPollInterval  = 250 * time.Millisecond",
     },
+    ruby: {
+      value: "250 ms",
+      file: "ruby/lib/stablemates/workhorse/worker.rb",
+      pattern: "poll_interval.nil? ? 250 :",
+    },
   },
   {
     setting: "Empty-claim backoff ceiling",
@@ -1080,6 +1143,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
       value: "5000 ms",
       file: "go/worker.go",
       pattern: "maximumEmptyPollInterval   = 5 * time.Second",
+    },
+    ruby: {
+      value: "5000 ms",
+      file: "ruby/lib/stablemates/workhorse/worker.rb",
+      pattern: "MAX_EMPTY_POLL_MS = 5_000",
     },
   },
   {
@@ -1104,6 +1172,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
       file: "go/worker.go",
       pattern: "defaultMaintenanceInterval = time.Second",
     },
+    ruby: {
+      value: "1000 ms",
+      file: "ruby/lib/stablemates/workhorse/worker.rb",
+      pattern: "maintenance_interval: 1,",
+    },
   },
   {
     setting: "Maintenance routine offer interval",
@@ -1126,6 +1199,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
       value: "60000 ms",
       file: "go/worker.go",
       pattern: "defaultMaintenanceRoutineInterval = time.Minute",
+    },
+    ruby: {
+      value: "60000 ms",
+      file: "ruby/lib/stablemates/workhorse/worker.rb",
+      pattern: "maintenance_routine_interval: 60,",
     },
   },
   {
@@ -1150,6 +1228,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
       file: "go/worker.go",
       pattern: "defaultRegistryInterval    = 5 * time.Second",
     },
+    ruby: {
+      value: "5000 ms",
+      file: "ruby/lib/stablemates/workhorse/worker.rb",
+      pattern: "registry_interval: 5,",
+    },
   },
   {
     setting: "Schedule catch-up limit",
@@ -1165,6 +1248,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
       pattern: "schedule_catchup_limit: int = 100",
     },
     go: { value: "100", file: "go/worker.go", pattern: "scheduleCatchupLimit = 100" },
+    ruby: {
+      value: "100",
+      file: "ruby/lib/stablemates/workhorse/worker.rb",
+      pattern: "schedule_catchup_limit: 100,",
+    },
   },
   {
     setting: "Dispatch cohorts",
@@ -1188,6 +1276,7 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
       file: "go/worker.go",
       pattern: "min(8, max(2, (concurrency+7)/8))",
     },
+    ruby: { planned: "SM-982" },
   },
   {
     setting: "Shutdown grace, then",
@@ -1211,6 +1300,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
       file: "go/worker.go",
       pattern: "defaultShutdownGracePeriod = 25 * time.Second",
     },
+    ruby: {
+      value: "25000 ms, then abandon the handlers",
+      file: "ruby/lib/stablemates/workhorse/worker.rb",
+      pattern: "shutdown_grace: 25,",
+    },
   },
   {
     setting: "Handler retry delay override",
@@ -1233,6 +1327,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
       value: "`RetryDelay`, unset",
       file: "go/worker.go",
       pattern: "RetryDelay func(attempt int, task ClaimedTask) *time.Duration",
+    },
+    ruby: {
+      value: "`retry_delay`, unset",
+      file: "ruby/lib/stablemates/workhorse/worker.rb",
+      pattern: "retry_delay: nil,",
     },
   },
 ];

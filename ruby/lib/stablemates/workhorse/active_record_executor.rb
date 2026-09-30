@@ -15,6 +15,9 @@ module Stablemates
       def with
         @model.with_connection { |connection| yield connection.raw_connection }
       end
+
+      # The size of the model's connection pool. A worker checks it against the connections it holds.
+      def size = @model.connection_pool.size
     end
   end
 end

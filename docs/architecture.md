@@ -540,6 +540,53 @@ plus its signal number, which produces 130 for `SIGINT` and 143 for `SIGTERM`. A
 calls `force_exit(1)`. The default `force_exit` is `os._exit`, so hard termination leaves active
 leases for `recover_expired_telemetry_v1`.
 
+Ruby `Stablemates::Workhorse::Worker.new(pool, ...)` takes a `ConnectionPool` or any object whose
+`with` yields a `PG::Connection`. It refuses a bare `PG::Connection`. Without
+`shared_heartbeats: true`, it requires an Integer pool `size` of at least 3, so a missing or
+non-integer `size` is refused too. Every worker built on one pool shares one `Worker::Heartbeat`,
+which holds one pool connection while it has members. `concurrency` accepts integers from 1 through
+100, and handlers run on a fixed `Concurrent::ThreadPoolExecutor` of that size with no queue. The
+worker claims only for executor threads that are ready, so a claimed task never waits for a thread.
+`lease` defaults to 30 seconds and accepts 0.1 through 86,400 seconds. `heartbeat` defaults to the
+larger of 100 milliseconds and a third of the lease, and must be shorter than the lease.
+`shutdown_grace` defaults to 25 seconds and accepts 0 through 86,400 seconds. Durations are finite
+Numeric seconds.
+
+`Worker#run` blocks until `Worker#stop`, and `Worker#run_once` claims and runs one batch. A handler
+registered with `Worker#handle` receives the payload and a `HandlerContext`, which carries `task`
+and `cancellation`. `CancellationToken#reason` is `:requested`, `:deadline_exceeded`,
+`:execution_timeout`, `:lease_lost`, or `:shutdown`, and only the first reason sticks. The worker
+never interrupts a handler thread with `Thread#raise`, `Thread#kill`, or `Timeout`. After `stop`,
+the worker claims nothing new and waits up to `shutdown_grace` for running handlers. It then
+cancels the rest with `:shutdown` and waits a 250 millisecond unwind window. A handler still
+running after that window is abandoned with its lease, and `run` raises
+`ShutdownIncompleteError`.
+
+When `Rails.application.executor` exists, the Ruby worker runs each handler inside
+`Rails.application.executor.wrap`. When `ActiveRecord::Base` is loaded and its
+`connection_pool.size` is below `concurrency`, `run` logs
+`workhorse.worker.active_record_pool_too_small`. A worker without a `logger` writes that warning
+to standard error instead.
+
+Ruby `Stablemates::Workhorse.run_worker_process(worker)` traps `TERM` and `INT` around
+`Worker#run`. Each trap writes its signal number to a self-pipe, and a relay thread reads it, so
+locks and logging stay outside trap context. The first signal calls `Worker#stop`. A second signal
+calls `Kernel.exit!` with 128 plus its signal number. The process exits 0 when `run` returns. When
+`run` raises, the helper writes the error class and message to standard error and exits 1. The
+helper reads the worker's stop version before it installs the traps, so a signal that arrives
+before the run loop starts still stops it.
+
+Ruby `Stablemates::Workhorse.run_worker_processes(processes:, shutdown_grace: 25, &build_worker)`
+forks `processes` children, from 1 through 64. Each child calls the block to build its own
+`Worker` and pool, then runs it through `run_worker_process`. A child ends with `Kernel.exit!`, so
+the `at_exit` handlers it inherited never close the parent's connections. The supervisor reaps
+children every 100 milliseconds. It restarts a child that exits while the supervisor is not
+stopping, after a one second delay when that child lived less than one second. The supervisor
+forwards `TERM` and `INT` to every child. A second signal is forwarded again, so the children exit
+at once. Children still running `shutdown_grace` seconds after the first signal receive
+`SIGKILL`. The method returns after every child has exited, and raises `NotImplementedError` on a
+platform without `Process.fork`.
+
 Python `Queue` accepts a caller-owned Psycopg connection. `AsyncQueue` accepts a caller-owned
 Psycopg `AsyncConnection` or asyncpg `Connection`. The clients never call `commit`, `rollback`, or
 `close`. `python/tests/test_driver_integration.py` verifies commit and rollback visibility through

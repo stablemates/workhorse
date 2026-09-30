@@ -3,8 +3,8 @@
 The Ruby queue client for the Workhorse durable task queue for PostgreSQL.
 
 > **Unreleased:** this gem is under construction and not yet published. It enqueues, cancels,
-> delivers signals, completes human waits, and syncs schedules and contracts. It also carries the
-> operator client and the dashboard. The worker runtime arrives in a later release.
+> delivers signals, completes human waits, and syncs schedules and contracts. It runs workers and
+> carries the operator client and the dashboard. Durable handler steps arrive in a later release.
 
 An AI agent should read [the Workhorse documentation index](https://workhorse.run/llms.txt) first.
 
@@ -64,6 +64,42 @@ end
 
 The task becomes visible when the transaction commits. A rollback removes it with the rest of the
 transaction.
+
+## Run a worker
+
+A `Worker` claims tasks from its queues and runs the handler registered for each task type. The
+handler receives the payload and a `HandlerContext`, and its return value becomes the task's result.
+A handler that raises fails the attempt, and PostgreSQL decides whether it retries.
+
+```ruby
+pool = ConnectionPool.new(size: 5) { PG.connect(ENV.fetch("DATABASE_URL")) }
+worker = Stablemates::Workhorse::Worker.new(pool, queues: ["email"], concurrency: 4)
+
+worker.handle("email.welcome") do |payload, context|
+  context.cancellation.check!
+  Mailer.welcome(payload.fetch("userId")).deliver_now
+  { "sent" => true }
+end
+
+Stablemates::Workhorse.run_worker_process(worker)
+```
+
+`run_worker_process` stops the worker on `TERM` or `INT` and exits once running handlers finish. A
+second signal exits at once. Long handlers should poll `context.cancellation`, because the worker
+never interrupts a handler thread.
+
+To run several worker processes from one loaded application, pass a block that builds each worker:
+
+```ruby
+Stablemates::Workhorse.run_worker_processes(processes: 4) do
+  pool = ConnectionPool.new(size: 5) { PG.connect(ENV.fetch("DATABASE_URL")) }
+  Stablemates::Workhorse::Worker.new(pool, queues: ["email"], concurrency: 4)
+    .handle("email.welcome") { |payload, _context| WelcomeMailer.call(payload) }
+end
+```
+
+Under Rails, each handler runs inside the Rails executor. Size the Active Record pool to at least
+the worker's `concurrency`; `run` warns when it is smaller.
 
 ## Operate queues and tasks
 

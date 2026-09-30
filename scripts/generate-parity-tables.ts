@@ -68,9 +68,6 @@ function renderTable(rows: readonly ParityRow[], table: "client" | "worker" | "o
   ]);
 }
 
-/** The Ruby worker runtime owns every default until it ships. */
-const rubyRuntimeDefault = { planned: "SM-900" };
-
 /** A default renders its value, or Absent when the language has no such setting. */
 function defaultValue(cell: ParityDefaultRow["typescript"] | ParityDefaultRow["rust"]): string {
   if (cell === undefined || "absent" in cell) return "Absent";
@@ -87,7 +84,7 @@ function renderDefaultsTable(): string {
       defaultValue(row.python),
       defaultValue(row.go),
       defaultValue(row.rust ?? { planned: "SM-878" }),
-      defaultValue(row.ruby ?? rubyRuntimeDefault),
+      defaultValue(row.ruby),
     ]),
   ]);
 }
@@ -204,10 +201,7 @@ const plannedItems = [
       ),
       ...ACTIVE_JOB_PARITY_ROWS.flatMap((row) => [row.defaultJob, row.typedJob]),
       ...PRODUCT_PARITY_ROWS.flatMap((row) => [row.postgresql, row.dashboard, row.cli]),
-      ...PARITY_DEFAULT_ROWS.flatMap((row) => [
-        row.rust ?? { planned: "SM-878" },
-        row.ruby ?? rubyRuntimeDefault,
-      ]),
+      ...PARITY_DEFAULT_ROWS.flatMap((row) => [row.rust ?? { planned: "SM-878" }, row.ruby]),
     ].flatMap((cell) => ("planned" in cell ? [cell.planned] : [])),
   ),
 ].toSorted();
