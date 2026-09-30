@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   agentEntryPointHopBound,
   assertAgentEntryPointReachable,
+  crawlableBody,
   type CrawlSurface,
 } from "./agent-entrypoint-crawl.js";
 
@@ -50,5 +51,16 @@ describe("agent entry point crawl", () => {
     await expect(
       assertAgentEntryPointReachable(surfacesWithout(name), loadPage, site),
     ).rejects.toThrow(name);
+  });
+
+  it("follows links only from successful text responses", async () => {
+    const link = `[Agent documentation](${router})`;
+    const response = (status: number, contentType: string) =>
+      new Response(link, { status, headers: { "content-type": contentType } });
+
+    await expect(crawlableBody(response(200, "text/html; charset=utf-8"))).resolves.toBe(link);
+    await expect(crawlableBody(response(200, "text/markdown"))).resolves.toBe(link);
+    await expect(crawlableBody(response(200, "image/png"))).resolves.toBeNull();
+    await expect(crawlableBody(response(404, "text/html"))).resolves.toBeNull();
   });
 });

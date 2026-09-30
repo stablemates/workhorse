@@ -7,6 +7,7 @@ import { WORKHORSE_VERSION } from "../src/version.js";
 import {
   agentEntryPointHopBound,
   assertAgentEntryPointReachable,
+  crawlableBody,
   type CrawlSurface,
 } from "./agent-entrypoint-crawl.js";
 
@@ -159,8 +160,7 @@ try {
       if (url.origin !== publicSite.origin) {
         throw new Error(`The local agent entry point crawl tried to fetch ${url.href}`);
       }
-      const response = await fetch(`${baseUrl}${url.pathname}${url.search}`);
-      return response.ok ? response.text() : null;
+      return crawlableBody(await fetch(`${baseUrl}${url.pathname}${url.search}`));
     },
     publicSite.origin,
     agentEntryPointHopBound,

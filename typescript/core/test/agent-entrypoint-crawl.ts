@@ -10,6 +10,18 @@ export interface CrawlSurface {
 
 export type CrawlPage = (url: URL) => Promise<string | null>;
 
+/**
+ * Return the body of a response the crawl may follow links from. Only text
+ * carries links: scanning an image's bytes yields garbage paths, and under
+ * Node 24 the preview server answers some of those with a 307 to itself.
+ */
+export async function crawlableBody(response: Response): Promise<string | null> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (response.ok && contentType.startsWith("text/")) return response.text();
+  await response.body?.cancel();
+  return null;
+}
+
 function pagePath(url: URL): string {
   const path = url.pathname.replace(/\.md$/, "").replace(/\/$/, "");
   return path === "" ? "/" : path;
