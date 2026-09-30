@@ -18,8 +18,10 @@ RSpec.describe "Workhorse errors" do
     conflict = W::Executor.translate(pg_error("P1001", '{"existingTaskId":"x","conflictingFields":["payload"]}'))
     expect(conflict).to be_an_instance_of(W::EnqueueIdempotencyConflictError)
     expect(conflict.details).to eq({"existingTaskId" => "x", "conflictingFields" => ["payload"]})
+    expect(W::Executor.translate(pg_error("P1002", "{}"))).to be_an_instance_of(W::RedriveIdempotencyConflictError)
     expect(W::Executor.translate(pg_error("P1003", "{}"))).to be_an_instance_of(W::DependencyCycleError)
     expect(W::Executor.translate(pg_error("P1005", "not json"))).to be_an_instance_of(W::DependencyLimitExceededError)
+    expect(W::Executor.translate(pg_error("P1006", "{}"))).to be_an_instance_of(W::PurgeIdempotencyConflictError)
 
     fast = W::Executor.translate(pg_error("P1007", '{"queue":"q","feature":"dependencies","ordinal":2}'))
     expect([fast.queue, fast.feature, fast.ordinal]).to eq(["q", "dependencies", 2])

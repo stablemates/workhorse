@@ -26,7 +26,8 @@ module Stablemates
         when Executor then executor
         when PG::Connection then new(Connection.new(executor))
         else
-          unless executor.respond_to?(:with)
+          # ActiveSupport defines Object#with, so only a +with+ of the executor's own class counts.
+          unless executor.respond_to?(:with) && executor.method(:with).owner != Object
             raise ArgumentError, "executor must be a PG::Connection, a ConnectionPool, or respond to with"
           end
 
@@ -61,8 +62,10 @@ module Stablemates
         detail = result&.error_field(PG::PG_DIAG_MESSAGE_DETAIL)
         case sqlstate
         when "P1001" then EnqueueIdempotencyConflictError.new(details(detail))
+        when "P1002" then RedriveIdempotencyConflictError.new(details(detail))
         when "P1003" then DependencyCycleError.new(details(detail))
         when "P1005" then DependencyLimitExceededError.new(details(detail))
+        when "P1006" then PurgeIdempotencyConflictError.new(details(detail))
         when "P1007"
           fields = details(detail)
           FastTierUnsupportedError.new(fields.fetch("queue", "unknown"), fields.fetch("feature", "unknown"),

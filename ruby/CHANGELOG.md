@@ -16,3 +16,10 @@ other SDKs carry, because every tag names one release of all of them.
 - Add the executor forms: a `PG::Connection`, a `ConnectionPool`, or any object whose `with`
   yields a connection. `ActiveRecordExecutor` joins the caller's Active Record transaction.
 - Add the error hierarchy under `Stablemates::Workhorse::Error`.
+- Add the `Admin` operator client: task, timeline, checkpoint, progress, and wait inspection, dead
+  letter listing and redrive, worker pause, and queue pause, resume, and purge. Every control takes
+  an `AdminAudit`.
+- Add `Dashboard`, a Rack application that serves the operator dashboard under a Rails `mount` or a
+  `Rack::Builder#map`. It answers the dashboard/v1 procedures and serves the bundled browser app.
+- `Executor.for` ignores the `Object#with` that ActiveSupport defines, so a plain object is still
+  refused.

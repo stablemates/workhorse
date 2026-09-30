@@ -16,6 +16,8 @@ require_relative "workhorse/ecma_pattern"
 require_relative "workhorse/contracts"
 require_relative "workhorse/policies"
 require_relative "workhorse/queue"
+require_relative "workhorse/admin"
+require_relative "workhorse/dashboard"
 
 module Stablemates
   # A PostgreSQL-backed durable task queue. PostgreSQL owns every state transition; this gem

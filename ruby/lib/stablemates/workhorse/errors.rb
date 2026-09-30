@@ -91,6 +91,11 @@ module Stablemates
       def initialize(details) = super(details, "PostgreSQL rejected a materially different idempotent enqueue")
     end
 
+    # SQLSTATE P1002: a retained redrive request ID received a different source task.
+    class RedriveIdempotencyConflictError < DiagnosedError
+      def initialize(details) = super(details, "PostgreSQL rejected a materially different idempotent redrive")
+    end
+
     # SQLSTATE P1003: the dependency would close a cycle.
     class DependencyCycleError < DiagnosedError
       def initialize(details) = super(details, "PostgreSQL rejected a cyclic task dependency")
@@ -99,6 +104,11 @@ module Stablemates
     # SQLSTATE P1005: a dependency limit was reached.
     class DependencyLimitExceededError < DiagnosedError
       def initialize(details) = super(details, "PostgreSQL rejected a task dependency limit")
+    end
+
+    # SQLSTATE P1006: a retained purge request ID received a different queue.
+    class PurgeIdempotencyConflictError < DiagnosedError
+      def initialize(details) = super(details, "PostgreSQL rejected a materially different idempotent queue purge")
     end
 
     # SQLSTATE P1007: a request and a queue's tier disagree (ADR 0077). +ordinal+ is the 1-based

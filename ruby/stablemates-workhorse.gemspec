@@ -16,7 +16,7 @@ Gem::Specification.new do |spec|
     "rubygems_mfa_required" => "true"
   }
 
-  spec.files = Dir["lib/**/*.rb"] + %w[CHANGELOG.md LICENSE NOTICE README.md]
+  spec.files = Dir["lib/**/*.{rb,json,tar.gz}"] + %w[CHANGELOG.md LICENSE NOTICE README.md]
   spec.require_paths = ["lib"]
 
   spec.add_dependency "connection_pool", ">= 2.5", "< 4"
