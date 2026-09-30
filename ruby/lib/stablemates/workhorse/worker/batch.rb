@@ -10,9 +10,9 @@ module Stablemates
 
       # Registers a block that runs tasks of +task_type+ in batches. Each claimed task waits up to
       # +linger+ seconds for others of its queue, and at most +max_size+ run in one call. Once the
-      # worker stops, a batch waits only for tasks it already claimed. The block receives the
-      # payloads, highest priority first and then in claim order, and a BatchHandlerContext whose
-      # +tasks+ follow the same order. It returns one outcome per payload, in the same order:
+      # worker stops, a batch waits only for tasks it already claimed. The block receives one
+      # BatchHandlerItem per task, highest priority first and then in claim order, each holding the
+      # task's payload and its own BatchHandlerContext. It returns one outcome per item, in order:
       # <tt>{status: :succeeded, result: value}</tt> or <tt>{status: :failed, error: exception}</tt>.
       # Every task still holds its own lease and settles on its own. A second call replaces the first.
       def handle_batch(task_type, max_size:, linger:, &handler)
@@ -164,8 +164,9 @@ module Stablemates
           linger_ms = [0.0, (monotonic - batch.map(&:arrived_at).min) * 1000].max
           @worker.record_batch_dispatch(@task_type, batch, full, linger_ms)
           @worker.record_batch_evidence(SqlCatalogue::RECORD_BATCH_DISPATCH_V1, "dispatch", batch_id, @task_type, batch, full)
+          items = batch.map { |member| BatchHandlerItem.new(payload: member.payload, context: BatchHandlerContext.new(member.context)) }
           begin
-            outcomes = validate(@handler.call(batch.map(&:payload), batch_context(batch)), batch.size)
+            outcomes = validate(@handler.call(items), batch.size)
           rescue Exception => e # rubocop:disable Lint/RescueException
             error = settleable(e, "raised")
             @worker.record_batch_evidence(SqlCatalogue::RECORD_BATCH_FAILURE_V1, "failure", batch_id, @task_type, batch, full)
@@ -179,13 +180,6 @@ module Stablemates
               member.result.reject(settleable(outcome[:error], "returned"))
             end
           end
-        end
-
-        # One token for the whole batch, which the first member cancellation cancels.
-        def batch_context(batch)
-          cancellation = CancellationToken.new
-          batch.each { |member| member.context.cancellation.observe { |reason| cancellation.cancel(reason) } }
-          BatchHandlerContext.new(tasks: batch.map { |member| member.context.task }, cancellation: cancellation)
         end
 
         # Every member must settle, so an error outside StandardError fails it as a RuntimeError.

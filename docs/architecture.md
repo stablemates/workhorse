@@ -568,8 +568,9 @@ running after that window is abandoned with its lease, and `run` raises
 `ShutdownIncompleteError`.
 
 Ruby `HandlerContext` in `ruby/lib/stablemates/workhorse/context.rb` also carries the durable
-calls. `checkpoint(name) { ... }` returns the stored value, or runs the block once and saves its
-result through `save_checkpoint_v1`. `set_progress(value)` calls `update_progress_v1` and returns
+calls. `get_checkpoint(name)` returns the stored `TaskCheckpoint`, or `nil` when none exists.
+`checkpoint(name) { ... }` returns the stored value, or runs the block once and saves its result
+through `save_checkpoint_v1`. `set_progress(value)` calls `update_progress_v1` and returns
 the stored `TaskProgress`. `get_progress` returns the latest `TaskProgress`, or `nil` before any
 report. A throttled report raises `ProgressRateLimitedError`, whose `retry_after` is in seconds.
 `sleep(name, seconds)` accepts 1 millisecond through 365 days, and `sleep_until(name, time)` accepts
@@ -628,10 +629,13 @@ member and then its own. The coordinator orders members by descending `ClaimedTa
 by the claim order dispatch stamped in `admit`. When `drain` begins, it calls
 `BatchCoordinator#flush!`. From then on a waiting member stops lingering once
 `Worker#batch_arrivals_complete?` finds every admitted task of its type and queue in the
-coordinator, and it rechecks every 50 ms. The block is called as `handler.call(payloads,
-batch_context)`. `BatchHandlerContext#tasks` lists the member `ClaimedTask` values in payload order.
-`BatchHandlerContext#cancellation` is one `CancellationToken` that the first member cancellation
-cancels with that member's reason. The block returns one Hash per payload in the same order:
+coordinator, and it rechecks every 50 ms. The block is called as `handler.call(items)`, with one
+`BatchHandlerItem` per member in that order. Each item holds the member's `payload` and its own
+`BatchHandlerContext` in `ruby/lib/stablemates/workhorse/batch_context.rb`. That context wraps the
+member's `HandlerContext` and exposes only `task`, `cancellation`, `get_checkpoint`, `checkpoint`,
+`get_progress`, and `set_progress`. Each write is fenced on that member's lease, and each
+cancellation is that member's own token. A member's checkpoint replays whatever batch a retry puts
+it in. The block returns one Hash per item in the same order:
 `{status: :succeeded, result:}` or `{status: :failed, error:}` with an `Exception`. A raised error,
 a non-Array return, a wrong count, or an invalid outcome fails every member. An error outside
 `StandardError`, raised or returned, fails its members with a `RuntimeError` that names it. Every member still settles under its own lease and fence.
@@ -3549,8 +3553,9 @@ the task's queue:
 | `runChild`, `runChildren`, `runChildrenAll` | `child tasks`   |
 
 The Ruby `HandlerContext` rejects its snake_case counterparts with the same feature text, before any
-validation or statement. `get_progress` stays a read and still answers. A Ruby batch handler's
-`BatchHandlerContext` carries only `tasks` and one batch `cancellation`.
+validation or statement. `get_checkpoint` and `get_progress` stay reads and still answer. A Ruby
+batch member's `BatchHandlerContext` delegates to its `HandlerContext`, so its `checkpoint` and
+`set_progress` raise the same error before any statement.
 
 A queue can move to the fast tier while the Ruby worker still claims it through `claim_many_v1`.
 That statement then returns fast-tier tasks with no tier marker. So `Worker#track_full_tier_claim`

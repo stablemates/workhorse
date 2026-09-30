@@ -118,19 +118,25 @@ A handler must let `HandlerContext::Suspension` propagate. It descends from `Exc
 Under Rails, each handler runs inside the Rails executor. Size the Active Record pool to at least
 the worker's `concurrency`; `run` warns when it is smaller.
 
-To handle several tasks of one type in one call, register a batch handler. It returns one outcome
-per payload, in order, and each task still succeeds or fails on its own. `max_size` cannot exceed
-the worker's `concurrency`, and `linger` is in seconds:
+To handle several tasks of one type in one call, register a batch handler. It receives one item per
+task, holding the payload and that task's own context, and returns one outcome per item, in order.
+Each task still succeeds or fails on its own. `max_size` cannot exceed the worker's `concurrency`,
+and `linger` is in seconds:
 
 ```ruby
-worker.handle_batch("email.digest", max_size: 4, linger: 0.2) do |payloads, context|
-  payloads.map do |payload|
-    { status: :succeeded, result: DigestMailer.call(payload) }
+worker.handle_batch("email.digest", max_size: 4, linger: 0.2) do |items|
+  items.map do |item|
+    digest = item.context.checkpoint("digest") { DigestMailer.call(item.payload) }
+    { status: :succeeded, result: digest }
   rescue => e
     { status: :failed, error: e }
   end
 end
 ```
+
+A member's context offers `task`, `cancellation`, `get_checkpoint`, `checkpoint`, `get_progress`,
+and `set_progress`, and nothing that suspends. A checkpoint belongs to its task, so a retry replays
+it whatever batch the task lands in.
 
 ## Run Active Job jobs
 

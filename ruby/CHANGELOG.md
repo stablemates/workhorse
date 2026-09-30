@@ -44,10 +44,15 @@ other SDKs carry, because every tag names one release of all of them.
   A fast-tier task's `HandlerContext` raises `FastTierUnsupportedError` for checkpoints,
   progress writes, durable waits, and child tasks before it sends any statement. That holds for a
   task claimed through `claim_many_v1` after its queue moved to the fast tier.
-- Add `Worker#handle_batch` with `max_size:` and `linger:` in seconds. The block receives the
-  payloads and a `BatchHandlerContext` with the member `tasks` and one `cancellation`, and returns
-  one outcome per payload. Once the worker stops, a lingering batch runs as soon as every task it
-  claimed has arrived.
+- Add `Worker#handle_batch` with `max_size:` and `linger:` in seconds. Once the worker stops, a
+  lingering batch runs as soon as every task it claimed has arrived.
+- Change the `handle_batch` block from `|payloads, context|` to `|items|`. Each `BatchHandlerItem`
+  holds a member's `payload` and its own `BatchHandlerContext` with `task`, `cancellation`,
+  `get_checkpoint`, `checkpoint`, `get_progress`, and `set_progress`. The batch-wide `tasks` and
+  shared `cancellation` are gone. Each write is fenced on its member's lease, and a member's
+  checkpoint replays whatever batch a retry puts it in. A fast-tier member's `checkpoint` and
+  `set_progress` raise `FastTierUnsupportedError` before any statement.
+- Add `HandlerContext#get_checkpoint`.
 - Add `run_worker_process`, which stops the worker on `TERM` or `INT` and exits at once on a second
   signal, and `run_worker_processes`, which forks, supervises, and restarts worker processes.
 - Add the Active Job adapter, selected with `config.active_job.queue_adapter =

@@ -111,6 +111,9 @@ module Stablemates
         @calls = Hash.new { |calls, kind| calls[kind] = {} }
       end
 
+      # The TaskCheckpoint named +name+ this task saved, or nil when it saved none.
+      def get_checkpoint(name) = checkpoints[name]
+
       # Returns the value a checkpoint named +name+ saved, running the block to produce and save it
       # only when no such checkpoint exists.
       def checkpoint(name, &block)

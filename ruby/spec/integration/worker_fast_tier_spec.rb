@@ -247,17 +247,18 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
     task_ids = Array.new(3) { |index| queue.enqueue("batch", {"index" => index}, priority: index, max_attempts: 1).task_id }
     calls = Concurrent::Array.new
     subject = worker(concurrency: 3)
-    subject.handle_batch("batch", max_size: 3, linger: 1) do |payloads, context|
-      calls << [payloads.map { |payload| payload["index"] }, context.tasks.map(&:id), context.cancellation.cancelled?]
-      payloads.map do |payload|
-        next {status: :failed, error: ArgumentError.new("odd")} if payload["index"].odd?
+    subject.handle_batch("batch", max_size: 3, linger: 1) do |items|
+      calls << [items.map { |item| item.payload["index"] }, items.map { |item| item.context.task.id },
+        items.map { |item| item.context.cancellation.cancelled? }]
+      items.map do |item|
+        next {status: :failed, error: ArgumentError.new("odd")} if item.payload["index"].odd?
 
-        {status: :succeeded, result: {"index" => payload["index"]}}
+        {status: :succeeded, result: {"index" => item.payload["index"]}}
       end
     end
 
     expect(subject.run_once).to be(true)
-    expect(calls).to eq([[[2, 1, 0], task_ids.reverse, false]])
+    expect(calls).to eq([[[2, 1, 0], task_ids.reverse, [false] * 3]])
     expect(outcomes(task_ids).to_h { |task_id, state, _| [task_id, state] })
       .to eq(task_ids.zip(%w[succeeded failed succeeded]).to_h)
   end
@@ -265,7 +266,7 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
   it "fails every batch member when the handler returns the wrong number of outcomes" do
     task_ids = Array.new(2) { queue.enqueue("short", {}, max_attempts: 1).task_id }
     subject = worker(concurrency: 2)
-    subject.handle_batch("short", max_size: 2, linger: 1) { |payloads, _| [{status: :succeeded, result: {}}] * (payloads.size - 1) }
+    subject.handle_batch("short", max_size: 2, linger: 1) { |items| [{status: :succeeded, result: {}}] * (items.size - 1) }
 
     expect(subject.run_once).to be(true)
     errors = task_ids.map do |task_id|
@@ -279,8 +280,8 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
   it "fails every member with a RuntimeError when the batch handler returns or raises a non-StandardError" do
     task_ids = Array.new(2) { |index| queue.enqueue("exit", {"raise" => index.zero?}, max_attempts: 1).task_id }
     subject = worker(concurrency: 2)
-    subject.handle_batch("exit", max_size: 1, linger: 0) do |payloads, _|
-      raise SystemExit, "raised exit" if payloads.first["raise"]
+    subject.handle_batch("exit", max_size: 1, linger: 0) do |items|
+      raise SystemExit, "raised exit" if items.first.payload["raise"]
 
       [{status: :failed, error: SystemExit.new("returned exit")}]
     end
@@ -298,9 +299,9 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
     task_ids = Array.new(2) { queue.enqueue("linger", {}, max_attempts: 1).task_id }
     calls = Concurrent::Array.new
     subject = worker(concurrency: 3, shutdown_grace: 0.05)
-    subject.handle_batch("linger", max_size: 3, linger: 30) do |payloads, context|
-      calls << [payloads.size, context.cancellation.cancelled?]
-      payloads.map { {status: :succeeded, result: {}} }
+    subject.handle_batch("linger", max_size: 3, linger: 30) do |items|
+      calls << [items.size, items.any? { |item| item.context.cancellation.cancelled? }]
+      items.map { {status: :succeeded, result: {}} }
     end
     started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 
@@ -316,9 +317,9 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
     task_ids = Array.new(2) { queue.enqueue("linger", {}, max_attempts: 1).task_id }
     calls = Concurrent::Array.new
     subject = worker(concurrency: 3, shutdown_grace: 0.05)
-    subject.handle_batch("linger", max_size: 3, linger: 30) do |payloads, _|
-      calls << payloads.size
-      payloads.map { {status: :succeeded, result: {}} }
+    subject.handle_batch("linger", max_size: 3, linger: 30) do |items|
+      calls << items.size
+      items.map { {status: :succeeded, result: {}} }
     end
     active = subject.instance_variable_get(:@active)
 
@@ -328,20 +329,111 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
       [PG::TextEncoder::Array.new.encode(task_ids)]).getvalue(0, 0)).to eq("2")
   end
 
-  it "cancels the batch token with the first member cancellation" do
+  it "gives each batch member its own cancellation token" do
     2.times { queue.enqueue("cancel", {}, max_attempts: 1) }
     reasons = Concurrent::Array.new
     subject = worker(concurrency: 2)
-    subject.handle_batch("cancel", max_size: 2, linger: 1) do |payloads, context|
+    subject.handle_batch("cancel", max_size: 2, linger: 1) do |items|
       active = subject.instance_variable_get(:@active)
-      active[context.tasks.last.id].cancellation.cancel(:lease_lost)
-      active[context.tasks.first.id].cancellation.cancel(:shutdown)
-      reasons << context.cancellation.reason
-      payloads.map { {status: :succeeded, result: {}} }
+      active[items.last.context.task.id].cancellation.cancel(:lease_lost)
+      reasons.concat(items.map { |item| item.context.cancellation.reason })
+      items.map { {status: :succeeded, result: {}} }
     end
 
     subject.run_once
-    expect(reasons).to eq([:lease_lost])
+    expect(reasons).to eq([nil, :lease_lost])
+  end
+
+  it "fences each batch member's durable writes on its own lease" do
+    task_ids = Array.new(3) { |index| queue.enqueue("fenced", {"index" => index}, priority: 3 - index, max_attempts: 1).task_id }
+    lost = task_ids[1]
+    errors = Concurrent::Array.new
+    subject = worker(concurrency: 3, lease: 0.5, heartbeat: 0.05)
+    subject.handle_batch("fenced", max_size: 3, linger: 1) do |items|
+      @connection.exec_params("UPDATE workhorse.task_runtime SET fence_token = fence_token + 1 WHERE task_id = $1", [lost])
+      items.find { |item| item.context.task.id == lost }.context.cancellation.wait(5)
+      items.map do |item|
+        item.context.set_progress({"step" => "charge"})
+        {status: :succeeded, result: {"charge" => item.context.checkpoint("charge") { item.payload["index"] }}}
+      rescue W::LeaseLostError => e
+        errors << [item.context.task.id, e.class]
+        {status: :failed, error: e}
+      end
+    end
+
+    expect(subject.run_once).to be(true)
+    expect(errors).to eq([[lost, W::LeaseLostError]])
+    states = @connection.exec_params(<<~SQL, [PG::TextEncoder::Array.new.encode(task_ids)]).values.to_h
+      SELECT task.id::text, COALESCE(outcome.state, runtime.state)
+        FROM workhorse.task task
+        LEFT JOIN workhorse.task_runtime runtime ON runtime.task_id = task.id
+        LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
+       WHERE task.id = ANY($1::uuid[])
+    SQL
+    expect(states).to eq(task_ids[0] => "succeeded", lost => "active", task_ids[2] => "succeeded")
+    saved = @connection.exec_params("SELECT task_id::text FROM workhorse.task_checkpoint WHERE task_id = ANY($1::uuid[])",
+      [PG::TextEncoder::Array.new.encode(task_ids)]).column_values(0)
+    expect(saved).to contain_exactly(task_ids[0], task_ids[2])
+  end
+
+  it "replays a batch member's checkpoint after it lands in a batch of different composition" do
+    retried = queue.enqueue("replay", {"key" => "retried"}, priority: 9, max_attempts: 2,
+      retry_policy: {"type" => "fixed", "delayMs" => 0}).task_id
+    queue.enqueue("replay", {"key" => "first"}, max_attempts: 1)
+    runs = Concurrent::Array.new
+    seen = Concurrent::Array.new
+    handler = proc do |items|
+      seen << items.map { |item| item.payload["key"] }
+      items.map do |item|
+        before = item.context.get_checkpoint("charge")&.value
+        charge = item.context.checkpoint("charge") do
+          runs << item.payload["key"]
+          "#{item.payload["key"]}:#{item.context.task.attempt}"
+        end
+        next {status: :failed, error: RuntimeError.new("network")} if item.payload["key"] == "retried" && item.context.task.attempt == 1
+
+        {status: :succeeded, result: {"before" => before, "charge" => charge}}
+      end
+    end
+    worker(concurrency: 2).handle_batch("replay", max_size: 2, linger: 1, &handler).run_once
+    2.times { |index| queue.enqueue("replay", {"key" => "later#{index}"}, max_attempts: 1) }
+    worker(concurrency: 3).handle_batch("replay", max_size: 3, linger: 1, &handler).run_once
+
+    expect(seen).to eq([%w[retried first], %w[retried later0 later1]])
+    expect(runs).to eq(%w[retried first later0 later1])
+    row = @connection.exec_params("SELECT state, current_attempt, result FROM workhorse.task_outcome WHERE task_id = $1",
+      [retried]).first
+    expect([row["state"], row["current_attempt"], JSON.parse(row["result"])])
+      .to eq(["succeeded", "2", {"before" => "retried:1", "charge" => "retried:1"}])
+  end
+
+  it "rejects a fast-tier batch member's durable calls before any write" do
+    make_fast
+    task_ids = Array.new(2) { |index| queue.enqueue("fast.batch", {"index" => index}, max_attempts: 1).task_id }
+    statements = Concurrent::Array.new
+    rejected = Concurrent::Array.new
+    subject = worker(concurrency: 2)
+    executor = subject.instance_variable_get(:@executor)
+    original = executor.method(:fenced_rows)
+    executor.define_singleton_method(:fenced_rows) do |sql, params = []|
+      statements << sql
+      original.call(sql, params)
+    end
+    subject.handle_batch("fast.batch", max_size: 2, linger: 1) do |items|
+      items.map do |item|
+        [-> { item.context.checkpoint("charge") { raise "ran" } }, -> { item.context.set_progress({"done" => 1}) }].each do |call|
+          call.call
+        rescue W::FastTierUnsupportedError => e
+          rejected << e.feature
+        end
+        {status: :succeeded, result: {"checkpoint" => item.context.get_checkpoint("charge"), "progress" => item.context.get_progress}}
+      end
+    end
+
+    expect(subject.run_once).to be(true)
+    expect(rejected.tally).to eq("checkpoints" => 2, "progress" => 2)
+    expect(statements).not_to include(W::SqlCatalogue::SAVE_CHECKPOINT_V1, W::SqlCatalogue::UPDATE_PROGRESS_V1)
+    expect(outcomes(task_ids).map { |_, state, _| state }).to eq(%w[succeeded succeeded])
   end
 
   it "keeps a plain claim and a fused refill from reserving the same free slot" do
