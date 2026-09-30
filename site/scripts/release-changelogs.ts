@@ -8,11 +8,11 @@ import {
 } from "../lib/releases.js";
 
 /**
- * Reads the published versions of the four lines out of their changelogs.
+ * Reads the published versions of the release lines out of their changelogs.
  *
  * `/docs/releases` prints the current version of each line so a reader can
  * apply the support policy without visiting npm, PyPI, the Go module proxy,
- * and crates.io.
+ * crates.io, and RubyGems.
  * A hand-maintained table would make that policy a false statement the first
  * time a release shipped without the page being edited, so the table is
  * generated from the files the release commit already updates
@@ -82,11 +82,32 @@ export function parseReleases(source: string, changelog: string): Release[] {
 }
 
 /**
+ * Checks the changelog of a line that has not released yet.
+ *
+ * Its only second-level heading may be `## Unreleased`. A release heading means
+ * the line shipped, and the table must then print that version, so the
+ * `unpublished` flag has to go.
+ */
+export function assertUnreleased(source: string, changelog: string): void {
+  for (const line of source.split("\n")) {
+    if (!anyHeading.test(line) || line.trim() === "## Unreleased") continue;
+    throw new Error(
+      `${changelog} has the heading "${line.trim()}", but its line is marked unpublished. ` +
+        "Remove `unpublished` from the line in site/lib/releases.ts once it releases.",
+    );
+  }
+}
+
+/**
  * Every line with its versions resolved, in `releaseLines` order. `repositoryDir`
  * is the repository root the changelog paths are relative to.
  */
 async function resolveLine(line: ReleaseLine, repositoryDir: URL): Promise<ResolvedReleaseLine> {
   const source = await readFile(new URL(line.changelog, repositoryDir), "utf8");
+  if (line.unpublished) {
+    assertUnreleased(source, line.changelog);
+    return { ...line, current: null, earlier: [] };
+  }
   // `parseReleases` throws on an empty changelog, so there is always a newest.
   const [current, ...earlier] = parseReleases(source, line.changelog);
   return { ...line, current: current!, earlier };

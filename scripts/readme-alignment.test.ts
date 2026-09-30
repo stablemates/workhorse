@@ -12,10 +12,19 @@ interface SupportManifest {
   };
 }
 
+/** Minimum language versions a package manifest enforces rather than support.json. */
+interface DeclaredMinimums {
+  readonly ruby: string;
+  readonly rust: string;
+}
+
 interface ReadmeContract {
   readonly example: string;
   readonly exampleLanguage: string;
-  readonly languageSupport: (support: SupportManifest["support"], rustVersion: string) => string;
+  readonly languageSupport: (
+    support: SupportManifest["support"],
+    declared: DeclaredMinimums,
+  ) => string;
   readonly readme: string;
 }
 
@@ -83,7 +92,13 @@ const contracts: readonly ReadmeContract[] = [
     readme: "rust/README.md",
     example: "rust/examples/quickstart.rs",
     exampleLanguage: "rust",
-    languageSupport: (_support, rustVersion) => `Rust ${rustVersion} or newer`,
+    languageSupport: (_support, declared) => `Rust ${declared.rust} or newer`,
+  },
+  {
+    readme: "ruby/README.md",
+    example: "ruby/examples/quickstart.rb",
+    exampleLanguage: "ruby",
+    languageSupport: (_support, declared) => `Ruby ${declared.ruby} or newer`,
   },
 ];
 
@@ -98,12 +113,18 @@ describe("SDK README alignment", () => {
   it("derives every language and PostgreSQL support sentence from support.json", async () => {
     const manifest = JSON.parse(await read("support.json")) as SupportManifest;
     const postgresSupport = `PostgreSQL ${versionRange(manifest.support.postgres.tested)}`;
-    // The crate's own rust-version is its minimum, so the README cannot drift from what Cargo enforces.
-    const rustVersion = /^rust-version = "([^"]+)"$/m.exec(await read("rust/Cargo.toml"))?.[1];
-    expect(rustVersion).toBeDefined();
+    // The crate's rust-version and the gem's required_ruby_version are their minimums, so a README
+    // cannot drift from what Cargo or RubyGems enforces.
+    const rust = /^rust-version = "([^"]+)"$/m.exec(await read("rust/Cargo.toml"))?.[1];
+    const ruby = /^\s*spec\.required_ruby_version = ">= ([^"]+)"$/m.exec(
+      await read("ruby/stablemates-workhorse.gemspec"),
+    )?.[1];
+    expect(rust).toBeDefined();
+    expect(ruby).toBeDefined();
+    const declared = { rust: rust!, ruby: ruby! };
 
     for (const contract of contracts) {
-      const expected = `Requires ${contract.languageSupport(manifest.support, rustVersion!)} and ${postgresSupport}.`;
+      const expected = `Requires ${contract.languageSupport(manifest.support, declared)} and ${postgresSupport}.`;
       expect(prose(await read(contract.readme))).toContain(expected);
     }
   });

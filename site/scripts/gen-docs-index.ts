@@ -326,7 +326,7 @@ const catalogMarkdown = catalog.categories
   .join("\n\n");
 
 /**
- * The published versions of the four lines, read out of their changelogs
+ * The published versions of the release lines, read out of their changelogs
  * (ADR 0058). `/docs/releases` prints them so a reader can apply the support
  * policy in `SECURITY.md`, which names the current line and no version.
  */
@@ -349,7 +349,9 @@ const releaseMarkdown = [
   ...releaseLineRecords.map(
     (line) =>
       `| ${line.name} | [\`${line.artifact}\`](${line.registryUrl}) on ${line.registry} | ` +
-      `\`${line.current.version}\` | ${line.current.date} | Yes |`,
+      (line.current
+        ? `\`${line.current.version}\` | ${line.current.date} | Yes |`
+        : "Not yet released | — | — |"),
   ),
   // A line whose first release is its only one has nothing superseded, so the
   // heading and the empty table below it would say the opposite of the truth.
@@ -738,7 +740,7 @@ await writeFile(
 Start at [${entryPoint.title}](${base}${entryPoint.url}.md). ${entryPoint.description}
 
 Append \`.md\` to any page URL for its Markdown source. A Markdown page shows every language —
-TypeScript, Python, Go, and Rust — where the HTML page shows one.
+TypeScript, Python, Go, Rust, and Ruby — where the HTML page shows one.
 
 Install with the commands on [${installation.title}](${base}${installation.url}.md). They name no
 version, and the runtime compatibility check confirms the schema before a process starts.

@@ -99,7 +99,7 @@ describe("the llms.txt sections", () => {
     expect(section).toContain("npm exec --no -- workhorse");
     expect(section).toContain("no Homebrew formula and no PyPI script");
     // Every non-Node SDK reads this line to learn how its schema step runs.
-    expect(section).toContain("Python, Go, and Rust applications run it through Node");
+    expect(section).toContain("Python, Go, Rust, and Ruby applications run it through Node");
     expect(section).toContain("`schema.sql`");
     expect(section).toContain("https://workhorse.run/docs/installation.md");
   });

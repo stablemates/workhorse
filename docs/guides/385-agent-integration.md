@@ -37,10 +37,11 @@ state and result.
 
 ## How the examples stay true
 
-The site page carries one complete program per language. Site checks compile all four: TypeScript
-through the type checker, Python through the formatter and the type checker, and Go through the
-formatter and the compiler. Rust examples must match regions in `rust/examples`, which
-`cargo clippy` compiles. The cross-SDK name sweep that guards the feature pages does not cover
+The site page carries one complete program per language. Site checks compile TypeScript through
+the type checker, Python through the formatter and the type checker, and Go through the formatter
+and the compiler. Rust examples must match regions in `rust/examples`, which `cargo clippy`
+compiles. Ruby examples must match regions in `ruby/examples`, which an integration spec runs
+against PostgreSQL. The cross-SDK name sweep that guards the feature pages does not cover
 this page, because compiling its programs is the stronger check.
 
 ## Next

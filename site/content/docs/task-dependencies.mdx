@@ -6,7 +6,7 @@ description: Keep downstream work blocked until its prerequisites reach declared
 Dependencies prevent a task from entering dispatch before its inputs are ready. PostgreSQL stores
 the task and its dependency edges in the enqueue transaction, so a rollback removes both.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     const importId = await queue.enqueue("contacts.import", { source: "upload" });
@@ -61,6 +61,18 @@ the task and its dependency edges in the enqueue transaction, so a rollback remo
         .await?;
     ```
   </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    import = queue.enqueue("contacts.import", {"source" => "upload"})
+    queue.enqueue("contacts.notify", {"importId" => import.task_id},
+      dependencies: Stablemates::Workhorse::Dependencies.new(
+        prerequisite_task_ids: [import.task_id],
+        on_success: :release,
+        on_failure: :fail,
+        on_cancellation: :cancel
+      ))
+    ```
+  </Tab>
 </Tabs>
 
 The older `prerequisiteTaskId` shorthand is deprecated because it hides the terminal policies.
@@ -68,7 +80,7 @@ The older `prerequisiteTaskId` shorthand is deprecated because it hides the term
 For fan-in, declare every prerequisite and what each terminal outcome means:
 
 The same `Dependencies` value accepts several prerequisite IDs for fan-in. TypeScript uses
-`prerequisiteTaskIds`, Python and Rust use `prerequisite_task_ids`, and Go uses
+`prerequisiteTaskIds`, Python, Rust, and Ruby use `prerequisite_task_ids`, and Go uses
 `PrerequisiteTaskIDs`.
 
 The dependent remains `blocked` until every edge resolves. If policies disagree after fan-in,

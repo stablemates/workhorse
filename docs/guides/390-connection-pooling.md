@@ -39,13 +39,13 @@ pooler's client cap.
 
 Heartbeats need headroom of their own. If handlers hold every pooled connection, a heartbeat queued
 behind them never runs, and every lease lapses at once. Every worker therefore keeps a dedicated
-heartbeat connection. TypeScript and Go workers on one pool share it the way they share the
-listener, and a Rust worker holds its own. Budget that connection on top of the
+heartbeat connection. TypeScript, Go, and Ruby workers on one pool share it, and a Rust worker
+holds its own. Budget that connection on top of the
 listener and whatever handlers take. If the pool cannot spare it, or states no size, the worker
 refuses to start and says why. Set `sharedHeartbeats` to send heartbeats through the shared pool
 instead, and accept that busy handlers can then delay renewal. The heartbeat connection runs only
 self-contained statements, so it works behind a transaction-mode pooler. Go names that opt-out
-`SharedHeartbeats`, and Python and Rust name it `shared_heartbeats`.
+`SharedHeartbeats`, and Python, Rust, and Ruby name it `shared_heartbeats`.
 
 On a fast-tier queue, a busy worker in any language splits its slots into cohorts, and each cohort
 can hold a connection of its own. When the pool states its size, the worker picks no more cohorts

@@ -4,7 +4,7 @@ export const siteConfig = {
   name: "Workhorse",
   tagline: "A durable task queue for PostgreSQL",
   description:
-    "A durable task queue for PostgreSQL, with TypeScript, Python, Go, and Rust workers on one SQL protocol.",
+    "A durable task queue for PostgreSQL, with TypeScript, Python, Go, Rust, and Ruby workers on one SQL protocol.",
   url: siteUrl,
   socialImage: `${siteUrl}/brand/workhorse-mark.png`,
   github: "https://github.com/stablemates/workhorse",

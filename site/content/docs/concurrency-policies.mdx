@@ -17,12 +17,13 @@ namespace owns and PostgreSQL reconciles stored state to match.
 
 Go applications call `Queue.SyncConcurrencyPolicies` through the same caller-owned executor used
 for enqueue. `Queue.ListConcurrencyPolicies` returns the persisted typed rows. Rust applications use
-`Queue::sync_concurrency_policies` and `Queue::list_concurrency_policies`.
+`Queue::sync_concurrency_policies` and `Queue::list_concurrency_policies`. Ruby applications use
+`Queue#sync_concurrency_policies` and `Queue#list_concurrency_policies`.
 
 Python applications call `sync_concurrency_policies` through `Queue` or `AsyncQueue` on their
 caller-owned connection. `list_concurrency_policies` returns the persisted typed rows.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.syncConcurrencyPolicies("workers", [
@@ -61,6 +62,13 @@ caller-owned connection. `list_concurrency_policies` returns the persisted typed
         .await?;
     ```
   </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    policies = queue.sync_concurrency_policies("workers", [
+      Stablemates::Workhorse::ConcurrencyPolicyDefinition.new(queue: "mail", max_active: 20, max_active_per_key: 3)
+    ], prune: false)
+    ```
+  </Tab>
 </Tabs>
 
 Workers need no matching in-memory configuration — admission reads the stored policy, so a policy
@@ -73,7 +81,7 @@ PostgreSQL rejects another namespace that tries to replace a queue this namespac
 
 The key names the group a task competes in — a tenant, a destination host, an account.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("mail.send", { messageId }, { queue: "mail", concurrencyKey: tenantId });
@@ -108,6 +116,11 @@ The key names the group a task competes in — a tenant, a destination host, an 
             },
         )
         .await?;
+    ```
+  </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    queue.enqueue("mail.send", {"messageId" => message_id}, queue: "mail", concurrency_key: tenant_id)
     ```
   </Tab>
 </Tabs>
@@ -153,9 +166,9 @@ and health row. `Queue.syncBudgets` stores budgets in PostgreSQL the way policie
 `Queue.listBudgets` reads them back. Go applications use `Queue.SyncBudgets` and
 `Queue.ListBudgets`. Python applications use `Queue.sync_budgets` or `AsyncQueue.sync_budgets`,
 and `Queue.list_budgets` or `AsyncQueue.list_budgets`. Rust applications use `Queue::sync_budgets`
-and `Queue::list_budgets`.
+and `Queue::list_budgets`. Ruby applications use `Queue#sync_budgets` and `Queue#list_budgets`.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.syncBudgets("workers", [{ name: "vendor-api", maxActive: 4 }]);
@@ -207,6 +220,14 @@ and `Queue::list_budgets`.
             },
         )
         .await?;
+    ```
+  </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    budgets = queue.sync_budgets("workers", [
+      Stablemates::Workhorse::BudgetDefinition.new(name: "vendor-api", max_active: 4)
+    ], prune: false)
+    queue.enqueue("invoice.sync", {"id" => 1}, queue: "billing", budget: "vendor-api")
     ```
   </Tab>
 </Tabs>

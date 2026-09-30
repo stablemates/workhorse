@@ -19,12 +19,13 @@ the persisted typed definitions.
 
 Go applications call `Queue.SyncRateLimitPolicies` through their caller-owned executor.
 `Queue.ListRateLimitPolicies` returns the persisted typed definitions. Rust applications use
-`Queue::sync_rate_limit_policies` and `Queue::list_rate_limit_policies`.
+`Queue::sync_rate_limit_policies` and `Queue::list_rate_limit_policies`. Ruby applications use
+`Queue#sync_rate_limit_policies` and `Queue#list_rate_limit_policies`.
 
 Python applications call `sync_rate_limit_policies` through `Queue` or `AsyncQueue` on their
 caller-owned connection. `list_rate_limit_policies` returns the persisted typed definitions.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.syncRateLimitPolicies("workers", [{
@@ -65,6 +66,17 @@ caller-owned connection. `list_rate_limit_policies` returns the persisted typed 
             false,
         )
         .await?;
+    ```
+  </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    policies = queue.sync_rate_limit_policies("workers", [
+      Stablemates::Workhorse::RateLimitPolicyDefinition.new(
+        queue: "provider-api",
+        rate: Stablemates::Workhorse::RateLimit.new(limit: 60, interval: 60, burst: 10),
+        per_key: Stablemates::Workhorse::RateLimit.new(limit: 5, interval: 60, burst: 2)
+      )
+    ], prune: false)
     ```
   </Tab>
 </Tabs>

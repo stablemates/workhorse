@@ -13,7 +13,7 @@ The problem: a request creates an order and must guarantee a fulfillment task �
 order commits. Pass your open transaction as the last argument to `enqueue`, and the task and the
 order share one commit or one rollback.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     import { Admin, Pool, Queue } from "@stablemates/workhorse";
@@ -125,6 +125,20 @@ order share one commit or one rollback.
     }
     ```
   </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    def self.create_order(pool, order_id, items)
+      pool.with do |connection|
+        connection.transaction do |transaction|
+          transaction.exec_params("INSERT INTO orders (id, items) VALUES ($1, $2)",
+            [order_id, PG::TextEncoder::Array.new.encode(items)])
+          Stablemates::Workhorse::Queue.new(transaction, default_queue: "orders")
+            .enqueue("order.fulfill", {"orderId" => order_id})
+        end
+      end
+    end
+    ```
+  </Tab>
 </Tabs>
 
 If the insert fails, no task exists. If the enqueue fails, no order exists. There is no window where
@@ -137,7 +151,7 @@ The problem: a trial signup should send a welcome email now and a follow-up in s
 neither email may ever send twice. Checkpoints make each send a restart boundary; the durable sleep
 releases the worker slot for the whole week.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     worker.handle("trial.lifecycle", async (payload: { to: string; followUpAt: string }, context) => {
@@ -268,6 +282,25 @@ releases the worker slot for the whole week.
     }
     ```
   </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    require "time"
+
+    def self.send_welcome(to) = {"deliveredTo" => to, "kind" => "welcome"}
+
+    def self.send_follow_up(to) = {"deliveredTo" => to, "kind" => "follow-up"}
+
+    def self.register_trial_handler(worker)
+      worker.handle("trial.lifecycle") do |trial, context|
+        to = trial.fetch("to")
+        context.checkpoint("welcome") { send_welcome(to) }
+        context.sleep_until("follow-up-window", Time.iso8601(trial.fetch("followUpAt")))
+        context.checkpoint("follow-up") { send_follow_up(to) }
+        {"deliveredTo" => to}
+      end
+    end
+    ```
+  </Tab>
 </Tabs>
 
 The sleep stores a named timer, drops the lease, and parks the task in `scheduled` — no worker slot
@@ -281,7 +314,7 @@ The problem: an invoice run must happen every night at 03:00 with no separate sc
 Declare the schedule in code and synchronize it during deployment; any worker watching the
 namespace fires it.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     // Deployment step: reconcile the namespace to exactly this set.
@@ -434,6 +467,23 @@ namespace fires it.
     }
     ```
   </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    def self.run_billing_worker(pool)
+      queue = Stablemates::Workhorse::Queue.new(pool, default_queue: "billing")
+      task = Stablemates::Workhorse::ScheduledTask.new(task_type: "invoice.generate", payload: {"scope" => "due"},
+        queue: "billing")
+      schedule = Stablemates::Workhorse::ScheduleDefinition.new(name: "nightly-invoice-run",
+        schedule: "0 3 * * *", task: task)
+      queue.sync_schedules("billing-production", [schedule], prune: false)
+
+      worker = Stablemates::Workhorse::Worker.new(pool,
+        queues: ["billing"], schedule_namespaces: ["billing-production"])
+      worker.handle("invoice.generate") { |payload, _context| {"generated" => true, "payload" => payload} }
+      Stablemates::Workhorse.run_worker_process(worker)
+    end
+    ```
+  </Tab>
 </Tabs>
 
 Competing workers cannot double-fire: each occurrence has a durable key from its namespace, name,
@@ -446,7 +496,7 @@ The problem: payment providers redeliver webhooks, and each delivery must produc
 Build the idempotency key from the provider's event ID; a replayed delivery returns the original
 task instead of creating another.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     export async function handleStripeWebhook(event: { id: string; type: string; data: unknown }) {
@@ -568,12 +618,23 @@ task instead of creating another.
     }
     ```
   </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    def self.handle_stripe_webhook(queue, event)
+      result = queue.enqueue("stripe.event", {"eventId" => event.fetch("id"), "eventType" => event.fetch("type")},
+        queue: "webhooks",
+        idempotency: Stablemates::Workhorse::Idempotency.new(key: "stripe:#{event.fetch("id")}",
+          scope: "stripe-webhooks"))
+      {"accepted" => result.task_id}
+    end
+    ```
+  </Tab>
 </Tabs>
 
 An equivalent replay returns the same task ID with no new task, event, or notification — the route
 stays safely retryable end to end. If a request reuses the key with a _different_ payload,
 TypeScript and Python throw `EnqueueIdempotencyConflictError`; Go returns the matching typed error;
-Rust returns `Error::EnqueueIdempotencyConflict`.
+Rust returns `Error::EnqueueIdempotencyConflict`; Ruby raises `EnqueueIdempotencyConflictError`.
 No SDK silently drops the difference. The handler still runs at least once, so keep its external
 effects idempotent too.
 
@@ -583,7 +644,7 @@ The problem: a provider outage dead-lettered a batch of tasks, the provider has 
 operator needs to replay exactly those failures — safely, and only once. Dry-run first, then reuse
 one incident request ID across pages so a crashed script can rerun without duplicating work.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     const filter = { queue: "billing", errorName: "ProviderTimeout" };
@@ -754,6 +815,27 @@ one incident request ID across pages so a crashed script can rerun without dupli
     }
     ```
   </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    def self.redrive_incident(admin)
+      filter = {queue: "billing", error_name: "ProviderTimeout"}
+      audit = Stablemates::Workhorse::AdminAudit.new(actor: "reviewer@example.com",
+        reason: "provider incident INC-2041 resolved", request_id: "INC-2041")
+      preview = admin.redrive_many(audit: audit, dry_run: true, limit: 100, **filter)
+      puts "#{preview.results.length} tasks eligible"
+
+      cursor = nil
+      loop do
+        page = admin.redrive_many(audit: audit, limit: 100, cursor: cursor, **filter)
+        page.results.each do |result|
+          puts "#{result.status} #{result.source_task_id} -> #{result.target_task_id}"
+        end
+        cursor = page.next_cursor
+        break if cursor.nil?
+      end
+    end
+    ```
+  </Tab>
 </Tabs>
 
 Each redrive creates a fresh task that copies the queue, type, payload, and retry policy; the failed
@@ -767,7 +849,7 @@ The problem: a customer withdraws an order while its export task is running. Han
 cannot be preempted safely, so cancellation is a durable request each SDK delivers through its
 handler cancellation primitive.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     // Operator side: record who asked and why.
@@ -917,12 +999,29 @@ handler cancellation primitive.
     }
     ```
   </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    def self.upload_part(part) = puts("uploading #{part}")
+
+    def self.configure_export(queue, worker, task_id)
+      queue.cancel(task_id, requested_by: "support@example.com", reason: "customer withdrew the order")
+
+      worker.handle("export.build") do |export, context|
+        export.fetch("parts").each do |part|
+          context.cancellation.check!
+          upload_part(part)
+        end
+        {"exported" => true}
+      end
+    end
+    ```
+  </Tab>
 </Tabs>
 
 If the task has not started, PostgreSQL cancels it immediately with no invented attempt history. If
 it is active, the worker's heartbeat delivers the request. TypeScript aborts `context.signal`,
-Python cancels `context.cancellation`, Go cancels the handler's standard context, and Rust reports
-it through `context.cancellation()`. A handler that ignores that request loses its lease eventually,
+Python cancels `context.cancellation`, Go cancels the handler's standard context, Rust reports
+it through `context.cancellation()`, and Ruby reports it through `context.cancellation`. A handler that ignores that request loses its lease eventually,
 and recovery materializes the cancellation instead of retrying.
 
 ## Durable agentic flow
@@ -931,7 +1030,7 @@ The problem: a model plans work, several tools run independently, and execution 
 deploy while waiting for approval. Checkpoint the model call, join tools as child tasks, cross a
 durable timer, then wait for an idempotent signal.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     worker.handle("agent.run", async ({ prompt, conversationId }, context) => {
@@ -1174,6 +1273,29 @@ durable timer, then wait for an idempotent signal.
     }
     ```
   </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    # +model+ answers plan(prompt, idempotency_key) with {"tools" => [{"id" => ..., ...}]}.
+    def self.register_agent(worker, model, cooldown)
+      worker.handle("agent.run") do |run, context|
+        key = "plan:#{context.task.id}"
+        plan = context.checkpoint("plan") { model.plan(run.fetch("prompt"), key) }
+
+        children = plan.fetch("tools").map do |tool|
+          Stablemates::Workhorse::ChildTaskRequest.new(
+            name: tool.fetch("id"), task_type: "agent.tool", payload: tool,
+            options: {queue: "tools", concurrency_key: run.fetch("conversationId")}
+          )
+        end
+
+        tools = context.run_children_all(children)
+        context.sleep("model-cooldown", cooldown)
+        approval = context.wait_for_signal("approval")
+        {"plan" => plan, "tools" => tools, "approved" => approval["approved"] == true}
+      end
+    end
+    ```
+  </Tab>
 </Tabs>
 
 Every boundary releases the lease and restarts the handler later, so names and child requests must
@@ -1183,7 +1305,8 @@ whole lifecycle; run it with `pnpm example:agentic-flow` against an installed Wo
 Python consumers can run `python/examples/lifecycle.py` for retry, checkpoint, timer, child, signal,
 and human-decision boundaries. Go consumers can run `go/examples/orchestration/main.go` for child,
 signal, and human-decision boundaries. Rust consumers can run `rust/examples/orchestration.rs` for
-child, signal, and human-decision boundaries. Every release lane verifies the public package
+child, signal, and human-decision boundaries. Ruby consumers can run `ruby/examples/orchestration.rb`
+for the same boundaries. Every release lane verifies the public package
 imports.
 
 ## Next

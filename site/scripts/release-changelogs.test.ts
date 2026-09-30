@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { releaseLines } from "../lib/releases.js";
-import { parseReleases, readReleaseLines } from "./release-changelogs.js";
+import { assertUnreleased, parseReleases, readReleaseLines } from "./release-changelogs.js";
 
 const repositoryRoot = pathToFileURL(`${resolve(import.meta.dirname, "../..")}/`);
 
@@ -64,11 +64,25 @@ describe("reading the release lines out of the changelogs", () => {
     );
   });
 
+  it("accepts only `## Unreleased` from a line that has not released", () => {
+    expect(() =>
+      assertUnreleased("# Ruby changelog\n\n## Unreleased\n\n- Notes.\n", "ruby/CHANGELOG.md"),
+    ).not.toThrow();
+    expect(() =>
+      assertUnreleased("## Unreleased\n\n## 0.5.0 — 2026-10-01\n", "ruby/CHANGELOG.md"),
+    ).toThrow(/marked unpublished/);
+  });
+
   it("resolves every line from the repository's own changelogs", async () => {
     const lines = await readReleaseLines(repositoryRoot);
 
     expect(lines.map((line) => line.id)).toEqual(releaseLines.map((line) => line.id));
-    for (const line of lines) {
+    // An unpublished line states no version, so it has nothing below to compare.
+    expect(lines.filter((line) => line.unpublished).map((line) => line.current)).toEqual(
+      lines.filter((line) => line.unpublished).map(() => null),
+    );
+    for (const line of lines.filter((candidate) => !candidate.unpublished)) {
+      if (!line.current) throw new Error(`${line.changelog} has no current version`);
       expect(line.current.version, `${line.changelog} has no current version`).toMatch(/\d/);
       expect(line.current.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       // The current version is the newest, so nothing earlier may outrank it.

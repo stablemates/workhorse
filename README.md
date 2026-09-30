@@ -1,6 +1,7 @@
 # Workhorse
 
-A durable task queue for PostgreSQL, with TypeScript, Python, Go, and Rust workers on one SQL protocol.
+A durable task queue for PostgreSQL, with TypeScript, Python, Go, Rust, and Ruby workers on one SQL
+protocol.
 
 Workhorse is versioned SQL functions inside the database you already run. Every language gets the
 same workers, the same durable waits, and the same dashboard, with no broker or server beside
@@ -86,6 +87,17 @@ export async function runQuickstart(databaseUrl) {
 The [quickstart](https://workhorse.run/docs/quickstart) continues through failure and recovery. See
 [worker processes](https://workhorse.run/docs/worker-processes) before deploying a worker.
 
+Every other SDK README runs the same first task in its own language. The Ruby gem is not on RubyGems
+yet, so until its first release Bundler installs it from this repository:
+
+```bash
+bundle add stablemates-workhorse --git https://github.com/stablemates/workhorse --glob ruby/stablemates-workhorse.gemspec
+bundle add connection_pool
+```
+
+The [Ruby README](ruby/README.md) continues with the schema step and a first task. The
+[Python](python/README.md), [Go](go/README.md), and [Rust](rust/README.md) READMEs do the same.
+
 ## When it fits
 
 Choose Workhorse when your application already depends on PostgreSQL and needs durable background
@@ -104,8 +116,9 @@ availability must be independent from the application database.
   compatibility facade. Its server and type contract are also published for package composition.
 - [`@stablemates/workhorse-otel`](typescript/otel) connects core's vendor-neutral telemetry to the
   host application's OpenTelemetry API providers.
-- The [Python SDK](python), [Go SDK](go), and [Rust crate](rust) implement the same PostgreSQL
-  protocol and embed the same operator dashboard.
+- The [Python SDK](python), [Go SDK](go), [Rust crate](rust), and [Ruby gem](ruby) implement the
+  same PostgreSQL protocol and embed the same operator dashboard. The Ruby gem also ships an Active
+  Job adapter.
 
 ## Learn and operate
 

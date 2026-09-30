@@ -1,29 +1,33 @@
 {
-  "languages": ["typescript", "python", "go", "rust"],
+  "languages": ["typescript", "python", "go", "rust", "ruby"],
   "scenarios": {
     "quickstart": {
       "typescript": { "file": "typescript/examples/quickstart.mjs" },
       "python": { "file": "python/examples/quickstart.py" },
       "go": { "file": "go/examples/quickstart/main.go" },
-      "rust": { "file": "rust/examples/quickstart.rs" }
+      "rust": { "file": "rust/examples/quickstart.rs" },
+      "ruby": { "file": "ruby/examples/quickstart.rb" }
     },
     "transaction": {
       "typescript": { "file": "typescript/examples/transaction.mjs" },
       "python": { "file": "python/examples/async_enqueue.py" },
       "go": { "file": "go/examples/transaction/main.go" },
-      "rust": { "file": "rust/examples/transaction.rs" }
+      "rust": { "file": "rust/examples/transaction.rs" },
+      "ruby": { "file": "ruby/examples/transaction.rb" }
     },
     "dedicated-worker": {
       "typescript": { "file": "typescript/examples/dedicated-worker.mjs" },
       "python": { "file": "python/examples/dedicated_worker.py" },
       "go": { "file": "go/examples/dedicated-worker/main.go" },
-      "rust": { "file": "rust/examples/dedicated_worker.rs" }
+      "rust": { "file": "rust/examples/dedicated_worker.rs" },
+      "ruby": { "file": "ruby/examples/dedicated_worker.rb" }
     },
     "orchestration": {
       "typescript": { "file": "typescript/examples/orchestration.mjs" },
       "python": { "file": "python/examples/lifecycle.py" },
       "go": { "file": "go/examples/orchestration/main.go" },
-      "rust": { "file": "rust/examples/orchestration.rs" }
+      "rust": { "file": "rust/examples/orchestration.rs" },
+      "ruby": { "file": "ruby/examples/orchestration.rb" }
     },
     "demo-worker": {
       "typescript": { "file": "typescript/examples/demo-worker.mjs" },
@@ -32,6 +36,11 @@
       "rust": {
         "exclusion": {
           "reason": "The demo runs no Rust worker, so there is no Rust demo-worker example."
+        }
+      },
+      "ruby": {
+        "exclusion": {
+          "reason": "The demo runs no Ruby worker, so there is no Ruby demo-worker example."
         }
       }
     },
@@ -51,6 +60,11 @@
         "exclusion": {
           "reason": "Rust has no agentic-flow example; the TypeScript file is the current composition."
         }
+      },
+      "ruby": {
+        "exclusion": {
+          "reason": "Ruby has no agentic-flow example; the TypeScript file is the current composition."
+        }
       }
     },
     "async-worker": {
@@ -68,6 +82,11 @@
       "rust": {
         "exclusion": {
           "reason": "Rust Worker is already asynchronous on Tokio, so there is no separate async-worker example."
+        }
+      },
+      "ruby": {
+        "exclusion": {
+          "reason": "Ruby Worker runs each slot on its own thread, so there is no separate async-worker example."
         }
       }
     }

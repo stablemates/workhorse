@@ -13,7 +13,7 @@ Workhorse to skip a stage; that is what [checkpoints](/docs/durable-execution) a
 Call `HandlerContext.setProgress` with any JSON value your operator surface understands.
 Each accepted update replaces the previous one.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     await ctx.setProgress({ phase: "reading", processed: 0 });
@@ -55,6 +55,16 @@ Each accepted update replaces the previous one.
     }
     ```
   </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    context.set_progress({"phase" => "reading", "processed" => 0})
+    read_batches(payload.fetch("source")).each do |batch|
+      import_batch(batch)
+      processed += batch.length
+      context.set_progress({"phase" => "importing", "processed" => processed})
+    end
+    ```
+  </Tab>
 </Tabs>
 
 `HandlerContext.getProgress` returns the latest retained value from inside a handler. Outside
@@ -65,7 +75,8 @@ one, `Admin.getProgress` reads it by task ID, and a custom runtime can write thr
 Python exposes the handler methods as `set_progress` and `get_progress`. Go exposes `SetProgress`
 and `GetProgress`. Their returned progress records carry the same revision and ownership provenance
 as the TypeScript record. Rust's `set_progress` and `get_progress` read and write the value alone;
-`Admin::get_progress` returns the full record.
+`Admin::get_progress` returns the full record. Ruby's `set_progress` and `get_progress` return the full
+`TaskProgress` record.
 
 ## Why progress is rate-limited
 

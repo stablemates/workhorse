@@ -15,7 +15,7 @@ batch, and target a named queue.
 returns its ID. Without `runAt`, PostgreSQL places the task in `ready` and a worker can claim it
 immediately. A future `runAt` places it in `scheduled` until promotion moves it to `ready`.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("email.send", { to: "person@example.com" });
@@ -62,6 +62,12 @@ immediately. A future `runAt` places it in `scheduled` until promotion moves it 
         .await?;
     ```
   </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    queue.enqueue("email.send", {"to" => "person@example.com"})
+    queue.enqueue("invoice.remind", {"invoiceId" => invoice_id}, queue: "billing", run_at: reminder_date)
+    ```
+  </Tab>
 </Tabs>
 
 `runAt` is a not-before boundary, not an appointment. If someone pauses the queue, or workers
@@ -69,7 +75,7 @@ become unavailable, a worker claims the task later than the boundary — never e
 
 `EnqueueOptions` carries everything else a task can be born with:
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("report.generate", { month: "2026-08" }, {
@@ -115,6 +121,18 @@ become unavailable, a worker claims the task later than the boundary — never e
         .await?;
     ```
   </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    queue.enqueue("report.generate", {"month" => "2026-08"},
+      queue: "reports",
+      tags: ["tenant:acme"],
+      concurrency_key: "acme",
+      priority: 10,
+      max_attempts: 5,
+      deadline: end_of_month,
+      execution_timeout: 120)
+    ```
+  </Tab>
 </Tabs>
 
 Each option is owned by its own page — [retries](/docs/retries), [deadlines](/docs/deadlines),
@@ -129,9 +147,9 @@ no window where one exists without the other.
 Each language hands it over differently. TypeScript passes the transaction client as the fourth
 argument to `enqueue`. Python builds a `Queue` on the connection whose transaction is open. Go wraps
 the transaction in an executor and builds a `Queue` around that. Rust builds a `Queue` on the open
-`tokio_postgres` transaction.
+`tokio_postgres` transaction. Ruby builds a `Queue` on the connection that `transaction` yields.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     await client.query("BEGIN");
@@ -166,12 +184,21 @@ the transaction in an executor and builds a `Queue` around that. Rust builds a `
     transaction.commit().await?;
     ```
   </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    connection.transaction do |transaction|
+      transaction.exec_params("INSERT INTO account (id, email) VALUES ($1, $2)", [id, email])
+      Stablemates::Workhorse::Queue.new(transaction).enqueue("account.created", {"accountId" => id})
+    end
+    ```
+  </Tab>
 </Tabs>
 
 TypeScript's fourth argument accepts anything with a pg-compatible `query` method, so the ORM
 adapters pass their own transaction handles the same way. Go's `NewPGXExecutor` accepts a `pgx.Tx`
 and `NewSQLExecutor` accepts a `*sql.Tx`. Rust's `Queue::new` accepts a `tokio_postgres` client or
-`Transaction`, or their `deadpool_postgres` counterparts. Python's `Worker` needs its own connection
+`Transaction`, or their `deadpool_postgres` counterparts. Ruby's `Queue.new` accepts a
+`PG::Connection`, a `ConnectionPool` of them, or an `ActiveRecordExecutor` around a model class. Python's `Worker` needs its own connection
 in autocommit mode and raises `ValueError` otherwise, so keep the connection you enqueue on separate
 from the one a worker runs on.
 
@@ -207,7 +234,7 @@ If a single operation produces many tasks — a fan-out to every subscriber, an 
 `queue.enqueueMany`. It validates and writes the whole group in one statement, and it also accepts
 a transaction as its second argument.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     const taskIds = await queue.enqueueMany(recipients.map((recipient) => ({
@@ -248,6 +275,16 @@ a transaction as its second argument.
     let results = queue.enqueue_many(requests).await?;
     ```
   </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    requests = recipients.map do |recipient|
+      Stablemates::Workhorse::EnqueueRequest.new(
+        task_type: "email.digest", payload: {"to" => recipient.email}, queue: "mail"
+      )
+    end
+    results = queue.enqueue_many(requests)
+    ```
+  </Tab>
 </Tabs>
 
 Returned IDs preserve input order, and the whole group commits or rolls back together. One call
@@ -270,7 +307,7 @@ dispatch order within one queue; it does not reserve capacity for lower-priority
 
 Whole-queue controls belong to `Admin`, and every mutation carries audit identity:
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     await admin.pauseQueue("billing", { actor, reason, requestId });
@@ -300,6 +337,13 @@ Whole-queue controls belong to `Admin`, and every mutation carries audit identit
     admin.pause_queue("billing", &audit).await?;
     let audit = AdminAudit { request_id: resume_request_id.into(), ..audit };
     admin.resume_queue("billing", &audit).await?;
+    ```
+  </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    audit = Stablemates::Workhorse::AdminAudit.new(actor: actor, reason: reason, request_id: request_id)
+    admin.pause_queue("billing", audit: audit)
+    admin.resume_queue("billing", audit: audit.with(request_id: resume_request_id))
     ```
   </Tab>
 </Tabs>

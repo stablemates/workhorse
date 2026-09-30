@@ -4,14 +4,14 @@ description: Install the schema, run your first task, then kill the worker mid-t
 ---
 
 In five minutes you will enqueue a task, run it, and then prove the interesting part: a task that
-survives its own worker being killed. Choose TypeScript, Python, Go, or Rust for the application
-code.
+survives its own worker being killed. Choose TypeScript, Python, Go, Rust, or Ruby for the
+application code.
 Schema installation uses the Workhorse CLI, which runs on Node.js. Every path also needs a
 PostgreSQL connection string.
 
 ## 1. Install
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
 
     ```bash
@@ -51,6 +51,20 @@ PostgreSQL connection string.
     runs on Node.js.
 
   </Tab>
+  <Tab value="Ruby">
+
+    ```bash
+    bundle add stablemates-workhorse --git https://github.com/stablemates/workhorse --glob ruby/stablemates-workhorse.gemspec
+    bundle add connection_pool
+    ```
+
+    The gem is not on RubyGems yet, so until its first release Bundler fetches it from the
+    repository.
+
+    Your application never installs the schema. A deployment step installs it once, and that step
+    runs on Node.js.
+
+  </Tab>
 </Tabs>
 
 ## 2. Install the schema
@@ -65,15 +79,15 @@ A TypeScript project runs the binary it already depends on:
 npm exec --no -- workhorse schema install
 ```
 
-A Python, Go, or Rust project has no `node_modules` to resolve that binary from, so it names the
+A Python, Go, Rust, or Ruby project has no `node_modules` to resolve that binary from, so it names the
 version instead — the same version as the SDK it installed above:
 
 ```bash
 npx --package @stablemates/workhorse@0.5.0 workhorse schema install
 ```
 
-That step runs on Node.js, even when the application is written in Python, Go, or
-Rust.
+That step runs on Node.js, even when the application is written in Python, Go, Rust, or
+Ruby.
 [Installation](/docs/installation) explains why the two forms differ, and
 [Compatibility](/docs/compatibility) names the version.
 
@@ -94,7 +108,7 @@ installing anything.
 A `Queue` accepts work; a `Worker` with a matching handler runs it. This example keeps both in one
 file so you can watch the whole lifecycle.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     import { Admin, Pool, Queue, Worker } from "@stablemates/workhorse";
@@ -241,13 +255,35 @@ file so you can watch the whole lifecycle.
     }
     ```
   </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    require "connection_pool"
+    require "pg"
+    require "stablemates/workhorse"
+
+    url = ENV.fetch("DATABASE_URL")
+    pool = ConnectionPool.new(size: 4) { PG.connect(url) }
+
+    queue = Stablemates::Workhorse::Queue.new(pool)
+    enqueued = queue.enqueue("email.welcome", {"to" => "ada@example.com"})
+
+    worker = Stablemates::Workhorse::Worker.new(pool)
+    worker.handle("email.welcome") do |payload, _context|
+      {"deliveredTo" => payload["to"]}
+    end
+    worker.run_once # production uses Stablemates::Workhorse.run_worker_process(worker)
+
+    task = Stablemates::Workhorse::Admin.new(pool).get_task(enqueued.task_id)
+    puts "#{task.state} #{task.result}" if task
+    ```
+  </Tab>
 </Tabs>
 
 Each example reads the durable outcome after the worker records state `succeeded`. That record is
 queryable evidence, not a log line — it stays after the process exits. The Python and Go examples
 read the shared projection directly to keep the quickstart to one dependency; both languages also
-ship `Admin` clients for the same operator reads. The Rust example reads the outcome through its
-`Admin` client.
+ship `Admin` clients for the same operator reads. The Rust and Ruby examples read the outcome
+through their `Admin` clients.
 
 ## 4. Kill the worker. The task finishes anyway.
 
@@ -318,7 +354,7 @@ interruption, and the boundaries you name are the parts that never repeat.
 In a real application, enqueue rarely stands alone. Pass your open transaction as the last
 argument and the task commits — or rolls back — with your business write.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     const client = await pool.connect();
@@ -398,6 +434,18 @@ argument and the task commits — or rolls back — with your business write.
         transaction.commit().await?;
         Ok(())
     }
+    ```
+  </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    def self.create_order(pool, order_id)
+      pool.with do |connection|
+        connection.transaction do |transaction|
+          transaction.exec_params("INSERT INTO orders (id) VALUES ($1)", [order_id])
+          Stablemates::Workhorse::Queue.new(transaction).enqueue("order.fulfill", {"orderId" => order_id})
+        end
+      end
+    end
     ```
   </Tab>
 </Tabs>

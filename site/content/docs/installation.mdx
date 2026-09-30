@@ -11,7 +11,7 @@ check every runtime process should make instead.
 ## Requirements
 
 Every SDK runs on stock PostgreSQL without an extension. The shared schema CLI runs on Node.js
-during deployment, including when the application itself runs Python, Go, or Rust.
+during deployment, including when the application itself runs Python, Go, Rust, or Ruby.
 [Compatibility](/docs/compatibility) names every supported version, and is the only page that does.
 Choose the runtime that matches your application:
 
@@ -19,6 +19,7 @@ Choose the runtime that matches your application:
 - Python works through synchronous or asynchronous drivers.
 - Go supports pgx or `database/sql`.
 - Rust runs on Tokio with `tokio-postgres`.
+- Ruby runs on the `pg` gem, alone or behind `connection_pool` or Active Record.
 
 `installSchema` refuses an unsupported PostgreSQL up front, naming the server's version, rather
 than failing partway through with a syntax error that reads like a Workhorse bug.
@@ -27,7 +28,7 @@ than failing partway through with a syntax error that reads like a Workhorse bug
 
 Install the SDK. Each package includes its default PostgreSQL driver.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
 
     ```bash
@@ -77,6 +78,21 @@ Install the SDK. Each package includes its default PostgreSQL driver.
     runs on Node.js.
 
   </Tab>
+  <Tab value="Ruby">
+
+    ```bash
+    bundle add stablemates-workhorse --git https://github.com/stablemates/workhorse --glob ruby/stablemates-workhorse.gemspec
+    bundle add connection_pool
+    ```
+
+    The gem is not on RubyGems yet, so until its first release Bundler fetches it from the
+    repository.
+    A Rails application can also run its jobs through the [Active Job adapter](/docs/active-job).
+
+    Your application never installs the schema. A deployment step installs it once, and that step
+    runs on Node.js.
+
+  </Tab>
 </Tabs>
 
 Add a database adapter (`@stablemates/workhorse-drizzle`, `@stablemates/workhorse-prisma`, `@stablemates/workhorse-typeorm`,
@@ -118,15 +134,15 @@ npm exec --no -- workhorse schema install
 fetches anything. Use `pnpm exec workhorse …` or `yarn workhorse …` if that is your package
 manager. The version cannot drift, because there is only one.
 
-A Python, Go, or Rust project has no `node_modules` to resolve the binary from, so it names both the
-package and the version:
+A Python, Go, Rust, or Ruby project has no `node_modules` to resolve the binary from, so it names
+both the package and the version:
 
 ```bash
 npx --package @stablemates/workhorse@0.5.0 workhorse schema install
 ```
 
-Pin that to the version of `stablemates-workhorse`, `github.com/stablemates/workhorse/go`, or the
-`workhorse` crate the application depends on. Every line releases together from one commit, so the
+Pin that to the version of the Python package, the Go module, the `workhorse` crate, or the Ruby
+gem the application depends on. Every line releases together from one commit, so the
 numbers are the same.
 `--package` also names where the binary comes from: without it `npx` looks for a `workhorse`
 package by that bare name, which belongs to someone else.
@@ -219,7 +235,7 @@ finishes, and they keep working because inside a major line a migration only add
 
 ## Create a development database without Node.js
 
-The schema tool ships only on npm, so a Python, Go, or Rust developer has no local command that
+The schema tool ships only on npm, so a Python, Go, Rust, or Ruby developer has no local command that
 creates the database. Every `vX.Y.Z` tag attaches the clean-install `schema.sql` to its GitHub
 release instead. Download that asset from the release for the version your application depends on,
 then apply it:
@@ -244,7 +260,7 @@ Application and worker processes should verify the schema, never install it. Tha
 destructive authority to create database objects out of every long-lived process. Every SDK ships
 the check.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
 
     ```ts
@@ -302,6 +318,16 @@ the check.
     ```
 
     A refusal is `workhorse::Error::Compatibility`, whose `code` names the reason.
+
+  </Tab>
+  <Tab value="Ruby">
+
+    ```ruby
+    queue = Stablemates::Workhorse::Queue.new(PG.connect(ENV.fetch("DATABASE_URL")))
+    queue.assert_compatible
+    ```
+
+    A refusal is `Stablemates::Workhorse::CompatibilityError`, whose `code` names the reason.
 
   </Tab>
 </Tabs>

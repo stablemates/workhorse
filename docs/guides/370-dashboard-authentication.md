@@ -106,7 +106,24 @@ let operator = dashboard::handler(options)?;
 let app = axum::Router::new().nest_service("/workhorse", operator);
 ```
 
-All four hosts serve the same browser bundle and versioned dashboard procedures. The language
+Ruby applications return a `Principal` from a Rack application, which Rails routes or any Rack
+builder can mount:
+
+```ruby
+dashboard = Stablemates::Workhorse::Dashboard.new(
+  pool,
+  authorize: lambda do |env|
+    username = application_admin_session(env)
+    username ? Stablemates::Workhorse::Dashboard::Principal.new(actor: username) : false
+  end,
+  path: "/workhorse",
+  environment: "production",
+  allowed_hosts: ["ops.example.com"]
+)
+app = Rack::Builder.new { map("/workhorse") { run dashboard } }
+```
+
+All five hosts serve the same browser bundle and versioned dashboard procedures. The language
 changes the HTTP adapter, while PostgreSQL keeps the operator behavior consistent.
 
 If the TypeScript host serves several workspaces, `authorize` also receives the resolved workspace

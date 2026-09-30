@@ -54,6 +54,14 @@ function isExampleFile(language: string, relativePath: string): boolean {
   if (language === "rust") {
     return name.endsWith(".rs") && !["docs.rs", "landing.rs", "agent_playbook.rs"].includes(name);
   }
+  // The Ruby files follow the same split. active_job.rb holds the Active Job page's regions, and
+  // no other language has an Active Job adapter to mirror it.
+  if (language === "ruby") {
+    return (
+      name.endsWith(".rb") &&
+      !["docs.rb", "landing.rb", "agent_playbook.rb", "active_job.rb"].includes(name)
+    );
+  }
   if (language === "typescript") {
     return (
       /\.(?:mjs|cjs|js|mts|cts|ts)$/.test(name) &&

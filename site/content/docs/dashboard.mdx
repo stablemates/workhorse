@@ -4,8 +4,8 @@ description: Mount the operator interface behind application authorization, or r
 ---
 
 Workhorse gives your operators one shared interface — tasks, attempts, checkpoints, schedules,
-queues, workers, failures, health — without you building an admin page. TypeScript, Python, Go, and
-Rust can each embed the same packaged React application in their native HTTP server. Every backend
+queues, workers, failures, health — without you building an admin page. TypeScript, Python, Go, Rust,
+and Ruby can each embed the same packaged React application in their native HTTP server. Every backend
 reads PostgreSQL through the versioned `dashboard/v1` contract, so the interface can observe workers
 on machines it has never met.
 
@@ -43,7 +43,7 @@ Choose the host for your application's language. Each host serves the browser bu
 dashboard procedures under `/workhorse`, checks schema compatibility after authorization, and
 never installs or migrates the schema.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     `createDashboardHost` accepts a caller-owned database pool and returns a Fetch-native handler.
 
@@ -146,6 +146,25 @@ never installs or migrates the schema.
     ```
 
   </Tab>
+  <Tab value="Ruby">
+    `Stablemates::Workhorse::Dashboard` is a Rack application over a caller-owned connection or
+    pool. Mount it at its `path` with Rails routes or any Rack builder.
+
+    ```ruby
+    dashboard = Stablemates::Workhorse::Dashboard.new(
+      pool,
+      authorize: lambda do |env|
+        username = application_admin_session(env)
+        username ? Stablemates::Workhorse::Dashboard::Principal.new(actor: username) : false
+      end,
+      path: "/workhorse",
+      environment: "production",
+      allowed_hosts: ["ops.example.com"]
+    )
+    app = Rack::Builder.new { map("/workhorse") { run dashboard } }
+    ```
+
+  </Tab>
 </Tabs>
 
 In TypeScript, Fetch-native frameworks — Hono, Next.js route handlers, SvelteKit, Nitro — call
@@ -173,7 +192,7 @@ unrelated routes.
 ## Serve several databases as workspaces
 
 The TypeScript embedded host and standalone CLI can serve several Workhorse databases as named
-workspaces. Python, Go, and Rust embedded hosts currently mount one database per host. In
+workspaces. Python, Go, Rust, and Ruby embedded hosts currently mount one database per host. In
 TypeScript, configure `workspaces` instead of `database`; each entry owns its connection and may
 override `environment`, `operator`, and the controllers:
 
@@ -204,11 +223,11 @@ credentials out of the file.
 An embedded dashboard uses your application's authentication through its authorization callback.
 The callback runs before the interface, assets, compatibility check, and every RPC method. Return
 a verified principal using the language-specific type shown above. An unauthenticated result denies
-the request, while TypeScript, Go, and Rust can also return a custom response.
+the request, while TypeScript, Go, Rust, and Ruby can also return a custom response.
 
 Every backend replaces actor text from the browser with the verified principal before a mutation.
 The resulting `auditActor` and `requestedBy` fields record who acted, but never decide who may.
-TypeScript controller options and Python, Go, or Rust procedure extensions can route selected
+TypeScript controller options and Python, Go, Rust, or Ruby procedure extensions can route selected
 mutations through application-owned services.
 
 The settings page edits maintenance and retention policy through `DashboardSettingsController`,

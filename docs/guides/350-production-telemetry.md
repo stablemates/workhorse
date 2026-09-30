@@ -27,7 +27,7 @@ When a worker claims the task, `Worker` restores the stored parent before it cre
 span. The enqueue and handler can run in different processes or at very different times while
 remaining part of one trace.
 
-The TypeScript queue creates an enqueue span and stores its context. Python, Go, and Rust queues store the
+The TypeScript queue creates an enqueue span and stores its context. Python, Go, Rust, and Ruby queues store the
 active caller context. Every worker restores either form and uses the same span names, so
 mixed-language deployments share traces. The Go host installs its providers without adding an SDK
 or exporter to the library.

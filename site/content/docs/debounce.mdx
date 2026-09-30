@@ -6,7 +6,7 @@ description: Replace pending work under a stable key while updates continue arri
 Debounce keeps one pending task with the latest accepted payload. PostgreSQL serializes concurrent
 replacements, so every caller observes one stable task identity.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     const result = await queue.enqueueWithResult("search.reindex", { documentId, revision }, {
@@ -49,6 +49,14 @@ replacements, so every caller observes one stable task identity.
             },
         )
         .await?;
+    ```
+  </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    result = queue.enqueue("search.reindex", {"documentId" => document_id, "revision" => revision},
+      debounce: Stablemates::Workhorse::Debounce.new(
+        key: document_id, window: quiet_period, schedule: :reset, scope: "search-index"
+      ))
     ```
   </Tab>
 </Tabs>
