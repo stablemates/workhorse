@@ -124,6 +124,16 @@ module Stablemates
       end
     end
 
+    # One child of +HandlerContext#run_children+. +options+ holds the keywords +Queue#enqueue+
+    # takes, less the coalescing and dependency options.
+    ChildTaskRequest = Data.define(:name, :task_type, :payload, :options) do
+      def initialize(name:, task_type:, payload:, options: {}) = super
+    end
+
+    # How one child of +HandlerContext#run_children+ ended. +status+ is :succeeded, :failed, or
+    # :canceled; +result+ holds a success's result and +error+ a failure's envelope.
+    ChildOutcome = Data.define(:status, :result, :error)
+
     # Encodes and decodes the values that cross the protocol, without coercing a non-JSON value.
     # Internal to the SDK; not part of its governed surface.
     module Values

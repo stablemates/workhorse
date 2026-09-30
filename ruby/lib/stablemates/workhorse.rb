@@ -2,6 +2,7 @@
 
 require "json"
 require "logger"
+require "monitor"
 require "securerandom"
 require "socket"
 require "uri"

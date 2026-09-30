@@ -63,12 +63,156 @@ RSpec.describe "Worker against PostgreSQL" do
     expect(JSON.parse(row["error"])["stack"]).to include("last try")
   end
 
+  it "replays a checkpoint in the retry instead of running its block again" do
+    task_id = queue.enqueue("charge", {}, max_attempts: 2).task_id
+    runs = 0
+    subject = worker(retry_delay: 0).handle("charge") do |_payload, context|
+      charge = context.checkpoint("charge") { runs += 1 }
+      raise "network" if context.task.attempt == 1
+
+      {"charge" => charge}
+    end
+    subject.run_once
+    make_ready(task_id)
+    subject.run_once
+
+    expect(runs).to eq(1)
+    row = status(task_id)
+    expect([row["state"], row["attempt"], JSON.parse(row["result"])]).to eq(["succeeded", "2", {"charge" => 1}])
+  end
+
   it "releases a task whose type has no handler without charging the attempt" do
     task_id = queue.enqueue("unknown", {}).task_id
     ran = worker.handle("other") { {} }.run_once
 
     expect(ran).to be(false)
     expect(status(task_id).values_at("state", "attempt")).to eq(%w[ready 1])
+  end
+
+  it "suspends a durable sleep and completes after the wake" do
+    task_id = queue.enqueue("nap", {}).task_id
+    subject = worker.handle("nap") do |_payload, context|
+      context.sleep("nap", 0.2)
+      {"woke" => true}
+    end
+    subject.run_once
+    expect(status(task_id)["state"]).to eq("scheduled")
+
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 5
+    until status(task_id)["state"] == "succeeded" || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+      subject.run_once
+      sleep 0.05
+    end
+    expect(status(task_id)["state"]).to eq("succeeded")
+  end
+
+  it "logs a handler that swallows its suspension signal and keeps the wait" do
+    task_id = queue.enqueue("nap", {}).task_id
+    output = StringIO.new
+    worker(logger: Logger.new(output)).handle("nap") { |_payload, context|
+      begin
+        context.sleep("nap", 3600)
+      rescue Exception # rubocop:disable Lint/RescueException
+        nil
+      end
+      {"swallowed" => true}
+    }.run_once
+
+    expect(status(task_id)["state"]).to eq("scheduled")
+    expect(output.string).to include("Task handler swallowed its suspension signal")
+  end
+
+  it "unwinds a scheduled sleep whose release the heartbeat reports as a lost lease first" do
+    task_id = queue.enqueue("nap", {}).task_id
+    context = nil
+    continued = false
+    output = StringIO.new
+    subject = worker(lease: 0.5, heartbeat: 0.05, logger: Logger.new(output)).handle("nap") do |_payload, handler_context|
+      context = handler_context
+      context.sleep("nap", 3600)
+      continued = true
+      {}
+    end
+    allow(subject.instance_variable_get(:@executor)).to receive(:fenced_rows).and_wrap_original do |original, sql, *arguments|
+      rows = original.call(sql, *arguments)
+      if sql == W::SqlCatalogue::SCHEDULE_WAIT_V1
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 5
+        sleep 0.01 until context.cancellation.reason == :lease_lost ||
+            Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+      end
+      rows
+    end
+    subject.run_once
+
+    expect([context.cancellation.reason, continued]).to eq([:lease_lost, false])
+    expect(status(task_id)["state"]).to eq("scheduled")
+    finished = output.string.lines.find { |line| line.include?("workhorse.task.execution_finished") }
+    expect(JSON.parse(finished[/\{.*\}/])["workhorse.handler.outcome"]).to eq("suspended")
+  end
+
+  it "suspends a parent on its children and joins their results on replay" do
+    single = queue.enqueue("single", {}).task_id
+    fan = queue.enqueue("fan", {}).task_id
+    subject = worker.handle("child") { |payload| payload["n"] * 2 }
+    subject.handle("single") do |_payload, context|
+      {"doubled" => context.run_child("double", "child", {"n" => 21}), "attempt" => context.task.attempt}
+    end
+    subject.handle("fan") do |_payload, context|
+      children = [1, 2].map { |n| W::ChildTaskRequest.new(name: "c#{n}", task_type: "child", payload: {"n" => n}) }
+      {"joined" => context.run_children_all(children), "attempt" => context.task.attempt}
+    end
+
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 10
+    until [single, fan].all? { |id| status(id)["state"] == "succeeded" } ||
+        Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+      subject.run_once
+    end
+    expect([single, fan].map { |id| status(id).then { |row| [row["state"], JSON.parse(row["result"])] } }).to eq(
+      [["succeeded", {"doubled" => 42, "attempt" => 1}], ["succeeded", {"joined" => {"c1" => 2, "c2" => 4}, "attempt" => 1}]]
+    )
+    queues = @connection.exec_params("SELECT task.queue_name FROM workhorse.task_child child JOIN workhorse.task task " \
+      "ON task.id = child.child_task_id WHERE child.parent_task_id = ANY($1::uuid[])", ["{#{single},#{fan}}"])
+    expect(queues.column_values(0)).to eq([@queue_name] * 3)
+  end
+
+  it "resumes a signal wait and a human wait with what was delivered" do
+    task_id = queue.enqueue("review", {}).task_id
+    subject = worker.handle("review") do |_payload, context|
+      signal = context.wait_for_signal("upload")
+      decision = context.wait_for_human("approve", {"file" => signal["file"]})
+      {"signal" => signal, "decision" => decision}
+    end
+    subject.run_once
+    expect(status(task_id)["state"]).to eq("scheduled")
+    queue.send_signal(task_id, "upload", {"file" => "a.csv"}, idempotency_key: "upload-1", requested_by: "spec")
+    subject.run_once
+    expect(status(task_id)["state"]).to eq("scheduled")
+    queue.complete_human_wait(task_id, "approve", {"approved" => true}, idempotency_key: "approve-1",
+      requested_by: "spec")
+    subject.run_once
+
+    row = status(task_id)
+    expect([row["state"], row["attempt"], JSON.parse(row["result"])]).to eq(
+      ["succeeded", "1", {"signal" => {"file" => "a.csv"}, "decision" => {"approved" => true}}]
+    )
+  end
+
+  it "round-trips progress and rate-limits a quick change" do
+    task_id = queue.enqueue("report", {}).task_id
+    seen = nil
+    worker.handle("report") { |_payload, context|
+      saved = context.set_progress({"done" => 1})
+      retry_after = begin
+        context.set_progress({"done" => 2})
+      rescue W::ProgressRateLimitedError => e
+        e.retry_after
+      end
+      seen = [saved.value, saved.revision, context.get_progress.value, retry_after.positive?]
+      {}
+    }.run_once
+
+    expect(seen).to eq([{"done" => 1}, 1, {"done" => 1}, true])
+    expect(status(task_id)["state"]).to eq("succeeded")
   end
 
   it "cancels the handler and keeps the task when the lease is taken over" do
@@ -97,6 +241,61 @@ RSpec.describe "Worker against PostgreSQL" do
     row = status(task_id)
     expect(row["state"]).to eq("failed")
     expect(JSON.parse(row["error"])["name"]).to eq("Stablemates::Workhorse::ContractValidationError")
+  end
+
+  it "stamps a contracted child with the contract PostgreSQL holds" do
+    child_type = "typed.child.#{@queue_name}"
+    version = W::TaskContractVersion.new(payload_schema: {"type" => "object", "required" => ["n"]})
+    queue.sync_contracts(child_type => W::TaskTypeContracts.new(current_version: "v1", versions: {"v1" => version}))
+    single = queue.enqueue("single", {}).task_id
+    fan = queue.enqueue("fan", {}).task_id
+    subject = worker.handle(child_type) { |payload| payload["n"] * 2 }
+    subject.handle("single") { |_payload, context| context.run_child("double", child_type, {"n" => 21}) }
+    subject.handle("fan") do |_payload, context|
+      context.run_children_all([1, 2].map { |n| W::ChildTaskRequest.new(name: "c#{n}", task_type: child_type, payload: {"n" => n}) })
+    end
+
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 10
+    until [single, fan].all? { |id| status(id)["state"] == "succeeded" } ||
+        Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+      subject.run_once
+    end
+    expect([single, fan].map { |id| JSON.parse(status(id)["result"]) }).to eq([42, {"c1" => 2, "c2" => 4}])
+    versions = @connection.exec_params("SELECT task.contract_version FROM workhorse.task_child child JOIN workhorse.task task " \
+      "ON task.id = child.child_task_id WHERE child.parent_task_id = ANY($1::uuid[])", ["{#{single},#{fan}}"])
+    expect(versions.column_values(0)).to eq(%w[v1] * 3)
+  end
+
+  it "replays children accepted under a contract version the task type no longer uses" do
+    child_type = "upgraded.child.#{@queue_name}"
+    version = W::TaskContractVersion.new(payload_schema: {"type" => "object", "required" => ["n"]})
+    queue.sync_contracts(child_type => W::TaskTypeContracts.new(current_version: "v1", versions: {"v1" => version}))
+    single = queue.enqueue("single", {}, max_attempts: 1).task_id
+    fan = queue.enqueue("fan", {}, max_attempts: 1).task_id
+    parents = lambda do |subject|
+      subject.handle("single") { |_payload, context| context.run_child("double", child_type, {"n" => 21}) }
+      subject.handle("fan") do |_payload, context|
+        context.run_children_all([1, 2].map { |n| W::ChildTaskRequest.new(name: "c#{n}", task_type: child_type, payload: {"n" => n}) })
+      end
+    end
+    edges = -> { @connection.exec_params("SELECT count(*) FROM workhorse.task_child WHERE parent_task_id = ANY($1::uuid[])", ["{#{single},#{fan}}"]).getvalue(0, 0).to_i }
+    first = parents.call(worker)
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 10
+    first.run_once until edges.call == 3 || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+
+    upgraded = W::TaskContractVersion.new(payload_schema: {"type" => "object", "required" => %w[n m]})
+    queue.sync_contracts(child_type => W::TaskTypeContracts.new(current_version: "v2", versions: {"v1" => version, "v2" => upgraded}))
+    restarted = parents.call(worker)
+    restarted.handle(child_type) { |payload| payload["n"] * 2 }
+    until [single, fan].all? { |id| %w[succeeded failed].include?(status(id)["state"]) } ||
+        Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+      restarted.run_once
+    end
+    expect([single, fan].map { |id| [status(id)["state"], JSON.parse(status(id)["result"] || "null")] })
+      .to eq([["succeeded", 42], ["succeeded", {"c1" => 2, "c2" => 4}]])
+    versions = @connection.exec_params("SELECT task.contract_version FROM workhorse.task_child child JOIN workhorse.task task " \
+      "ON task.id = child.child_task_id WHERE child.parent_task_id = ANY($1::uuid[])", ["{#{single},#{fan}}"])
+    expect(versions.column_values(0)).to eq(%w[v1] * 3)
   end
 
   it "raises ShutdownIncompleteError when a handler outlives the grace and the unwind window" do

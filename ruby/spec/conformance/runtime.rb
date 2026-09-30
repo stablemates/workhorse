@@ -15,11 +15,7 @@ module Conformance
   # functions, never into the worker itself.
   class Runtime
     # Runtime fixtures that need a handler surface the Ruby worker does not have yet.
-    GAPS = {
-      "batch" => "batch handlers land in SM-982",
-      "suspension-replay" => "the durable HandlerContext lands in SM-981",
-      "lease-loss" => "its fenced handler writes are durable HandlerContext calls, which land in SM-981"
-    }.freeze
+    GAPS = {"batch" => "batch handlers land in SM-982"}.freeze
     CANCEL_NAMES = {
       requested: "CancellationRequestedError",
       deadline_exceeded: "DeadlineExceededError",
@@ -79,6 +75,8 @@ module Conformance
       when "json-round-trip" then json_round_trip(fixture)
       when "heartbeat-failure" then heartbeat_failure(fixture)
       when "maintenance-phase-error" then maintenance_phase_error(fixture)
+      when "suspension-replay" then suspension_replay(fixture)
+      when "lease-loss" then lease_loss(fixture)
       else raise Failure, "unknown runtime fixture kind #{Matcher.render(fixture["kind"])}"
       end
     rescue Failure
@@ -647,6 +645,86 @@ module Conformance
       end
     end
 
+    def suspension_replay(fixture)
+      name = queue_name(fixture)
+      task_ids = {"suspension" => queue.enqueue(fixture["taskType"], {}, queue: name).task_id,
+                  "following" => queue.enqueue(fixture["followingTaskType"], {}, queue: name).task_id}
+      seen = Concurrent::Array.new
+      counts = Concurrent::Hash.new(0)
+      with_pool do |pool|
+        subject = worker(pool, fixture, maintenance_interval: 0.1)
+        subject.handle(fixture["taskType"]) do |_payload, context|
+          counts[:runs] += 1
+          seen << "suspension:#{context.task.attempt}"
+          prepared = context.checkpoint(fixture["checkpointName"]) { {"operation" => counts[:operations] += 1} }
+          subject.pause if counts[:runs] == 1
+          context.sleep(fixture["waitName"], fixture["waitMs"] / 1000.0)
+          {"prepared" => prepared, "handlerRuns" => counts[:runs]}
+        end
+        subject.handle(fixture["followingTaskType"]) do |_payload, context|
+          seen << "following:#{context.task.attempt}"
+          {"handled" => true}
+        end
+        check(subject.run_once == true, "the worker did not run the suspending task")
+        expect_states(task_ids, fixture["expectedAfterSuspension"])
+        expect_attempts(task_ids["suspension"], fixture["expectedAttemptsAfterSuspension"])
+        subject.resume
+        check(subject.run_once == true, "the released slot did not run the following task")
+        expect_states(task_ids, fixture["expectedAfterSlotRelease"])
+        # The wait is long enough that it cannot elapse on a slow runner, so the fixture rewinds it
+        # and promotes it instead of sleeping through it.
+        @connection.exec_params("UPDATE workhorse.task_runtime SET run_at = clock_timestamp() - " \
+          "interval '1 millisecond' WHERE task_id = $1", [task_ids["suspension"]])
+        @connection.exec("SELECT * FROM workhorse.tick_v1(100, 100)")
+        check(subject.run_once == true, "the worker did not replay the woken task")
+        expect_states(task_ids, fixture["expectedAfterReplay"])
+      end
+      expect_attempts(task_ids["suspension"], fixture["expectedAttemptsAfterReplay"])
+      check(seen.to_a == fixture["expectedHandlerOrder"], "handler order #{seen.to_a}")
+      check(counts[:runs] == fixture["expectedHandlerRuns"], "the handler ran #{counts[:runs]} times")
+      check(counts[:operations] == fixture["expectedCheckpointOperations"],
+        "the checkpoint operation ran #{counts[:operations]} times")
+    end
+
+    def lease_loss(fixture)
+      task_id = queue.enqueue(fixture["taskType"], {}, queue: queue_name(fixture), max_attempts: fixture["maxAttempts"],
+        retry_policy: {"type" => "fixed", "delayMs" => 0}).task_id
+      started = Concurrent::Event.new
+      reasons = Concurrent::Array.new
+      rejected = Concurrent::Array.new
+      with_pool do |pool|
+        subject = worker(pool, fixture, lease: fixture["leaseMs"] / 1000.0, heartbeat: fixture["heartbeatMs"] / 1000.0)
+        subject.handle(fixture["taskType"]) do |_payload, context|
+          started.set
+          raise "the lease loss never reached the handler" unless context.cancellation.wait(5)
+
+          reasons << context.cancellation.reason
+          late_writes(context).each do |write, call|
+            call.call
+          rescue W::LeaseLostError
+            rejected << write
+          end
+          # The worker survives the loss and would claim the retried attempt next, so claims pause
+          # to keep the ready state observable.
+          subject.pause
+          {"late" => true}
+        end
+        running(-> { subject.run_once }) do |result|
+          check(started.wait(5), "the handler never started")
+          @connection.exec_params("UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - " \
+            "interval '1 millisecond' WHERE task_id = $1", [task_id])
+          recovered = value("SELECT rows_affected FROM workhorse.recover_expired_telemetry_v1(100, 0)")
+          check(recovered == "1", "recovery expired #{Matcher.render(recovered)} leases, want 1")
+          check(result.call == true, "the worker did not report the lost run")
+        end
+      end
+      check(fixture["expectedRunOutcome"] == "processed", "unexpected run outcome #{fixture["expectedRunOutcome"]}")
+      check(reasons.to_a == [:lease_lost], "abort reasons #{reasons.to_a}")
+      check(rejected.to_a == fixture["portableRejectedWrites"], "rejected writes #{rejected.to_a}")
+      expect_state(task_id, fixture["expectedState"])
+      expect_outcomes(task_id, [fixture["expectedAttemptOutcome"]])
+    end
+
     # ----- support -------------------------------------------------------------------------------
 
     def queue = @queue ||= W::Queue.new(@connection)
@@ -736,6 +814,29 @@ module Conformance
       want = {"state" => expected["state"], "attempt" => expected["attempt"]}
       want["errorName"] = expected["errorName"] if expected.key?("errorName")
       check(actual.slice(*want.keys) == want, "task state #{actual}, want #{want}")
+    end
+
+    # Each durable write a handler may attempt after its lease is gone, by its portable name.
+    def late_writes(context)
+      child = ["too-late", "protocol.child", {}]
+      {"checkpoint" => -> { context.checkpoint("too-late") { {"late" => true} } },
+       "sleep" => -> { context.sleep("too-late", 0.001) },
+       "sleepUntil" => -> { context.sleep_until("too-late-until", Time.now) },
+       "waitForSignal" => -> { context.wait_for_signal("too-late") },
+       "waitForHuman" => -> { context.wait_for_human("too-late", {"late" => true}) },
+       "runChild" => -> { context.run_child(*child) },
+       "runChildren" => lambda {
+         context.run_children([W::ChildTaskRequest.new(name: child[0], task_type: child[1], payload: child[2])])
+       }}
+    end
+
+    def expect_states(task_ids, expected)
+      expected.each { |key, want| expect_state(task_ids.fetch(key), want) }
+    end
+
+    def expect_attempts(task_id, expected)
+      count = Integer(value("SELECT count(*) FROM workhorse.attempt_history WHERE task_id = $1", task_id), 10)
+      check(count == expected, "task #{task_id} recorded #{count} attempts, want #{expected}")
     end
 
     def expect_outcomes(task_id, expected)

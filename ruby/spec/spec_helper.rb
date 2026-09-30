@@ -24,6 +24,7 @@ class FakeExecutor < W::Executor
 
   def rows(sql, params = [])
     return COMPATIBLE if sql == W::SqlCatalogue::COMPATIBILITY_STATE
+    return [] if sql == W::SqlCatalogue::GET_CONTRACT_DEFINITION_V1
 
     @statements << [sql, params]
     @answer ? @answer.call(sql, params) : []

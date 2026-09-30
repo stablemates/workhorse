@@ -5,16 +5,6 @@
       "fixture": "runtime/priority-ordered-mixed-batch",
       "issue": "SM-982",
       "reason": "batch handlers land in SM-982"
-    },
-    {
-      "fixture": "runtime/durable-wait-suspension-and-checkpoint-replay",
-      "issue": "SM-981",
-      "reason": "the durable HandlerContext lands in SM-981"
-    },
-    {
-      "fixture": "runtime/lease-loss-fences-handler-writes",
-      "issue": "SM-981",
-      "reason": "its fenced handler writes are durable HandlerContext calls, which land in SM-981"
     }
   ]
 }

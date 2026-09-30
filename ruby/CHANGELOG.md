@@ -28,6 +28,12 @@ other SDKs carry, because every tag names one release of all of them.
   its payload and a `HandlerContext` with the task and a `CancellationToken`. `stop` requests
   shutdown. `run` then drains handlers within `shutdown_grace`, cancels the rest with `:shutdown`,
   and raises `ShutdownIncompleteError` when any handler still runs.
+- Add the durable `HandlerContext` calls: `checkpoint`, `sleep`, `sleep_until`, `wait_for_signal`,
+  `wait_for_human`, `run_child`, `run_children`, `run_children_all`, `get_progress`, and
+  `set_progress`. A call that waits suspends the attempt and releases its lease, and the task
+  resumes in the same attempt. A handler that swallows the suspension still suspends, and the
+  worker logs `workhorse.handler.signal_swallowed`. After the lease is lost, every durable write
+  raises `LeaseLostError`; reads and checkpoint replays still return. A child without a queue runs on the worker's first queue.
 - Under Rails, handlers run inside `Rails.application.executor.wrap`. `run` warns when the Active
   Record pool is smaller than `concurrency`.
 - Add `run_worker_process`, which stops the worker on `TERM` or `INT` and exits at once on a second

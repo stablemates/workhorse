@@ -4,8 +4,7 @@ The Ruby queue client for the Workhorse durable task queue for PostgreSQL.
 
 > **Unreleased:** this gem is under construction and not yet published. It enqueues, cancels,
 > delivers signals, completes human waits, and syncs schedules and contracts. It runs workers and
-> carries the operator client, the dashboard, and an Active Job adapter. Durable handler steps
-> arrive in a later release.
+> carries the durable handler steps, the operator client, the dashboard, and an Active Job adapter.
 
 An AI agent should read [the Workhorse documentation index](https://workhorse.run/llms.txt) first.
 
@@ -98,6 +97,23 @@ Stablemates::Workhorse.run_worker_processes(processes: 4) do
     .handle("email.welcome") { |payload, _context| WelcomeMailer.call(payload) }
 end
 ```
+
+The context also carries durable steps. A checkpoint saves a value once, so a retry replays it
+instead of running its block again. A sleep, a signal wait, a human wait, or a child suspends the
+attempt and frees the worker thread. The task resumes when the wait ends, and earlier steps replay.
+
+```ruby
+worker.handle("order.fulfil") do |payload, context|
+  charge = context.checkpoint("charge") { Payments.charge(payload.fetch("orderId")) }
+  context.sleep("settle", 60)
+  approval = context.wait_for_human("approve", { "charge" => charge })
+  label = context.run_child("label", "shipping.label", { "orderId" => payload.fetch("orderId") })
+  { "approved" => approval, "label" => label }
+end
+```
+
+A handler must let `HandlerContext::Suspension` propagate. It descends from `Exception`, so a bare
+`rescue` does not catch it.
 
 Under Rails, each handler runs inside the Rails executor. Size the Active Record pool to at least
 the worker's `concurrency`; `run` warns when it is smaller.

@@ -50,7 +50,7 @@ describe("Ruby parity evidence", () => {
 
   it("reads the declared fixtures, the expected-unsupported list, and the spec examples", () => {
     expect(state.declared.has("scenarios/fast-tier")).toBe(true);
-    expect(state.unsupported.get("runtime/lease-loss-fences-handler-writes")).toBe("SM-981");
+    expect(state.unsupported.get("runtime/priority-ordered-mixed-batch")).toBe("SM-982");
     expect(state.examples.get(example.file)?.has(example.example)).toBe(true);
   });
 
@@ -90,12 +90,9 @@ describe("Ruby parity evidence", () => {
 
   it("rejects a fixture the Ruby runner lists as expected unsupported", () => {
     expect(
-      rubyEvidenceProblems(
-        [row({ fixtures: ["runtime/lease-loss-fences-handler-writes"] })],
-        state,
-      ),
+      rubyEvidenceProblems([row({ fixtures: ["runtime/priority-ordered-mixed-batch"] })], state),
     ).toEqual([
-      "Probe: runtime/lease-loss-fences-handler-writes is expected unsupported in Ruby (SM-981), so the cell cannot be Supported",
+      "Probe: runtime/priority-ordered-mixed-batch is expected unsupported in Ruby (SM-982), so the cell cannot be Supported",
     ]);
   });
 
