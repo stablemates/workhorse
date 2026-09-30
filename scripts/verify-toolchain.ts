@@ -58,18 +58,37 @@ const probes: Record<string, ToolProbe> = {
   node: { arguments: ["--version"], identity: new RegExp(String.raw`^v${version}`) },
   pnpm: { arguments: ["--version"], identity: new RegExp(String.raw`^${version}`) },
   python: { arguments: ["--version"], identity: new RegExp(String.raw`^Python ${version}`) },
+  ruby: { arguments: ["--version"], identity: new RegExp(String.raw`^ruby ${version}`) },
   rust: { arguments: ["--version"], identity: new RegExp(String.raw`^rustc ${version}`) },
   uv: { arguments: ["--version"], identity: new RegExp(String.raw`^uv ${version}`) },
 };
 
 /**
- * Commands of the pinned Rust toolchain that repository scripts start directly. Each names itself,
- * so a substitute is refused; `rustc` answers for the `mise.toml` pin.
+ * Commands of a pinned toolchain that repository scripts start directly, by the `mise.toml` tool
+ * that ships them. Each names itself, so a substitute is refused; the pinned tool answers for the
+ * pin.
  */
-const rustCommands: Record<string, ToolProbe> = {
-  cargo: { arguments: ["--version"], identity: new RegExp(String.raw`^cargo ${version}`) },
-  rustfmt: { arguments: ["--version"], identity: new RegExp(String.raw`^rustfmt ${version}`) },
+const toolchainCommands: Record<string, Record<string, ToolProbe>> = {
+  rust: {
+    cargo: { arguments: ["--version"], identity: new RegExp(String.raw`^cargo ${version}`) },
+    rustfmt: { arguments: ["--version"], identity: new RegExp(String.raw`^rustfmt ${version}`) },
+  },
+  ruby: {
+    // Bundler 4 prints the bare version; Bundler 2, which Ruby 3.4 bundles, prefixes its name.
+    bundle: {
+      arguments: ["--version"],
+      identity: new RegExp(String.raw`^(?:Bundler version )?${version}`),
+    },
+  },
 };
+
+/** The probe for a command a checkable toolchain ships, or undefined. */
+function toolchainCommand(name: string, checkable: ReadonlySet<string>): ToolProbe | undefined {
+  for (const [tool, commands] of Object.entries(toolchainCommands)) {
+    if (checkable.has(tool) && Object.hasOwn(commands, name)) return commands[name];
+  }
+  return undefined;
+}
 
 /** Part of the Go toolchain rather than a `mise.toml` entry, and checked by a rule of its own. */
 export const gofmtTool = "gofmt";
@@ -138,12 +157,14 @@ export function toolsNamedBy(
   };
 
   const name = executableName(command);
-  if (checkable.has(name) || (checkable.has("rust") && name in rustCommands)) add(name, command);
+  if (checkable.has(name) || toolchainCommand(name, checkable)) add(name, command);
   // `go:fmt:check` and `health` reach their real tool through a shell, because they need a pipe or
   // a variable. Without this the wrapper would check `sh` and let a substituted `gofmt` through.
   if (name === "sh" || name === "bash") {
     for (const argument of commandArguments) {
-      for (const token of argument.split(/\s+/)) if (checkable.has(token)) add(token, token);
+      for (const token of argument.split(/\s+/)) {
+        if (checkable.has(token) || toolchainCommand(token, checkable)) add(token, token);
+      }
     }
   }
   return requests;
@@ -196,7 +217,7 @@ async function verifyVersioned(
   { tool, executable }: ToolRequest,
   { mode, pins }: VerifyOptions,
 ): Promise<string | undefined> {
-  const probe = probes[tool] ?? rustCommands[tool];
+  const probe = probes[tool] ?? toolchainCommand(tool, new Set(Object.keys(toolchainCommands)));
   if (!probe) return undefined;
   const pin = pins.get(tool);
 

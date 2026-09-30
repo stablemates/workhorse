@@ -2,7 +2,7 @@ pre-commit:
   parallel: true
   jobs:
     - name: check generated SQL catalogues
-      glob: "{protocol/v1/manifest.json,scripts/generate-sql-catalogues.ts,go/sql_catalogue_generated.go,typescript/core/src/queue/sql-catalogue.generated.ts,python/src/workhorse/_statements.py}"
+      glob: "{protocol/v1/manifest.json,scripts/generate-sql-catalogues.ts,go/sql_catalogue_generated.go,typescript/core/src/queue/sql-catalogue.generated.ts,python/src/workhorse/_statements.py,ruby/lib/stablemates/workhorse/sql_catalogue_generated.rb}"
       run: mise exec -- pnpm sql-catalogues:check
     - name: check parity tables
       glob: "{rust/**,rust/PARITY.md,typescript/core/test/support/parity-capabilities.ts,docs/parity.md,scripts/generate-parity-tables.ts}"
@@ -69,6 +69,9 @@ pre-commit:
     - name: test Rust workspace
       glob: "{rust/**/*.rs,rust/Cargo.toml,rust/Cargo.lock}"
       run: mise exec -- pnpm rust:test
+    - name: lint Ruby
+      glob: "ruby/**"
+      run: mise exec -- pnpm ruby:lint
     - name: lint Python
       glob: "python/**"
       run: mise exec -- pnpm python:lint

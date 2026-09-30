@@ -132,6 +132,22 @@ describe("a substituted tool", () => {
     expect(await refusals("rustfmt", "identity", pins)).toEqual([]);
   });
 
+  it.skipIf(!onPosix)(
+    "accepts a Bundler 2 or Bundler 4 bundle and refuses another tool",
+    async () => {
+      const pins: [string, string][] = [["ruby", "3.4.11"]];
+
+      leadPath(await toolDirectory({ bundle: 'echo "Bundler version 2.6.9"' }));
+      expect(await refusals("bundle", "identity", pins)).toEqual([]);
+      leadPath(await toolDirectory({ bundle: 'echo "4.0.20"' }));
+      expect(await refusals("bundle", "identity", pins)).toEqual([]);
+      leadPath(await toolDirectory({ bundle: 'echo "ruby 3.4.11"' }));
+      expect((await refusals("bundle", "identity", pins))[0]).toContain(
+        "bundle did not identify itself",
+      );
+    },
+  );
+
   it.skipIf(!onPosix)("refuses a cargo-deny that answers as another tool", async () => {
     leadPath(await toolDirectory({ "cargo-deny": 'echo "cargo 1.89.0 (c24e10642 2025-06-23)"' }));
 
@@ -285,6 +301,16 @@ describe("the tools a repository command starts", () => {
     expect(toolsNamedBy("cargo", ["test"], checkable)).toEqual([]);
     expect(toolsNamedBy("cargo", ["test"], new Set(["rust"]))).toEqual([
       { tool: "cargo", executable: "cargo" },
+    ]);
+  });
+
+  it("checks Bundler once ruby is pinned, including inside a shell script", () => {
+    expect(toolsNamedBy("bundle", ["exec", "rake"], checkable)).toEqual([]);
+    expect(
+      toolsNamedBy("sh", ["-c", "cd ruby && bundle exec rake test"], new Set(["ruby"])),
+    ).toEqual([
+      { tool: "ruby", executable: "ruby" },
+      { tool: "bundle", executable: "bundle" },
     ]);
   });
 

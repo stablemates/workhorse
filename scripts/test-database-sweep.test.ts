@@ -41,6 +41,7 @@ describe("test database classification", () => {
       "workhorse_test_hearturchin_31d32fa0_py_3db5c31880",
       "workhorse_test_source_1bcf29d8_go_196d5c60db",
       "workhorse_test_source_1bcf29d8_go_dashboard_196d5c60db",
+      "workhorse_test_source_1bcf29d8_rb_196d5c60db",
     ]) {
       expect(classifyTestDatabase(name, context)).toEqual({ kind: "scratch", retired: true });
     }
