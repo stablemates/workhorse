@@ -1752,7 +1752,9 @@ describe("task dependencies", () => {
       () => observed.fail(secondRoot, "crossed-sdk-worker", new Error("crossed")),
     );
 
-    expect(codes).toEqual(["40P01"]);
+    // A resend can start before the other cascade finishes and cross it again, so PostgreSQL may
+    // choose more than one victim. Every abort is a deadlock, and both failures still settle.
+    expect(new Set(codes)).toEqual(new Set(["40P01"]));
     expect(settled).toEqual([
       { status: "fulfilled", value: "failed" },
       { status: "fulfilled", value: "failed" },
