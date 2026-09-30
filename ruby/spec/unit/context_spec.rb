@@ -180,6 +180,42 @@ RSpec.describe W::HandlerContext do
     expect(executor.statements.length).to eq(1)
   end
 
+  it "keeps the newest acknowledged progress when writes return out of order" do
+    entered = Queue.new
+    release = Queue.new
+    executor = FakeExecutor.new do |_sql, params|
+      value = params.last
+      if value == "1"
+        entered << true
+        release.pop
+      end
+      [{"status" => "updated", "progress_value" => value, "revision" => value, "attempt" => "1",
+        "fence_token" => "7", "worker_id" => "w", "created_at" => nil, "updated_at" => nil}]
+    end
+    ctx = context(executor)
+    first = Thread.new { ctx.set_progress(1) }
+    entered.pop
+    expect(ctx.set_progress(2).revision).to eq(2)
+    release << true
+    expect(first.value.revision).to eq(1)
+    expect(ctx.get_progress).to have_attributes(value: 2, revision: 2)
+  end
+
+  it "rejects an invalid checkpoint or wait name before it runs the block or any statement" do
+    executor = FakeExecutor.new
+    deferred = described_class.new(executor: executor, queue: W::Queue.new(executor), task: task, worker_id: "w",
+      cancellation: token, arbiter: arbiter, fast_tier: -> { raise "the tier lookup must not run" })
+    ["", "x" * 201, nil, :a].product([context(executor), deferred]).each do |name, ctx|
+      expect { ctx.checkpoint(name) { raise "the block must not run" } }
+        .to raise_error(ArgumentError, "checkpoint name must contain between 1 and 200 characters")
+      expect { ctx.sleep(name, 1) }.to raise_error(ArgumentError, "wait name must contain between 1 and 200 characters")
+      expect { ctx.sleep_until(name, Time.now + 1) }
+        .to raise_error(ArgumentError, "wait name must contain between 1 and 200 characters")
+    end
+    expect(executor.statements).to be_empty
+    expect([token.cancelled?, arbiter.outcome]).to eq([false, nil])
+  end
+
   it "suspends the attempt for a created child" do
     executor = FakeExecutor.new { [{"status" => "created"}] }
     expect { context(executor).run_child("c", "t", {}) }.to raise_error(W::HandlerContext::Suspension)

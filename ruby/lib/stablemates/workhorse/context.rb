@@ -117,6 +117,7 @@ module Stablemates
       # Returns the value a checkpoint named +name+ saved, running the block to produce and save it
       # only when no such checkpoint exists.
       def checkpoint(name, &block)
+        durable_name(name, "checkpoint")
         durable!("checkpoints")
         raise ArgumentError, "checkpoint needs a block" if block.nil?
 
@@ -139,12 +140,14 @@ module Stablemates
       # Suspends the attempt for +seconds+ under the durable timer +name+. Returns at once when the
       # timer has already elapsed in an earlier attempt.
       def sleep(name, seconds)
+        durable_name(name, "wait")
         durable!("durable waits")
         schedule_wait(name, Values.milliseconds(seconds, "wait duration", 1..MAX_WAIT_MS), nil)
       end
 
       # Suspends the attempt until +time+ under the durable timer +name+.
       def sleep_until(name, time)
+        durable_name(name, "wait")
         durable!("durable waits")
         raise ArgumentError, "wait time must be a Time" unless time.is_a?(Time)
         raise ArgumentError, "wait time must be no more than 365 days in the future" if
@@ -248,7 +251,8 @@ module Stablemates
         end
       end
 
-      # Persists +progress+, a JSON value, and returns the stored TaskProgress.
+      # Persists +progress+, a JSON value, and returns the stored TaskProgress. When writes overlap,
+      # +get_progress+ keeps the highest revision PostgreSQL acknowledged, whatever order they return in.
       def set_progress(progress)
         durable!("progress")
         encoded = Values.json(progress, "progress")
@@ -262,7 +266,10 @@ module Stablemates
         else raise UnexpectedStatusError.new(:set_progress, status)
         end
         saved = progress_record(row)
-        @lock.synchronize { @loaded[:progress] = [:ok, saved] }
+        @lock.synchronize do
+          state, cached = @loaded[:progress]
+          @loaded[:progress] = [:ok, saved] unless state == :ok && cached && cached.revision > saved.revision
+        end
         log(:debug, "workhorse.task.progress_updated", "Task progress persisted", "workhorse.progress.status" => status)
         saved
       end
@@ -440,7 +447,7 @@ module Stablemates
       # Refuses a durable write once the attempt is cancelled. An attempt that lost its lease raises
       # LeaseLostError, as its fenced write would.
       # A fast-tier task has no durable execution state (ADR 0077), so each call that would write it
-      # raises before any validation or round trip.
+      # raises before any round trip. Only a checkpoint or wait name is validated first.
       # A worker that does not know the tier at claim time passes a callable, which the first
       # durable call runs and caches. A failed read raises before any durable write.
       def durable!(feature)
@@ -549,10 +556,14 @@ module Stablemates
         timeout.nil? ? nil : Values.milliseconds(timeout, "#{label} timeout", 1..MAX_EXTERNAL_TIMEOUT_MS)
       end
 
-      def child_name(name)
+      def child_name(name) = durable_name(name, "child")
+
+      # PostgreSQL accepts a checkpoint, wait, or child name of 1 to 200 characters. Checking it first
+      # keeps an invalid name from running a block or reaching PostgreSQL.
+      def durable_name(name, label)
         return if name.is_a?(String) && name.length.between?(1, 200)
 
-        raise ArgumentError, "child name must contain between 1 and 200 characters"
+        raise ArgumentError, "#{label} name must contain between 1 and 200 characters"
       end
 
       # JSON with every object's keys sorted, so equal requests encode to equal text.

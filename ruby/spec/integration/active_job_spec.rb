@@ -289,6 +289,17 @@ RSpec.describe "Active Job adapter against PostgreSQL" do
     expect(state(jobs[3].provider_job_id)).to eq("scheduled")
   end
 
+  it "clears a perform_all_later job's earlier enqueue_error once a later call enqueues it" do
+    job = AjPriorityJob.new
+    expect(ActiveJob.perform_all_later([job])).to be_nil
+    expect([job.successfully_enqueued?, job.enqueue_error]).to match([false, be_a(ActiveJob::EnqueueError)])
+
+    job.priority = 5
+    expect(ActiveJob.perform_all_later([job])).to be_nil
+    expect([job.successfully_enqueued?, job.enqueue_error]).to eq([true, nil])
+    expect(task_row(job.provider_job_id)["priority"]).to eq("5")
+  end
+
   it "records the enqueuing trace context for both formats" do
     parent = OpenTelemetry::Trace::SpanContext.new
     context = OpenTelemetry::Trace.context_with_span(OpenTelemetry::Trace.non_recording_span(parent))

@@ -223,9 +223,11 @@ module ActiveJob
       def enqueue_at(job, timestamp) = enqueue_one(job, Time.at(timestamp))
 
       # Enqueues +jobs+ in atomic chunks of the shared batch limit and returns how many it enqueued.
-      # A job with an invalid priority records the error and is skipped.
+      # A job with an invalid priority records the error and is skipped. Each job reports only the
+      # error of this call.
       def enqueue_all(jobs)
         pending = jobs.filter_map do |job|
+          job.enqueue_error = nil
           [job, workhorse.request(job, job.scheduled_at && Time.at(job.scheduled_at.to_f))]
         rescue ::ActiveJob::EnqueueError => e
           job.enqueue_error = e

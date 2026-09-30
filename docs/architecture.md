@@ -572,9 +572,12 @@ calls. `get_checkpoint(name)` returns the stored `TaskCheckpoint`, or `nil` when
 `checkpoint(name) { ... }` returns the stored value, or runs the block once and saves its result
 through `save_checkpoint_v1`. `set_progress(value)` calls `update_progress_v1` and returns
 the stored `TaskProgress`. `get_progress` returns the latest `TaskProgress`, or `nil` before any
-report. A throttled report raises `ProgressRateLimitedError`, whose `retry_after` is in seconds.
+report. When progress writes overlap, the context keeps the highest `revision` PostgreSQL
+acknowledged, whatever order the writes return in. A throttled report raises `ProgressRateLimitedError`, whose `retry_after` is in seconds.
 `sleep(name, seconds)` accepts 1 millisecond through 365 days, and `sleep_until(name, time)` accepts
-a `Time` at most 365 days ahead. Both call `schedule_wait_v1`. `wait_for_signal(name, timeout:)` and
+a `Time` at most 365 days ahead. Both call `schedule_wait_v1`. A checkpoint or wait name is a
+String of 1 through 200 characters. An invalid name raises `ArgumentError` before the block runs
+or any statement. `wait_for_signal(name, timeout:)` and
 `wait_for_human(name, context, timeout:)` take an optional timeout from 1 millisecond through 7
 days. Their names contain 1 through 200 characters without surrounding whitespace, and the human
 context encodes to at most 65,536 bytes of JSON. `run_child(name, task_type, payload, **options)`
@@ -676,7 +679,8 @@ Job older than 8.0 raises `LoadError`. `StablematesWorkhorseAdapter.new(executor
 through `ActiveRecordExecutor.new(ActiveRecord::Base)` when `executor` is nil, so an enqueue joins
 the caller's Active Record transaction when `enqueue_after_transaction_commit` is false.
 `enqueue_all` enqueues in atomic chunks of `MAX_ENQUEUE_BATCH_SIZE`. It sets `enqueue_error` and
-skips a job whose priority it refuses, and returns how many jobs it enqueued.
+skips a job whose priority it refuses, and returns how many jobs it enqueued. It clears each job's
+`enqueue_error` first, so a job reports only the error of the current call.
 
 A job class without a task type is a default job. Its task type is `active_job`, and its payload is
 `job.serialize`. A class that includes `Stablemates::Workhorse::ActiveJob::Options` and calls
@@ -3553,9 +3557,9 @@ the task's queue:
 | `runChild`, `runChildren`, `runChildrenAll` | `child tasks`   |
 
 The Ruby `HandlerContext` rejects its snake_case counterparts with the same feature text, before any
-validation or statement. `get_checkpoint` and `get_progress` stay reads and still answer. A Ruby
+durable write. Only a checkpoint or wait name is validated first. `get_checkpoint` and `get_progress` stay reads and still answer. A Ruby
 batch member's `BatchHandlerContext` delegates to its `HandlerContext`, so its `checkpoint` and
-`set_progress` raise the same error before any statement.
+`set_progress` raise the same error before any durable write.
 
 A queue can move to the fast tier while the Ruby worker still claims it through `claim_many_v1`.
 That statement then returns fast-tier tasks with no tier marker. So `Worker#track_full_tier_claim`
