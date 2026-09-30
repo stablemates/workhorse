@@ -2,17 +2,25 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
+  ACTIVE_JOB_PARITY_ROWS,
   PARITY_CLIENT_ROWS,
   PARITY_DEFAULT_ROWS,
   PARITY_OPERATOR_ROWS,
   PARITY_WORKER_ROWS,
   PRODUCT_PARITY_ROWS,
+  type ActiveJobParityCell,
   type ParityCell,
   type ParityDefaultRow,
   type ParityRow,
+  type RubyParityCell,
   type RustParityCell,
 } from "../typescript/core/test/support/parity-capabilities.js";
 import { repositoryRoot } from "./packages.js";
+import {
+  activeJobEvidenceProblems,
+  readRubyEvidenceState,
+  rubyEvidenceProblems,
+} from "./ruby-parity-evidence.js";
 import { readRustFixtureState, rustEvidenceProblems } from "./rust-parity-evidence.js";
 
 const documentPath = path.join(repositoryRoot, "docs/parity.md");
@@ -26,7 +34,7 @@ const tables = [
 
 const productColumns = ["PostgreSQL", "Dashboard", "CLI"] as const;
 
-function status(cell: ParityCell | RustParityCell): string {
+function status(cell: ParityCell | RustParityCell | RubyParityCell): string {
   if ("absent" in cell) return "Absent";
   // Reference-style so the reader reaches the Issue; the definitions are generated below.
   if ("planned" in cell) return `[Planned][${cell.planned}]`;
@@ -48,16 +56,20 @@ function rustCell(row: ParityRow, table: "client" | "worker" | "operator"): Rust
 
 function renderTable(rows: readonly ParityRow[], table: "client" | "worker" | "operator"): string {
   return renderCells([
-    ["Capability", "TypeScript", "Python", "Go", "Rust"],
+    ["Capability", "TypeScript", "Python", "Go", "Rust", "Ruby"],
     ...rows.map((row) => [
       row.capability,
       status(row.typescript),
       status(row.python),
       status(row.go),
       status(rustCell(row, table)),
+      status(row.ruby),
     ]),
   ]);
 }
+
+/** The Ruby worker runtime owns every default until it ships. */
+const rubyRuntimeDefault = { planned: "SM-900" };
 
 /** A default renders its value, or Absent when the language has no such setting. */
 function defaultValue(cell: ParityDefaultRow["typescript"] | ParityDefaultRow["rust"]): string {
@@ -68,13 +80,32 @@ function defaultValue(cell: ParityDefaultRow["typescript"] | ParityDefaultRow["r
 
 function renderDefaultsTable(): string {
   return renderCells([
-    ["Setting", "TypeScript", "Python", "Go", "Rust"],
+    ["Setting", "TypeScript", "Python", "Go", "Rust", "Ruby"],
     ...PARITY_DEFAULT_ROWS.map((row) => [
       row.setting,
       defaultValue(row.typescript),
       defaultValue(row.python),
       defaultValue(row.go),
       defaultValue(row.rust ?? { planned: "SM-878" }),
+      defaultValue(row.ruby ?? rubyRuntimeDefault),
+    ]),
+  ]);
+}
+
+/** An Active Job cell names its limit before the status it qualifies. */
+function activeJobStatus(cell: ActiveJobParityCell): string {
+  if ("nativeOnly" in cell) return "Native only";
+  const limit = "limit" in cell && cell.limit !== undefined ? `${cell.limit}, ` : "";
+  return `${limit}${status(cell)}`;
+}
+
+function renderActiveJobTable(): string {
+  return renderCells([
+    ["Capability", "Default job", "Typed job"],
+    ...ACTIVE_JOB_PARITY_ROWS.map((row) => [
+      row.capability,
+      activeJobStatus(row.defaultJob),
+      activeJobStatus(row.typedJob),
     ]),
   ]);
 }
@@ -113,6 +144,23 @@ if (rustProblems.length > 0) {
   throw new Error(`Rust parity cells lack executed evidence:\n${rustProblems.join("\n")}`);
 }
 
+// Both modes refuse a Ruby Supported cell, native or Active Job, that the Ruby suite does not back.
+const rubyState = readRubyEvidenceState(repositoryRoot);
+const rubyProblems = [
+  ...rubyEvidenceProblems(
+    tables.flatMap(([, rows]) => rows),
+    rubyState,
+  ),
+  ...activeJobEvidenceProblems(
+    ACTIVE_JOB_PARITY_ROWS,
+    [...PARITY_CLIENT_ROWS, ...PARITY_WORKER_ROWS],
+    rubyState,
+  ),
+];
+if (rubyProblems.length > 0) {
+  throw new Error(`Ruby parity cells lack executed evidence:\n${rubyProblems.join("\n")}`);
+}
+
 const current = await readFile(documentPath, "utf8");
 const generatedLanguages = tables.reduce(
   (document, [name, rows]) => replaceGeneratedTable(document, name, rows, name),
@@ -128,13 +176,23 @@ const generatedDefaults = generatedLanguages.replace(
   defaultsPattern,
   `${defaultsStart}\n\n${renderDefaultsTable()}\n\n${defaultsEnd}`,
 );
+const activeJobStart = "<!-- BEGIN GENERATED PARITY ACTIVE JOB -->";
+const activeJobEnd = "<!-- END GENERATED PARITY ACTIVE JOB -->";
+const activeJobPattern = new RegExp(`${activeJobStart}[\\s\\S]*?${activeJobEnd}`);
+if (!activeJobPattern.test(generatedDefaults)) {
+  throw new Error("Missing generated parity markers for Active Job");
+}
+const generatedActiveJob = generatedDefaults.replace(
+  activeJobPattern,
+  `${activeJobStart}\n\n${renderActiveJobTable()}\n\n${activeJobEnd}`,
+);
 const productStart = "<!-- BEGIN GENERATED PARITY PRODUCT -->";
 const productEnd = "<!-- END GENERATED PARITY PRODUCT -->";
 const productPattern = new RegExp(`${productStart}[\\s\\S]*?${productEnd}`);
-if (!productPattern.test(generatedDefaults)) {
+if (!productPattern.test(generatedActiveJob)) {
   throw new Error("Missing generated parity markers for product");
 }
-const generated = generatedDefaults.replace(
+const generated = generatedActiveJob.replace(
   productPattern,
   `${productStart}\n\n${renderProductTable()}\n\n${productEnd}`,
 );
@@ -142,10 +200,14 @@ const plannedItems = [
   ...new Set(
     [
       ...tables.flatMap(([name, rows]) =>
-        rows.flatMap((row) => [row.typescript, row.python, row.go, rustCell(row, name)]),
+        rows.flatMap((row) => [row.typescript, row.python, row.go, rustCell(row, name), row.ruby]),
       ),
+      ...ACTIVE_JOB_PARITY_ROWS.flatMap((row) => [row.defaultJob, row.typedJob]),
       ...PRODUCT_PARITY_ROWS.flatMap((row) => [row.postgresql, row.dashboard, row.cli]),
-      ...PARITY_DEFAULT_ROWS.map((row) => row.rust ?? { planned: "SM-878" }),
+      ...PARITY_DEFAULT_ROWS.flatMap((row) => [
+        row.rust ?? { planned: "SM-878" },
+        row.ruby ?? rubyRuntimeDefault,
+      ]),
     ].flatMap((cell) => ("planned" in cell ? [cell.planned] : [])),
   ),
 ].toSorted();

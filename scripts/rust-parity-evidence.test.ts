@@ -17,6 +17,7 @@ function row(rust: unknown): ParityRow {
     python: planned,
     go: planned,
     rust: rust as ParityRow["rust"],
+    ruby: planned,
   };
 }
 

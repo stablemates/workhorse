@@ -39,7 +39,8 @@ function readJson(file: string): unknown {
   return JSON.parse(readFileSync(file, "utf8"));
 }
 
-export function readRustFixtureState(root: string): RustFixtureState {
+/** Every `<category>/<fixture id>` that `protocol/v1` declares. */
+export function readDeclaredFixtures(root: string): Set<string> {
   const declared = new Set<string>();
   for (const category of categories) {
     const document = readJson(path.join(root, "protocol/v1", `${category}.json`));
@@ -49,11 +50,15 @@ export function readRustFixtureState(root: string): RustFixtureState {
     ) as { id: string }[];
     for (const fixture of fixtures) declared.add(`${category}/${fixture.id}`);
   }
+  return declared;
+}
+
+export function readRustFixtureState(root: string): RustFixtureState {
   const ledger = readJson(path.join(root, "rust/tests/conformance/expected-unsupported.json")) as {
     fixtures: { fixture: string; issue: string }[];
   };
   return {
-    declared,
+    declared: readDeclaredFixtures(root),
     unsupported: new Map(ledger.fixtures.map((entry) => [entry.fixture, entry.issue])),
     integrationTests: readIntegrationTests(root),
   };

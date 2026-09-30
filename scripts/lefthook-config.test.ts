@@ -15,9 +15,9 @@ describe("lefthook Rust and generated-artifact routing", () => {
     expect(config).toContain('glob: "**/*.{ts,tsx,js,jsx,mjs,cjs,json,md,yml,yaml}"');
   });
 
-  it("routes Rust and generated parity files to their checks", () => {
+  it("routes Rust, Ruby specs, and generated parity files to their checks", () => {
     expect(config).toContain(
-      'glob: "{rust/**,rust/PARITY.md,typescript/core/test/support/parity-capabilities.ts,docs/parity.md,scripts/generate-parity-tables.ts}"',
+      'glob: "{rust/**,rust/PARITY.md,ruby/spec/**,typescript/core/test/support/parity-capabilities.ts,docs/parity.md,scripts/generate-parity-tables.ts}"',
     );
     expect(config).toContain(
       'glob: "{rust/**,rust/PARITY.md,docs/rust-conformance.md,scripts/generate-rust-conformance.ts}"',

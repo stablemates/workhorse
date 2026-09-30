@@ -41,14 +41,28 @@ module ScratchDatabase
       "DATABASE_URL_TEST is unset"
     end
 
+    # Another scratch database beside the process's own, with a fresh schema its caller may
+    # rewrite. Nil when a local run has no database. `drop_extra` or `drop` removes it.
+    def extra(label)
+      return nil unless url
+
+      @mutex.synchronize do
+        name = scratch_name(@source_name, "#{Process.pid}:#{label}")
+        @extras << name
+        install(name)
+      end
+    end
+
+    def drop_extra(label)
+      name = scratch_name(@source_name, "#{Process.pid}:#{label}")
+      @mutex.synchronize { discard(name) if @extras.delete(name) }
+    end
+
     def drop
+      discard(@extras.pop) until @extras.empty?
       return unless @name
 
-      with_admin { |admin| drop_database(admin, @name) }
-      report("dropped scratch database #{@name}")
-    rescue PG::Error => e
-      report("could not drop scratch database #{@name}: #{e.message}; run pnpm db:sweep")
-      raise
+      discard(@name)
     ensure
       @name = nil
     end
@@ -77,14 +91,20 @@ module ScratchDatabase
       raise "DATABASE_URL_TEST must name a test database" unless source_name.include?("test")
 
       @source = source
+      @source_name = source_name
       name = scratch_name(source_name, Process.pid)
+      # Owned before it exists, so a failed schema install still drops the database.
+      @name = name
+      install(name)
+    end
+
+    # Create +name+ afresh and install the current schema into it.
+    def install(name)
       with_admin do |admin|
         drop_database(admin, name)
         admin.exec("CREATE DATABASE #{PG::Connection.quote_ident(name)}")
       end
-      # Owned from here on, so a failed schema install still drops the database.
-      @name = name
-      scratch_url = replace_database(source, name)
+      scratch_url = replace_database(@source, name)
       connection = PG.connect(scratch_url, connect_timeout: CONNECT_TIMEOUT)
       begin
         connection.exec(File.read(SCHEMA))
@@ -93,6 +113,14 @@ module ScratchDatabase
       end
       report("running against scratch database #{name}")
       scratch_url
+    end
+
+    def discard(name)
+      with_admin { |admin| drop_database(admin, name) }
+      report("dropped scratch database #{name}")
+    rescue PG::Error => e
+      report("could not drop scratch database #{name}: #{e.message}; run pnpm db:sweep")
+      raise
     end
 
     def with_admin
@@ -130,8 +158,8 @@ module ScratchDatabase
     end
 
     # `<source>_rb_<digest>`, the scratch shape `pnpm db:sweep` recognizes, within 63 bytes.
-    def scratch_name(source, process)
-      digest = Digest::SHA256.hexdigest("ruby:#{process}")[0, 10]
+    def scratch_name(source, owner)
+      digest = Digest::SHA256.hexdigest("ruby:#{owner}")[0, 10]
       "#{source[0, 44]}_rb_#{digest}"
     end
 
@@ -146,4 +174,5 @@ module ScratchDatabase
 
   @mutex = Mutex.new
   @created = false
+  @extras = []
 end

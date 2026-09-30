@@ -20,7 +20,7 @@ import {
 // are recorded too, so shipping a capability without flipping its cell fails here.
 
 const repository = path.resolve(import.meta.dirname, "../../..");
-type ExistingLanguage = Exclude<ParityLanguage, "rust">;
+type ExistingLanguage = Exclude<ParityLanguage, "rust" | "ruby">;
 const languages: readonly ExistingLanguage[] = ["typescript", "python", "go"];
 const productTargets: readonly ProductParityTarget[] = ["postgresql", "dashboard", "cli"];
 
@@ -41,7 +41,9 @@ function documentedTables(markdown: string): DocumentedRow[][] {
   let current: DocumentedRow[] | null = null;
   for (const line of markdown.split("\n")) {
     if (
-      /^\|\s*Capability\s*\|\s*TypeScript\s*\|\s*Python\s*\|\s*Go\s*(\|\s*Rust\s*)?\|$/.test(line)
+      /^\|\s*Capability\s*\|\s*TypeScript\s*\|\s*Python\s*\|\s*Go\s*(\|\s*Rust\s*(\|\s*Ruby\s*)?)?\|$/.test(
+        line,
+      )
     ) {
       current = [];
       tables.push(current);
@@ -56,7 +58,7 @@ function documentedTables(markdown: string): DocumentedRow[][] {
       .split("|")
       .slice(1, -1)
       .map((cell) => cell.trim());
-    if ((cells.length !== 4 && cells.length !== 5) || /^-+$/.test(cells[0]!)) continue;
+    if (cells.length < 4 || cells.length > 6 || /^-+$/.test(cells[0]!)) continue;
     const [capability, ...statuses] = cells as [string, Status, Status, Status];
     current.push({
       capability,
