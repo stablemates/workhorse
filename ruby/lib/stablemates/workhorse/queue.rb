@@ -21,8 +21,6 @@ module Stablemates
       TASK_STATES = %i[blocked scheduled ready active succeeded failed canceled].freeze
       SIGNAL_STATUSES = %i[delivered duplicate not_waiting already_delivered stale not_found].freeze
       HUMAN_WAIT_STATUSES = %i[completed duplicate not_waiting already_completed stale not_found].freeze
-      # Times one fenced write is sent at most when PostgreSQL rolls it back as a deadlock victim.
-      FENCED_WRITE_DEADLOCK_ATTEMPTS = 3
       # The protocol's bounds, checked here so an invalid request raises before any statement.
       MAX_DURATION_MS = 31_536_000_000
       MAX_RATE_INTERVAL_MS = 86_400_000
@@ -40,7 +38,7 @@ module Stablemates
       private_constant :DEFAULT_MAX_ATTEMPTS, :DEFAULT_IDEMPOTENCY_TTL_MS, :MAX_TASK_DEPENDENCIES,
         :MAX_EXTERNAL_VALUE_BYTES, :OUTCOMES, :NON_REPLACEABLE_REASONS, :DEPENDENCY_POLICIES,
         :DEBOUNCE_SCHEDULES, :CATCHUP_POLICIES, :CANCEL_STATUSES, :TASK_STATES,
-        :SIGNAL_STATUSES, :HUMAN_WAIT_STATUSES, :FENCED_WRITE_DEADLOCK_ATTEMPTS, :MAX_DURATION_MS,
+        :SIGNAL_STATUSES, :HUMAN_WAIT_STATUSES, :MAX_DURATION_MS,
         :MAX_RATE_INTERVAL_MS, :MAX_POLICY_VALUE, :MAX_POLICY_DEFINITIONS, :MAX_NAME_BYTES,
         :MAX_KEY_BYTES, :MAX_TAGS, :MAX_TAG_LENGTH, :RETRY_POLICY_FIELDS
 
@@ -244,12 +242,40 @@ module Stablemates
         list(SqlCatalogue::LIST_BUDGETS, names, "names").map { |row| Policies.budget(row) }
       end
 
+      # The +create_child_v1+ request for one child of +parent+, a ClaimedTask. A child inherits
+      # the parent's trace context, runs on the "default" queue unless +options+ names one, and
+      # takes no coalescing or dependency option. Internal to the SDK.
+      def serialize_child_request(parent, task_type, payload, options) # :nodoc:
+        request = EnqueueRequest.new(task_type: task_type, payload: payload, **options)
+        if request.idempotency || request.debounce || request.throttle || request.dependencies
+          raise ArgumentError, "Child tasks cannot use coalescing or dependency enqueue options"
+        end
+
+        Values.check_json(payload, "payload")
+        input = task_input(request)
+        input["queue"] = "default" if request.queue.nil? || request.queue.empty?
+        input["deadline"] = request.deadline && Values.timestamp(request.deadline, "deadline")
+        input["budget"] = optional_bytes(request.budget, MAX_NAME_BYTES, "budget")
+        timeout = request.execution_timeout &&
+          Values.milliseconds(request.execution_timeout, "execution timeout", 0..MAX_DURATION_MS)
+        input["executionTimeoutMs"] = timeout&.zero? ? nil : timeout
+        input["prerequisiteTaskId"] = nil
+        input["dependencies"] = nil
+        input["tags"] = tags(request.tags)
+        input["traceContext"] = parent.trace_context unless parent.trace_context.nil?
+        input["runAt"] = Values.timestamp(request.run_at, "run at") if request.run_at
+        input
+      end
+
       private
 
       def enqueue_attempt(requests)
         now = Time.now
+        trace_context = Telemetry.inject_trace_context
         inputs = requests.each_with_index.map do |request, index|
-          serialize_request(request, now)
+          input = serialize_request(request, now)
+          input["traceContext"] = trace_context if trace_context
+          input
         rescue ArgumentError => e
           raise ArgumentError, "enqueue request #{index + 1}: #{e.message}"
         end
@@ -535,25 +561,7 @@ module Stablemates
         value
       end
 
-      # Sends a fenced write, and sends it again when PostgreSQL chose it as a deadlock victim.
-      #
-      # PostgreSQL rolls back the whole statement, and a resend writes the same complete desired
-      # set. A deadlock aborts a caller-owned transaction, so a resend there fails with 25P02, and
-      # the caller gets the original deadlock instead.
-      def fenced_write(statement, params)
-        deadlock = nil
-        attempt = 1
-        begin
-          @executor.rows(statement, params)
-        rescue DatabaseError => e
-          raise deadlock if deadlock && e.sqlstate == "25P02"
-          raise if attempt >= FENCED_WRITE_DEADLOCK_ATTEMPTS || e.sqlstate != "40P01"
-
-          deadlock = e
-          attempt += 1
-          retry
-        end
-      end
+      def fenced_write(statement, params) = @executor.fenced_rows(statement, params)
 
       def list(statement, names, label)
         @executor.rows(statement, [Values.text_array(names || [], label)])

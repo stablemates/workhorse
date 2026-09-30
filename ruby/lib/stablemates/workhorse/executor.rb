@@ -19,7 +19,9 @@ module Stablemates
       private_constant :Connection
 
       STRINGS = PG::TypeMapAllStrings.new
-      private_constant :STRINGS
+      # Times one fenced write is sent at most when PostgreSQL rolls it back as a deadlock victim.
+      FENCED_WRITE_DEADLOCK_ATTEMPTS = 3
+      private_constant :STRINGS, :FENCED_WRITE_DEADLOCK_ATTEMPTS
 
       def self.for(executor)
         case executor
@@ -53,6 +55,26 @@ module Stablemates
         end
       rescue PG::Error => e
         raise Executor.translate(e)
+      end
+
+      # Sends a fenced write, and sends it again when PostgreSQL chose it as a deadlock victim.
+      #
+      # PostgreSQL rolls back the whole statement, and a resend writes the same complete desired
+      # set. A deadlock aborts a caller-owned transaction, so a resend there fails with 25P02, and
+      # the caller gets the original deadlock instead.
+      def fenced_rows(sql, params = [])
+        deadlock = nil
+        attempt = 1
+        begin
+          rows(sql, params)
+        rescue DatabaseError => e
+          raise deadlock if deadlock && e.sqlstate == "25P02"
+          raise if attempt >= FENCED_WRITE_DEADLOCK_ATTEMPTS || e.sqlstate != "40P01"
+
+          deadlock = e
+          attempt += 1
+          retry
+        end
       end
 
       # Maps a PG::Error to the SDK's error for its SQLSTATE.

@@ -19,6 +19,7 @@ Gem::Specification.new do |spec|
   spec.files = Dir["lib/**/*.{rb,json,tar.gz}"] + %w[CHANGELOG.md LICENSE NOTICE README.md]
   spec.require_paths = ["lib"]
 
+  spec.add_dependency "concurrent-ruby", ">= 1.3.1", "< 2"
   spec.add_dependency "connection_pool", ">= 2.5", "< 4"
   spec.add_dependency "pg", ">= 1.6", "< 2"
 end
