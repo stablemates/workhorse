@@ -21,8 +21,6 @@ module Stablemates
       TASK_STATES = %i[blocked scheduled ready active succeeded failed canceled].freeze
       SIGNAL_STATUSES = %i[delivered duplicate not_waiting already_delivered stale not_found].freeze
       HUMAN_WAIT_STATUSES = %i[completed duplicate not_waiting already_completed stale not_found].freeze
-      # Times one fenced write is sent at most when PostgreSQL rolls it back as a deadlock victim.
-      FENCED_WRITE_DEADLOCK_ATTEMPTS = 3
       # The protocol's bounds, checked here so an invalid request raises before any statement.
       MAX_DURATION_MS = 31_536_000_000
       MAX_RATE_INTERVAL_MS = 86_400_000
@@ -40,7 +38,7 @@ module Stablemates
       private_constant :DEFAULT_MAX_ATTEMPTS, :DEFAULT_IDEMPOTENCY_TTL_MS, :MAX_TASK_DEPENDENCIES,
         :MAX_EXTERNAL_VALUE_BYTES, :OUTCOMES, :NON_REPLACEABLE_REASONS, :DEPENDENCY_POLICIES,
         :DEBOUNCE_SCHEDULES, :CATCHUP_POLICIES, :CANCEL_STATUSES, :TASK_STATES,
-        :SIGNAL_STATUSES, :HUMAN_WAIT_STATUSES, :FENCED_WRITE_DEADLOCK_ATTEMPTS, :MAX_DURATION_MS,
+        :SIGNAL_STATUSES, :HUMAN_WAIT_STATUSES, :MAX_DURATION_MS,
         :MAX_RATE_INTERVAL_MS, :MAX_POLICY_VALUE, :MAX_POLICY_DEFINITIONS, :MAX_NAME_BYTES,
         :MAX_KEY_BYTES, :MAX_TAGS, :MAX_TAG_LENGTH, :RETRY_POLICY_FIELDS
 
@@ -248,8 +246,11 @@ module Stablemates
 
       def enqueue_attempt(requests)
         now = Time.now
+        trace_context = Telemetry.inject_trace_context
         inputs = requests.each_with_index.map do |request, index|
-          serialize_request(request, now)
+          input = serialize_request(request, now)
+          input["traceContext"] = trace_context if trace_context
+          input
         rescue ArgumentError => e
           raise ArgumentError, "enqueue request #{index + 1}: #{e.message}"
         end
@@ -535,25 +536,7 @@ module Stablemates
         value
       end
 
-      # Sends a fenced write, and sends it again when PostgreSQL chose it as a deadlock victim.
-      #
-      # PostgreSQL rolls back the whole statement, and a resend writes the same complete desired
-      # set. A deadlock aborts a caller-owned transaction, so a resend there fails with 25P02, and
-      # the caller gets the original deadlock instead.
-      def fenced_write(statement, params)
-        deadlock = nil
-        attempt = 1
-        begin
-          @executor.rows(statement, params)
-        rescue DatabaseError => e
-          raise deadlock if deadlock && e.sqlstate == "25P02"
-          raise if attempt >= FENCED_WRITE_DEADLOCK_ATTEMPTS || e.sqlstate != "40P01"
-
-          deadlock = e
-          attempt += 1
-          retry
-        end
-      end
+      def fenced_write(statement, params) = @executor.fenced_rows(statement, params)
 
       def list(statement, names, label)
         @executor.rows(statement, [Values.text_array(names || [], label)])

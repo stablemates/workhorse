@@ -98,6 +98,32 @@ module Stablemates
     # A stored budget. +max_active+ and +rate+ may each be nil.
     Budget = Data.define(:namespace, :name, :max_active, :rate, :updated_at)
 
+    # One attempt a worker leased. PostgreSQL's fence token guards every write the attempt makes.
+    ClaimedTask = Data.define(
+      :id, :queue, :type, :priority, :payload, :contract_version, :result_max_bytes,
+      :redact_error_details, :trace_context, :attempt, :max_attempts, :retry_policy, :deadline_at,
+      :execution_timeout_ms, :attempt_timeout_at, :fence_token, :lease_expires_at
+    ) do
+      def self.from_row(row, queue) # :nodoc:
+        new(
+          id: row.fetch("task_id"), queue: queue, type: row.fetch("task_type"),
+          priority: Values.parse_integer(row["priority"]), payload: Values.parse_json(row["payload"]),
+          contract_version: row["contract_version"],
+          result_max_bytes: Values.parse_integer(row["result_max_bytes"]),
+          redact_error_details: row["redact_error_details"] == "t",
+          trace_context: Values.parse_json(row["trace_context"]),
+          attempt: Values.parse_integer(row["attempt"]),
+          max_attempts: Values.parse_integer(row["max_attempts"]),
+          retry_policy: Values.parse_json(row["retry_policy"]),
+          deadline_at: Values.parse_time(row["deadline_at"]),
+          execution_timeout_ms: Values.parse_integer(row["execution_timeout_ms"]),
+          attempt_timeout_at: Values.parse_time(row["attempt_timeout_at"]),
+          fence_token: Values.parse_integer(row["fence_token"]),
+          lease_expires_at: Values.parse_time(row["lease_expires_at"])
+        )
+      end
+    end
+
     # Encodes and decodes the values that cross the protocol, without coercing a non-JSON value.
     # Internal to the SDK; not part of its governed surface.
     module Values

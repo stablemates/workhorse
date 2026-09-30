@@ -104,7 +104,7 @@ async function expectEvidence(root: string, evidence: ParityCell): Promise<void>
  * of cell answer the same two questions and the caller asserts once.
  */
 async function describeDefault(
-  cell: ParityDefaultRow[ExistingLanguage],
+  cell: Exclude<ParityDefaultRow["ruby"], { planned: string }>,
 ): Promise<{ sourced: boolean; published: boolean }> {
   if ("absent" in cell) {
     return { sourced: cell.absent.trim().length > 0, published: true };
@@ -217,6 +217,14 @@ describe("parity matrix", () => {
   )("%s / %s publishes the value its source still sets", async (_setting, _language, cell) => {
     // A default cell names the line that sets it. A value cannot outlive its constant, and an
     // Absent cell has to say why the language has no such setting.
+    expect(await describeDefault(cell)).toEqual({ sourced: true, published: true });
+  });
+
+  it.each(
+    PARITY_DEFAULT_ROWS.flatMap((row) =>
+      "planned" in row.ruby ? [] : [[row.setting, row.ruby] as const],
+    ),
+  )("%s / ruby publishes the value its source still sets", async (_setting, cell) => {
     expect(await describeDefault(cell)).toEqual({ sourced: true, published: true });
   });
 

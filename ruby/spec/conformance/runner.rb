@@ -6,6 +6,7 @@ require "time"
 require_relative "database"
 require_relative "ledger"
 require_relative "matcher"
+require_relative "runtime"
 
 module Conformance
   PROTOCOL = File.expand_path("../../../protocol/v1", __dir__)
@@ -17,7 +18,6 @@ module Conformance
   ].freeze
   # The categories only the worker runtime can execute.
   RUNTIME_CATEGORIES = %w[failures runtime].freeze
-  RUNTIME_GAP = "the Ruby worker runtime lands in SM-900"
   DATABASE_CATEGORIES = %w[scenarios cron-occurrences requests schedules compatibility].freeze
 
   # Every fixture each category file declares, in file order.
@@ -78,9 +78,6 @@ module Conformance
     def run
       each_fixture("interpreter") { |fixture| Runner.run_interpreter(fixture) }
       each_fixture("contracts") { |fixture| Runner.run_contract(fixture) }
-      RUNTIME_CATEGORIES.each do |category|
-        @catalogue.category(category).each { |fixture| record(category, fixture, Outcome.unsupported(RUNTIME_GAP)) }
-      end
 
       problems = []
       scenarios = ScratchDatabase.extra("protocol_conformance_scenarios")
@@ -96,8 +93,14 @@ module Conformance
         ensure
           ScratchDatabase.drop_extra("protocol_conformance_adapters")
         end
+        runtime = ScratchDatabase.extra("protocol_conformance_runtime")
+        begin
+          run_runtime(runtime)
+        ensure
+          ScratchDatabase.drop_extra("protocol_conformance_runtime")
+        end
       else
-        DATABASE_CATEGORIES.each do |category|
+        (DATABASE_CATEGORIES + RUNTIME_CATEGORIES).each do |category|
           @catalogue.category(category).each do |fixture|
             record(category, fixture, Outcome.skipped("DATABASE_URL_TEST is unset"))
           end
@@ -322,6 +325,18 @@ module Conformance
     end
 
     # ----- adapters ----------------------------------------------------------------------------
+
+    # The failures and runtime fixtures run a real worker, so they share one scratch database.
+    def run_runtime(url)
+      with_connection(url) do |setup|
+        runtime = Runtime.new(url, setup)
+        each_fixture("failures") { |fixture| runtime.failure(fixture) }
+        @catalogue.category("runtime").each do |fixture|
+          gap = Runtime::GAPS[fixture["kind"]]
+          record("runtime", fixture, gap ? Outcome.unsupported(gap) : attempt { runtime.run(fixture) })
+        end
+      end
+    end
 
     def run_adapters(url)
       with_connection(url) do |setup|

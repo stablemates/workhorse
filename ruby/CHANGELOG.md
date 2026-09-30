@@ -23,3 +23,12 @@ other SDKs carry, because every tag names one release of all of them.
   `Rack::Builder#map`. It answers the dashboard/v1 procedures and serves the bundled browser app.
 - `Executor.for` ignores the `Object#with` that ActiveSupport defines, so a plain object is still
   refused.
+- Add `Worker`: it claims, heartbeats, completes, fails, and retries tasks over a
+  `ConnectionPool`, and runs handlers on a thread pool of `concurrency` threads. A handler receives
+  its payload and a `HandlerContext` with the task and a `CancellationToken`. `stop` requests
+  shutdown. `run` then drains handlers within `shutdown_grace`, cancels the rest with `:shutdown`,
+  and raises `ShutdownIncompleteError` when any handler still runs.
+- Under Rails, handlers run inside `Rails.application.executor.wrap`. `run` warns when the Active
+  Record pool is smaller than `concurrency`.
+- Add `run_worker_process`, which stops the worker on `TERM` or `INT` and exits at once on a second
+  signal, and `run_worker_processes`, which forks, supervises, and restarts worker processes.

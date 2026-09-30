@@ -50,7 +50,7 @@ describe("Ruby parity evidence", () => {
 
   it("reads the declared fixtures, the expected-unsupported list, and the spec examples", () => {
     expect(state.declared.has("scenarios/fast-tier")).toBe(true);
-    expect(state.unsupported.get("failures/undeclared-name")).toBe("SM-900");
+    expect(state.unsupported.get("runtime/lease-loss-fences-handler-writes")).toBe("SM-981");
     expect(state.examples.get(example.file)?.has(example.example)).toBe(true);
   });
 
@@ -89,8 +89,13 @@ describe("Ruby parity evidence", () => {
   });
 
   it("rejects a fixture the Ruby runner lists as expected unsupported", () => {
-    expect(rubyEvidenceProblems([row({ fixtures: ["failures/undeclared-name"] })], state)).toEqual([
-      "Probe: failures/undeclared-name is expected unsupported in Ruby (SM-900), so the cell cannot be Supported",
+    expect(
+      rubyEvidenceProblems(
+        [row({ fixtures: ["runtime/lease-loss-fences-handler-writes"] })],
+        state,
+      ),
+    ).toEqual([
+      "Probe: runtime/lease-loss-fences-handler-writes is expected unsupported in Ruby (SM-981), so the cell cannot be Supported",
     ]);
   });
 

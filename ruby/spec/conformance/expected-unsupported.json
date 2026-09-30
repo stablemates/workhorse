@@ -2,109 +2,19 @@
   "$comment": "protocol/v1 fixtures the Ruby lane does not pass yet. Each entry names the Issue that owns the gap. protocol_conformance_spec.rb fails when an unlisted fixture does not pass and when a listed fixture passes.",
   "fixtures": [
     {
-      "fixture": "failures/declared-name-and-stack",
-      "issue": "SM-900",
-      "reason": "failure envelopes come from the Ruby worker runtime, which lands in SM-900"
-    },
-    {
-      "fixture": "failures/declared-name-without-stack",
-      "issue": "SM-900",
-      "reason": "failure envelopes come from the Ruby worker runtime, which lands in SM-900"
-    },
-    {
-      "fixture": "failures/undeclared-name",
-      "issue": "SM-900",
-      "reason": "failure envelopes come from the Ruby worker runtime, which lands in SM-900"
-    },
-    {
-      "fixture": "failures/redacted-details",
-      "issue": "SM-900",
-      "reason": "failure envelopes come from the Ruby worker runtime, which lands in SM-900"
-    },
-    {
-      "fixture": "runtime/enqueue-trace-context-reaches-handler",
-      "issue": "SM-900",
-      "reason": "the Ruby worker runtime lands in SM-900"
-    },
-    {
       "fixture": "runtime/priority-ordered-mixed-batch",
-      "issue": "SM-900",
-      "reason": "the Ruby worker runtime lands in SM-900"
+      "issue": "SM-982",
+      "reason": "batch handlers land in SM-982"
     },
     {
       "fixture": "runtime/durable-wait-suspension-and-checkpoint-replay",
-      "issue": "SM-900",
-      "reason": "the Ruby worker runtime lands in SM-900"
-    },
-    {
-      "fixture": "runtime/cooperative-cancellation-reaches-handler",
-      "issue": "SM-900",
-      "reason": "the Ruby worker runtime lands in SM-900"
-    },
-    {
-      "fixture": "runtime/deadline-settles-after-early-local-timer",
-      "issue": "SM-900",
-      "reason": "the Ruby worker runtime lands in SM-900"
-    },
-    {
-      "fixture": "runtime/deadline-settles-after-database-first-heartbeat",
-      "issue": "SM-900",
-      "reason": "the Ruby worker runtime lands in SM-900"
-    },
-    {
-      "fixture": "runtime/execution-timeout-settles-after-early-local-timer",
-      "issue": "SM-900",
-      "reason": "the Ruby worker runtime lands in SM-900"
+      "issue": "SM-981",
+      "reason": "the durable HandlerContext lands in SM-981"
     },
     {
       "fixture": "runtime/lease-loss-fences-handler-writes",
-      "issue": "SM-900",
-      "reason": "the Ruby worker runtime lands in SM-900"
-    },
-    {
-      "fixture": "runtime/heartbeats-never-overlap",
-      "issue": "SM-900",
-      "reason": "the Ruby worker runtime lands in SM-900"
-    },
-    {
-      "fixture": "runtime/empty-polls-back-off-with-jitter",
-      "issue": "SM-900",
-      "reason": "the Ruby worker runtime lands in SM-900"
-    },
-    {
-      "fixture": "runtime/stop-drains-active-slots-without-new-claims",
-      "issue": "SM-900",
-      "reason": "the Ruby worker runtime lands in SM-900"
-    },
-    {
-      "fixture": "runtime/busy-worker-refills-slots-with-overlapping-batched-claims",
-      "issue": "SM-900",
-      "reason": "the Ruby worker runtime lands in SM-900"
-    },
-    {
-      "fixture": "runtime/budget-admission-holds-across-queues",
-      "issue": "SM-900",
-      "reason": "the Ruby worker runtime lands in SM-900"
-    },
-    {
-      "fixture": "runtime/missing-handler-releases-the-task-with-its-attempt-intact",
-      "issue": "SM-900",
-      "reason": "the Ruby worker runtime lands in SM-900"
-    },
-    {
-      "fixture": "runtime/json-values-survive-the-payload-and-result-round-trip",
-      "issue": "SM-900",
-      "reason": "the Ruby worker runtime lands in SM-900"
-    },
-    {
-      "fixture": "runtime/failed-heartbeat-rounds-keep-the-attempt-running",
-      "issue": "SM-900",
-      "reason": "the Ruby worker runtime lands in SM-900"
-    },
-    {
-      "fixture": "runtime/failing-maintenance-phase-leaves-the-worker-claiming",
-      "issue": "SM-900",
-      "reason": "the Ruby worker runtime lands in SM-900"
+      "issue": "SM-981",
+      "reason": "its fenced handler writes are durable HandlerContext calls, which land in SM-981"
     }
   ]
 }

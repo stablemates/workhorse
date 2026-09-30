@@ -60,10 +60,10 @@ RSpec.describe "protocol/v1 conformance" do
       expect(problems).to eq(["requests/b was never executed"])
     end
 
-    it "names only SM-900 for the fixtures the worker runtime owns" do
+    it "names SM-981 and SM-982 for the runtime fixtures the durable context and batches own" do
       entries = Conformance::Ledger.load
-      expect(entries.map { |entry| entry["issue"] }.uniq).to eq(["SM-900"])
-      expect(entries.map { |entry| entry["fixture"].split("/").first }.uniq.sort).to eq(%w[failures runtime])
+      expect(entries.map { |entry| entry["issue"] }.uniq.sort).to eq(%w[SM-981 SM-982])
+      expect(entries.map { |entry| entry["fixture"].split("/").first }.uniq).to eq(["runtime"])
     end
   end
 
