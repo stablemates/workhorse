@@ -9,6 +9,7 @@ module Stablemates
       def initialize
         @reason = Concurrent::AtomicReference.new
         @event = Concurrent::Event.new
+        @observers = Concurrent::Array.new
       end
 
       def cancelled? = @event.set?
@@ -33,7 +34,16 @@ module Stablemates
         return false unless @reason.compare_and_set(nil, reason)
 
         @event.set
+        @observers.each { |observer| observer.call(reason) }
         true
+      end
+
+      # Calls +observer+ with the reason once the token is cancelled, or at once if it already is.
+      # A cancel that races the call may run it twice, so +observer+ must be idempotent.
+      def observe(&observer) # :nodoc:
+        @observers << observer
+        reason = @reason.get
+        observer.call(reason) unless reason.nil?
       end
     end
 
@@ -87,8 +97,9 @@ module Stablemates
       # The attempt's CancellationToken.
       attr_reader :cancellation
 
-      def initialize(executor:, queue:, task:, worker_id:, cancellation:, arbiter:, logger: nil) # :nodoc:
+      def initialize(executor:, queue:, task:, worker_id:, cancellation:, arbiter:, logger: nil, fast_tier: false) # :nodoc:
         @executor = executor
+        @fast_tier = fast_tier
         @queue = queue
         @task = task
         @worker_id = worker_id
@@ -103,6 +114,7 @@ module Stablemates
       # Returns the value a checkpoint named +name+ saved, running the block to produce and save it
       # only when no such checkpoint exists.
       def checkpoint(name, &block)
+        durable!("checkpoints")
         raise ArgumentError, "checkpoint needs a block" if block.nil?
 
         once(:checkpoint, name) do
@@ -124,11 +136,13 @@ module Stablemates
       # Suspends the attempt for +seconds+ under the durable timer +name+. Returns at once when the
       # timer has already elapsed in an earlier attempt.
       def sleep(name, seconds)
+        durable!("durable waits")
         schedule_wait(name, Values.milliseconds(seconds, "wait duration", 1..MAX_WAIT_MS), nil)
       end
 
       # Suspends the attempt until +time+ under the durable timer +name+.
       def sleep_until(name, time)
+        durable!("durable waits")
         raise ArgumentError, "wait time must be a Time" unless time.is_a?(Time)
         raise ArgumentError, "wait time must be no more than 365 days in the future" if
           (time - Time.now) * 1000 > MAX_WAIT_MS
@@ -139,6 +153,7 @@ module Stablemates
       # Returns the payload of the signal +name+, suspending the attempt until one arrives.
       # +timeout+ is a count of seconds.
       def wait_for_signal(name, timeout: nil)
+        durable!("signal waits")
         external_name(name, "signal")
         timeout_ms = external_timeout(timeout, "signal")
         once(:wait_for_signal, name) do
@@ -158,6 +173,7 @@ module Stablemates
       # Returns the decision a person recorded for the wait +name+, suspending the attempt until one
       # arrives. +context+ is JSON shown to that person; +timeout+ is a count of seconds.
       def wait_for_human(name, context, timeout: nil)
+        durable!("human waits")
         external_name(name, "human wait")
         timeout_ms = external_timeout(timeout, "human wait")
         Values.check_json(context, "human wait context")
@@ -184,6 +200,7 @@ module Stablemates
       # succeeds. +enqueue_options+ are the keywords Queue#enqueue takes, less the coalescing and
       # dependency options.
       def run_child(name, task_type, payload, **enqueue_options)
+        durable!("child tasks")
         child_name(name)
         build = lambda do |versions = {}|
           canonical_json(@queue.serialize_child_request(@task, task_type, payload, enqueue_options, {},
@@ -230,6 +247,7 @@ module Stablemates
 
       # Persists +progress+, a JSON value, and returns the stored TaskProgress.
       def set_progress(progress)
+        durable!("progress")
         encoded = Values.json(progress, "progress")
         live!(:set_progress)
         row = write(SqlCatalogue::UPDATE_PROGRESS_V1, encoded)
@@ -273,6 +291,7 @@ module Stablemates
       end
 
       def run_child_set(children, mode)
+        durable!("child tasks")
         raise ArgumentError, "children must be an Array of ChildTaskRequest" unless
           children.is_a?(Array) && children.all?(ChildTaskRequest)
         raise LimitExceededError.new(:run_children, "child set") if children.length > MAX_CHILDREN
@@ -417,6 +436,12 @@ module Stablemates
 
       # Refuses a durable write once the attempt is cancelled. An attempt that lost its lease raises
       # LeaseLostError, as its fenced write would.
+      # A fast-tier task has no durable execution state (ADR 0077), so each call that would write it
+      # raises before any validation or round trip.
+      def durable!(feature)
+        raise FastTierUnsupportedError.new(@task.queue, feature, nil) if @fast_tier
+      end
+
       def live!(operation)
         raise LeaseLostError.new(@task.id, operation) if @cancellation.reason == :lease_lost
 

@@ -109,6 +109,33 @@ RSpec.describe W::HandlerContext do
     expect(context(executor).wait_for_signal("s", timeout: 2)).to eq({"ok" => true})
   end
 
+  it "rejects every durable write on a fast-tier task before any statement runs" do
+    executor = FakeExecutor.new { [] }
+    fast = described_class.new(executor: executor, queue: W::Queue.new(executor), task: task, worker_id: "w",
+      cancellation: token, arbiter: arbiter, fast_tier: true)
+    child = W::ChildTaskRequest.new(name: "c", task_type: "t", payload: {})
+    {
+      "checkpoints" => -> { fast.checkpoint("c") { raise "the block must not run" } },
+      "progress" => -> { fast.set_progress(1) },
+      "durable waits" => -> { fast.sleep("s", 1) },
+      "signal waits" => -> { fast.wait_for_signal("s") },
+      "human waits" => -> { fast.wait_for_human("h", {}) },
+      "child tasks" => -> { fast.run_child("c", "t", {}) }
+    }.each do |feature, call|
+      expect(&call).to raise_error(W::FastTierUnsupportedError, "Fast-tier queue default does not support #{feature}") { |error|
+        expect([error.queue, error.feature, error.ordinal]).to eq(["default", feature, nil])
+      }
+    end
+    expect { fast.sleep_until("s", Time.now + 1) }.to raise_error(W::FastTierUnsupportedError, /durable waits/)
+    expect { fast.run_children([child]) }.to raise_error(W::FastTierUnsupportedError, /child tasks/)
+    expect { fast.run_children_all([child]) }.to raise_error(W::FastTierUnsupportedError, /child tasks/)
+    expect { fast.sleep("s", -1) }.to raise_error(W::FastTierUnsupportedError)
+    expect(executor.statements).to be_empty
+    expect(fast.get_progress).to be_nil
+    expect(token.cancelled?).to be(false)
+    expect(arbiter.outcome).to be_nil
+  end
+
   it "validates external wait names and timeouts before any statement runs" do
     executor = FakeExecutor.new
     expect { context(executor).wait_for_signal(" s") }.to raise_error(ArgumentError)
