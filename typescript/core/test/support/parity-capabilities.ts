@@ -19,6 +19,10 @@
  * runner's expected-unsupported list, or unless the named test exists in an integration target. A
  * Rust cell is therefore Supported only while CI executes and passes its evidence.
  *
+ * A Ruby Supported cell follows the same rule. It cites `protocol/v1` fixtures that the Ruby
+ * conformance runner passes, or one example in a `ruby/spec` file that `pnpm ruby:test` runs. CI runs
+ * that suite with `WORKHORSE_REQUIRE_DATABASE=1`, so a cited example cannot skip there.
+ *
  * A Planned cell carries the Ontrack Issue that owns the gap. The generator writes its link into
  * the document, so a Planned cell cannot outlive the work it points at unnoticed.
  */
@@ -29,6 +33,7 @@ export const PARITY_TEST_ROOTS = {
   python: "python/tests",
   go: "go",
   rust: "rust",
+  ruby: "ruby/spec",
 } as const;
 
 export type ParityLanguage = keyof typeof PARITY_TEST_ROOTS;
@@ -64,6 +69,18 @@ export type RustParityCell =
   | { absent: string }
   | { planned: string };
 
+/** An example, by its exact `it` description, in a `ruby/spec` file that `pnpm ruby:test` runs. */
+interface RubyExampleEvidence {
+  file: string;
+  example: string;
+}
+
+export type RubyParityCell =
+  | RustFixtureEvidence
+  | RubyExampleEvidence
+  | { absent: string }
+  | { planned: string };
+
 export interface ParityRow {
   /** The capability column, byte for byte as `docs/parity.md` writes it. */
   capability: string;
@@ -72,6 +89,8 @@ export interface ParityRow {
   go: ParityCell;
   /** A Rust cell is Supported only with fixtures or an integration test that CI executes. */
   rust?: RustParityCell;
+  /** The native Ruby SDK. A Ruby cell is Supported only with evidence that CI executes. */
+  ruby: RubyParityCell;
 }
 
 /** Where each product operator surface's tests live, relative to the repository root. */
@@ -101,6 +120,10 @@ const pythonAdmin = { file: "test_admin.py", pattern: "admin." } as const;
 export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Transactional enqueue in a caller-owned tx",
+    ruby: {
+      file: "integration/enqueue_spec.rb",
+      example: "commits and rolls back a transactional enqueue with the caller",
+    },
     rust: {
       file: "enqueue_postgres.rs",
       test: "transactional_enqueue_commits_and_rolls_back_with_the_caller",
@@ -111,6 +134,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Atomic batch enqueue",
+    ruby: {
+      file: "integration/enqueue_spec.rb",
+      example: "writes an atomic batch in request order with enqueue_many",
+    },
     rust: {
       file: "enqueue_postgres.rs",
       test: "enqueue_many_writes_an_atomic_batch_in_request_order",
@@ -121,6 +148,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Delayed enqueue (`runAt` / `run_at`)",
+    ruby: {
+      file: "integration/enqueue_spec.rb",
+      example: "persists run at, priority, tags, and max attempts",
+    },
     rust: {
       file: "enqueue_postgres.rs",
       test: "enqueue_persists_run_at_priority_tags_and_max_attempts",
@@ -131,6 +162,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Priority",
+    ruby: {
+      file: "integration/enqueue_spec.rb",
+      example: "persists run at, priority, tags, and max attempts",
+    },
     rust: {
       file: "enqueue_postgres.rs",
       test: "enqueue_persists_run_at_priority_tags_and_max_attempts",
@@ -141,6 +176,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Tags and max attempts",
+    ruby: {
+      file: "integration/enqueue_spec.rb",
+      example: "persists run at, priority, tags, and max attempts",
+    },
     rust: {
       file: "enqueue_postgres.rs",
       test: "enqueue_persists_run_at_priority_tags_and_max_attempts",
@@ -151,6 +190,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Persisted retry policies",
+    ruby: {
+      file: "integration/enqueue_spec.rb",
+      example: "persists the retry policy, deadline, and execution timeout",
+    },
     rust: {
       file: "enqueue_postgres.rs",
       test: "enqueue_persists_retry_policy_deadline_and_execution_timeout",
@@ -161,6 +204,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Absolute deadlines and execution timeouts",
+    ruby: {
+      file: "integration/enqueue_spec.rb",
+      example: "persists the retry policy, deadline, and execution timeout",
+    },
     rust: {
       file: "enqueue_postgres.rs",
       test: "enqueue_persists_retry_policy_deadline_and_execution_timeout",
@@ -171,6 +218,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Enqueue idempotency",
+    ruby: {
+      file: "integration/enqueue_spec.rb",
+      example: "replays an idempotent enqueue and rejects a conflicting request",
+    },
     rust: {
       file: "enqueue_postgres.rs",
       test: "enqueue_idempotency_replays_and_rejects_a_conflicting_request",
@@ -181,6 +232,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Keyed debounce",
+    ruby: {
+      file: "integration/enqueue_spec.rb",
+      example: "replaces a pending task inside its debounce window",
+    },
     rust: {
       file: "enqueue_postgres.rs",
       test: "debounce_replaces_a_pending_task_inside_its_window",
@@ -191,6 +246,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Keyed throttle",
+    ruby: {
+      file: "integration/enqueue_spec.rb",
+      example: "coalesces requests inside a throttle window",
+    },
     rust: { file: "enqueue_postgres.rs", test: "throttle_coalesces_requests_inside_its_window" },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "throttle" },
     python: { file: "test_driver_integration.py", pattern: "throttle" },
@@ -198,6 +257,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Task dependencies with terminal policies",
+    ruby: {
+      file: "integration/enqueue_spec.rb",
+      example: "blocks a task on its dependencies with their terminal policies",
+    },
     rust: {
       file: "enqueue_postgres.rs",
       test: "dependencies_block_a_task_with_its_terminal_policies",
@@ -208,6 +271,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Concurrency keys",
+    ruby: {
+      file: "integration/enqueue_spec.rb",
+      example: "persists the concurrency key and budget",
+    },
     rust: { file: "enqueue_postgres.rs", test: "enqueue_persists_concurrency_key_and_budget" },
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "concurrencyKey" },
     python: { file: "test_enqueue.py", pattern: "concurrency_key" },
@@ -215,6 +282,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Concurrency policy management",
+    ruby: {
+      file: "integration/client_spec.rb",
+      example: "syncs policies and budgets per namespace, pruning what a sync omits",
+    },
     rust: { file: "client_postgres.rs", test: "sync_concurrency_policies_stores_lists_and_prunes" },
     typescript: {
       file: "integration-retention-maintenance.test.ts",
@@ -231,6 +302,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Rate-limit policy management",
+    ruby: {
+      file: "integration/client_spec.rb",
+      example: "syncs policies and budgets per namespace, pruning what a sync omits",
+    },
     rust: { file: "client_postgres.rs", test: "sync_rate_limit_policies_stores_lists_and_prunes" },
     typescript: {
       file: "integration-claim-lease-fence.test.ts",
@@ -247,6 +322,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Named budget management",
+    ruby: {
+      file: "integration/client_spec.rb",
+      example: "syncs policies and budgets per namespace, pruning what a sync omits",
+    },
     rust: { file: "client_postgres.rs", test: "sync_budgets_stores_lists_and_prunes" },
     typescript: {
       file: "integration-budgets.test.ts",
@@ -263,6 +342,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Recurring schedule definition sync",
+    ruby: { file: "integration/client_spec.rb", example: "stores and prunes schedule definitions" },
     rust: { file: "client_postgres.rs", test: "sync_schedules_stores_and_prunes_definitions" },
     typescript: { file: "integration-cron-schedules.test.ts", pattern: "syncSchedules" },
     python: { file: "test_schedules.py", pattern: "sync_schedules" },
@@ -270,6 +350,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Payload and result contracts",
+    ruby: {
+      file: "integration/client_spec.rb",
+      example: "validates payloads against synced contracts and stamps contract fields",
+    },
     rust: {
       file: "client_postgres.rs",
       test: "sync_contracts_validates_payloads_and_stamps_contract_fields",
@@ -280,6 +364,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Compatibility refusal before mutation",
+    ruby: {
+      file: "integration/enqueue_spec.rb",
+      example: "refuses an incompatible schema before the first write",
+    },
     rust: {
       file: "enqueue_postgres.rs",
       test: "incompatible_schema_refuses_before_the_first_write",
@@ -290,6 +378,22 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Public startup schema compatibility check",
+    ruby: {
+      fixtures: [
+        "compatibility/current",
+        "compatibility/schema-newer-inside-major-line",
+        "compatibility/served-protocol-undeclared",
+        "compatibility/schema-not-installed",
+        "compatibility/schema-before-the-fast-tier-contract",
+        "compatibility/schema-before-the-governed-drift-repair",
+        "compatibility/schema-before-the-admission-shards",
+        "compatibility/schema-serves-only-older-protocols",
+        "compatibility/schema-below-the-statement-catalogues",
+        "compatibility/schema-no-longer-serves-client",
+        "compatibility/client-protocol-too-old",
+        "compatibility/client-protocol-too-new",
+      ],
+    },
     rust: {
       fixtures: [
         "compatibility/current",
@@ -310,6 +414,27 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "SQL protocol conformance fixtures executed",
+    ruby: {
+      fixtures: [
+        "interpreter/matcher-semantics",
+        "scenarios/successful-batch-lifecycle",
+        "scenarios/retry-and-terminal-failure",
+        "scenarios/ownership-expiration-and-recovery",
+        "scenarios/cancellation",
+        "scenarios/timer-wait",
+        "scenarios/coalescing-and-structured-errors",
+        "scenarios/dependencies",
+        "scenarios/children",
+        "scenarios/signals",
+        "scenarios/queue-health",
+        "scenarios/human-tokens",
+        "scenarios/contract-definition-sync-and-read",
+        "scenarios/batch-claim-admission",
+        "scenarios/retention-maintenance",
+        "scenarios/unknown-type-release",
+        "scenarios/fast-tier",
+      ],
+    },
     rust: {
       fixtures: [
         "interpreter/matcher-semantics",
@@ -336,6 +461,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Enqueue trace-context propagation",
+    ruby: { planned: "SM-900" },
     rust: { file: "enqueue_postgres.rs", test: "enqueue_propagates_the_current_trace_context" },
     typescript: {
       file: "sql-protocol-conformance.test.ts",
@@ -352,6 +478,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
 export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Claiming and handler execution",
+    ruby: { planned: "SM-900" },
     rust: { file: "worker_postgres.rs", test: "the_handler_result_reaches_the_task_outcome" },
     typescript: { file: "integration-claim-lease-fence.test.ts", pattern: "claim" },
     python: { file: "test_worker.py", pattern: "handler" },
@@ -359,6 +486,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Bounded worker concurrency",
+    ruby: { planned: "SM-900" },
     rust: {
       file: "worker_postgres.rs",
       test: "concurrent_handlers_stay_within_the_concurrency_limit",
@@ -369,6 +497,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Fast task tier with one outcome row per task",
+    ruby: { planned: "SM-900" },
     rust: {
       file: "worker_postgres.rs",
       test: "a_crashed_fast_worker_loses_no_task_and_records_one_outcome_each",
@@ -379,6 +508,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Fused fast-tier completion and refill claim in slot cohorts",
+    ruby: { planned: "SM-900" },
     rust: {
       file: "worker_postgres.rs",
       test: "an_abandoned_batching_worker_reruns_no_more_tasks_than_its_concurrency",
@@ -392,6 +522,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Unhandled task type released to its queue",
+    ruby: { planned: "SM-900" },
     rust: { fixtures: ["runtime/missing-handler-releases-the-task-with-its-attempt-intact"] },
     typescript: { file: "integration-claim-lease-fence.test.ts", pattern: "unregistered type" },
     python: { file: "test_worker.py", pattern: "unregistered_type" },
@@ -399,6 +530,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Heartbeats, lease recovery, fenced ownership",
+    ruby: { planned: "SM-900" },
     rust: {
       fixtures: [
         "runtime/heartbeats-never-overlap",
@@ -412,6 +544,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Cooperative cancellation delivery",
+    ruby: { planned: "SM-900" },
     rust: { fixtures: ["runtime/cooperative-cancellation-reaches-handler"] },
     typescript: { file: "integration-claim-lease-fence.test.ts", pattern: "cancel" },
     python: { file: "test_worker.py", pattern: "cancel" },
@@ -419,6 +552,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Notification-assisted dispatch with polling",
+    ruby: { planned: "SM-900" },
     rust: {
       file: "worker_postgres.rs",
       test: "a_notification_wakes_an_idle_worker_before_its_poll",
@@ -429,6 +563,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Durable checkpoints (handler context)",
+    ruby: { planned: "SM-900" },
     rust: { fixtures: ["runtime/durable-wait-suspension-and-checkpoint-replay"] },
     typescript: { file: "integration-checkpoints-progress-waits.test.ts", pattern: "checkpoint" },
     python: { file: "test_worker.py", pattern: "checkpoint" },
@@ -436,6 +571,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Durable timers (`sleep` / `sleepUntil`)",
+    ruby: { planned: "SM-900" },
     rust: {
       file: "durable_postgres.rs",
       test: "sleep_suspends_until_its_wake_time_and_a_past_wake_time_returns_at_once",
@@ -446,6 +582,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Signal and human-decision waits",
+    ruby: { planned: "SM-900" },
     rust: {
       file: "durable_postgres.rs",
       test: "signal_and_human_waits_resume_with_what_was_delivered",
@@ -456,6 +593,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Linked child fan-out and result join",
+    ruby: { planned: "SM-900" },
     rust: { file: "durable_postgres.rs", test: "run_children_reports_how_each_child_ended" },
     typescript: { file: "integration-child-tasks.test.ts", pattern: "child" },
     python: { file: "test_worker_child_tasks.py", pattern: "child" },
@@ -463,6 +601,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Latest-value progress reporting",
+    ruby: { planned: "SM-900" },
     rust: {
       file: "durable_postgres.rs",
       test: "progress_round_trips_and_a_quick_change_is_rate_limited",
@@ -473,6 +612,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Batch handler delivery",
+    ruby: { planned: "SM-900" },
     rust: { file: "worker_postgres.rs", test: "a_batch_handler_receives_its_members_in_one_call" },
     typescript: { file: "integration-batch-handlers.test.ts", pattern: "batch" },
     python: { file: "test_worker.py", pattern: "batch" },
@@ -480,6 +620,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Schedule firing (database cron evaluation)",
+    ruby: { planned: "SM-900" },
     rust: { file: "worker_postgres.rs", test: "maintenance_fires_due_schedules_in_its_namespaces" },
     typescript: { file: "integration-cron-schedules.test.ts", pattern: "fireSchedule" },
     python: { file: "test_worker_schedules.py", pattern: "schedule" },
@@ -487,6 +628,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Worker fleet registration and remote pause",
+    ruby: { planned: "SM-900" },
     rust: {
       file: "worker_postgres.rs",
       test: "an_operator_pause_stops_claims_until_it_is_cleared",
@@ -497,6 +639,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Graceful stop and signal drain",
+    ruby: { planned: "SM-900" },
     rust: { file: "worker_postgres.rs", test: "a_stuck_handler_is_abandoned_when_grace_ends" },
     typescript: { file: "worker-process.test.ts", pattern: "drain" },
     python: { file: "test_worker_process.py", pattern: "drain" },
@@ -504,6 +647,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Retention maintenance participation",
+    ruby: { planned: "SM-900" },
     rust: { file: "worker_postgres.rs", test: "a_worker_runs_terminal_storage_maintenance" },
     typescript: { file: "integration-retention-maintenance.test.ts", pattern: "retain" },
     python: { file: "test_worker.py", pattern: "participates_in_slow_maintenance" },
@@ -511,6 +655,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "OpenTelemetry tracing and metrics",
+    ruby: { planned: "SM-900" },
     rust: { file: "worker_postgres.rs", test: "worker_metrics_reach_the_global_meter_provider" },
     typescript: { file: "telemetry.test.ts", pattern: "span" },
     python: { file: "test_worker_telemetry.py", pattern: "span" },
@@ -518,6 +663,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Shared runtime fixtures executed",
+    ruby: { planned: "SM-900" },
     rust: {
       fixtures: [
         "runtime/enqueue-trace-context-reaches-handler",
@@ -537,6 +683,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
 export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   {
     capability: "Task lookup, listing, and timeline",
+    ruby: { planned: "SM-901" },
     rust: { file: "admin_postgres.rs", test: "admin_lists_looks_up_and_times_tasks_across_pages" },
     typescript: { file: "integration-operator-reads.test.ts", pattern: "admin.listTasks" },
     python: pythonAdmin,
@@ -544,6 +691,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Queue health snapshot",
+    ruby: { file: "integration/client_spec.rb", example: "returns the queue health snapshot" },
     rust: { file: "client_postgres.rs", test: "health_returns_the_queue_health_snapshot" },
     typescript: { file: "integration-health-snapshots.test.ts", pattern: "health" },
     python: { file: "test_driver_integration.py", pattern: "health" },
@@ -551,6 +699,10 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Cancellation requests",
+    ruby: {
+      file: "integration/client_spec.rb",
+      example: "reports each PostgreSQL cancel disposition",
+    },
     rust: { file: "client_postgres.rs", test: "cancel_reports_each_postgres_disposition" },
     typescript: { file: "integration-operator-reads.test.ts", pattern: "cancel" },
     python: { file: "test_worker_runtime_conformance.py", pattern: "cancel" },
@@ -558,6 +710,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Queue pause, resume, and purge",
+    ruby: { planned: "SM-901" },
     rust: { file: "admin_postgres.rs", test: "admin_pauses_resumes_and_purges_a_queue" },
     typescript: { file: "integration-queue-administration.test.ts", pattern: "admin.purgeQueue" },
     python: pythonAdmin,
@@ -565,6 +718,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Dead-letter listing and redrive",
+    ruby: { planned: "SM-901" },
     rust: { file: "admin_postgres.rs", test: "admin_lists_and_redrives_dead_letters" },
     typescript: { file: "integration-operator-reads.test.ts", pattern: "admin.redrive" },
     python: pythonAdmin,
@@ -572,6 +726,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Checkpoint, wait, and human-decision reads",
+    ruby: { planned: "SM-901" },
     rust: { file: "admin_postgres.rs", test: "admin_reads_checkpoints_waits_and_human_waits" },
     typescript: { file: "integration-human-waits.test.ts", pattern: "admin.listHumanWaits" },
     python: pythonAdmin,
@@ -579,6 +734,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Durable operator worker pause",
+    ruby: { planned: "SM-901" },
     rust: { file: "admin_postgres.rs", test: "admin_pauses_and_resumes_a_registered_worker" },
     typescript: { file: "integration-worker-registry.test.ts", pattern: "paused" },
     python: pythonAdmin,
@@ -586,6 +742,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Embedded dashboard backend",
+    ruby: { planned: "SM-901" },
     typescript: {
       file: "../../dashboard-server/test/conformance.test.ts",
       pattern: "dashboard/v1 HTTP conformance fixtures",
@@ -675,6 +832,83 @@ export const PRODUCT_PARITY_ROWS: readonly ProductParityRow[] = [
   },
 ];
 
+/**
+ * An Active Job cell says whether a job enqueued through the adapter reaches a native capability.
+ *
+ * A cell the adapter reaches is Planned until the adapter ships, then Supported with Ruby evidence.
+ * A native-only cell records why `perform` cannot reach the capability. `limit` names a partial
+ * reach, such as a typed job whose payload passes its contract while no result is stored.
+ */
+export type ActiveJobParityCell =
+  | ((RustFixtureEvidence | RubyExampleEvidence | { planned: string }) & { limit?: string })
+  | { nativeOnly: string };
+
+export interface ActiveJobParityRow {
+  /** A Client or Worker row's capability, byte for byte. */
+  capability: string;
+  defaultJob: ActiveJobParityCell;
+  typedJob: ActiveJobParityCell;
+}
+
+const adapter = { planned: "SM-902" } as const;
+const noContext = { nativeOnly: "`perform` receives no handler context" } as const;
+const noOption = { nativeOnly: "Active Job has no option for it" } as const;
+const noWaiting = { nativeOnly: "Active Job has no model of one job waiting on another" } as const;
+
+/**
+ * The Client and Worker rows an Active Job job can reach, from ADR 0075's native-only table.
+ *
+ * The Ruby column above describes the native SDK. This table describes a Rails application that
+ * enqueues through `ActiveJob::QueueAdapters::StablematesWorkhorseAdapter` instead.
+ */
+export const ACTIVE_JOB_PARITY_ROWS: readonly ActiveJobParityRow[] = [
+  ...[
+    "Transactional enqueue in a caller-owned tx",
+    "Atomic batch enqueue",
+    "Delayed enqueue (`runAt` / `run_at`)",
+    "Priority",
+    "Tags and max attempts",
+    "Concurrency keys",
+    "Enqueue trace-context propagation",
+    "Claiming and handler execution",
+    "Bounded worker concurrency",
+    "Heartbeats, lease recovery, fenced ownership",
+    "Graceful stop and signal drain",
+  ].map((capability) => ({ capability, defaultJob: adapter, typedJob: adapter })),
+  {
+    capability: "Payload and result contracts",
+    defaultJob: { nativeOnly: "a default job's payload is Active Job's own serialization" },
+    typedJob: { ...adapter, limit: "Payload only" },
+  },
+  ...["Persisted retry policies", "Absolute deadlines and execution timeouts"].map(
+    (capability) => ({ capability, defaultJob: noOption, typedJob: noOption }),
+  ),
+  ...["Enqueue idempotency", "Keyed debounce", "Keyed throttle"].map((capability) => ({
+    capability,
+    defaultJob: { nativeOnly: "`retry_job` re-enqueues the same `job_id`" },
+    typedJob: noOption,
+  })),
+  {
+    capability: "Task dependencies with terminal policies",
+    defaultJob: noWaiting,
+    typedJob: noWaiting,
+  },
+  {
+    capability: "Recurring schedule definition sync",
+    defaultJob: { nativeOnly: "a schedule enqueues a task type, not a serialized job" },
+    typedJob: { nativeOnly: "recurring Active Job jobs are deferred past 0.6.0" },
+  },
+  ...[
+    "Cooperative cancellation delivery",
+    "Durable checkpoints (handler context)",
+    "Durable timers (`sleep` / `sleepUntil`)",
+    "Signal and human-decision waits",
+    "Linked child fan-out and result join",
+    "Latest-value progress reporting",
+    "Batch handler delivery",
+  ].map((capability) => ({ capability, defaultJob: noContext, typedJob: noContext })),
+];
+
 /** The three tables, in the order `docs/parity.md` prints them. */
 export const PARITY_TABLES: readonly (readonly ParityRow[])[] = [
   PARITY_CLIENT_ROWS,
@@ -705,6 +939,7 @@ export interface ParityDefaultRow {
   python: ParityDefaultCell | { absent: string };
   go: ParityDefaultCell | { absent: string };
   rust?: ParityDefaultCell | { absent: string } | { planned: string };
+  ruby?: ParityDefaultCell | { absent: string } | { planned: string };
 }
 
 /**
