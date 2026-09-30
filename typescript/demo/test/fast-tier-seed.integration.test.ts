@@ -194,12 +194,16 @@ describe("Workhorse demo fast-tier seed", () => {
       await run;
     }
 
-    // The worker claims only its own language's queue, so the other two keep their batches.
+    // The worker claims only its own language's queue, so the other two keep their batches. The
+    // worker also runs the fast-tier schedules, which can add a task to any fast queue mid-test, so
+    // count only the seeded tasks.
     const live = await pool.query<{ queue: string; count: number }>(
       `SELECT queue_name AS queue, count(*)::integer AS count
          FROM workhorse.fast_task_runtime
+        WHERE task_id = ANY($1::uuid[])
         GROUP BY queue_name
         ORDER BY queue_name`,
+      [seeded.taskIds],
     );
     expect(live.rows).toEqual(
       FAST_QUEUE_NAMES.filter((queue) => queue !== DEMO_FAST_QUEUE)
