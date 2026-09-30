@@ -146,10 +146,10 @@ RSpec.describe "Worker runtime against PostgreSQL" do
     task_id = queue.enqueue("partial", {}).task_id
     failing = "#{@queue_name}-failing"
     subject = worker(queues: [@queue_name, failing], concurrency: 2).handle("partial") { {} }
-    allow(subject).to receive(:claim).and_wrap_original do |original, name, limit|
+    allow(subject).to receive(:claim).and_wrap_original do |original, name, *limits|
       raise "later queue claim failed" if name == failing
 
-      original.call(name, limit)
+      original.call(name, *limits)
     end
 
     expect { subject.run_once }.to raise_error(RuntimeError, "later queue claim failed")

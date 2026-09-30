@@ -1,10 +1,4 @@
 {
   "$comment": "protocol/v1 fixtures the Ruby lane does not pass yet. Each entry names the Issue that owns the gap. protocol_conformance_spec.rb fails when an unlisted fixture does not pass and when a listed fixture passes.",
-  "fixtures": [
-    {
-      "fixture": "runtime/priority-ordered-mixed-batch",
-      "issue": "SM-982",
-      "reason": "batch handlers land in SM-982"
-    }
-  ]
+  "fixtures": []
 }

@@ -15,7 +15,7 @@ module Conformance
   # functions, never into the worker itself.
   class Runtime
     # Runtime fixtures that need a handler surface the Ruby worker does not have yet.
-    GAPS = {"batch" => "batch handlers land in SM-982"}.freeze
+    GAPS = {}.freeze
     CANCEL_NAMES = {
       requested: "CancellationRequestedError",
       deadline_exceeded: "DeadlineExceededError",
@@ -77,6 +77,7 @@ module Conformance
       when "maintenance-phase-error" then maintenance_phase_error(fixture)
       when "suspension-replay" then suspension_replay(fixture)
       when "lease-loss" then lease_loss(fixture)
+      when "batch" then batch(fixture)
       else raise Failure, "unknown runtime fixture kind #{Matcher.render(fixture["kind"])}"
       end
     rescue Failure
@@ -378,6 +379,38 @@ module Conformance
       states = task_ids.map { |task_id| state(task_id)["state"] }
       check(states.count("succeeded") == fixture["expectedSucceeded"], "states after the drain: #{states}")
       check(states.count("ready") == fixture["expectedReady"], "states after the drain: #{states}")
+    end
+
+    # The batch handler pauses the worker, so each run_once delivers one batch. The retrying task
+    # fails its first attempt and succeeds on the next run.
+    def batch(fixture)
+      name = queue_name(fixture)
+      task_ids = fixture.fetch("tasks").to_h do |task|
+        [task["key"], queue.enqueue(fixture["taskType"], {"key" => task["key"], "outcome" => task["outcome"]},
+          queue: name, priority: task["priority"], max_attempts: task["maxAttempts"],
+          retry_policy: {"type" => "fixed", "delayMs" => 0}).task_id]
+      end
+      seen = Concurrent::Array.new
+      with_pool do |pool|
+        subject = worker(pool, fixture, concurrency: fixture["concurrency"])
+        subject.handle_batch(fixture["taskType"], max_size: fixture["batchMaxSize"], linger: 0.1) do |payloads, context|
+          seen.concat(payloads.map { |payload| payload["key"] })
+          subject.pause
+          payloads.zip(context.tasks).map do |payload, task|
+            if payload["outcome"] == "succeed" || task.attempt > 1
+              {status: :succeeded, result: {"attempt" => task.attempt}}
+            else
+              {status: :failed, error: RuntimeError.new("#{payload["outcome"]} on attempt #{task.attempt}")}
+            end
+          end
+        end
+        check(subject.run_once == true, "the first run delivered no batch")
+        check(seen == fixture["expectedHandlerOrder"], "handler order #{seen}, want #{fixture["expectedHandlerOrder"]}")
+        batch_states(task_ids, fixture["expectedAfterFirstRun"], "first")
+        subject.resume
+        check(subject.run_once == true, "the second run delivered no batch")
+        batch_states(task_ids, fixture["expectedAfterSecondRun"], "second")
+      end
     end
 
     def slot_refill(fixture)
@@ -801,6 +834,13 @@ module Conformance
     def waits_on(pid, lock) = value(WAITS_ON, pid, lock) == "t"
 
     def active(subject) = subject.instance_variable_get(:@active).size
+
+    def batch_states(task_ids, expected, run)
+      expected.each do |key, want|
+        got = state(task_ids.fetch(key)).slice("state", "attempt")
+        check(got == want, "after the #{run} run #{key} is #{got}, want #{want}")
+      end
+    end
 
     def state(task_id)
       result = @connection.exec_params(STATE, [task_id])

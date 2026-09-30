@@ -502,7 +502,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Fast task tier with one outcome row per task",
-    ruby: { planned: "SM-982" },
+    ruby: {
+      file: "integration/worker_fast_tier_spec.rb",
+      example: "runs fast-tier tasks and records one fast_task_outcome row for each",
+    },
     rust: {
       file: "worker_postgres.rs",
       test: "a_crashed_fast_worker_loses_no_task_and_records_one_outcome_each",
@@ -513,7 +516,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Fused fast-tier completion and refill claim in slot cohorts",
-    ruby: { planned: "SM-982" },
+    ruby: {
+      file: "integration/worker_fast_tier_spec.rb",
+      example: "fuses each completion with a refill claim bounded by its slot cohort",
+    },
     rust: {
       file: "worker_postgres.rs",
       test: "an_abandoned_batching_worker_reruns_no_more_tasks_than_its_concurrency",
@@ -638,7 +644,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Batch handler delivery",
-    ruby: { planned: "SM-982" },
+    ruby: { fixtures: ["runtime/priority-ordered-mixed-batch"] },
     rust: { file: "worker_postgres.rs", test: "a_batch_handler_receives_its_members_in_one_call" },
     typescript: { file: "integration-batch-handlers.test.ts", pattern: "batch" },
     python: { file: "test_worker.py", pattern: "batch" },
@@ -1321,7 +1327,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
       file: "go/worker.go",
       pattern: "min(8, max(2, (concurrency+7)/8))",
     },
-    ruby: { planned: "SM-982" },
+    ruby: {
+      value: "1 below concurrency 8, else concurrency / 8 within 2 to 8",
+      file: "ruby/lib/stablemates/workhorse/worker.rb",
+      pattern: "((@concurrency + 7) / 8).clamp(2, 8)",
+    },
   },
   {
     setting: "Shutdown grace, then",

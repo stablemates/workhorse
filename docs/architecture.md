@@ -545,8 +545,13 @@ Ruby `Stablemates::Workhorse::Worker.new(pool, ...)` takes a `ConnectionPool` or
 `shared_heartbeats: true`, it requires an Integer pool `size` of at least 3, so a missing or
 non-integer `size` is refused too. Every worker built on one pool shares one `Worker::Heartbeat`,
 which holds one pool connection while it has members. `concurrency` accepts integers from 1 through
-100, and handlers run on a fixed `Concurrent::ThreadPoolExecutor` of that size with no queue. The
-worker claims only for executor threads that are ready, so a claimed task never waits for a thread.
+100, and handlers run on a `Concurrent::ThreadPoolExecutor` with no queue. It keeps `concurrency`
+threads and allows up to twice that many, because a task a fast-tier completion claimed starts while
+the completing handler's thread still returns. The worker claims only for free slots and within
+`DispatchSlots#thread_room`, the executor threads neither running nor reserved. A fused claim asks
+for at most that room, so handovers in a row cannot outrun the executor and a claimed task never
+waits for a thread. `cohorts` splits the slots for fast-tier dispatch, as
+[Workers on a fast-tier queue](#workers-on-a-fast-tier-queue) describes.
 `lease` defaults to 30 seconds and accepts 0.1 through 86,400 seconds. `heartbeat` defaults to the
 larger of 100 milliseconds and a third of the lease, and must be shorter than the lease.
 `shutdown_grace` defaults to 25 seconds and accepts 0 through 86,400 seconds. Durations are finite
@@ -612,6 +617,28 @@ The worker therefore ends the attempt without failing or completing it, even whe
 found the task released won the arbiter with `lease_expired` first. The attempt's telemetry then
 reports the suspension, not a lost lease. When the handler swallows the suspension and returns, the
 worker ignores the return and logs `workhorse.handler.signal_swallowed`.
+
+`Worker#handle_batch(type, max_size:, linger:, &handler)` registers a batch handler. `max_size`
+accepts integers from 1 through 100 and cannot exceed `concurrency`. `linger` accepts a Numeric
+count of seconds from 0 through 60, rounded to whole milliseconds.
+Each claimed task occupies its own handler thread and slot while it waits in
+the type's `BatchCoordinator`, which keeps one waiting list per queue. A full group dispatches at
+once. Otherwise the first member's linger deadline dispatches every group ahead of the waiting
+member and then its own. The coordinator orders members by descending `ClaimedTask#priority`, then
+by the claim order dispatch stamped in `admit`. When `drain` begins, it calls
+`BatchCoordinator#flush!`. From then on a waiting member stops lingering once
+`Worker#batch_arrivals_complete?` finds every admitted task of its type and queue in the
+coordinator, and it rechecks every 50 ms. The block is called as `handler.call(payloads,
+batch_context)`. `BatchHandlerContext#tasks` lists the member `ClaimedTask` values in payload order.
+`BatchHandlerContext#cancellation` is one `CancellationToken` that the first member cancellation
+cancels with that member's reason. The block returns one Hash per payload in the same order:
+`{status: :succeeded, result:}` or `{status: :failed, error:}` with an `Exception`. A raised error,
+a non-Array return, a wrong count, or an invalid outcome fails every member. An error outside
+`StandardError`, raised or returned, fails its members with a `RuntimeError` that names it. Every member still settles under its own lease and fence.
+The coordinator records `record_batch_dispatch_v1` before the call and `record_batch_failure_v1`
+after a whole-batch failure. A failed evidence write logs `workhorse.handler.batch_evidence_failed`
+and never decides an outcome. Each dispatch records the `workhorse.handler.batch.size` and
+`workhorse.handler.batch.linger` histograms.
 
 When `Rails.application.executor` exists, the Ruby worker runs each handler inside
 `Rails.application.executor.wrap`. When `ActiveRecord::Base` is loaded and its
@@ -3433,7 +3460,7 @@ A worker does not configure the tier. Each SDK worker probes a queue with a fast
 `complete_many_and_claim_v1`. A `P1007` answer marks the queue full-tier for 30 seconds, and the
 worker claims through `claim_many_v1` until the next probe. The interval is
 `TIER_PROBE_INTERVAL_MS` in TypeScript, `_TIER_PROBE_INTERVAL_SECONDS` in Python,
-`fastTierProbeInterval` in Go, and `TIER_PROBE_INTERVAL` in Rust. A stale belief is safe, because PostgreSQL routes each claim by the
+`fastTierProbeInterval` in Go, and `TIER_PROBE_INTERVAL` in Rust and Ruby. A stale belief is safe, because PostgreSQL routes each claim by the
 current tier.
 
 A fast-tier completion uses the fused statement. A `batched completion` rejection means the queue
@@ -3494,6 +3521,21 @@ back to `complete_v1`. The worker sorts each statement's task ids. When PostgreS
 statement back with SQLSTATE `40P01`, `fenced_rows` sends it again, up to
 `FENCED_WRITE_DEADLOCK_ATTEMPTS` (3) times in total, because nothing in it committed.
 
+The Ruby worker follows the Python rules. `Worker.new(cohorts:)` takes an Integer from 1 through
+`concurrency` and raises `ArgumentError` otherwise; an explicit value is never capped. Without it,
+`dispatch_cohorts` applies the TypeScript default and caps it at the pool's Integer `size`, minus 1
+for the listener, minus 1 for the heartbeat connection unless `shared_heartbeats` is true, and never
+below 1. A pool without an Integer `size` leaves the default uncapped. `DispatchSlots` splits the
+slots as TypeScript does. `reserve_claim` plans a plain claim and reserves its slots under one
+`@state_lock` hold, so a fused claim cannot reserve the same slots in between.
+`reserve_completion_claim` asks for the free slots of the completing task's cohort plus one, and `send_batched_completion` keeps one `complete_many_and_claim_v1`
+statement in flight per queue and cohort. Completions that arrive meanwhile share the next
+statement, split into chunks of at most `COMPLETION_BATCH_LIMIT` (100) tasks and 100 claimed slots.
+`send_completion_chunk` names each chunk's tasks in task ID order. When PostgreSQL rolls a chunk
+back with SQLSTATE `40P01`, `fenced_rows` sends it again, up to `FENCED_WRITE_DEADLOCK_ATTEMPTS` (3)
+times in total. A chunk that raises `FastTierUnsupportedError` completes each task through
+`complete_v1`.
+
 A fast-tier handler context rejects durable execution locally with `FastTierUnsupportedError` for
 the task's queue:
 
@@ -3505,6 +3547,10 @@ the task's queue:
 | `waitForSignal`                             | `signal waits`  |
 | `waitForHuman`                              | `human waits`   |
 | `runChild`, `runChildren`, `runChildrenAll` | `child tasks`   |
+
+The Ruby `HandlerContext` rejects its snake_case counterparts with the same feature text, before any
+validation or statement. `get_progress` stays a read and still answers. A Ruby batch handler's
+`BatchHandlerContext` carries only `tasks` and one batch `cancellation`.
 
 The rejection is a handler failure, so the attempt follows the task's retry policy.
 

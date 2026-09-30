@@ -28,6 +28,8 @@ module Stablemates
         "workhorse.maintenance.errors" => [:counter, "Workhorse maintenance phase failures", "{error}"],
         "workhorse.claim.duration" => [:histogram, "PostgreSQL claim operation latency", "ms"],
         "workhorse.handler.duration" => [:histogram, "Handler execution latency", "ms"],
+        "workhorse.handler.batch.size" => [:histogram, "Tasks delivered in one batch handler invocation", "{task}"],
+        "workhorse.handler.batch.linger" => [:histogram, "Time from the first batch member arriving until dispatch", "ms"],
         "workhorse.schedule.lag" => [:histogram, "Delay between a scheduled occurrence and its durable firing", "s"],
         "workhorse.maintenance.duration" => [:histogram, "Workhorse maintenance phase duration", "ms"]
       }.freeze

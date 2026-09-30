@@ -36,6 +36,17 @@ other SDKs carry, because every tag names one release of all of them.
   raises `LeaseLostError`; reads and checkpoint replays still return. A child without a queue runs on the worker's first queue.
 - Under Rails, handlers run inside `Rails.application.executor.wrap`. `run` warns when the Active
   Record pool is smaller than `concurrency`.
+- `Worker` runs tasks on a fast-tier queue: it probes each queue with `complete_many_and_claim_v1`,
+  records one `fast_task_outcome` row per task, and fuses each completion with a refill claim.
+  `Worker.new(cohorts:)` splits the slots into dispatch cohorts; without it, the worker keeps one
+  below concurrency 8, else `concurrency / 8` from 2 through 8, capped by the pool's spare
+  connections. The handler thread pool now allows two threads per slot.
+  A fast-tier task's `HandlerContext` raises `FastTierUnsupportedError` for checkpoints,
+  progress writes, durable waits, and child tasks before it sends any statement.
+- Add `Worker#handle_batch` with `max_size:` and `linger:` in seconds. The block receives the
+  payloads and a `BatchHandlerContext` with the member `tasks` and one `cancellation`, and returns
+  one outcome per payload. Once the worker stops, a lingering batch runs as soon as every task it
+  claimed has arrived.
 - Add `run_worker_process`, which stops the worker on `TERM` or `INT` and exits at once on a second
   signal, and `run_worker_processes`, which forks, supervises, and restarts worker processes.
 - Add the Active Job adapter, selected with `config.active_job.queue_adapter =

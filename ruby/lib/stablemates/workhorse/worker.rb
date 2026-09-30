@@ -25,6 +25,8 @@ module Stablemates
       PROTOCOL = "5"
       LANGUAGE = "ruby"
       MIN_POOL_SIZE = 3
+      COMPLETION_BATCH_LIMIT = 100
+      TIER_PROBE_INTERVAL = 30
       STATUS_OUTCOMES = {
         "cancel_requested" => :cancelled, "deadline_exceeded" => :deadline_exceeded,
         "timeout_exceeded" => :attempt_timeout, "stale" => :lease_expired
@@ -41,6 +43,7 @@ module Stablemates
       }.freeze
       private_constant :MAX_EMPTY_POLL_MS, :NOTIFICATION_POLL_MS, :NOTIFICATION_CLAIM_DELAY, :UNWIND_WINDOW,
         :EXPIRATION_RETRY, :REDACTED_NAME, :REDACTED_MESSAGE, :PROTOCOL, :LANGUAGE, :MIN_POOL_SIZE,
+        :COMPLETION_BATCH_LIMIT, :TIER_PROBE_INTERVAL,
         :STATUS_OUTCOMES, :TELEMETRY_OUTCOMES, :SPAN_OUTCOMES, :CANCEL_REASONS
 
       # One attempt's hold on its lease: the heartbeat membership, the lease watchdog, and the lock
@@ -85,18 +88,79 @@ module Stablemates
       end
       private_constant :Ownership
 
-      # One admitted task. +ownership+ is an AtomicReference that holds the task's Ownership once
+      # One admitted ClaimedTask. +ownership+ is an AtomicReference that holds its Ownership once
       # its handler starts.
-      Active = Struct.new(:cancellation, :ownership) # :nodoc:
+      Active = Struct.new(:cancellation, :ownership, :task) # :nodoc:
       private_constant :Active
 
-      attr_reader :worker_id, :queues, :concurrency
+      # The dispatch loop's slot accounting, which fast-tier completions share. Every field changes
+      # under the worker's @state_lock. A slot is busy while its executor thread runs, reserved
+      # while a claim for it is in flight, and handed over once a completion claimed a task into
+      # it. Handed-over slots count as free, because the task that fills them is already admitted.
+      class DispatchSlots # :nodoc:
+        attr_reader :concurrency, :refill_batch, :cohort_capacity, :listener, :version, :run_errors, :handlers,
+          :cohort_active, :cohort_handed_over, :cohort_reserved, :cohort_claims, :handed_over, :thread_cohorts
+        attr_accessor :whole_claims, :reserved, :empty, :empty_wait, :pass_ended, :claimed_any, :claim_error, :open
+
+        def initialize(concurrency, cohorts, listener, version, run_errors, handlers)
+          @concurrency = concurrency
+          # A claim waits for a quarter of the slots, so at most four claims are in flight.
+          @refill_batch = (concurrency / 4.0).ceil
+          # Spreads the remainder over the first cohorts, so sizes differ by at most one slot.
+          @cohort_capacity = Array.new(cohorts) { |index| (concurrency / cohorts) + ((index < concurrency % cohorts) ? 1 : 0) }
+          @listener = listener
+          @version = version
+          @run_errors = run_errors
+          @handlers = handlers
+          @cohort_active = Array.new(cohorts, 0)
+          @cohort_handed_over = Array.new(cohorts, 0)
+          @cohort_reserved = Array.new(cohorts, 0)
+          @cohort_claims = Array.new(cohorts, 0)
+          # Maps a task whose completion handed its slot over, and a running task, to its cohort.
+          @handed_over = {}
+          @thread_cohorts = {}
+          @whole_claims = 0
+          @reserved = 0
+          @empty = 0
+          @empty_wait = nil
+          @pass_ended = false
+          @claimed_any = false
+          @claim_error = nil
+          @open = true
+        end
+
+        def free_slots = [@concurrency - @handlers.active_count + @handed_over.size - @reserved, thread_room].min
+
+        # The executor threads a claim may still start. A handed-over thread keeps its executor
+        # thread until it returns, so handovers in a row could otherwise outrun the executor.
+        def thread_room = @handlers.max_length - @handlers.active_count - @reserved
+
+        def cohort_free(cohort)
+          @cohort_capacity[cohort] - @cohort_active[cohort] + @cohort_handed_over[cohort] - @cohort_reserved[cohort]
+        end
+
+        def roomiest_cohort = @cohort_capacity.each_index.max_by { |cohort| [cohort_free(cohort), -cohort] }
+      end
+      private_constant :DispatchSlots
+
+      # The fused claim one fast-tier completion reserved: its limit, its cohort, and the wake
+      # version when it reserved. A zero limit reserves nothing.
+      CompletionClaim = Struct.new(:limit, :cohort, :wake_version) # :nodoc:
+      private_constant :CompletionClaim
+
+      # One completion waiting for a batched complete_many_and_claim_v1 statement. The statement's
+      # sender fills +accepted+, +claimed+, +full_tier+, or +error+ and sets +done+. +lead+ makes a
+      # waiting completion the sender of the next statement.
+      PendingCompletion = Struct.new(:task, :encoded, :limit, :done, :accepted, :claimed, :full_tier, :error, :lead) # :nodoc:
+      private_constant :PendingCompletion
+
+      attr_reader :worker_id, :queues, :concurrency, :cohorts
 
       def initialize(pool, queues: ["default"], worker_id: nil, concurrency: 1, lease: 30, heartbeat: nil,
         poll_interval: nil, polling_only: false, maintenance_interval: 1, maintenance_routine_interval: 60,
         registry_interval: 5, disable_registry: false, schedule_namespaces: [], schedule_catchup_limit: 100,
         shutdown_grace: 25, shared_heartbeats: false, retry_delay: nil, on_registration_error: nil,
-        on_notification_error: nil, logger: nil)
+        on_notification_error: nil, cohorts: nil, logger: nil)
         @executor = worker_executor(pool, shared_heartbeats)
         @pool = pool
         @queues = unique_names(queues, "queues")
@@ -106,6 +170,7 @@ module Stablemates
           concurrency.is_a?(Integer) && concurrency.between?(1, 100)
 
         @concurrency = concurrency
+        @cohorts = dispatch_cohorts(cohorts, pool, shared_heartbeats)
         @worker_id = worker_id || "#{Socket.gethostname}-#{Process.pid}-#{SecureRandom.hex(4)}"
         raise ArgumentError, "worker_id must be a non-empty String" unless @worker_id.is_a?(String) && !@worker_id.empty?
 
@@ -135,6 +200,7 @@ module Stablemates
         @queue = Queue.new(@executor, default_queue: @queues.first)
         @heartbeat = shared_heartbeats ? Heartbeat.new(@executor, dedicated: false) : Heartbeat.dedicated(pool)
         @handlers = Concurrent::Map.new
+        @batch_coordinators = Concurrent::Map.new
         @contracts = Concurrent::Map.new
         @run_lock = Mutex.new
         @wake = Concurrent::Event.new
@@ -151,6 +217,19 @@ module Stablemates
         @registered = Concurrent::AtomicBoolean.new(false)
         @instance_id = nil
         @draining = false
+        # Guards the dispatch slots, the queue tiers, and the claim order that handler threads share
+        # with the dispatch loop.
+        @state_lock = Mutex.new
+        @dispatch_slots = nil
+        # Counts state changes, so an empty-claim wait ends when one arrives during its claim.
+        @wake_version = 0
+        @full_tier_until = {}
+        @fast_tier_queues = Set.new
+        @fast_task_ids = Set.new
+        @dispatch_order = {}
+        @dispatch_seq = 0
+        @completion_lock = Mutex.new
+        @pending_completions = {}
       end
 
       # Registers the block that runs tasks of +task_type+. The block receives the payload and a
@@ -160,6 +239,7 @@ module Stablemates
         raise ArgumentError, "handle requires a block" if handler.nil?
 
         @handlers[task_type] = handler
+        @batch_coordinators.delete(task_type)
         self
       end
 
@@ -178,20 +258,20 @@ module Stablemates
         active = @active.size
         log(:info, "workhorse.worker.stop_requested", "Worker stop requested",
           "workhorse.worker.active_slots" => active, "workhorse.worker.queues" => @queues)
-        @wake.set
+        wake_dispatcher
       end
 
       # Starts no claim until +resume+. Running handlers continue.
       def pause
         @locally_paused.make_true
         log(:info, "workhorse.worker.paused", "Worker paused locally", "workhorse.worker.queues" => @queues)
-        @wake.set
+        wake_dispatcher
       end
 
       def resume
         @locally_paused.make_false
         log(:info, "workhorse.worker.resumed", "Worker resumed locally", "workhorse.worker.queues" => @queues)
-        @wake.set
+        wake_dispatcher
       end
 
       # Whether this worker or an operator paused it.
@@ -218,6 +298,23 @@ module Stablemates
             "(found #{capacity.nil? ? "unknown" : capacity}); set shared_heartbeats: true to opt out"
         end
         Executor.for(pool)
+      end
+
+      # Slot cohorts for fast-tier dispatch (ADR 0076). Without the option, a worker keeps one
+      # pooled connection per cohort after the listener and the heartbeat connection.
+      def dispatch_cohorts(cohorts, pool, shared_heartbeats)
+        unless cohorts.nil?
+          raise ArgumentError, "cohorts must be an integer between 1 and concurrency" unless
+            cohorts.is_a?(Integer) && cohorts.between?(1, @concurrency)
+
+          return cohorts
+        end
+        default = (@concurrency < 8) ? 1 : ((@concurrency + 7) / 8).clamp(2, 8)
+        capacity = pool.respond_to?(:size) ? pool.size : nil
+        return default unless capacity.is_a?(Integer)
+
+        spare = capacity - 1 - (shared_heartbeats ? 0 : 1)
+        spare.clamp(1, default)
       end
 
       def unique_names(values, label)
@@ -285,6 +382,8 @@ module Stablemates
           @draining = true
           refresh_registration(force: true)
           abandoned = drain(handlers)
+          # A handler's completion may admit tasks until the drain ends, so the slots outlive it.
+          @state_lock.synchronize { @dispatch_slots = nil }
           deregister
           log(:info, "workhorse.worker.stopped", "Worker stopped",
             "workhorse.worker.active_slots" => abandoned, "workhorse.worker.queues" => @queues)
@@ -296,54 +395,46 @@ module Stablemates
         claimed_any
       end
 
-      # Starts claims while slots are free, admits what they return, and waits otherwise. At most
-      # four claims are in flight, because a claim needs a quarter of the slots free.
+      # Keeps the slots full without one serial claim round trip per task (ADR 0076). A claim
+      # reserves the slots it asks for, so claimed tasks never exceed the concurrency. With no claim
+      # in flight, any free slot starts one. While one is in flight, another starts only once the
+      # unreserved free slots reach the refill batch, so a busy worker claims in batches. A
+      # fast-tier completion claims too, from the same accounting. On the fast tier the slots split
+      # into cohorts, and plain claims leave one at a time, each for the roomiest cohort.
       def dispatch(continuous, version, handlers, listener, startup, run_errors, maintenance_errors)
-        refill = (@concurrency / 4.0).ceil
-        reserved = 0
+        slots = DispatchSlots.new(@concurrency, @cohorts, listener, version, run_errors, handlers)
+        @state_lock.synchronize { @dispatch_slots = slots }
+        # Each claim in flight, with its limit, its cohort (nil for the whole worker), and the
+        # slots it reserved in that cohort.
         claims = {}
         results = ::Queue.new
-        claim_error = nil
-        pass_ended = false
-        empty = 0
-        empty_wait = nil
-        claimed_any = false
-        wake_version = 0
         next_claim_id = 0
 
         settle = lambda do |outcome|
-          id, limit, claimed_version, claimed, error = outcome
-          claims.delete(id)
-          reserved -= limit
-          claimed.each { |task, started_at| admit(handlers, task, started_at, run_errors) }
-          if error
-            claim_error ||= error
-          elsif claimed.any? { |task, _| handled?(task.type) }
-            empty = 0
-            claimed_any = true
-            empty_wait = nil
-          else
-            empty += 1
-            pass_ended = true
-            empty_wait ||= [monotonic + dispatch_wait(empty, listener), claimed_version]
+          id, claimed_version, claimed, error = outcome
+          limit, cohort, cohort_limit = claims.delete(id)
+          @state_lock.synchronize do
+            slots.reserved -= limit
+            if cohort.nil?
+              slots.whole_claims -= 1
+            else
+              slots.cohort_claims[cohort] -= 1
+              slots.cohort_reserved[cohort] -= cohort_limit
+            end
+            # A claimed task holds a lease, so it runs even when the loop is stopping or failed.
+            claimed.each { |task, started_at| admit(slots, task, started_at, cohort) }
+            settle_claim_progress(slots, claimed, claimed_version, error)
           end
-        end
-
-        # A slot is free once its executor thread is ready again, not when its task leaves @active.
-        next_claim = lambda do
-          free = @concurrency - handlers.active_count - reserved
-          next nil if free <= 0
-          next nil if !claims.empty? && free < refill
-
-          free
         end
 
         begin
           loop do
             @wake.reset
-            wake_version += 1 if @notified.true?
             settle.call(results.pop) until results.empty?
             refresh_registration
+            claim_error, pass_ended, empty, empty_wait, wake_version = @state_lock.synchronize do
+              [slots.claim_error, slots.pass_ended, slots.empty, slots.empty_wait, @wake_version]
+            end
             break if stop_requested?(version) || !run_errors.empty? || claim_error || !maintenance_errors.empty?
             break if !continuous && pass_ended
 
@@ -357,23 +448,21 @@ module Stablemates
               deadline, seen_version = empty_wait
               remaining = deadline - monotonic
               if remaining <= 0 || seen_version != wake_version
-                empty_wait = nil
+                @state_lock.synchronize { slots.empty_wait = nil if slots.empty_wait.equal?(empty_wait) }
               else
                 @wake.wait(remaining)
               end
               next
             end
-            if next_claim.call
+            if plan_claim(slots, claims)
               run_maintenance_if_due unless startup&.alive?
-              while (limit = next_claim.call)
+              while (plan, claim_version = reserve_claim(slots, claims))
                 next_claim_id += 1
-                delayed = @notified.make_false && empty.positive?
-                reserved += limit
-                claims[next_claim_id] = limit
-                start_claim(next_claim_id, limit, wake_version, delayed, version, results)
+                claims[next_claim_id] = plan
+                start_claim(next_claim_id, plan, claim_version, empty.positive?, version, results)
               end
             end
-            next if claims.empty? && next_claim.call
+            next if claims.empty? && plan_claim(slots, claims)
 
             # A thread whose task already left @active returns to the executor at once, and no
             # wakeup follows its return, so dispatch rechecks shortly instead.
@@ -381,19 +470,95 @@ module Stablemates
             @wake.wait(returning ? THREAD_RETURN_WAIT : dispatch_wait(empty, listener))
           end
         ensure
+          # Completions stop claiming with the loop. Tasks an in-flight claim returns hold leases,
+          # so they run before the drain.
+          @state_lock.synchronize { slots.open = false }
           settle.call(results.pop) until claims.empty?
         end
-        raise claim_error if claim_error
+        raise slots.claim_error if slots.claim_error
 
-        claimed_any
+        slots.claimed_any
+      end
+
+      # Records whether a returned plain claim made progress. The caller holds @state_lock.
+      def settle_claim_progress(slots, claimed, claimed_version, error)
+        if error
+          slots.claim_error ||= error
+        elsif claimed.any? { |task, _| handled?(task.type) }
+          slots.empty = 0
+          slots.claimed_any = true
+          slots.empty_wait = nil
+        else
+          # A claim that only handed its tasks back made no progress, so it backs off as an
+          # empty claim does instead of spinning on a task no handler here runs.
+          slots.empty += 1
+          slots.pass_ended = true
+          slots.empty_wait ||= [monotonic + dispatch_wait(slots.empty, slots.listener), claimed_version]
+        end
+      end
+
+      def plan_claim(slots, claims) = @state_lock.synchronize { claim_plan(slots, claims) }
+
+      # Plans the next plain claim and reserves its slots under one lock, so a fused completion
+      # cannot reserve the same free slots in between. Returns the plan and the wake version.
+      def reserve_claim(slots, claims)
+        @state_lock.synchronize do
+          plan = claim_plan(slots, claims)
+          next nil if plan.nil?
+
+          limit, cohort, cohort_limit = plan
+          slots.reserved += limit
+          if cohort.nil?
+            slots.whole_claims += 1
+          else
+            slots.cohort_claims[cohort] += 1
+            slots.cohort_reserved[cohort] += cohort_limit
+          end
+          [plan, @wake_version]
+        end
+      end
+
+      # Plans the next plain claim: its limit, its cohort, and its slots in that cohort. A slot is
+      # free once its executor thread is ready again, not when its task leaves @active. The caller
+      # holds @state_lock.
+      def claim_plan(slots, claims)
+        free = slots.free_slots
+        return nil if free <= 0
+
+        if @cohorts == 1 || !@full_tier_until.empty?
+          return nil if !claims.empty? && free < slots.refill_batch
+
+          return [free, nil, free]
+        end
+        return nil unless claims.empty?
+
+        cohort = slots.roomiest_cohort
+        cohort_limit = [free, slots.cohort_free(cohort)].min
+        # A claim that still has to learn a queue's tier reserves every free slot, so a queue
+        # that answers on the full tier fills them all.
+        return (cohort_limit.positive? ? [cohort_limit, cohort, cohort_limit] : nil) if
+          @queues.all? { |queue| @fast_tier_queues.include?(queue) }
+
+        [free, cohort, [0, cohort_limit].max]
       end
 
       def notify
         @notified.make_true
+        wake_dispatcher
+      end
+
+      # Wakes the run loop for a state change, which also ends an empty-poll wait.
+      def wake_dispatcher
+        @state_lock.synchronize { @wake_version += 1 }
         @wake.set
       end
 
-      def start_claim(id, limit, wake_version, delayed, version, results)
+      # Runs a claim reserve_claim already reserved slots for.
+      def start_claim(id, plan, wake_version, backing_off, version, results)
+        limit, cohort, cohort_limit = plan
+        # The notification delay spreads idle workers one notification woke together. A worker
+        # whose last claim found work would claim now anyway, so it skips the delay.
+        delayed = @notified.make_false && backing_off
         thread = Thread.new do
           claimed = []
           error = nil
@@ -401,11 +566,11 @@ module Stablemates
             sleep(rand(0.0..NOTIFICATION_CLAIM_DELAY)) if delayed
             # A worker paused or stopped during the delay sends no claim; settling frees the slots.
             withdrawn = delayed && (stop_requested?(version) || paused?)
-            claim_across_queues(limit, claimed) unless withdrawn
+            claim_across_queues(limit, claimed, cohort.nil? ? limit : cohort_limit) unless withdrawn
           rescue => e
             error = e
           ensure
-            results << [id, limit, wake_version, claimed, error]
+            results << [id, wake_version, claimed, error]
             @wake.set
           end
         end
@@ -414,49 +579,288 @@ module Stablemates
 
       # Claims from each queue at most once, starting one queue further on each call. Appends to
       # +claimed+ as each queue answers, so a later queue's error keeps the leases already taken.
-      def claim_across_queues(limit, claimed)
+      # Fast-tier queues together give at most +fast_limit+ tasks, the free slots of one cohort.
+      def claim_across_queues(limit, claimed, fast_limit = limit)
         start = (@next_queue_index.increment - 1) % @queues.size
         @queues.size.times do |offset|
           break if claimed.size >= limit
 
           queue = @queues[(start + offset) % @queues.size]
-          claimed.concat(claim(queue, limit - claimed.size))
+          claimed.concat(claim(queue, limit - claimed.size, fast_limit - claimed.size))
         end
       end
 
-      def claim(queue, limit)
+      def claim(queue, limit, fast_limit)
         started_at = monotonic
         Telemetry.span("workhorse.claim", {"workhorse.queue.name" => queue}) do |span|
-          rows = @executor.rows(SqlCatalogue::CLAIM_MANY_V1, [queue, @worker_id, limit.to_s, @lease_ms.to_s])
+          rows = claim_queue(queue, limit, started_at, fast_limit)
+          if rows.nil?
+            Telemetry.set_attribute(span, "workhorse.queue.tier", "full")
+            rows = @executor.rows(SqlCatalogue::CLAIM_MANY_V1, [queue, @worker_id, limit.to_s, @lease_ms.to_s])
+          end
           tasks = rows.map { |row| ClaimedTask.from_row(row, queue) }
-          Telemetry.record("workhorse.claim.duration", (monotonic - started_at) * 1000,
-            "workhorse.queue.name" => queue, "workhorse.claim.result" => tasks.empty? ? "empty" : "claimed")
+          record_claimed(queue, started_at, tasks)
           Telemetry.task_span_attributes(tasks.first).each { |key, value| Telemetry.set_attribute(span, key, value) } if tasks.any?
-          tasks.map do |task|
-            Telemetry.add("workhorse.tasks.claimed", 1, Telemetry.task_metric_attributes(task))
-            log(:debug, "workhorse.task.claimed", "Task claimed", Telemetry.task_span_attributes(task))
-            [task, started_at]
+          tasks.map { |task| [task, started_at] }
+        end
+      end
+
+      # Records a claim's duration and logs each task it returned.
+      def record_claimed(queue, started_at, tasks)
+        Telemetry.record("workhorse.claim.duration", (monotonic - started_at) * 1000,
+          "workhorse.queue.name" => queue, "workhorse.claim.result" => tasks.empty? ? "empty" : "claimed")
+        tasks.each do |task|
+          Telemetry.add("workhorse.tasks.claimed", 1, Telemetry.task_metric_attributes(task))
+          log(:debug, "workhorse.task.claimed", "Task claimed", Telemetry.task_span_attributes(task))
+        end
+      end
+
+      # Claims through the fast tier, or returns nil when the queue is on the full tier. The fast
+      # claim is complete_many_and_claim_v1 with no completions. A full-tier queue rejects it, and
+      # the worker then claims that queue through claim_many_v1 until the next probe.
+      def claim_queue(queue, limit, sent_at, fast_limit)
+        return nil if @state_lock.synchronize { @full_tier_until.fetch(queue, -Float::INFINITY) > sent_at }
+
+        fast_limit = [limit, fast_limit].min
+        return [] if fast_limit <= 0
+
+        begin
+          rows = @executor.fenced_rows(SqlCatalogue::COMPLETE_MANY_AND_CLAIM_V1,
+            [@worker_id, "{}", "{}", "{}", queue, fast_limit.to_s, @lease_ms.to_s])
+        rescue FastTierUnsupportedError
+          mark_full_tier(queue, sent_at)
+          return nil
+        end
+        # A claim that finds nothing still returns one row, with every claim column null.
+        claimed = rows.reject { |row| row["task_id"].nil? }
+        @state_lock.synchronize do
+          @full_tier_until.delete(queue)
+          @fast_tier_queues.add(queue)
+          claimed.each { |row| @fast_task_ids.add(row["task_id"]) }
+        end
+        claimed
+      end
+
+      # Claims a queue that rejected a fast-tier statement through claim_many_v1 until the probe.
+      def mark_full_tier(queue, sent_at)
+        @state_lock.synchronize do
+          @full_tier_until[queue] = sent_at + TIER_PROBE_INTERVAL
+          @fast_tier_queues.delete(queue)
+        end
+      end
+
+      def fast_task?(task) = @state_lock.synchronize { @fast_task_ids.include?(task.id) }
+
+      # Completes a fast-tier attempt through the batched statement, and refills its slot.
+      # Completions of one queue and cohort that arrive while its statement is in flight share the
+      # next one. The statement also claims tasks into the slots dispatch set aside for it. A queue
+      # that left the fast tier after the claim rejects that statement, so the attempt completes
+      # through complete_v1 instead.
+      def complete_fast_task(task, encoded)
+        reservation = reserve_completion_claim(task)
+        pending = PendingCompletion.new(task, encoded, reservation.limit, Concurrent::Event.new, false, [], false, nil, false)
+        begin
+          send_batched_completion(pending, [task.queue, reservation.cohort])
+        ensure
+          settle_completion_claim(task, reservation, pending.error ? nil : pending.claimed)
+        end
+        raise pending.error if pending.error
+        return fenced_row(SqlCatalogue::COMPLETE_V1, task, encoded)["accepted"] == "t" if pending.full_tier
+
+        pending.accepted
+      end
+
+      # Sets aside the slots a completion's fused claim may fill (ADR 0076, rules 12 and 13). The
+      # claim asks for the free slots of the task's cohort plus the slot the task leaves. It claims
+      # nothing while the worker stops, pauses, or waits after an empty claim, and it waits for the
+      # cohort's refill batch while another claim for the cohort is in flight.
+      def reserve_completion_claim(task)
+        @state_lock.synchronize do
+          slots = @dispatch_slots
+          next CompletionClaim.new(0, 0, @wake_version) if slots.nil?
+
+          cohort = slots.thread_cohorts.fetch(task.id, 0)
+          idle = CompletionClaim.new(0, cohort, @wake_version)
+          next idle if !slots.open || stop_requested?(slots.version) || !slots.run_errors.empty? || paused? ||
+            slots.claim_error || slots.empty_wait
+
+          # The slot this task leaves is free, but its thread is not until the handler returns.
+          limit = [[slots.free_slots, slots.cohort_free(cohort)].min + 1, slots.thread_room].min
+          claiming = slots.whole_claims.positive? || slots.cohort_claims[cohort].positive?
+          next idle if limit <= 0 || (claiming && limit < slots.refill_batch)
+
+          slots.reserved += limit
+          slots.cohort_reserved[cohort] += limit
+          slots.handed_over[task.id] = cohort
+          slots.cohort_handed_over[cohort] += 1
+          CompletionClaim.new(limit, cohort, @wake_version)
+        end
+      end
+
+      # Releases a fused claim's reservation and starts the tasks it claimed in its cohort.
+      # +claimed+ is nil when the completion failed.
+      def settle_completion_claim(task, reservation, claimed)
+        return if reservation.limit.zero?
+
+        @state_lock.synchronize do
+          slots = @dispatch_slots
+          next if slots.nil?
+
+          slots.reserved -= reservation.limit
+          slots.cohort_reserved[reservation.cohort] -= reservation.limit
+          # A claimed task took over this handler's slot. Without one, the slot stays this
+          # handler's until it exits.
+          if (claimed.nil? || claimed.empty?) && slots.handed_over.delete(task.id)
+            slots.cohort_handed_over[reservation.cohort] -= 1
+          end
+          (claimed || []).each { |next_task, started_at| admit(slots, next_task, started_at, reservation.cohort) }
+          if claimed&.any? { |next_task, _| handled?(next_task.type) }
+            slots.claimed_any = true
+            slots.empty = 0
+          elsif claimed&.empty? && @queues.one?
+            # The fused claim asks one queue only, so it proves that queue empty when this worker
+            # has no other.
+            slots.empty += 1
+            slots.pass_ended = true
+            slots.empty_wait ||= [monotonic + dispatch_wait(slots.empty, slots.listener), reservation.wake_version]
+          end
+        end
+        @wake.set
+      end
+
+      # Sends a completion in the next statement of its batch key, and waits for its result. One
+      # statement per key is in flight. The first completion sends its own at once. Those that
+      # arrive meanwhile wait, and the first of them sends them all together when it returns.
+      def send_batched_completion(pending, key)
+        batch = @completion_lock.synchronize do
+          waiting = @pending_completions[key]
+          if waiting.nil?
+            @pending_completions[key] = []
+            [pending]
+          else
+            waiting << pending
+            nil
+          end
+        end
+        if batch.nil?
+          pending.done.wait
+          return unless pending.lead
+
+          batch = @completion_lock.synchronize do
+            waiting = @pending_completions[key]
+            @pending_completions[key] = []
+            waiting
+          end
+        end
+        begin
+          flush_completions(key.first, batch)
+        ensure
+          @completion_lock.synchronize do
+            waiting = @pending_completions[key]
+            if waiting.empty?
+              @pending_completions.delete(key)
+            else
+              waiting.first.lead = true
+              waiting.first.done.set
+            end
           end
         end
       end
 
-      # Runs handlers on exactly +concurrency+ threads and never queues. Dispatch claims only for
-      # ready threads, so a post is never rejected and a claimed task never waits for a thread.
+      # Completes a batch in statements within the protocol's array and claim limits. A failed
+      # statement fails only the completions it carried.
+      def flush_completions(queue, batch)
+        start = 0
+        while start < batch.size
+          finish = start
+          claim_limit = 0
+          while finish < batch.size && finish - start < COMPLETION_BATCH_LIMIT &&
+              claim_limit + batch[finish].limit <= COMPLETION_BATCH_LIMIT
+            claim_limit += batch[finish].limit
+            finish += 1
+          end
+          chunk = batch[start...finish]
+          start = finish
+          begin
+            send_completion_chunk(queue, chunk, claim_limit)
+          rescue Exception => e # rubocop:disable Lint/RescueException
+            chunk.each { |member| member.error = e }
+          ensure
+            chunk.each { |member| member.done.set }
+          end
+        end
+      end
+
+      # Sends one complete_many_and_claim_v1 statement and answers every completion in it. The
+      # chunk names its tasks in task ID order, as a heartbeat names its leases, so the two
+      # statements lock shared runtime rows in the same order. A deadlock between the fused claim
+      # and another worker's lease rolls the statement back with 40P01, and fenced_rows sends it
+      # again.
+      def send_completion_chunk(queue, chunk, claim_limit)
+        chunk.sort_by! { |member| member.task.id }
+        sent_at = monotonic
+        begin
+          rows = @executor.fenced_rows(SqlCatalogue::COMPLETE_MANY_AND_CLAIM_V1, [
+            @worker_id,
+            Values.text_array(chunk.map { |member| member.task.id }, "task ids"),
+            Values.text_array(chunk.map { |member| member.task.fence_token.to_s }, "fence tokens"),
+            Values.text_array(chunk.map(&:encoded), "results"),
+            queue, claim_limit.to_s, @lease_ms.to_s
+          ])
+        rescue FastTierUnsupportedError
+          mark_full_tier(queue, sent_at)
+          chunk.each { |member| member.full_tier = true }
+          return
+        end
+        # Only the first row carries the accepted completions. A statement that claims nothing
+        # still returns that row, with every claim column null.
+        accepted = Set.new(Values.parse_text_array(rows.first&.fetch("accepted", nil)) || [])
+        claimed = rows.reject { |row| row["task_id"].nil? }.map { |row| ClaimedTask.from_row(row, queue) }
+        @state_lock.synchronize do
+          @full_tier_until.delete(queue)
+          @fast_tier_queues.add(queue)
+          claimed.each { |next_task| @fast_task_ids.add(next_task.id) }
+        end
+        record_claimed(queue, sent_at, claimed) if claim_limit.positive?
+        # Claimed tasks go to the completions in order, each up to the slots it reserved.
+        offset = 0
+        chunk.each do |member|
+          member.accepted = accepted.include?(member.task.id)
+          member.claimed = (claimed[offset, member.limit] || []).map { |next_task| [next_task, sent_at] }
+          offset += member.claimed.size
+        end
+      end
+
+      # Runs handlers without queueing. A handler whose completion claimed tasks into its slot still
+      # returns while they start, so the executor allows a second thread per slot. Every claim
+      # also fits DispatchSlots#thread_room, so a post is never rejected.
       def handler_executor
-        Concurrent::ThreadPoolExecutor.new(min_threads: @concurrency, max_threads: @concurrency, max_queue: 0,
+        Concurrent::ThreadPoolExecutor.new(min_threads: @concurrency, max_threads: 2 * @concurrency, max_queue: 0,
           synchronous: true, fallback_policy: :abort)
       end
 
       def handled?(task_type) = @handlers.key?(task_type)
 
-      # A claimed task always runs, even after stop or pause: its lease is already held.
-      def admit(handlers, task, started_at, run_errors)
-        active = Active.new(CancellationToken.new, Concurrent::AtomicReference.new)
+      # Gives a claimed task a slot and a handler thread. The caller holds @state_lock, so the slot
+      # and the reservation it came from change together. The task joins +cohort+ while that
+      # cohort has a free slot, and the roomiest cohort otherwise. A claimed task always runs, even
+      # after stop or pause: its lease is already held.
+      def admit(slots, task, started_at, cohort)
+        # Dispatch assigns claim order here. A batch coordinator cannot read arrival order off its
+        # own lock, because handler threads reach that lock in scheduler order, not claim order.
+        @dispatch_order[task.id] = @dispatch_seq
+        @dispatch_seq += 1
+        cohort = slots.roomiest_cohort if cohort.nil? || slots.cohort_free(cohort) <= 0
+        slots.cohort_active[cohort] += 1
+        slots.thread_cohorts[task.id] = cohort
+        active = Active.new(CancellationToken.new, Concurrent::AtomicReference.new, task)
         @active[task.id] = active
-        handlers.post { run_claimed_task(task, started_at, active, run_errors) }
+        slots.handlers.post { run_claimed_task(task, started_at, active, slots.run_errors) }
       rescue Exception # rubocop:disable Lint/RescueException
         # A task the executor refused never runs, so the drain must not wait for it.
         @active.delete(task.id)
+        @dispatch_order.delete(task.id)
+        slots.cohort_active[cohort] -= 1 if slots.thread_cohorts.delete(task.id)
         raise
       end
 
@@ -468,6 +872,16 @@ module Stablemates
         run_errors << e
         @stop_version.increment
       ensure
+        @state_lock.synchronize do
+          @dispatch_order.delete(task.id)
+          @fast_task_ids.delete(task.id)
+          slots = @dispatch_slots
+          cohort = slots&.thread_cohorts&.delete(task.id)
+          unless cohort.nil?
+            slots.cohort_active[cohort] -= 1
+            slots.cohort_handed_over[cohort] -= 1 if slots.handed_over.delete(task.id)
+          end
+        end
         @active.delete(task.id)
         @wake.set
       end
@@ -488,6 +902,8 @@ module Stablemates
       # Waits up to the shutdown grace, cancels what still runs, and gives it one unwind window.
       # Returns the number of handlers abandoned after that window.
       def drain(handlers)
+        # A lingering batch cannot grow once claims stop, so it runs as soon as its members arrive.
+        @batch_coordinators.each_value(&:flush!)
         deadline = monotonic + @shutdown_grace
         wait_until_idle(deadline)
         remaining = @active.values
@@ -551,7 +967,7 @@ module Stablemates
         else
           log(:info, "workhorse.worker.resumed", "Worker resumed remotely")
         end
-        @wake.set
+        wake_dispatcher
       end
 
       def deregister
@@ -731,7 +1147,7 @@ module Stablemates
         own(task, ownership, arbiter, cancellation)
         active.ownership.set(ownership)
         context = HandlerContext.new(executor: @executor, queue: @queue, task: task, worker_id: @worker_id,
-          cancellation: cancellation, arbiter: arbiter, logger: @logger)
+          cancellation: cancellation, arbiter: arbiter, logger: @logger, fast_tier: fast_task?(task))
         begin
           result = invoke(handler, task.payload, context)
           validate_result(task, result)
@@ -792,7 +1208,11 @@ module Stablemates
 
       def complete(task, encoded, arbiter)
         accepted = Telemetry.span("workhorse.complete", Telemetry.task_span_attributes(task)) do |span|
-          accepted = fenced_row(SqlCatalogue::COMPLETE_V1, task, encoded)["accepted"] == "t"
+          accepted = if fast_task?(task)
+            complete_fast_task(task, encoded)
+          else
+            fenced_row(SqlCatalogue::COMPLETE_V1, task, encoded)["accepted"] == "t"
+          end
           Telemetry.set_attribute(span, "workhorse.complete.accepted", accepted)
           attributes = Telemetry.task_span_attributes(task).merge("workhorse.complete.accepted" => accepted)
           if accepted

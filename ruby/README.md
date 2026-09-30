@@ -118,6 +118,20 @@ A handler must let `HandlerContext::Suspension` propagate. It descends from `Exc
 Under Rails, each handler runs inside the Rails executor. Size the Active Record pool to at least
 the worker's `concurrency`; `run` warns when it is smaller.
 
+To handle several tasks of one type in one call, register a batch handler. It returns one outcome
+per payload, in order, and each task still succeeds or fails on its own. `max_size` cannot exceed
+the worker's `concurrency`, and `linger` is in seconds:
+
+```ruby
+worker.handle_batch("email.digest", max_size: 4, linger: 0.2) do |payloads, context|
+  payloads.map do |payload|
+    { status: :succeeded, result: DigestMailer.call(payload) }
+  rescue => e
+    { status: :failed, error: e }
+  end
+end
+```
+
 ## Run Active Job jobs
 
 A Rails application selects the adapter by name:
