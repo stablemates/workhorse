@@ -171,8 +171,9 @@ module Stablemates
       end
 
       # One page of failed tasks, most recently finished first.
-      def list_dead_letters(limit: 100, cursor: nil, **filter)
-        document = dead_letter_filter(**filter)
+      def list_dead_letters(limit: 100, cursor: nil, queue: nil, type: nil, tags: [], error_name: nil,
+        finished_after: nil, finished_before: nil)
+        document = dead_letter_filter(queue, type, tags, error_name, finished_after, finished_before)
         limit(limit, MAX_REDRIVE_BATCH_SIZE, "list_dead_letters limit")
         cursor(cursor, DeadLetterCursor)
         assert_compatible
@@ -197,8 +198,9 @@ module Stablemates
       end
 
       # Redrives one page of the failed tasks the filter selects. +dry_run+ reports without changing.
-      def redrive_many(audit:, limit: 100, dry_run: false, cursor: nil, **filter)
-        document = dead_letter_filter(**filter)
+      def redrive_many(audit:, limit: 100, dry_run: false, cursor: nil, queue: nil, type: nil, tags: [],
+        error_name: nil, finished_after: nil, finished_before: nil)
+        document = dead_letter_filter(queue, type, tags, error_name, finished_after, finished_before)
         audit(audit)
         limit(limit, MAX_REDRIVE_BATCH_SIZE, "redrive_many limit")
         raise ArgumentError, "dry_run must be true or false" unless [true, false].include?(dry_run)
@@ -376,8 +378,7 @@ module Stablemates
         {"include" => payload.include, "maxBytes" => payload.max_bytes, "redactKeys" => keys}
       end
 
-      def dead_letter_filter(queue: nil, type: nil, tags: [], error_name: nil, finished_after: nil,
-        finished_before: nil)
+      def dead_letter_filter(queue, type, tags, error_name, finished_after, finished_before)
         optional_string(queue, "queue")
         optional_string(type, "type")
         optional_string(error_name, "error_name")

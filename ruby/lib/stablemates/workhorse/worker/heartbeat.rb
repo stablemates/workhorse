@@ -10,7 +10,7 @@ module Stablemates
       # renewal: handlers that hold every other connection never delay a lease round. With
       # +shared_heartbeats: true+ a worker has its own heartbeat, which borrows a connection from
       # the executor for each round instead.
-      class Heartbeat
+      class Heartbeat # :nodoc:
         # One running attempt. +renew+ takes the monotonic send time of an accepted round;
         # +settle+ takes a status other than +accepted+; +fail+ takes an error +settle+ raised.
         Member = Data.define(:worker_id, :task, :lease_ms, :interval, :renew, :settle, :fail, :logger)

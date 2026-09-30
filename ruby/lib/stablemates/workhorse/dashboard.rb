@@ -141,20 +141,20 @@ module Stablemates
       end
 
       # "" for the root, otherwise "/" followed by the non-empty segments of +path+.
-      def self.normalize_path(path)
+      def self.normalize_path(path) # :nodoc:
         segments = path.to_s.split("/").reject(&:empty?)
         segments.empty? ? "" : "/#{segments.join("/")}"
       end
 
       # Lowercase a host[:port] and drop the default port, so one address has one spelling.
-      def self.canonical_host(host, scheme)
+      def self.canonical_host(host, scheme) # :nodoc:
         host = host.downcase
         default = DEFAULT_PORTS[scheme]
         host = host.delete_suffix(default) if default
         "#{scheme}://#{host}"
       end
 
-      def self.allowed_hosts(entries)
+      def self.allowed_hosts(entries) # :nodoc:
         entries.each_with_object(Set.new) do |entry, allowed|
           parsed = begin
             URI.parse("http://#{entry}")

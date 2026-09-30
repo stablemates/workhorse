@@ -3,18 +3,19 @@
 Each file here records one governed surface as it stands on this commit. A pull request
 that removes a name, renames one, or narrows a type changes a file here, so the change is visible in
 review and the check names it. [ADR 0054](../docs/decisions/0054-define-what-1-0-0-promises.md)
-and [ADR 0079](../docs/decisions/0079-govern-the-rust-api-as-an-eighth-surface.md) define the
-surfaces, and Gate 1 of
+[ADR 0079](../docs/decisions/0079-govern-the-rust-api-as-an-eighth-surface.md), and
+[ADR 0084](../docs/decisions/0084-govern-the-ruby-api-as-a-ninth-surface.md) define the surfaces, and Gate 1 of
 [ADR 0056](../docs/decisions/0056-set-the-1-0-0-exit-criteria.md) requires the checks.
 
-| File             | Surface                                                            | Check                          | Generator                         |
-| ---------------- | ------------------------------------------------------------------ | ------------------------------ | --------------------------------- |
-| `typescript.txt` | Every published package's `exports` map and shipped `.d.ts`        | `pnpm typescript-api:check`    | `pnpm typescript-api:generate`    |
-| `python.txt`     | Every public `workhorse` module's `__all__`                        | `pnpm python-api:check`        | `pnpm python-api:generate`        |
-| `go.txt`         | Exported identifiers of the Go module's non-`internal` packages    | `pnpm go-api:check`            | `pnpm go-api:generate`            |
-| `rust.txt`       | Every public item of the `workhorse` crate, per feature            | `pnpm rust-api:check`          | `pnpm rust-api:generate`          |
-| `cli.txt`        | The `workhorse` commands, flags, exit codes, and `--json` payloads | `pnpm cli-surface:check`       | `pnpm cli-surface:generate`       |
-| `telemetry.txt`  | Every instrument, span, and attribute name Workhorse emits         | `pnpm telemetry-surface:check` | `pnpm telemetry-surface:generate` |
+| File             | Surface                                                                                         | Check                          | Generator                         |
+| ---------------- | ----------------------------------------------------------------------------------------------- | ------------------------------ | --------------------------------- |
+| `typescript.txt` | Every published package's `exports` map and shipped `.d.ts`                                     | `pnpm typescript-api:check`    | `pnpm typescript-api:generate`    |
+| `python.txt`     | Every public `workhorse` module's `__all__`                                                     | `pnpm python-api:check`        | `pnpm python-api:generate`        |
+| `go.txt`         | Exported identifiers of the Go module's non-`internal` packages                                 | `pnpm go-api:check`            | `pnpm go-api:generate`            |
+| `rust.txt`       | Every public item of the `workhorse` crate, per feature                                         | `pnpm rust-api:check`          | `pnpm rust-api:generate`          |
+| `ruby.txt`       | Every public constant under `Stablemates::Workhorse` and the Active Job adapter, less `:nodoc:` | `pnpm ruby-api:check`          | `pnpm ruby-api:generate`          |
+| `cli.txt`        | The `workhorse` commands, flags, exit codes, and `--json` payloads                              | `pnpm cli-surface:check`       | `pnpm cli-surface:generate`       |
+| `telemetry.txt`  | Every instrument, span, and attribute name Workhorse emits                                      | `pnpm telemetry-surface:check` | `pnpm telemetry-surface:generate` |
 
 These are generated artifacts. Do not edit one by hand: run its generator and commit what it wrote.
 
@@ -50,6 +51,24 @@ the check reports the old line as gone. A feature that adds no item says so in o
 The generator reads rustdoc JSON through `rust/tools/api-snapshot` on the pinned toolchain. Blanket
 impls are left out, because each follows from a bound the file already lists. Auto-trait impls stay
 in, because a type that stops being `Send` breaks callers without any signature changing.
+
+## How the Ruby file reads the gem
+
+Ruby hides a name in two ways. `private_constant` and `private` hide it at run time, and a `:nodoc:`
+marker on its definition line hides it by convention. `ruby.txt` honours both. The generator loads
+the gem on the pinned Ruby and walks it by reflection, which sees what `private_constant` hid. It
+then reads the source with Prism, which sees the `:nodoc:` markers and each parameter list as
+written. Reflection alone would drop every default value, so a changed default would pass unseen.
+A literal default keeps its whitespace, because that whitespace is part of the value.
+
+A public method that takes `**` hides the keywords it accepts. Each such line names the source of
+those keywords, such as `EnqueueRequest#initialize` or `ActiveJob::OPTION_KEYS`, and that source has
+its own lines. The generator stops on a public `**` without a named source, so every keyword a caller
+can pass has a line.
+
+Each module gets one section with its superclass, included modules, `Data` members, constants, and
+public methods. A method the module inherits is left out, because its superclass or included module
+already names it. The value of `VERSION` is left out too, because it changes on every release.
 
 ## Where the last two read from
 

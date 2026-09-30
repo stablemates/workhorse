@@ -22,10 +22,11 @@ module Stablemates
       MAX_OPTION_TAGS = 18
       MAX_TAG_LENGTH = 100
       MAX_TASK_TYPE_BYTES = 256
+      # The keywords +workhorse_options+ accepts. A job class that passes any other key raises.
       OPTION_KEYS = %i[task_type max_attempts tags concurrency_key].freeze
       WORKER_KEY = :stablemates_workhorse_active_job_worker
       private_constant :JOB_ID_TAG, :CLASS_TAG, :MAX_OPTION_TAGS, :MAX_TAG_LENGTH, :MAX_TASK_TYPE_BYTES,
-        :OPTION_KEYS, :WORKER_KEY
+        :WORKER_KEY
 
       # Declares Workhorse options on a job class. Include it and call +workhorse_options+.
       module Options
@@ -35,8 +36,9 @@ module Stablemates
         end
 
         module ClassMethods
-          # Sets +task_type+, +max_attempts+, +tags+, or +concurrency_key+. Any other key, or an
-          # invalid value, raises ArgumentError. A subclass inherits the options and may extend them.
+          # Sets +task_type+, +max_attempts+, +tags+, or +concurrency_key+, the OPTION_KEYS. Any other
+          # key, or an invalid value, raises ArgumentError. A subclass inherits the options and may
+          # extend them.
           def workhorse_options(**options)
             self.workhorse_settings = workhorse_settings.merge(ActiveJob.validate_options(name, options)).freeze
           end

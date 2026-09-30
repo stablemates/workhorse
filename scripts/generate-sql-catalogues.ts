@@ -136,8 +136,8 @@ function renderRuby(manifest: Manifest, statements: Statement[]): string {
 
 module Stablemates
   module Workhorse
-    # The protocol SQL this gem runs, generated from protocol/v1/manifest.json.
-    module SqlCatalogue
+    # The protocol SQL this gem runs, generated from protocol/v1/manifest.json. Internal to the SDK.
+    module SqlCatalogue # :nodoc:
       # The SQL protocol version this gem implements.
       CLIENT_PROTOCOL_VERSION = ${manifest.protocolVersion}
       MINIMUM_PROTOCOL_VERSION = ${manifest.supportedClientProtocol.minimumVersion}

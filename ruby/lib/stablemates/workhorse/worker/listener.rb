@@ -8,7 +8,7 @@ module Stablemates
       # The listener holds one pool connection that runs +LISTEN workhorse_tasks+. A notification
       # names a queue, or +*+ for every queue. A lost connection reconnects with a jittered backoff,
       # and the worker keeps polling meanwhile, so a notification only shortens a wait.
-      class Listener
+      class Listener # :nodoc:
         CHANNEL = "workhorse_tasks"
         INITIAL_RECONNECT = 0.1
         MAX_RECONNECT = 5.0
