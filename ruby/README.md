@@ -3,8 +3,8 @@
 The Ruby queue client for the Workhorse durable task queue for PostgreSQL.
 
 > **Unreleased:** this gem is under construction and not yet published. It enqueues, cancels,
-> delivers signals, completes human waits, and syncs schedules and contracts. The worker runtime and
-> the operator client arrive in later releases.
+> delivers signals, completes human waits, and syncs schedules and contracts. It also carries the
+> operator client and the dashboard. The worker runtime arrives in a later release.
 
 An AI agent should read [the Workhorse documentation index](https://workhorse.run/llms.txt) first.
 
@@ -64,6 +64,46 @@ end
 
 The task becomes visible when the transaction commits. A rollback removes it with the rest of the
 transaction.
+
+## Operate queues and tasks
+
+`Admin` inspects and controls tasks, dead letters, workers, and queues. It takes the same executors
+as `Queue`, so a control joins the caller's transaction. Every control takes an `AdminAudit`, which
+PostgreSQL records. Its request ID makes a retried control replay instead of repeating.
+
+```ruby
+admin = Stablemates::Workhorse::Admin.new(pool)
+audit = Stablemates::Workhorse::AdminAudit.new(actor: "ops@example.com", reason: "Provider outage",
+                                               request_id: SecureRandom.uuid)
+
+admin.pause_queue("email", audit: audit)
+page = admin.list_dead_letters(queue: "email", limit: 50)
+page.items.each { |letter| puts "#{letter.task_id} #{letter.type}" }
+```
+
+## Mount the dashboard
+
+`Dashboard` is a Rack application that serves the operator dashboard and its procedure calls. The
+host application decides who may use it: `authorize` receives the Rack environment and returns a
+`Dashboard::Principal`, `false` for a 401, or a Rack response such as a login redirect.
+
+```ruby
+dashboard = Stablemates::Workhorse::Dashboard.new(
+  pool,
+  authorize: ->(env) { Stablemates::Workhorse::Dashboard::Principal.new(env["warden"]&.user&.email) },
+  allowed_hosts: ["ops.example.com"]
+)
+
+# config/routes.rb
+mount dashboard, at: "/workhorse"
+
+# config.ru
+map("/workhorse") { run dashboard }
+```
+
+The `path` option, `"/workhorse"` by default, must match the mount point. Pass `read_only: true` to
+refuse every mutation. A request whose `Host` is outside `allowed_hosts` is refused before
+`authorize` runs.
 
 ## Errors
 

@@ -22,9 +22,9 @@ Two boundaries keep this matrix small:
   keeps a shared database capability from implying that every language exposes a matching client.
 
 Ruby is the fifth SDK, shipped as the `stablemates-workhorse` gem ([ADR
-0075](decisions/0075-shape-the-ruby-sdk-as-one-gem-with-an-active-job-adapter.md)). Its client
-ships today. Its worker runtime, `Admin` client, and dashboard backend are Planned. So the sections
-below that compare worker runtimes speak of the four languages that ship one.
+0075](decisions/0075-shape-the-ruby-sdk-as-one-gem-with-an-active-job-adapter.md)). Its client, `Admin` client,
+and dashboard backend ship today. Its worker runtime is Planned. So the sections below that compare
+worker runtimes speak of the four languages that ship one.
 
 ## Client (enqueue side)
 
@@ -263,29 +263,30 @@ through its own public SDK.
 
 <!-- BEGIN GENERATED PARITY OPERATOR -->
 
-| Capability                                 | TypeScript | Python    | Go        | Rust      | Ruby              |
-| ------------------------------------------ | ---------- | --------- | --------- | --------- | ----------------- |
-| Task lookup, listing, and timeline         | Supported  | Supported | Supported | Supported | [Planned][SM-901] |
-| Queue health snapshot                      | Supported  | Supported | Supported | Supported | Supported         |
-| Cancellation requests                      | Supported  | Supported | Supported | Supported | Supported         |
-| Queue pause, resume, and purge             | Supported  | Supported | Supported | Supported | [Planned][SM-901] |
-| Dead-letter listing and redrive            | Supported  | Supported | Supported | Supported | [Planned][SM-901] |
-| Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported | Supported | [Planned][SM-901] |
-| Durable operator worker pause              | Supported  | Supported | Supported | Supported | [Planned][SM-901] |
-| Embedded dashboard backend                 | Supported  | Supported | Supported | Supported | [Planned][SM-901] |
+| Capability                                 | TypeScript | Python    | Go        | Rust      | Ruby      |
+| ------------------------------------------ | ---------- | --------- | --------- | --------- | --------- |
+| Task lookup, listing, and timeline         | Supported  | Supported | Supported | Supported | Supported |
+| Queue health snapshot                      | Supported  | Supported | Supported | Supported | Supported |
+| Cancellation requests                      | Supported  | Supported | Supported | Supported | Supported |
+| Queue pause, resume, and purge             | Supported  | Supported | Supported | Supported | Supported |
+| Dead-letter listing and redrive            | Supported  | Supported | Supported | Supported | Supported |
+| Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported | Supported | Supported |
+| Durable operator worker pause              | Supported  | Supported | Supported | Supported | Supported |
+| Embedded dashboard backend                 | Supported  | Supported | Supported | Supported | Supported |
 
 <!-- END GENERATED PARITY OPERATOR -->
 
-TypeScript, Go, and Rust expose these methods through dedicated public `Admin` clients. Python provides
-synchronous `Admin` over Psycopg and `AsyncAdmin` over Psycopg or asyncpg. Their embedded dashboards
-call the same clients for shared operator reads and controls. Cancellation remains
+TypeScript, Go, Rust, and Ruby expose these methods through dedicated public `Admin` clients. Python
+provides synchronous `Admin` over Psycopg and `AsyncAdmin` over Psycopg or asyncpg. Their embedded
+dashboards call the same clients for shared operator reads and controls. Cancellation remains
 application-shaped, so every queue client exposes it with audit attribution.
 
 The embedded dashboard backend row records which language can serve the dashboard from its own HTTP
 server ([ADR 0029](decisions/0029-embeddable-dashboard-backends.md)). A cell is Supported only when
 that backend passes the shared `dashboard/v1` HTTP fixtures. [ADR
 0074](decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md) gives Rust a `tower::Service`
-backend behind the `dashboard` feature.
+backend behind the `dashboard` feature. Ruby serves it as a Rack application that a Rails route or
+`Rack::Builder#map` mounts.
 
 ## Schema tooling is TypeScript-only, deliberately
 
@@ -356,7 +357,6 @@ stops the published view from becoming another source of truth.
 <!-- BEGIN GENERATED PARITY LINEAR LINKS -->
 
 [SM-900]: https://linear.app/stablemates/issue/SM-900
-[SM-901]: https://linear.app/stablemates/issue/SM-901
 [SM-902]: https://linear.app/stablemates/issue/SM-902
 
 <!-- END GENERATED PARITY LINEAR LINKS -->

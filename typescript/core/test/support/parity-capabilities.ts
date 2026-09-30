@@ -683,7 +683,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
 export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   {
     capability: "Task lookup, listing, and timeline",
-    ruby: { planned: "SM-901" },
+    ruby: {
+      file: "integration/admin_spec.rb",
+      example: "lists tasks with filters, projection, and a cursor",
+    },
     rust: { file: "admin_postgres.rs", test: "admin_lists_looks_up_and_times_tasks_across_pages" },
     typescript: { file: "integration-operator-reads.test.ts", pattern: "admin.listTasks" },
     python: pythonAdmin,
@@ -710,7 +713,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Queue pause, resume, and purge",
-    ruby: { planned: "SM-901" },
+    ruby: { file: "integration/admin_spec.rb", example: "pauses, resumes, and purges a queue" },
     rust: { file: "admin_postgres.rs", test: "admin_pauses_resumes_and_purges_a_queue" },
     typescript: { file: "integration-queue-administration.test.ts", pattern: "admin.purgeQueue" },
     python: pythonAdmin,
@@ -718,7 +721,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Dead-letter listing and redrive",
-    ruby: { planned: "SM-901" },
+    ruby: { file: "integration/admin_spec.rb", example: "lists dead letters and redrives one" },
     rust: { file: "admin_postgres.rs", test: "admin_lists_and_redrives_dead_letters" },
     typescript: { file: "integration-operator-reads.test.ts", pattern: "admin.redrive" },
     python: pythonAdmin,
@@ -726,7 +729,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Checkpoint, wait, and human-decision reads",
-    ruby: { planned: "SM-901" },
+    ruby: { file: "integration/admin_spec.rb", example: "reads checkpoints, progress, and waits" },
     rust: { file: "admin_postgres.rs", test: "admin_reads_checkpoints_waits_and_human_waits" },
     typescript: { file: "integration-human-waits.test.ts", pattern: "admin.listHumanWaits" },
     python: pythonAdmin,
@@ -734,7 +737,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Durable operator worker pause",
-    ruby: { planned: "SM-901" },
+    ruby: { file: "integration/admin_spec.rb", example: "lists workers and pauses one" },
     rust: { file: "admin_postgres.rs", test: "admin_pauses_and_resumes_a_registered_worker" },
     typescript: { file: "integration-worker-registry.test.ts", pattern: "paused" },
     python: pythonAdmin,
@@ -742,7 +745,10 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Embedded dashboard backend",
-    ruby: { planned: "SM-901" },
+    ruby: {
+      file: "integration/dashboard_conformance_spec.rb",
+      example: "answers every shared exchange and reports the policies behind a queue",
+    },
     typescript: {
       file: "../../dashboard-server/test/conformance.test.ts",
       pattern: "dashboard/v1 HTTP conformance fixtures",

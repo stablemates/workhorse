@@ -23,6 +23,7 @@ const languageDirectories = [
   path.join(repositoryRoot, "go/dashboard"),
   path.join(repositoryRoot, "python/src/workhorse/dashboard"),
   path.join(repositoryRoot, "rust/dashboard"),
+  path.join(repositoryRoot, "ruby/lib/stablemates/workhorse/dashboard"),
 ];
 
 function writeString(target: Buffer, offset: number, length: number, value: string): void {
