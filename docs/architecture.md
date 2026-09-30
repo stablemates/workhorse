@@ -3552,6 +3552,19 @@ The Ruby `HandlerContext` rejects its snake_case counterparts with the same feat
 validation or statement. `get_progress` stays a read and still answers. A Ruby batch handler's
 `BatchHandlerContext` carries only `tasks` and one batch `cancellation`.
 
+A queue can move to the fast tier while the Ruby worker still claims it through `claim_many_v1`.
+That statement then returns fast-tier tasks with no tier marker. So `Worker#track_full_tier_claim`
+gives the tasks of a non-empty `claim_many_v1` result one shared, deferred tier read. The first
+durable call of any of those handlers runs it through the internal `queue_control` statement, and
+both the claim and the `HandlerContext` cache the answer. On `tier = 'fast'` the call raises
+`FastTierUnsupportedError` and the worker ends the probe interval. `set_queue_tier_v1` refuses a
+queue with live tasks, so one read holds for every task of the claim.
+
+The read runs inside the handler, where the heartbeat already renews the lease. A slow read therefore
+cannot expire a lease that `claim_many_v1` committed. A failed read is not cached. It raises from the
+durable call before any durable write, and the next durable call retries it. A handler that makes no
+durable call never reads the tier, and its task completes through `complete_v1` or `fail_v1`.
+
 The rejection is a handler failure, so the attempt follows the task's retry policy.
 
 ## Read models and health

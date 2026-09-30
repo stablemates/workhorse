@@ -42,7 +42,8 @@ other SDKs carry, because every tag names one release of all of them.
   below concurrency 8, else `concurrency / 8` from 2 through 8, capped by the pool's spare
   connections. The handler thread pool now allows two threads per slot.
   A fast-tier task's `HandlerContext` raises `FastTierUnsupportedError` for checkpoints,
-  progress writes, durable waits, and child tasks before it sends any statement.
+  progress writes, durable waits, and child tasks before it sends any statement. That holds for a
+  task claimed through `claim_many_v1` after its queue moved to the fast tier.
 - Add `Worker#handle_batch` with `max_size:` and `linger:` in seconds. The block receives the
   payloads and a `BatchHandlerContext` with the member `tasks` and one `cancellation`, and returns
   one outcome per payload. Once the worker stops, a lingering batch runs as soon as every task it

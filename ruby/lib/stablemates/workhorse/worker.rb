@@ -226,6 +226,7 @@ module Stablemates
         @full_tier_until = {}
         @fast_tier_queues = Set.new
         @fast_task_ids = Set.new
+        @tier_reads = {}
         @dispatch_order = {}
         @dispatch_seq = 0
         @completion_lock = Mutex.new
@@ -597,6 +598,7 @@ module Stablemates
           if rows.nil?
             Telemetry.set_attribute(span, "workhorse.queue.tier", "full")
             rows = @executor.rows(SqlCatalogue::CLAIM_MANY_V1, [queue, @worker_id, limit.to_s, @lease_ms.to_s])
+            track_full_tier_claim(queue, rows) if rows.any?
           end
           tasks = rows.map { |row| ClaimedTask.from_row(row, queue) }
           record_claimed(queue, started_at, tasks)
@@ -649,7 +651,51 @@ module Stablemates
         end
       end
 
+      # Gives the tasks a claim_many_v1 call returned one shared, deferred tier read.
+      # claim_many_v1 claims a fast-tier queue through fast_claim_v1, so a queue that moved to
+      # the fast tier during the probe interval returns fast-tier tasks with no marker. The read
+      # runs in a handler's first durable call, once the heartbeat renews the task's lease, and not
+      # here, where a slow read would spend leases that nothing renews yet. The tier cannot change
+      # while the queue has live tasks, so one read holds for every task of the claim.
+      def track_full_tier_claim(queue, rows)
+        read = deferred_tier_read(queue)
+        @state_lock.synchronize { rows.each { |row| @tier_reads[row["task_id"]] = read } }
+      end
+
+      # Returns a callable that reads whether +queue+ is on the fast tier, once. A failed read is
+      # not cached, so the next durable call retries it. A fast answer ends the probe interval.
+      def deferred_tier_read(queue)
+        lock = Mutex.new
+        fast = nil
+        lambda do
+          lock.synchronize do
+            if fast.nil?
+              fast = queue_fast?(queue)
+              if fast
+                @state_lock.synchronize do
+                  @full_tier_until.delete(queue)
+                  @fast_tier_queues.add(queue)
+                end
+              end
+            end
+            fast
+          end
+        end
+      end
+
+      # Reads whether +queue+ is on the fast tier. A queue with no control row is on the full tier.
+      def queue_fast?(queue)
+        control = @executor.rows(SqlCatalogue::QUEUE_CONTROL, []).find { |row| row["queue_name"] == queue }
+        !control.nil? && control["tier"] == "fast"
+      end
+
       def fast_task?(task) = @state_lock.synchronize { @fast_task_ids.include?(task.id) }
+
+      # The fast_tier argument for a task's HandlerContext: true for a task a fast-tier statement
+      # claimed, the claim's deferred tier read for a task claim_many_v1 returned, and false otherwise.
+      def context_tier(task)
+        @state_lock.synchronize { @fast_task_ids.include?(task.id) || @tier_reads.fetch(task.id, false) }
+      end
 
       # Completes a fast-tier attempt through the batched statement, and refills its slot.
       # Completions of one queue and cohort that arrive while its statement is in flight share the
@@ -875,6 +921,7 @@ module Stablemates
         @state_lock.synchronize do
           @dispatch_order.delete(task.id)
           @fast_task_ids.delete(task.id)
+          @tier_reads.delete(task.id)
           slots = @dispatch_slots
           cohort = slots&.thread_cohorts&.delete(task.id)
           unless cohort.nil?
@@ -1147,7 +1194,7 @@ module Stablemates
         own(task, ownership, arbiter, cancellation)
         active.ownership.set(ownership)
         context = HandlerContext.new(executor: @executor, queue: @queue, task: task, worker_id: @worker_id,
-          cancellation: cancellation, arbiter: arbiter, logger: @logger, fast_tier: fast_task?(task))
+          cancellation: cancellation, arbiter: arbiter, logger: @logger, fast_tier: context_tier(task))
         begin
           result = invoke(handler, task.payload, context)
           validate_result(task, result)
