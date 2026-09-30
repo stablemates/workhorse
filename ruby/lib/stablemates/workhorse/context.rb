@@ -438,8 +438,17 @@ module Stablemates
       # LeaseLostError, as its fenced write would.
       # A fast-tier task has no durable execution state (ADR 0077), so each call that would write it
       # raises before any validation or round trip.
+      # A worker that does not know the tier at claim time passes a callable, which the first
+      # durable call runs and caches. A failed read raises before any durable write.
       def durable!(feature)
-        raise FastTierUnsupportedError.new(@task.queue, feature, nil) if @fast_tier
+        raise FastTierUnsupportedError.new(@task.queue, feature, nil) if fast_tier?
+      end
+
+      def fast_tier?
+        @lock.synchronize do
+          @fast_tier = @fast_tier.call if @fast_tier.respond_to?(:call)
+          @fast_tier
+        end
       end
 
       def live!(operation)

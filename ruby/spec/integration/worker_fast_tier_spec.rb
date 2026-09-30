@@ -99,6 +99,117 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
       [task_id]).getvalue(0, 0)).to eq("0")
   end
 
+  it "fails a durable step on a queue that moved to the fast tier while the worker claimed it as full" do
+    raised = Queue.new
+    subject = worker(concurrency: 1).handle("fast-durable") do |_payload, context|
+      context.checkpoint("step") { raise "the checkpoint block must not run" }
+    rescue => e
+      raised << e
+      raise
+    end
+    # The first run learns that the empty queue is on the full tier and stops probing it.
+    run_until(subject) { subject.instance_variable_get(:@full_tier_until).key?(@queue_name) }
+    make_fast
+    task_id = queue.enqueue("fast-durable", {}, max_attempts: 1).task_id
+
+    # The second run claims through claim_many_v1 until the probe, and so claims a fast-tier task.
+    run_until(subject) { outcomes([task_id]).size == 1 }
+
+    expect(raised.pop).to be_a(W::FastTierUnsupportedError)
+    expect(outcomes([task_id])).to eq([[task_id, "failed", "1"]])
+    expect(@connection.exec_params("SELECT count(*) FROM workhorse.task_checkpoint WHERE task_id = $1",
+      [task_id]).getvalue(0, 0)).to eq("0")
+    expect(subject.instance_variable_get(:@full_tier_until)).not_to have_key(@queue_name)
+  end
+
+  # Delays each tier read of +subject+ by +delay+ seconds, and fails the first one when +fail_first+.
+  def slow_tier_reads(subject, delay, fail_first: false)
+    reads = Concurrent::AtomicFixnum.new
+    executor = subject.instance_variable_get(:@executor)
+    original = executor.method(:rows)
+    executor.define_singleton_method(:rows) do |sql, params = []|
+      if sql == W::SqlCatalogue::QUEUE_CONTROL
+        sleep delay
+        raise "the tier read failed" if fail_first && reads.increment == 1
+      end
+      original.call(sql, params)
+    end
+  end
+
+  # Runs +subject+ once so it caches the empty queue as full-tier, then moves the queue to the fast
+  # tier and enqueues one single-attempt task that the next run claims through claim_many_v1.
+  def cut_over(subject)
+    run_until(subject) { subject.instance_variable_get(:@full_tier_until).key?(@queue_name) }
+    make_fast
+    queue.enqueue("fast-durable", {}, max_attempts: 1).task_id
+  end
+
+  def fast_outcome(task_id)
+    @connection.exec_params("SELECT state, attempt, error->>'name' FROM workhorse.fast_task_outcome WHERE task_id = $1",
+      [task_id]).values
+  end
+
+  def checkpoint_count(task_id)
+    @connection.exec_params("SELECT count(*) FROM workhorse.task_checkpoint WHERE task_id = $1", [task_id]).getvalue(0, 0)
+  end
+
+  it "reads the tier of a cutover claim under the heartbeat, so a slow read keeps the lease" do
+    raised = Queue.new
+    subject = worker(concurrency: 1, lease: 0.2, heartbeat: 0.05).handle("fast-durable") do |_payload, context|
+      context.checkpoint("step") { raise "the checkpoint block must not run" }
+    rescue => e
+      raised << e
+      raise
+    end
+    task_id = cut_over(subject)
+    slow_tier_reads(subject, 0.5)
+
+    run_until(subject) { fast_outcome(task_id).any? }
+
+    expect(raised.pop).to be_a(W::FastTierUnsupportedError)
+    # The handler's own failure, not an expired lease, ended the attempt.
+    expect(fast_outcome(task_id)).to eq([%w[failed 1 Stablemates::Workhorse::FastTierUnsupportedError]])
+    expect(checkpoint_count(task_id)).to eq("0")
+  end
+
+  it "raises a slow failed tier read from the durable call before any durable write" do
+    raised = Queue.new
+    subject = worker(concurrency: 1, lease: 0.2, heartbeat: 0.05).handle("fast-durable") do |_payload, context|
+      context.checkpoint("step") { raise "the checkpoint block must not run" }
+    rescue => e
+      raised << e
+      raise
+    end
+    task_id = cut_over(subject)
+    slow_tier_reads(subject, 0.5, fail_first: true)
+
+    run_until(subject) { fast_outcome(task_id).any? }
+
+    expect(raised.pop.message).to eq("the tier read failed")
+    expect(fast_outcome(task_id)).to eq([%w[failed 1 RuntimeError]])
+    expect(checkpoint_count(task_id)).to eq("0")
+    expect(subject.instance_variable_get(:@tier_reads)).to be_empty
+  end
+
+  it "keeps the lease of a full-tier task while a slow tier read admits its checkpoint" do
+    reads = Concurrent::AtomicFixnum.new
+    subject = worker(concurrency: 1, lease: 0.2, heartbeat: 0.05).handle("full-durable") do |_payload, context|
+      context.checkpoint("step") { reads.increment }
+      {}
+    end
+    slow_tier_reads(subject, 0.5)
+    task_id = queue.enqueue("full-durable", {}, max_attempts: 1).task_id
+    state = lambda do
+      @connection.exec_params("SELECT state FROM workhorse.task_outcome WHERE task_id = $1", [task_id]).values
+    end
+
+    run_until(subject) { state.call.any? }
+
+    expect(state.call).to eq([["succeeded"]])
+    expect(reads.value).to eq(1)
+    expect(checkpoint_count(task_id)).to eq("1")
+  end
+
   it "fuses each completion with a refill claim bounded by its slot cohort" do
     make_fast
     task_ids = Array.new(40) { |index| queue.enqueue("cohort", {"index" => index}).task_id }
