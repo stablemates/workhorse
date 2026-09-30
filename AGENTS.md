@@ -53,6 +53,21 @@ harness, product, or session.
 Co-Authored-By: claude-fable-5-1 <noreply@anthropic.com>
 ```
 
+## Keep an agent pull request to one commit
+
+An agent's pull request branch holds exactly one commit on top of its base. Review, CI, and
+follow-up changes amend that commit. When the base moves, rebase onto it and keep one commit.
+
+On each amend, rewrite the message to describe the whole change, not the first iteration. Keep the
+`SM-*` identifier in the subject and one trailer per model that produced any part of the change.
+
+After an amend or rebase, the agent may push with `git push --force-with-lease` to its own pull
+request branch. Never force-push `main` or another contributor's branch. If someone else pushed to
+the branch, ask a maintainer before rewriting it.
+
+Amending discards the intermediate commits. Record verification evidence in Linear and in pull
+request comments instead.
+
 ## Do not run the demo server
 
 Do not start the demo. Not `pnpm demo`, not `pnpm demo:app`, and not a variant in the background.
