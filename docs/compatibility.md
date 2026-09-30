@@ -25,14 +25,15 @@ This boundary is about correctness only. It is not a performance claim; see
 
 ## Supported versions
 
-| Runtime    | Supported      | Minimum | End of life                                                    | Notes                                                       |
-| ---------- | -------------- | ------- | -------------------------------------------------------------- | ----------------------------------------------------------- |
-| Node.js    | 22, 24         | 22      | 22: 2027-04-30, 24: 2028-04-30                                 | Even-numbered releases only. `engines.node` is `>=22`.      |
-| Python     | 3.12–3.14      | 3.12    | 3.12: 2028-10, 3.13: 2029-10, 3.14: 2030-10                    | `stablemates-workhorse` ships one `py3-none-any` wheel.     |
-| Go         | 1.25 and newer | 1.25    | No date; Go supports its two most recent releases              | pgx v5.11.0 is the minimum and the tested version.          |
-| Rust       | 1.89 and newer | 1.89    | No date; Rust supports only its latest stable release          | Tokio with `tokio-postgres` 0.7 and `deadpool-postgres`.    |
-| Ruby       | 3.3, 3.4, 4.0  | 3.3     | 3.3: 2027-03, 3.4: 2028-03, 4.0: 2029-03                       | `pg` 1.6 alone, behind `connection_pool`, or Active Record. |
-| PostgreSQL | 15, 16, 17, 18 | 15      | 15: 2027-11-11, 16: 2028-11-09, 17: 2029-11-08, 18: 2030-11-14 | No extension beyond the default `plpgsql` is installed.     |
+| Runtime    | Supported      | Minimum | End of life                                                    | Notes                                                           |
+| ---------- | -------------- | ------- | -------------------------------------------------------------- | --------------------------------------------------------------- |
+| Node.js    | 22, 24         | 22      | 22: 2027-04-30, 24: 2028-04-30                                 | Even-numbered releases only. `engines.node` is `>=22`.          |
+| Python     | 3.12–3.14      | 3.12    | 3.12: 2028-10, 3.13: 2029-10, 3.14: 2030-10                    | `stablemates-workhorse` ships one `py3-none-any` wheel.         |
+| Go         | 1.25 and newer | 1.25    | No date; Go supports its two most recent releases              | pgx v5.11.0 is the minimum and the tested version.              |
+| Rust       | 1.89 and newer | 1.89    | No date; Rust supports only its latest stable release          | Tokio with `tokio-postgres` 0.7 and `deadpool-postgres`.        |
+| Ruby       | 3.3, 3.4, 4.0  | 3.3     | 3.3: 2027-03-31, 3.4: not announced, 4.0: not announced        | `pg` 1.6 alone, behind `connection_pool`, or Active Record.     |
+| Active Job | 8.0, 8.1       | 8.0     | 8.0: 2026-11-07, 8.1: 2027-10-10                               | The Rails adapter. Rails dates are the end of security support. |
+| PostgreSQL | 15, 16, 17, 18 | 15      | 15: 2027-11-11, 16: 2028-11-09, 17: 2029-11-08, 18: 2030-11-14 | No extension beyond the default `plpgsql` is installed.         |
 
 Pull requests and pushes run the newest Node.js and PostgreSQL versions. The weekly schedule runs
 every Node.js and PostgreSQL combination. It also runs the packed-package test on the newest
@@ -72,7 +73,7 @@ this split.
 
 ### Raising a floor
 
-Raising the Node.js, Python, Go, or PostgreSQL minimum is a **minor** release. It is never a major
+Raising the Node.js, Python, Go, Ruby, Active Job, or PostgreSQL minimum is a **minor** release. It is never a major
 and never a patch, and it is the only way a version leaves the table above.
 [ADR 0058](decisions/0058-fix-the-current-line-and-gate-floors-on-upstream-end-of-life.md) records
 the decision. The support matrix is deliberately not one of the governed surfaces in
@@ -81,18 +82,25 @@ the decision. The support matrix is deliberately not one of the governed surface
 A floor rises only when the version being dropped has reached its **upstream end of life**. The
 upstream project's own schedule is the authority and this repository keeps no competing one:
 
-| Runtime    | End of life is                                      | Published at                                                            |
-| ---------- | --------------------------------------------------- | ----------------------------------------------------------------------- |
-| Node.js    | Past the release's published end-of-life date       | [nodejs/Release](https://github.com/nodejs/Release)                     |
-| Python     | Past the version's published end-of-life date       | [Python developer guide](https://devguide.python.org/versions/)         |
-| Go         | Older than the two releases the Go project supports | [Go release policy](https://go.dev/doc/devel/release#policy)            |
-| PostgreSQL | Past the major's community end-of-life date         | [PostgreSQL versioning](https://www.postgresql.org/support/versioning/) |
+| Runtime    | End of life is                                      | Published at                                                                  |
+| ---------- | --------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Node.js    | Past the release's published end-of-life date       | [nodejs/Release](https://github.com/nodejs/Release)                           |
+| Python     | Past the version's published end-of-life date       | [Python developer guide](https://devguide.python.org/versions/)               |
+| Go         | Older than the two releases the Go project supports | [Go release policy](https://go.dev/doc/devel/release#policy)                  |
+| Ruby       | Past the branch's published end-of-life date        | [Ruby maintenance branches](https://www.ruby-lang.org/en/downloads/branches/) |
+| Active Job | Past the Rails release's security support           | [Rails maintenance policy](https://rubyonrails.org/maintenance)               |
+| PostgreSQL | Past the major's community end-of-life date         | [PostgreSQL versioning](https://www.postgresql.org/support/versioning/)       |
 
-`support.json` records that date for every listed Node.js, Python, and PostgreSQL version, and the
-`End of life` column above publishes it. Go is the exception: its policy is relative to whatever
-the current release is, so there is no published date to transcribe and none is recorded. Node.js
-and PostgreSQL publish a day; the Python developer guide publishes only a month until a version
-retires, and a month-precision entry stands for that whole month.
+`support.json` records that date for every listed Node.js, Python, Ruby, Active Job, and PostgreSQL
+version, and the `End of life` column above publishes it. Go is the exception: its policy is
+relative to whatever the current release is, so there is no published date to transcribe and none is
+recorded. Node.js, PostgreSQL, Ruby, and Rails publish a day. The Python developer guide publishes
+only a month until a version retires, and a month-precision entry stands for that whole month.
+
+Ruby names a branch's end only once the branch enters security maintenance. Until then its
+`support.json` date is `null`, and the table says "not announced" rather than guessing. The floor
+always carries a date, because it retires first. Active Job follows its Rails release, and the
+date is the end of that release's security support.
 
 Convenience is not a reason. A runtime still supported upstream keeps its place in the table even
 when dropping it would simplify the code or shorten the matrix.
@@ -106,7 +114,7 @@ upgrade is a database migration the operator schedules rather than a package bum
 
 A floor raise is a minor because it cannot reach code that already runs. The release you installed
 keeps working against the database you built it for; what a dropped runtime loses is future
-releases, and every package manager in the three ecosystems reports that as a resolution result.
+releases, and every package manager in these ecosystems reports that as a resolution result.
 
 ### Moving a dependency range
 
@@ -283,8 +291,9 @@ name it was not configured for.
 
 ## Packages and versioning
 
-Ten packages ship from this repository. `@stablemates/workhorse` is the TypeScript durable queue;
-`stablemates-workhorse` is the Python client and worker SDK; the rest are optional TypeScript packages.
+Eleven packages ship from this repository. `@stablemates/workhorse` is the TypeScript durable queue.
+`stablemates-workhorse` names both the Python distribution on PyPI and the Ruby gem on RubyGems. The
+rest are optional TypeScript packages.
 
 | Package                                     | Purpose                                           | Peer requirements                                                                                             |
 | ------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
@@ -298,15 +307,16 @@ Ten packages ship from this repository. `@stablemates/workhorse` is the TypeScri
 | `@stablemates/workhorse-dashboard-server`   | Authenticated standalone dashboard server         | `@stablemates/workhorse-dashboard-contract`                                                                   |
 | `@stablemates/workhorse-dashboard-contract` | Type-only dashboard server boundary               | None                                                                                                          |
 | `stablemates-workhorse`                     | Python clients, workers, and WSGI dashboard       | None; includes Psycopg >= 3.3 and < 4; `asyncpg` extra supports >= 0.31 and < 1                               |
+| `stablemates-workhorse` (gem)               | Ruby clients, workers, and Rack dashboard         | None; includes `pg` >= 1.6 and < 2, `connection_pool` >= 2.5 and < 4; Active Job adapter supports >= 8.0      |
 
 The nine TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional TypeScript package always declares the core version it was released with as a peer range.
-The Python package, the Go module, and the Rust crate declare no TypeScript peer range; SQL protocol
+The Python package, the Go module, the Rust crate, and the Ruby gem declare no TypeScript peer range; SQL protocol
 5 and schema version 43 are their compatibility boundary instead. Their version numbers still match the npm
 packages, because every line releases from one commit.
 
-Every release publishes one version to npm, PyPI, and the Go module proxy from one source commit.
-The current release is `0.5.0`. “Public beta” means the release is usable for evaluation and early production adoption without a
+Every release publishes one version to npm, PyPI, the Go module proxy, crates.io, and RubyGems from
+one source commit. The current release is `0.5.0`. “Public beta” means the release is usable for evaluation and early production adoption without a
 0.x compatibility promise. The label is retired at 1.0.0 and replaced by “stable”; see
 [What SemVer governs](#what-semver-governs).
 
@@ -343,8 +353,8 @@ the first release that carries one is `v0.1.0`.
 
 Each line carries its own tag on that one commit, because npm, PyPI, and the Go module proxy have
 separate build and publication identities. The Go module proxy also resolves a subdirectory module
-only from a `go/`-prefixed tag. The crate publishes from the TypeScript `vX.Y.Z` tag, so four
-registries share three tags.
+only from a `go/`-prefixed tag. The crate and the gem publish from the TypeScript `vX.Y.Z` tag, so
+five registries share three tags.
 [ADR 0050](decisions/0050-release-0-1-0-without-a-prerelease-suffix.md) records that the tags name
 one commit and one version number.
 
@@ -627,26 +637,26 @@ for the distribution being published.
 
 ### Release train
 
-Every release publishes the same version to npm, PyPI, the Go module proxy, and crates.io from one
-source commit, in one controlled window, in a fixed order. Dates go into the changelogs before the
+Every release publishes the same version to npm, PyPI, the Go module proxy, crates.io, and RubyGems
+from one source commit, in one controlled window, in a fixed order. Dates go into the changelogs before the
 candidate is cut, and a slipped date means a new candidate. No commit lands on `main` between the
 first tag and the last, so every tag names the candidate commit.
 
-The Rust crate has no tag of its own. It rides the npm `v*` tag and publishes after npm, as
-[Rust crate](#rust-crate) describes.
+The Rust crate and the Ruby gem have no tag of their own. Each rides the npm `v*` tag and publishes
+after npm, as [Rust crate](#rust-crate) and [Ruby gem](#ruby-gem) describe.
 
 1. Rehearse. The candidate commit's `main` push run must show a green `CI / required`.
    `.github/workflows/release.yml` and `.github/workflows/release-python.yml` are dispatched
    manually with `dry-run` enabled, and every npm and Python archive is downloaded and inspected.
    All nine npm tarballs, the Python wheel, and the Python source distribution are installed in
-   clean consumers. The Go external consumer and the Rust packaged-crate consumer are built from the
-   same commit.
+   clean consumers. The Go external consumer, the Rust packaged-crate consumer, and the Ruby
+   packaged-gem consumer are built from the same commit.
    Test registries are not part of the rehearsal.
 2. Publish Python first. One distribution is the smallest production test of trusted publishing.
    Its PEP 740 attestations are verified on PyPI before the train continues.
 3. Publish npm second. `@stablemates/workhorse` goes before its eight dependents, and every
-   package's provenance is verified. The same run then publishes the Rust crate, and its version is
-   verified on crates.io before the train continues.
+   package's provenance is verified. The same run then publishes the Rust crate and the Ruby gem. Each
+   version is verified on its registry before the train continues.
 4. Publish Go last. The `go/vX.Y.Z` tag is pushed after the gate passes, and the version is
    verified through the public module proxy.
 
@@ -688,7 +698,7 @@ A check the artifact cannot satisfy therefore fails the rehearsal, not the train
 A published version is never reused. An ordinary defect stays available and receives a higher
 fix. A security, secret, privacy, or legal exposure triggers credential rotation and removal where
 the registry permits it. The response also deprecates the npm release, yanks the PyPI release, or
-retracts the Go version as appropriate, and yanks the crates.io version. Removal does not make prior
+retracts the Go version as appropriate, and yanks the crates.io and RubyGems versions. Removal does not make prior
 public access reversible.
 [`SECURITY.md`](../SECURITY.md) states how to report a vulnerability privately and which versions
 receive fixes.
@@ -697,6 +707,8 @@ The first public beta did not run this way: fix-forwards spread it across three 
 The dated entries in [`CHANGELOG.md`](../CHANGELOG.md),
 [`python/CHANGELOG.md`](../python/CHANGELOG.md), and [`go/CHANGELOG.md`](../go/CHANGELOG.md) name
 those commits.
+The Ruby gem keeps its own [`ruby/CHANGELOG.md`](../ruby/CHANGELOG.md), which the
+[Ruby gem](#ruby-gem) checklist bumps with every release.
 
 ### npm packages
 
@@ -784,13 +796,83 @@ or with `cargo owner --add <github-login> workhorse` using a token that carries 
 `change-owners` scope. crates.io sends the new owner an invitation, and ownership starts when they
 accept it.
 
+### Ruby gem
+
+The Ruby SDK publishes one gem, `stablemates-workhorse`, from `ruby/`
+([ADR 0075](decisions/0075-shape-the-ruby-sdk-as-one-gem-with-an-active-job-adapter.md)). Like the
+crate, it has no tag of its own and publishes from the npm `v*` tag. It joins the release train on
+the first release after the gem name is reserved.
+
+1. Set `VERSION` in `ruby/lib/stablemates/workhorse/version.rb` to the release version. Move the
+   `## Unreleased` entries of `ruby/CHANGELOG.md` under a `## X.Y.Z` heading, and commit both with
+   the candidate. For the first release, also remove the "Unreleased" note from `ruby/README.md`.
+   Replace the Git install in `install.ruby` of `support.json` with `bundle add
+stablemates-workhorse`, and change every surface `scripts/install-commands.test.ts` governs to
+   match. Drop the not-yet-released sentences from the site's compatibility, installation,
+   quickstart, and agent pages, and the `unpublished` flag from the Ruby entry in
+   `site/lib/releases.ts`.
+2. Tag `vX.Y.Z`. The build job of `.github/workflows/release.yml` runs `pnpm ruby:release-check`.
+   It runs the Ruby gates, then builds the `.gem` once with `gem build --strict`. It installs that
+   archive into an empty gem home and runs a clean consumer project without Bundler. With PostgreSQL
+   available, that consumer enqueues one task and runs it through a worker.
+3. After npm publishes, the `rubygems` job compares the gem version with the tag. A mismatch writes a
+   notice and publishes nothing, so a release that leaves the gem behind still succeeds.
+4. On a match, `rubygems/release-gem` exchanges the job's OIDC identity for a RubyGems API key and
+   runs `rake release` in `ruby/`. That task builds the gem and pushes it with a Sigstore
+   attestation. It finds the train tag already in place, so it pushes no tag. The action then waits
+   until RubyGems.org serves the new version.
+5. Verify the public version with `gem install stablemates-workhorse -v X.Y.Z` in an empty gem home,
+   and review the attestation on the gem's RubyGems.org page.
+
+A maintainer set up publication on 2026-09-30 with these steps. Nothing in this repository performs
+them.
+
+1. Reserve the name. The maintainer took the placeholder route and pushed `stablemates-workhorse`
+   `0.0.0` by hand. The placeholder is not a release, and the first release supersedes it. The other
+   route, a pending trusted publisher, reserves nothing until the first release publishes within
+   its 12-hour expiry.
+2. Choose the owners. The maintainer is the only owner for now. An owner adds another with
+   `gem owner stablemates-workhorse --add <email>` or in the gem's settings on RubyGems.org.
+3. Register the trusted publisher on the gem: owner `stablemates`, repository `workhorse`, workflow
+   filename `release.yml`, and environment `rubygems`. The maintainer registered it. RubyGems.org
+   does not publish trusted publishers, so only an owner can check it.
+4. Create the `rubygems` environment on GitHub with required reviewers and a policy that admits only
+   the `v*` tags, as `npm`, `pypi`, and `crates-io` have. Turn off administrator bypass. The
+   environment exists with these settings.
+
+The gem's `rubygems_mfa_required` metadata does not block this job. RubyGems.org accepts a push with
+a trusted publisher's API key without an OTP.
+[ADR 0075](decisions/0075-shape-the-ruby-sdk-as-one-gem-with-an-active-job-adapter.md) also makes the
+Ruby competitor benchmark a release gate. That gate has to pass before the first release publishes the
+gem.
+
+### Release tags
+
+Each tag prefix publishes a fixed set of packages:
+
+| Tag         | Publishes                                     | Workflow                                |
+| ----------- | --------------------------------------------- | --------------------------------------- |
+| `v*`        | The nine npm packages, the crate, and the gem | `.github/workflows/release.yml`         |
+| `python/v*` | The PyPI distribution                         | `.github/workflows/release-python.yml`  |
+| `go/v*`     | The Go module, through the module proxy       | None; `scripts/release-go.sh` pushes it |
+
+Two repository tag rulesets cover `refs/tags/v*`, `refs/tags/python/v*`, and `refs/tags/go/v*`.
+
+- "Protect release tags" (ruleset 21888197) restricts creation to organization administrators. The
+  `OrganizationAdmin` role is its only bypass actor.
+- "Lock release tags" (ruleset 24047194) blocks update, deletion, and non-fast-forward pushes. It has
+  no bypass actor, so a published tag cannot move or disappear.
+
+The Ruby gem publishes from `v*`, which both rulesets already cover. If the gem ever moves to a
+different tag prefix, add that prefix to both rulesets in the same change.
+
 The public repository requires pull requests and `CI / required` on `main`. Outside collaborators
-require workflow approval. The protected `npm`, `pypi`, and `crates-io` environments require review.
-The `npm` and `pypi` environments also prevent administrator bypass.
+require workflow approval. The protected `npm`, `pypi`, `crates-io`, and `rubygems` environments
+require review, and all four prevent administrator bypass.
 
 ### Publication credentials
 
-None of the four registries holds a credential this repository stores, and none of them holds one
+None of the five registries holds a credential this repository stores, and none of them holds one
 that can expire.
 
 npm publication uses trusted publishing. `npm publish` exchanges the publish job's GitHub Actions
@@ -821,6 +903,12 @@ file, the environment, or the repository breaks publication until an owner updat
 publisher on crates.io. The `0.0.0` placeholder was published by hand, because crates.io accepts
 a trusted publisher only for a crate that already exists.
 
+RubyGems publication stores no credential. `rubygems/release-gem` exchanges the `rubygems` job's OIDC
+identity for a short-lived API key. RubyGems.org mints that key only for the trusted publisher
+registered on the `stablemates-workhorse` gem: this repository, `release.yml`, and the `rubygems`
+environment. Renaming the workflow file, the environment, or the repository breaks publication until
+an owner updates the trusted publisher on RubyGems.org.
+
 The Go module proxy needs no credential at all. `scripts/release-go.sh` pushes a tag, and the proxy
 serves what the public repository already holds.
 
@@ -839,7 +927,7 @@ summary. Read that report. Do not infer registry state from whichever npm comman
 
 Recover by re-cutting the whole train at the next patch version.
 [ADR 0050](decisions/0050-release-0-1-0-without-a-prerelease-suffix.md) requires one version across
-the four registries, so every package moves, not only the ones that failed. The packages that did
+the five registries, so every package moves, not only the ones that failed. The packages that did
 publish stay published, because removal is unavailable and would break anyone who installed them.
 Deprecate each with `npm deprecate <name>@<version>` so an installer is pointed at the version that
 replaces it.

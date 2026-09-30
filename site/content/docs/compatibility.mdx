@@ -11,14 +11,15 @@ correctness evidence.
 
 ## The tested matrix
 
-| Runtime    | Supported      | Minimum | End of life                                                    | Notes                                                       |
-| ---------- | -------------- | ------- | -------------------------------------------------------------- | ----------------------------------------------------------- |
-| Node.js    | 22, 24         | 22      | 22: 2027-04-30, 24: 2028-04-30                                 | Even-numbered releases only. `engines.node` is `>=22`.      |
-| Python     | 3.12–3.14      | 3.12    | 3.12: 2028-10, 3.13: 2029-10, 3.14: 2030-10                    | `stablemates-workhorse` ships one `py3-none-any` wheel.     |
-| Go         | 1.25 and newer | 1.25    | No date; Go supports its two most recent releases              | pgx v5.11.0 is the minimum and the tested version.          |
-| Rust       | 1.89 and newer | 1.89    | No date; Rust supports only its latest stable release          | Tokio with `tokio-postgres` 0.7 and `deadpool-postgres`.    |
-| Ruby       | 3.3, 3.4, 4.0  | 3.3     | 3.3: 2027-03, 3.4: 2028-03, 4.0: 2029-03                       | `pg` 1.6 alone, behind `connection_pool`, or Active Record. |
-| PostgreSQL | 15, 16, 17, 18 | 15      | 15: 2027-11-11, 16: 2028-11-09, 17: 2029-11-08, 18: 2030-11-14 | No extension beyond the default `plpgsql` is installed.     |
+| Runtime    | Supported      | Minimum | End of life                                                    | Notes                                                           |
+| ---------- | -------------- | ------- | -------------------------------------------------------------- | --------------------------------------------------------------- |
+| Node.js    | 22, 24         | 22      | 22: 2027-04-30, 24: 2028-04-30                                 | Even-numbered releases only. `engines.node` is `>=22`.          |
+| Python     | 3.12–3.14      | 3.12    | 3.12: 2028-10, 3.13: 2029-10, 3.14: 2030-10                    | `stablemates-workhorse` ships one `py3-none-any` wheel.         |
+| Go         | 1.25 and newer | 1.25    | No date; Go supports its two most recent releases              | pgx v5.11.0 is the minimum and the tested version.              |
+| Rust       | 1.89 and newer | 1.89    | No date; Rust supports only its latest stable release          | Tokio with `tokio-postgres` 0.7 and `deadpool-postgres`.        |
+| Ruby       | 3.3, 3.4, 4.0  | 3.3     | 3.3: 2027-03-31, 3.4: not announced, 4.0: not announced        | `pg` 1.6 alone, behind `connection_pool`, or Active Record.     |
+| Active Job | 8.0, 8.1       | 8.0     | 8.0: 2026-11-07, 8.1: 2027-10-10                               | The Rails adapter. Rails dates are the end of security support. |
+| PostgreSQL | 15, 16, 17, 18 | 15      | 15: 2027-11-11, 16: 2028-11-09, 17: 2029-11-08, 18: 2030-11-14 | No extension beyond the default `plpgsql` is installed.         |
 
 Your application needs one of those language runtimes and a PostgreSQL server at or above its
 minimum. It does not need the others: a Python, Go, Rust, or Ruby service runs on its own language alone.
@@ -220,13 +221,16 @@ The `workhorse` crate records its versions in `rust/CHANGELOG.md` and publishes 
 consumer from that archive, and enqueues one task. After npm publishes, crates.io trusted
 publishing uploads the crate when its version matches the tag.
 
-The Ruby gem records its changes in `ruby/CHANGELOG.md`. It has no release yet, so no registry
-carries it and no tag publishes it.
+The Ruby gem records its changes in `ruby/CHANGELOG.md` and will publish from the same `vX.Y.Z`
+tag. Its release gate builds the gem once, installs that archive into a clean consumer project,
+and enqueues one task. After npm publishes, RubyGems trusted publishing uploads the gem when its
+version matches the tag. It has no release yet. RubyGems holds only a `0.0.0` placeholder that
+reserves the name.
 
 The repository is public and these paths run. Pull requests and pushes to `main` run each
 language's suite once, on the newest supported versions. The weekly schedule runs the full
 compatibility matrix, every suite variation, and the packed-install and package checks. Branch protection requires the stable `CI / required` check, and protected
-npm, PyPI, and crates.io environments require a second person to approve publication.
+npm, PyPI, crates.io, and RubyGems environments require a second person to approve publication.
 
 One honest caveat: support proves correctness under the tested matrix. It does not promise a
 throughput level for your database, payloads, handlers, or deployment topology.
