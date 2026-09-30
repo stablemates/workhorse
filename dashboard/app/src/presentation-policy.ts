@@ -10,7 +10,7 @@ import type {
   DashboardSystemRetryBucket,
   DashboardWorkerRow,
 } from "@stablemates/workhorse-dashboard-server/wire";
-import type { QueueHealthReason } from "@stablemates/workhorse";
+import type { QueueHealthReason, QueueHealthReasonCode } from "@stablemates/workhorse";
 
 const DAY_MS = 86_400_000;
 const CEILING_PRESSURE = 0.8;
@@ -183,8 +183,11 @@ export const retentionCategoryLabels: Record<DashboardRetentionCategory, string>
 };
 
 export interface HealthCheckMessage {
+  code: QueueHealthReasonCode;
   message: string;
-  /** What an operator can do about the failed check, in one or two sentences. */
+  /** Structured subject lets the UI emphasize the name without parsing the sentence. */
+  subject?: { label: "Queue" | "Budget"; name: string; detail: string };
+  /** Resolution advice for a failure, or an explanation of an expected control. */
   advice: string;
   /** Documentation page that explains the failing subsystem. */
   helpHref: string;
@@ -192,18 +195,32 @@ export interface HealthCheckMessage {
 
 const docs = (page: string) => `https://workhorse.run/docs/${page}`;
 
+function scopedHealthMessage(
+  label: "Queue" | "Budget",
+  name: string | undefined,
+  detail: string,
+): Pick<HealthCheckMessage, "message" | "subject"> {
+  return {
+    message: `${label} ${name} ${detail}`,
+    subject: name === undefined ? undefined : { label, name, detail },
+  };
+}
+
 export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
   criticalChecks: HealthCheckMessage[];
   degradedChecks: HealthCheckMessage[];
+  expectedChecks: HealthCheckMessage[];
 } {
   const criticalChecks: HealthCheckMessage[] = [];
   const degradedChecks: HealthCheckMessage[] = [];
+  const expectedChecks: HealthCheckMessage[] = [];
   const lateRetentionLabels: string[] = [];
   const lateRetentionCategories: DashboardRetentionCategory[] = [];
   for (const reason of reasons) {
     switch (reason.code) {
       case "expired-leases":
         criticalChecks.push({
+          code: reason.code,
           message: "Expired leases",
           advice:
             "A worker stopped renewing its lease, usually because its process crashed or " +
@@ -213,6 +230,7 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
         break;
       case "overdue-deadlines":
         criticalChecks.push({
+          code: reason.code,
           message: "Tasks are past their deadlines",
           advice:
             "Live tasks passed their deadlines. Deadline maintenance fails them on its next " +
@@ -222,6 +240,7 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
         break;
       case "overdue-execution-timeouts":
         criticalChecks.push({
+          code: reason.code,
           message: "Attempts are past their execution limits",
           advice:
             "Attempts ran longer than their execution limits allow. Maintenance fails them on " +
@@ -231,6 +250,7 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
         break;
       case "overdue-external-waits":
         criticalChecks.push({
+          code: reason.code,
           message: `External waits are overdue (${reason.observed})`,
           advice:
             "A signal or human decision passed its deadline. Review waiting tasks and complete " +
@@ -240,6 +260,7 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
         break;
       case "stalled-promotion":
         criticalChecks.push({
+          code: reason.code,
           message: "Scheduled tasks are overdue",
           advice:
             "Due tasks are not being promoted to ready, which usually means no worker is " +
@@ -249,6 +270,7 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
         break;
       case "missing-history-partitions":
         criticalChecks.push({
+          code: reason.code,
           message: "Daily history storage is missing",
           advice:
             "Workers prepare daily history storage during maintenance, so a missing day means " +
@@ -259,6 +281,7 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
         break;
       case "rollup-stalled":
         degradedChecks.push({
+          code: reason.code,
           message: "The statistics summary is behind",
           advice:
             "Retention cannot delete history the rollup has not summarized, so history " +
@@ -274,6 +297,7 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
         break;
       case "eligible-history-partitions":
         degradedChecks.push({
+          code: reason.code,
           message: `History days await deletion (${reason.observed})`,
           advice:
             "Each retention pass deletes a limited number of history days. If the count keeps " +
@@ -283,6 +307,7 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
         break;
       case "default-history-rows":
         degradedChecks.push({
+          code: reason.code,
           message: `History rows use fallback storage (${reason.observed})`,
           advice:
             "These rows arrived before their daily storage existed and must be deleted row by " +
@@ -291,29 +316,44 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
         });
         break;
       case "concurrency-blocked":
-        degradedChecks.push({
-          message: `Concurrency policy blocks ready tasks on ${reason.queue}`,
+        expectedChecks.push({
+          code: reason.code,
+          ...scopedHealthMessage(
+            "Queue",
+            reason.queue,
+            `has ${reason.observed}+ ready tasks waiting for concurrency capacity`,
+          ),
           advice:
-            "The queue's concurrency policy holds ready tasks back while active work fills the " +
-            "limit. Raise the limit if the queue should drain faster.",
+            "The configured concurrency limit keeps active work within capacity. Waiting tasks " +
+            "are expected while the limit is in use.",
           helpHref: docs("concurrency-policies"),
         });
         break;
       case "rate-limit-throttled":
-        degradedChecks.push({
-          message: `Queue ${reason.queue} has ${reason.observed}+ ready tasks waiting for rate-limit tokens`,
+        expectedChecks.push({
+          code: reason.code,
+          ...scopedHealthMessage(
+            "Queue",
+            reason.queue,
+            `has ${reason.observed}+ ready tasks waiting for rate-limit tokens`,
+          ),
           advice:
-            "The queue's rate limit admits work slower than it arrives. Raise the rate if the " +
-            "downstream system can absorb more.",
+            "The configured rate limit controls how quickly tasks start. Waiting for tokens is " +
+            "expected while Workhorse enforces that rate.",
           helpHref: docs("rate-limits"),
         });
         break;
       case "budget-blocked":
-        degradedChecks.push({
-          message: `Budget ${reason.budgetName} holds ${reason.observed}+ ready tasks across queues`,
+        expectedChecks.push({
+          code: reason.code,
+          ...scopedHealthMessage(
+            "Budget",
+            reason.budgetName,
+            `holds ${reason.observed}+ ready tasks across queues`,
+          ),
           advice:
-            "The named budget is at its concurrency cap or out of start tokens, so ready tasks " +
-            "in every queue naming it wait. Raise the budget if the shared resource can absorb more.",
+            "The configured budget protects capacity shared across queues. Waiting for capacity " +
+            "or start tokens is expected while the budget is in use.",
           helpHref: docs("concurrency-policies"),
         });
         break;
@@ -321,6 +361,7 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
   }
   if (lateRetentionLabels.length > 0) {
     degradedChecks.push({
+      code: "retention-lag",
       message: `Retention cleanup is late for ${lateRetentionLabels.join(", ")}`,
       advice: [
         lateRetentionCategories.some((category) => category !== "scheduleOccurrences")
@@ -334,7 +375,95 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
       helpHref: docs("maintenance"),
     });
   }
-  return { criticalChecks, degradedChecks };
+  return { criticalChecks, degradedChecks, expectedChecks };
+}
+
+const healthCheckDefinitions = {
+  "expired-leases": { label: "Worker leases", summary: "No expired worker leases." },
+  "overdue-deadlines": { label: "Task deadlines", summary: "No tasks are past their deadlines." },
+  "overdue-execution-timeouts": {
+    label: "Execution timeouts",
+    summary: "No attempts are past their execution limits.",
+  },
+  "overdue-external-waits": {
+    label: "External waits",
+    summary: "No signals or human decisions are past their deadlines.",
+  },
+  "stalled-promotion": {
+    label: "Scheduled task promotion",
+    summary: "No scheduled task promotion exceeds its lag budget.",
+  },
+  "missing-history-partitions": {
+    label: "Daily history partitions",
+    summary: "All required daily history partitions exist.",
+  },
+  "rollup-stalled": {
+    label: "Statistics rollup",
+    summary: "No statistics rollup stall reported.",
+  },
+  "retention-lag": {
+    label: "Retention cleanup",
+    summary: "No retention category exceeds its cleanup budget.",
+  },
+  "eligible-history-partitions": {
+    label: "History partition cleanup",
+    summary: "History days awaiting deletion are within the cleanup budget.",
+  },
+  "default-history-rows": {
+    label: "Fallback history storage",
+    summary: "No history rows use fallback storage.",
+  },
+  "concurrency-blocked": {
+    label: "Concurrency limits",
+    summary: "No sampled ready tasks are waiting for concurrency capacity.",
+  },
+  "rate-limit-throttled": {
+    label: "Rate limits",
+    summary: "No sampled ready tasks are waiting for rate-limit tokens.",
+  },
+  "budget-blocked": {
+    label: "Shared budgets",
+    summary: "No sampled ready tasks are waiting for shared budget capacity.",
+  },
+} satisfies Record<QueueHealthReasonCode, { label: string; summary: string }>;
+
+export interface SystemHealthCheck {
+  code: QueueHealthReasonCode;
+  label: string;
+  summary: string;
+  status: "critical" | "degraded" | "passing" | "throttling" | "limiting";
+  messages: HealthCheckMessage[];
+}
+
+/** Every supported check stays visible; only operational failures move to the top. */
+export function systemHealthChecks(reasons: readonly QueueHealthReason[]): SystemHealthCheck[] {
+  const { criticalChecks, degradedChecks, expectedChecks } = healthCheckMessages(reasons);
+  const checks = Object.entries(healthCheckDefinitions).map(
+    ([code, definition]): SystemHealthCheck => {
+      const critical = criticalChecks.filter((check) => check.code === code);
+      const degraded = degradedChecks.filter((check) => check.code === code);
+      const expected = expectedChecks.filter((check) => check.code === code);
+      return {
+        code: code as QueueHealthReasonCode,
+        label: definition.label,
+        summary: definition.summary,
+        status:
+          critical.length > 0
+            ? "critical"
+            : degraded.length > 0
+              ? "degraded"
+              : expected.length > 0
+                ? code === "rate-limit-throttled"
+                  ? "throttling"
+                  : "limiting"
+                : "passing",
+        messages: [...critical, ...degraded, ...expected],
+      };
+    },
+  );
+  const statusOrder = { critical: 0, degraded: 1, passing: 2, throttling: 2, limiting: 2 };
+  // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+  return [...checks].sort((a, b) => statusOrder[a.status] - statusOrder[b.status]);
 }
 
 const storageRelationPresentation: Record<

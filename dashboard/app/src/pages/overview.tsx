@@ -5,7 +5,6 @@ import type {
   DashboardSystemWindow,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import {
-  Anchor,
   Badge,
   Box,
   Center,
@@ -24,9 +23,11 @@ import {
 import { Suspense } from "react";
 import {
   ExternalWaitAlert,
+  QueueActivity,
   QueuePressure,
   RetryStorm,
   SystemKpiList,
+  SystemWindowKpis,
   formatPercent,
   systemBucketLabel,
 } from "../charts/system.js";
@@ -41,12 +42,9 @@ import {
 import { SystemOutcomeChart, systemWindows } from "../core.js";
 import { BudgetsTable, budgetCappedFootnote } from "../budgets-table.js";
 import { HelpButton } from "../components/help-button.js";
+import { SystemHealthChecks } from "../components/system-health-checks.js";
 import { taskDisplayName } from "../components/task-list.js";
-import {
-  healthCheckMessages,
-  presentStorageRelation,
-  retentionCategoryLabels,
-} from "../presentation-policy.js";
+import { presentStorageRelation, retentionCategoryLabels } from "../presentation-policy.js";
 
 export function SystemPage({
   data,
@@ -57,9 +55,6 @@ export function SystemPage({
   setWindow: (window: DashboardSystemWindow) => void;
   navigate: (href: string) => void;
 }) {
-  // Level is also spelled out in the badge text so status never depends on color alone.
-  const systemStatusColor =
-    data.status.level === "critical" ? "red" : data.status.level === "degraded" ? "yellow" : "teal";
   const outcomeChartData = data.outcomes.map((bucket) => ({
     bucket: systemBucketLabel(bucket.bucketStart, data.window),
     enqueued: bucket.enqueued,
@@ -70,11 +65,6 @@ export function SystemPage({
     canceled: bucket.canceled,
   }));
   const retention = data.integrity.retention;
-  const { criticalChecks, degradedChecks } = healthCheckMessages(data.status.reasons);
-  const checks = [
-    ...criticalChecks.map((check) => ({ check, severity: "critical" as const })),
-    ...degradedChecks.map((check) => ({ check, severity: "degraded" as const })),
-  ];
   const defaultSpill =
     retention.defaultHistoryRows.taskEvents + retention.defaultHistoryRows.attemptHistory;
   const eligiblePartitions =
@@ -108,374 +98,412 @@ export function SystemPage({
 
   return (
     <Stack gap="xl">
-      <Group justify="space-between" align="flex-start">
-        <Box>
-          <Group gap="sm" mb={4}>
-            <Title order={1}>System health</Title>
-            <HelpButton
-              label="System health"
-              help="Critical checks mean Workhorse may stop or lose work. Degraded checks mean retained history is using more storage than its policy allows."
-            />
-            <Badge color={systemStatusColor} variant="light" size="lg" tt="capitalize">
-              {data.status.level}
-            </Badge>
-          </Group>
-          <Stack gap={6}>
-            {/* Each check keeps its own severity so a degraded note is not painted as critical,
-                and each carries the operator's next step plus the page that explains it. */}
-            {checks.slice(0, 3).map(({ check, severity }) => (
-              <Box key={check.message} maw={640}>
-                <Text c={severity === "critical" ? "red.7" : "yellow.8"} size="sm">
-                  {severity === "critical" ? "Critical" : "Degraded"}: {check.message}
-                </Text>
-                <Text c="dimmed" size="xs">
-                  {check.advice}{" "}
-                  <Anchor href={check.helpHref} target="_blank" rel="noopener noreferrer" size="xs">
-                    Learn more
-                  </Anchor>
-                </Text>
-              </Box>
-            ))}
-            {checks.length === 0 ? (
-              <Text c="dimmed" size="sm">
-                All checks pass.
-              </Text>
-            ) : null}
-          </Stack>
-          {data.pausedQueues.length > 0 ? (
-            <Group gap={6} mt="xs">
-              <Text c="dimmed" size="xs">
-                Paused
-              </Text>
-              {data.pausedQueues.map((queue) => (
-                <Badge key={queue} color="yellow" variant="light" size="sm">
-                  {queue}
-                </Badge>
-              ))}
+      <Stack gap="sm">
+        <Group justify="space-between" align="flex-start">
+          <Box>
+            <Group gap="sm" mb={4}>
+              <Title order={1} size="h3">
+                System health
+              </Title>
+              <HelpButton
+                label="System health"
+                help="Each check reports whether work or maintenance needs attention. Rate limits, concurrency limits, and shared budgets protect capacity as configured."
+              />
             </Group>
-          ) : null}
-        </Box>
-        <Stack gap={6} align="flex-end">
-          <SegmentedControl
-            size="xs"
-            value={data.window}
-            onChange={(value) => setWindow(value as DashboardSystemWindow)}
-            data={systemWindows.map((value) => ({ value, label: value }))}
-          />
+            {data.pausedQueues.length > 0 ? (
+              <Group gap={6} mt="xs">
+                <Text c="dimmed" size="xs">
+                  Paused
+                </Text>
+                {data.pausedQueues.map((queue) => (
+                  <Badge key={queue} color="yellow" variant="light" size="sm">
+                    {queue}
+                  </Badge>
+                ))}
+              </Group>
+            ) : null}
+          </Box>
           <Text c="dimmed" size="xs" title={formatExact(data.capturedAt)}>
             Captured {formatRelative(data.capturedAt)}
           </Text>
-        </Stack>
-      </Group>
+        </Group>
+
+        <SystemHealthChecks reasons={data.status.reasons} />
+      </Stack>
 
       <ExternalWaitAlert externalWaits={data.kpis.externalWaits} navigate={navigate} />
 
-      {/* The measures lead the page beside the activity chart; tables get full rows below so
-          their numeric columns never fight a sibling column for width. */}
-      <Grid gap="xl">
-        <Grid.Col span={{ base: 12, lg: 4 }}>
-          <SystemKpiList data={data} navigate={navigate} />
-        </Grid.Col>
-        <Grid.Col span={{ base: 12, lg: 8 }}>
-          {/* A flex column lets the chart absorb whatever height the measures column sets,
-              so the panel never shows dead space under the plot. */}
-          <Paper withBorder p="md" h="100%" style={{ display: "flex", flexDirection: "column" }}>
-            <Group justify="space-between" mb="sm">
-              <Box>
-                <Group gap={4} wrap="nowrap">
-                  <Text fw={650}>Task activity</Text>
-                  <HelpButton
-                    label="Task activity"
-                    help="Each bar shows attempt outcomes for one minute. The line shows tasks added during that minute."
-                  />
-                </Group>
-                <Text c="dimmed" size="xs">
-                  Tasks added and attempts finished each minute
-                </Text>
-              </Box>
-              <Badge variant="light" color="gray">
-                {data.window}
+      <Stack
+        component="section"
+        aria-labelledby="system-activity-title"
+        className="system-section"
+        gap="lg"
+      >
+        <Group justify="space-between" align="flex-end">
+          <Box>
+            <Group gap="xs">
+              <Title order={2} size="h4" id="system-activity-title">
+                Activity over time
+              </Title>
+              <Badge variant="light" color="gray" size="sm" tt="none">
+                Full + fast tiers
               </Badge>
             </Group>
-            <Box mih={320} style={{ flex: 1 }}>
-              <Suspense
-                fallback={
-                  <Center h="100%">
-                    <Loader size="sm" />
-                  </Center>
-                }
-              >
-                <SystemOutcomeChart data={outcomeChartData} />
-              </Suspense>
-            </Box>
-          </Paper>
-        </Grid.Col>
-      </Grid>
-
-      {/* Current queue pressure gets the full width its numeric columns need. */}
-      <QueuePressure data={data} navigate={navigate} />
-      {data.budgets.length === 0 ? null : <BudgetsTable budgets={data.budgets} />}
-      {data.budgetsCapped ? (
-        <Text c="dimmed" size="xs">
-          {budgetCappedFootnote}
-        </Text>
-      ) : null}
-
-      <Paper withBorder>
-        <Box p="md">
-          <Group gap={4} wrap="nowrap">
-            <Text fw={650}>Task types with failures</Text>
-            <HelpButton
-              label="Task types with failures"
-              help="This table ranks task types by failed attempts in the selected window. The last columns describe the newest matching attempt."
+            <Text c="dimmed" size="xs">
+              Metrics in this section use the selected time range.
+            </Text>
+          </Box>
+          <Stack gap={6}>
+            <Text c="dimmed" size="xs">
+              Time range
+            </Text>
+            <SegmentedControl
+              aria-label="Activity time range"
+              aria-controls="system-activity-metrics"
+              size="xs"
+              value={data.window}
+              onChange={(value) => setWindow(value as DashboardSystemWindow)}
+              data={systemWindows.map((value) => ({ value, label: value }))}
             />
+          </Stack>
+        </Group>
+
+        <Stack id="system-activity-metrics" gap="lg">
+          <Grid gap="xl">
+            <Grid.Col span={{ base: 12, lg: 4 }}>
+              <SystemWindowKpis data={data} />
+            </Grid.Col>
+            <Grid.Col span={{ base: 12, lg: 8 }}>
+              {/* A flex column lets the chart absorb whatever height the measures column sets,
+              so the panel never shows dead space under the plot. */}
+              <Paper
+                withBorder
+                p="md"
+                h="100%"
+                style={{ display: "flex", flexDirection: "column" }}
+              >
+                <Group justify="space-between" mb="sm">
+                  <Box>
+                    <Group gap={4} wrap="nowrap">
+                      <Text fw={650}>Task activity</Text>
+                      <HelpButton
+                        label="Task activity"
+                        help="Each bar shows attempt outcomes for one minute. The line shows tasks added during that minute."
+                      />
+                    </Group>
+                    <Text c="dimmed" size="xs">
+                      Tasks added and attempts finished each minute
+                    </Text>
+                  </Box>
+                </Group>
+                <Box mih={320} style={{ flex: 1 }}>
+                  <Suspense
+                    fallback={
+                      <Center h="100%">
+                        <Loader size="sm" />
+                      </Center>
+                    }
+                  >
+                    <SystemOutcomeChart data={outcomeChartData} />
+                  </Suspense>
+                </Box>
+              </Paper>
+            </Grid.Col>
+          </Grid>
+
+          <QueueActivity data={data} navigate={navigate} />
+
+          <Paper withBorder>
+            <Box p="md">
+              <Group gap={4} wrap="nowrap">
+                <Text fw={650}>Task types with failures</Text>
+                <HelpButton
+                  label="Task types with failures"
+                  help="This table ranks task types by failed attempts in the selected window. The last columns describe the newest matching attempt."
+                />
+              </Group>
+              <Text c="dimmed" size="xs">
+                Closed attempts in the selected window
+              </Text>
+            </Box>
+            {data.failingTypes.length === 0 ? (
+              <Center mih={180}>
+                <Text c="dimmed" size="sm">
+                  No failed attempts in this window.
+                </Text>
+              </Center>
+            ) : (
+              <ScrollArea>
+                <Table highlightOnHover verticalSpacing={6} horizontalSpacing="sm" miw={760}>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Queue and task type</Table.Th>
+                      <Table.Th ta="right">Attempts</Table.Th>
+                      <Table.Th ta="right">Error %</Table.Th>
+                      <Table.Th ta="right">Terminal</Table.Th>
+                      <Table.Th>Last error</Table.Th>
+                      <Table.Th>Last seen</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {data.failingTypes.map((type) => (
+                      <Table.Tr key={`${type.queue}:${type.type}`}>
+                        <Table.Td>
+                          <Text size="sm" fw={600}>
+                            {taskDisplayName(type.type, type.queue)}
+                          </Text>
+                          <Text c="dimmed" size="xs">
+                            {type.queue}
+                          </Text>
+                        </Table.Td>
+                        <Table.Td ta="right">{type.attempts}</Table.Td>
+                        <Table.Td ta="right">
+                          <Text c={type.errorRate >= 0.05 ? "red.7" : "yellow.8"} size="sm">
+                            {formatPercent(type.errorRate)}
+                          </Text>
+                        </Table.Td>
+                        <Table.Td ta="right">{type.terminalFailures}</Table.Td>
+                        <Table.Td maw={220}>
+                          <Text size="xs" lineClamp={1} title={type.lastError ?? undefined}>
+                            {type.lastError ?? "—"}
+                          </Text>
+                        </Table.Td>
+                        <Table.Td>
+                          <Text c="dimmed" size="xs" title={formatExact(type.lastSeenAt)}>
+                            {formatRelative(type.lastSeenAt)}
+                          </Text>
+                        </Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </ScrollArea>
+            )}
+          </Paper>
+        </Stack>
+      </Stack>
+
+      <Stack
+        component="section"
+        aria-labelledby="system-current-title"
+        className="system-section"
+        gap="lg"
+      >
+        <Box>
+          <Group gap="xs">
+            <Title order={2} size="h4" id="system-current-title">
+              Current operations
+            </Title>
+            <Badge variant="light" color="gray" size="sm" tt="none">
+              Now
+            </Badge>
           </Group>
           <Text c="dimmed" size="xs">
-            Closed attempts in the selected window
+            Queue state, retries, maintenance, and storage are independent of the time range.
           </Text>
         </Box>
-        {data.failingTypes.length === 0 ? (
-          <Center mih={180}>
-            <Text c="dimmed" size="sm">
-              No failed attempts in this window.
-            </Text>
-          </Center>
-        ) : (
-          <ScrollArea>
-            <Table highlightOnHover verticalSpacing={6} horizontalSpacing="sm" miw={760}>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>Queue and task type</Table.Th>
-                  <Table.Th ta="right">Attempts</Table.Th>
-                  <Table.Th ta="right">Error %</Table.Th>
-                  <Table.Th ta="right">Terminal</Table.Th>
-                  <Table.Th>Last error</Table.Th>
-                  <Table.Th>Last seen</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {data.failingTypes.map((type) => (
-                  <Table.Tr key={`${type.queue}:${type.type}`}>
-                    <Table.Td>
-                      <Text size="sm" fw={600}>
-                        {taskDisplayName(type.type, type.queue)}
-                      </Text>
-                      <Text c="dimmed" size="xs">
-                        {type.queue}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td ta="right">{type.attempts}</Table.Td>
-                    <Table.Td ta="right">
-                      <Text c={type.errorRate >= 0.05 ? "red.7" : "yellow.8"} size="sm">
-                        {formatPercent(type.errorRate)}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td ta="right">{type.terminalFailures}</Table.Td>
-                    <Table.Td maw={220}>
-                      <Text size="xs" lineClamp={1} title={type.lastError ?? undefined}>
-                        {type.lastError ?? "—"}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text c="dimmed" size="xs" title={formatExact(type.lastSeenAt)}>
-                        {formatRelative(type.lastSeenAt)}
-                      </Text>
-                    </Table.Td>
-                  </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
-          </ScrollArea>
-        )}
-      </Paper>
 
-      {/* The retry outlook and the maintenance checks both answer "what happens next". */}
-      <Grid gap="xl">
-        <Grid.Col span={{ base: 12, lg: 5 }}>
-          <RetryStorm data={data} />
-        </Grid.Col>
-        <Grid.Col span={{ base: 12, lg: 7 }}>
-          <Paper withBorder p="md" h="100%">
-            <Group gap={4} wrap="nowrap">
-              <Text fw={650}>Background maintenance</Text>
-              <HelpButton
-                label="Background maintenance"
-                help="These checks cover due tasks, prepared history storage, and retention cleanup. The counts show the current database state and ignore the window selector."
-              />
-            </Group>
-            <Text c="dimmed" size="xs" mb="lg">
-              Checks that keep tasks moving and history bounded
-            </Text>
-            <Group justify="space-between" mb="lg">
-              <Box>
-                <Text size="sm" fw={600}>
-                  Overdue scheduled tasks
-                </Text>
-                <Text c="dimmed" size="xs">
-                  Still scheduled after their start time
-                </Text>
-              </Box>
-              <Badge
-                color={data.integrity.dueButUnpromoted > 0 ? "red" : "teal"}
-                variant="light"
-                size="lg"
-              >
-                {data.integrity.dueButUnpromoted}
-              </Badge>
-            </Group>
-            <Table verticalSpacing={6} horizontalSpacing="xs" captionSide="top">
-              <Table.Caption ta="left" c="dimmed" fz="xs" mt={0} mb={4}>
-                Daily storage prepared for history
-              </Table.Caption>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th scope="col">Day</Table.Th>
-                  <Table.Th scope="col" ta="center">
-                    Task events
-                  </Table.Th>
-                  <Table.Th scope="col" ta="center">
-                    Attempt history
-                  </Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {data.integrity.partitions.map((partition) => (
-                  <Table.Tr key={partition.day}>
-                    <Table.Th scope="row" fw={400}>
-                      <Text
-                        size="xs"
-                        title={`${partition.day} · ${formatExact(partition.startsAt)}`}
-                      >
-                        {formatDay(partition.startsAt)}
-                      </Text>
-                    </Table.Th>
-                    <Table.Td ta="center">
-                      <Badge color={partition.eventExists ? "teal" : "red"} variant="dot" size="sm">
-                        {partition.eventExists ? "Ready" : "Missing"}
-                      </Badge>
-                    </Table.Td>
-                    <Table.Td ta="center">
-                      <Badge
-                        color={partition.attemptExists ? "teal" : "red"}
-                        variant="dot"
-                        size="sm"
-                      >
-                        {partition.attemptExists ? "Ready" : "Missing"}
-                      </Badge>
-                    </Table.Td>
-                  </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
-            <Divider my="md" />
-            <Stack gap="md">
-              <Group justify="space-between" wrap="nowrap" align="flex-start">
-                <Box>
-                  <Group gap={4} wrap="nowrap">
-                    <Text size="sm" fw={600}>
-                      Retention cleanup
-                    </Text>
-                    <HelpButton label="Retention cleanup" help={retentionDetail} />
-                  </Group>
-                  <Text c="dimmed" size="xs">
-                    {enabledRetention.length === 0
-                      ? "No category deletes history"
-                      : retention.maxLagMs === null || retention.maxLagMs === 0
-                        ? "Every category is inside its keep-for window"
-                        : `Furthest behind: ${
-                            retention.categories.find(
-                              (row) => row.category === retention.maxLagCategory,
-                            )?.category
-                              ? retentionCategoryLabels[retention.maxLagCategory!]
-                              : retention.maxLagCategory
-                          }`}
-                  </Text>
-                </Box>
-                <Badge
-                  color={retentionBehind ? "yellow" : "teal"}
-                  variant="light"
-                  title={retentionDetail}
-                >
-                  {enabledRetention.length === 0
-                    ? "Not applicable"
-                    : retention.maxLagMs === null || retention.maxLagMs === 0
-                      ? "On time"
-                      : `${formatSpan(retention.maxLagMs)} behind`}
-                </Badge>
+        <SystemKpiList data={data} navigate={navigate} />
+        <QueuePressure data={data} navigate={navigate} />
+        {data.budgets.length === 0 ? null : <BudgetsTable budgets={data.budgets} />}
+        {data.budgetsCapped ? (
+          <Text c="dimmed" size="xs">
+            {budgetCappedFootnote}
+          </Text>
+        ) : null}
+
+        {/* The retry outlook and the maintenance checks both answer "what happens next". */}
+        <Grid gap="xl">
+          <Grid.Col span={{ base: 12, lg: 5 }}>
+            <RetryStorm data={data} />
+          </Grid.Col>
+          <Grid.Col span={{ base: 12, lg: 7 }}>
+            <Paper withBorder p="md" h="100%">
+              <Group gap={4} wrap="nowrap">
+                <Text fw={650}>Background maintenance</Text>
+                <HelpButton
+                  label="Background maintenance"
+                  help="These checks cover due tasks, prepared history storage, and retention cleanup. The counts show the current database state and ignore the window selector."
+                />
               </Group>
-              <Group justify="space-between" wrap="nowrap" align="flex-start">
+              <Text c="dimmed" size="xs" mb="lg">
+                Checks that keep tasks moving and history bounded
+              </Text>
+              <Group justify="space-between" mb="lg">
                 <Box>
                   <Text size="sm" fw={600}>
-                    Oldest retained
+                    Overdue scheduled tasks
                   </Text>
                   <Text c="dimmed" size="xs">
-                    {oldestRetained
-                      ? retentionCategoryLabels[oldestRetained.category]
-                      : "No history retained yet"}
+                    Still scheduled after their start time
                   </Text>
                 </Box>
                 <Badge
-                  color="gray"
+                  color={data.integrity.dueButUnpromoted > 0 ? "red" : "teal"}
                   variant="light"
-                  title={formatExact(retention.oldestRetainedAt ?? undefined)}
+                  size="lg"
                 >
-                  {retention.oldestRetainedAt === null
-                    ? "—"
-                    : formatRelative(retention.oldestRetainedAt)}
+                  {data.integrity.dueButUnpromoted}
                 </Badge>
               </Group>
-              <Group justify="space-between" wrap="nowrap" align="flex-start">
-                <Box>
-                  <Group gap={4} wrap="nowrap">
-                    <Text size="sm" fw={600}>
-                      History days awaiting deletion
+              <Table verticalSpacing={6} horizontalSpacing="xs" captionSide="top">
+                <Table.Caption ta="left" c="dimmed" fz="xs" mt={0} mb={4}>
+                  Daily storage prepared for history
+                </Table.Caption>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th scope="col">Day</Table.Th>
+                    <Table.Th scope="col" ta="center">
+                      Task events
+                    </Table.Th>
+                    <Table.Th scope="col" ta="center">
+                      Attempt history
+                    </Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {data.integrity.partitions.map((partition) => (
+                    <Table.Tr key={partition.day}>
+                      <Table.Th scope="row" fw={400}>
+                        <Text
+                          size="xs"
+                          title={`${partition.day} · ${formatExact(partition.startsAt)}`}
+                        >
+                          {formatDay(partition.startsAt)}
+                        </Text>
+                      </Table.Th>
+                      <Table.Td ta="center">
+                        <Badge
+                          color={partition.eventExists ? "teal" : "red"}
+                          variant="dot"
+                          size="sm"
+                        >
+                          {partition.eventExists ? "Ready" : "Missing"}
+                        </Badge>
+                      </Table.Td>
+                      <Table.Td ta="center">
+                        <Badge
+                          color={partition.attemptExists ? "teal" : "red"}
+                          variant="dot"
+                          size="sm"
+                        >
+                          {partition.attemptExists ? "Ready" : "Missing"}
+                        </Badge>
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+              <Divider my="md" />
+              <Stack gap="md">
+                <Group justify="space-between" wrap="nowrap" align="flex-start">
+                  <Box>
+                    <Group gap={4} wrap="nowrap">
+                      <Text size="sm" fw={600}>
+                        Retention cleanup
+                      </Text>
+                      <HelpButton label="Retention cleanup" help={retentionDetail} />
+                    </Group>
+                    <Text c="dimmed" size="xs">
+                      {enabledRetention.length === 0
+                        ? "No category deletes history"
+                        : retention.maxLagMs === null || retention.maxLagMs === 0
+                          ? "Every category is inside its keep-for window"
+                          : `Furthest behind: ${
+                              retention.categories.find(
+                                (row) => row.category === retention.maxLagCategory,
+                              )?.category
+                                ? retentionCategoryLabels[retention.maxLagCategory!]
+                                : retention.maxLagCategory
+                            }`}
                     </Text>
-                    <HelpButton
-                      label="History days awaiting deletion"
-                      help="These UTC days are older than their retention period. Cleanup deletes a limited number each time it runs."
-                    />
-                  </Group>
-                  <Text c="dimmed" size="xs">
-                    Current total, not windowed
-                  </Text>
-                </Box>
-                <Badge
-                  color={eligiblePartitions > 0 ? "yellow" : "teal"}
-                  variant="light"
-                  title={`${retention.eligibleHistoryPartitions.taskEvents} task-event days, ${retention.eligibleHistoryPartitions.attemptHistory} attempt-history days`}
-                >
-                  {retention.eligibleHistoryPartitions.taskEvents} events ·{" "}
-                  {retention.eligibleHistoryPartitions.attemptHistory} attempts
-                </Badge>
-              </Group>
-              <Group justify="space-between" wrap="nowrap" align="flex-start">
-                <Box>
-                  <Group gap={4} wrap="nowrap">
+                  </Box>
+                  <Badge
+                    color={retentionBehind ? "yellow" : "teal"}
+                    variant="light"
+                    title={retentionDetail}
+                  >
+                    {enabledRetention.length === 0
+                      ? "Not applicable"
+                      : retention.maxLagMs === null || retention.maxLagMs === 0
+                        ? "On time"
+                        : `${formatSpan(retention.maxLagMs)} behind`}
+                  </Badge>
+                </Group>
+                <Group justify="space-between" wrap="nowrap" align="flex-start">
+                  <Box>
                     <Text size="sm" fw={600}>
-                      Rows in fallback storage
+                      Oldest retained
                     </Text>
-                    <HelpButton
-                      label="Rows in fallback storage"
-                      help="These rows had no daily storage for their timestamp. If a plus sign appears, the bounded scan found at least this many rows."
-                    />
-                  </Group>
-                  <Text c="dimmed" size="xs">
-                    Database-wide, not windowed
-                  </Text>
-                </Box>
-                <Badge color={defaultSpill > 0 ? "yellow" : "teal"} variant="light">
-                  {retention.defaultHistoryRows.taskEvents}
-                  {retention.defaultHistoryRowsCapped.taskEvents ? "+" : ""} events ·{" "}
-                  {retention.defaultHistoryRows.attemptHistory}
-                  {retention.defaultHistoryRowsCapped.attemptHistory ? "+" : ""} attempts
-                </Badge>
-              </Group>
-            </Stack>
-          </Paper>
-        </Grid.Col>
-      </Grid>
+                    <Text c="dimmed" size="xs">
+                      {oldestRetained
+                        ? retentionCategoryLabels[oldestRetained.category]
+                        : "No history retained yet"}
+                    </Text>
+                  </Box>
+                  <Badge
+                    color="gray"
+                    variant="light"
+                    title={formatExact(retention.oldestRetainedAt ?? undefined)}
+                  >
+                    {retention.oldestRetainedAt === null
+                      ? "—"
+                      : formatRelative(retention.oldestRetainedAt)}
+                  </Badge>
+                </Group>
+                <Group justify="space-between" wrap="nowrap" align="flex-start">
+                  <Box>
+                    <Group gap={4} wrap="nowrap">
+                      <Text size="sm" fw={600}>
+                        History days awaiting deletion
+                      </Text>
+                      <HelpButton
+                        label="History days awaiting deletion"
+                        help="These UTC days are older than their retention period. Cleanup deletes a limited number each time it runs."
+                      />
+                    </Group>
+                    <Text c="dimmed" size="xs">
+                      Current total, not windowed
+                    </Text>
+                  </Box>
+                  <Badge
+                    color={eligiblePartitions > 0 ? "yellow" : "teal"}
+                    variant="light"
+                    title={`${retention.eligibleHistoryPartitions.taskEvents} task-event days, ${retention.eligibleHistoryPartitions.attemptHistory} attempt-history days`}
+                  >
+                    {retention.eligibleHistoryPartitions.taskEvents} events ·{" "}
+                    {retention.eligibleHistoryPartitions.attemptHistory} attempts
+                  </Badge>
+                </Group>
+                <Group justify="space-between" wrap="nowrap" align="flex-start">
+                  <Box>
+                    <Group gap={4} wrap="nowrap">
+                      <Text size="sm" fw={600}>
+                        Rows in fallback storage
+                      </Text>
+                      <HelpButton
+                        label="Rows in fallback storage"
+                        help="These rows had no daily storage for their timestamp. If a plus sign appears, the bounded scan found at least this many rows."
+                      />
+                    </Group>
+                    <Text c="dimmed" size="xs">
+                      Database-wide, not windowed
+                    </Text>
+                  </Box>
+                  <Badge color={defaultSpill > 0 ? "yellow" : "teal"} variant="light">
+                    {retention.defaultHistoryRows.taskEvents}
+                    {retention.defaultHistoryRowsCapped.taskEvents ? "+" : ""} events ·{" "}
+                    {retention.defaultHistoryRows.attemptHistory}
+                    {retention.defaultHistoryRowsCapped.attemptHistory ? "+" : ""} attempts
+                  </Badge>
+                </Group>
+              </Stack>
+            </Paper>
+          </Grid.Col>
+        </Grid>
 
-      <StoragePanel storage={data.integrity.storage} retention={retention} />
+        <StoragePanel storage={data.integrity.storage} retention={retention} />
+      </Stack>
     </Stack>
   );
 }

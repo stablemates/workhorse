@@ -69,6 +69,17 @@ defaults without replacing operator overrides, so TypeScript, Go, Python, Rust, 
 Every client decodes the database response into its language's `QueueHealth` type, preserving the
 same reason codes and the `capped` lower-bound marker for operator tooling.
 
+The dashboard lists every check with its own status, so passing checks remain visible beside failures.
+Critical and degraded checks appear first, with resolution advice.
+Rate limits show “Throttling” when ready tasks wait for tokens.
+Concurrency limits and shared budgets show “Limiting” when they hold ready tasks back.
+These are neutral operating states on the dashboard.
+The dashboard does not display an aggregate verdict; the underlying `QueueHealth.status` still carries the database's evaluation.
+The time range controls the separate Activity over time section.
+That section labels [statistics](/docs/operations#rolling-statistics) as “Full + fast tiers”.
+Health checks and Current operations show the latest snapshot.
+Changing the range also refreshes that snapshot.
+
 ## Next
 
 - [Operations](/docs/operations) — act on unhealthy queue state

@@ -58,8 +58,8 @@ describe("named budget presentation", () => {
     expect(markup).not.toContain(budgetCappedFootnote);
   });
 
-  it("explains a budget-blocked health reason with the budget name", () => {
-    const { degradedChecks } = healthCheckMessages([
+  it("explains budget enforcement as expected with the budget name", () => {
+    const { degradedChecks, expectedChecks } = healthCheckMessages([
       {
         code: "budget-blocked",
         severity: "degraded",
@@ -68,8 +68,10 @@ describe("named budget presentation", () => {
         budgetName: "vendor-api",
       },
     ]);
-    expect(degradedChecks).toHaveLength(1);
-    expect(degradedChecks[0]?.message).toContain("vendor-api");
-    expect(degradedChecks[0]?.message).toContain("4+");
+    expect(degradedChecks).toHaveLength(0);
+    expect(expectedChecks).toHaveLength(1);
+    expect(expectedChecks[0]?.message).toContain("vendor-api");
+    expect(expectedChecks[0]?.message).toContain("4+");
+    expect(expectedChecks[0]?.advice).toContain("protects capacity shared across queues");
   });
 });

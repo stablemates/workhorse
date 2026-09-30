@@ -33,6 +33,9 @@ requested horizon. Queue-wait percentiles merge a logarithmic sketch across thos
 long-window reads stay bounded without keeping every sample. Worker and tag breakdowns remain live
 queries because their data-controlled cardinality would make aggregate storage unbounded.
 
+The summaries include full-tier and fast-tier queues.
+Fast-tier counts come from compact runtime and outcome records, including when optional history is off.
+
 Every summary boundary is a UTC boundary, whatever timezone the database is set to, so a day
 summary covers a UTC day and names the same day for every operator reading the chart.
 
