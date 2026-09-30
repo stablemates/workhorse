@@ -515,6 +515,10 @@ describe("schema installation", () => {
       { version: 42, description: "keep JIT compilation out of the task detail read" },
       { version: 43, description: "shard the admission counters" },
       { version: 44, description: "make schedule-run retention health respect daily cleanup" },
+      {
+        version: 45,
+        description: "date an unrun history pass from the oldest expired schedule run",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

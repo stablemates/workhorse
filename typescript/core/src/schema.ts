@@ -320,6 +320,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "make schedule-run retention health respect daily cleanup",
     kind: "additive",
   },
+  {
+    fromVersion: 44,
+    toVersion: 45,
+    file: "0046-date-an-unrun-history-pass-from-the-oldest-expired-run.sql",
+    description: "date an unrun history pass from the oldest expired schedule run",
+    kind: "additive",
+  },
 ];
 
 /**

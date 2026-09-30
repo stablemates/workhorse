@@ -1621,6 +1621,69 @@ describe("retention maintenance", () => {
       expect(await scheduleRunLagReported()).toBe(false);
     });
 
+    it("dates an unrun pass from the oldest expired run at any time of day", async () => {
+      // The scheduled time was an hour ago, so a due time that restarts daily would read one hour.
+      await pool.query(
+        `UPDATE workhorse.maintenance_policy
+            SET history_retention_local_time =
+                  ((clock_timestamp() - interval '1 hour') AT TIME ZONE 'UTC')::time(0)`,
+      );
+      await addScheduleRun(8, 9);
+      expect(await scheduleRunLagReported()).toBe(false);
+
+      await addScheduleRun(30, 31);
+      expect(await scheduleRunLagReported()).toBe(true);
+    });
+
+    it("dates an unrun pass by instant when daylight saving time ends", async () => {
+      // The run expires at 01:45 EDT, before the scheduled 01:30 repeats as 06:30 UTC.
+      await pool.query(
+        `UPDATE workhorse.maintenance_policy
+            SET timezone = 'America/New_York', history_retention_local_time = '01:30'`,
+      );
+      await pool.query(
+        `INSERT INTO workhorse.schedule_definition(
+           namespace, schedule_name, cron_expression, queue_name, task_type, payload, max_attempts
+         ) VALUES ('integration', 'health-cadence', '0 * * * *', 'default', 'health-cadence',
+                   '{}'::jsonb, 3)`,
+      );
+      await pool.query(
+        `INSERT INTO workhorse.schedule_occurrence(namespace, schedule_name, occurrence_at, fired_at)
+         VALUES ('integration', 'health-cadence',
+                 '2026-10-18T05:45:00Z', '2026-10-18T05:45:00Z')`,
+      );
+
+      // Queue health reads clock_timestamp(), so this session resolves it to a fixed instant. A UTC
+      // session keeps the 14-day window from gaining the hour that New York repeats.
+      const client = await pool.connect();
+      const reportedAt = async (now: string) => {
+        await client.query(
+          `CREATE OR REPLACE FUNCTION fixed_clock.clock_timestamp() RETURNS timestamptz
+             LANGUAGE sql AS $$ SELECT '${now}'::timestamptz $$`,
+        );
+        const { rows } = await client.query<{ reported: boolean }>(
+          `SELECT jsonb_path_exists(
+                    workhorse.queue_health_v1($1::timestamptz)->'status'->'reasons',
+                    '$[*] ? (@.code == "retention-lag" && @.category == "scheduleOccurrences")'
+                  ) AS reported`,
+          [now],
+        );
+        return rows[0]?.reported;
+      };
+      try {
+        await client.query("CREATE SCHEMA fixed_clock");
+        await client.query("SET search_path TO fixed_clock, pg_catalog, public");
+        await client.query("SET TIME ZONE 'UTC'");
+        expect(await reportedAt("2026-11-01T12:29:00Z")).toBe(false);
+        expect(await reportedAt("2026-11-01T12:31:00Z")).toBe(true);
+      } finally {
+        await client.query("RESET search_path");
+        await client.query("RESET TIME ZONE");
+        await client.query("DROP SCHEMA IF EXISTS fixed_clock CASCADE");
+        client.release();
+      }
+    });
+
     it("follows the latest start while other history keeps a pass incomplete", async () => {
       // Incomplete event retention reruns the pass every tick, so its last completed date goes stale.
       await addScheduleRun(6, 6);
