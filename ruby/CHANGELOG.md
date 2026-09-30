@@ -42,7 +42,7 @@ other SDKs carry, because every tag names one release of all of them.
   below concurrency 8, else `concurrency / 8` from 2 through 8, capped by the pool's spare
   connections. The handler thread pool now allows two threads per slot.
   A fast-tier task's `HandlerContext` raises `FastTierUnsupportedError` for checkpoints,
-  progress writes, durable waits, and child tasks before it sends any statement. That holds for a
+  progress writes, durable waits, and child tasks before any durable write. That holds for a
   task claimed through `claim_many_v1` after its queue moved to the fast tier.
 - Add `Worker#handle_batch` with `max_size:` and `linger:` in seconds. Once the worker stops, a
   lingering batch runs as soon as every task it claimed has arrived.
@@ -51,8 +51,13 @@ other SDKs carry, because every tag names one release of all of them.
   `get_checkpoint`, `checkpoint`, `get_progress`, and `set_progress`. The batch-wide `tasks` and
   shared `cancellation` are gone. Each write is fenced on its member's lease, and a member's
   checkpoint replays whatever batch a retry puts it in. A fast-tier member's `checkpoint` and
-  `set_progress` raise `FastTierUnsupportedError` before any statement.
+  `set_progress` raise `FastTierUnsupportedError` before any durable write.
 - Add `HandlerContext#get_checkpoint`.
+- `HandlerContext#checkpoint`, `sleep`, and `sleep_until` refuse a name outside 1 to 200
+  characters with `ArgumentError` before the block runs or any statement. `get_progress` keeps the
+  highest progress revision PostgreSQL acknowledged when `set_progress` calls return out of order.
+- The Active Job adapter's `enqueue_all` clears each job's `enqueue_error`, so a job reports only
+  the error of the current call.
 - Add `run_worker_process`, which stops the worker on `TERM` or `INT` and exits at once on a second
   signal, and `run_worker_processes`, which forks, supervises, and restarts worker processes.
 - Add the Active Job adapter, selected with `config.active_job.queue_adapter =

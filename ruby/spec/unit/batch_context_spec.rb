@@ -84,6 +84,26 @@ RSpec.describe W::BatchHandlerContext do
     expect(executor.statements).to be_empty
   end
 
+  it "rejects an empty checkpoint name before it runs the block or any statement" do
+    executor = FakeExecutor.new
+    expect { member(executor).checkpoint("") { raise "the block must not run" } }
+      .to raise_error(ArgumentError, "checkpoint name must contain between 1 and 200 characters")
+    expect(executor.statements).to be_empty
+  end
+
+  it "keeps the member's newest acknowledged progress when writes return out of order" do
+    revision = 3
+    executor = FakeExecutor.new do
+      revision -= 1
+      [{"status" => "updated", "progress_value" => revision.to_s, "revision" => revision.to_s, "attempt" => "2",
+        "fence_token" => "7", "worker_id" => "w", "created_at" => nil, "updated_at" => nil}]
+    end
+    context = member(executor)
+    expect(context.set_progress(2).revision).to eq(2)
+    expect(context.set_progress(1).revision).to eq(1)
+    expect(context.get_progress).to have_attributes(value: 2, revision: 2)
+  end
+
   it "pairs each payload with its context in a BatchHandlerItem" do
     context = member(FakeExecutor.new)
     item = W::BatchHandlerItem.new(payload: {"n" => 1}, context: context)
