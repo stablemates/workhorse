@@ -577,7 +577,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Durable checkpoints (handler context)",
-    ruby: { planned: "SM-981" },
+    ruby: { fixtures: ["runtime/durable-wait-suspension-and-checkpoint-replay"] },
     rust: { fixtures: ["runtime/durable-wait-suspension-and-checkpoint-replay"] },
     typescript: { file: "integration-checkpoints-progress-waits.test.ts", pattern: "checkpoint" },
     python: { file: "test_worker.py", pattern: "checkpoint" },
@@ -585,7 +585,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Durable timers (`sleep` / `sleepUntil`)",
-    ruby: { planned: "SM-981" },
+    ruby: {
+      file: "integration/worker_spec.rb",
+      example: "suspends a durable sleep and completes after the wake",
+    },
     rust: {
       file: "durable_postgres.rs",
       test: "sleep_suspends_until_its_wake_time_and_a_past_wake_time_returns_at_once",
@@ -596,7 +599,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Signal and human-decision waits",
-    ruby: { planned: "SM-981" },
+    ruby: {
+      file: "integration/worker_spec.rb",
+      example: "resumes a signal wait and a human wait with what was delivered",
+    },
     rust: {
       file: "durable_postgres.rs",
       test: "signal_and_human_waits_resume_with_what_was_delivered",
@@ -607,7 +613,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Linked child fan-out and result join",
-    ruby: { planned: "SM-981" },
+    ruby: {
+      file: "integration/worker_spec.rb",
+      example: "suspends a parent on its children and joins their results on replay",
+    },
     rust: { file: "durable_postgres.rs", test: "run_children_reports_how_each_child_ended" },
     typescript: { file: "integration-child-tasks.test.ts", pattern: "child" },
     python: { file: "test_worker_child_tasks.py", pattern: "child" },
@@ -615,7 +624,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Latest-value progress reporting",
-    ruby: { planned: "SM-981" },
+    ruby: {
+      file: "integration/worker_spec.rb",
+      example: "round-trips progress and rate-limits a quick change",
+    },
     rust: {
       file: "durable_postgres.rs",
       test: "progress_round_trips_and_a_quick_change_is_rate_limited",

@@ -32,7 +32,8 @@ module Stablemates
       TELEMETRY_OUTCOMES = {
         :completed => "succeeded", :failed => "failed", :retry => "retry", :lease_expired => "lease_lost",
         :released => "released", :deadline_exceeded => "deadline_exceeded", :attempt_timeout => "timeout",
-        :cancelled => "canceled", nil => "unknown"
+        :cancelled => "canceled", :suspended_for_wait => "suspended", :suspended_for_child => "suspended",
+        nil => "unknown"
       }.freeze
       SPAN_OUTCOMES = TELEMETRY_OUTCOMES.merge(lease_expired: "stale", attempt_timeout: "timeout_exceeded").freeze
       CANCEL_REASONS = {
@@ -695,9 +696,9 @@ module Stablemates
 
       def finish_telemetry(task, span, arbiter, state, started_at, attributes)
         duration = (monotonic - started_at) * 1000
-        outcome = TELEMETRY_OUTCOMES.fetch(arbiter.outcome, "unknown")
+        outcome = TELEMETRY_OUTCOMES.fetch(arbiter.reported_outcome, "unknown")
         Telemetry.set_attribute(span, "workhorse.handler.outcome",
-          state[:span_outcome] || SPAN_OUTCOMES.fetch(arbiter.outcome, "unknown"))
+          state[:span_outcome] || SPAN_OUTCOMES.fetch(arbiter.reported_outcome, "unknown"))
         Telemetry.record_error(span, state[:errors].first) unless state[:errors].empty?
         metric = Telemetry.task_metric_attributes(task)
         Telemetry.record("workhorse.handler.duration", duration, metric.merge("workhorse.handler.outcome" => outcome))
@@ -729,13 +730,18 @@ module Stablemates
         ownership = Ownership.new(claim_started_at, @lease_ms / 1000.0)
         own(task, ownership, arbiter, cancellation)
         active.ownership.set(ownership)
-        context = HandlerContext.new(task: task, cancellation: cancellation)
+        context = HandlerContext.new(executor: @executor, queue: @queue, task: task, worker_id: @worker_id,
+          cancellation: cancellation, arbiter: arbiter, logger: @logger)
         begin
           result = invoke(handler, task.payload, context)
           validate_result(task, result)
           encoded = Values.json(result, "task result")
-        rescue => e
+        rescue HandlerContext::Suspension
           return if finish_ownership(task, ownership, arbiter)
+
+          raise Error, "Durable wait suspension was not accepted by the arbiter"
+        rescue => e
+          return if finish_suspended(task, ownership, arbiter)
 
           state[:span_outcome] = settle_failure(task, e, arbiter)
           state[:errors] << (task.redact_error_details ? REDACTED_NAME : e.class.name)
@@ -743,7 +749,7 @@ module Stablemates
         ensure
           ownership.release
         end
-        return if finish_ownership(task, ownership, arbiter)
+        return if finish_suspended(task, ownership, arbiter)
 
         complete(task, encoded, arbiter)
       end
@@ -928,9 +934,26 @@ module Stablemates
         false
       end
 
+      # Like finish_ownership, for a handler that returned or raised an error. A handler that did
+      # either after a durable call suspended it swallowed the suspension; the attempt still
+      # suspends, and the worker logs a warning.
+      def finish_suspended(task, ownership, arbiter)
+        return false unless finish_ownership(task, ownership, arbiter)
+
+        if arbiter.suspended?
+          log(:warn, "workhorse.handler.signal_swallowed", "Task handler swallowed its suspension signal",
+            {"workhorse.queue.name" => task.queue}.merge(Telemetry.task_span_attributes(task),
+              "workhorse.handler.outcome" => "suspended"))
+        end
+        true
+      end
+
+      # A task that a durable write released needs nothing more from the worker, whichever outcome won.
       def finish_lifecycle(task, arbiter)
+        return true if arbiter.released?
+
         case arbiter.outcome
-        when :deadline_exceeded, :attempt_timeout then true
+        when :suspended_for_wait, :suspended_for_child, :deadline_exceeded, :attempt_timeout then true
         when :cancelled
           raise LeaseLostError.new(task.id, "cancel") unless acknowledge_cancel(task)
 

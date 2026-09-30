@@ -74,11 +74,11 @@ telemetry, and graceful shutdown.
 | Heartbeats, lease recovery, fenced ownership                | Supported  | Supported | Supported | Supported | Supported         |
 | Cooperative cancellation delivery                           | Supported  | Supported | Supported | Supported | Supported         |
 | Notification-assisted dispatch with polling                 | Supported  | Supported | Supported | Supported | Supported         |
-| Durable checkpoints (handler context)                       | Supported  | Supported | Supported | Supported | [Planned][SM-981] |
-| Durable timers (`sleep` / `sleepUntil`)                     | Supported  | Supported | Supported | Supported | [Planned][SM-981] |
-| Signal and human-decision waits                             | Supported  | Supported | Supported | Supported | [Planned][SM-981] |
-| Linked child fan-out and result join                        | Supported  | Supported | Supported | Supported | [Planned][SM-981] |
-| Latest-value progress reporting                             | Supported  | Supported | Supported | Supported | [Planned][SM-981] |
+| Durable checkpoints (handler context)                       | Supported  | Supported | Supported | Supported | Supported         |
+| Durable timers (`sleep` / `sleepUntil`)                     | Supported  | Supported | Supported | Supported | Supported         |
+| Signal and human-decision waits                             | Supported  | Supported | Supported | Supported | Supported         |
+| Linked child fan-out and result join                        | Supported  | Supported | Supported | Supported | Supported         |
+| Latest-value progress reporting                             | Supported  | Supported | Supported | Supported | Supported         |
 | Batch handler delivery                                      | Supported  | Supported | Supported | Supported | [Planned][SM-982] |
 | Schedule firing (database cron evaluation)                  | Supported  | Supported | Supported | Supported | Supported         |
 | Worker fleet registration and remote pause                  | Supported  | Supported | Supported | Supported | Supported         |
@@ -356,7 +356,6 @@ stops the published view from becoming another source of truth.
 
 <!-- BEGIN GENERATED PARITY LINEAR LINKS -->
 
-[SM-981]: https://linear.app/stablemates/issue/SM-981
 [SM-982]: https://linear.app/stablemates/issue/SM-982
 
 <!-- END GENERATED PARITY LINEAR LINKS -->

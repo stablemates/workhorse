@@ -555,12 +555,63 @@ Numeric seconds.
 `Worker#run` blocks until `Worker#stop`, and `Worker#run_once` claims and runs one batch. A handler
 registered with `Worker#handle` receives the payload and a `HandlerContext`, which carries `task`
 and `cancellation`. `CancellationToken#reason` is `:requested`, `:deadline_exceeded`,
-`:execution_timeout`, `:lease_lost`, or `:shutdown`, and only the first reason sticks. The worker
+`:execution_timeout`, `:lease_lost`, `:suspended`, or `:shutdown`, and only the first reason sticks. The worker
 never interrupts a handler thread with `Thread#raise`, `Thread#kill`, or `Timeout`. After `stop`,
 the worker claims nothing new and waits up to `shutdown_grace` for running handlers. It then
 cancels the rest with `:shutdown` and waits a 250 millisecond unwind window. A handler still
 running after that window is abandoned with its lease, and `run` raises
 `ShutdownIncompleteError`.
+
+Ruby `HandlerContext` in `ruby/lib/stablemates/workhorse/context.rb` also carries the durable
+calls. `checkpoint(name) { ... }` returns the stored value, or runs the block once and saves its
+result through `save_checkpoint_v1`. `set_progress(value)` calls `update_progress_v1` and returns
+the stored `TaskProgress`. `get_progress` returns the latest `TaskProgress`, or `nil` before any
+report. A throttled report raises `ProgressRateLimitedError`, whose `retry_after` is in seconds.
+`sleep(name, seconds)` accepts 1 millisecond through 365 days, and `sleep_until(name, time)` accepts
+a `Time` at most 365 days ahead. Both call `schedule_wait_v1`. `wait_for_signal(name, timeout:)` and
+`wait_for_human(name, context, timeout:)` take an optional timeout from 1 millisecond through 7
+days. Their names contain 1 through 200 characters without surrounding whitespace, and the human
+context encodes to at most 65,536 bytes of JSON. `run_child(name, task_type, payload, **options)`
+takes the `Queue#enqueue` keywords less the coalescing and dependency options, and calls
+`create_child_v1`. `run_children(children)` and `run_children_all(children)` take at most 100
+`ChildTaskRequest` values with unique names and call `create_children_v1` with mode `settled` or
+`all_success`. `run_children` maps each name to a `ChildOutcome`, and `run_children_all` maps each
+name to its result. An omitted child queue is the worker's first queue. A contracted child carries
+the current contract that `get_contract_definition_v1` returns, because a child write has no
+stale-contract retry. PostgreSQL compares a replayed request with the accepted one, contract stamp
+included. On `conflict`, the context therefore reads each existing child's `contract_version`
+through `task_child` and `get_task`. It retries once with those versions stamped. When the current
+contract rejects a replayed payload, the context builds the request again under those versions
+before it writes. A parent holds one individual child or one child set. `run_child` under a second
+name, or after a child set, raises `LimitExceededError`. A child set after an individual child raises `ConflictError`.
+
+The Ruby context maps `stale` to `LeaseLostError`, and `conflict`, `already_waiting`, and
+`limit_exceeded` to `ConflictError`, `AlreadyWaitingError`, and `LimitExceededError`. A child set
+of more than 100 children raises `LimitExceededError` before any write. A joined result over the
+set's byte limit makes `create_children_v1` return `result_too_large`, which raises
+`ChildResultLimitExceededError`. An undefined status raises `UnexpectedStatusError`. A `timeout`
+other than nil must be a count of seconds, or the wait raises `ArgumentError` before any write.
+Before each durable write, the context raises `LeaseLostError` once the token carries
+`:lease_lost`, and `CancelledError` for any other reason. Reads and checkpoint replays return
+without that check. Concurrent calls with one name share the first call's write, keyed as follows,
+and a mismatched key raises `ConflictError`:
+
+- A checkpoint shares by name alone.
+- A relative sleep shares whatever its duration. An absolute sleep shares only the same wake time.
+- A signal wait shares by name alone, so the first call's timeout wins.
+- A human wait shares the same context, compared as canonical JSON, and the first call's timeout
+  wins.
+- A child or child set shares its canonical request, and a child set also shares its mode.
+
+A `scheduled` wait, a `waiting` signal or human wait, and a `created` child submit
+`suspended_for_wait` or `suspended_for_child` to the attempt arbiter. The context records the
+release before its log call, and the call always raises `HandlerContext::Suspension`, even when
+that log raises. Only a winning submission cancels the token with `:suspended`. That class descends
+from `Exception`, so a bare `rescue` does not catch it. The fenced write already released the task.
+The worker therefore ends the attempt without failing or completing it, even when a heartbeat that
+found the task released won the arbiter with `lease_expired` first. The attempt's telemetry then
+reports the suspension, not a lost lease. When the handler swallows the suspension and returns, the
+worker ignores the return and logs `workhorse.handler.signal_swallowed`.
 
 When `Rails.application.executor` exists, the Ruby worker runs each handler inside
 `Rails.application.executor.wrap`. When `ActiveRecord::Base` is loaded and its

@@ -351,9 +351,10 @@ module Stablemates
     module Contracts
       module_function
 
-      # The contract PostgreSQL holds for +task_type+, or nil when it has none.
-      def load(executor, task_type)
-        rows = executor.rows(SqlCatalogue::GET_CONTRACT_DEFINITION_V1, [task_type, nil])
+      # The current contract PostgreSQL holds for +task_type+, or its +version+ when given, or nil
+      # when there is none.
+      def load(executor, task_type, version = nil)
+        rows = executor.rows(SqlCatalogue::GET_CONTRACT_DEFINITION_V1, [task_type, version])
         return nil if rows.empty?
         raise invalid_definition unless rows.one?
 

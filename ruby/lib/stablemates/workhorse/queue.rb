@@ -242,6 +242,45 @@ module Stablemates
         list(SqlCatalogue::LIST_BUDGETS, names, "names").map { |row| Policies.budget(row) }
       end
 
+      # The +create_child_v1+ request for one child of +parent+, a ClaimedTask. A child inherits
+      # the parent's trace context, runs on the default queue unless +options+ names one, and
+      # takes no coalescing or dependency option. A contracted child carries the contract PostgreSQL
+      # holds now, because a child write has no stale-contract retry. A +version+ other than
+      # +:current+ stamps that contract version instead, or none when it is nil. +contracts+ caches
+      # those loads across one child set. Internal to the SDK.
+      def serialize_child_request(parent, task_type, payload, options, contracts = {}, version: :current) # :nodoc:
+        request = EnqueueRequest.new(task_type: task_type, payload: payload, **options)
+        if request.idempotency || request.debounce || request.throttle || request.dependencies
+          raise ArgumentError, "Child tasks cannot use coalescing or dependency enqueue options"
+        end
+
+        Values.check_json(payload, "payload")
+        input = task_input(request)
+        input["queue"] = @default_queue if request.queue.nil? || request.queue.empty?
+        input["deadline"] = request.deadline && Values.timestamp(request.deadline, "deadline")
+        input["budget"] = optional_bytes(request.budget, MAX_NAME_BYTES, "budget")
+        timeout = request.execution_timeout &&
+          Values.milliseconds(request.execution_timeout, "execution timeout", 0..MAX_DURATION_MS)
+        input["executionTimeoutMs"] = timeout&.zero? ? nil : timeout
+        input["prerequisiteTaskId"] = nil
+        input["dependencies"] = nil
+        input["tags"] = tags(request.tags)
+        input["traceContext"] = parent.trace_context unless parent.trace_context.nil?
+        input["runAt"] = Values.timestamp(request.run_at, "run at") if request.run_at
+        key = (version == :current) ? request.task_type : [request.task_type, version]
+        contract = contracts.fetch(key) do
+          contracts[key] = if version != :current
+            version && Contracts.load(@executor, request.task_type, version)
+          else
+            Contracts.load(@executor, request.task_type).tap do |loaded|
+              @lock.synchronize { @contracts[request.task_type] = loaded }
+            end
+          end
+        end
+        stamp_contract(input, request, contract)
+        input
+      end
+
       private
 
       def enqueue_attempt(requests)
@@ -392,8 +431,13 @@ module Stablemates
           contract = Contracts.load(@executor, task_type)
           @lock.synchronize { @contracts[task_type] = contract }
         end
+        stamp_contract(input, request, contract)
+      end
+
+      def stamp_contract(input, request, contract)
         return if contract.nil?
-        raise ContractValidationError.new(task_type, contract.version) unless contract.schema.valid?(request.payload)
+        raise ContractValidationError.new(request.task_type, contract.version) unless
+          contract.schema.valid?(request.payload)
 
         input["contractVersion"] = contract.version
         input["payloadMaxBytes"] = contract.payload_max_bytes
