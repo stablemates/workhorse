@@ -41,6 +41,14 @@ an annotation. A `$ref` must also point at a subschema, so it cannot reach a sch
    applies. Each payload was checked at enqueue, so a keyword in the payload schema does not affect
    tasks already queued.
 
+A contract schema must also declare each `$anchor` once. JSON Schema libraries disagree on which of
+two equal anchors a reference names, so such a schema could validate differently in each language.
+Every SDK now rejects it with `<path>.$anchor must declare a unique anchor`. Before this change,
+Python and Rust accepted it, TypeScript accepted a duplicate of a root anchor, and the other SDKs
+reported different errors. Rename one anchor in a new contract version. The Rust crate
+now requires `jsonschema` 0.58, because 0.57 resolved a reference to a second, distinct anchor to
+the first anchor's schema.
+
 **The demo deployment contract names schema version 52 as the final version.**
 `typescript/demo/DEPLOYMENT.md` said the build ships version 51 and that migration finishes there.
 Migration 0053 had already made the final version 52. The contract now says 52, and a test compares

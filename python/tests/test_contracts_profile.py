@@ -63,3 +63,11 @@ def test_contract_schema_refuses_a_reference_outside_the_schema_tree() -> None:
         TypeError, match=re.escape("$.properties.a.$ref must point at a subschema of the contract")
     ):
         compile_contract_schema(schema)
+
+
+def test_contract_schema_names_the_duplicate_anchor() -> None:
+    schema: Json = {"$defs": {"one": {"$anchor": "same"}, "two": {"$anchor": "same"}}}
+    with pytest.raises(
+        TypeError, match=re.escape("$.$defs.two.$anchor must declare a unique anchor")
+    ):
+        compile_contract_schema(schema)

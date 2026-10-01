@@ -129,7 +129,10 @@ def _check_profile(
                 raise TypeError(f"{keyword_path} must be a bundled local reference")
             references.append((keyword_path, value))
         elif keyword == "$anchor":
+            # Libraries disagree on which of two equal anchors a reference names.
             if isinstance(value, str):
+                if value in anchors:
+                    raise TypeError(f"{keyword_path} must declare a unique anchor")
                 anchors.add(value)
         elif keyword == "$schema":
             if value != DIALECT:

@@ -31,6 +31,7 @@ const (
 	contractObjectErrorFormat             = "%s must be an object"
 	contractProfileErrorFormat            = "%s is outside the Workhorse contract profile"
 	contractSubschemaReferenceErrorFormat = "%s must point at a subschema of the contract"
+	contractDuplicateAnchorErrorFormat    = "%s must declare a unique anchor"
 	invalidContractDefinitionMessage      = "invalid contract definition returned by PostgreSQL"
 	fastTierUnsupportedMessage            = "fast-tier queue does not support the request"
 	contractRootPath                      = "$"

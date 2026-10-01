@@ -33,6 +33,11 @@ an annotation. A `$ref` must also point at a subschema, so it cannot reach a sch
    applies. Each payload was checked at enqueue, so a keyword in the payload schema does not affect
    tasks already queued.
 
+A contract schema must also declare each `$anchor` once. JSON Schema libraries disagree on which of
+two equal anchors a reference names, so such a schema could validate differently in each language.
+The SDK now raises `TypeError` with `<path>.$anchor must declare a unique anchor`; before this
+change it accepted the schema. Rename one anchor in a new contract version.
+
 **A cancelled `AsyncWorker` checkpoint can still leave a checkpoint.** The documentation said a
 cancelled `await context.checkpoint(name, operation)` stores nothing. That holds only while the
 operation runs. Once the operation returns, its save may already be under way, and the worker waits

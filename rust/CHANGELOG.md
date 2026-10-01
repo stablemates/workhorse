@@ -42,6 +42,19 @@ with `<path>.$ref must point at a subschema of the contract`. That includes a po
    applies. Each payload was checked at enqueue, so a keyword in the payload schema does not affect
    tasks already queued.
 
+A contract schema must also declare each `$anchor` once. JSON Schema libraries disagree on which of
+two equal anchors a reference names, so such a schema could validate differently in each language.
+Compiling or synchronizing such a contract now returns `Error::InvalidArgument` with
+`<path>.$anchor must declare a unique anchor`; before this change the crate accepted it. Rename one
+anchor in a new contract version.
+
+**Fixed: a reference to a second anchor no longer validates against the first.** With `jsonschema`
+0.57, a schema that referenced two different anchors, `#first` and `#second`, resolved `#second` to
+the schema of `first`. For a contract whose `first` anchor is an integer and whose `second` anchor
+is a string, `{"second": "two"}` was rejected and `{"second": 2}` was accepted. The crate now
+requires `jsonschema` 0.58, which resolves each anchor to its own schema. The shared
+`forward-declared-anchors` fixture pins both instances.
+
 ## 0.5.0 — 2026-09-28
 
 The npm packages, Python distribution, Go module, and Rust crate release from one source commit.

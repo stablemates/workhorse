@@ -203,8 +203,11 @@ fn check_profile<'a>(
                 walk.references.push((keyword_path, reference));
             }
         } else if keyword == "$anchor" {
+            // Libraries disagree on which of two equal anchors a reference names.
             if let Some(anchor) = value.as_str() {
-                walk.anchors.insert(anchor);
+                if !walk.anchors.insert(anchor) {
+                    return Err(format!("{keyword_path} must declare a unique anchor"));
+                }
             }
         } else if keyword == "$schema" {
             if value.as_str() != Some(DIALECT) {
@@ -371,5 +374,14 @@ mod tests {
             panic!("a reference into default compiled");
         };
         assert_eq!(message, "$.properties.a.$ref must point at a subschema of the contract");
+    }
+
+    #[test]
+    fn names_the_duplicate_anchor() {
+        let schema = json!({"$defs": {"one": {"$anchor": "same"}, "two": {"$anchor": "same"}}});
+        let Err(Error::InvalidArgument(message)) = compile_contract_schema(&schema) else {
+            panic!("a duplicate anchor compiled");
+        };
+        assert_eq!(message, "$.$defs.two.$anchor must declare a unique anchor");
     }
 }

@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -172,7 +174,9 @@ func checkContractProfile(schema any, path string, walk *contractSchemaWalk) err
 	if !ok {
 		return fmt.Errorf(contractSchemaTypeErrorFormat, path)
 	}
-	for keyword, value := range document {
+	// Sorted keywords make the reported violation the same on every run.
+	for _, keyword := range slices.Sorted(maps.Keys(document)) {
+		value := document[keyword]
 		keywordPath := path + contractPathSeparator + keyword
 		switch {
 		case keyword == contractReferenceKeyword:
@@ -183,6 +187,10 @@ func checkContractProfile(schema any, path string, walk *contractSchemaWalk) err
 			walk.references = append(walk.references, contractReference{path: keywordPath, reference: ref})
 		case keyword == contractAnchorKeyword:
 			if anchor, ok := value.(string); ok {
+				// Libraries disagree on which of two equal anchors a reference names.
+				if walk.anchors[anchor] {
+					return fmt.Errorf(contractDuplicateAnchorErrorFormat, keywordPath)
+				}
 				walk.anchors[anchor] = true
 			}
 		case keyword == contractDialectKeyword:
@@ -208,8 +216,8 @@ func checkContractProfile(schema any, path string, walk *contractSchemaWalk) err
 			if !ok {
 				return fmt.Errorf(contractObjectErrorFormat, keywordPath)
 			}
-			for name, child := range values {
-				if err := checkContractProfile(child, keywordPath+contractPathSeparator+name, walk); err != nil {
+			for _, name := range slices.Sorted(maps.Keys(values)) {
+				if err := checkContractProfile(values[name], keywordPath+contractPathSeparator+name, walk); err != nil {
 					return err
 				}
 			}

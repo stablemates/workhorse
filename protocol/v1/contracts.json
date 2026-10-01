@@ -211,6 +211,90 @@
     "schemaError": true
   },
   {
+    "id": "duplicate-anchor-with-reference-rejected",
+    "schema": {
+      "$defs": {
+        "one": { "$anchor": "same", "type": "integer" },
+        "two": { "$anchor": "same", "type": "string" }
+      },
+      "$ref": "#same"
+    },
+    "schemaError": true
+  },
+  {
+    "id": "duplicate-anchor-without-reference-rejected",
+    "schema": {
+      "$defs": {
+        "one": { "$anchor": "same", "type": "integer" },
+        "two": { "$anchor": "same", "type": "string" }
+      }
+    },
+    "schemaError": true
+  },
+  {
+    "id": "duplicate-anchor-at-root-and-nested-rejected",
+    "schema": {
+      "$anchor": "same",
+      "type": "object",
+      "properties": { "child": { "$anchor": "same", "type": "string" } }
+    },
+    "schemaError": true
+  },
+  {
+    "id": "duplicate-anchor-across-keywords-rejected",
+    "schema": {
+      "allOf": [{ "$anchor": "same" }],
+      "items": { "$anchor": "same" },
+      "properties": { "a": { "$ref": "#same" } }
+    },
+    "schemaError": true
+  },
+  {
+    "id": "forward-declared-anchors",
+    "schema": {
+      "type": "object",
+      "properties": { "first": { "$ref": "#first" }, "second": { "$ref": "#second" } },
+      "$defs": {
+        "first": { "$anchor": "first", "type": "integer" },
+        "second": { "$anchor": "second", "type": "string" }
+      }
+    },
+    "instances": [
+      { "value": { "first": 1, "second": "two" }, "valid": true },
+      { "value": { "first": "one" }, "valid": false },
+      { "value": { "second": 2 }, "valid": false }
+    ]
+  },
+  {
+    "id": "recursive-anchor-reference",
+    "schema": {
+      "$ref": "#node",
+      "$defs": {
+        "node": {
+          "$anchor": "node",
+          "type": "object",
+          "required": ["value"],
+          "properties": {
+            "value": { "type": "integer" },
+            "children": { "type": "array", "items": { "$ref": "#node" } }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "instances": [
+      {
+        "value": { "value": 1, "children": [{ "value": 2, "children": [{ "value": 3 }] }] },
+        "valid": true
+      },
+      {
+        "value": { "value": 1, "children": [{ "value": 2, "children": [{ "value": "three" }] }] },
+        "valid": false
+      },
+      { "value": { "value": 1, "children": [{}] }, "valid": false }
+    ]
+  },
+  {
     "id": "references-to-subschemas",
     "schema": {
       "$defs": { "a/b": { "type": "integer" }, "named": { "$anchor": "count", "minimum": 0 } },

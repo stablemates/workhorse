@@ -42,6 +42,12 @@ describe("contract schema profile", () => {
     ).toThrow("$.properties.a.$ref must point at a subschema of the contract");
   });
 
+  it("names the duplicate anchor it refuses", () => {
+    expect(() =>
+      compileContractSchema({ $defs: { one: { $anchor: "same" }, two: { $anchor: "same" } } }),
+    ).toThrow("$.$defs.two.$anchor must declare a unique anchor");
+  });
+
   it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
     "rejects the non-finite number %s, which JSON would store as null",
     (value) => {

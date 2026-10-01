@@ -17,7 +17,8 @@ other SDKs carry, because every tag names one release of all of them.
   string's shape in handler code instead. A `$ref` must point at a subschema, so it cannot reach a
   schema hidden in `default` or `examples`; any other reference raises `ArgumentError` with
   `<path>.$ref must point at a subschema of the contract`, including a pointer that encodes `/` as
-  `%2F`.
+  `%2F`. A schema that declares one `$anchor` twice raises `ArgumentError` with
+  `<path>.$anchor must declare a unique anchor`.
 - **Breaking: a contract version that another SDK's 0.5 release synced with `pattern` or
   `patternProperties` does not compile in this gem.** Upgrade in this order:
   1. Find each contract version that uses either keyword, or a `$ref` that points outside a

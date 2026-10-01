@@ -85,7 +85,7 @@ RSpec.describe Stablemates::Workhorse::ContractSchema do
     document = {"properties" => {"a" => {"$ref" => "#name"}}, "$defs" => {"name" => {"$anchor" => "name", "type" => "string"}}}
     expect(schema(document).valid?({"a" => "x"})).to be(true)
     expect(schema(document).valid?({"a" => 1})).to be(false)
-    duplicate = {"$defs" => {"a" => {"$anchor" => "x"}, "b" => {"$anchor" => "x"}}}
-    expect { schema(duplicate) }.to raise_error(ArgumentError)
+    duplicate = {"$defs" => {"one" => {"$anchor" => "same"}, "two" => {"$anchor" => "same"}}}
+    expect { schema(duplicate) }.to raise_error(ArgumentError, "$.$defs.two.$anchor must declare a unique anchor")
   end
 end

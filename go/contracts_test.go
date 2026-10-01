@@ -70,6 +70,17 @@ func TestContractSchemaRefusesAReferenceOutsideTheSchemaTree(t *testing.T) {
 	}
 }
 
+func TestContractSchemaNamesTheDuplicateAnchor(t *testing.T) {
+	schema := map[string]any{"$defs": map[string]any{
+		"one": map[string]any{"$anchor": "same"},
+		"two": map[string]any{"$anchor": "same"},
+	}}
+	_, err := compileContractSchema(schema)
+	if err == nil || err.Error() != "$.$defs.two.$anchor must declare a unique anchor" {
+		t.Fatalf("expected the profile to refuse the duplicate anchor, got %v", err)
+	}
+}
+
 func TestContractJSONNormalizationPreservesLargeIntegers(t *testing.T) {
 	var value any
 	if err := decodeContractJSON([]byte(`{"id":9007199254740993}`), &value); err != nil {

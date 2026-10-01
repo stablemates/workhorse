@@ -137,20 +137,21 @@ module Stablemates
       # a reference may name an anchor that comes later. A reference must name a schema position the
       # profile check visited; one into +default+ or +examples+ would apply a schema it never saw.
       def prepare(schema)
-        collect_anchors(schema)
+        collect_anchors(schema, "$")
         check_references(schema, "$")
       end
 
-      def collect_anchors(schema)
+      # Libraries disagree on which of two equal anchors a reference names.
+      def collect_anchors(schema, path)
         return unless schema.is_a?(Hash)
 
         if schema.key?("$anchor")
           anchor = schema["$anchor"]
-          raise ArgumentError, "invalid contract schema: anchor #{anchor} is duplicated" if @anchors.key?(anchor)
+          raise ArgumentError, "#{path}.$anchor must declare a unique anchor" if @anchors.key?(anchor)
 
           @anchors[anchor] = schema
         end
-        each_subschema(schema, "$") { |child, _path| collect_anchors(child) }
+        each_subschema(schema, path) { |child, child_path| collect_anchors(child, child_path) }
       end
 
       def check_references(schema, path)

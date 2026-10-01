@@ -33,6 +33,13 @@ an annotation. A `$ref` must also point at a subschema, so it cannot reach a sch
    applies. Each payload was checked at enqueue, so a keyword in the payload schema does not affect
    tasks already queued.
 
+A contract schema must also declare each `$anchor` once. JSON Schema libraries disagree on which of
+two equal anchors a reference names, so such a schema could validate differently in each language.
+Compiling or synchronizing such a contract still fails, now with
+`<path>.$anchor must declare a unique anchor` instead of the library's error. The profile check now
+visits keywords in sorted order, so a schema with several violations reports the same one on every
+run.
+
 ## 0.5.0 — 2026-09-28
 
 The npm packages, Python distribution, Go module, and Rust crate release from one source commit.

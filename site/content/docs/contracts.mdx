@@ -109,7 +109,8 @@ current document.
 Workhorse accepts the shared JSON Schema profile only. Bundled references work inside one document,
 formats stay annotations, and Workhorse rejects remote references or custom keywords before
 compilation. A reference must point at a subschema, so it cannot reach a schema hidden in `default`
-or `examples`, where the profile check never looks.
+or `examples`, where the profile check never looks. Each `$anchor` name may appear once, because libraries disagree on which of two equal anchors a
+reference names.
 
 The profile leaves out `pattern` and `patternProperties`, because the SDKs' regular expression
 engines accept different syntax and match differently. Each SDK rejects either keyword at any depth,

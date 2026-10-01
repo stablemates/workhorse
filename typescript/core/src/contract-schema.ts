@@ -128,7 +128,12 @@ function visitSchema(schema: Json, path: string, walk: SchemaWalk): void {
       }
       walk.references.push({ path: keywordPath, reference: value });
     } else if (keyword === "$anchor") {
-      if (typeof value === "string") walk.anchors.add(value);
+      if (typeof value === "string") {
+        // Libraries disagree on which of two equal anchors a reference names.
+        if (walk.anchors.has(value))
+          throw new TypeError(`${keywordPath} must declare a unique anchor`);
+        walk.anchors.add(value);
+      }
     } else if (keyword === "$schema") {
       if (value !== DIALECT) throw new TypeError(`${keywordPath} must select Draft 2020-12`);
     } else if (SCHEMA_VALUE_KEYWORDS.has(keyword)) {
