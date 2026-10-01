@@ -250,7 +250,9 @@ impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
         let tasks: Vec<_> = senders.iter().map(|(_, task)| *task).collect();
         record(&worker, sql::RECORD_BATCH_DISPATCH_V1, batch_id, &tasks).await;
         let expected = items.len();
-        let outcomes = AssertUnwindSafe((self.handler)(items))
+        // The callback runs inside the caught future, so a panic before it returns its future is
+        // caught like a panic while that future is polled.
+        let outcomes = AssertUnwindSafe(async { (self.handler)(items).await })
             .catch_unwind()
             .await
             .map_err(|panic| HandlerError::from_panic(&self.task_type, true, panic))

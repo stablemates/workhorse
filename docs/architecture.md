@@ -998,8 +998,13 @@ out a batch runs its callback inside its own execution, as Go does. That member 
 the callback returns, even when the member is cancelled. The shutdown drain counts it the same way.
 A batch coordinator holds only a weak reference to its worker, so dropping the last `Worker` handle
 frees the worker, its handlers, and whatever they captured. A batch that dispatches after that
-rejects each member with `BatchAbandoned` without calling the handler. `Worker::run(shutdown)` and
-`Worker::run_once` share one execution permit.
+rejects each member with `BatchAbandoned` without calling the handler. The worker calls each
+handler and batch callback inside the future it catches unwinds on, so a panic before the callback
+returns its future is caught like one while that future is polled. A caught panic fails the attempt
+with `HandlerPanic` and the message `handler for <type> panicked: <detail>`, or `batch handler for
+<type> panicked: <detail>` for every member of a batch. A batch panic also calls
+`record_batch_failure_v1`. `Worker::run(shutdown)` and `Worker::run_once` share one execution
+permit.
 
 When `shutdown` resolves, `Worker::run` stops claiming and drains within `shutdown_grace_period`.
 The deadline is fixed when `dispatch` in `rust/src/worker/dispatch.rs` observes `shutdown`. Claims
