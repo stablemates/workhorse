@@ -36,6 +36,21 @@ santhosh-tekuri/jsonschema. Every implementation runs `protocol/v1/contracts.jso
 SDK should use jsonschema-rs with format validation and external retrieval disabled, then run the
 same table before claiming parity.
 
+## Amendment: patterns cannot use backreferences (2026-10-01)
+
+A `pattern` value or a `patternProperties` key that contains `\1` through `\9` or `\k<name>`
+outside a character class is a schema error. Each SDK rejects it in the profile check, before a
+language library compiles the schema, with the profile's normal error.
+
+Backreferences have no shared behavior. RE2, which the Go SDK uses, has no backreferences. The
+other engines disagree on a reference to a group that has not matched, such as `^(a|(b))\2$`, and on
+a forward reference such as `^\1(a)$`. ECMA-262 matches the empty string in both cases. Emulating
+that in every runtime would add a translation layer for a feature contracts rarely need.
+
+`protocol/v1/contracts.json` pins the rejection for numeric, named, skipped-group, and forward
+references, and for a `patternProperties` key. A contract that used a backreference stops
+compiling; its owner publishes a new version without one.
+
 ## Consequences
 
 One contract document now produces the same validity decision in every shipped SDK. Applications

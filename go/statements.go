@@ -30,6 +30,7 @@ const (
 	contractArrayErrorFormat            = "%s must be an array"
 	contractObjectErrorFormat           = "%s must be an object"
 	contractProfileErrorFormat          = "%s is outside the Workhorse contract profile"
+	contractBackreferenceErrorFormat    = "%s uses a backreference, which is outside the Workhorse contract profile"
 	invalidContractDefinitionMessage    = "invalid contract definition returned by PostgreSQL"
 	fastTierUnsupportedMessage          = "fast-tier queue does not support the request"
 	contractRootPath                    = "$"
@@ -56,6 +57,8 @@ const (
 	contractVersionsJSONField           = "versions"
 	contractReferenceKeyword            = "$ref"
 	contractDialectKeyword              = "$schema"
+	contractPatternKeyword              = "pattern"
+	contractPatternPropertiesKeyword    = "patternProperties"
 )
 
 var contractSchemaValueKeywords = []string{"additionalProperties", "contains", "else", "if", "items", "not", "propertyNames", "then"}

@@ -46,6 +46,10 @@ Each SDK rejects keywords outside the shared profile before compiling a schema. 
 target bundled definitions in the same document, while remote references and custom keywords are
 rejected. Formats remain annotations, so an email format does not create a language-specific gate.
 
+Regular expressions differ most at backreferences. Go's regex engine has none, and the others
+disagree when the group did not match. Each SDK therefore rejects a `pattern` or a
+`patternProperties` key that contains `\1` through `\9` or `\k<name>`.
+
 Every SDK compiles each schema the profile allows. TypeScript does not add Ajv's stricter lint
 rules, so a union type, `properties` without an object type, or an open `prefixItems` array compiles
 there as it does in the other SDKs. Ajv still rejects a schema that is not valid JSON Schema.

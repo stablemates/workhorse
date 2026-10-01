@@ -94,6 +94,41 @@ const PLAIN_KEYWORDS: &[&str] = &[
 ];
 const DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 
+/// Reports whether an ECMA-262 pattern contains `\1`-`\9` or `\k<name>` outside a character class.
+///
+/// A backreference to a group that has not matched behaves differently across regex engines, and RE2
+/// has none, so the profile rejects it. Every byte this scan compares is ASCII, so it can walk bytes.
+fn uses_backreference(source: &str) -> bool {
+    let bytes = source.as_bytes();
+    let mut in_class = false;
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => {
+                let escaped = bytes.get(index + 1).copied();
+                if !in_class && matches!(escaped, Some(b'k' | b'1'..=b'9')) {
+                    return true;
+                }
+                index += 1;
+            }
+            b'[' => in_class = true,
+            b']' => in_class = false,
+            _ => {}
+        }
+        index += 1;
+    }
+    false
+}
+
+fn check_backreference(source: &str, path: &str) -> Result<(), String> {
+    if uses_backreference(source) {
+        return Err(format!(
+            "{path} uses a backreference, which is outside the Workhorse contract profile"
+        ));
+    }
+    Ok(())
+}
+
 fn check_profile(schema: &Value, path: &str) -> Result<(), String> {
     let document = match schema {
         Value::Bool(_) => return Ok(()),
@@ -123,7 +158,15 @@ fn check_profile(schema: &Value, path: &str) -> Result<(), String> {
             let children =
                 value.as_object().ok_or_else(|| format!("{keyword_path} must be an object"))?;
             for (name, child) in children {
-                check_profile(child, &format!("{keyword_path}.{name}"))?;
+                let child_path = format!("{keyword_path}.{name}");
+                if keyword == "patternProperties" {
+                    check_backreference(name, &child_path)?;
+                }
+                check_profile(child, &child_path)?;
+            }
+        } else if keyword == "pattern" {
+            if let Some(source) = value.as_str() {
+                check_backreference(source, &keyword_path)?;
             }
         } else if !PLAIN_KEYWORDS.contains(&keyword) {
             return Err(format!("{keyword_path} is outside the Workhorse contract profile"));
@@ -239,5 +282,40 @@ fn default_limit(value: i32) -> i64 {
         sql::DEFAULT_TASK_VALUE_MAX_BYTES
     } else {
         i64::from(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn names_the_pattern_that_uses_a_backreference() {
+        for (path, schema) in [
+            ("$.properties.a.pattern", json!({"properties": {"a": {"pattern": "^(a)\\1$"}}})),
+            (
+                "$.patternProperties.^(?<x>a)\\k<x>$",
+                json!({"patternProperties": {"^(?<x>a)\\k<x>$": true}}),
+            ),
+        ] {
+            let Err(Error::InvalidArgument(message)) = compile_contract_schema(&schema) else {
+                panic!("{path} compiled");
+            };
+            assert_eq!(
+                message,
+                format!(
+                    "{path} uses a backreference, which is outside the Workhorse contract profile"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn reads_an_escaped_backslash_or_a_class_as_no_backreference() {
+        assert!(!uses_backreference(r"^\\1$"));
+        assert!(!uses_backreference(r"^[\]1]$"));
+        assert!(uses_backreference(r"^[a]\1$"));
     }
 }

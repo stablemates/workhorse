@@ -9,14 +9,12 @@ module Stablemates
     # validators compile it, and +compile+ raises ArgumentError for anything outside that grammar.
     #
     # Onigmo differs from ECMA-262 where this translation intervenes. +^+ and +$+ match at line
-    # ends, +.+ excludes only a newline, +\s+ and +\b+ follow Unicode, and a plain group stops
-    # capturing beside a named one. A backreference to a group that has not matched fails, where
-    # ECMA-262 matches the empty string.
+    # ends, +.+ excludes only a newline, and +\s+ and +\b+ follow Unicode. The contract profile
+    # rejects backreferences, so +compile+ refuses +\1+ to +\9+ and +\k<name>+.
     #
-    # Three differences remain. A group keeps its capture from an earlier iteration of a
-    # quantifier, where ECMA-262 clears it. Onigmo has no +Script_Extensions+ escape, so +compile+
-    # refuses one. Property names and members follow Ruby's Unicode version, which can lag the one
-    # other validators read. Internal to the SDK.
+    # Two differences remain. Onigmo has no +Script_Extensions+ escape, so +compile+ refuses one.
+    # Property names and members follow Ruby's Unicode version, which can lag the one other
+    # validators read. Internal to the SDK.
     class EcmaPattern
       SPACE = '\t\n\u000b\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff'
       WORD = "[A-Za-z0-9_]"
@@ -32,6 +30,27 @@ module Stablemates
 
       def self.compile(source) = new(source).regexp
 
+      # Whether +source+ has +\1+ to +\9+ or +\k+ outside a character class. Inside a class the
+      # +u+ grammar refuses those escapes anyway.
+      def self.backreference?(source)
+        in_class = false
+        escaped = false
+        source.each_char do |char|
+          if escaped
+            return true if !in_class && (char == "k" || ("1".."9").cover?(char))
+
+            escaped = false
+          elsif char == "\\"
+            escaped = true
+          elsif char == "["
+            in_class = true
+          elsif char == "]"
+            in_class = false
+          end
+        end
+        false
+      end
+
       attr_reader :regexp
 
       def initialize(source)
@@ -42,7 +61,7 @@ module Stablemates
         @out = +""
         @groups = []
         @last = :none
-        @names = group_names
+        check_group_names
         translate
         raise ArgumentError, "unterminated group" unless @groups.empty?
 
@@ -53,10 +72,9 @@ module Stablemates
 
       private
 
-      # Numbers every capture group, so a backreference can name one that comes later.
-      def group_names
+      # Refuses a group name that appears twice, as the +u+ grammar does.
+      def check_group_names
         names = {}
-        count = 0
         at = 0
         in_class = false
         while at < @source.length
@@ -69,17 +87,12 @@ module Stablemates
             in_class = true
           elsif char == "("
             name = @source[(at + 1)..][GROUP_NAME, 1]
-            if name
-              raise ArgumentError, "duplicate group name #{name}" if names.key?(name)
+            raise ArgumentError, "duplicate group name #{name}" if name && names.key?(name)
 
-              names[name] = count + 1
-            end
-            count += 1 if name || @source[at + 1] != "?"
+            names[name] = true if name
           end
           at += 1
         end
-        @captures = count
-        names
       end
 
       def translate
@@ -153,24 +166,10 @@ module Stablemates
         case char
         when "b" then emit(WORD_BOUNDARY, :assertion)
         when "B" then emit(NOT_WORD_BOUNDARY, :assertion)
-        when "k"
-          name = @source[@at..][/\A<([^>]*)>/, 1] or raise ArgumentError, "invalid named reference"
-          number = @names[name] or raise ArgumentError, "no group named #{name}"
-          @at += name.length + 2
-          emit(backreference(number), :atom)
-        when "1".."9"
-          digits = char + @source[@at..][/\A\d*/]
-          @at += digits.length - 1
-          raise ArgumentError, "no group #{digits}" if Integer(digits, 10) > @captures
-
-          emit(backreference(Integer(digits, 10)), :atom)
+        when "k", "1".."9" then raise ArgumentError, "a backreference is outside the Workhorse contract profile"
         else emit(set_escape(char) || character_escape(char, SYNTAX), :atom)
         end
       end
-
-      # A group that has not matched yet, or that the matching alternative skipped, matches the empty
-      # string. The conditional gives Onigmo that rule.
-      def backreference(number) = "(?(#{number})\\k<#{number}>)"
 
       # A class like +\d+, or nil for any other escape.
       def set_escape(char)

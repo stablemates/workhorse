@@ -68,7 +68,12 @@ module Stablemates
         elsif SCHEMA_MAPS.include?(keyword)
           return "#{path} must be an object" unless value.is_a?(Hash)
 
-          value.lazy.filter_map { |name, child| profile_violation(child, "#{path}.#{name}") }.first
+          value.lazy.filter_map do |name, child|
+            (keyword == "patternProperties" && backreference_violation(name, "#{path}.#{name}")) ||
+              profile_violation(child, "#{path}.#{name}")
+          end.first
+        elsif keyword == "pattern" && value.is_a?(String)
+          backreference_violation(value, path)
         elsif PLAIN_KEYWORDS.include?(keyword)
           value_violation(keyword, value, path)
         else
@@ -76,6 +81,11 @@ module Stablemates
         end
       end
       private_class_method :keyword_violation
+
+      def self.backreference_violation(source, path)
+        "#{path} uses a backreference, which is outside the Workhorse contract profile" if EcmaPattern.backreference?(source)
+      end
+      private_class_method :backreference_violation
 
       # The Draft 2020-12 meta-schema's rule for the value of +keyword+, as a violation or nil.
       def self.value_violation(keyword, value, path)

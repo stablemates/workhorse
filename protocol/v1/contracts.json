@@ -99,5 +99,38 @@
     "id": "pattern-property-outside-its-selector-rejected",
     "schema": { "type": "string", "pattern": "^\\p{General_Category=Greek}$" },
     "schemaError": true
+  },
+  {
+    "id": "pattern-numeric-backreference-rejected",
+    "schema": { "type": "string", "pattern": "^(a)\\1$" },
+    "schemaError": true
+  },
+  {
+    "id": "pattern-named-backreference-rejected",
+    "schema": { "type": "string", "pattern": "^(?<x>a)\\k<x>$" },
+    "schemaError": true
+  },
+  {
+    "id": "pattern-backreference-to-skipped-group-rejected",
+    "schema": { "type": "string", "pattern": "^(a|(b))\\2$" },
+    "schemaError": true
+  },
+  {
+    "id": "pattern-forward-backreference-rejected",
+    "schema": { "type": "string", "pattern": "^\\1(a)$" },
+    "schemaError": true
+  },
+  {
+    "id": "pattern-properties-backreference-rejected",
+    "schema": { "type": "object", "patternProperties": { "^(a)\\1$": { "type": "string" } } },
+    "schemaError": true
+  },
+  {
+    "id": "pattern-escaped-backslash-before-digit",
+    "schema": { "type": "string", "pattern": "^\\\\1$" },
+    "instances": [
+      { "value": "\\1", "valid": true },
+      { "value": "1", "valid": false }
+    ]
   }
 ]
