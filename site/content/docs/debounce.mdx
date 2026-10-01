@@ -71,6 +71,8 @@ the accepted payload unchanged.
 Only `scheduled` or `ready` tasks that have never started can be replaced. A task that waits durably
 or backs off before a retry is also `scheduled`, and it is refused. A refused replacement includes a
 stable `reason` so callers can distinguish lifecycle movement from an incompatible request.
+In Ruby, `result.reason` is `:incompatible_key_mode`, `:not_pending`, or `:window_elapsed_pending`
+for a `:non_replaceable` result, and `nil` for every other outcome.
 
 Running a debounced task now from the dashboard or `Admin.runTaskNow` ends its window. The next
 request with the same key starts a new task.

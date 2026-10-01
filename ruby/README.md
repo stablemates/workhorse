@@ -80,6 +80,9 @@ The gem is `stablemates-workhorse`, and its namespace is `Stablemates::Workhorse
   SDK discards that connection through the pool's `discard_current_connection`. The SDK never
   closes a connection the caller owns. A source without `discard_current_connection` must replace
   an unusable connection itself.
+  Each enqueue returns an `EnqueueResult` with the task ID and an `outcome`. A debounced request
+  that was `:non_replaceable` also carries a `reason`: `:incompatible_key_mode`, `:not_pending`, or
+  `:window_elapsed_pending`.
 - `Worker` takes a pool, registers handlers by task type, and runs them under a lease with a shared
   heartbeat connection. `run_worker_process` drains it on `TERM` or `INT`.
 - `HandlerContext` offers checkpoints, durable sleeps, signal and human waits, child tasks, and

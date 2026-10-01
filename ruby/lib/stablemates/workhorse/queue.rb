@@ -482,7 +482,7 @@ module Stablemates
         raise invalid_result unless
           (outcome == "non_replaceable") ? NON_REPLACEABLE_REASONS.include?(reason) : reason.nil?
 
-        EnqueueResult.new(task_id: row.fetch("task_id"), outcome: outcome.to_sym)
+        EnqueueResult.new(task_id: row.fetch("task_id"), outcome: outcome.to_sym, reason: reason&.to_sym)
       end
 
       def invalid_result = ArgumentError.new("PostgreSQL returned an invalid enqueue result")

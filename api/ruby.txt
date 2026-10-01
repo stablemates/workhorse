@@ -223,7 +223,8 @@ class Stablemates::Workhorse::EnqueueRequest
 
 class Stablemates::Workhorse::EnqueueResult
   superclass Data
-  members task_id, outcome
+  members task_id, outcome, reason
+  def initialize(task_id:, outcome:, reason: nil)
 
 class Stablemates::Workhorse::Error
   superclass StandardError

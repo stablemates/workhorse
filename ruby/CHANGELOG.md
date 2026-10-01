@@ -79,3 +79,6 @@ other SDKs carry, because every tag names one release of all of them.
 - Workers built on one pool share one notification listener connection, as they share the
   heartbeat connection. Each worker is woken only for its own queues, and the listener stops when
   the last worker on the pool stops.
+- `EnqueueResult#reason` says why a debounced enqueue was `:non_replaceable`:
+  `:incompatible_key_mode`, `:not_pending`, or `:window_elapsed_pending`. It is `nil` for every other
+  outcome.
