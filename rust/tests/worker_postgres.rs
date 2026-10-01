@@ -5,6 +5,7 @@
 //! `docs/parity.md` cites.
 mod support;
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -14,6 +15,7 @@ use support::{scratch_database, ScratchDatabase};
 use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::{Client, NoTls};
 use uuid::Uuid;
+use workhorse::contracts::{TaskContractVersion, TaskTypeContracts};
 use workhorse::{
     Admin, AdminAudit, BatchItem, BatchOptions, BatchResult, CancelReason, ChildTaskRequest,
     Debounce, DebounceSchedule, EnqueueOptions, EnqueueRequest, Error, HandlerContext,
@@ -1012,4 +1014,40 @@ async fn an_abandoned_batching_worker_reruns_no_more_tasks_than_its_concurrency(
     assert!(reruns > 0 && reruns <= concurrency, "{reruns} tasks ran twice");
     assert!(effects.values().all(|&runs| runs <= 2), "{effects:?}");
     assert_eq!(harness.runtime_rows("fast-abandon").await, 0);
+}
+
+/// SM-1051: two contracts whose type and version join to the same text keep separate schemas.
+#[tokio::test]
+async fn result_schemas_stay_apart_when_type_and_version_join_alike() {
+    let Some(harness) = harness("worker_schema_key").await else { return };
+    let contract = |version: &str, result_schema: Value| TaskTypeContracts {
+        current_version: version.into(),
+        versions: BTreeMap::from([(
+            version.to_string(),
+            TaskContractVersion { result_schema, ..TaskContractVersion::default() },
+        )]),
+    };
+    let contracts = BTreeMap::from([
+        ("a|b".to_string(), contract("c", json!({"type": "string"}))),
+        ("a".to_string(), contract("b|c", json!({"type": "number"}))),
+    ]);
+    harness.queue.sync_contracts(&contracts).await.unwrap();
+    let once = EnqueueOptions { max_attempts: 1, ..Default::default() };
+    // A fresh worker per order starts with an empty cache, so each pair takes its turn first.
+    for order in [["a|b", "a"], ["a", "a|b"]] {
+        let worker = harness.worker(options());
+        worker.handle("a|b", |_: Value, _| async { Ok(json!("text")) });
+        worker.handle("a", |_: Value, _| async { Ok(json!(1)) });
+        for task_type in order {
+            let task = harness.enqueue(task_type, json!({}), once.clone()).await;
+            assert!(worker.run_once().await.unwrap());
+            let snapshot = harness.admin.get_task(task).await.unwrap().unwrap();
+            assert_eq!(
+                snapshot.state,
+                TaskState::Succeeded,
+                "{task_type} after {order:?} met the other pair's schema: {:?}",
+                snapshot.error
+            );
+        }
+    }
 }
