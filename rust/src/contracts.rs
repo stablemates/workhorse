@@ -167,8 +167,16 @@ pub(crate) async fn load_contract<E: Executor>(
     executor: &E,
     task_type: &str,
 ) -> Result<Option<Arc<PayloadContract>>, Error> {
-    let rows =
-        executor.rows(sql::GET_CONTRACT_DEFINITION_V1, &[&task_type, &None::<String>]).await?;
+    load_contract_version(executor, task_type, None).await
+}
+
+/// Loads `version` of a task type's contract, or its current contract when `version` is `None`.
+pub(crate) async fn load_contract_version<E: Executor>(
+    executor: &E,
+    task_type: &str,
+    version: Option<&str>,
+) -> Result<Option<Arc<PayloadContract>>, Error> {
+    let rows = executor.rows(sql::GET_CONTRACT_DEFINITION_V1, &[&task_type, &version]).await?;
     let row = match rows.as_slice() {
         [] => return Ok(None),
         [row] => row,

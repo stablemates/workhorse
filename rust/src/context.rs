@@ -75,6 +75,11 @@ impl HandlerContext {
         &self.inner.cancellation
     }
 
+    /// The pool unfenced reads go through.
+    pub(crate) fn pool(&self) -> &deadpool_postgres::Pool {
+        &self.inner.pool
+    }
+
     /// Whether a durable call suspended the task, which PostgreSQL has then already settled.
     pub(crate) fn suspended(&self) -> bool {
         self.inner.suspended.load(Ordering::Acquire)
@@ -418,6 +423,14 @@ mod tests {
     }
 
     fn fast_context() -> HandlerContext {
+        context(true, CancellationToken::default(), unreachable_pool())
+    }
+
+    fn context(
+        fast_tier: bool,
+        cancellation: CancellationToken,
+        pool: deadpool_postgres::Pool,
+    ) -> HandlerContext {
         let task = ClaimedTask {
             id: uuid::Uuid::new_v4(),
             task_type: "fast".into(),
@@ -437,10 +450,30 @@ mod tests {
             fence_token: 1,
             lease_expires_at: Utc::now(),
             claim_sent_at: tokio::time::Instant::now(),
-            fast_tier: true,
+            fast_tier,
         };
-        let cancellation = CancellationToken::default();
-        HandlerContext::new(Arc::new(task), cancellation, unreachable_pool(), "worker".into())
+        HandlerContext::new(Arc::new(task), cancellation, pool, "worker".into())
+    }
+
+    /// A pool over a server that accepts connections and never answers the handshake.
+    async fn stalled_pool() -> (deadpool_postgres::Pool, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+        let mut config = deadpool_postgres::Config::new();
+        config.host = Some("127.0.0.1".into());
+        config.port = Some(port);
+        config.dbname = Some("unused".into());
+        config.user = Some("unused".into());
+        let pool = config
+            .create_pool(Some(deadpool_postgres::Runtime::Tokio1), tokio_postgres::NoTls)
+            .unwrap();
+        (pool, server)
     }
 
     fn refused(error: Error, expected: &str) {
@@ -475,5 +508,32 @@ mod tests {
         let checkpoint = context.checkpoint("step", || async { Ok(1) }).await.unwrap_err();
         assert_eq!(checkpoint.name.as_deref(), Some("FastTierUnsupportedError"));
         assert_eq!(checkpoint.message, "Fast-tier queue fast-queue does not support checkpoints");
+    }
+
+    // Any round trip would wait on the stalled server, so only a check before the contract
+    // lookups returns within the bound.
+    #[tokio::test]
+    async fn a_canceled_handler_creates_no_child_without_a_responsive_database() {
+        let (pool, server) = stalled_pool().await;
+        let cancellation = CancellationToken::default();
+        cancellation.cancel(CancelReason::LeaseLost);
+        let context = context(false, cancellation, pool);
+        let child = || ChildTaskRequest::new("child", "leaf", &json!({})).unwrap();
+        let bound = Duration::from_millis(500);
+        let lease_lost = |result: Result<Result<(), Error>, _>, operation| match result {
+            Ok(Err(Error::LeaseLost { operation: lost, .. })) => assert_eq!(lost, operation),
+            Ok(other) => panic!("expected {operation:?} to lose its lease, got {other:?}"),
+            Err(_) => panic!("{operation:?} waited on the stalled database"),
+        };
+        let payload = json!({});
+        let options = EnqueueOptions::default();
+        let run_child = context.run_child::<_, Value>("child", "leaf", &payload, options);
+        let run_child = tokio::time::timeout(bound, run_child).await;
+        lease_lost(run_child.map(|result| result.map(drop)), Operation::RunChild);
+        let set = tokio::time::timeout(bound, context.run_children(vec![child()])).await;
+        lease_lost(set.map(|result| result.map(drop)), Operation::RunChildren);
+        let all = tokio::time::timeout(bound, context.run_children_all(vec![child()])).await;
+        lease_lost(all.map(|result| result.map(drop)), Operation::RunChildren);
+        server.abort();
     }
 }

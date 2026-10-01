@@ -110,14 +110,14 @@ joined object exceeds the parent's result contract, `ChildResultLimitExceededErr
 
 ## Validate a contracted child
 
-A child type can declare a payload contract like any other task type. The TypeScript, Go, Python,
-and Ruby contexts then treat the child like an enqueue. Each stamps the child with the type's current
-contract and validates the payload first. An invalid payload raises `TaskContractValidationError`,
-or `ContractValidationError` in Ruby, before PostgreSQL creates any child.
+A child type can declare a payload contract like any other task type. Every context then treats the
+child like an enqueue. Each stamps the child with the type's current contract and validates the
+payload first. An invalid payload raises `TaskContractValidationError` before PostgreSQL creates any
+child. Ruby raises `ContractValidationError`, and Rust returns `Error::ContractValidation`.
 
 A replayed parent may run after a deploy has moved the child's current contract. PostgreSQL still
-compares the replayed request with the accepted one. The Go, Python, and Ruby contexts therefore
-re-stamp the request with each existing child's accepted version. The replay then joins the existing
+compares the replayed request with the accepted one. The Go, Python, Ruby, and Rust contexts
+therefore re-stamp the request with each existing child's accepted version. The replay then joins the existing
 child instead of raising `ChildConflictError`. Python applies this to both `HandlerContext` and
 `AsyncHandlerContext`. [Payload contracts](230-payload-contracts.md) explains versions and stamping.
 

@@ -80,13 +80,13 @@ make them independently idempotent.
 
 ## Validate a contracted child
 
-The TypeScript, Go, Python, and Ruby contexts validate a contracted child type like an enqueue. Each
-stamps the child with the type's current contract and validates its payload first. An invalid
-payload raises `TaskContractValidationError`, or `ContractValidationError` in Ruby, before
-PostgreSQL creates any child.
+Every context validates a contracted child type like an enqueue. Each stamps the child with the
+type's current contract and validates its payload first. An invalid payload raises
+`TaskContractValidationError` before PostgreSQL creates any child. Ruby raises
+`ContractValidationError`, and Rust returns `Error::ContractValidation`.
 
 After a deploy moves the child's current contract, PostgreSQL still compares a replayed request
-with the accepted one. The Go, Python, and Ruby contexts stamp each existing child's accepted
+with the accepted one. The Go, Python, Ruby, and Rust contexts stamp each existing child's accepted
 version, so the replay joins that child instead of raising `ChildConflictError`. Python covers both
 `HandlerContext` and `AsyncHandlerContext`. [Contracts](/docs/contracts) explains versions and
 stamping.

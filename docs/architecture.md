@@ -1001,7 +1001,14 @@ wake time at most 365 days ahead. `wait_for_signal` and `wait_for_human` take an
 whole milliseconds from 1 millisecond through 7 days. The human context encodes to at most 65,536
 bytes of JSON. `run_child`, `run_children`, and `run_children_all` accept at most 100 children with
 unique names. `run_children` maps each name to a `ChildOutcome`, and `run_children_all` fails unless
-every child succeeds. An oversized child result returns `Error::ChildResultLimitExceeded`. A
+every child succeeds. A contracted child carries the current contract that
+`get_contract_definition_v1` returns, because a child write has no stale-contract retry. The context
+validates each child payload first and returns `Error::ContractValidation` before any write.
+PostgreSQL compares a replayed request with the accepted one, contract stamp included. On
+`conflict`, the context therefore reads each existing child's `contract_version` through
+`task_child` and `get_task`. It retries once with those versions stamped. When the current contract
+rejects a replayed payload, the context builds the request again under those versions before it
+writes. An oversized child result returns `Error::ChildResultLimitExceeded`. A
 refused durable call returns `Error::Conflict`, `Error::LimitExceeded`, `Error::AlreadyWaiting`, or
 `Error::LeaseLost`. A suspending call returns `Error::Suspended`. PostgreSQL has already settled that task, so
 the worker ignores the handler's return.
