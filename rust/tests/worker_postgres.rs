@@ -40,10 +40,13 @@ async fn harness(name: &str) -> Option<Harness> {
 }
 
 impl Harness {
-    fn worker(&self, options: WorkerOptions) -> Worker {
+    fn pool(&self) -> deadpool_postgres::Pool {
         let manager = deadpool_postgres::Manager::new(self.database.url().parse().unwrap(), NoTls);
-        let pool = deadpool_postgres::Pool::builder(manager).max_size(6).build().unwrap();
-        Worker::new(pool, options).unwrap()
+        deadpool_postgres::Pool::builder(manager).max_size(6).build().unwrap()
+    }
+
+    fn worker(&self, options: WorkerOptions) -> Worker {
+        Worker::new(self.pool(), options).unwrap()
     }
 
     async fn enqueue(&self, task_type: &str, payload: Value, options: EnqueueOptions) -> Uuid {
@@ -507,6 +510,214 @@ async fn a_drain_finishes_running_handlers_within_grace() {
 }
 
 #[tokio::test]
+async fn shutdown_returns_within_its_bound_while_the_registry_row_stays_locked() {
+    let Some(harness) = harness("worker_stalled_registry").await else { return };
+    let task = harness.enqueue("rust.cooperative", json!({}), EnqueueOptions::default()).await;
+    let grace = Duration::from_secs(1);
+    let options = WorkerOptions { shutdown_grace_period: grace, ..options() };
+    let worker_id = options.worker_id.clone().unwrap();
+    let pool = harness.pool();
+    let worker = Worker::new(pool.clone(), options).unwrap();
+    let (started, mut running_handlers) = mpsc::unbounded_channel();
+    let (cancelled, cancellation) = oneshot::channel::<tokio::time::Instant>();
+    let cancelled = Arc::new(Mutex::new(Some(cancelled)));
+    worker.handle("rust.cooperative", move |_: Value, context: HandlerContext| {
+        let _ = started.send(());
+        let cancelled = Arc::clone(&cancelled);
+        async move {
+            context.cancellation().cancelled().await;
+            if let Some(cancelled) = cancelled.lock().unwrap().take() {
+                let _ = cancelled.send(tokio::time::Instant::now());
+            }
+            Err::<Value, _>(HandlerError::new("stopped"))
+        }
+    });
+    let (stop, running) = run(&worker);
+    running_handlers.recv().await.unwrap();
+
+    // Every registry write the drain makes now waits on this row lock until the test ends.
+    let mut locker = harness.database.connect().await;
+    let lock = locker.transaction().await.unwrap();
+    let locked = lock
+        .execute(
+            "SELECT 1 FROM workhorse.worker_registry WHERE worker_id = $1 FOR UPDATE",
+            &[&worker_id],
+        )
+        .await
+        .unwrap();
+    assert_eq!(locked, 1, "the worker never registered");
+
+    let began = tokio::time::Instant::now();
+    stop.send(()).unwrap();
+    // The stalled refresh spends the whole grace period. One deadline still bounds the handler,
+    // so it sees cancellation when grace ends rather than a fresh grace period later.
+    let cancelled_at = tokio::time::timeout(Duration::from_secs(5), cancellation)
+        .await
+        .expect("the handler never saw shutdown cancellation")
+        .unwrap();
+    let cancelled_after = cancelled_at - began;
+    assert!(
+        cancelled_after >= grace,
+        "the handler was cancelled before grace: {cancelled_after:?}"
+    );
+    assert!(
+        cancelled_after < grace + Duration::from_millis(600),
+        "the stalled refresh delayed handler cancellation past grace: {cancelled_after:?}"
+    );
+    // Grace, the unwind window and the cleanup window for the stalled deregistration, plus
+    // scheduling tolerance. A fresh bound per phase would need at least one more second.
+    let outcome = tokio::time::timeout(Duration::from_secs(5), running)
+        .await
+        .expect("shutdown waited on the locked registry row")
+        .unwrap();
+    let elapsed = began.elapsed();
+    assert!(outcome.is_ok(), "{outcome:?}");
+    assert!(
+        elapsed < Duration::from_millis(2_900),
+        "shutdown outlived grace plus its unwind and cleanup windows: {elapsed:?}"
+    );
+    // The handler that honored cancellation released its task.
+    assert_eq!(harness.state(task).await, TaskState::Ready);
+    // The abandoned registry statements still wait on the lock. Their connections left the pool,
+    // so every connection the pool lends now answers at once.
+    let mut lent = Vec::new();
+    for _ in 0..pool.status().max_size {
+        lent.push(pool.get().await.unwrap());
+    }
+    for connection in &lent {
+        tokio::time::timeout(Duration::from_secs(2), connection.query_one("SELECT 1", &[]))
+            .await
+            .expect("the pool lent a connection still running an abandoned registry statement")
+            .unwrap();
+    }
+    drop(lent);
+    lock.rollback().await.unwrap();
+}
+
+#[tokio::test]
+async fn shutdown_discards_the_connection_of_a_claim_it_abandons() {
+    let Some(harness) = harness("worker_stalled_claim").await else { return };
+    let options = WorkerOptions {
+        disable_registry: true,
+        shared_heartbeats: true,
+        maintenance_interval: Duration::from_secs(600),
+        maintenance_routine_interval: Duration::from_secs(600),
+        shutdown_grace_period: Duration::from_millis(100),
+        ..options()
+    };
+    let pool = harness.pool();
+    let worker = Worker::new(pool.clone(), options).unwrap();
+    let (stop, running) = run(&worker);
+    // The first maintenance pass also reads the task table. Let it finish before the lock.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Every claim now waits on this table lock until the test ends.
+    let mut locker = harness.database.connect().await;
+    let lock = locker.transaction().await.unwrap();
+    lock.execute("LOCK TABLE workhorse.task IN ACCESS EXCLUSIVE MODE", &[]).await.unwrap();
+    let observer = harness.database.connect().await;
+    let waiting = tokio::time::Instant::now() + WAIT;
+    loop {
+        let stalled: i64 = observer
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() \
+                 AND wait_event_type = 'Lock' AND query LIKE '%claim_many_v1%'",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        if stalled > 0 {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < waiting, "no claim reached the lock");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), running)
+        .await
+        .expect("shutdown waited on the stalled claim")
+        .unwrap()
+        .unwrap();
+    // The abandoned claim still waits on the lock. Its connection left the pool, so every
+    // connection the pool lends now answers at once.
+    let mut lent = Vec::new();
+    for _ in 0..pool.status().max_size {
+        lent.push(pool.get().await.unwrap());
+    }
+    for connection in &lent {
+        tokio::time::timeout(Duration::from_secs(2), connection.query_one("SELECT 1", &[]))
+            .await
+            .expect("the pool lent a connection still running an abandoned claim")
+            .unwrap();
+    }
+    drop(lent);
+    lock.rollback().await.unwrap();
+}
+
+#[tokio::test]
+async fn shutdown_does_not_wait_for_a_stalled_heartbeat_round() {
+    let Some(harness) = harness("worker_stalled_heartbeat").await else { return };
+    let task = harness.enqueue("rust.stuck", json!({}), EnqueueOptions::default()).await;
+    let interval = Duration::from_secs(8);
+    let options = WorkerOptions {
+        shutdown_grace_period: Duration::from_millis(200),
+        lease_duration: Duration::from_secs(60),
+        heartbeat_interval: Some(interval),
+        ..options()
+    };
+    let worker = harness.worker(options);
+    let (started, mut running_handlers) = mpsc::unbounded_channel();
+    worker.handle("rust.stuck", move |_: Value, _| {
+        let _ = started.send(());
+        std::future::pending::<Result<Value, HandlerError>>()
+    });
+    let (stop, running) = run(&worker);
+    running_handlers.recv().await.unwrap();
+
+    // The first heartbeat round waits on this lock for its whole interval.
+    let mut locker = harness.database.connect().await;
+    let lock = locker.transaction().await.unwrap();
+    let mut locked = 0;
+    for table in ["workhorse.task_runtime", "workhorse.fast_task_runtime"] {
+        let statement = format!("SELECT 1 FROM {table} WHERE task_id = $1 FOR UPDATE");
+        locked += lock.execute(statement.as_str(), &[&task]).await.unwrap();
+    }
+    assert_eq!(locked, 1, "the task has no runtime row");
+    let observer = harness.database.connect().await;
+    let waiting = tokio::time::Instant::now() + interval + Duration::from_secs(5);
+    loop {
+        let stalled: i64 = observer
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() \
+                 AND wait_event_type = 'Lock' AND query LIKE '%heartbeat_many_v1%'",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        if stalled > 0 {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < waiting, "no heartbeat round reached the lock");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let began = tokio::time::Instant::now();
+    stop.send(()).unwrap();
+    // Grace, the unwind window and the cleanup window, with margin well short of the interval
+    // the stalled round would otherwise hold the heartbeat connection for.
+    let outcome = tokio::time::timeout(Duration::from_secs(5), running)
+        .await
+        .expect("shutdown waited for the stalled heartbeat round")
+        .unwrap();
+    assert!(matches!(outcome, Err(Error::ShutdownIncomplete { abandoned: 1 })), "{outcome:?}");
+    assert!(began.elapsed() < Duration::from_secs(3), "shutdown took {:?}", began.elapsed());
+    lock.rollback().await.unwrap();
+}
+
+#[tokio::test]
 async fn a_handler_that_honors_shutdown_cancellation_releases_its_task() {
     let Some(harness) = harness("worker_unwind").await else { return };
     let task = harness.enqueue("rust.cooperative", json!({}), EnqueueOptions::default()).await;
@@ -575,6 +786,148 @@ async fn a_notification_wakes_an_idle_worker_before_its_poll() {
     harness.wait_for(task, TaskState::Succeeded).await;
     stop.send(()).unwrap();
     running.await.unwrap().unwrap();
+}
+
+/// Forwards PostgreSQL frontend messages from `client` to `server` whole, until a simple query
+/// containing `marker` arrives. It swallows that query and everything after it, fires
+/// `intercepted`, and returns when `client` closes.
+async fn forward_until_query<R, W>(
+    mut client: R,
+    mut server: W,
+    marker: &[u8],
+    intercepted: oneshot::Sender<()>,
+) where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // Untyped startup messages come first: an optional SSL or GSS request, then the startup
+    // packet. Each is a length that counts itself, then a code.
+    loop {
+        let mut header = [0; 8];
+        if client.read_exact(&mut header).await.is_err() {
+            return;
+        }
+        let length = u32::from_be_bytes(header[..4].try_into().unwrap()) as usize;
+        let mut message = header.to_vec();
+        message.resize(length, 0);
+        if client.read_exact(&mut message[8..]).await.is_err() {
+            return;
+        }
+        server.write_all(&message).await.unwrap();
+        let code = u32::from_be_bytes(header[4..].try_into().unwrap());
+        if code != 80_877_103 && code != 80_877_104 {
+            break;
+        }
+    }
+    // Every later message is a type byte, then a length that counts itself but not the type.
+    loop {
+        let mut header = [0; 5];
+        if client.read_exact(&mut header).await.is_err() {
+            return;
+        }
+        let length = u32::from_be_bytes(header[1..].try_into().unwrap()) as usize;
+        let mut message = header.to_vec();
+        message.resize(length + 1, 0);
+        if client.read_exact(&mut message[5..]).await.is_err() {
+            return;
+        }
+        if header[0] == b'Q' && message[5..].windows(marker.len()).any(|window| window == marker) {
+            break;
+        }
+        server.write_all(&message).await.unwrap();
+    }
+    let _ = intercepted.send(());
+    let mut rest = Vec::new();
+    let _ = client.read_to_end(&mut rest).await;
+}
+
+#[tokio::test]
+async fn the_proxy_intercepts_a_query_that_arrives_in_fragments() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    fn query(text: &str) -> Vec<u8> {
+        let mut message = vec![b'Q'];
+        message.extend_from_slice(&(text.len() as u32 + 5).to_be_bytes());
+        message.extend_from_slice(text.as_bytes());
+        message.push(0);
+        message
+    }
+    let mut startup = 16_u32.to_be_bytes().to_vec();
+    startup.extend_from_slice(&196_608_u32.to_be_bytes());
+    startup.extend_from_slice(b"user\0u\0\0");
+    let forwarded = [startup.clone(), query("SELECT 1")].concat();
+    let sent = [forwarded.clone(), query("LISTEN workhorse_tasks"), query("SELECT 2")].concat();
+
+    let (mut client, client_end) = tokio::io::duplex(64);
+    let (server_end, mut server) = tokio::io::duplex(1024);
+    let (intercepted, interception) = oneshot::channel();
+    let proxy = tokio::spawn(forward_until_query(
+        client_end,
+        server_end,
+        b"LISTEN workhorse_tasks",
+        intercepted,
+    ));
+    // One byte per write, so no read holds a whole message, and the marker spans many reads.
+    for byte in sent {
+        client.write_all(&[byte]).await.unwrap();
+        client.flush().await.unwrap();
+        tokio::task::yield_now().await;
+    }
+    drop(client);
+    tokio::time::timeout(WAIT, proxy).await.expect("the proxy outlived its client").unwrap();
+    interception.await.expect("the proxy never intercepted the fragmented query");
+    let mut received = Vec::new();
+    server.read_to_end(&mut received).await.unwrap();
+    assert_eq!(received, forwarded);
+}
+
+#[tokio::test]
+async fn shutdown_closes_the_notification_connection_while_listen_stalls() {
+    let Some(harness) = harness("worker_stalled_listen").await else { return };
+    let database: tokio_postgres::Config = harness.database.url().parse().unwrap();
+    let tokio_postgres::config::Host::Tcp(host) = &database.get_hosts()[0] else {
+        panic!("the test database must be reachable over TCP");
+    };
+    let upstream = (host.clone(), database.get_ports()[0]);
+    // This proxy forwards the listener's connection but swallows its LISTEN, so the statement
+    // waits for a reply that never comes.
+    let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut listen = tokio_postgres::Config::new();
+    listen.host("127.0.0.1").port(proxy.local_addr().unwrap().port());
+    listen.user(database.get_user().unwrap()).dbname(database.get_dbname().unwrap());
+    if let Some(password) = database.get_password() {
+        listen.password(password);
+    }
+    let (stalled, listen_sent) = oneshot::channel();
+    let (closed, client_closed) = oneshot::channel();
+    tokio::spawn(async move {
+        let (client, _) = proxy.accept().await.unwrap();
+        let server = tokio::net::TcpStream::connect(upstream).await.unwrap();
+        let (client_reader, mut client_writer) = client.into_split();
+        let (mut server_reader, server_writer) = server.into_split();
+        tokio::spawn(async move { tokio::io::copy(&mut server_reader, &mut client_writer).await });
+        forward_until_query(client_reader, server_writer, b"LISTEN workhorse_tasks", stalled).await;
+        let _ = closed.send(());
+    });
+    let worker = harness.worker(WorkerOptions {
+        polling_only: false,
+        listen_config: Some(listen),
+        shutdown_grace_period: Duration::from_millis(100),
+        ..options()
+    });
+    let (stop, running) = run(&worker);
+    tokio::time::timeout(WAIT, listen_sent).await.expect("the listener never sent LISTEN").unwrap();
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), running)
+        .await
+        .expect("shutdown waited on the stalled listener")
+        .unwrap()
+        .unwrap();
+    // Shutdown aborted the stalled listener. Its connection must close with it.
+    tokio::time::timeout(Duration::from_secs(2), client_closed)
+        .await
+        .expect("the notification connection outlived shutdown")
+        .unwrap();
 }
 
 #[tokio::test]

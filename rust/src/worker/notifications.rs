@@ -14,6 +14,17 @@ const RECONNECT_INITIAL: Duration = Duration::from_millis(100);
 const RECONNECT_MAXIMUM: Duration = Duration::from_secs(5);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 
+/// Owns the task that drives the listener's connection, and aborts it when dropped.
+///
+/// Shutdown can abort the listener while a statement waits. The connection must close with it.
+struct Driver(tokio::task::JoinHandle<()>);
+
+impl Drop for Driver {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Listens until `stop` fires, waking the worker for a matching queue or the `*` wildcard.
 ///
 /// A pool cannot hand out a connection's notification stream, so the listener opens its own
@@ -37,7 +48,7 @@ pub(super) async fn listen(
             Err(error) => error.to_string(),
             Ok((client, mut connection)) => {
                 let (sender, mut received) = tokio::sync::mpsc::unbounded_channel();
-                let driver = tokio::spawn(async move {
+                let driver = Driver(tokio::spawn(async move {
                     let mut messages = futures_util::stream::poll_fn(move |context| {
                         connection.poll_message(context)
                     });
@@ -54,10 +65,9 @@ pub(super) async fn listen(
                         }
                     }
                     let _ = sender.send(Err("notification connection closed".into()));
-                });
+                }));
                 let listened = tokio::select! {
                     () = stop.cancelled() => {
-                        driver.abort();
                         return;
                     }
                     listened = client.batch_execute(LISTEN) => listened,
@@ -89,7 +99,7 @@ pub(super) async fn listen(
                         tracing::warn!(error = %error, "task notification listener stopped");
                     }
                 }
-                driver.abort();
+                drop(driver);
                 error
             }
         };
