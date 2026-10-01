@@ -772,6 +772,23 @@ describe("continuous integration", () => {
     expect(rakefile).toContain('require "bundler/gem_tasks"');
   });
 
+  it("announces the GitHub release only after every registry on the v* tag succeeds", async () => {
+    const workflow = await read(".github/workflows/release.yml");
+    const job = workflow.slice(workflow.indexOf("\n  github-release:"));
+    const registries = [
+      workflow.slice(workflow.indexOf("\n  crates-io:"), workflow.indexOf("\n  rubygems:")),
+      workflow.slice(workflow.indexOf("\n  rubygems:"), workflow.indexOf("\n  github-release:")),
+    ];
+
+    expect(job).toContain("needs: [publish, crates-io, rubygems]");
+    expect(job).toContain("if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true");
+    // A crate or gem that sits the train out must still succeed, or the release never appears.
+    for (const registry of registries) {
+      expect(registry).toContain('echo "publish=false" >> "$GITHUB_OUTPUT"');
+      expect(registry).not.toContain("exit 1");
+    }
+  });
+
   it("publishes Python distributions from a checked, versioned tag", async () => {
     const workflow = await read(".github/workflows/release-python.yml");
     const releaseCheck = await read("scripts/check-python-release.ts");

@@ -363,11 +363,15 @@ before 0.5.0 crosses it offline, with the
 [ADR 0077](decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) records
 the decision. The upgrade from 0.5 to 0.6 only adds, so it is an ordinary rolling deployment.
 
-`.github/workflows/release.yml` publishes the nine npm packages with provenance, then creates the
+`.github/workflows/release.yml` publishes the nine npm packages with provenance. It then creates the
 GitHub release for the tag and attaches `sql/schema.sql`. That artifact is the clean-install schema
 for the version, provided so a Python or Go developer with no Node.js toolchain can create a
 development database with `psql -f schema.sql`. It applies none of the CLI's guards, so deployments
 run `workhorse schema install` or `workhorse schema migrate` instead.
+
+The GitHub release becomes public only after the crates.io and RubyGems jobs succeed. A crate or gem
+whose version does not match the tag skips publication, and its job still succeeds, so the release
+still appears. A failed crate or gem publication ends the run before the release exists.
 
 The asset is reachable at
 `https://github.com/stablemates/workhorse/releases/download/vX.Y.Z/schema.sql`. `support.json`
@@ -691,7 +695,8 @@ after npm, as [Rust crate](#rust-crate) and [Ruby gem](#ruby-gem) describe.
    server precedes the dashboard facade.
    [ADR 0085](decisions/0085-publish-npm-packages-in-dependency-order.md) records this order. Every
    package's provenance is verified. The same run then publishes the Rust crate and the Ruby gem.
-   Each version is verified on its registry before the train continues.
+   Each version is verified on its registry before the train continues. The run creates the public
+   GitHub release last, after both of those jobs succeed.
 4. Publish Go last. The `go/vX.Y.Z` tag is pushed after the gate passes, and the version is
    verified through the public module proxy.
 
