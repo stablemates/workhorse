@@ -1038,6 +1038,7 @@ func TestQueueLooksEachContractedTaskTypeUpOncePerBatch(t *testing.T) {
 	}
 
 	before := len(executor.calls)
+	executor.responses = append(executor.responses, []workhorse.Row{definition})
 	_, err = queue.EnqueueManyWithResults(ctx, []workhorse.EnqueueRequest{
 		{Type: "email.send", Payload: map[string]any{"missing": "name"}},
 	})
@@ -1045,7 +1046,8 @@ func TestQueueLooksEachContractedTaskTypeUpOncePerBatch(t *testing.T) {
 	if !errors.As(err, &validation) || validation.Kind != "payload" || validation.Version != "v1" {
 		t.Fatalf("expected payload validation error, received %v", err)
 	}
-	if len(executor.calls) != before {
-		t.Fatalf("expected the cached contract to reject the payload without a query, recorded %d", len(executor.calls)-before)
+	reload := executor.calls[before:]
+	if len(reload) != 1 || !strings.Contains(reload[0].statement, "get_contract_definition_v1") {
+		t.Fatalf("expected one contract reload before the rejection and no enqueue, recorded %#v", reload)
 	}
 }

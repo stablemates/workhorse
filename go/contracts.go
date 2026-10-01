@@ -47,7 +47,8 @@ func (err *TaskContractUnavailableError) Error() string {
 
 // contractCache holds each task type's current contract between enqueues. A nil definition records
 // that the type has none. PostgreSQL reports a stale entry as a contract_mismatch row, which
-// refreshes it, so the cache needs no expiry.
+// refreshes it. An entry that rejects a payload is reloaded before the rejection is returned, so
+// the cache needs no expiry.
 type contractCache struct {
 	mu          sync.RWMutex
 	validators  map[string]*jsonschema.Schema

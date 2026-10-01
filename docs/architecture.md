@@ -1082,7 +1082,13 @@ not cached, so the next call queries again. Each `Queue` holds one for its enque
 `SyncContracts`, the queue caches each task type's `get_contract_definition_v1` row on first
 enqueue. It refreshes that entry on a `contract_mismatch` row and retries once, as TypeScript does.
 A second mismatch returns `ErrContractPolicyChanged`. A warm enqueue therefore issues only
-`enqueue_many_v1`.
+`enqueue_many_v1`. A cached definition can also reject a payload that an operator override now
+accepts, and `enqueue_many_v1` never sees that request. When a cached definition returns
+`*TaskContractValidationError`, `applyPayloadContracts` reloads that task type's definition once per
+enqueue through the queue's `Executor`, which is the caller's transaction when the queue wraps one,
+and validates again. The second result stands. Go has no enqueue-side size check, because
+`enqueue_many_v1` reports a stale version before it applies `payload_max_bytes`. Child-task
+creation and `SyncSchedules` read the current definition on every call.
 `AssertCompatible` remains as a deprecated Go alias for the rest of the `0.x` line and is removed in
 `1.0.0`. `go/compatibility_test.go` executes every case in `protocol/v1/compatibility.json`.
 
