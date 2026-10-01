@@ -55,7 +55,6 @@ RSpec.describe Stablemates::Workhorse::ContractSchema do
     expect { schema("$schema" => "http://json-schema.org/draft-07/schema#") }.to raise_error(ArgumentError)
     expect { schema("unevaluatedProperties" => false) }.to raise_error(ArgumentError)
     expect { schema("$ref" => "#/$defs/missing") }.to raise_error(ArgumentError)
-    expect { schema("pattern" => "(") }.to raise_error(ArgumentError)
     expect(described_class.profile_violation({"properties" => {"a" => {"$dynamicRef" => "#x"}}}))
       .to eq("$.properties.a.$dynamicRef is outside the Workhorse contract profile")
   end
@@ -64,39 +63,22 @@ RSpec.describe Stablemates::Workhorse::ContractSchema do
     [
       {"type" => "strnig"}, {"type" => %w[string string]}, {"minimum" => "1"}, {"maxLength" => -1},
       {"maxItems" => 1.5}, {"required" => [1]}, {"enum" => "a"}, {"uniqueItems" => "yes"},
-      {"pattern" => 1}, {"properties" => []}, {"items" => 1}, {"allOf" => []}, {"$anchor" => "1a"}
+      {"properties" => []}, {"items" => 1}, {"allOf" => []}, {"$anchor" => "1a"}
     ].each do |document|
       expect { schema(document) }.to raise_error(ArgumentError), document.inspect
     end
   end
 
-  it "matches patterns with ECMA-262 semantics" do
-    anchored = schema("type" => "string", "pattern" => "^a$")
-    expect(anchored.valid?("a")).to be(true)
-    expect(anchored.valid?("a\nb")).to be(false), "^ and $ do not match at line ends"
-    expect(schema("pattern" => "^.$").valid?("\r")).to be(false), ". excludes every line terminator"
-    expect(schema("pattern" => "^\\s$").valid?("\u0085")).to be(false), "\\s excludes NEL"
-    expect(schema("pattern" => "^\\w$").valid?("é")).to be(false), "\\w is ASCII"
-    expect(schema("pattern" => "\\bb").valid?("éb")).to be(true), "\\b uses ASCII word characters"
-    expect(schema("pattern" => "^(?<x>a)(b)$").valid?("ab")).to be(true), "a named group beside a plain one"
-    expect(schema("pattern" => "^\\\\1$").valid?("\\1")).to be(true), "an escaped backslash is not a backreference"
-    expect(schema("pattern" => "^\\p{Lu}$").valid?("A")).to be(true)
-    expect(schema("pattern" => "^\\p{Script=Greek}\\p{sc=Grek}$").valid?("αβ")).to be(true)
-    expect(schema("pattern" => "^\\p{digit}$").valid?("٣")).to be(true), "digit is Decimal_Number"
-    expect(schema("pattern" => "^\\P{gc=L}$").valid?("α")).to be(false)
-    ["\\p{greek}", "\\p{Greek}", "\\p{Script=Lu}", "\\p{gc=ASCII}", "\\p{Other_Alphabetic}", "\\p{Alnum}",
-      "(?i)a", "\\A", "\\h", "a{2,1}", "(?<x>a)(?<x>b)"].each do |source|
-      expect { schema("pattern" => source) }.to raise_error(ArgumentError), source
+  it "names the pattern keyword it refuses at any depth" do
+    {"$.properties.a.pattern" => {"properties" => {"a" => {"type" => "string", "pattern" => "^a$"}}},
+     "$.items.patternProperties" => {"items" => {"patternProperties" => {"^a" => true}}}}.each do |path, document|
+      expect { schema(document) }.to raise_error(ArgumentError, /#{Regexp.escape(path)} is outside the Workhorse contract profile/)
     end
   end
 
-  it "refuses a backreference as outside the contract profile" do
-    {"$.pattern" => {"pattern" => "^(a)\\1$"},
-     "$.properties.a.pattern" => {"properties" => {"a" => {"pattern" => "^(?:(?<x>a)|b)\\k<x>$"}}},
-     "$.patternProperties.^(a)\\1$" => {"patternProperties" => {"^(a)\\1$" => true}}}.each do |path, document|
-      expect { schema(document) }
-        .to raise_error(ArgumentError, "#{path} uses a backreference, which is outside the Workhorse contract profile")
-    end
+  it "refuses a reference that leaves the profile-checked schema tree" do
+    document = {"default" => {"pattern" => "^a$"}, "properties" => {"a" => {"$ref" => "#/default"}}}
+    expect { schema(document) }.to raise_error(ArgumentError, "$.properties.a.$ref must point at a subschema of the contract")
   end
 
   it "resolves an anchor declared after its reference and refuses a duplicate" do

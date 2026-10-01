@@ -47,15 +47,26 @@ func TestContractSchemaProfile(t *testing.T) {
 	}
 }
 
-func TestContractSchemaNamesTheBackreference(t *testing.T) {
+func TestContractSchemaNamesThePatternKeywordItRefuses(t *testing.T) {
 	for path, schema := range map[string]any{
-		"$.properties.a.pattern":              map[string]any{"properties": map[string]any{"a": map[string]any{"pattern": `^(a)\1$`}}},
-		"$.patternProperties.^(?<x>a)\\k<x>$": map[string]any{"patternProperties": map[string]any{`^(?<x>a)\k<x>$`: true}},
+		"$.properties.a.pattern":    map[string]any{"properties": map[string]any{"a": map[string]any{"type": "string", "pattern": "^a$"}}},
+		"$.items.patternProperties": map[string]any{"items": map[string]any{"patternProperties": map[string]any{"^a": true}}},
 	} {
 		_, err := compileContractSchema(schema)
-		if err == nil || err.Error() != path+" uses a backreference, which is outside the Workhorse contract profile" {
+		if err == nil || err.Error() != path+" is outside the Workhorse contract profile" {
 			t.Fatalf("expected the profile to name %s, got %v", path, err)
 		}
+	}
+}
+
+func TestContractSchemaRefusesAReferenceOutsideTheSchemaTree(t *testing.T) {
+	schema := map[string]any{
+		"default":    map[string]any{"pattern": "^a$"},
+		"properties": map[string]any{"a": map[string]any{"$ref": "#/default"}},
+	}
+	_, err := compileContractSchema(schema)
+	if err == nil || err.Error() != "$.properties.a.$ref must point at a subschema of the contract" {
+		t.Fatalf("expected the profile to refuse the reference, got %v", err)
 	}
 }
 

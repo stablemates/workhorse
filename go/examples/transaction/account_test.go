@@ -43,7 +43,7 @@ func TestCreateAccountRollsBackWhenEnqueueFails(t *testing.T) {
 			"1": {PayloadSchema: map[string]any{
 				"type":       "object",
 				"required":   []any{"accountId"},
-				"properties": map[string]any{"accountId": map[string]any{"type": "string", "pattern": "^acct_"}},
+				"properties": map[string]any{"accountId": map[string]any{"type": "string", "minLength": 8}},
 			}},
 		}},
 	}); err != nil {
@@ -66,7 +66,7 @@ func TestCreateAccountRollsBackWhenEnqueueFails(t *testing.T) {
 		t.Fatalf("after a rejected enqueue: %d accounts and %d tasks committed, want none", accounts, tasks)
 	}
 
-	if err := createAccount(ctx, pool, "acct_1", "person@example.com"); err != nil {
+	if err := createAccount(ctx, pool, "acct_0001", "person@example.com"); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM account").Scan(&accounts); err != nil {

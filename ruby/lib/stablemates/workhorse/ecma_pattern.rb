@@ -9,8 +9,8 @@ module Stablemates
     # validators compile it, and +compile+ raises ArgumentError for anything outside that grammar.
     #
     # Onigmo differs from ECMA-262 where this translation intervenes. +^+ and +$+ match at line
-    # ends, +.+ excludes only a newline, and +\s+ and +\b+ follow Unicode. The contract profile
-    # rejects backreferences, so +compile+ refuses +\1+ to +\9+ and +\k<name>+.
+    # ends, +.+ excludes only a newline, and +\s+ and +\b+ follow Unicode. +compile+ refuses
+    # backreferences, +\1+ to +\9+ and +\k<name>+.
     #
     # Two differences remain. Onigmo has no +Script_Extensions+ escape, so +compile+ refuses one.
     # Property names and members follow Ruby's Unicode version, which can lag the one other
@@ -29,27 +29,6 @@ module Stablemates
         :GROUP_NAME, :PROPERTY
 
       def self.compile(source) = new(source).regexp
-
-      # Whether +source+ has +\1+ to +\9+ or +\k+ outside a character class. Inside a class the
-      # +u+ grammar refuses those escapes anyway.
-      def self.backreference?(source)
-        in_class = false
-        escaped = false
-        source.each_char do |char|
-          if escaped
-            return true if !in_class && (char == "k" || ("1".."9").cover?(char))
-
-            escaped = false
-          elsif char == "\\"
-            escaped = true
-          elsif char == "["
-            in_class = true
-          elsif char == "]"
-            in_class = false
-          end
-        end
-        false
-      end
 
       attr_reader :regexp
 
@@ -166,7 +145,7 @@ module Stablemates
         case char
         when "b" then emit(WORD_BOUNDARY, :assertion)
         when "B" then emit(NOT_WORD_BOUNDARY, :assertion)
-        when "k", "1".."9" then raise ArgumentError, "a backreference is outside the Workhorse contract profile"
+        when "k", "1".."9" then raise ArgumentError, "backreferences are not supported"
         else emit(set_escape(char) || character_escape(char, SYNTAX), :atom)
         end
       end

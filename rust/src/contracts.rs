@@ -1,5 +1,5 @@
 //! Versioned payload contracts: the Workhorse JSON Schema profile, compilation, and sync.
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use serde_json::{json, Map, Value};
@@ -58,7 +58,7 @@ impl std::fmt::Debug for ContractSchema {
 const SCHEMA_VALUES: &[&str] =
     &["additionalProperties", "contains", "else", "if", "items", "not", "propertyNames", "then"];
 const SCHEMA_ARRAYS: &[&str] = &["allOf", "anyOf", "oneOf", "prefixItems"];
-const SCHEMA_MAPS: &[&str] = &["$defs", "dependentSchemas", "patternProperties", "properties"];
+const SCHEMA_MAPS: &[&str] = &["$defs", "dependentSchemas", "properties"];
 const PLAIN_KEYWORDS: &[&str] = &[
     "$anchor",
     "$comment",
@@ -87,49 +87,106 @@ const PLAIN_KEYWORDS: &[&str] = &[
     "minLength",
     "minProperties",
     "multipleOf",
-    "pattern",
     "required",
     "type",
     "uniqueItems",
 ];
 const DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 
-/// Reports whether an ECMA-262 pattern contains `\1`-`\9` or `\k<name>` outside a character class.
-///
-/// A backreference to a group that has not matched behaves differently across regex engines, and RE2
-/// has none, so the profile rejects it. Every byte this scan compares is ASCII, so it can walk bytes.
-fn uses_backreference(source: &str) -> bool {
-    let bytes = source.as_bytes();
-    let mut in_class = false;
-    let mut index = 0;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'\\' => {
-                let escaped = bytes.get(index + 1).copied();
-                if !in_class && matches!(escaped, Some(b'k' | b'1'..=b'9')) {
-                    return true;
-                }
-                index += 1;
-            }
-            b'[' => in_class = true,
-            b']' => in_class = false,
-            _ => {}
-        }
-        index += 1;
-    }
-    false
+#[derive(Default)]
+struct SchemaWalk<'a> {
+    anchors: HashSet<&'a str>,
+    references: Vec<(String, &'a str)>,
 }
 
-fn check_backreference(source: &str, path: &str) -> Result<(), String> {
-    if uses_backreference(source) {
-        return Err(format!(
-            "{path} uses a backreference, which is outside the Workhorse contract profile"
-        ));
+/// Requires every reference to name a schema position the profile walk checked. A reference into
+/// `default` or `examples` would otherwise apply a schema the walk never saw.
+fn check_contract_profile(schema: &Value) -> Result<(), String> {
+    let mut walk = SchemaWalk::default();
+    check_profile(schema, "$", &mut walk)?;
+    for (path, reference) in &walk.references {
+        if !references_subschema(schema, reference, &walk.anchors) {
+            return Err(format!("{path} must point at a subschema of the contract"));
+        }
     }
     Ok(())
 }
 
-fn check_profile(schema: &Value, path: &str) -> Result<(), String> {
+fn references_subschema(root: &Value, reference: &str, anchors: &HashSet<&str>) -> bool {
+    let fragment = &reference[1..];
+    if fragment.is_empty() {
+        return true;
+    }
+    let Some(pointer) = fragment.strip_prefix('/') else {
+        return anchors.contains(fragment);
+    };
+    let Some(tokens) = pointer.split('/').map(pointer_token).collect::<Option<Vec<_>>>() else {
+        return false;
+    };
+    let mut tokens = tokens.iter();
+    let mut node = root;
+    while let Some(keyword) = tokens.next() {
+        let Value::Object(document) = node else {
+            return false;
+        };
+        let keyword = keyword.as_str();
+        let value = document.get(keyword);
+        let child = if SCHEMA_VALUES.contains(&keyword) {
+            value
+        } else if SCHEMA_ARRAYS.contains(&keyword) {
+            let index = tokens.next().filter(|token| {
+                token == &"0"
+                    || (!token.starts_with('0') && token.bytes().all(|b| b.is_ascii_digit()))
+            });
+            match (
+                value.and_then(Value::as_array),
+                index.and_then(|token| token.parse::<usize>().ok()),
+            ) {
+                (Some(children), Some(index)) => children.get(index),
+                _ => None,
+            }
+        } else if SCHEMA_MAPS.contains(&keyword) {
+            match (value.and_then(Value::as_object), tokens.next()) {
+                (Some(children), Some(name)) => children.get(name),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let Some(child) = child else {
+            return false;
+        };
+        node = child;
+    }
+    true
+}
+
+/// Decodes one JSON Pointer token from a URI fragment: percent-escapes, then `~1` and `~0`.
+fn pointer_token(token: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(token.len());
+    let mut input = token.bytes();
+    while let Some(byte) = input.next() {
+        if byte == b'%' {
+            let high = (input.next()? as char).to_digit(16)?;
+            let low = (input.next()? as char).to_digit(16)?;
+            let decoded = (high * 16 + low) as u8;
+            // Libraries disagree on whether `%2F` separates tokens, so the walk could check a different schema.
+            if decoded == b'/' {
+                return None;
+            }
+            bytes.push(decoded);
+        } else {
+            bytes.push(byte);
+        }
+    }
+    Some(String::from_utf8(bytes).ok()?.replace("~1", "/").replace("~0", "~"))
+}
+
+fn check_profile<'a>(
+    schema: &'a Value,
+    path: &str,
+    walk: &mut SchemaWalk<'a>,
+) -> Result<(), String> {
     let document = match schema {
         Value::Bool(_) => return Ok(()),
         Value::Object(document) => document,
@@ -142,31 +199,30 @@ fn check_profile(schema: &Value, path: &str) -> Result<(), String> {
             if !value.as_str().is_some_and(|reference| reference.starts_with('#')) {
                 return Err(format!("{keyword_path} must be a bundled local reference"));
             }
+            if let Some(reference) = value.as_str() {
+                walk.references.push((keyword_path, reference));
+            }
+        } else if keyword == "$anchor" {
+            if let Some(anchor) = value.as_str() {
+                walk.anchors.insert(anchor);
+            }
         } else if keyword == "$schema" {
             if value.as_str() != Some(DIALECT) {
                 return Err(format!("{keyword_path} must select Draft 2020-12"));
             }
         } else if SCHEMA_VALUES.contains(&keyword) {
-            check_profile(value, &keyword_path)?;
+            check_profile(value, &keyword_path, walk)?;
         } else if SCHEMA_ARRAYS.contains(&keyword) {
             let children =
                 value.as_array().ok_or_else(|| format!("{keyword_path} must be an array"))?;
             for (index, child) in children.iter().enumerate() {
-                check_profile(child, &format!("{keyword_path}[{index}]"))?;
+                check_profile(child, &format!("{keyword_path}[{index}]"), walk)?;
             }
         } else if SCHEMA_MAPS.contains(&keyword) {
             let children =
                 value.as_object().ok_or_else(|| format!("{keyword_path} must be an object"))?;
             for (name, child) in children {
-                let child_path = format!("{keyword_path}.{name}");
-                if keyword == "patternProperties" {
-                    check_backreference(name, &child_path)?;
-                }
-                check_profile(child, &child_path)?;
-            }
-        } else if keyword == "pattern" {
-            if let Some(source) = value.as_str() {
-                check_backreference(source, &keyword_path)?;
+                check_profile(child, &format!("{keyword_path}.{name}"), walk)?;
             }
         } else if !PLAIN_KEYWORDS.contains(&keyword) {
             return Err(format!("{keyword_path} is outside the Workhorse contract profile"));
@@ -179,7 +235,7 @@ fn check_profile(schema: &Value, path: &str) -> Result<(), String> {
 ///
 /// `format` is an annotation, and only bundled local references resolve.
 pub fn compile_contract_schema(schema: &Value) -> Result<ContractSchema, Error> {
-    check_profile(schema, "$").map_err(Error::InvalidArgument)?;
+    check_contract_profile(schema).map_err(Error::InvalidArgument)?;
     jsonschema::options()
         .with_draft(jsonschema::Draft::Draft202012)
         .should_validate_formats(false)
@@ -292,30 +348,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn names_the_pattern_that_uses_a_backreference() {
+    fn names_the_pattern_keyword_it_refuses_at_any_depth() {
         for (path, schema) in [
-            ("$.properties.a.pattern", json!({"properties": {"a": {"pattern": "^(a)\\1$"}}})),
             (
-                "$.patternProperties.^(?<x>a)\\k<x>$",
-                json!({"patternProperties": {"^(?<x>a)\\k<x>$": true}}),
+                "$.properties.a.pattern",
+                json!({"properties": {"a": {"type": "string", "pattern": "^a$"}}}),
             ),
+            ("$.items.patternProperties", json!({"items": {"patternProperties": {"^a": true}}})),
         ] {
             let Err(Error::InvalidArgument(message)) = compile_contract_schema(&schema) else {
                 panic!("{path} compiled");
             };
-            assert_eq!(
-                message,
-                format!(
-                    "{path} uses a backreference, which is outside the Workhorse contract profile"
-                )
-            );
+            assert_eq!(message, format!("{path} is outside the Workhorse contract profile"));
         }
     }
 
     #[test]
-    fn reads_an_escaped_backslash_or_a_class_as_no_backreference() {
-        assert!(!uses_backreference(r"^\\1$"));
-        assert!(!uses_backreference(r"^[\]1]$"));
-        assert!(uses_backreference(r"^[a]\1$"));
+    fn refuses_a_reference_outside_the_schema_tree() {
+        let schema =
+            json!({"default": {"pattern": "^a$"}, "properties": {"a": {"$ref": "#/default"}}});
+        let Err(Error::InvalidArgument(message)) = compile_contract_schema(&schema) else {
+            panic!("a reference into default compiled");
+        };
+        assert_eq!(message, "$.properties.a.$ref must point at a subschema of the contract");
     }
 }
