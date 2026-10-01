@@ -14,7 +14,7 @@ import {
 import { SQL_STATEMENTS } from "../src/queue/sql-catalogue.generated.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { databaseUrl, deferred, pool, queue, waitForDatabaseCondition, admin } =
+const { databaseUrl, deferred, pool, queue, waitForDatabaseCondition, admin, adminAudit } =
   createIntegrationTestContext(import.meta.url);
 
 describe("claim lease fence", () => {
@@ -1238,6 +1238,46 @@ describe("claim lease fence", () => {
         locker.release();
       }
     }
+  });
+
+  it("rejects a NULL batch limit or lease before claiming any task on either tier", async () => {
+    const fullQueue = `null-limit-full-${randomUUID()}`;
+    const fastQueue = `null-limit-fast-${randomUUID()}`;
+    await expect(
+      admin.setQueueTier(fastQueue, "fast", adminAudit("move to the fast tier")),
+    ).resolves.toBe("fast");
+    // More ready tasks than any accepted limit, so an unbounded claim would be visible.
+    for (const queueName of [fullQueue, fastQueue]) {
+      await queue.enqueueMany(
+        Array.from({ length: 101 }, (_, ordinal) => ({
+          type: "null-limit",
+          payload: { ordinal },
+          options: { queue: queueName },
+        })),
+      );
+    }
+
+    for (const queueName of [fullQueue, fastQueue]) {
+      await expect(
+        pool.query(SQL_STATEMENTS.claim_many_v1, [queueName, "null-limit-worker", null, 30_000]),
+      ).rejects.toMatchObject({ code: "P0001", message: "limit must be between 1 and 100" });
+      await expect(
+        pool.query(SQL_STATEMENTS.claim_many_v1, [queueName, "null-lease-worker", 1, null]),
+      ).rejects.toMatchObject({
+        code: "P0001",
+        message: "lease_ms must be between 100 and 86400000",
+      });
+    }
+    const active = await pool.query<{ queue_name: string; count: number }>(
+      `SELECT queue_name, count(*)::integer AS count
+         FROM (SELECT queue_name, state FROM workhorse.task_runtime
+               UNION ALL
+               SELECT queue_name, state FROM workhorse.fast_task_runtime) runtime
+        WHERE queue_name = ANY($1::text[]) AND state = 'active'
+        GROUP BY queue_name`,
+      [[fullQueue, fastQueue]],
+    );
+    expect(active.rows).toEqual([]);
   });
 
   it("claims exclusively and rejects stale completion after recovery", async () => {

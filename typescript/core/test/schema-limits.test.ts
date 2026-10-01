@@ -287,9 +287,11 @@ const rules: readonly LimitRule[] = [
     constant: "MAX_TASK_QUERY_PAGE_SIZE",
     value: MAX_TASK_QUERY_PAGE_SIZE,
     bounds: "rows returned by one keyset-paginated query",
+    // The claim batch guards share this wording with a bound of 100, which no exported constant
+    // names, so the pattern skips that bound.
     patterns: [
       new RegExp(
-        String.raw`p_limit IS NULL OR p_limit NOT BETWEEN 1 AND (\d+)${gap}RAISE EXCEPTION 'limit must be between 1 and (\d+)'`,
+        String.raw`p_limit IS NULL OR p_limit NOT BETWEEN 1 AND (?!100\b)(\d+)${gap}RAISE EXCEPTION 'limit must be between 1 and (\d+)'`,
         "g",
       ),
     ],
