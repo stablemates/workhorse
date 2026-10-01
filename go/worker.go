@@ -1985,7 +1985,7 @@ func (worker *Worker) execute(
 	defer releaseOwnership()
 	durability := &HandlerContext{
 		Task: task, context: handlerContext, cancel: cancelHandler, executor: executor,
-		workerID: worker.workerID,
+		contracts: &worker.contracts, workerID: worker.workerID,
 	}
 	if task.payloadError != nil {
 		handler = func(context.Context, any, *HandlerContext) (any, error) {

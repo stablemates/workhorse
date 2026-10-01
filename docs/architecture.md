@@ -388,6 +388,13 @@ order. Each `ChildResult.Outcome` is `ChildSucceeded`, `ChildFailed`, or `ChildC
 returns an empty result without suspension. `ChildLeaseLostError`, `ChildConflictError`,
 `ChildLimitExceededError`, and `ChildResultLimitExceededError` map the corresponding protocol
 statuses. The result-limit error retains `ResultBytes` and `ResultLimitBytes`.
+A contracted Go child carries the current contract that `get_contract_definition_v1` returns, because
+a child write has no stale-contract retry. The method validates the payload first and returns
+`TaskContractValidationError` before it writes. PostgreSQL compares a replayed request with the
+accepted one, contract stamp included. On `conflict`, the context therefore reads each existing
+child's `contract_version` through `task_child` and `get_task`. It retries once with those versions
+stamped. When the current contract rejects a replayed payload, the context builds the request again
+under those versions before it writes.
 The `Create`-prefixed spelling of each of these three methods remains as a deprecated Go alias for
 the rest of the `0.x` line and is removed in `1.0.0`. `go/CHANGELOG.md` pairs every old Go name with
 its replacement.

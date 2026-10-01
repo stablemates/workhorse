@@ -615,11 +615,23 @@ func (contract *payloadContract) validatePayload(taskType string, payload any) e
 
 // loadPayloadContract returns the current contract for a task type, or nil when the type has none.
 func (queue *Queue) loadPayloadContract(ctx context.Context, taskType string) (*payloadContract, error) {
-	rows, err := queue.executor.Query(
+	return loadPayloadContract(ctx, queue.executor, &queue.contracts, taskType, nil)
+}
+
+// loadPayloadContract reads one contract version of a task type, the current one when version is
+// nil, and returns nil when PostgreSQL holds none. cache keeps the compiled payload validators.
+func loadPayloadContract(
+	ctx context.Context,
+	executor Executor,
+	cache *contractCache,
+	taskType string,
+	version any,
+) (*payloadContract, error) {
+	rows, err := executor.Query(
 		ctx,
 		protocolStatementRegistry[getContractDefinitionStatementName],
 		taskType,
-		nil,
+		version,
 	)
 	if err != nil {
 		return nil, err
@@ -631,7 +643,7 @@ func (queue *Queue) loadPayloadContract(ctx context.Context, taskType string) (*
 		return nil, errorsNewInvalidContract()
 	}
 	row := rows[0]
-	version, ok := row[contractVersionField].(string)
+	loaded, ok := row[contractVersionField].(string)
 	if !ok {
 		return nil, errorsNewInvalidContract()
 	}
@@ -639,8 +651,8 @@ func (queue *Queue) loadPayloadContract(ctx context.Context, taskType string) (*
 	if err != nil {
 		return nil, err
 	}
-	validator, err := queue.contracts.validator(
-		taskType+contractCacheSeparator+version+contractCacheSeparator+contractPayloadKind,
+	validator, err := cache.validator(
+		taskType+contractCacheSeparator+loaded+contractCacheSeparator+contractPayloadKind,
 		document[contractPayloadSchemaField],
 	)
 	if err != nil {
@@ -648,7 +660,7 @@ func (queue *Queue) loadPayloadContract(ctx context.Context, taskType string) (*
 	}
 	// database/sql scans a text[] column as its text form, which would serialize as a JSON string.
 	return &payloadContract{
-		version:              version,
+		version:              loaded,
 		validator:            validator,
 		payloadMaxBytes:      row[rowPayloadMaxBytesField],
 		resultMaxBytes:       row[rowResultMaxBytesField],
