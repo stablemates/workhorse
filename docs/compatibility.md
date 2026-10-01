@@ -338,6 +338,13 @@ before any process from the new release starts. Breaking changes are listed in
 [`CHANGELOG.md`](../CHANGELOG.md) with the upgrade steps for that release, and
 [ADR 0053](decisions/0053-start-migrations-at-0-1-0-and-keep-them-additive.md) states the rule.
 
+Migration 0025 is the one exception. It is a contract step that 0.5.0 ships, so a database from
+before 0.5.0 crosses it offline, with the
+[0.5.0 upgrade steps](../CHANGELOG.md#050--2026-09-28).
+[The fast-tier cutover](schema-lifecycle.md#the-fast-tier-cutover) explains why, and
+[ADR 0077](decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) records
+the decision. The upgrade from 0.5 to 0.6 only adds, so it is an ordinary rolling deployment.
+
 `.github/workflows/release.yml` publishes the nine npm packages with provenance, then creates the
 GitHub release for the tag and attaches `sql/schema.sql`. That artifact is the clean-install schema
 for the version, provided so a Python or Go developer with no Node.js toolchain can create a
@@ -596,7 +603,11 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
   lists the client protocols it still answers; a contract step drops the ones it stops serving, and
   every older runtime then refuses at once. That narrowing is a contract step the operator runs,
   never something a release performs on their behalf, so a mixed fleet mid-deploy is supported at
-  every version boundary including a major one.
+  every version boundary including a major one. Migration 0025 is the one exception: 0.5.0 ships it
+  as a contract step that retires protocols 1 through 4. A database from before 0.5.0 therefore
+  crosses it offline, with every worker and producer stopped, as
+  [the fast-tier cutover](schema-lifecycle.md#the-fast-tier-cutover) describes. From 0.5 to 0.6 a
+  mixed fleet is supported again.
 
   See [Retention and removal](#retention-and-removal).
 

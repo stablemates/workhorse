@@ -39,7 +39,8 @@ The current published version of each line, and which versions receive fixes, ar
 Workhorse is a public beta. It is usable for evaluation and early production adoption. A minor
 release may change behaviour, so read the changelog before you upgrade. Inside a major line a
 migration only adds, so a running deployment upgrades in place and is never asked to recreate its
-database.
+database. The one exception is migration 0025: a database from before 0.5.0 crosses it offline, as
+[Upgrade a 0.4.x database offline](/docs/installation#upgrade-a-04x-database-offline) describes. The upgrade from 0.5 to 0.6 only adds.
 
 Handlers run at least once, PostgreSQL is the only supported database, and there is no separate
 workflow definition language: durable steps are composed in ordinary handler code.

@@ -6,7 +6,8 @@ distribution, and the Rust crate carry, because every release tag names one comm
 
 Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.1.0` the schema
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
-adds.
+adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses it offline, with the
+[0.5.0 upgrade steps](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md#050--2026-09-28). The upgrade from 0.5 to 0.6 only adds.
 
 ## 0.5.0 — 2026-09-28
 

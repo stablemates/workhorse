@@ -7,7 +7,9 @@
   [ADR 0064](0064-rename-the-unit-noun-from-job-to-task.md) (the 0.1.0 baseline was re-cut for
   the unit-noun rename),
   [ADR 0073](0073-prune-the-migration-chain-to-the-0-2-0-baseline.md) (0.1.x had no production
-  installs, so the chain now begins at the 0.2.0 baseline rather than at 0.1.0)
+  installs, so the chain now begins at the 0.2.0 baseline rather than at 0.1.0),
+  [ADR 0077](0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) (migration 0025 is a contract step
+  in the 0.5.0 minor, crossed offline)
 - **Related:** WH-604, WH-607, WH-605, WH-582
 
 ## Context

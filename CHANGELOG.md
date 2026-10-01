@@ -13,7 +13,9 @@ process are in [`docs/compatibility.md`](docs/compatibility.md).
 
 Workhorse is a public beta. While the line is `0.x`, any minor release may change behaviour. From
 `0.1.0` the schema upgrades in place: every release ships ordered, immutable migrations, and inside
-a major line a migration only adds. Breaking changes are always listed with upgrade steps.
+a major line a migration only adds. Migration 0025 is the one exception: a database from before
+0.5.0 crosses it offline, with the [0.5.0 upgrade steps](#050--2026-09-28). The upgrade from 0.5 to
+0.6 only adds. Breaking changes are always listed with upgrade steps.
 
 ## 0.5.0 — 2026-09-28
 
