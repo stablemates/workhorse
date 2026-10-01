@@ -48,6 +48,10 @@ other SDKs carry, because every tag names one release of all of them.
   `discard_current_connection`, so the next statement gets a fresh connection. Before, the pool
   reused the dead connection until the process restarted. An ordinary SQL error keeps the
   connection, and the failed statement is never resent.
+- `Worker` measures a result as PostgreSQL does, by the UTF-8 length of its `jsonb` text, before
+  it completes the task. A result over the task's limit fails only its own attempt with
+  `ValueSizeLimitError`, and the retry policy decides what happens next. The worker no longer stops
+  when PostgreSQL refuses an oversized completion. That holds on both tiers and for batch members.
 - Add `Worker#handle_batch` with `max_size:` and `linger:` in seconds. Once the worker stops, a
   lingering batch runs as soon as every task it claimed has arrived.
 - Change the `handle_batch` block from `|payloads, context|` to `|items|`. Each `BatchHandlerItem`

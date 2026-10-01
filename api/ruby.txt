@@ -442,6 +442,14 @@ class Stablemates::Workhorse::UnexpectedStatusError
   def operation
   def status
 
+class Stablemates::Workhorse::ValueSizeLimitError
+  superclass Stablemates::Workhorse::Error
+  def initialize(task_type, part, actual_bytes, max_bytes)
+  def actual_bytes
+  def max_bytes
+  def part
+  def task_type
+
 class Stablemates::Workhorse::Worker
   def initialize(pool, queues: ["default"], worker_id: nil, concurrency: 1, lease: 30, heartbeat: nil, poll_interval: nil, polling_only: false, maintenance_interval: 1, maintenance_routine_interval: 60, registry_interval: 5, disable_registry: false, schedule_namespaces: [], schedule_catchup_limit: 100, shutdown_grace: 25, shared_heartbeats: false, retry_delay: nil, on_registration_error: nil, on_notification_error: nil, cohorts: nil, logger: nil)
   def cohorts
