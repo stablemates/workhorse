@@ -308,6 +308,17 @@ duration_ms)`, `sleep_until(name, wake_at)`, `get_progress()`, `set_progress(val
 the same limits as `Worker.handle_batch`. `run_once()`, `run()`, `pause()`, `resume()`,
 `is_paused()`, and `stop()` match their synchronous names and return contracts.
 
+Each awaitable context method runs its synchronous call on a bridge thread. A cancelled caller
+waits for that call to return before it re-raises `asyncio.CancelledError`, because the thread
+cannot be interrupted. `_await_bridge_call` then retrieves the call's own outcome, so the loop never
+reports it as unretrieved, and the caller's cancellation wins over it.
+`AsyncHandlerContext.checkpoint(name, operation)` calls `operation` inside the task it tracks, in
+the same loop step that checks for cancellation. A cancelled `checkpoint` either stops that task
+before `operation` is called or cancels it while the awaitable runs, including an `asyncio.Task`
+that `operation` returned, and waits for its cleanup. If `operation` absorbs the cancellation and
+returns a value, the tracked task raises `asyncio.CancelledError` instead. Either way, `checkpoint`
+stores no row in `workhorse.task_checkpoint`, so a later attempt runs the operation again.
+
 `Worker.run_once()` and `Worker.run()` use a cached compatibility check. A dispatch sweep runs
 `tick_v1(100, 100)` when `maintenance_interval_ms` has elapsed since the last tick. The tick
 promotes due retries and durable waits, and it recovers expired leases with the persisted retry
