@@ -80,10 +80,14 @@ immediately. Workhorse records every eligible slow-routine execution.
 
 ## Deploys don't cause duplicates either
 
-Every definition carries a revision that increments when you change it. PostgreSQL reads that
-revision while evaluating the namespace, then requires the same revision when it reserves the
-occurrence. If a deployment changes or disables the definition between those operations, the fire
-becomes a no-op.
+A deployment's synchronization and a worker's evaluation of one namespace never interleave. If a
+synchronization is still open, the worker skips that namespace and evaluates the new definitions
+on its next tick. If an evaluation is running, the synchronization waits for it to finish.
+
+Every definition also carries a revision that increments when you change it. A fire names the
+revision it read, and PostgreSQL requires that revision when it reserves the occurrence. If a
+deployment changed or disabled the definition since then, the fire becomes a no-op. This covers a
+direct `fireSchedule` call made against an older definition.
 
 ## Things to know
 

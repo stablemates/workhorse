@@ -163,10 +163,13 @@ the namespace, schedule name, and planned occurrence time. The first worker clai
 other call converges on the task that already exists. No leader election, no single scheduler — any
 number of workers can race and the outcome is one task.
 
-Rolling deployments are covered the same way. Every definition carries a revision that increments
-on change. PostgreSQL reads that revision while evaluating the namespace, then requires the same
-revision when it reserves the occurrence. If a deployment changes or disables the definition
-between those operations, the fire becomes a no-op.
+Rolling deployments are covered too. A deployment's synchronization and a worker's evaluation of
+one namespace never interleave. A worker skips a namespace whose synchronization is still open and
+evaluates the new definitions on its next tick. A synchronization waits for a running evaluation
+to finish. Every definition also carries a revision that increments on change. A fire names the
+revision it read, and PostgreSQL requires that revision when it reserves the occurrence. If a
+deployment changed or disabled the definition since then, such as before a direct `fireSchedule`
+call, the fire becomes a no-op.
 
 Evaluation runs on PostgreSQL's clock rather than each worker's, so a worker whose clock drifts
 neither fires early nor moves a schedule's position backwards. When another transaction already
