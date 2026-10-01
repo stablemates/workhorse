@@ -196,6 +196,26 @@
     "schemaError": true
   },
   {
+    "id": "reference-with-trailing-percent-rejected",
+    "schema": { "$defs": { "x%": { "type": "string" } }, "$ref": "#/$defs/x%" },
+    "schemaError": true
+  },
+  {
+    "id": "reference-with-one-digit-escape-rejected",
+    "schema": { "$defs": { "x%2": { "type": "string" } }, "$ref": "#/$defs/x%2" },
+    "schemaError": true
+  },
+  {
+    "id": "reference-with-non-hexadecimal-escape-rejected",
+    "schema": { "$defs": { "key%GG": { "type": "string" } }, "$ref": "#/$defs/key%GG" },
+    "schemaError": true
+  },
+  {
+    "id": "reference-with-half-hexadecimal-escape-rejected",
+    "schema": { "$defs": { "x%2G": { "type": "string" } }, "$ref": "#/$defs/x%2G" },
+    "schemaError": true
+  },
+  {
     "id": "reference-outside-schema-rejected",
     "schema": { "default": { "type": "string" }, "$ref": "#/default" },
     "schemaError": true
@@ -229,6 +249,32 @@
       { "value": { "y": -1 }, "valid": false },
       { "value": { "z": "a" }, "valid": false },
       { "value": { "self": { "other": 1 } }, "valid": false }
+    ]
+  },
+  {
+    "id": "references-with-escaped-names",
+    "schema": {
+      "$defs": {
+        "key%GG": { "type": "integer" },
+        "caf\u00e9": { "type": "string" },
+        "a~b": { "type": "boolean" },
+        "a/b": { "type": "null" }
+      },
+      "type": "object",
+      "properties": {
+        "percent": { "$ref": "#/$defs/key%25GG" },
+        "multibyte": { "$ref": "#/$defs/caf%C3%A9" },
+        "tilde": { "$ref": "#/$defs/a~0b" },
+        "slash": { "$ref": "#/$defs/a~1b" }
+      },
+      "additionalProperties": false
+    },
+    "instances": [
+      { "value": { "percent": 1, "multibyte": "a", "tilde": true, "slash": null }, "valid": true },
+      { "value": { "percent": "a" }, "valid": false },
+      { "value": { "multibyte": 1 }, "valid": false },
+      { "value": { "tilde": 1 }, "valid": false },
+      { "value": { "slash": 1 }, "valid": false }
     ]
   }
 ]

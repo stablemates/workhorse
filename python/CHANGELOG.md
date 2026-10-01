@@ -33,6 +33,11 @@ an annotation. A `$ref` must also point at a subschema, so it cannot reach a sch
    applies. Each payload was checked at enqueue, so a keyword in the payload schema does not affect
    tasks already queued.
 
+A `$ref` pointer token with a malformed percent escape, such as `x%`, `x%2`, or `key%GG`, now
+fails with `<path>.$ref must point at a subschema of the contract`. Python used to keep the escape as
+literal text and resolve it against a definition of the same name, which every other SDK refuses.
+Write `%25` to reference a name that contains `%`.
+
 **A cancelled `AsyncWorker` checkpoint can still leave a checkpoint.** The documentation said a
 cancelled `await context.checkpoint(name, operation)` stores nothing. That holds only while the
 operation runs. Once the operation returns, its save may already be under way, and the worker waits

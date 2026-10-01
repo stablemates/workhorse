@@ -13,6 +13,7 @@ from .types import Json, TaskTypeContracts
 
 DIALECT = "https://json-schema.org/draft/2020-12/schema"
 _MISSING = object()
+_MALFORMED_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 SCHEMA_VALUES = {
     "additionalProperties",
     "contains",
@@ -78,6 +79,9 @@ def _references_subschema(root: Json, reference: str, anchors: set[str]) -> bool
         return True
     if not fragment.startswith("/"):
         return fragment in anchors
+    # `unquote` keeps a malformed escape as literal text, which every other SDK refuses.
+    if _MALFORMED_ESCAPE.search(fragment):
+        return False
     try:
         decoded = [unquote(token, errors="strict") for token in fragment.split("/")[1:]]
     except UnicodeDecodeError:

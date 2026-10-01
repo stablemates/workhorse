@@ -63,3 +63,12 @@ def test_contract_schema_refuses_a_reference_outside_the_schema_tree() -> None:
         TypeError, match=re.escape("$.properties.a.$ref must point at a subschema of the contract")
     ):
         compile_contract_schema(schema)
+
+
+@pytest.mark.parametrize("name", ["x%", "x%2", "key%GG", "x%2G"])
+def test_contract_schema_refuses_a_malformed_percent_escape(name: str) -> None:
+    schema: Json = {"$defs": {name: {"type": "string"}}, "$ref": f"#/$defs/{name}"}
+    with pytest.raises(
+        TypeError, match=re.escape("$.$ref must point at a subschema of the contract")
+    ):
+        compile_contract_schema(schema)

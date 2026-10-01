@@ -109,7 +109,9 @@ current document.
 Workhorse accepts the shared JSON Schema profile only. Bundled references work inside one document,
 formats stay annotations, and Workhorse rejects remote references or custom keywords before
 compilation. A reference must point at a subschema, so it cannot reach a schema hidden in `default`
-or `examples`, where the profile check never looks.
+or `examples`, where the profile check never looks. A percent sign in a reference must start a
+complete escape, such as `%25` for a literal percent sign. Each SDK rejects a malformed escape, so
+every SDK resolves the reference to the same name.
 
 The profile leaves out `pattern` and `patternProperties`, because the SDKs' regular expression
 engines accept different syntax and match differently. Each SDK rejects either keyword at any depth,
