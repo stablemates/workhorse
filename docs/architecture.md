@@ -1280,7 +1280,11 @@ guarantees.
    gives its capacity. The pool object is the sharing identity, so queryables built from one pool
    share one listener and one heartbeat connection. Transaction queryables never carry a pool,
    because that session ends. Without a pool, a worker refuses to start unless `sharedHeartbeats`
-   is set, and then dispatches by bounded polling.
+   is set, and then dispatches by bounded polling. `connectionPoolOf(database)`, exported from
+   `@stablemates/workhorse` with its `ConnectionPool` type, resolves that pool for any caller: an
+   attached pool first, calling the function when the adapter attached one, then the queryable
+   itself when it has `connect()`, else `undefined`. The function form lets TypeORM attach its
+   driver's pool before the data source connects, so a caller resolves the pool at use, not once.
 6. **Resource ownership.** An adapter closes nothing it did not create. `WorkhorseAdapter.close()`
    invokes the configured `close` callback at most once, however many times it is called.
 
@@ -4006,6 +4010,20 @@ A host reads through the procedure it already mounts. `readDashboardEvents`, `re
 `DashboardEventsQuery` therefore leave `./server`, which had exposed three of those readers for no
 stated reason. This repository's own suites import the module by relative path, as they already do
 for `readDashboardTaskDetail`.
+
+Every dashboard read is bounded. `dashboardDatabase(database, timeoutMs)` resolves the pool with
+`connectionPoolOf` for each read, borrows one connection, and runs the read inside `BEGIN READ
+ONLY` after `set_config('statement_timeout', timeoutMs, true)`, so the bound ends with the
+transaction. A read PostgreSQL cancels with SQLSTATE `57014` throws `DashboardReadTimeoutError`,
+which carries `timeoutMs`; the connection is already released. The bound defaults to
+`DASHBOARD_STATEMENT_TIMEOUT_MS`, 15,000 ms. `createDashboardHost` takes
+`DashboardWorkspaceOptions.statementTimeoutMs` first, then `DashboardHostOptions.statementTimeoutMs`,
+then that default. Each workspace's `Admin` reads through `boundedQueryable` over the same
+`DashboardDatabase`, so the retention preview runs under the bound too. A `Queryable` with no pool
+— neither `connect()` nor an attached pool — is read directly and unbounded, because sending
+`BEGIN` and the read separately through a shared entry point could leave another caller's
+connection inside a transaction. Drizzle over a node-postgres pool and TypeORM attach a pool; the
+Prisma and Kysely adapters attach one only through their `pool` option.
 
 The idempotency wire family carries the `Dashboard` prefix every other wire name has:
 `DashboardIdempotencyEvidence`, `readDashboardIdempotencyEvidence`,

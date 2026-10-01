@@ -16,6 +16,8 @@ export {
   WorkhorseError,
 } from "./errors.js";
 export type { SchemaCompatibilityCode, SchemaCompatibilityVersions } from "./errors.js";
+export { connectionPoolOf } from "./connection-pool.js";
+export type { ConnectionPool } from "./connection-pool.js";
 export { WorkhorseMetricsObserver } from "./metrics-observer.js";
 export type {
   AdapterConnectionPool,

@@ -38,10 +38,28 @@ function dashboardClient(
   );
 }
 
-/** The procedure this host serves sleeps in the database, standing in for a read that outgrew its
- * bound on a strained database rather than one that is expensive by design. */
-function slowly(text: string): string {
-  return text.includes("dashboard_task_counts_v1") ? "SELECT pg_sleep(5) AS result" : text;
+/** The marked statement sleeps in the database, standing in for a read that outgrew its bound on a
+ * strained database rather than one that is expensive by design. It keeps its own parameters. */
+function slowly(text: string, marker: string): string {
+  return text.includes(marker)
+    ? `SELECT original.* FROM pg_sleep(5) CROSS JOIN (${text}) original`
+    : text;
+}
+
+/** The test pool, except that every statement containing `marker` sleeps on either path it takes. */
+function sleepingOn(marker: string) {
+  return {
+    query: (text: string, values?: readonly unknown[]) =>
+      pool.query(slowly(text, marker), [...(values ?? [])]),
+    async connect() {
+      const client = await pool.connect();
+      return Object.assign(Object.create(client) as typeof client, {
+        query: (text: string, values?: readonly unknown[]) =>
+          client.query(slowly(text, marker), values as unknown[]),
+        release: (error?: unknown) => client.release(error),
+      });
+    },
+  };
 }
 
 function tasksRequest(acceptEncoding: string | null): Request {
@@ -181,20 +199,8 @@ describe("bounded dashboard read time", () => {
   });
 
   it("answers a read past its bound with a typed TIMEOUT rather than holding the request", async () => {
-    const sleeping = {
-      query: (text: string, values?: readonly unknown[]) =>
-        pool.query(slowly(text), [...(values ?? [])]),
-      async connect() {
-        const client = await pool.connect();
-        return Object.assign(Object.create(client) as typeof client, {
-          query: (text: string, values?: readonly unknown[]) =>
-            client.query(slowly(text), values as unknown[]),
-          release: (error?: unknown) => client.release(error),
-        });
-      },
-    };
     const host = createDashboardHost({
-      database: sleeping as never,
+      database: sleepingOn("dashboard_task_counts_v1") as never,
       path: "/",
       statementTimeoutMs: 150,
       authorize: () => true,
@@ -206,6 +212,25 @@ describe("bounded dashboard read time", () => {
 
     expect(failure).toBeInstanceOf(ORPCError);
     expect(failure).toMatchObject({ code: "TIMEOUT", status: 408 });
+  });
+
+  it("bounds the retention preview, which Admin computes, like every other dashboard read", async () => {
+    // Only the preview statement scans the task and outcome history this way.
+    const host = createDashboardHost({
+      database: sleepingOn("SELECT task_id, finished_at FROM workhorse.task_outcome") as never,
+      path: "/",
+      statementTimeoutMs: 150,
+      authorize: () => true,
+    });
+    const started = performance.now();
+
+    const failure = await dashboardClient(host)
+      .dashboard.previewRetentionPolicy({ definition: { terminalOutcomeRetentionDays: 30 } })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ORPCError);
+    expect(failure).toMatchObject({ code: "TIMEOUT", status: 408 });
+    expect(performance.now() - started).toBeLessThan(4_000);
   });
 });
 
