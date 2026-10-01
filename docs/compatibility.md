@@ -142,8 +142,9 @@ names, so no equivalent exists on the TypeScript or Python lines.
 
 Each language line fails its build on an advisory in its own dependency tree. `pnpm npm:vuln`
 covers npm, `pnpm python:vuln` covers PyPI, `pnpm go:vuln` covers the Go module, and
-`pnpm rust:vuln` covers the Rust crate. `pnpm check` runs all four, and so does the `static` task in
-`.github/workflows/ci.yml`.
+`pnpm rust:vuln` covers the Rust crate, and `pnpm ruby:vuln` covers the Ruby gem. `pnpm check` runs
+all five, and so does the `static` task in `.github/workflows/ci.yml`. The release workflow runs
+`pnpm ruby:vuln` again inside `pnpm ruby:release-check`.
 
 `pnpm npm:vuln` runs `pnpm audit --prod` and fails on every advisory it reports, whatever the
 severity. Severity describes the advisory rather than this repository's exposure to it, so a
@@ -175,6 +176,23 @@ cargo-deny exits non-zero both on an advisory and on an advisory database it cou
 `scripts/audit-rust-dependencies.ts` tells them apart by the summary record a completed check
 writes. Without that record, the scan reports the unreachable database and names no acceptance
 entry as stale.
+
+`pnpm ruby:vuln` runs bundler-audit, locked in the gem's own bundle, against `ruby/Gemfile.lock` and
+every locked Rails gemfile under `ruby/gemfiles/`. Dependabot updates only the first of those, so the
+scan is what catches an advisory in a Rails lockfile. The scan fails on every advisory that reaches a
+lockfile, whatever its criticality, and on a gem source fetched without TLS. A reported advisory
+passes only when `scripts/ruby-advisory-acceptances.json` states a reason and a review date for it.
+The check fails once that date passes, and when an entry stops matching anything in any lockfile.
+An entry without a reason, or whose review date is not a real calendar date, fails the check before
+any advisory is judged. bundler-audit's own `ruby/.bundler-audit.yml` ignore list is refused, because it carries no review
+date.
+
+bundler-audit reads a local copy of the ruby-advisory-db and reports a clean lockfile when that
+copy is empty. `scripts/audit-ruby-dependencies.ts` therefore refreshes the database with
+`bundle-audit update` first. It refuses the run when the refresh fails, when the database holds no
+advisories, or when it is not a git checkout that a refresh can move. bundler-audit silently skips
+a directory it cannot list, so the script also reads every advisory directory and file itself. An
+unreadable one refuses the run. Each refusal names the database and no acceptance entry as stale.
 
 Fixing beats accepting. Prefer a lockfile bump, then a declared-range bump; write an entry only when
 no released version carries the fix, or when the path is provably outside what this repository

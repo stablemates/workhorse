@@ -40,17 +40,18 @@ asks otherwise.
 5. **Advisory.** GitHub is the CVE Numbering Authority for this repository, so publishing the
    advisory requests a CVE. One vulnerability gets one CVE and one advisory per affected
    ecosystem, because a GitHub advisory names a single ecosystem and Workhorse publishes to npm,
-   PyPI, the Go module proxy, and crates.io. Each fix is also recorded in the affected changelog.
+   PyPI, the Go module proxy, crates.io, and RubyGems. Each fix is also recorded in the affected
+   changelog.
 
 No third-party security audit of Workhorse has taken place. Every review referenced by this project
 is a maintainer review. The dashboard server is the one component that serves HTTP to a browser, and
 [`docs/dashboard-security-review.md`](docs/dashboard-security-review.md) is the checklist its review
 walks. That file also states when a pull request has to re-walk a row.
 
-The npm, PyPI, Go, and Rust dependency trees are scanned on each run of CI: `pnpm npm:vuln` for
-npm, `pnpm python:vuln` for PyPI, `pnpm go:vuln` for the Go module, and `pnpm rust:vuln` for the
-Rust crate. An advisory the scan reports fails the build until it is fixed or accepted in writing
-with a review date.
+The npm, PyPI, Go, Rust, and Ruby dependency trees are scanned on each run of CI: `pnpm npm:vuln`
+for npm, `pnpm python:vuln` for PyPI, `pnpm go:vuln` for the Go module, `pnpm rust:vuln` for the
+Rust crate, and `pnpm ruby:vuln` for the Ruby gem. An advisory the scan reports fails the build
+until it is fixed or accepted in writing with a review date.
 [`docs/compatibility.md`](docs/compatibility.md) states that policy.
 
 ## Supported versions
@@ -60,12 +61,12 @@ nowhere else.** There are no maintenance branches, no backports, and no long-ter
 designation. An older minor does not receive a fix; upgrade to the current line to receive one.
 
 The affected lines are the ones that contain the vulnerable code. A problem in the SQL schema or
-the protocol is fixed on all four lines as one release train. A problem in one SDK ships on that
+the protocol is fixed on all five lines as one release train. A problem in one SDK ships on that
 line alone.
 
-The four lines are the nine `@stablemates/workhorse*` npm packages, released in lockstep; the
-`stablemates-workhorse` Python distribution; the `github.com/stablemates/workhorse/go` module; and
-the `workhorse` Rust crate.
+The five lines are the nine `@stablemates/workhorse*` npm packages, released in lockstep; the
+`stablemates-workhorse` Python distribution; the `github.com/stablemates/workhorse/go` module; the
+`workhorse` Rust crate; and the `stablemates-workhorse` Ruby gem.
 [`docs/compatibility.md`](docs/compatibility.md) defines the supported runtimes and the release
 process.
 
@@ -87,9 +88,9 @@ only adds.
 
 A fix ships as a new, higher version. A published version is never re-tagged or replaced. When a
 release carries a security, secret, privacy, or legal exposure, the maintainers also deprecate the
-npm release, yank the PyPI release, or retract the Go version, yank the crates.io version, and
-rotate or revoke any affected credential. Removal does not reverse prior access, so treat every published artifact as
-permanently observable.
+npm release, yank the PyPI release, retract the Go version, yank the crates.io version, or yank the
+RubyGems version, and rotate or revoke any affected credential. Removal does not reverse prior
+access, so treat every published artifact as permanently observable.
 
 ## Safe harbour
 

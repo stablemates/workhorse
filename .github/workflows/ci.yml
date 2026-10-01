@@ -94,7 +94,8 @@ jobs:
       - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
         with:
           tool: cargo-deny@0.20.2 # Pinned to the cargo-deny version in mise.toml.
-      # `pnpm lint` runs RuboCop over the Ruby gem, and `ruby-api:check` loads it to read its API.
+      # `pnpm lint` runs RuboCop over the Ruby gem, `ruby-api:check` loads it to read its API, and
+      # `ruby:vuln` runs bundler-audit from its bundle.
       - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
         with:
           ruby-version: 3.4.11 # Pinned to the ruby version in mise.toml.
@@ -118,6 +119,7 @@ jobs:
       - run: pnpm python:vuln
       - run: pnpm go:vuln
       - run: pnpm rust:vuln
+      - run: pnpm ruby:vuln
       - run: pnpm typecheck
 
   unit:

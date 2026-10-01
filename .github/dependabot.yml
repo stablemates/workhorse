@@ -100,6 +100,20 @@ updates:
         patterns: ["*"]
         update-types: [minor, patch]
 
+  # The Ruby gem's Gemfile.lock. Dependabot reads only the Gemfile in this directory, so it does not
+  # update ruby/gemfiles/rails_8_0.gemfile.lock; `pnpm ruby:vuln` audits that lockfile as well, and
+  # an advisory there fails CI until someone relocks it.
+  - package-ecosystem: bundler
+    directory: /ruby
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      ruby:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
   # The base images in Dockerfile, Dockerfile.dashboard and Dockerfile.site. The published image is
   # built from these, so a base image that stops receiving patches is a deployment concern.
   - package-ecosystem: docker

@@ -254,7 +254,7 @@ describe("the public beta line", () => {
     expect(policy).toContain("An older minor does not receive a fix");
     expect(policy).toContain("A published version is never re-tagged or replaced");
     expect(policy).toContain(
-      "deprecate the npm release, yank the PyPI release, or retract the Go version",
+      "deprecate the npm release, yank the PyPI release, retract the Go version, yank the crates.io version, or yank the RubyGems version",
     );
 
     expect(await read("README.md")).toContain("[Security policy](SECURITY.md)");
