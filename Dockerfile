@@ -10,7 +10,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 go build -o /opt/workhorse-go-demo-worker ./examples/demo-worker
 
-FROM rust:1.89.0-alpine@sha256:4b800f2e72e04be908e5f634c504c741bd943b763d1d8ad7b096cc340e1b5b46 AS rust-build
+FROM rust:1.98.1-alpine@sha256:7cc1c22d77d9432f7fe012a70e6d3e555af54c2a6832700ed7d553f1769ae89f AS rust-build
 
 # The Alpine Rust image omits the C runtime objects that linking a procedural macro needs.
 RUN apk add --no-cache musl-dev
