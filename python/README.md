@@ -77,6 +77,9 @@ operation and waits for its cleanup before the cancellation reaches the handler.
 stores no checkpoint for a cancelled operation, even one that catches the cancellation and returns
 a value, so a later attempt runs it again.
 
+The operation runs on the event loop in a copy of the handler's context. It sees the handler's
+context variables and current OpenTelemetry span, so its spans are children of the handler span.
+
 ## Package boundary
 
 This distribution provides synchronous Psycopg and asynchronous Psycopg or asyncpg clients and

@@ -94,7 +94,8 @@ connections, and its handler context methods are awaitable. Each awaitable metho
 bridge thread, so a cancelled handler waits for that call to return before the cancellation reaches
 it. A cancelled `checkpoint` also cancels its operation and waits for the operation's cleanup. It
 stores no checkpoint for that operation, even one that catches the cancellation and returns a
-value, so a later attempt runs the operation again. Both surfaces share the same claim,
+value, so a later attempt runs the operation again. The operation runs in a copy of the handler's
+context, so it sees the handler's context variables and current OpenTelemetry span. Both surfaces share the same claim,
 heartbeat, batch, settlement, telemetry, and drain core. Workers in every SDK language also
 participate in the worker registry.
 Python's `handle_batch` follows the same grouping contract described in
