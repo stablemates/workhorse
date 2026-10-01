@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
@@ -85,9 +86,7 @@ class Queue:
         self.default_queue = default_queue
         self._compatibility = _CachedCompatibilityCheck(self._executor)
         self._contract_validators: dict[tuple[str, str], Any] = {}
-        # A task type's current contract, or None when it has none. A contract_mismatch row or a
-        # payload the cached entry rejects refreshes a stale entry, so the cache needs no expiry.
-        self._contract_definitions: dict[str, _Row | None] = {}
+        self._contracts = _ContractCache()
         self._contracts_enabled = False
 
     def enqueue(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> str:
@@ -132,16 +131,22 @@ class Queue:
             return []
         self._compatibility.assert_compatible()
         # An operator can select a version the cached definition rejects after sync_contracts().
-        # That payload never reaches enqueue_many_v1, so each task type reloads once before the
-        # queue reports the rejection.
-        reloaded: set[str] = set()
+        # That payload never reaches enqueue_many_v1, so a type reloads before the queue reports
+        # the rejection, unless this call already read its definition.
+        loaded: set[str] = set()
+        # A concurrent load can publish an older read and win the shared cache from this call's
+        # load, so later items of this call validate against the definition this call read.
+        definitions: dict[str, _Row | None] = {}
         for _attempt in range(2):
             values = _serialize_request_values(
                 requests, self.default_queue, _inject_trace_context()
             )
             for request, value in zip(requests, values, strict=True):
-                cached = request.type in self._contract_definitions
-                definition = self._contract_definition(request.type)
+                if request.type in definitions:
+                    definition = definitions[request.type]
+                else:
+                    definition = self._contract_definition(request.type, loaded)
+                    definitions[request.type] = definition
                 if definition is None:
                     continue
                 try:
@@ -149,11 +154,11 @@ class Queue:
                         definition, request.type, request.payload, value, self._contract_validators
                     )
                 except TaskContractValidationError:
-                    if not cached or request.type in reloaded:
+                    if request.type in loaded:
                         raise
-                    reloaded.add(request.type)
-                    definition = self._load_contract(request.type)
-                    self._contract_definitions[request.type] = definition
+                    loaded.add(request.type)
+                    definition = self._reload_contract(request.type)
+                    definitions[request.type] = definition
                     if definition is not None:
                         _apply_contract(
                             definition,
@@ -171,16 +176,29 @@ class Queue:
             if stale_types is None:
                 return _results(rows)
             for task_type in stale_types:
-                self._contract_definitions[task_type] = self._load_contract(task_type)
+                loaded.add(task_type)
+                definitions[task_type] = self._reload_contract(task_type)
         raise RuntimeError(_CONTRACT_POLICY_CHANGED)
 
-    def _contract_definition(self, task_type: str) -> _Row | None:
-        """Return the cached contract, loading it once; unsynced queues use reported types only."""
-        if task_type not in self._contract_definitions:
+    def _contract_definition(self, task_type: str, loaded: set[str]) -> _Row | None:
+        """Return the cached contract, loading it once; unsynced queues use reported types only.
+
+        A type this call loads joins ``loaded``.
+        """
+        try:
+            return self._contracts.get(task_type)
+        except KeyError:
             if not self._contracts_enabled:
                 return None
-            self._contract_definitions[task_type] = self._load_contract(task_type)
-        return self._contract_definitions[task_type]
+        definition = self._reload_contract(task_type)
+        loaded.add(task_type)
+        return definition
+
+    def _reload_contract(self, task_type: str) -> _Row | None:
+        load = self._contracts.start_load(task_type)
+        definition = self._load_contract(task_type)
+        self._contracts.publish(task_type, load, definition)
+        return definition
 
     def _load_contract(self, task_type: str) -> _Row | None:
         rows = self._executor.rows(_STATEMENTS.get_contract, (task_type, None))
@@ -257,7 +275,7 @@ class Queue:
         _assert_sync_compatible(self._executor)
         payload = json.dumps(_serialize_contracts(contracts), separators=(",", ":"))
         self._executor.rows(_STATEMENTS.sync_contracts, (payload,))
-        self._contract_definitions.clear()
+        self._contracts.clear()
         self._contracts_enabled = True
 
     def send_signal(
@@ -311,9 +329,7 @@ class AsyncQueue:
         self.default_queue = default_queue
         self._compatibility = _AsyncCachedCompatibilityCheck(executor)
         self._contract_validators: dict[tuple[str, str], Any] = {}
-        # A task type's current contract, or None when it has none. A contract_mismatch row or a
-        # payload the cached entry rejects refreshes a stale entry, so the cache needs no expiry.
-        self._contract_definitions: dict[str, _Row | None] = {}
+        self._contracts = _ContractCache()
         self._contracts_enabled = False
 
     @classmethod
@@ -374,16 +390,22 @@ class AsyncQueue:
             return []
         await self._compatibility.assert_compatible()
         # An operator can select a version the cached definition rejects after sync_contracts().
-        # That payload never reaches enqueue_many_v1, so each task type reloads once before the
-        # queue reports the rejection.
-        reloaded: set[str] = set()
+        # That payload never reaches enqueue_many_v1, so a type reloads before the queue reports
+        # the rejection, unless this call already read its definition.
+        loaded: set[str] = set()
+        # A concurrent load can publish an older read and win the shared cache from this call's
+        # load, so later items of this call validate against the definition this call read.
+        definitions: dict[str, _Row | None] = {}
         for _attempt in range(2):
             values = _serialize_request_values(
                 requests, self.default_queue, _inject_trace_context()
             )
             for request, value in zip(requests, values, strict=True):
-                cached = request.type in self._contract_definitions
-                definition = await self._contract_definition(request.type)
+                if request.type in definitions:
+                    definition = definitions[request.type]
+                else:
+                    definition = await self._contract_definition(request.type, loaded)
+                    definitions[request.type] = definition
                 if definition is None:
                     continue
                 try:
@@ -391,11 +413,11 @@ class AsyncQueue:
                         definition, request.type, request.payload, value, self._contract_validators
                     )
                 except TaskContractValidationError:
-                    if not cached or request.type in reloaded:
+                    if request.type in loaded:
                         raise
-                    reloaded.add(request.type)
-                    definition = await self._load_contract(request.type)
-                    self._contract_definitions[request.type] = definition
+                    loaded.add(request.type)
+                    definition = await self._reload_contract(request.type)
+                    definitions[request.type] = definition
                     if definition is not None:
                         _apply_contract(
                             definition,
@@ -413,16 +435,29 @@ class AsyncQueue:
             if stale_types is None:
                 return _results(rows)
             for task_type in stale_types:
-                self._contract_definitions[task_type] = await self._load_contract(task_type)
+                loaded.add(task_type)
+                definitions[task_type] = await self._reload_contract(task_type)
         raise RuntimeError(_CONTRACT_POLICY_CHANGED)
 
-    async def _contract_definition(self, task_type: str) -> _Row | None:
-        """Return the cached contract, loading it once; unsynced queues use reported types only."""
-        if task_type not in self._contract_definitions:
+    async def _contract_definition(self, task_type: str, loaded: set[str]) -> _Row | None:
+        """Return the cached contract, loading it once; unsynced queues use reported types only.
+
+        A type this call loads joins ``loaded``.
+        """
+        try:
+            return self._contracts.get(task_type)
+        except KeyError:
             if not self._contracts_enabled:
                 return None
-            self._contract_definitions[task_type] = await self._load_contract(task_type)
-        return self._contract_definitions[task_type]
+        definition = await self._reload_contract(task_type)
+        loaded.add(task_type)
+        return definition
+
+    async def _reload_contract(self, task_type: str) -> _Row | None:
+        load = self._contracts.start_load(task_type)
+        definition = await self._load_contract(task_type)
+        self._contracts.publish(task_type, load, definition)
+        return definition
 
     async def _load_contract(self, task_type: str) -> _Row | None:
         rows = await self._executor.rows(_STATEMENTS.get_contract, (task_type, None))
@@ -505,7 +540,7 @@ class AsyncQueue:
         await _assert_async_compatible(self._executor)
         payload = json.dumps(_serialize_contracts(contracts), separators=(",", ":"))
         await self._executor.rows(_STATEMENTS.sync_contracts, (payload,))
-        self._contract_definitions.clear()
+        self._contracts.clear()
         self._contracts_enabled = True
 
     async def send_signal(
@@ -582,6 +617,45 @@ def _cancel_result(row: _Row, task_id: str) -> CancelResult:
 
 
 _CONTRACT_POLICY_CHANGED = "contract policy changed again while retrying enqueue"
+
+
+class _ContractCache:
+    """Each task type's current contract, or None when it has none.
+
+    A contract_mismatch row or a payload the cached entry rejects refreshes a stale entry, so the
+    cache needs no expiry. Loads run concurrently and can finish out of order. A load publishes
+    only when no other load published its type and no clear() ran since it started, so a slower,
+    older read never replaces a newer entry.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._definitions: dict[str, _Row | None] = {}
+        self._generations: dict[str, int] = {}
+        self._epoch = 0
+
+    def get(self, task_type: str) -> _Row | None:
+        """Return the cached contract, or raise KeyError when the type has no entry."""
+        with self._lock:
+            return self._definitions[task_type]
+
+    def start_load(self, task_type: str) -> tuple[int, int]:
+        with self._lock:
+            return self._epoch, self._generations.get(task_type, 0)
+
+    def publish(self, task_type: str, load: tuple[int, int], definition: _Row | None) -> None:
+        with self._lock:
+            epoch, generation = load
+            if epoch != self._epoch or generation != self._generations.get(task_type, 0):
+                return
+            self._generations[task_type] = generation + 1
+            self._definitions[task_type] = definition
+
+    def clear(self) -> None:
+        with self._lock:
+            self._definitions.clear()
+            self._generations.clear()
+            self._epoch += 1
 
 
 def _contract_mismatch(rows: Sequence[_Row]) -> list[str] | None:
