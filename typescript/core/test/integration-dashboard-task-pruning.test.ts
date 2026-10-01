@@ -78,23 +78,37 @@ async function measureProbes(): Promise<Record<string, number>> {
   return measured;
 }
 
+/** How many times each request is measured; the fewest blocks any of them read is what counts. */
+const measurements = 3;
+
 /**
  * How many shared blocks one call reads. A procedure plans its own body, so the plan of the call
  * reports the nested reads only as these totals, which is exactly what pruning changes.
+ *
+ * The totals also count the catalog reads of a backend that rebuilds its caches, which a new
+ * connection does and which invalidations from other activity on the cluster force at any moment.
+ * One rebuild adds thousands of blocks to an otherwise steady few hundred, so a single measurement
+ * failed the bounds below without any change in what the request read (SM-1066). A rebuild only
+ * ever adds blocks, so the smallest of a few measurements is the request's own cost, and a request
+ * that stopped pruning still reads more on every one of them.
  */
 async function blocksRead(procedure: string, input: Record<string, unknown>): Promise<number> {
-  const result = await database.pool.query<{ "QUERY PLAN": unknown }>(
-    `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT workhorse.${procedure}($1::jsonb)`,
-    [JSON.stringify(input)],
-  );
-  const plan = (
-    result.rows[0]?.["QUERY PLAN"] as
-      | Array<{ Plan?: { "Shared Hit Blocks"?: number; "Shared Read Blocks"?: number } }>
-      | undefined
-  )?.[0]?.Plan;
-  const blocks = (plan?.["Shared Hit Blocks"] ?? 0) + (plan?.["Shared Read Blocks"] ?? 0);
-  expect(blocks).toBeGreaterThan(0);
-  return blocks;
+  let fewest = Number.POSITIVE_INFINITY;
+  for (let measurement = 0; measurement < measurements; measurement++) {
+    const result = await database.pool.query<{ "QUERY PLAN": unknown }>(
+      `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT workhorse.${procedure}($1::jsonb)`,
+      [JSON.stringify(input)],
+    );
+    const plan = (
+      result.rows[0]?.["QUERY PLAN"] as
+        | Array<{ Plan?: { "Shared Hit Blocks"?: number; "Shared Read Blocks"?: number } }>
+        | undefined
+    )?.[0]?.Plan;
+    const blocks = (plan?.["Shared Hit Blocks"] ?? 0) + (plan?.["Shared Read Blocks"] ?? 0);
+    expect(blocks).toBeGreaterThan(0);
+    fewest = Math.min(fewest, blocks);
+  }
+  return fewest;
 }
 
 /**
