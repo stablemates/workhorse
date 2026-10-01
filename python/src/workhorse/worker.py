@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import socket
 import traceback
 from bisect import insort
@@ -22,7 +23,10 @@ from ._compatibility import (
     CachedCompatibilityCheck as _CachedCompatibilityCheck,
     SyncRowExecutor as _SyncRowExecutor,
 )
-from ._contracts import compile_contract_schema as _compile_contract_schema
+from ._contracts import (
+    compile_contract_schema as _compile_contract_schema,
+    jsonb_text_bytes as _jsonb_text_bytes,
+)
 from ._drivers import (
     PooledSyncExecutor as _PooledSyncExecutor,
     PsycopgConnection as _PsycopgConnection,
@@ -88,6 +92,7 @@ from .errors import (
     StaleLeaseError,
     TaskContractUnavailableError,
     TaskContractValidationError,
+    TaskValueSizeLimitError,
     WaitConflictError,
     WaitLeaseLostError,
     WaitLimitExceededError,
@@ -2728,7 +2733,7 @@ class Worker:
         try:
             result = handler(task.payload, durability.context())
             self._validate_result_contract(task, result)
-            encoded_result = json.dumps(result, separators=(",", ":"))
+            encoded_result = _encode_result(task.type, result, task.result_max_bytes)
         except _DurableWaitSuspension:
             if finish_ownership_lifecycle():
                 return
@@ -3136,6 +3141,25 @@ def _expiration_delay(expiration_at: datetime | None, retry_at: float | None) ->
     if expiration_at is None:
         return None
     return (expiration_at - datetime.now(UTC)).total_seconds()
+
+
+_NUMBER_EXPONENT = re.compile(r"\de[+-]")
+
+
+def _encode_result(task_type: str, result: object, max_bytes: int) -> str:
+    """Encode a handler result, or raise before a completion statement can carry it.
+
+    A non-finite number raises ValueError. A result that measures more than max_bytes as
+    octet_length(result::jsonb::text) raises TaskValueSizeLimitError. Compact ASCII JSON at most
+    half the limit, with no exponent, cannot exceed it, so only larger results are measured.
+    """
+    encoded = json.dumps(result, separators=(",", ":"), allow_nan=False)
+    if len(encoded) * 2 <= max_bytes and _NUMBER_EXPONENT.search(encoded) is None:
+        return encoded
+    actual_bytes = _jsonb_text_bytes(json.loads(encoded))
+    if actual_bytes > max_bytes:
+        raise TaskValueSizeLimitError(task_type, "result", actual_bytes, max_bytes)
+    return encoded
 
 
 def _error_envelope(error: Exception, redact_details: bool) -> Json:
