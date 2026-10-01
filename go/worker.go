@@ -540,25 +540,16 @@ func (worker *Worker) Run(ctx context.Context) error {
 		defer close(registryDone)
 		worker.registrationLoop(registryContext, executor, registryWake)
 	}()
-	notificationContext, stopNotifications := context.WithCancel(ctx)
 	notificationWake := make(chan struct{}, 1)
-	notificationDone := make(chan struct{})
-	var notificationListening atomic.Bool
-	go func() {
-		defer close(notificationDone)
-		listenForTaskNotifications(
-			notificationContext,
-			worker.pool,
-			worker.queues,
-			worker.pollingOnly,
-			worker.logger,
-			notificationWake,
-			&notificationListening,
-		)
-	}()
+	// Every worker on the pool shares one listener connection. The subscription ends when the run's
+	// context does, so a stopped worker no longer holds a share while it drains.
+	notifications := subscribeToTaskNotifications(
+		ctx, worker.pool, worker.queues, worker.pollingOnly, worker.logger, notificationWake,
+	)
+	stopNotificationsAtCancel := context.AfterFunc(ctx, notifications.close)
 	defer func() {
-		stopNotifications()
-		<-notificationDone
+		stopNotificationsAtCancel()
+		notifications.close()
 	}()
 	maintenanceContext, stopMaintenance := context.WithCancel(ctx)
 	maintenanceErrors := make(chan error, 1)
@@ -626,7 +617,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 		notificationWake:  notificationWake,
 		registryWake:      registryWake,
 		maintenanceErrors: maintenanceErrors,
-		listening:         notificationListening.Load,
+		listening:         notifications.isListening,
 		// A maintenance, claim, or execution error stops the run while the caller's context is
 		// still live. The grace period starts then, so a stalled claim cannot hold the settlement.
 		stopped: startGrace,

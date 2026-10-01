@@ -842,7 +842,8 @@ without starting the listener. PgBouncer transaction mode cannot preserve the se
 `LISTEN`. For that deployment, `WorkerOptions.PollingOnly` disables the listener and logs the
 polling fallback; it defaults to false.
 On clean shutdown, the listener allows up to 1000 milliseconds for `UNLISTEN workhorse_tasks` before
-returning its connection to the pool.
+returning its connection to the pool. The last worker to leave stops the listener, and its logger
+receives a failed `UNLISTEN`.
 
 Cancelling the `Run` context stops new claims and the maintenance loop. An in-flight claim may still
 land and joins the drain. Active handlers retain a context without the caller's cancellation during
