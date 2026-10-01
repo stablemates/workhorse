@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
@@ -42,7 +42,8 @@ struct Pending<P, R> {
 }
 
 struct Coordinator<P, R> {
-    worker: Arc<Inner>,
+    /// Weak, because the worker's handler map owns this coordinator through the erased handler.
+    worker: Weak<Inner>,
     task_type: String,
     options: BatchOptions,
     handler: BatchHandler<P, R>,
@@ -88,7 +89,7 @@ impl Worker {
         );
         let handler = Arc::new(handler);
         let coordinator = Arc::new(Coordinator {
-            worker: Arc::clone(&self.0),
+            worker: Arc::downgrade(&self.0),
             task_type: task_type.into(),
             options,
             handler: Arc::new(move |items: Vec<BatchItem<P>>| handler(items).boxed()),
@@ -210,6 +211,12 @@ impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
     }
 
     async fn dispatch(&self, batch: Vec<Member<P, R>>) {
+        let Some(worker) = self.worker.upgrade() else {
+            for member in batch {
+                let _ = member.result.send(Err(abandoned()));
+            }
+            return;
+        };
         let queue = batch[0].item.context.task().queue.clone();
         let full = batch.len() == self.options.max_size;
         let linger =
@@ -220,13 +227,13 @@ impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
             ("workhorse.handler.batch.full", Attribute::Bool(full)),
         ];
         let linger_ms = linger.as_secs_f64() * 1000.0;
-        self.worker.metrics.record(Histogram::BatchSize, batch.len() as f64, &attributes);
-        self.worker.metrics.record(Histogram::BatchLinger, linger_ms, &attributes);
+        worker.metrics.record(Histogram::BatchSize, batch.len() as f64, &attributes);
+        worker.metrics.record(Histogram::BatchLinger, linger_ms, &attributes);
         tracing::debug!(
             event.name = "workhorse.handler.batch_dispatched",
             workhorse.queue.name = %queue,
             workhorse.task.type = %self.task_type,
-            workhorse.worker.id = %self.worker.worker_id,
+            workhorse.worker.id = %worker.worker_id,
             workhorse.handler.batch.size = batch.len(),
             workhorse.handler.batch.linger = linger_ms,
             workhorse.handler.batch.full = full,
@@ -241,7 +248,7 @@ impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
             items.push(member.item);
         }
         let tasks: Vec<_> = senders.iter().map(|(_, task)| *task).collect();
-        self.record(sql::RECORD_BATCH_DISPATCH_V1, batch_id, &tasks).await;
+        record(&worker, sql::RECORD_BATCH_DISPATCH_V1, batch_id, &tasks).await;
         let expected = items.len();
         let outcomes = AssertUnwindSafe((self.handler)(items))
             .catch_unwind()
@@ -267,27 +274,27 @@ impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
                 }
             }
             Err(error) => {
-                self.record(sql::RECORD_BATCH_FAILURE_V1, batch_id, &tasks).await;
+                record(&worker, sql::RECORD_BATCH_FAILURE_V1, batch_id, &tasks).await;
                 for (sender, _) in senders {
                     let _ = sender.send(Err(error.clone()));
                 }
             }
         }
     }
+}
 
-    /// Records batch membership for operators; a failed write never affects settlement.
-    async fn record(&self, statement: &str, batch_id: Uuid, tasks: &[(Uuid, i32, i64)]) {
-        let (mut ids, mut attempts, mut fences) = (Vec::new(), Vec::new(), Vec::new());
-        for &(id, attempt, fence) in tasks {
-            ids.push(id);
-            attempts.push(attempt);
-            fences.push(fence);
-        }
-        let params: [&(dyn tokio_postgres::types::ToSql + Sync); 5] =
-            [&batch_id, &ids, &attempts, &fences, &self.worker.worker_id];
-        if let Err(error) = fenced_rows(&self.worker.pool, statement, &params).await {
-            tracing::debug!(error = %error, "batch membership was not recorded");
-        }
+/// Records batch membership for operators; a failed write never affects settlement.
+async fn record(worker: &Inner, statement: &str, batch_id: Uuid, tasks: &[(Uuid, i32, i64)]) {
+    let (mut ids, mut attempts, mut fences) = (Vec::new(), Vec::new(), Vec::new());
+    for &(id, attempt, fence) in tasks {
+        ids.push(id);
+        attempts.push(attempt);
+        fences.push(fence);
+    }
+    let params: [&(dyn tokio_postgres::types::ToSql + Sync); 5] =
+        [&batch_id, &ids, &attempts, &fences, &worker.worker_id];
+    if let Err(error) = fenced_rows(&worker.pool, statement, &params).await {
+        tracing::debug!(error = %error, "batch membership was not recorded");
     }
 }
 
@@ -308,7 +315,10 @@ fn abandoned() -> HandlerError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use chrono::Utc;
+    use serde_json::json;
     use tokio::sync::{mpsc, Semaphore};
     use tokio::task::JoinHandle;
 
@@ -347,14 +357,17 @@ mod tests {
         let options =
             WorkerOptions { concurrency: 3, shared_heartbeats: true, ..Default::default() };
         let worker = Worker::new(pool(), options).unwrap();
-        Arc::new(Coordinator {
-            worker: Arc::clone(&worker.0),
+        let coordinator = Arc::new(Coordinator {
+            worker: Arc::downgrade(&worker.0),
             task_type: "batch".into(),
             options: BatchOptions { max_size: 2, linger: LINGER },
             handler: Arc::new(move |items| handler(items).boxed()),
             pending: Mutex::new(Pending { next: 0, queues: HashMap::new() }),
             arrived: Box::new(arrived),
-        })
+        });
+        // The coordinator holds its worker weakly, so the test keeps the worker alive.
+        std::mem::forget(worker);
+        coordinator
     }
 
     fn join(coordinator: &Arc<Coordinator<i64, i64>>, payload: i64) -> JoinHandle<i64> {
@@ -466,5 +479,71 @@ mod tests {
         gates[1].add_permits(1);
         assert_eq!(tokio::time::timeout(LINGER * 5, third).await.unwrap().unwrap(), 30);
         assert_eq!(calls.recv().await.unwrap(), vec![3]);
+    }
+
+    fn context() -> HandlerContext {
+        let task = ClaimedTask {
+            id: Uuid::new_v4(),
+            task_type: "batched".into(),
+            queue: "batch-queue".into(),
+            priority: 0,
+            payload: json!({}),
+            contract_version: None,
+            result_max_bytes: None,
+            redact_error_details: false,
+            trace_context: None,
+            attempt: 1,
+            max_attempts: 1,
+            retry_policy: json!({}),
+            deadline_at: None,
+            execution_timeout: None,
+            attempt_timeout_at: None,
+            fence_token: 1,
+            lease_expires_at: Utc::now(),
+            claim_sent_at: Instant::now(),
+            fast_tier: false,
+        };
+        HandlerContext::new(Arc::new(task), CancellationToken::default(), pool(), "worker".into())
+    }
+
+    fn options() -> BatchOptions {
+        BatchOptions { max_size: 1, linger: Duration::ZERO }
+    }
+
+    #[tokio::test]
+    async fn dropping_the_last_worker_handle_frees_a_worker_with_a_batch_handler() {
+        let worker = Worker::new(pool(), WorkerOptions::default()).unwrap();
+        let captured = Arc::new(());
+        let held = Arc::clone(&captured);
+        worker.handle_batch("batched", options(), move |items: Vec<BatchItem<Value>>| {
+            let _held = &held;
+            async move { items.into_iter().map(|_| BatchResult::Succeeded(json!(null))).collect() }
+        });
+        let inner = Arc::downgrade(&worker.0);
+        drop(worker);
+        assert!(inner.upgrade().is_none(), "the batch handler kept its worker alive");
+        assert_eq!(Arc::strong_count(&captured), 1, "the handler's captured state outlived it");
+    }
+
+    #[tokio::test]
+    async fn a_batch_whose_worker_is_gone_abandons_its_members_without_calling_the_handler() {
+        let worker = Worker::new(pool(), WorkerOptions::default()).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&calls);
+        worker.handle_batch("batched", options(), move |items: Vec<BatchItem<Value>>| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            async move { items.into_iter().map(|_| BatchResult::Succeeded(json!(null))).collect() }
+        });
+        let erased = Arc::clone(&lock_handlers(&worker)["batched"]);
+        drop(worker);
+        let error = erased(json!({}), context()).await.unwrap_err();
+        assert_eq!(error, abandoned());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    fn lock_handlers(
+        worker: &Worker,
+    ) -> std::sync::RwLockReadGuard<'_, HashMap<String, ErasedHandler>> {
+        worker.0.handlers.read().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
