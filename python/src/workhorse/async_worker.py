@@ -456,15 +456,27 @@ class AsyncWorker:
         self._start_run()
         stop_notifications = asyncio.Event()
         listener = asyncio.create_task(self._listen(stop_notifications))
+        completed = False
         try:
             await self._run_inner(self._inner.run)
+            completed = True
         finally:
             stop_notifications.set()
             listener.cancel()
-            with suppress(asyncio.CancelledError):
-                await listener
+            # A later cancellation must not cut the listener's connection release short.
+            # The run waits for it without forwarding that cancellation into the listener.
+            interrupted = False
+            while not listener.done():
+                try:
+                    await asyncio.wait((listener,))
+                except asyncio.CancelledError:
+                    interrupted = True
             self._threads.close()
             self._running = False
+            if not listener.cancelled():
+                listener.result()
+        if interrupted and completed:
+            raise asyncio.CancelledError
 
     def pause(self) -> None:
         self._inner.pause()
@@ -493,7 +505,13 @@ class AsyncWorker:
             return await asyncio.shield(run)
         except asyncio.CancelledError:
             self._inner.stop()
-            await run
+            # A nested timeout or a TaskGroup can cancel again while the core drains.
+            # Returning then would close the bridge under live handlers and let a new
+            # run overlap this one, so every later cancellation waits for the drain too.
+            while not run.done():
+                with suppress(asyncio.CancelledError):
+                    await asyncio.wait((run,))
+            run.result()
             raise
 
     def _open_heartbeat_executor(self) -> tuple[_AsyncExecutorBridge, Callable[[], None]]:

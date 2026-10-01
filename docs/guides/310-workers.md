@@ -12,6 +12,11 @@ PostgreSQL to evaluate.
 methods are awaitable. TypeScript, Python, Go, Rust, and Ruby workers all participate in the worker registry.
 Python's `handle_batch` follows the grouping contract in
 [315-batch-handlers.md](315-batch-handlers.md).
+Cancelling the task that awaits `AsyncWorker.run()` or `run_once()` asks the worker to drain.
+A repeated cancellation does not cut that drain short. The call re-raises `CancelledError` only
+after active handlers finish and the notification connection is released. Keep the pool and event
+loop open until then. Task cancellation is not the process runner's second signal, which exits
+without waiting.
 
 ```python
 worker = AsyncWorker.from_asyncpg(connection, queues=("email", "billing"))
