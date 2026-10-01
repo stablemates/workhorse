@@ -16,7 +16,7 @@ from itertools import islice
 from queue import SimpleQueue
 from threading import Event, Lock, Thread, current_thread
 from time import monotonic, sleep
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 from uuid import uuid4
 
 from ._compatibility import (
@@ -24,6 +24,7 @@ from ._compatibility import (
     SyncRowExecutor as _SyncRowExecutor,
 )
 from ._contracts import (
+    apply_contract as _apply_contract,
     compile_contract_schema as _compile_contract_schema,
     jsonb_text_bytes as _jsonb_text_bytes,
 )
@@ -47,6 +48,7 @@ from ._notifications import (
 from ._protocol import serialize_child_request as _serialize_child_request
 from ._statements import (
     PROTOCOL_VERSION as _PROTOCOL_VERSION,
+    SQL_STATEMENTS as _SQL_STATEMENTS,
     STATEMENTS as _STATEMENTS,
     DriverStatement as _DriverStatement,
 )
@@ -321,6 +323,25 @@ class _DurableWaitSuspension(BaseException):
 
 _MAX_WAIT_DURATION_MS = 31_536_000_000
 
+_MAX_CHILD_TASKS = 100
+_LookupResult = TypeVar("_LookupResult")
+
+# The contract version each existing child was created under, by child name. None marks a child
+# created without a contract.
+_ChildVersions = dict[str, str | None]
+# Contract definitions loaded for one child request, by task type, whether the version was pinned,
+# and the pinned version. None marks a type without a contract.
+_ChildContracts = dict[tuple[str, bool, str | None], _Row | None]
+
+
+def _catalogue_statement(name: str) -> _DriverStatement:
+    psycopg, asyncpg = _SQL_STATEMENTS[name]
+    return _DriverStatement(psycopg=psycopg, asyncpg=asyncpg)
+
+
+_TASK_CHILD = _catalogue_statement("task_child")
+_GET_TASK = _catalogue_statement("get_task")
+
 # How long a worker claims a queue that rejected a fast claim through claim_many before probing it
 # again. A queue can move to the fast tier only while it holds no live tasks (ADR 0077).
 _TIER_PROBE_INTERVAL_SECONDS = 30.0
@@ -335,8 +356,10 @@ class _HandlerDurability:
         cancellation: CancellationToken,
         arbiter: _AttemptOutcomeArbiter,
         fast_tier: bool = False,
+        payload_validators: dict[tuple[str, str], Any] | None = None,
     ) -> None:
         self._executor = executor
+        self._payload_validators = {} if payload_validators is None else payload_validators
         self._task = task
         self._fast_tier = fast_tier
         self._worker_id = worker_id
@@ -774,8 +797,22 @@ class _HandlerDurability:
     ) -> Json:
         if not isinstance(name, str) or not 1 <= len(name) <= 200:
             raise ValueError("Child name must contain between 1 and 200 characters")
-        request = _serialize_child_request(self._task, type, payload, options, "default")
-        encoded = json.dumps(request, separators=(",", ":"), allow_nan=False, sort_keys=True)
+
+        def build(versions: _ChildVersions | None) -> str:
+            request = self._child_request(name, type, payload, options, versions, {})
+            return json.dumps(request, separators=(",", ":"), allow_nan=False, sort_keys=True)
+
+        def write(encoded: str) -> _Row:
+            self._cancellation.raise_if_cancelled()
+            return _require_lifecycle_row(
+                _fenced_write_rows(
+                    self._executor,
+                    _STATEMENTS.create_child,
+                    (self._task.id, self._worker_id, self._task.fence_token, name, encoded),
+                )
+            )
+
+        encoded = self._initial_child_request(build)
         with self._lock:
             current = self._child_calls.get(name)
             if current is None:
@@ -790,14 +827,7 @@ class _HandlerDurability:
         if not owns_call:
             return pending.result()
         try:
-            self._cancellation.raise_if_cancelled()
-            row = _require_lifecycle_row(
-                _fenced_write_rows(
-                    self._executor,
-                    _STATEMENTS.create_child,
-                    (self._task.id, self._worker_id, self._task.fence_token, name, encoded),
-                )
-            )
+            row = self._replayed_child_row(write(encoded), encoded, build, write)
             status = row["status"]
             if status == "stale":
                 raise ChildLeaseLostError(self._task.id)
@@ -844,10 +874,9 @@ class _HandlerDurability:
     ) -> dict[str, Json]:
         if isinstance(children, (str, bytes)) or not isinstance(children, Sequence):
             raise TypeError("Children must be a sequence")
-        if len(children) > 100:
+        if len(children) > _MAX_CHILD_TASKS:
             raise ChildLimitExceededError(self._task.id)
         names: set[str] = set()
-        requests: list[dict[str, Json]] = []
         for child in children:
             if not isinstance(child, ChildTaskRequest):
                 raise TypeError("Each child must be a ChildTaskRequest")
@@ -856,19 +885,31 @@ class _HandlerDurability:
             if child.name in names:
                 raise ValueError("Child names must be unique")
             names.add(child.name)
-            requests.append(
+
+        def build(versions: _ChildVersions | None) -> str:
+            contracts: _ChildContracts = {}
+            requests: list[dict[str, Json]] = [
                 {
                     "name": child.name,
-                    "request": _serialize_child_request(
-                        self._task,
-                        child.type,
-                        child.payload,
-                        child.options,
-                        "default",
+                    "request": self._child_request(
+                        child.name, child.type, child.payload, child.options, versions, contracts
                     ),
                 }
+                for child in children
+            ]
+            return json.dumps(requests, separators=(",", ":"), allow_nan=False, sort_keys=True)
+
+        def write(encoded: str) -> _Row:
+            self._cancellation.raise_if_cancelled()
+            return _require_lifecycle_row(
+                _fenced_write_rows(
+                    self._executor,
+                    _STATEMENTS.create_children,
+                    (self._task.id, self._worker_id, self._task.fence_token, encoded, mode),
+                )
             )
-        encoded = json.dumps(requests, separators=(",", ":"), allow_nan=False, sort_keys=True)
+
+        encoded = self._initial_child_request(build)
         call_key = f"{mode}:{encoded}"
         with self._lock:
             current = self._children_call
@@ -884,14 +925,7 @@ class _HandlerDurability:
         if not owns_call:
             return pending.result()
         try:
-            self._cancellation.raise_if_cancelled()
-            row = _require_lifecycle_row(
-                _fenced_write_rows(
-                    self._executor,
-                    _STATEMENTS.create_children,
-                    (self._task.id, self._worker_id, self._task.fence_token, encoded, mode),
-                )
-            )
+            row = self._replayed_child_row(write(encoded), encoded, build, write)
             status = row["status"]
             if status == "stale":
                 raise ChildLeaseLostError(self._task.id)
@@ -934,6 +968,107 @@ class _HandlerDurability:
                 current = self._children_call
                 if current is not None and current[1] is pending:
                     self._children_call = None
+
+    def _child_request(
+        self,
+        name: str,
+        type: str,
+        payload: Json,
+        options: EnqueueOptions,
+        versions: _ChildVersions | None,
+        contracts: _ChildContracts,
+    ) -> dict[str, Json]:
+        """Serialize one child request under the contract PostgreSQL holds for its type now.
+
+        A child write has no stale-contract retry, so the request carries the current contract. A
+        name in versions carries that contract version instead, or none when the version is None.
+        """
+        request = _serialize_child_request(self._task, type, payload, options, "default")
+        pinned = versions is not None and name in versions
+        version = versions.get(name) if versions is not None and pinned else None
+        if pinned and version is None:
+            return request
+        key = (type, pinned, version)
+        if key in contracts:
+            definition = contracts[key]
+        else:
+            rows = self._executor.rows(_STATEMENTS.get_contract, (type, version))
+            definition = rows[0] if rows else None
+            contracts[key] = definition
+        if definition is not None:
+            _apply_contract(definition, type, payload, request, self._payload_validators)
+        return request
+
+    def _child_lookup(self, lookup: Callable[[], _LookupResult]) -> _LookupResult:
+        """Run a contract lookup, surfacing the handler's cancellation over a failed read."""
+        try:
+            return lookup()
+        except TaskContractValidationError:
+            raise
+        except Exception:
+            self._cancellation.raise_if_cancelled()
+            raise
+
+    def _initial_child_request(self, build: Callable[[_ChildVersions | None], str]) -> str:
+        """Build a child request, falling back to the versions existing children were created under.
+
+        A replayed attempt may carry a payload the current contract rejects but the contract its
+        child was created under accepts. The fallback keeps that child joinable.
+        """
+        try:
+            return self._child_lookup(lambda: build(None))
+        except TaskContractValidationError as error:
+            versions = self._child_lookup(self._accepted_child_versions)
+            if not versions:
+                raise
+            try:
+                return self._child_lookup(lambda: build(versions))
+            except TaskContractValidationError:
+                raise error from None
+
+    def _replayed_child_row(
+        self,
+        row: _Row,
+        encoded: str,
+        build: Callable[[_ChildVersions | None], str],
+        write: Callable[[str], _Row],
+    ) -> _Row:
+        """Retry a conflict once with each existing child stamped with its accepted version.
+
+        PostgreSQL compares a replayed request with the accepted one, contract stamp included, so a
+        contract change since the first activation would otherwise conflict.
+        """
+        if row["status"] != "conflict":
+            return row
+        versions = self._child_lookup(self._accepted_child_versions)
+        if not versions:
+            return row
+        try:
+            accepted = self._child_lookup(lambda: build(versions))
+        except TaskContractValidationError:
+            return row
+        if accepted == encoded:
+            return row
+        return write(accepted)
+
+    def _accepted_child_versions(self) -> _ChildVersions:
+        """Return the contract version of each child this task created, by name."""
+        task_id = self._task.id
+        # The psycopg text names the task twice; the asyncpg text reuses $1. One extra row covers
+        # the edge where this task is itself a child.
+        parameters: tuple[object, ...] = (
+            (task_id, _MAX_CHILD_TASKS + 1)
+            if getattr(self._executor, "dialect", "psycopg") == "asyncpg"
+            else (task_id, task_id, _MAX_CHILD_TASKS + 1)
+        )
+        versions: _ChildVersions = {}
+        for edge in self._executor.rows(_TASK_CHILD, parameters):
+            if str(edge["parent_task_id"]).lower() != task_id.lower():
+                continue
+            rows = self._executor.rows(_GET_TASK, (str(edge["child_task_id"]),))
+            version = rows[0]["contract_version"] if len(rows) == 1 else None
+            versions[str(edge["child_name"])] = version if isinstance(version, str) else None
+        return versions
 
 
 class Worker:
@@ -1090,6 +1225,8 @@ class Worker:
         self._pending_completions: dict[tuple[str, int], list[_PendingCompletion]] = {}
         self._state_lock = Lock()
         self._contract_validators: dict[tuple[str, str], Any] = {}
+        # Child payload validators are keyed like result validators, so they need their own cache.
+        self._child_payload_validators: dict[tuple[str, str], Any] = {}
         self._execution_lock = Lock()
         self._wake = Event()
         self._dispatch_wake_version = 0
@@ -2707,6 +2844,7 @@ class Worker:
             cancellation,
             arbiter,
             fast_tier,
+            self._child_payload_validators,
         )
 
         ownership_released = False

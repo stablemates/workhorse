@@ -12,7 +12,7 @@ from ._compatibility import (
     assert_sync_compatible as _assert_sync_compatible,
 )
 from ._contracts import (
-    compile_contract_schema as _compile_contract_schema,
+    apply_contract as _apply_contract,
     serialize_contracts as _serialize_contracts,
 )
 from ._drivers import (
@@ -44,7 +44,6 @@ from ._telemetry import inject_trace_context as _inject_trace_context
 from .errors import (
     HumanWaitIdempotencyConflictError,
     SignalIdempotencyConflictError,
-    TaskContractValidationError,
     _translate_database_error,
 )
 from .types import (
@@ -510,38 +509,6 @@ def _raise_translated(error: Exception) -> NoReturn:
     if translated is not None:
         raise translated from error
     raise error
-
-
-def _apply_contract(
-    row: _Row,
-    task_type: str,
-    payload: Json,
-    request: dict[str, Json],
-    cache: dict[tuple[str, str], Any],
-) -> None:
-    version = str(row["version"])
-    document = row["schema"]
-    if isinstance(document, str):
-        document = json.loads(document)
-    if not isinstance(document, Mapping) or "payload" not in document:
-        raise RuntimeError("workhorse.get_contract_definition_v1 returned an invalid schema")
-    validator = cache.get((task_type, version))
-    if validator is None:
-        validator = _compile_contract_schema(cast(Json, document["payload"]))
-        cache[(task_type, version)] = validator
-    if not validator.is_valid(payload):
-        raise TaskContractValidationError(task_type, version, "payload")
-    request.update(
-        {
-            "contractVersion": version,
-            "payloadMaxBytes": cast(int, row["payload_max_bytes"]),
-            "resultMaxBytes": cast(int, row["result_max_bytes"]),
-            "sensitivePayloadKeys": cast(
-                Json, list(cast(Sequence[str], row["payload_redact_keys"]))
-            ),
-            "sensitiveResultKeys": cast(Json, list(cast(Sequence[str], row["result_redact_keys"]))),
-        }
-    )
 
 
 def _health_window_start() -> datetime:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 from jsonschema import Draft202012Validator
@@ -93,6 +93,38 @@ def compile_contract_schema(schema: Json) -> Draft202012Validator:
     check_contract_schema(schema)
     Draft202012Validator.check_schema(cast(Any, schema))
     return Draft202012Validator(cast(Any, schema))
+
+
+def apply_contract(
+    row: Mapping[str, object],
+    task_type: str,
+    payload: Json,
+    request: dict[str, Json],
+    cache: dict[tuple[str, str], Any],
+) -> None:
+    version = str(row["version"])
+    document = row["schema"]
+    if isinstance(document, str):
+        document = json.loads(document)
+    if not isinstance(document, Mapping) or "payload" not in document:
+        raise RuntimeError("workhorse.get_contract_definition_v1 returned an invalid schema")
+    validator = cache.get((task_type, version))
+    if validator is None:
+        validator = compile_contract_schema(cast(Json, document["payload"]))
+        cache[(task_type, version)] = validator
+    if not validator.is_valid(payload):
+        raise TaskContractValidationError(task_type, version, "payload")
+    request.update(
+        {
+            "contractVersion": version,
+            "payloadMaxBytes": cast(int, row["payload_max_bytes"]),
+            "resultMaxBytes": cast(int, row["result_max_bytes"]),
+            "sensitivePayloadKeys": cast(
+                Json, list(cast(Sequence[str], row["payload_redact_keys"]))
+            ),
+            "sensitiveResultKeys": cast(Json, list(cast(Sequence[str], row["result_redact_keys"]))),
+        }
+    )
 
 
 def validate_contract_value(
