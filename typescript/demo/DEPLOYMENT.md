@@ -273,9 +273,15 @@ choose the rate-limit key. Any replacement proxy must preserve that append-only 
 The server also bounds each request independently of the rate budget. It refuses a declared
 request body over 131,072 bytes with 413, and a `POST`, `PUT`, or `PATCH` that streams without a
 declared `Content-Length` with 411 — so the proxy must buffer request bodies and forward their
-length. More than four operator mutations executing at once answer 503, and any request still open
-after sixty seconds is closed. The three admissions that create tasks — `enqueueTest`,
-`redriveTask`, and `redriveDeadLetters` — additionally refuse once fifty tasks are ready or running,
+length. A request has sixty seconds to arrive in full; past that the server answers 408 and closes
+the connection. Once the application starts handling a request, it has another sixty seconds to
+answer before the server answers 504 in its place.
+
+More than four operator mutations executing at once answer 503. A mutation keeps its slot until its
+database transaction commits or rolls back, even after its client disconnects or receives a 504.
+PostgreSQL cancels any statement inside an operator mutation after ten seconds, which rolls the
+mutation back. The three admissions that create tasks — `enqueueTest`, `redriveTask`, and
+`redriveDeadLetters` — additionally refuse once fifty tasks are ready or running,
 so a flood of distinct clients cannot pile work on the demo fleet faster than it drains.
 
 Those guards classify a request by the procedure the dashboard host would dispatch it to, not by

@@ -10,9 +10,10 @@ import { isDemoOperatorMutation } from "./operator-rate-limit.js";
 export const DEMO_REQUEST_BODY_MAX_BYTES = 131_072;
 
 /**
- * How long one request may occupy the server, including a slowly delivered body.
+ * How long a request may take to arrive, including a slowly delivered body, and then how long the
+ * application may take to answer it.
  *
- * The body cap bounds size, not speed; without a whole-request deadline a client could hold a
+ * The body cap bounds size, not speed; without a deadline on arrival a client could hold a
  * connection open for as long as it trickles bytes. Sixty seconds is far past what any
  * dashboard read or mutation takes.
  */

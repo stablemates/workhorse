@@ -148,6 +148,32 @@ async function assertDemoOperatorWorkBudget(
   }
 }
 
+/**
+ * How long one statement inside an operator mutation may run before PostgreSQL cancels it.
+ *
+ * A mutation holds a pooled connection and one of the few operator mutation slots until its
+ * transaction ends, even after its client has gone. Every statement the demo's mutations issue
+ * finishes in milliseconds on a healthy database, so the bound only cuts off one stalled on a lock
+ * or a strained database.
+ */
+export const DEMO_OPERATOR_STATEMENT_TIMEOUT_MS = 10_000;
+
+type DemoTransaction = Parameters<Parameters<DemoDatabase["transaction"]>[0]>[0];
+
+/** Run one operator mutation in a transaction whose every statement is bounded in time. */
+export function runOperatorTransaction<T>(
+  database: DemoDatabase,
+  run: (transaction: DemoTransaction) => Promise<T>,
+  statementTimeoutMs = DEMO_OPERATOR_STATEMENT_TIMEOUT_MS,
+): Promise<T> {
+  return database.transaction(async (transaction) => {
+    await transaction.execute(
+      sql`SELECT set_config('statement_timeout', ${String(statementTimeoutMs)}, true)`,
+    );
+    return run(transaction);
+  });
+}
+
 const GOOGLE_ANALYTICS_TAG = `<script async src="https://www.googletagmanager.com/gtag/js?id=G-9NC8FKZPVB"></script>
 <script>
   window.dataLayer = window.dataLayer || [];
@@ -987,7 +1013,8 @@ async function redriveLatestDeadLetter(
   database: DemoDatabase,
   audit: AuditContext,
 ): Promise<{ taskId: string }> {
-  return database.transaction(async (transaction) => {
+  return runOperatorTransaction(database, async (transaction) => {
+    await assertDemoOperatorWorkBudget(transaction);
     const workhorse = createDrizzleAdapter(transaction, {
       defaultQueue: DEMO_QUEUE,
       queueOptions: DEMO_QUEUE_OPTIONS,
@@ -1101,10 +1128,10 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
   return {
     mode: "writable",
     async enqueueTest(kind, audit, scenario, priority = 0, feature) {
-      await assertDemoOperatorWorkBudget(database);
       if (kind === "redrive") return redriveLatestDeadLetter(database, audit);
       const target = kind === "feature" ? `task:feature:${feature}` : `task:${kind}`;
-      return database.transaction(async (transaction) => {
+      return runOperatorTransaction(database, async (transaction) => {
+        await assertDemoOperatorWorkBudget(transaction);
         const workhorse = createDrizzleAdapter(transaction, {
           defaultQueue: DEMO_QUEUE,
           queueOptions: DEMO_QUEUE_OPTIONS,
@@ -1130,7 +1157,7 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
 export function createLocalScheduleController(database: DemoDatabase): ScheduleController {
   return {
     async setSchedulePaused(namespace, name, paused, audit) {
-      const rows = await database.transaction(async (transaction) => {
+      const rows = await runOperatorTransaction(database, async (transaction) => {
         const before = await transaction.execute<{ paused: boolean }>(sql`
           SELECT paused FROM workhorse.schedule_definition
            WHERE namespace = ${namespace} AND schedule_name = ${name}
@@ -1188,7 +1215,7 @@ function operatorAuditStatus(
 export function createLocalOperatorControllers(database: DemoDatabase) {
   return createDashboardOperatorControllers({
     run: (action, operation) =>
-      database.transaction(async (transaction) => {
+      runOperatorTransaction(database, async (transaction) => {
         // Redrives are the only controller actions that admit new tasks; the rest act on existing
         // ones, so they stay available while the budget is saturated (canceling even drains it).
         if (action.kind === "redriveTask" || action.kind === "redriveDeadLetters") {
@@ -1340,7 +1367,7 @@ function createLocalSettingsController(database: DemoDatabase): SettingsControll
     audit: AuditContext,
     change: (queue: Queue) => Promise<unknown>,
   ): Promise<void> {
-    await database.transaction(async (transaction) => {
+    await runOperatorTransaction(database, async (transaction) => {
       const workhorse = createDrizzleAdapter(transaction, {
         defaultQueue: DEMO_QUEUE,
         queueOptions: DEMO_QUEUE_OPTIONS,

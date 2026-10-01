@@ -4378,8 +4378,15 @@ The demo server applies three further bounds before a request reaches the applic
 whose declared `Content-Length` exceeds 131,072 bytes is refused with `413`; a `POST`, `PUT`, or
 `PATCH` that arrives with `Transfer-Encoding` but no declared length is refused with `411`. At most
 four operator mutations may execute concurrently; admissions beyond that answer `503` with
-`Retry-After`. `server.requestTimeout` is set to 60,000 milliseconds, which also bounds how slowly
-an in-limit body may arrive. Independently of the HTTP layer, every RPC that creates tasks —
+`Retry-After`. `createDemoRequestListener` returns a mutation's slot when the application's answer
+settles, not when the response closes, so a client that disconnects mid-mutation keeps its slot
+until the mutation's transaction ends. A mutation whose client leaves before the application starts
+it is not started. `server.requestTimeout` is set to 60,000 milliseconds, which also bounds how
+slowly an in-limit body may arrive. The application then has `DEMO_REQUEST_TIMEOUT_MS`, 60,000
+milliseconds, to answer; past it the client receives `504` and the slot stays held until the work
+settles. `runOperatorTransaction` sets a transaction-local `statement_timeout` of
+`DEMO_OPERATOR_STATEMENT_TIMEOUT_MS`, 10,000 milliseconds. That bounds each statement of an
+operator transaction, not the transaction as a whole. Independently of the HTTP layer, every RPC that creates tasks —
 `enqueueTest`, `redriveTask`, and `redriveDeadLetters` — refuses with `TOO_MANY_REQUESTS` once 50
 tasks in the demo database are in `ready` or `active` state. Scheduled and blocked tasks do not
 count, and mutations that act on existing tasks stay available under saturation.
