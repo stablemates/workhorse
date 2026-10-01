@@ -18,7 +18,12 @@ const workerError = {
 const stackDatabase = {
   query: async (text: string) => {
     if (text.includes("dashboard_event_detail_v1")) {
-      return { rows: [{ result: { id: "event", error: workerError } }] };
+      return {
+        rows: [{ result: { id: "event", error: workerError, details: { error: workerError } } }],
+      };
+    }
+    if (text.includes("dashboard_events_v1")) {
+      return { rows: [{ result: { events: [{ id: "event", details: { error: workerError } }] } }] };
     }
     if (text.includes("dashboard_task_detail_v1")) {
       const detail = {
@@ -28,7 +33,7 @@ const stackDatabase = {
         current: { runtime: { error: workerError }, outcome: null, error: workerError },
         batchExecutions: [],
         attempts: [{ error: workerError }],
-        events: [],
+        events: [{ type: "failed", details: { error: workerError } }],
       };
       return { rows: [{ result: detail }] };
     }
@@ -60,7 +65,7 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-/** Sign in over HTTP and read one task and one event, returning every persisted error they carry. */
+/** Sign in over HTTP and read one task, one event, and the feed, returning every persisted error. */
 async function persistedErrors(port: number): Promise<unknown[]> {
   const send = (requestPath: string, headers: Record<string, string>, body: string) =>
     fetch(`http://127.0.0.1:${port}${requestPath}`, {
@@ -88,9 +93,24 @@ async function persistedErrors(port: number): Promise<unknown[]> {
   const task = (await rpc("taskDetail", { id: "00000000-0000-4000-8000-000000000001" })) as {
     current: { runtime: { error: unknown }; error: unknown };
     attempts: { error: unknown }[];
+    events: { details: { error: unknown } }[];
   };
-  const event = await rpc("eventDetail", { id: "event:018f0000-0000-7000-8000-000000999999" });
-  return [task.current.runtime.error, task.current.error, task.attempts[0]?.error, event.error];
+  const event = (await rpc("eventDetail", {
+    id: "event:018f0000-0000-7000-8000-000000999999",
+  })) as {
+    error: unknown;
+    details: { error: unknown };
+  };
+  const feed = (await rpc("events", {})) as { events: { details: { error: unknown } }[] };
+  return [
+    task.current.runtime.error,
+    task.current.error,
+    task.attempts[0]?.error,
+    task.events[0]?.details.error,
+    event.error,
+    event.details.error,
+    feed.events[0]?.details.error,
+  ];
 }
 
 const remote = async (revealErrorStacks?: boolean) => {
@@ -117,9 +137,9 @@ dashboardSessionSuite(
   () => {
     it("omits worker stacks on a remotely reachable listener unless the operator opts in", async () => {
       expect(await remote()).toEqual(
-        Array.from({ length: 4 }, () => ({ name: "Error", message: "failed" })),
+        Array.from({ length: 7 }, () => ({ name: "Error", message: "failed" })),
       );
-      expect(await remote(true)).toEqual(Array.from({ length: 4 }, () => workerError));
+      expect(await remote(true)).toEqual(Array.from({ length: 7 }, () => workerError));
     });
   },
 );
