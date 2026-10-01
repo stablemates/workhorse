@@ -56,6 +56,12 @@ const { PrismaClient } = require("@prisma/client") as {
 };
 
 const statement = "SELECT $1::text AS task_id, $2::int AS attempt";
+// Every lexical context in which `$N` is text rather than a parameter, around one real parameter.
+const lexicalStatement = [
+  "SELECT $1::text AS value, '$2' AS literal, E'\\'$2' AS escaped, 1 AS \"$2\",",
+  "  $tag$ $2 $$ $tag$ AS body -- $2",
+  "/* $2 /* $2 */ $2 */",
+].join("\n");
 const values = ["task-1", 2] as const;
 
 type Execute = (text: string, parameters: readonly unknown[]) => Promise<QueryResultRow[]>;
@@ -218,6 +224,14 @@ describe.each(queryableProviders)("$name queryable contract", (provider) => {
       fields: [],
       rows: [{ task_id: "task-1" }, { task_id: "task-2" }],
     });
+  });
+
+  it("sends $N inside literals, identifiers, comments, and dollar quotes unmodified", async () => {
+    const execute = vi.fn<Execute>(async () => []);
+
+    await provider.queryable(execute).query(lexicalStatement, ["bound"]);
+
+    expect(execute).toHaveBeenCalledWith(lexicalStatement, ["bound"]);
   });
 
   it("retains the driver error shape and does not expose parameter values", async () => {
@@ -483,6 +497,14 @@ describe.each(integrationProviders)("$name built-package conformance", (provider
       await running;
       claim.mockRestore();
     }
+  });
+
+  it("binds only the parameters PostgreSQL sees outside literals and comments", async () => {
+    const result = await provider.adapter.database.query(lexicalStatement, ["bound"]);
+
+    expect(result.rows).toEqual([
+      { value: "bound", literal: "$2", escaped: "'$2", $2: 1, body: " $2 $$ " },
+    ]);
   });
 
   it("translates the real driver error shape and retains PostgreSQL's SQLSTATE", async () => {
