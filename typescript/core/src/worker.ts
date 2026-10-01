@@ -56,12 +56,14 @@ import {
   type WorkerCompletionPreparation,
   type WorkerHeartbeatChannel,
   type WorkerHeartbeatReservation,
+  type WorkerQueueTierRead,
   workerCheckpointsRead,
   workerCompletionPrepare,
   workerHeartbeatReservation,
   workerHeartbeatReservationProblem,
   workerStatementPoolCapacity,
   workerProgressRead,
+  workerQueueTierRead,
   workerWaitsRead,
 } from "./worker-internal.js";
 import { createHandlerContext } from "./handler-context.js";
@@ -562,6 +564,9 @@ export class Worker {
   private readonly fullTierUntil = new Map<string, number>();
   // Queues whose last claim answered as fast-tier.
   private readonly fastTierQueues = new Set<string>();
+  // Tasks from a claim_many_v1 result, with the tier read they share. claim_many_v1 claims from a
+  // queue that became fast-tier after its probe, and its tasks carry no tier marker.
+  private readonly tierReads = new WeakMap<ClaimedTask, () => Promise<boolean>>();
   // The cohort each running task belongs to, so a completion the loop declines still batches with
   // its own cohort.
   private readonly taskCohorts = new WeakMap<ClaimedTask, number>();
@@ -1031,6 +1036,11 @@ export class Worker {
     return [...this.latestMaintenance.values()];
   }
 
+  // A task's tier for its handler context: known from a fast claim, or read on first durable call.
+  private contextTier(task: ClaimedTask): boolean | (() => Promise<boolean>) {
+    return this.fastTasks.has(task) || (this.tierReads.get(task) ?? false);
+  }
+
   private async inject(point: Failpoint, task: ClaimedTask): Promise<void> {
     const configured = this.options.failpoint;
     const shouldCrash =
@@ -1109,9 +1119,38 @@ export class Worker {
         this.fastTierQueues.delete(queueName);
       }
     }
-    claimed ??= await this.queue.claimMany!(this.workerId, limit, options);
+    if (claimed === undefined) {
+      claimed = await this.queue.claimMany!(this.workerId, limit, options);
+      if (claimed.length > 0) this.trackFullTierClaim(queueName, claimed);
+    }
     for (const task of claimed) this.claimSentAt.set(task, sentAt);
     return claimed;
+  }
+
+  // Gives the tasks of one claim_many_v1 result one shared tier read. Their first durable context
+  // call makes it, so a handler without one costs no round trip. Only an answer is cached: a failed
+  // read rejects that call, and the next call reads again. A fast answer ends the probe interval.
+  private trackFullTierClaim(queueName: string, claimed: readonly ClaimedTask[]): void {
+    const read = (this.queue as Partial<WorkerQueueTierRead>)[workerQueueTierRead];
+    if (!read) return;
+    let answer: Promise<boolean> | undefined;
+    const tierRead = (): Promise<boolean> => {
+      answer ??= read.call(this.queue, queueName).then(
+        (fast) => {
+          if (fast) {
+            this.fullTierUntil.delete(queueName);
+            this.fastTierQueues.add(queueName);
+          }
+          return fast;
+        },
+        (error: unknown) => {
+          answer = undefined;
+          throw error;
+        },
+      );
+      return answer;
+    };
+    for (const task of claimed) this.tierReads.set(task, tierRead);
   }
 
   private async runBatch(
@@ -1251,7 +1290,7 @@ export class Worker {
         await this.inject("beforeHandler", task);
         const result = await handler(
           task.payload,
-          createHandlerContext(this.queue, this.workerId, task, attempt, this.fastTasks.has(task)),
+          createHandlerContext(this.queue, this.workerId, task, attempt, this.contextTier(task)),
         );
         await this.inject("afterHandler", task);
         if (attempt.arbiter.isSuspended()) {

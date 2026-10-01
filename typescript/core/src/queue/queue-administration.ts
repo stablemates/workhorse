@@ -74,6 +74,14 @@ export class QueueAdministrationModule extends QueueModule {
     return changed;
   }
 
+  /** Reads a queue's tier. A queue without a control row is full-tier. */
+  async queueTier(queueName: string): Promise<QueueTier> {
+    const result = await this.context.database.query<{ queue_name: string; tier: QueueTier }>(
+      SQL_STATEMENTS["queue_control"],
+    );
+    return result.rows.find((row) => row.queue_name === queueName)?.tier ?? "full";
+  }
+
   async setQueueHistory(
     queueName: string,
     settings: Partial<QueueHistorySettings>,

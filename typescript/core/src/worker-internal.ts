@@ -59,3 +59,13 @@ export const workerHeartbeatReservationProblem = Symbol(
  * The worker caps its default cohorts to the connections that pool has left for them.
  */
 export const workerStatementPoolCapacity = Symbol("workhorse.worker.statement-pool-capacity");
+
+/**
+ * Reads whether a queue is fast-tier now. A queue without a control row is full-tier. The worker
+ * reads it for tasks that claim_many_v1 returned, which carry no tier marker (ADR 0077).
+ */
+export const workerQueueTierRead = Symbol("workhorse.worker.queue-tier-read");
+
+export interface WorkerQueueTierRead {
+  [workerQueueTierRead](queueName: string): Promise<boolean>;
+}
