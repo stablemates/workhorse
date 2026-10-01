@@ -446,27 +446,45 @@ async def test_asyncpg_run_removes_the_notification_listener_before_release(
         pool.terminate()
 
 
-# SM-1071: the async worker left the core's Psycopg listener enabled, so every run also
-# opened a thread that failed against the async pool and reported each retry.
+# SM-1074: the async worker left the core's Psycopg listener enabled, so every run also
+# opened a sync listener thread that failed against the async pool and reported each retry.
 @pytest.mark.asyncio
-async def test_async_psycopg_run_reports_no_core_listener_failure(async_psycopg_pool) -> None:
+@pytest.mark.parametrize("driver", ["psycopg", "asyncpg"])
+async def test_async_worker_run_starts_only_its_own_notification_listener(
+    driver: str, async_psycopg_pool, asyncpg_pool
+) -> None:
     reported: list[BaseException] = []
-    worker = AsyncWorker.from_psycopg(
-        async_psycopg_pool,
-        queue="sm-1071-core-listener",
-        poll_ms=5_000,
-        on_notification_error=reported.append,
+    options: dict[str, Any] = {
+        "queue": f"sm-1074-{driver}",
+        "poll_ms": 5_000,
+        "on_notification_error": reported.append,
+    }
+    worker = (
+        AsyncWorker.from_psycopg(async_psycopg_pool, **options)
+        if driver == "psycopg"
+        else AsyncWorker.from_asyncpg(asyncpg_pool, **options)
     )
+    core_listeners: list[object] = []
+    start_core_listener = worker._inner._start_notification_listener
+
+    def record_core_listener() -> Any:
+        listener = start_core_listener()
+        core_listeners.append(listener)
+        return listener
+
+    worker._inner._start_notification_listener = record_core_listener  # type: ignore[method-assign]
     run = asyncio.create_task(worker.run())
     try:
         await eventually_async(
-            lambda: notification_listening(worker), "the psycopg listener never started"
+            lambda: notification_listening(worker), f"the {driver} listener never started"
         )
-        await asyncio.sleep(0.2)
+        # Give a failing core listener time to report and retry.
+        await asyncio.sleep(0.5)
     finally:
         worker.stop()
         await asyncio.wait_for(run, timeout=2)
 
+    assert core_listeners == [None]
     assert reported == []
 
 
@@ -529,3 +547,24 @@ async def test_a_failed_listener_removal_still_releases_the_connection(
     assert not await notification_listening(worker)
     if isinstance(error, OSError):
         assert reported == [error]
+
+
+# SM-1074: the core falls back to a Psycopg pool heartbeat factory, which cannot open a sync
+# connection from an async pool. Dedicated heartbeats must use the async worker's own factory.
+@pytest.mark.parametrize("driver", ["psycopg", "asyncpg"])
+@pytest.mark.parametrize("shared_heartbeats", [False, True])
+async def test_async_worker_heartbeats_never_use_the_core_pool_factory(
+    driver: str, shared_heartbeats: bool, async_psycopg_pool, asyncpg_pool
+) -> None:
+    worker = (
+        AsyncWorker.from_psycopg(
+            async_psycopg_pool, queue="sm-1074-heartbeats", shared_heartbeats=shared_heartbeats
+        )
+        if driver == "psycopg"
+        else AsyncWorker.from_asyncpg(
+            asyncpg_pool, queue="sm-1074-heartbeats", shared_heartbeats=shared_heartbeats
+        )
+    )
+
+    expected = None if shared_heartbeats else worker._open_heartbeat_executor
+    assert worker._inner._heartbeat_executor_factory == expected
