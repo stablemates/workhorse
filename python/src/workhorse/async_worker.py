@@ -364,7 +364,6 @@ class AsyncWorker:
         self._bridge = _AsyncExecutorBridge(executor)
         self._pool = pool
         self._driver = driver
-        self._notification_connection_factory = None
         self._on_notification_error = on_notification_error
         self._loop: asyncio.AbstractEventLoop | None = None
         self._running = False
@@ -381,6 +380,8 @@ class AsyncWorker:
             ),
             **worker_options,
         )
+        # The async run listens through its own driver, so the core opens no Psycopg listener.
+        self._inner._notification_connection_factory = None
 
     @classmethod
     def from_psycopg(
@@ -690,12 +691,20 @@ class AsyncWorker:
                 self._inner._wake_from_notification()
 
         await connection.add_listener(_CHANNEL, wake)
-        self._inner._set_notification_listening(True)
-        self._inner._wake_from_notification()
-        while not stop.is_set() and not connection.is_closed():
-            with suppress(TimeoutError):
-                await asyncio.wait_for(stop.wait(), timeout=0.1)
-        await connection.remove_listener(_CHANNEL, wake)
+        try:
+            self._inner._set_notification_listening(True)
+            self._inner._wake_from_notification()
+            while not stop.is_set() and not connection.is_closed():
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(stop.wait(), timeout=0.1)
+        finally:
+            # run() cancels this task, and asyncpg warns when a pooled connection returns with a
+            # callback. A failed UNLISTEN leaves the release to the pool's reset.
+            try:
+                await connection.remove_listener(_CHANNEL, wake)
+            except Exception as error:
+                if self._on_notification_error is not None:
+                    self._on_notification_error(error)
 
 
 __all__ = ["AsyncBatchHandler", "AsyncHandler", "AsyncWorker"]

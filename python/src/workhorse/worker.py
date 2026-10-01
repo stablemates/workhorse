@@ -1249,7 +1249,7 @@ class Worker:
         )
         self._heartbeat_connection_lock = Lock()
         self._heartbeat_connection: tuple[_SyncRowExecutor, Callable[[], None]] | None = None
-        self._notification_connection_factory: _NotificationConnectionFactory = (
+        self._notification_connection_factory: _NotificationConnectionFactory | None = (
             _psycopg_pool_notification_factory(pool)
         )
 

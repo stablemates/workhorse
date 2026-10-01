@@ -572,11 +572,14 @@ The listener reconnects after errors with 10 percent jitter around exponential d
 failure never stops dispatch. `stop()` waits at most 200 milliseconds for the listener thread, so a
 blocked connection factory cannot prevent the worker from draining.
 
-`AsyncWorker.run()` can open a separate native async notification connection through
-`notification_connection_factory`. Psycopg uses its asynchronous `notifies` iterator. asyncpg uses
-`add_listener` and `remove_listener`. Both filter `workhorse_tasks` payloads to the configured queues
-or `*`, wake the shared dispatcher, report listener errors, and reconnect with the same jittered
-backoff. `AsyncWorker` closes the listener connection but never closes its query connection.
+`AsyncWorker.run()` holds one notification connection from its pool in an asyncio task and disables
+the core worker's Psycopg listener thread. Psycopg uses its asynchronous `notifies` iterator. asyncpg
+uses `add_listener` and `remove_listener`. Both filter `workhorse_tasks` payloads to the configured
+queues or `*`, wake the shared dispatcher, report listener errors, and reconnect with the same
+jittered backoff. When `run()` returns, it cancels the listener task. asyncpg calls `remove_listener`
+on every exit, including that cancellation, so the pool never receives a connection with a callback.
+`on_notification_error` receives a failed `remove_listener`, and the connection still returns to the
+pool, whose reset discards the `LISTEN`.
 
 Handler failures pass a JSON error envelope to `fail_v1` with a null retry override, so PostgreSQL
 selects `ready`, `scheduled`, or `failed` from the persisted attempt budget and retry policy.
