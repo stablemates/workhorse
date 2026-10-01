@@ -36,8 +36,11 @@ exposes `SyncContracts`. PostgreSQL inserts each version once and keeps the curr
 separate policy row, so an operator override survives the next deploy.
 
 After synchronization, the TypeScript client caches the selected document for each task type. If an
-operator changes the selected version, PostgreSQL reports the stale selection so the client can
-refresh the document and validate the enqueue again.
+operator changes the selected version, the cached document can go stale in two ways. A payload the
+cached document accepts reaches PostgreSQL, which reports the stale selection. A payload the cached
+document rejects never reaches PostgreSQL, so the client reloads the selection once before it
+reports the rejection. Either way, the client validates the enqueue again against the current
+document.
 
 Each SDK rejects keywords outside the shared profile before compiling a schema. References can
 target bundled definitions in the same document, while remote references and custom keywords are

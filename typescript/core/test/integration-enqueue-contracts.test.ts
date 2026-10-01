@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import type { QueryResultRow } from "pg";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   DEFAULT_IDEMPOTENCY_SCOPE,
@@ -15,6 +16,8 @@ import {
   MAX_TASK_DEPENDENTS,
   MAX_THROTTLE_WINDOW_MS,
   TaskContractValidationError,
+  TaskTypeContracts,
+  TaskValueSizeLimitError,
   Queue,
   type Queryable,
   Worker,
@@ -381,6 +384,92 @@ describe("enqueue contracts", () => {
         "DELETE FROM workhorse.contract_definition WHERE task_type = 'contract.policy' AND version = 'one'",
       ),
     ).rejects.toThrow(/contract documents are immutable/);
+  });
+
+  describe("a stale cached contract", () => {
+    const shapes: TaskTypeContracts["versions"] = {
+      one: { payloadSchema: { type: "object", required: ["one"], properties: { one: true } } },
+      two: { payloadSchema: { type: "object", required: ["two"], properties: { two: true } } },
+      roomy: {
+        maxPayloadBytes: 4096,
+        payloadSchema: { type: "object", required: ["one"], properties: { one: true } },
+      },
+    };
+    const staleQueue = async (taskType: string): Promise<Queue> => {
+      const synced = new Queue(pool, "default", {
+        defaultMaxPayloadBytes: 128,
+        contracts: { [taskType]: { currentVersion: "one", versions: shapes } },
+      });
+      await synced.syncContracts();
+      return synced;
+    };
+
+    it("refreshes the selection when a payload fails the cached version", async () => {
+      const synced = await staleQueue("stale.version");
+      await pool.query("SELECT workhorse.override_contract_version_v1('stale.version', 'two')");
+
+      const id = await synced.enqueue("stale.version", { two: true });
+
+      await expect(admin.getTask(id)).resolves.toMatchObject({ contractVersion: "two" });
+      await expect(synced.enqueue("stale.version", { one: true })).rejects.toBeInstanceOf(
+        TaskContractValidationError,
+      );
+    });
+
+    it("refreshes the selection when a payload exceeds the cached size limit", async () => {
+      const synced = await staleQueue("stale.limit");
+      const payload = { one: "x".repeat(512) };
+      await expect(synced.enqueue("stale.limit", payload)).rejects.toBeInstanceOf(
+        TaskValueSizeLimitError,
+      );
+      await pool.query("SELECT workhorse.override_contract_version_v1('stale.limit', 'roomy')");
+
+      const id = await synced.enqueue("stale.limit", payload);
+
+      await expect(admin.getTask(id)).resolves.toMatchObject({ contractVersion: "roomy" });
+    });
+
+    it("reads the refreshed selection through the caller's transaction", async () => {
+      const synced = await staleQueue("stale.transaction");
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(
+          "SELECT workhorse.override_contract_version_v1('stale.transaction', 'two')",
+        );
+        const id = await synced.enqueue("stale.transaction", { two: true }, {}, client);
+        const stored = await client.query<{ contract_version: string }>(
+          "SELECT contract_version FROM workhorse.task WHERE id = $1",
+          [id],
+        );
+        expect(stored.rows).toEqual([{ contract_version: "two" }]);
+      } finally {
+        await client.query("ROLLBACK");
+        client.release();
+      }
+    });
+
+    it("refreshes once before rejecting a payload the current version also rejects", async () => {
+      const synced = await staleQueue("stale.invalid");
+      let contractReads = 0;
+      const spied: Queryable = {
+        query: <R extends QueryResultRow>(text: string, values?: readonly unknown[]) => {
+          if (text.includes("get_contract_definition_v1")) contractReads += 1;
+          return pool.query<R>(text, values === undefined ? undefined : [...values]);
+        },
+      };
+
+      await expect(
+        synced.enqueue("stale.invalid", { neither: true }, {}, spied),
+      ).rejects.toMatchObject({ name: "TaskContractValidationError", contractVersion: "one" });
+      expect(contractReads).toBe(1);
+
+      await pool.query("SELECT workhorse.override_contract_version_v1('stale.invalid', 'two')");
+      await expect(
+        synced.enqueue("stale.invalid", { neither: true }, {}, spied),
+      ).rejects.toMatchObject({ name: "TaskContractValidationError", contractVersion: "two" });
+      expect(contractReads).toBe(2);
+    });
   });
 
   // PostgreSQL enforces a size limit on the value's jsonb text, which spaces its separators and

@@ -574,15 +574,45 @@ export class EnqueueContractsModule extends QueueModule {
     return (await this.serializedTaskAcceptance(taskType, payload)).acceptance;
   }
 
+  // An operator can change the selected version or its limits after syncContracts(). A payload the
+  // cached definition rejects may be valid under the current one, so the client reloads the
+  // definition once through the enqueue's queryable and validates again before it reports the
+  // rejection.
   private async serializedTaskAcceptance(
     taskType: string,
     payload: Json,
+    database: Queryable = this.context.database,
   ): Promise<SerializedTaskAcceptance> {
-    const { options } = this.context;
-    const typeContracts = options.contracts?.[taskType];
     const databaseContract = !this.state.contractsSynchronized
       ? undefined
       : this.state.currentDatabaseContracts.get(taskType);
+    try {
+      return this.serializedTaskAcceptanceUnder(taskType, payload, databaseContract);
+    } catch (error) {
+      if (
+        databaseContract === undefined ||
+        !(error instanceof TaskContractValidationError || error instanceof TaskValueSizeLimitError)
+      ) {
+        throw error;
+      }
+      const definition = await this.loadContract(taskType, null, database);
+      this.storeCurrentContract(taskType, definition);
+      return this.serializedTaskAcceptanceUnder(taskType, payload, definition ?? undefined);
+    }
+  }
+
+  private storeCurrentContract(taskType: string, definition: CachedContractDefinition | null) {
+    if (definition === null) this.state.currentDatabaseContracts.delete(taskType);
+    else this.state.currentDatabaseContracts.set(taskType, definition);
+  }
+
+  private serializedTaskAcceptanceUnder(
+    taskType: string,
+    payload: Json,
+    databaseContract: CachedContractDefinition | undefined,
+  ): SerializedTaskAcceptance {
+    const { options } = this.context;
+    const typeContracts = options.contracts?.[taskType];
     const contractVersion = databaseContract?.version ?? typeContracts?.currentVersion ?? null;
     const contract =
       databaseContract?.contract ??
@@ -750,6 +780,7 @@ export class EnqueueContractsModule extends QueueModule {
             const { serializedPayload, acceptance } = await this.serializedTaskAcceptance(
               type,
               payload,
+              transaction,
             );
             if (options.prerequisiteTaskId !== undefined && options.dependencies !== undefined) {
               throw new TypeError(
@@ -863,9 +894,10 @@ export class EnqueueContractsModule extends QueueModule {
               throw new Error("PostgreSQL returned invalid contract mismatch details");
             }
             for (const taskType of mismatch.taskTypes) {
-              const definition = await this.loadContract(taskType, null, transaction);
-              if (definition === null) this.state.currentDatabaseContracts.delete(taskType);
-              else this.state.currentDatabaseContracts.set(taskType, definition);
+              this.storeCurrentContract(
+                taskType,
+                await this.loadContract(taskType, null, transaction),
+              );
             }
             if (!refreshOnMismatch) {
               throw new Error("Contract policy changed again while retrying enqueue");

@@ -100,8 +100,11 @@ Call `queue.syncContracts()` during application startup. Python, Rust, and Ruby 
 the current version in a separate policy row, so an operator override survives the next deploy.
 
 After synchronization, the TypeScript client caches the selected document for each task type. If an
-operator changes the selected version, PostgreSQL reports the stale selection so the client can
-refresh the document and validate the enqueue again.
+operator changes the selected version, the cached document can go stale in two ways. A payload the
+cached document accepts reaches PostgreSQL, which reports the stale selection. A payload the cached
+document rejects never reaches PostgreSQL, so the client reloads the selection once before it
+reports the rejection. Either way, the client validates the enqueue again against the current
+document.
 
 Workhorse accepts the shared JSON Schema profile only. Bundled references work inside one document,
 formats stay annotations, and Workhorse rejects remote references or custom keywords before
