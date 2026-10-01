@@ -362,6 +362,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "sample the clock after the row lock",
     kind: "additive",
   },
+  {
+    fromVersion: 50,
+    toVersion: 51,
+    file: "0052-keep-cold-export-segments-one-utc-day.sql",
+    description: "keep cold-export segments one UTC day",
+    kind: "additive",
+  },
 ];
 
 /**

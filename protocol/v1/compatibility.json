@@ -1,7 +1,7 @@
 [
   {
     "id": "current",
-    "installedSchemaVersion": 50,
+    "installedSchemaVersion": 51,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [5],
     "compatible": true

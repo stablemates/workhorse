@@ -44,6 +44,49 @@ A crash cannot corrupt the ledger either. A claim leases the day and counts the 
 the attempt that holds the lease can mark the day complete. A stale exporter that wakes up late is
 refused.
 
+## A day is a UTC day
+
+A segment always starts at a UTC midnight and lasts one UTC day, whatever time zone the exporter's
+session uses. Earlier releases stepped a calendar day in the session time zone. Across a
+daylight-saving change, a segment could then run an hour short or an hour long. Later segments
+started off midnight, and two of them could share a UTC date and so one object name. The later
+export overwrote the earlier day's object.
+
+The schema upgrade that adds the UTC-day rule repairs such a ledger. Before you run it, stop every
+exporter and let each finish its object and manifest uploads. Keep export enabled, so retention
+still waits for the export. The repair fences an earlier exporter out of the ledger. It cannot stop
+an upload already in flight, and that upload would overwrite the corrected day's object with the
+old range.
+
+The upgrade first waits for any running retention pass, and none starts until the repair commits.
+A pass that read the old watermark therefore cannot delete history the repair wants to export
+again. An exporter that claims or completes a day during the upgrade waits for it too.
+
+When a relation lost a completed day to a short or long segment, Workhorse moves its watermark back
+to the first day that segment may have overwritten. The exporter then writes those days again.
+Retention reads the watermark, so it keeps those days until the export has copied them.
+
+Each damaged segment is then made one UTC day:
+
+- A segment that starts at a UTC midnight and lies at or after the new watermark becomes one UTC day
+  and is exported again. Its attempt count rises, so the exporter that held it before cannot
+  complete it.
+- Any other segment that is not one UTC day is dropped. Its object stays in your store, but the
+  ledger no longer names it.
+
+The upgrade raises a warning per relation with the count and the range of each kind of change.
+
+The rewind reaches only history that PostgreSQL still holds. If retention already removed some of
+those days, the watermark stops at the oldest day still present. A second warning names the days
+that cannot be written again. Treat their archive objects as suspect, and restore them from another
+copy if you have one.
+
+Retention can also remove part of a day. The fast tier prunes outcomes one row at a time, so a day
+it already archived may keep only some of its rows. Exporting that day again would overwrite a
+complete object with a smaller one. The rewind therefore also stops after the last completed day
+whose source now holds fewer rows than its archive object recorded. Those days keep their objects,
+and the same warning names them.
+
 ## Running an exporter
 
 The exporter is not a worker routine. Workers never talk to your object store and dispatch never

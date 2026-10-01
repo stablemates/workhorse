@@ -620,6 +620,40 @@ describe("retention maintenance", () => {
     ).rejects.toThrow("hour-aligned lower bound");
   });
 
+  it("counts every hour once in a long window that crosses daylight saving in the session TimeZone", async () => {
+    // 1 January to 15 April 2026 05:00Z crosses the 8 March transition in America/New_York.
+    const from = new Date("2026-01-01T00:00:00Z");
+    const to = new Date("2026-04-15T05:00:00Z");
+    const hours = (to.getTime() - from.getTime()) / 3_600_000;
+    // Both tiers hold the whole window, so a boundary an hour off would drop or repeat an hour.
+    await pool.query(
+      `INSERT INTO workhorse.task_stat_bucket_hour(bucket_start, queue_name, task_type, enqueued)
+       SELECT hour, 'default', 'stat-dst', 1
+         FROM generate_series($1::timestamptz, $2::timestamptz - interval '1 hour', interval '1 hour') hour`,
+      [from, to],
+    );
+    await pool.query(
+      `INSERT INTO workhorse.task_stat_bucket_day(bucket_start, queue_name, task_type, enqueued)
+       SELECT day, 'default', 'stat-dst', 24
+         FROM generate_series($1::timestamptz, $2::timestamptz, interval '24 hours') day`,
+      [from, to],
+    );
+
+    const client = await pool.connect();
+    try {
+      await client.query("SET TimeZone = 'America/New_York'");
+      const total = await client.query<{ enqueued: number }>(
+        `SELECT COALESCE(sum(enqueued), 0)::integer AS enqueued
+           FROM workhorse.stat_buckets_v1($1, $2) WHERE task_type = 'stat-dst'`,
+        [from, to],
+      );
+      expect(total.rows[0]!.enqueued).toBe(hours);
+    } finally {
+      await client.query("RESET TimeZone");
+      client.release();
+    }
+  });
+
   it("folds statistics beyond the group limit into an overflow type instead of growing unbounded", async () => {
     for (let index = 0; index < 5; index += 1) await queue.enqueue(`stat-type-${index}`, {});
     await queue.overrideMaintenancePolicy({ statisticsGroupLimit: 2 });
