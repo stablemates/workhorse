@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from functools import lru_cache
 from typing import Any, cast
 
-from jsonschema import Draft202012Validator
+import regex
+from jsonschema import Draft202012Validator, FormatChecker, ValidationError
+from jsonschema.validators import extend
 
+from ._ecma_pattern import BackreferenceError, compile_ecma_pattern
 from .errors import TaskContractValidationError
 from .types import Json, TaskTypeContracts
 
@@ -84,15 +88,119 @@ def check_contract_schema(schema: Json, path: str = "$") -> None:
             if not isinstance(value, dict):
                 raise TypeError(f"{keyword_path} must be an object")
             for name, child in value.items():
+                if keyword == "patternProperties":
+                    _check_pattern(name, f"{keyword_path}.{name}")
                 check_contract_schema(child, f"{keyword_path}.{name}")
+        elif keyword == "pattern" and isinstance(value, str):
+            _check_pattern(value, keyword_path)
         elif keyword not in ANNOTATIONS and keyword not in VALIDATION:
             raise TypeError(f"{keyword_path} is outside the Workhorse contract profile")
 
 
 def compile_contract_schema(schema: Json) -> Draft202012Validator:
+    """Compile a contract schema, raising TypeError or ValueError for one outside the profile.
+
+    A pattern is an ECMA-262 regular expression under the ``u`` flag, as the TypeScript reference
+    compiles it, so a pattern outside that grammar raises ValueError.
+    """
     check_contract_schema(schema)
-    Draft202012Validator.check_schema(cast(Any, schema))
-    return Draft202012Validator(cast(Any, schema))
+    _ContractValidator.check_schema(cast(Any, schema), format_checker=_META_FORMATS)
+    return _ContractValidator(cast(Any, _without_dialect(schema)))
+
+
+def _without_dialect(schema: Json) -> Json:
+    """Copy a checked schema without its ``$schema`` keywords, each of which names DIALECT.
+
+    jsonschema builds a fresh validator for each subschema that declares ``$schema``, and it would
+    build its registered Draft 2020-12 validator, which matches patterns with re.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    copy: dict[str, Json] = {}
+    for keyword, value in schema.items():
+        if keyword == "$schema":
+            continue
+        if keyword in SCHEMA_VALUES:
+            copy[keyword] = _without_dialect(value)
+        elif keyword in SCHEMA_ARRAYS:
+            copy[keyword] = [_without_dialect(child) for child in cast(list[Json], value)]
+        elif keyword in SCHEMA_MAPS:
+            children = cast(dict[str, Json], value)
+            copy[keyword] = {name: _without_dialect(child) for name, child in children.items()}
+        else:
+            copy[keyword] = value
+    return copy
+
+
+# Compiled patterns, shared by every schema that repeats one.
+_ecma_pattern = lru_cache(maxsize=1024)(compile_ecma_pattern)
+
+
+def _check_pattern(pattern: str, path: str) -> None:
+    try:
+        _ecma_pattern(pattern)
+    except BackreferenceError:
+        message = f"{path} uses a backreference, which is outside the Workhorse contract profile"
+        raise ValueError(message) from None
+
+
+# Each keyword function takes the (validator, value, instance, schema) arguments jsonschema passes.
+def _pattern(
+    validator: Any, pattern: str, instance: Any, _schema: Any
+) -> Iterator[ValidationError]:
+    if validator.is_type(instance, "string") and not _ecma_pattern(pattern).search(instance):
+        yield ValidationError(f"{instance!r} does not match {pattern!r}")
+
+
+def _pattern_properties(
+    validator: Any, patterns: Mapping[str, Any], instance: Any, _schema: Any
+) -> Iterator[ValidationError]:
+    if not validator.is_type(instance, "object"):
+        return
+    for pattern, subschema in patterns.items():
+        compiled = _ecma_pattern(pattern)
+        for name, value in instance.items():
+            if compiled.search(name):
+                yield from validator.descend(value, subschema, path=name, schema_path=pattern)
+
+
+def _additional_properties(
+    validator: Any, additional: Any, instance: Any, schema: Mapping[str, Any]
+) -> Iterator[ValidationError]:
+    if not validator.is_type(instance, "object"):
+        return
+    properties = schema.get("properties", {})
+    patterns: list[regex.Pattern[str]] = [
+        _ecma_pattern(pattern) for pattern in schema.get("patternProperties", {})
+    ]
+    extras = [
+        name
+        for name in instance
+        if name not in properties and not any(pattern.search(name) for pattern in patterns)
+    ]
+    if validator.is_type(additional, "object"):
+        for extra in extras:
+            yield from validator.descend(instance[extra], additional, path=extra)
+    elif not additional and extras:
+        listed = ", ".join(repr(extra) for extra in sorted(extras))
+        yield ValidationError(f"Additional properties are not allowed ({listed} unexpected)")
+
+
+# The meta-schema's own format checks, except that check_contract_schema has already compiled every
+# pattern as ECMA-262, where the regex format would compile it with re.
+_META_FORMATS = FormatChecker(
+    [name for name in Draft202012Validator.FORMAT_CHECKER.checkers if name != "regex"]
+)
+
+# Draft 2020-12 with every pattern keyword matching under ECMA-262 semantics instead of re's.
+_ContractValidator: type[Draft202012Validator] = cast(Any, extend)(
+    Draft202012Validator,
+    validators={
+        "additionalProperties": _additional_properties,
+        "pattern": _pattern,
+        "patternProperties": _pattern_properties,
+    },
+)
 
 
 def apply_contract(

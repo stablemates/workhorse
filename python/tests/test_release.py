@@ -81,6 +81,7 @@ def test_python_support_contract_matches_repository_declarations(database_url: s
     assert project["dependencies"] == [
         "jsonschema>=4.25,<5",
         "psycopg[pool]>=3.3,<4",
+        "regex>=2024.11,<2027",
     ]
     assert project["optional-dependencies"]["psycopg"] == []
     assert project["optional-dependencies"]["asyncpg"] == ["asyncpg>=0.31,<1"]
