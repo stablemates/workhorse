@@ -51,5 +51,10 @@
     "id": "custom-keyword-rejected",
     "schema": { "type": "string", "workhorseCustom": true },
     "schemaError": true
+  },
+  {
+    "id": "pattern-property-outside-its-selector-rejected",
+    "schema": { "type": "string", "pattern": "^\\p{General_Category=Greek}$" },
+    "schemaError": true
   }
 ]
