@@ -105,7 +105,11 @@ export async function checkPythonRelease(): Promise<void> {
   const temporary = await mkdtemp(path.join(tmpdir(), "workhorse-python-release-"));
   const stagedDistributions = path.join(temporary, "dist");
   try {
-    await run("uv", ["build", "--project", "python", "--out-dir", stagedDistributions]);
+    // uv.lock does not cover the build backend, so hash-pinned constraints fix hatchling.
+    await run("uv", ["build", "--project", "python", "--out-dir", stagedDistributions], {
+      UV_BUILD_CONSTRAINT: "python/build-constraints.txt",
+      UV_REQUIRE_HASHES: "1",
+    });
     const names = await distributions(stagedDistributions, version);
     await run("pnpm", ["python:test"], {
       WORKHORSE_PYTHON_DISTRIBUTIONS: stagedDistributions,

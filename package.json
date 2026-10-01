@@ -102,7 +102,7 @@
     "npm:vuln": "tsx scripts/audit-npm-dependencies.ts",
     "format": "oxfmt --write . && pnpm python:format && pnpm go:fmt",
     "format:check": "oxfmt --check . && pnpm python:format:check && pnpm go:fmt:check",
-    "python:build": "pnpm dashboard-bundle:fetch && uv build --project python",
+    "python:build": "pnpm dashboard-bundle:fetch && uv build --project python --build-constraints python/build-constraints.txt --require-hashes",
     "python:release-check": "tsx scripts/check-python-release.ts",
     "python:format": "uv run --project python ruff format python/src python/tests python/examples python/tools",
     "python:format:check": "uv run --project python ruff format --check python/src python/tests python/examples python/tools",
@@ -191,7 +191,8 @@
     "tsx": "^4.23.15",
     "typescript": "^5.8.3",
     "vite": "^8.3.1",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "yaml": "2.9.1"
   },
   "packageManager": "pnpm@10.18.3",
   "pnpm": {

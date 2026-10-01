@@ -10,6 +10,7 @@ from typing import Any
 
 import psycopg
 import tomli
+from distributions import BUILD_CONSTRAINTS, install_distribution
 
 import workhorse
 from workhorse._version import WORKHORSE_VERSION
@@ -208,3 +209,37 @@ def test_built_distributions_run_the_documented_examples(
             assert worker_result.stdout.strip() == (
                 f"Python {driver} async worker example completed"
             )
+
+
+# An older hatchling release that pyproject.toml still accepts. The test pins it so the
+# backend that builds a wheel from the sdist is visibly the one the constraints name.
+OLDER_HATCHLING = (
+    "hatchling==1.27.0 \\\n"
+    "    --hash=sha256:d3a2f3567c4f926ea39849cdf924c7e99e6686c9c8e288ae1037c8fa2a5d937b\n"
+)
+
+
+def test_installing_the_sdist_builds_its_wheel_with_the_constrained_backend(
+    tmp_path: Path, built_distributions: dict[str, Path]
+) -> None:
+    pinned = BUILD_CONSTRAINTS.read_text()
+    match = re.search(r"^hatchling==.*?\n(?:    --hash=.*\n)+", pinned, re.MULTILINE)
+    assert match is not None
+    constraints = tmp_path / "build-constraints.txt"
+    constraints.write_text(pinned.replace(match.group(0), OLDER_HATCHLING))
+    environment_directory = tmp_path / "environment"
+    subprocess.run(
+        ["uv", "venv", str(environment_directory), "--python", sys.executable], check=True
+    )
+    interpreter = environment_directory / "bin" / "python"
+
+    install_distribution(
+        built_distributions["sdist"], interpreter, None, tmp_path, constraints=constraints
+    )
+
+    wheel_metadata = next(
+        (environment_directory / "lib").glob(
+            "python*/site-packages/stablemates_workhorse-*.dist-info/WHEEL"
+        )
+    )
+    assert "Generator: hatchling 1.27.0\n" in wheel_metadata.read_text()

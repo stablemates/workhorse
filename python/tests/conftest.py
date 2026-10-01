@@ -15,7 +15,7 @@ import pytest
 import pytest_asyncio
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
-REPOSITORY = Path(__file__).parents[2]
+from distributions import BUILD_CONSTRAINTS, install_distribution
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -25,10 +25,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             item.add_marker(pytest.mark.integration)
 
 
+REPOSITORY = Path(__file__).parents[2]
+
+
 @pytest.fixture(scope="session")
-def installed_distribution_interpreters(
-    tmp_path_factory: pytest.TempPathFactory,
-) -> dict[str, Path]:
+def built_distributions(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     scratch = tmp_path_factory.mktemp("python-distributions")
     configured_distributions = os.environ.get("WORKHORSE_PYTHON_DISTRIBUTIONS")
     if configured_distributions:
@@ -43,18 +44,28 @@ def installed_distribution_interpreters(
                 "build",
                 "--project",
                 str(REPOSITORY / "python"),
+                "--build-constraints",
+                str(BUILD_CONSTRAINTS),
+                "--require-hashes",
                 "--out-dir",
                 str(distribution_directory),
             ],
             check=True,
             cwd=REPOSITORY,
         )
-    artifacts = {
+    return {
         "wheel": next(distribution_directory.glob("*.whl")),
         "sdist": next(distribution_directory.glob("*.tar.gz")),
     }
+
+
+@pytest.fixture(scope="session")
+def installed_distribution_interpreters(
+    tmp_path_factory: pytest.TempPathFactory, built_distributions: dict[str, Path]
+) -> dict[str, Path]:
+    scratch = tmp_path_factory.mktemp("python-environments")
     interpreters: dict[str, Path] = {}
-    for distribution, artifact in artifacts.items():
+    for distribution, artifact in built_distributions.items():
         environments = (
             (distribution, None),
             (f"{distribution}-psycopg", "psycopg"),
@@ -68,18 +79,7 @@ def installed_distribution_interpreters(
                 cwd=REPOSITORY,
             )
             installed_python = environment_directory / "bin" / "python"
-            subprocess.run(
-                [
-                    "uv",
-                    "pip",
-                    "install",
-                    "--python",
-                    str(installed_python),
-                    f"{artifact}[{extras}]" if extras else str(artifact),
-                ],
-                check=True,
-                cwd=REPOSITORY,
-            )
+            install_distribution(artifact, installed_python, extras, scratch)
             interpreters[name] = installed_python
     return interpreters
 
