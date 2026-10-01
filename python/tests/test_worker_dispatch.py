@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
+from itertools import pairwise
 from threading import Event, Lock, Thread
 from time import monotonic, sleep
 from typing import Any
@@ -281,6 +282,7 @@ def scripted_worker(
     concurrency: int,
     poll_ms: int = 5_000,
     cohorts: int | None = None,
+    **options: Any,
 ) -> Worker:
     worker = Worker(
         object(),  # type: ignore[arg-type]
@@ -289,9 +291,10 @@ def scripted_worker(
         concurrency=concurrency,
         cohorts=cohorts,
         poll_ms=poll_ms,
-        registry_interval_ms=0,
+        registry_interval_ms=options.pop("registry_interval_ms", 0),
         shared_heartbeats=True,
         _executor=claims,
+        **options,
     )
     worker._compatibility.assert_compatible = lambda: None  # type: ignore[method-assign]
     # No listener, so the empty-claim wait follows the poll interval.
@@ -610,3 +613,217 @@ def test_failed_startup_maintenance_pass_ends_the_run_with_its_error() -> None:
     with running(worker, executions) as errors:
         wait_for(lambda: len(errors) == 1, "the failed maintenance pass did not end the run")
     assert [str(error) for error in errors] == ["tick failed"]
+
+
+class RecordedMaintenance(ScriptedClaims):
+    """Record each tick and schedule offer, optionally fail a later tick, and answer registration.
+
+    The registry row reports the remote pause flag, so a test can pause the worker remotely.
+    """
+
+    def __init__(
+        self,
+        rows: Sequence[dict[str, object]] = (),
+        *,
+        fail_tick: int | None = None,
+        remotely_paused: bool = False,
+    ) -> None:
+        super().__init__(rows)
+        self.fail_tick = fail_tick
+        self.remotely_paused = remotely_paused
+        self.statements: list[DriverStatement] = []
+        self.ticks: list[float] = []
+        self.schedule_offers: list[float] = []
+        self.ticks_in_flight = 0
+        self.maximum_ticks_in_flight = 0
+
+    def rows(self, statement: DriverStatement, parameters: Sequence[object] = ()) -> list[Any]:
+        with self._lock:
+            self.statements.append(statement)
+        if statement is STATEMENTS.register_worker:
+            return [{"paused": self.remotely_paused}]
+        if statement is STATEMENTS.fire_due_schedules:
+            with self._lock:
+                self.schedule_offers.append(monotonic())
+            return []
+        if statement is not STATEMENTS.tick:
+            return super().rows(statement, parameters)
+        with self._lock:
+            self.ticks.append(monotonic())
+            self.ticks_in_flight += 1
+            self.maximum_ticks_in_flight = max(self.maximum_ticks_in_flight, self.ticks_in_flight)
+            failing = self.fail_tick == len(self.ticks)
+        try:
+            # A pass that takes a while gives an overlapping pass room to show up.
+            sleep(0.01)
+            if failing:
+                raise RuntimeError("tick failed")
+            return []
+        finally:
+            with self._lock:
+                self.ticks_in_flight -= 1
+
+    def ticks_since(self, started_at: float) -> list[float]:
+        with self._lock:
+            return [at for at in self.ticks if at >= started_at]
+
+    def offers_since(self, started_at: float) -> list[float]:
+        with self._lock:
+            return [at for at in self.schedule_offers if at >= started_at]
+
+
+def maintenance_worker(claims: RecordedMaintenance, **options: Any) -> Worker:
+    return scripted_worker(
+        claims,
+        maintenance_interval_ms=100,
+        maintenance_routine_poll_ms=100,
+        schedule_namespaces=("dispatch-schedules",),
+        **options,
+    )
+
+
+def assert_on_cadence(times: list[float], interval: float) -> None:
+    """Every gap between passes stays near the maintenance interval."""
+    gaps = [later - earlier for earlier, later in pairwise(times)]
+    # A loaded host delays a wake, so the bound allows that slack but no dispatcher-sized stall.
+    assert gaps and max(gaps) < interval * 2.5, gaps
+
+
+# SM-1014: maintenance ran only when a slot was free, so a full worker stopped ticking and stopped
+# offering schedules until a handler returned.
+def test_saturated_worker_keeps_maintenance_and_schedule_offers_on_cadence() -> None:
+    claims = RecordedMaintenance([task_row(0, HANDLED), task_row(1, HANDLED)])
+    executions = Executions(claims)
+    worker = maintenance_worker(claims, concurrency=2)
+    with running(worker, executions) as errors:
+        wait_for(lambda: executions.running() == 2, "the worker did not fill its slots")
+        saturated_at = monotonic()
+        wait_for(
+            lambda: (
+                min(len(claims.ticks_since(saturated_at)), len(claims.offers_since(saturated_at)))
+                >= 5
+            ),
+            "a full worker stopped offering schedules",
+        )
+        ticks = claims.ticks_since(saturated_at)
+        offers = claims.offers_since(saturated_at)
+        assert executions.running() == 2
+    assert errors == []
+    assert len(ticks) >= 5
+    assert_on_cadence(ticks, 0.1)
+    assert_on_cadence(offers, 0.1)
+    assert claims.maximum_ticks_in_flight == 1
+
+
+@pytest.mark.parametrize("pause", ["local", "remote"])
+def test_paused_worker_keeps_maintenance_on_cadence(pause: str) -> None:
+    claims = RecordedMaintenance([task_row(0, HANDLED)], remotely_paused=pause == "remote")
+    executions = Executions(claims)
+    worker = maintenance_worker(
+        claims,
+        concurrency=2,
+        poll_ms=10,
+        registry_interval_ms=0 if pause == "local" else 1_000,
+    )
+    if pause == "local":
+        worker.pause()
+    with running(worker, executions) as errors:
+        started_at = monotonic()
+        wait_for(
+            lambda: len(claims.ticks_since(started_at)) >= 5, "a paused worker stopped ticking"
+        )
+        assert worker.is_paused()
+        assert claims.claims() == 0
+        ticks = claims.ticks_since(started_at)
+    assert errors == []
+    assert_on_cadence(ticks, 0.1)
+    assert claims.maximum_ticks_in_flight == 1
+
+
+def test_empty_claim_backoff_does_not_stretch_maintenance() -> None:
+    claims = RecordedMaintenance()
+    executions = Executions(claims)
+    # The empty-claim wait is fifty maintenance intervals long.
+    worker = maintenance_worker(claims, concurrency=2, poll_ms=5_000)
+    with running(worker, executions) as errors:
+        wait_for(lambda: claims.claims() == 1, "the worker did not claim")
+        backing_off_at = monotonic()
+        wait_for(
+            lambda: len(claims.ticks_since(backing_off_at)) >= 5,
+            "the empty-claim wait stalled maintenance",
+        )
+        assert claims.claims() == 1
+        ticks = claims.ticks_since(backing_off_at)
+    assert errors == []
+    assert_on_cadence(ticks, 0.1)
+
+
+def test_failed_later_maintenance_pass_stops_and_drains_the_run() -> None:
+    claims = RecordedMaintenance([task_row(0, HANDLED)], fail_tick=3)
+    executions = Executions(claims)
+    worker = maintenance_worker(claims, concurrency=1)
+    worker._execute_claimed_task = executions.execute  # type: ignore[method-assign]
+    errors: list[BaseException] = []
+    finished = Event()
+
+    def run() -> None:
+        try:
+            worker.run()
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            finished.set()
+
+    thread = Thread(target=run)
+    thread.start()
+    try:
+        wait_for(lambda: len(claims.ticks) >= 3, "the worker did not reach the failing tick")
+        # The run drains its claimed task before it reports the failure.
+        assert not finished.wait(timeout=0.2)
+        assert executions.running() == 1
+        executions.open_all()
+        assert finished.wait(timeout=5)
+    finally:
+        executions.open_all()
+        worker.stop()
+        thread.join(timeout=5)
+    assert [str(error) for error in errors] == ["tick failed"]
+    assert len(claims.ticks) == 3
+    assert executions.started == [task_row(0, HANDLED)["task_id"]]
+
+
+def test_run_once_runs_maintenance_before_it_claims() -> None:
+    claims = RecordedMaintenance([task_row(0, HANDLED)])
+    executions = Executions(claims)
+    executions.open = True
+    worker = maintenance_worker(claims, concurrency=1)
+    worker._execute_claimed_task = executions.execute  # type: ignore[method-assign]
+    assert worker.run_once() is True
+    maintained = [
+        statement
+        for statement in claims.statements
+        if statement in (STATEMENTS.tick, STATEMENTS.fire_due_schedules, STATEMENTS.claim_many)
+    ]
+    assert maintained[:3] == [
+        STATEMENTS.tick,
+        STATEMENTS.fire_due_schedules,
+        STATEMENTS.claim_many,
+    ]
+
+
+def test_maintenance_routines_keep_their_own_shorter_cadence() -> None:
+    claims = RecordedMaintenance([task_row(0, HANDLED)])
+    executions = Executions(claims)
+    worker = scripted_worker(
+        claims, concurrency=1, maintenance_interval_ms=60_000, maintenance_routine_poll_ms=100
+    )
+
+    def routine_offers() -> int:
+        with claims._lock:
+            return claims.statements.count(STATEMENTS.run_maintenance)
+
+    with running(worker, executions) as errors:
+        wait_for(lambda: executions.running() == 1, "the worker did not fill its slot")
+        wait_for(lambda: routine_offers() >= 4, "the routines waited for the tick interval")
+        assert len(claims.ticks) == 1
+    assert errors == []
