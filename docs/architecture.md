@@ -1285,6 +1285,17 @@ alphanumeric codes. `PrismaQueryError` prefers `meta.code` over Prisma's outer r
 `TypeOrmQueryError` follows `driverError` and `cause`. Each adapter copies the discovered code to
 its wrapper's `code` property so core can preserve typed SQL conflicts.
 
+`drizzleQueryable` rebuilds the statement as a Drizzle `SQL` value. Each positional `$N` becomes
+`sql.param`, and the text between parameters becomes `sql.raw`. The scan follows PostgreSQL's lexer:
+a `$N` inside a string literal, an `E''` escape string, a quoted identifier, a line comment, a nested
+block comment, a dollar-quoted body, or an identifier stays text. A line comment ends at a line feed
+or a carriage return. Literals separated by whitespace that contains a newline form one constant,
+and the continuation keeps the first segment's escape rules. A line comment counts as that
+whitespace, so a quote inside it never starts a continuation. A block comment between two literals
+keeps them separate. A schema script's plpgsql bodies therefore reach PostgreSQL unchanged. A genuine `$N` with no matching value raises `RangeError`.
+node-postgres returns one result per statement for a parameter-free script with several statements;
+`executeDrizzle` returns the rows of the last one.
+
 `kyselyQueryable` builds a `CompiledQuery.raw` from the statement and positional values, then calls
 `executeQuery` on either a `Kysely` database or `Transaction`. It maps `QueryResult.rows` into the
 same synthetic node-postgres metadata described above. `KyselyQueryError` retains the statement and
