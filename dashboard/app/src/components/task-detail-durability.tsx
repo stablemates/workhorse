@@ -32,6 +32,7 @@ import {
 } from "./task-detail-overview.js";
 import { HelpButton } from "./help-button.js";
 import { eventDetailSummary } from "../event-presentation.js";
+import { formatCount } from "../count-format.js";
 
 /** Plain-English consequence of one dependency policy action, said of the dependent task. */
 function dependencyActionPhrase(action: "release" | "cancel" | "fail"): string {
@@ -163,8 +164,8 @@ export function ChildLine({
     <Stack gap={6}>
       {children.length > 0 ? (
         <Text c="dimmed" size="xs" fw={600}>
-          {joinedChildren} of {children.length} {children.length === 1 ? "child" : "children"}{" "}
-          joined
+          {formatCount(joinedChildren)} of {formatCount(children.length)}{" "}
+          {children.length === 1 ? "child" : "children"} joined
         </Text>
       ) : null}
       {task.childLineage.records.map((edge) => {
@@ -419,7 +420,7 @@ export function BoundaryTimeline({ task }: { task: DashboardTaskDetail }) {
       {repeatedClaimAttempts.length > 0 ? (
         <Text c="dimmed" size="xs" mt={6}>
           {repeatedClaimAttempts.length === 1
-            ? `Attempt ${repeatedClaimAttempts[0]} has ${claimsPerAttempt.get(repeatedClaimAttempts[0]!)} claims.`
+            ? `Attempt ${repeatedClaimAttempts[0]} has ${formatCount(claimsPerAttempt.get(repeatedClaimAttempts[0]!) ?? 0)} claims.`
             : `Attempts ${repeatedClaimAttempts.join(", ")} each have more than one claim.`}{" "}
           A durable wait releases ownership without closing the logical attempt, so one attempt can
           hold several claims with different fence tokens.
@@ -548,7 +549,7 @@ export function DurableWaits({ task }: { task: DashboardTaskDetail }) {
       title="Durable wait"
       aside={
         <Badge variant="light" color="indigo">
-          {task.waits.length}
+          {formatCount(task.waits.length)}
           {task.truncated.waits ? "+" : ""}
         </Badge>
       }

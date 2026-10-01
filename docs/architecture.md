@@ -197,16 +197,16 @@ asynchronous equivalent return `HumanWaitCompletionResult`. Its `status` is `com
 completion under one retained idempotency key raises `HumanWaitIdempotencyConflictError`.
 
 Python validates external-wait names at 1 through 200 characters without surrounding whitespace.
-It accepts `timeout_ms` from 1 through 604800000. Signal payloads, human contexts, and human results
-must encode to at most 65536 UTF-8 bytes. Delivery idempotency keys contain 1 through 512 UTF-8
+It accepts `timeout_ms` from 1 through 604,800,000. Signal payloads, human contexts, and human results
+must encode to at most 65,536 UTF-8 bytes. Delivery idempotency keys contain 1 through 512 UTF-8
 bytes, and `requested_by` contains 1 through 200 characters.
 
 Every non-empty Python mutation first executes `SELECT version FROM workhorse.schema_version ORDER
 BY version`. `Queue` and `AsyncQueue` enqueue through a per-queue cached check instead, so a warm
 enqueue issues only `enqueue_many_v1`. `python/src/workhorse/_protocol.py` accepts schema version 43 or newer and client protocol 5.
 It refuses an unreadable, missing, older, or newer schema before the mutating statement. Enqueue
-batches contain at most 1000 requests. Default priority is 0, default attempt budget is 25, default
-payload and result limits are 1048576 bytes, and default idempotency retention is 86400000
+batches contain at most 1,000 requests. Default priority is 0, default attempt budget is 25, default
+payload and result limits are 1,048,576 bytes, and default idempotency retention is 86,400,000
 milliseconds.
 
 `python/src/workhorse/_statements.py` owns each statement in `STATEMENTS` with explicit Psycopg and
@@ -273,12 +273,12 @@ Debounce and throttle cannot combine with `Dependencies`. Prerequisite lists can
 duplicated, or larger than `MaxTaskDependencies` at 100. PostgreSQL validates every remaining value.
 
 The queue then calls `enqueue_many_v1`. A zero `Queue` uses the queue default. Zero `Priority` is 0,
-zero `MaxAttempts` is 25, and zero `Idempotency.TTLMS` is 86400000 milliseconds. Zero `Scope` is
+zero `MaxAttempts` is 25, and zero `Idempotency.TTLMS` is 86,400,000 milliseconds. Zero `Scope` is
 `default`. Zero `ConcurrencyKey`, `ExecutionTimeoutMS`, `Deadline`, `RetryPolicy`, `Dependencies`,
 and keyed-mode pointers serialize as absent or `null` according to the protocol contract.
-`payloadMaxBytes` and `resultMaxBytes` are 1048576. `sensitivePayloadKeys`,
+`payloadMaxBytes` and `resultMaxBytes` are 1,048,576. `sensitivePayloadKeys`,
 `sensitiveResultKeys`, and zero `Tags` are empty arrays. `runAt` is the current UTC timestamp unless
-the caller supplies `RunAt` or a keyed mode selects PostgreSQL's default. `MaxEnqueueBatchSize` is 1000.
+the caller supplies `RunAt` or a keyed mode selects PostgreSQL's default. `MaxEnqueueBatchSize` is 1,000.
 
 `EnqueueResult` preserves PostgreSQL's
 ordered task ID, outcome, and optional non-replaceable reason. The queue never commits, rolls back,
@@ -319,7 +319,7 @@ Both factories accept `queue`, `queues`, `worker_id`, `concurrency`, `poll_ms`, 
 limits as `Worker`. They also accept `shared_heartbeats` and the `on_notification_error` and
 `on_registration_error` callbacks. Neither factory accepts a connection factory, because the worker
 takes its heartbeat and listener connections from the pool.
-`registry_interval_ms` defaults to 5000. It accepts `0` to disable registration or a non-boolean
+`registry_interval_ms` defaults to 5,000. It accepts `0` to disable registration or a non-boolean
 integer of at least 100 milliseconds.
 `AsyncWorker.handle(type, handler)` receives `(Json, AsyncHandlerContext)`. The context exposes
 awaitable `get_checkpoint(name)`, `get_wait(name)`, `checkpoint(name, operation)`, `sleep(name,
@@ -437,7 +437,7 @@ returns the retained `result`. Concurrent same-name calls share one `Future` onl
 canonical encoded contexts match. A different in-flight or retained context raises
 `HumanWaitConflictError`. The method raises `HumanWaitLeaseLostError`,
 `HumanWaitAlreadyWaitingError`, or `HumanWaitLimitExceededError` for `stale`, `already_waiting`, or
-`limit_exceeded`. PostgreSQL caps each task at 1000 signal names and 1000 human-decision names.
+`limit_exceeded`. PostgreSQL caps each task at 1,000 signal names and 1,000 human-decision names.
 
 `HandlerContext.run_child(name, type, payload, options=None)` accepts child names from 1 through 200
 characters. It encodes `EnqueueOptions` without keyed modes or dependencies and calls
@@ -469,7 +469,7 @@ under those versions before it writes. The `AsyncHandlerContext` methods share t
 with overlapping batched `claim_many_v1` calls under the rules that
 [ADR 0076](decisions/0076-keep-overlapping-batched-claims-in-flight-to-fill-worker-slots.md) sets for
 every SDK, described under the TypeScript worker's claim passes. Each claim
-uses a 30000 millisecond default lease. `lease_ms` accepts 100 through 86400000. `heartbeat_ms`
+uses a 30,000 millisecond default lease. `lease_ms` accepts 100 through 86,400,000. `heartbeat_ms`
 defaults to the greater of 100 or one third of `lease_ms`; it must be positive and less than
 `lease_ms`. `maintenance_routine_poll_ms` bounds how often the worker offers the slow retention
 routines, defaults to 60000, and must be an integer of at least 100. `retry_delay_ms` reports one
@@ -525,7 +525,7 @@ core owns replay and persistence.
 
 `Worker.handle_batch(type, handler, *, max_size, linger_ms)` registers a synchronous Python batch
 handler. `max_size` accepts integers from 1 through 100 and cannot exceed `Worker.concurrency`.
-`linger_ms` accepts integers from 0 through 60000. Each task occupies one worker slot while it waits
+`linger_ms` accepts integers from 0 through 60,000. Each task occupies one worker slot while it waits
 for a full group or the linger deadline. The coordinator groups one type and queue, then orders the
 selected members by descending `ClaimedTask.priority` and worker claim order. Each task occupies its
 own handler thread, so the dispatcher stamps a claim sequence before that thread starts. The
@@ -598,8 +598,8 @@ Python `run_worker_process(worker, *, shutdown_timeout_ms, force_exit)` installs
 `SIGTERM` handlers around `Worker.run()`. Each handler writes its signal number to a nonblocking
 self-pipe. A control thread reads the pipe, so lock acquisition, log emission, timer creation, and
 thread creation happen outside the main thread's signal handler. The first signal starts the
-shutdown deadline and calls `Worker.stop()` on a separate thread. The deadline defaults to 25000
-milliseconds and accepts integers from 1 through 3600000. If the worker drains before the deadline,
+shutdown deadline and calls `Worker.stop()` on a separate thread. The deadline defaults to 25,000
+milliseconds and accepts integers from 1 through 3,600,000. If the worker drains before the deadline,
 the function restores the previous handlers and returns. A second signal calls `force_exit` with 128
 plus its signal number, which produces 130 for `SIGINT` and 143 for `SIGTERM`. An expired deadline
 calls `force_exit(1)`. The default `force_exit` is `os._exit`, so hard termination leaves active
@@ -809,25 +809,25 @@ occurrence.
 `WorkerOptions.WorkerID` defaults to the host name, process ID, and a random suffix.
 `WorkerOptions.Concurrency` defaults to 1 and accepts integers from 1 through 100. One buffered
 semaphore owns that budget across every configured queue.
-`WorkerOptions.LeaseDuration` defaults to 30000 milliseconds and accepts whole-millisecond values
-from 100 through 86400000. `WorkerOptions.PollInterval` defaults to 5000 milliseconds, or to 250
+`WorkerOptions.LeaseDuration` defaults to 30,000 milliseconds and accepts whole-millisecond values
+from 100 through 86,400,000. `WorkerOptions.PollInterval` defaults to 5,000 milliseconds, or to 250
 milliseconds when `WorkerOptions.PollingOnly` is set, matching the TypeScript and Python defaults
 recorded in [ADR 0072](decisions/0072-converge-the-worker-runtime-defaults.md).
 `WorkerOptions.HeartbeatInterval` defaults to one third of `LeaseDuration`, truncated to a whole
 millisecond, and must remain positive and shorter than the lease.
-`WorkerOptions.MaintenanceInterval` defaults to 1000 milliseconds and accepts positive
+`WorkerOptions.MaintenanceInterval` defaults to 1,000 milliseconds and accepts positive
 whole-millisecond values. `WorkerOptions.MaintenanceRoutineInterval` bounds how often the worker
-offers the slow retention routines, defaults to 60000 milliseconds, and accepts positive
+offers the slow retention routines, defaults to 60,000 milliseconds, and accepts positive
 whole-millisecond values. `WorkerOptions.RetryDelay` reports one failed attempt's delay as a
 `*time.Duration` from `func(attempt int, task ClaimedTask)`, and returns nil to leave the delay to
 the persisted retry policy. It is unset by default.
-`WorkerOptions.RegistryInterval` defaults to 5000 milliseconds and accepts whole-millisecond values
+`WorkerOptions.RegistryInterval` defaults to 5,000 milliseconds and accepts whole-millisecond values
 of at least 100. `WorkerOptions.DisableRegistry` prevents registration and remote pause delivery.
 `WorkerOptions.OnRegistrationError` observes a failed refresh without stopping dispatch.
 `WorkerOptions.ScheduleNamespaces` defaults to empty, rejects empty names, and removes duplicates
 after their first occurrence. An empty list disables schedule evaluation.
 `WorkerOptions.ScheduleCatchupLimit` defaults to 100 and accepts integers from 1 through 10,000.
-`WorkerOptions.ShutdownGracePeriod` defaults to 25000 milliseconds and accepts positive
+`WorkerOptions.ShutdownGracePeriod` defaults to 25,000 milliseconds and accepts positive
 whole-millisecond values. It bounds the drain, starting when `Run` observes its context end or a
 lifecycle error, before `Run` waits for an in-flight claim. `Run` cancels every handler still
 executing when the period expires, allows 250 milliseconds for those handlers to unwind, then stops
@@ -838,7 +838,7 @@ After the period expires, `drainExecutions` does not report an execution error t
 `context.Canceled`, because the deadline caused it. An error it settled earlier is still returned.
 The same deadline cancels each shutdown statement that waits for a pooled connection: an in-flight
 claim, a fused completion claim, and the draining registration refresh. A claim the deadline cancels
-leaves any lease it committed to expire. `deregister_worker_v1` then gets at most 1000 milliseconds,
+leaves any lease it committed to expire. `deregister_worker_v1` then gets at most 1,000 milliseconds,
 so handlers that hold every pool connection cannot keep `Run` from returning.
 `WorkerOptions.Logger` accepts a `*slog.Logger` and defaults to `slog.Default()`.
 `Worker.Handle(type, handler)` registers a
@@ -858,7 +858,7 @@ It reports whether the pass ran a handler, so a pass that only released reports 
 one handler goroutine. The queue cursor advances after every claim attempt, so a busy queue cannot
 prevent another configured queue from being checked. An empty sweep waits for `PollInterval` or a
 matching PostgreSQL notification, whichever arrives first. Without an active listener, empty waits
-double through 5000 milliseconds with ±10% jitter. When the worker's last claim found nothing, a
+double through 5,000 milliseconds with ±10% jitter. When the worker's last claim found nothing, a
 notification waits a random 0 through 50 milliseconds before the next claim. A worker whose last
 claim found work claims without that wait.
 
@@ -867,11 +867,11 @@ executes `LISTEN workhorse_tasks`. A payload equal to a configured queue name or
 loop. The listener also wakes the loop after connecting, so polling covers work committed during a
 connection gap. Listener failure never stops dispatch. The worker logs a warning through
 `WorkerOptions.Logger`, continues polling, and reconnects after an exponential delay from 100
-milliseconds through 5000 milliseconds. A pool limited to one connection logs once and uses polling
+milliseconds through 5,000 milliseconds. A pool limited to one connection logs once and uses polling
 without starting the listener. PgBouncer transaction mode cannot preserve the session that owns
 `LISTEN`. For that deployment, `WorkerOptions.PollingOnly` disables the listener and logs the
 polling fallback; it defaults to false.
-On clean shutdown, the listener allows up to 1000 milliseconds for `UNLISTEN workhorse_tasks` before
+On clean shutdown, the listener allows up to 1,000 milliseconds for `UNLISTEN workhorse_tasks` before
 returning its connection to the pool. The last worker to leave stops the listener, and its logger
 receives a failed `UNLISTEN`.
 
@@ -886,7 +886,7 @@ While handlers run, one worker heartbeat goroutine serializes `heartbeat_many_v1
 Each call includes every active task's ID, fence token, and lease duration. Heartbeat batches never
 overlap.
 The earlier of `deadline_at` and `attempt_timeout_at` cancels the handler context. The supervisor
-then retries `expire_owned_telemetry_v1` while PostgreSQL returns `not_due` within its 1000
+then retries `expire_owned_telemetry_v1` while PostgreSQL returns `not_due` within its 1,000
 millisecond clock-skew budget. The supervisor leaves the heartbeat batch before it calls
 `expire_owned_telemetry_v1`, and the heartbeat goroutine delivers each ownership result without
 blocking. A slow expiration therefore cannot stall heartbeats for other tasks. If the supervisor
@@ -958,14 +958,14 @@ driver error. `Queue` exposes `enqueue`, `enqueue_many`, `cancel`, `send_signal`
 `complete_human_wait`, `health`, `sync_schedules`, `sync_contracts`, `sync_concurrency_policies`,
 `sync_rate_limit_policies`, `sync_budgets`, and the matching policy and budget list methods.
 `EnqueueOptions.max_attempts` defaults to 25, and zero selects that default. `enqueue_many` accepts
-at most 1000 requests. Task dependencies accept 1 through 100 unique prerequisite task IDs. A signal
+at most 1,000 requests. Task dependencies accept 1 through 100 unique prerequisite task IDs. A signal
 payload or human-wait result encodes to at most 65,536 bytes of JSON.
 
 `Admin::new(executor)` and `Admin::connect(url)` expose `list_tasks`, `get_task`,
 `get_task_timeline`, `list_dead_letters`, `redrive`, `redrive_many`, `get_checkpoint`,
 `list_checkpoints`, `get_progress`, `get_wait`, `list_waits`, `list_signal_waits`,
 `list_human_waits`, `list_workers`, `set_worker_paused`, `pause_queue`, `resume_queue`, and
-`purge_queue`. A page limit defaults to 100 and accepts 1 through 1000. A payload view defaults to
+`purge_queue`. A page limit defaults to 100 and accepts 1 through 1,000. A payload view defaults to
 16,384 bytes, accepts 1 through 1,048,576, and accepts at most 50 redaction keys. `AdminAudit`
 carries `actor` of 1 through 200 characters, `reason` of 1 through 2000 characters, and `request_id`
 of 1 through 512 UTF-8 bytes.
@@ -2868,7 +2868,7 @@ potentially blocking locks. Without a concurrency policy, it selects the strict-
 policy, it refills the held shards from PostgreSQL time and returns null when they hold no whole
 token.
 
-`claim_many_v1` accepts a limit from 1 through 100 and a lease from 100 through 86400000 ms. It
+`claim_many_v1` accepts a limit from 1 through 100 and a lease from 100 through 86,400,000 ms. It
 raises before any lock when either is NULL or outside its range, on either tier. Since migration
 0047, every function that bounds a required limit or lease rejects NULL the same way.
 
@@ -2978,7 +2978,7 @@ The constructor requires a safe integer for every timing and limit option, so `N
 and fractions throw before any queue operation. `leaseMs` is at least 1. `heartbeatMs` is at least 1
 and less than `leaseMs`. `pollMs` and a fixed `retryDelayMs` are at least 0.
 `maintenanceIntervalMs` and `maintenanceRoutinePollMs` are at least 100. `registryIntervalMs` is 0,
-which opts out of registration, or at least 100. `scheduleCatchupLimit` accepts 1 through 10000.
+which opts out of registration, or at least 100. `scheduleCatchupLimit` accepts 1 through 10,000.
 
 `WorkerOptions.queues` accepts one or more non-empty queue names. Duplicate names collapse to one
 entry while preserving first occurrence order. `WorkerOptions.queue` remains the single-queue

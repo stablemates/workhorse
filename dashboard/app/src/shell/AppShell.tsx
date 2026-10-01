@@ -69,6 +69,7 @@ import {
   taskHref,
 } from "../core.js";
 import { EventDetails } from "../components/event-details.js";
+import { formatCount } from "../count-format.js";
 
 /**
  * The task drawer, fetched the first time an operator opens one.
@@ -489,7 +490,7 @@ export function DashboardContent({
                   rightSection={
                     count === undefined ? null : (
                       <Badge variant="light" color="gray" miw={32}>
-                        {count}
+                        {formatCount(count)}
                       </Badge>
                     )
                   }

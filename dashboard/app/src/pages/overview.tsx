@@ -45,6 +45,7 @@ import { HelpButton } from "../components/help-button.js";
 import { SystemHealthChecks } from "../components/system-health-checks.js";
 import { taskDisplayName } from "../components/task-list.js";
 import { presentStorageRelation, retentionCategoryLabels } from "../presentation-policy.js";
+import { formatCount } from "../count-format.js";
 
 export function SystemPage({
   data,
@@ -256,13 +257,13 @@ export function SystemPage({
                             {type.queue}
                           </Text>
                         </Table.Td>
-                        <Table.Td ta="right">{type.attempts}</Table.Td>
+                        <Table.Td ta="right">{formatCount(type.attempts)}</Table.Td>
                         <Table.Td ta="right">
                           <Text c={type.errorRate >= 0.05 ? "red.7" : "yellow.8"} size="sm">
                             {formatPercent(type.errorRate)}
                           </Text>
                         </Table.Td>
-                        <Table.Td ta="right">{type.terminalFailures}</Table.Td>
+                        <Table.Td ta="right">{formatCount(type.terminalFailures)}</Table.Td>
                         <Table.Td maw={220}>
                           <Text size="xs" lineClamp={1} title={type.lastError ?? undefined}>
                             {type.lastError ?? "—"}
@@ -343,7 +344,7 @@ export function SystemPage({
                   variant="light"
                   size="lg"
                 >
-                  {data.integrity.dueButUnpromoted}
+                  {formatCount(data.integrity.dueButUnpromoted)}
                 </Badge>
               </Group>
               <Table verticalSpacing={6} horizontalSpacing="xs" captionSide="top">
@@ -469,10 +470,10 @@ export function SystemPage({
                   <Badge
                     color={eligiblePartitions > 0 ? "yellow" : "teal"}
                     variant="light"
-                    title={`${retention.eligibleHistoryPartitions.taskEvents} task-event days, ${retention.eligibleHistoryPartitions.attemptHistory} attempt-history days`}
+                    title={`${formatCount(retention.eligibleHistoryPartitions.taskEvents)} task-event days, ${formatCount(retention.eligibleHistoryPartitions.attemptHistory)} attempt-history days`}
                   >
-                    {retention.eligibleHistoryPartitions.taskEvents} events ·{" "}
-                    {retention.eligibleHistoryPartitions.attemptHistory} attempts
+                    {formatCount(retention.eligibleHistoryPartitions.taskEvents)} events ·{" "}
+                    {formatCount(retention.eligibleHistoryPartitions.attemptHistory)} attempts
                   </Badge>
                 </Group>
                 <Group justify="space-between" wrap="nowrap" align="flex-start">
@@ -491,9 +492,9 @@ export function SystemPage({
                     </Text>
                   </Box>
                   <Badge color={defaultSpill > 0 ? "yellow" : "teal"} variant="light">
-                    {retention.defaultHistoryRows.taskEvents}
+                    {formatCount(retention.defaultHistoryRows.taskEvents)}
                     {retention.defaultHistoryRowsCapped.taskEvents ? "+" : ""} events ·{" "}
-                    {retention.defaultHistoryRows.attemptHistory}
+                    {formatCount(retention.defaultHistoryRows.attemptHistory)}
                     {retention.defaultHistoryRowsCapped.attemptHistory ? "+" : ""} attempts
                   </Badge>
                 </Group>
@@ -641,7 +642,7 @@ export function StoragePanel({
                   </Text>
                   {row.partitions > 0 ? (
                     <Text c="dimmed" fz={10}>
-                      {row.partitions} daily {row.partitions === 1 ? "part" : "parts"}
+                      {formatCount(row.partitions)} daily {row.partitions === 1 ? "part" : "parts"}
                     </Text>
                   ) : null}
                 </Table.Th>

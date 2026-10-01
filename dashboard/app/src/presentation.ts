@@ -12,6 +12,7 @@ import type {
   DashboardTaskFilter,
   DashboardIdempotencyEvidence,
 } from "@stablemates/workhorse-dashboard-server/wire";
+import { formatCount } from "./count-format.js";
 
 /** Proves a runtime option list contains every member of its wire union. */
 type CompleteDashboardOptions<Union, Options extends readonly Union[]> =
@@ -629,13 +630,13 @@ export interface RedriveBatchDescription extends RedriveOutcomeDescription {
 }
 
 function countedTasks(count: number): string {
-  return count === 1 ? "1 task" : `${count} tasks`;
+  return count === 1 ? "1 task" : `${formatCount(count)} tasks`;
 }
 
 function enqueuedCopies(count: number): string {
   return count === 1
     ? "Workhorse enqueued 1 task as a copy of its failure"
-    : `Workhorse enqueued ${count} tasks as copies of their failures`;
+    : `Workhorse enqueued ${formatCount(count)} tasks as copies of their failures`;
 }
 
 /**
@@ -661,7 +662,7 @@ export function describeRedriveBatch(
       ? null
       : refused === 1
         ? "1 task was no longer a dead letter"
-        : `${refused} tasks were no longer dead letters`,
+        : `${formatCount(refused)} tasks were no longer dead letters`,
   ].filter((clause) => clause !== null);
   const more = moreRemain
     ? "More dead letters match this filter, so redrive again to continue"

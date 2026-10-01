@@ -230,7 +230,7 @@ previous container is still draining.
 
 That memory limit and the image's Node heap ceiling are one pair. `Dockerfile` sets
 `NODE_OPTIONS=--max-old-space-size=128` in its runtime stage. V8 sizes a heap from a fixed default
-rather than from the container, so an uncapped Node process here believes it may grow to 4288 MB.
+rather than from the container, so an uncapped Node process here believes it may grow to 4,288 MB.
 It then defers collection while it believes memory remains, the container limit is reached first,
 and the kernel kills the process. That kill carries no message and no stack, so it reads as an
 unexplained restart rather than as a memory problem.
@@ -244,7 +244,7 @@ smaller limit without a smaller ceiling restores the silent kill.
 
 Both values were measured in a container limited to 1 GiB, with both workspaces configured. The
 load was the demo's own recurring schedules plus continuous dashboard reads. Without the ceiling
-the container's resident set peaked at 821 MiB of the 1024 MiB it is allowed, and each Node
+the container's resident set peaked at 821 MiB of the 1,024 MiB it is allowed, and each Node
 process held about 290 MiB. With the ceiling the container peaked at 611 MiB and no process was
 killed. Nothing fails at the uncapped peak today, because the demo's working set is small. Anything
 that grows that working set reaches the container limit before V8 collects.

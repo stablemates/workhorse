@@ -46,6 +46,7 @@ import {
 import { HelpButton } from "../components/help-button.js";
 import { taskDisplayName } from "../components/task-list.js";
 import { retryBucketLabel, sortQueuesByRisk } from "../presentation-policy.js";
+import { formatCount } from "../count-format.js";
 
 function formatRate(value: number): string {
   if (value === 0) return "0";
@@ -103,7 +104,7 @@ function RetryBars({ buckets }: { buckets: DashboardSystemRetryBucket[] }) {
             />
           </Box>
           <Text size="xs" fw={650} w={24} ta="right">
-            {bucket.count}
+            {formatCount(bucket.count)}
           </Text>
         </Group>
       ))}
@@ -187,7 +188,7 @@ function HealthKpi({
         ) : null}
         {typeof value === "string" || typeof value === "number" ? (
           <Text fw={750} fz={18} lh={1.2} ta="right" style={{ flexShrink: 0 }}>
-            {value}
+            {typeof value === "number" ? formatCount(value) : value}
           </Text>
         ) : (
           value
@@ -232,7 +233,7 @@ export function QueuePressure({
           </Text>
         </Box>
         <Badge variant="light" color={queues.some((queue) => queue.paused) ? "yellow" : "gray"}>
-          {queues.length} queues
+          {formatCount(queues.length)} queues
         </Badge>
       </Group>
       <ScrollArea>
@@ -287,7 +288,7 @@ export function QueuePressure({
                       {queue.paused ? "Paused" : "Running"}
                     </Badge>
                   </Table.Td>
-                  <Table.Td ta="right">{queue.ready}</Table.Td>
+                  <Table.Td ta="right">{formatCount(queue.ready)}</Table.Td>
                   <Table.Td ta="right">{formatDuration(queue.oldestReadyMs)}</Table.Td>
                   <Table.Td>
                     {queue.priorityBacklog.length === 0 ? (
@@ -301,14 +302,15 @@ export function QueuePressure({
                             <Text component="span" fw={650} inherit>
                               P{lane.priority}
                             </Text>{" "}
-                            · {lane.ready} ready · oldest {formatDuration(lane.oldestReadyMs)}
+                            · {formatCount(lane.ready)} ready · oldest{" "}
+                            {formatDuration(lane.oldestReadyMs)}
                           </Text>
                         ))}
                       </Stack>
                     )}
                   </Table.Td>
-                  <Table.Td ta="right">{queue.dueSoon}</Table.Td>
-                  <Table.Td ta="right">{queue.active}</Table.Td>
+                  <Table.Td ta="right">{formatCount(queue.dueSoon)}</Table.Td>
+                  <Table.Td ta="right">{formatCount(queue.active)}</Table.Td>
                   <Table.Td ta="right">
                     <Text size="sm" title={limit.title} aria-label={`Limit: ${limit.title}`}>
                       {limit.label}
@@ -336,7 +338,7 @@ export function QueuePressure({
                       </Text>
                     )}
                   </Table.Td>
-                  <Table.Td ta="right">{queue.retrying}</Table.Td>
+                  <Table.Td ta="right">{formatCount(queue.retrying)}</Table.Td>
                 </Table.Tr>
               );
             })}
@@ -531,7 +533,7 @@ export function SystemKpiList({
       <HealthKpi
         title="Retries in backoff"
         value={data.kpis.retry.backoff}
-        detail={`${data.kpis.retry.dueSoon} due in the next 5m`}
+        detail={`${formatCount(data.kpis.retry.dueSoon)} due in the next 5m`}
         help="This count shows tasks in backoff before another attempt. The second count shows how many become ready within five minutes."
         scope="now"
         color={data.kpis.retry.dueSoon > 0 ? "orange" : "blue"}
@@ -540,7 +542,7 @@ export function SystemKpiList({
       <HealthKpi
         title="Expired leases"
         value={data.kpis.lease.expired}
-        detail={`${data.kpis.lease.expiringSoon} expire in 30s`}
+        detail={`${formatCount(data.kpis.lease.expiringSoon)} expire in 30s`}
         help="This count shows active tasks whose leases expired. It also shows leases nearing expiry."
         scope="now"
         color={data.kpis.lease.expired > 0 ? "red" : "teal"}
@@ -549,7 +551,7 @@ export function SystemKpiList({
       <HealthKpi
         title="Overdue tasks"
         value={deadline.overdue}
-        detail={`${deadline.dueWithinMinute} due in 1m · ${deadline.overdueTimeouts} timed-out attempts awaiting reap`}
+        detail={`${formatCount(deadline.dueWithinMinute)} due in 1m · ${formatCount(deadline.overdueTimeouts)} timed-out attempts awaiting reap`}
         help="This count shows live tasks past their deadline. It also shows approaching deadlines and attempts whose execution time has expired."
         scope="now"
         color={
@@ -574,11 +576,11 @@ export function SystemKpiList({
               View blocked tasks
             </Button>
             <Text fw={750} fz={18} lh={1.2} ta="right">
-              {data.kpis.dependencies.blockedTasks}
+              {formatCount(data.kpis.dependencies.blockedTasks)}
             </Text>
           </Group>
         }
-        detail={`${data.kpis.dependencies.pendingEdges} pending edges · ${data.kpis.dependencies.failedResolutions} failed resolutions${data.kpis.dependencies.retentionPruneStarved ? " · retention is blocked" : ""}${data.kpis.dependencies.capped ? " · Counts reached the scan limit" : ""}`}
+        detail={`${formatCount(data.kpis.dependencies.pendingEdges)} pending edges · ${formatCount(data.kpis.dependencies.failedResolutions)} failed resolutions${data.kpis.dependencies.retentionPruneStarved ? " · retention is blocked" : ""}${data.kpis.dependencies.capped ? " · Counts reached the scan limit" : ""}`}
         help="These tasks are waiting for prerequisite outcomes. Failed resolutions need attention, while a blocked retention pass means dependency evidence is holding expired task history."
         scope="now"
         color={
@@ -594,7 +596,7 @@ export function SystemKpiList({
       <HealthKpi
         title="Waiting parents"
         value={data.kpis.children.waitingParents}
-        detail={`${data.kpis.children.pendingChildren} pending children · ${data.kpis.children.unjoinedResults} unjoined results · ${data.kpis.children.failedParents} failed parents · ${data.kpis.children.canceledParents} canceled parents${data.kpis.children.capped ? " · Counts reached the scan limit" : ""}`}
+        detail={`${formatCount(data.kpis.children.pendingChildren)} pending children · ${formatCount(data.kpis.children.unjoinedResults)} unjoined results · ${formatCount(data.kpis.children.failedParents)} failed parents · ${formatCount(data.kpis.children.canceledParents)} canceled parents${data.kpis.children.capped ? " · Counts reached the scan limit" : ""}`}
         help="These parent tasks are waiting for child work. Unjoined results remain available until the parent collects them."
         scope="now"
         color={
@@ -619,12 +621,14 @@ export function SystemKpiList({
               Review waiting tasks
             </Button>
             <Text fw={750} fz={18} lh={1.2} ta="right">
-              {data.kpis.externalWaits.pendingSignals +
-                data.kpis.externalWaits.pendingHumanDecisions}
+              {formatCount(
+                data.kpis.externalWaits.pendingSignals +
+                  data.kpis.externalWaits.pendingHumanDecisions,
+              )}
             </Text>
           </Group>
         }
-        detail={`${data.kpis.externalWaits.pendingSignals} signals · ${data.kpis.externalWaits.pendingHumanDecisions} human decisions · ${data.kpis.externalWaits.overdue} overdue · oldest ${formatDuration(data.kpis.externalWaits.oldestPendingAgeMs)} · ${data.kpis.externalWaits.rejectedDeliveries} rejected deliveries/24h${data.kpis.externalWaits.capped ? " · Counts reached the scan limit" : ""}`}
+        detail={`${formatCount(data.kpis.externalWaits.pendingSignals)} signals · ${formatCount(data.kpis.externalWaits.pendingHumanDecisions)} human decisions · ${formatCount(data.kpis.externalWaits.overdue)} overdue · oldest ${formatDuration(data.kpis.externalWaits.oldestPendingAgeMs)} · ${formatCount(data.kpis.externalWaits.rejectedDeliveries)} rejected deliveries/24h${data.kpis.externalWaits.capped ? " · Counts reached the scan limit" : ""}`}
         help="These handlers are suspended for a signal or human decision. Overdue waits remain critical until deadline maintenance resolves them."
         scope="now"
         color={data.kpis.externalWaits.overdue > 0 ? "red" : "teal"}
@@ -691,7 +695,7 @@ export function RetryStorm({ data }: { data: DashboardSystemPage }) {
                 </Text>
               </Box>
               <Badge color="orange" variant="light">
-                {type.count}
+                {formatCount(type.count)}
               </Badge>
             </Group>
           ))}

@@ -155,17 +155,17 @@ differs today, and the reason follows the table.
 | Setting                                 | TypeScript                                                | Python                                                    | Go                                                        | Rust                                                      | Ruby                                                      |
 | --------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- |
 | Worker concurrency                      | 1                                                         | 1                                                         | 1                                                         | 1                                                         | 1                                                         |
-| Lease duration                          | 30000 ms                                                  | 30000 ms                                                  | 30000 ms                                                  | 30000 ms                                                  | 30000 ms                                                  |
+| Lease duration                          | 30,000 ms                                                 | 30,000 ms                                                 | 30,000 ms                                                 | 30,000 ms                                                 | 30,000 ms                                                 |
 | Heartbeat interval                      | Lease duration / 3                                        | Lease duration / 3                                        | Lease duration / 3                                        | Lease duration / 3                                        | Lease duration / 3                                        |
-| Claim poll interval (subscription live) | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   |
+| Claim poll interval (subscription live) | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  |
 | Claim poll interval (polling only)      | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    |
-| Empty-claim backoff ceiling             | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   |
-| Maintenance tick interval               | 1000 ms                                                   | 1000 ms                                                   | 1000 ms                                                   | 1000 ms                                                   | 1000 ms                                                   |
-| Maintenance routine offer interval      | 60000 ms                                                  | 60000 ms                                                  | 60000 ms                                                  | 60000 ms                                                  | 60000 ms                                                  |
-| Worker registry interval                | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   | 5000 ms                                                   |
+| Empty-claim backoff ceiling             | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  |
+| Maintenance tick interval               | 1,000 ms                                                  | 1,000 ms                                                  | 1,000 ms                                                  | 1,000 ms                                                  | 1,000 ms                                                  |
+| Maintenance routine offer interval      | 60,000 ms                                                 | 60,000 ms                                                 | 60,000 ms                                                 | 60,000 ms                                                 | 60,000 ms                                                 |
+| Worker registry interval                | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  |
 | Schedule catch-up limit                 | 100                                                       | 100                                                       | 100                                                       | 100                                                       | 100                                                       |
 | Dispatch cohorts                        | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 |
-| Shutdown grace, then                    | 25000 ms, then exit the process                           | 25000 ms, then exit the process                           | 25000 ms, then abandon the handlers                       | 25000 ms, then abandon the handlers                       | 25000 ms, then abandon the handlers                       |
+| Shutdown grace, then                    | 25,000 ms, then exit the process                          | 25,000 ms, then exit the process                          | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      |
 | Handler retry delay override            | `retryDelayMs`, unset                                     | `retry_delay_ms`, unset                                   | `RetryDelay`, unset                                       | `retry_delay`, unset                                      | `retry_delay`, unset                                      |
 
 <!-- END GENERATED PARITY DEFAULTS -->
@@ -181,11 +181,11 @@ Three rows carry a condition the setting name alone cannot.
   not run in lockstep. The quotient rounds up, and a worker that knows its pool size caps the
   default at the connections left after its listener and heartbeat connection. An explicit
   cohort count is never capped.
-- **Maintenance routine offer interval.** All five tick maintenance every 1000 ms, which bounds
+- **Maintenance routine offer interval.** All five tick maintenance every 1,000 ms, which bounds
   dispatch latency. The slower retention routines keep their own minute, because PostgreSQL owns
   the global due decision and a faster offer only adds rejected calls.
 
-The shutdown deadline agrees at 25000 ms, and it sits under the 30 second termination grace a
+The shutdown deadline agrees at 25,000 ms, and it sits under the 30 second termination grace a
 container platform gives a process by default. What follows that deadline cannot agree, and it is
 the one accepted exception.
 
@@ -212,7 +212,7 @@ an integer exactly within the signed and unsigned 64-bit ranges. TypeScript and 
 it as an IEEE-754 double, which holds integers exactly only up to 2^53 - 1.
 
 So a payload, result, checkpoint, or progress value that carries an integer larger than
-9007199254740991 in magnitude is not portable. Enqueued from Python and handled in Python, it
+9,007,199,254,740,991 in magnitude is not portable. Enqueued from Python and handled in Python, it
 survives, and a Rust worker keeps it while it fits in 64 bits. Enqueued from Python and handled
 by a TypeScript or Go worker, it arrives rounded: the worker never sees the value the caller sent,
 and never reports an error.

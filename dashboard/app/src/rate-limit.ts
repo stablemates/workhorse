@@ -1,4 +1,5 @@
 import type { DashboardRateLimitPolicySummary } from "@stablemates/workhorse-dashboard-server/wire";
+import { formatCount } from "./count-format.js";
 
 export const rateLimitCappedFootnote =
   "Rate-limit pressure uses a bounded sample, so rate-limited task counts are lower bounds.";
@@ -10,7 +11,7 @@ function intervalLabel(intervalMs: number): string {
 }
 
 function bucketLabel(bucket: { limit: number; intervalMs: number; burst: number }): string {
-  return `${bucket.limit}/${intervalLabel(bucket.intervalMs)} · burst ${bucket.burst}`;
+  return `${formatCount(bucket.limit)}/${intervalLabel(bucket.intervalMs)} · burst ${formatCount(bucket.burst)}`;
 }
 
 export function describeRateLimit(policy: DashboardRateLimitPolicySummary | null): {
@@ -28,9 +29,9 @@ export function describeRateLimit(policy: DashboardRateLimitPolicySummary | null
   return {
     label: bucketLabel(policy.rate),
     keyedLabel: policy.perKey === null ? null : `${bucketLabel(policy.perKey)} per key`,
-    title: `Workhorse admits ${policy.rate.limit} starts every ${intervalLabel(
+    title: `Workhorse admits ${formatCount(policy.rate.limit)} starts every ${intervalLabel(
       policy.rate.intervalMs,
-    )}, retaining up to ${policy.rate.burst} tokens after idle time.`,
+    )}, retaining up to ${formatCount(policy.rate.burst)} tokens after idle time.`,
   };
 }
 
@@ -48,8 +49,8 @@ export function describeRateThrottle(policy: DashboardRateLimitPolicySummary | n
   }
   const next = policy.nextEligibleAt === null ? "the next database refill" : policy.nextEligibleAt;
   return {
-    label: `${policy.throttledReady}${policy.throttledKeys > 0 ? ` · ${policy.throttledKeys} keys` : ""}`,
-    title: `${policy.throttledReady} sampled ready tasks are waiting for tokens. The earliest can start at ${next}.`,
+    label: `${formatCount(policy.throttledReady)}${policy.throttledKeys > 0 ? ` · ${formatCount(policy.throttledKeys)} keys` : ""}`,
+    title: `${formatCount(policy.throttledReady)} sampled ready tasks are waiting for tokens. The earliest can start at ${next}.`,
     throttling: true,
   };
 }

@@ -13,6 +13,7 @@
  */
 
 import type { DashboardConcurrencyPolicySummary } from "@stablemates/workhorse-dashboard-server/wire";
+import { formatCount } from "./count-format.js";
 
 /** One queue's limit cell: how much of the fleet-wide budget is in use. */
 export interface ConcurrencyLimitDisplay {
@@ -30,8 +31,8 @@ export function describeConcurrencyLimit(
 ): ConcurrencyLimitDisplay {
   if (policy === null) return { label: "—", title: noPolicyTitle };
   return {
-    label: `${policy.active} / ${policy.maxActive}`,
-    title: `Fleet-wide budget: at most ${policy.maxActive} ${plural(policy.maxActive, "task")} from this queue may run at once across every worker sharing this database. ${policy.active} ${policy.active === 1 ? "is" : "are"} active now, leaving ${policy.available}.`,
+    label: `${formatCount(policy.active)} / ${formatCount(policy.maxActive)}`,
+    title: `Fleet-wide budget: at most ${formatCount(policy.maxActive)} ${plural(policy.maxActive, "task")} from this queue may run at once across every worker sharing this database. ${formatCount(policy.active)} ${policy.active === 1 ? "is" : "are"} active now, leaving ${formatCount(policy.available)}.`,
   };
 }
 
@@ -60,14 +61,15 @@ export function describeConcurrencyKeys(
     };
   }
   const saturated = policy.saturatedKeys > 0;
-  const parts = [`Per key ${policy.maxActivePerKey}`];
-  if (saturated) parts.push(`${policy.saturatedKeys} ${plural(policy.saturatedKeys, "key")} full`);
+  const parts = [`Per key ${formatCount(policy.maxActivePerKey)}`];
+  if (saturated)
+    parts.push(`${formatCount(policy.saturatedKeys)} ${plural(policy.saturatedKeys, "key")} full`);
   return {
     label: parts.join(" · "),
-    title: `Each concurrency key in this queue may run at most ${policy.maxActivePerKey} ${plural(policy.maxActivePerKey, "task")} at once. ${
+    title: `Each concurrency key in this queue may run at most ${formatCount(policy.maxActivePerKey)} ${plural(policy.maxActivePerKey, "task")} at once. ${
       saturated
-        ? `${policy.saturatedKeys} ${plural(policy.saturatedKeys, "key")} ${policy.saturatedKeys === 1 ? "has" : "have"} reached that limit; the busiest key is running ${policy.highestKeyActive}.`
-        : `No key has reached that limit; the busiest key is running ${policy.highestKeyActive}.`
+        ? `${formatCount(policy.saturatedKeys)} ${plural(policy.saturatedKeys, "key")} ${policy.saturatedKeys === 1 ? "has" : "have"} reached that limit; the busiest key is running ${formatCount(policy.highestKeyActive)}.`
+        : `No key has reached that limit; the busiest key is running ${formatCount(policy.highestKeyActive)}.`
     }`,
     saturated,
   };
@@ -94,8 +96,8 @@ export function describeConcurrencyBlocked(
     };
   }
   return {
-    label: String(policy.blockedReady),
-    title: `At least ${policy.blockedReady} ready ${plural(policy.blockedReady, "task")} cannot start because this budget is full. Workhorse scans a bounded window of the queue, so this count is a lower bound rather than the whole backlog.`,
+    label: formatCount(policy.blockedReady),
+    title: `At least ${formatCount(policy.blockedReady)} ready ${plural(policy.blockedReady, "task")} cannot start because this budget is full. Workhorse scans a bounded window of the queue, so this count is a lower bound rather than the whole backlog.`,
     blocking: true,
   };
 }
@@ -205,10 +207,10 @@ export function describeTaskConcurrency(task: {
     return unmeasuredTaskConcurrency(concurrencyKey, keyTitle, policy, basis);
   }
   const keys = describeConcurrencyKeys(policy);
-  const parts = [`in use ${policy.active} of ${policy.maxActive}`];
+  const parts = [`in use ${formatCount(policy.active)} of ${formatCount(policy.maxActive)}`];
   if (keys.label !== null) parts.push(keys.label.toLowerCase());
   if (policy.blockedReady > 0) {
-    parts.push(`${policy.blockedReady}+ ready blocked`);
+    parts.push(`${formatCount(policy.blockedReady)}+ ready blocked`);
   }
   const capacityRole =
     basis === "pending"
@@ -248,8 +250,8 @@ function unmeasuredTaskConcurrency(
   policy: DashboardConcurrencyPolicySummary,
   basis: "live" | "pending",
 ): TaskConcurrencyDisplay {
-  const parts = [`queue limit ${policy.maxActive}`];
-  if (policy.maxActivePerKey !== null) parts.push(`per key ${policy.maxActivePerKey}`);
+  const parts = [`queue limit ${formatCount(policy.maxActive)}`];
+  if (policy.maxActivePerKey !== null) parts.push(`per key ${formatCount(policy.maxActivePerKey)}`);
   const keyed =
     concurrencyKey === null
       ? basis === "pending"
@@ -266,10 +268,10 @@ function unmeasuredTaskConcurrency(
     concurrencyKey,
     keyTitle,
     summary: parts.join(" · "),
-    title: `${basis === "pending" ? "This task is scheduled, so it will enter this budget when it becomes ready. " : ""}Fleet-wide budget: at most ${policy.maxActive} ${plural(policy.maxActive, "task")} from this queue may run at once across every worker sharing this database${
+    title: `${basis === "pending" ? "This task is scheduled, so it will enter this budget when it becomes ready. " : ""}Fleet-wide budget: at most ${formatCount(policy.maxActive)} ${plural(policy.maxActive, "task")} from this queue may run at once across every worker sharing this database${
       policy.maxActivePerKey === null
         ? ", and the queue does not limit tasks by concurrency key"
-        : `, and at most ${policy.maxActivePerKey} ${plural(policy.maxActivePerKey, "task")} per concurrency key`
+        : `, and at most ${formatCount(policy.maxActivePerKey)} ${plural(policy.maxActivePerKey, "task")} per concurrency key`
     }. ${keyed} How much of that budget is in use now is unknown: Workhorse measures utilization for a bounded number of queues and this queue fell outside that sample, so no count is shown rather than a count of zero.`,
     utilizationKnown: false,
     basis,
@@ -303,16 +305,16 @@ function settledTaskConcurrency(
       basisLabel: basisLabels.current,
     };
   }
-  const parts = [`queue limit ${policy.maxActive}`];
-  if (policy.maxActivePerKey !== null) parts.push(`per key ${policy.maxActivePerKey}`);
+  const parts = [`queue limit ${formatCount(policy.maxActive)}`];
+  if (policy.maxActivePerKey !== null) parts.push(`per key ${formatCount(policy.maxActivePerKey)}`);
   return {
     concurrencyKey,
     keyTitle,
     summary: parts.join(" · "),
-    title: `${settled} This queue currently admits at most ${policy.maxActive} ${plural(policy.maxActive, "task")} at once across every worker sharing this database${
+    title: `${settled} This queue currently admits at most ${formatCount(policy.maxActive)} ${plural(policy.maxActive, "task")} at once across every worker sharing this database${
       policy.maxActivePerKey === null
         ? ", and does not limit tasks by concurrency key"
-        : `, and at most ${policy.maxActivePerKey} ${plural(policy.maxActivePerKey, "task")} per concurrency key`
+        : `, and at most ${formatCount(policy.maxActivePerKey)} ${plural(policy.maxActivePerKey, "task")} per concurrency key`
     }. ${noSnapshotCaveat}`,
     utilizationKnown: true,
     basis: "current",

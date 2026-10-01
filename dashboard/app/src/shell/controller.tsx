@@ -74,6 +74,7 @@ import { seekDashboardTaskPage } from "../task-page-seek.js";
 import { createDashboardRouter } from "../dashboard-routing.js";
 import { createDashboardRefreshController } from "../dashboard-refresh-controller.js";
 import { useMutationInFlight } from "../mutation-in-flight.js";
+import { formatCount } from "../count-format.js";
 
 const TasksPage = lazy(() =>
   import("../pages/tasks.js").then((module) => ({ default: module.TasksPage })),
@@ -563,7 +564,7 @@ export function useDashboardController(
         setConfirmingQueue(null);
         notifyDashboard({
           title: "Queue cleared",
-          message: `Cleared ${result.deletedCount} queued ${
+          message: `Cleared ${formatCount(result.deletedCount)} queued ${
             result.deletedCount === 1 ? "task" : "tasks"
           } from ${queue}.`,
           tone: result.deletedCount > 0 ? "success" : "neutral",

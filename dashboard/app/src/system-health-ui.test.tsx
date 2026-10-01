@@ -164,7 +164,7 @@ describe("individual system health checks", () => {
       {
         code: "rate-limit-throttled",
         severity: "degraded",
-        observed: 7,
+        observed: 12_500,
         budget: 0,
         queue: "emails",
       },
@@ -191,7 +191,7 @@ describe("individual system health checks", () => {
       "Queue <strong>payments</strong> has 4+ ready tasks waiting for rate-limit tokens",
     );
     expect(html).toContain(
-      "Queue <strong>emails</strong> has 7+ ready tasks waiting for rate-limit tokens",
+      "Queue <strong>emails</strong> has 12,500+ ready tasks waiting for rate-limit tokens",
     );
     expect(html).toContain("Budget <strong>vendor-api</strong> holds 5+ ready tasks across queues");
     expect(html).toContain("The statistics summary is behind");
