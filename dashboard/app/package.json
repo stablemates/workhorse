@@ -57,10 +57,10 @@
     "typecheck": "tsc -p tsconfig.typecheck.json"
   },
   "dependencies": {
-    "@mantine/charts": "^9.6.2",
-    "@mantine/core": "^9.6.2",
-    "@mantine/hooks": "^9.6.2",
-    "@mantine/notifications": "^9.6.2",
+    "@mantine/charts": "^9.6.3",
+    "@mantine/core": "^9.6.3",
+    "@mantine/hooks": "^9.6.3",
+    "@mantine/notifications": "^9.6.3",
     "@phosphor-icons/react": "^2.1.10",
     "@stablemates/workhorse-dashboard-server": "workspace:*",
     "recharts": "^3.10.1"
