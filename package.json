@@ -180,7 +180,7 @@
     "@opentelemetry/core": "2.11.0",
     "@opentelemetry/sdk-metrics": "2.11.0",
     "@opentelemetry/sdk-trace-base": "2.11.0",
-    "@types/node": "^26.6.2",
+    "@types/node": "^26.6.3",
     "@types/pg": "^8.23.1",
     "@vitest/coverage-v8": "4.1.11",
     "knip": "6.38.0",
