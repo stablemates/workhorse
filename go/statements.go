@@ -371,6 +371,7 @@ const (
 	waitConflictErrorFormat             = "wait %s for task %s has a conflicting target"
 	waitLimitExceededErrorFormat        = "task %s already has the maximum number of durable waits"
 	nilCheckpointOperationMessage       = "checkpoint operation must not be nil"
+	checkpointOperationPanickedFormat   = "checkpoint %s operation panicked"
 	invalidCheckpointResultMessage      = "PostgreSQL returned an invalid checkpoint result"
 	unknownCheckpointStatusFormat       = "PostgreSQL returned unknown checkpoint status %q"
 	invalidProgressResultMessage        = "PostgreSQL returned an invalid progress result"

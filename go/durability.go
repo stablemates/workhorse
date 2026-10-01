@@ -281,18 +281,34 @@ func (handler *HandlerContext) Checkpoint(
 	}
 	if pending := handler.checkpoints[name]; pending != nil {
 		handler.checkpoint.Unlock()
-		<-pending.done
-		return pending.value, pending.err
+		// The initiator runs application code that may ignore cancellation, so a duplicate stops
+		// waiting for it once the handler context ends.
+		select {
+		case <-pending.done:
+			return pending.value, pending.err
+		case <-handler.context.Done():
+			return nil, context.Cause(handler.context)
+		}
 	}
 	pending := &checkpointCall{done: make(chan struct{})}
 	handler.checkpoints[name] = pending
 	handler.checkpoint.Unlock()
 
+	// A panic in the operation still releases every duplicate and removes the in-flight entry.
+	// The duplicates receive an error, never the nil result of an operation that did not finish,
+	// and the panic continues to the worker, which records it as the task failure.
+	completed := false
+	defer func() {
+		if !completed {
+			pending.value, pending.err = nil, fmt.Errorf(checkpointOperationPanickedFormat, name)
+		}
+		handler.checkpoint.Lock()
+		delete(handler.checkpoints, name)
+		close(pending.done)
+		handler.checkpoint.Unlock()
+	}()
 	pending.value, pending.err = handler.runCheckpoint(name, operation)
-	handler.checkpoint.Lock()
-	delete(handler.checkpoints, name)
-	close(pending.done)
-	handler.checkpoint.Unlock()
+	completed = true
 	return pending.value, pending.err
 }
 
