@@ -163,6 +163,12 @@ use `enqueue_many_v1`; recurring definitions use `sync_schedule_definitions_v2`.
 `cancel_v1`; signal delivery uses `send_signal_v1`; human completion uses
 `complete_human_wait_v1`.
 
+`SyncExecutor` and `AsyncPsycopgExecutor` in `python/src/workhorse/_drivers.py` open every cursor
+with `row_factory=tuple_row`. A caller's Psycopg connection may therefore carry `dict_row`,
+`class_row`, or any other row factory. The SDK leaves the connection's own `row_factory` unchanged,
+so the caller's later queries keep their configured row shape. `python/tests/test_row_factory.py`
+covers the clients, workers, `Admin`, and the compatibility check for each of those factories.
+
 Every module under `python/src/workhorse/` whose path carries no leading underscore declares
 `__all__`, and that list is the module's supported surface. `workhorse` re-exports 126 names;
 `types`, `errors`, `admin`, `client`, `worker`, `async_worker`, `worker_process`, `compatibility`,

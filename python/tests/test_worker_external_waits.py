@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from threading import Event, Thread
 from time import sleep
+from typing import Any
 
 import psycopg
 import pytest
@@ -324,9 +325,9 @@ class _BlockingWaitConnection:
         self._reached = reached
         self._release = release
 
-    def cursor(self) -> _BlockingWaitCursor:
+    def cursor(self, *, row_factory: Any = None) -> _BlockingWaitCursor:
         return _BlockingWaitCursor(
-            self._connection.cursor(),  # type: ignore[union-attr]
+            self._connection.cursor(row_factory=row_factory),  # type: ignore[union-attr]
             self._reached,
             self._release,
         )

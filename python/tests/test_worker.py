@@ -733,8 +733,8 @@ def test_batch_evidence_failure_does_not_change_settlement(database_url: str) ->
         def __init__(self, connection: object) -> None:
             self.connection = connection
 
-        def cursor(self) -> EvidenceFailingCursor:
-            return EvidenceFailingCursor(self.connection.cursor())  # type: ignore[union-attr]
+        def cursor(self, *, row_factory: Any = None) -> EvidenceFailingCursor:
+            return EvidenceFailingCursor(self.connection.cursor(row_factory=row_factory))  # type: ignore[union-attr]
 
     with (
         psycopg.connect(database_url) as enqueue_connection,
@@ -1163,8 +1163,8 @@ def test_run_wakes_from_a_dedicated_notification_connection(database_url: str) -
         def __init__(self, connection: object) -> None:
             self.connection = connection
 
-        def cursor(self) -> DelayedCursor:
-            return DelayedCursor(self.connection.cursor())  # type: ignore[union-attr]
+        def cursor(self, *, row_factory: Any = None) -> DelayedCursor:
+            return DelayedCursor(self.connection.cursor(row_factory=row_factory))  # type: ignore[union-attr]
 
     class ListeningConnection:
         autocommit = True

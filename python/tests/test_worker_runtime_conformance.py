@@ -586,8 +586,8 @@ class HeldPollConnection:
     def autocommit(self) -> bool:
         return self._connection.autocommit
 
-    def cursor(self) -> Any:
-        return HeldPollCursor(self, self._connection.cursor())
+    def cursor(self, *, row_factory: Any = None) -> Any:
+        return HeldPollCursor(self, self._connection.cursor(row_factory=row_factory))
 
     def release(self) -> None:
         self.released.put(None)

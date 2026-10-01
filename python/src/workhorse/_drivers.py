@@ -4,6 +4,8 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, cast
 
+from psycopg.rows import tuple_row
+
 from ._statements import DriverDialect, DriverStatement
 
 Row = Mapping[str, object]
@@ -22,7 +24,7 @@ class SyncCursor(Protocol):
 
 
 class PsycopgConnection(Protocol):
-    def cursor(self) -> SyncCursor: ...
+    def cursor(self, *, row_factory: Any) -> SyncCursor: ...
 
 
 class AsyncPsycopgCursor(Protocol):
@@ -40,7 +42,7 @@ class AsyncPsycopgCursor(Protocol):
 class AsyncPsycopgConnection(Protocol):
     autocommit: bool
 
-    def cursor(self) -> AsyncPsycopgCursor: ...
+    def cursor(self, *, row_factory: Any) -> AsyncPsycopgCursor: ...
 
 
 class AsyncpgConnection(Protocol):
@@ -78,7 +80,8 @@ class SyncExecutor:
         self.connection = connection
 
     def rows(self, statement: DriverStatement, parameters: Sequence[object] = ()) -> list[Row]:
-        with self.connection.cursor() as cursor:
+        # The caller may configure any row factory; the SDK reads positional rows.
+        with self.connection.cursor(row_factory=tuple_row) as cursor:
             cursor.execute(statement.for_dialect(self.dialect), parameters)
             return _mapping_rows(cursor.description, cursor.fetchall())
 
@@ -92,7 +95,7 @@ class AsyncPsycopgExecutor:
     async def rows(
         self, statement: DriverStatement, parameters: Sequence[object] = ()
     ) -> list[Row]:
-        async with self.connection.cursor() as cursor:
+        async with self.connection.cursor(row_factory=tuple_row) as cursor:
             await cursor.execute(statement.for_dialect(self.dialect), parameters)
             return _mapping_rows(cursor.description, await cursor.fetchall())
 

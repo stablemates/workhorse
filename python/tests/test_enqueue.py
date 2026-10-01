@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 from protocol_fixtures import assert_fixture_execution, read_protocol_fixture
+from psycopg.rows import tuple_row
 from test_protocol_conformance import assert_value
 
 from workhorse import (
@@ -46,7 +47,8 @@ class Connection:
         self.responses = responses
         self.calls: list[tuple[str, tuple[object, ...]]] = []
 
-    def cursor(self) -> Cursor:
+    def cursor(self, *, row_factory: Any = None) -> Cursor:
+        assert row_factory is tuple_row
         cursor = Cursor(self.responses.pop(0))
         cursor.connection_calls = self.calls
         return cursor

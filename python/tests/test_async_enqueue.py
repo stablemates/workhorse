@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 import pytest
+from psycopg.rows import tuple_row
 
 from workhorse import AsyncQueue
 from workhorse._statements import MINIMUM_SCHEMA_VERSION, PROTOCOL_VERSION
@@ -89,7 +90,8 @@ class AsyncPsycopgConnection:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple[object, ...]]] = []
 
-    def cursor(self) -> AsyncPsycopgCursor:
+    def cursor(self, *, row_factory: object = None) -> AsyncPsycopgCursor:
+        assert row_factory is tuple_row
         return AsyncPsycopgCursor(self)
 
 
