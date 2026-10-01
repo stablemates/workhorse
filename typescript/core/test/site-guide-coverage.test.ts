@@ -113,4 +113,30 @@ describe("documentation site guide coverage", () => {
     // works. support-matrix.test.ts holds the three entrypoint names.
     expect(files[7]).toContain("Assert compatibility when a process starts");
   });
+
+  it("tells TypeScript readers to register telemetry before Workhorse metrics appear", async () => {
+    const [guide, page] = await Promise.all([
+      readFile(path.join(root, "docs/guides/355-observability.md"), "utf8"),
+      readFile(path.join(root, "site/content/docs/maintenance.mdx"), "utf8"),
+    ]);
+
+    // Core starts with a no-op provider (ADR 0048), so configuring an SDK alone exports nothing.
+    // The maintenance page once promised metrics as soon as an SDK was configured.
+    expect(page).not.toMatch(/automatically once your application configures an SDK/);
+    expect(page).toContain("core stays silent until a telemetry provider is registered");
+    expect(page).toContain("[OpenTelemetry](/docs/operations#opentelemetry)");
+    expect(guide).toContain("[registers telemetry](350-production-telemetry.md)");
+
+    // The observer example must register telemetry and tear down in order: the observer stops
+    // before the provider it records into goes away.
+    const example = page.slice(page.indexOf("new WorkhorseMetricsObserver(") - 400);
+    const registration = example.indexOf("const unregisterTelemetry = registerOpenTelemetry();");
+    const observerStart = example.indexOf("new WorkhorseMetricsObserver(");
+    const observerStop = example.indexOf("observer.stop();");
+    const unregister = example.indexOf("unregisterTelemetry();", observerStop);
+    expect(registration).toBeGreaterThanOrEqual(0);
+    expect(registration).toBeLessThan(observerStart);
+    expect(observerStop).toBeGreaterThan(observerStart);
+    expect(unregister).toBeGreaterThan(observerStop);
+  });
 });
