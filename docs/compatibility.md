@@ -824,6 +824,13 @@ stablemates-workhorse`, and change every surface `scripts/install-commands.test.
 5. Verify the public version with `gem install stablemates-workhorse -v X.Y.Z` in an empty gem home,
    and review the attestation on the gem's RubyGems.org page.
 
+Both jobs install the locked bundle beside the release credentials. A frozen bundle pins each gem
+version, and the `CHECKSUMS` section of each committed Ruby lockfile pins that version's bytes.
+Bundler compares every downloaded gem with its SHA-256 digest and refuses a mismatch.
+`scripts/ruby-lockfile-checksums.test.ts` fails when a lockfile resolves a gem without a checksum,
+or when CI, the release workflow, or a hook disables the comparison. After changing a Gemfile,
+regenerate the lockfile with the pinned Bundler, which keeps the section current.
+
 A maintainer set up publication on 2026-09-30 with these steps. Nothing in this repository performs
 them.
 
