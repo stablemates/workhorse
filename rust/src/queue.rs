@@ -71,8 +71,25 @@ impl Executor for deadpool_postgres::Pool {
         statement: &str,
         params: &[&(dyn ToSql + Sync)],
     ) -> Result<Vec<Row>, Error> {
-        let client = self.get().await?;
-        Ok(client.query(statement, params).await?)
+        let mut held = Discarded(Some(self.get().await?));
+        let rows = held.0.as_ref().expect("held above").query(statement, params).await;
+        // The statement finished, so the connection goes back to the pool as usual.
+        drop(held.0.take());
+        Ok(rows?)
+    }
+}
+
+/// Holds a pooled connection and removes it from the pool if dropped while still held.
+///
+/// Dropping a statement's future does not stop the statement. Returned to the pool, its connection
+/// would make the next borrower wait behind it.
+struct Discarded(Option<deadpool_postgres::Object>);
+
+impl Drop for Discarded {
+    fn drop(&mut self) {
+        if let Some(connection) = self.0.take() {
+            drop(deadpool_postgres::Object::take(connection));
+        }
     }
 }
 

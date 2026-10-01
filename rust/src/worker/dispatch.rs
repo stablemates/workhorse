@@ -496,10 +496,12 @@ impl<D: Dispatch> Dispatcher<D> {
     }
 }
 
-/// Claims and launches tasks until `shutdown` resolves.
+/// Claims and launches tasks until `shutdown` resolves, and returns the shutdown deadline.
 ///
-/// Before it returns, every claim still in flight settles and its tasks join `executions`, so
-/// the caller's drain covers them.
+/// The deadline is `grace` after the loop observes `shutdown`. Before it returns, every claim
+/// still in flight settles by that deadline and its tasks join `executions`, so the caller's drain
+/// covers them. A claim still pending at the deadline is dropped, and PostgreSQL recovers any task
+/// it claimed once that lease expires.
 pub(super) async fn dispatch<D: Dispatch, F: Future<Output = ()>>(
     worker: &Arc<D>,
     executions: &mut JoinSet<Result<(), Error>>,
@@ -507,7 +509,8 @@ pub(super) async fn dispatch<D: Dispatch, F: Future<Output = ()>>(
     notification: &Notify,
     registry: &Notify,
     first_error: &mut Option<Error>,
-) {
+    grace: Duration,
+) -> Instant {
     let mut dispatcher = Dispatcher::new(worker);
     loop {
         if shutdown.as_mut().now_or_never().is_some() {
@@ -547,23 +550,36 @@ pub(super) async fn dispatch<D: Dispatch, F: Future<Output = ()>>(
             () = registry.notified() => {}
         }
     }
+    let deadline = Instant::now() + grace;
     dispatcher.stopping.store(true, Ordering::SeqCst);
     lock(&dispatcher.shared.slots).stopping = true;
-    while let Some(result) = dispatcher.claims.join_next_with_id().await {
+    // Plain claims and fused claims reserved before the stop settle together, so one that stalls
+    // past the deadline does not strand the tasks the other returned within it.
+    let mut handoffs_open = true;
+    loop {
+        let fused_settled = lock(&dispatcher.shared.slots).fused == 0;
+        if dispatcher.claims.is_empty() && (fused_settled || !handoffs_open) {
+            break;
+        }
+        tokio::select! {
+            Some(result) = dispatcher.claims.join_next_with_id() => {
+                dispatcher.settle(result, executions);
+            }
+            handoff = dispatcher.handoffs.recv(), if handoffs_open => match handoff {
+                Some(handoff) => dispatcher.receive(handoff, executions),
+                None => handoffs_open = false,
+            },
+            () = tokio::time::sleep_until(deadline) => break,
+        }
+    }
+    // The deadline can win the select while a claim that returned in time waits to be joined.
+    while let Some(result) = dispatcher.claims.try_join_next_with_id() {
         dispatcher.settle(result, executions);
     }
-    // A fused claim reserved before the stop still hands its tasks over, and they run.
-    loop {
-        let settled = lock(&dispatcher.shared.slots).fused == 0;
-        if settled {
-            while let Ok(handoff) = dispatcher.handoffs.try_recv() {
-                dispatcher.receive(handoff, executions);
-            }
-            return;
-        }
-        let Some(handoff) = dispatcher.handoffs.recv().await else { return };
+    while let Ok(handoff) = dispatcher.handoffs.try_recv() {
         dispatcher.receive(handoff, executions);
     }
+    deadline
 }
 
 #[cfg(test)]
@@ -700,6 +716,30 @@ mod tests {
 
     type ClaimRequest = (usize, usize, oneshot::Sender<Vec<FakeTask>>);
 
+    impl Fake {
+        fn start(
+            setup: &Setup,
+        ) -> (Arc<Self>, mpsc::UnboundedReceiver<ClaimRequest>, mpsc::UnboundedReceiver<FusedRequest>)
+        {
+            let (sender, claims) = mpsc::unbounded_channel();
+            let (fused_sender, fused) = mpsc::unbounded_channel();
+            let worker = Arc::new(Self {
+                concurrency: setup.concurrency,
+                cohorts: setup.cohorts,
+                queue_count: setup.queue_count,
+                fast_tier_only: AtomicBool::new(setup.fast_tier_only),
+                tiers_known: AtomicBool::new(setup.tiers_known),
+                poll: setup.poll,
+                paused: AtomicBool::new(setup.paused),
+                claims: sender,
+                fused: fused_sender,
+                started: Arc::new(AtomicUsize::new(0)),
+                released: AtomicUsize::new(0),
+            });
+            (worker, claims, fused)
+        }
+    }
+
     struct Harness {
         worker: Arc<Fake>,
         claims: mpsc::UnboundedReceiver<ClaimRequest>,
@@ -717,6 +757,7 @@ mod tests {
         tiers_known: bool,
         poll: Duration,
         paused: bool,
+        grace: Duration,
     }
 
     impl Default for Setup {
@@ -729,6 +770,7 @@ mod tests {
                 tiers_known: true,
                 poll: Duration::from_secs(60),
                 paused: false,
+                grace: Duration::from_secs(60),
             }
         }
     }
@@ -739,21 +781,7 @@ mod tests {
         }
 
         fn start(setup: Setup) -> Self {
-            let (sender, claims) = mpsc::unbounded_channel();
-            let (fused_sender, fused) = mpsc::unbounded_channel();
-            let worker = Arc::new(Fake {
-                concurrency: setup.concurrency,
-                cohorts: setup.cohorts,
-                queue_count: setup.queue_count,
-                fast_tier_only: AtomicBool::new(setup.fast_tier_only),
-                tiers_known: AtomicBool::new(setup.tiers_known),
-                poll: setup.poll,
-                paused: AtomicBool::new(setup.paused),
-                claims: sender,
-                fused: fused_sender,
-                started: Arc::new(AtomicUsize::new(0)),
-                released: AtomicUsize::new(0),
-            });
+            let (worker, claims, fused) = Fake::start(&setup);
             let notification = Arc::new(Notify::new());
             let (stop, stopped) = oneshot::channel::<()>();
             let running = {
@@ -772,6 +800,7 @@ mod tests {
                         &notification,
                         &registry,
                         &mut first_error,
+                        setup.grace,
                     )
                     .await;
                     while executions.join_next().await.is_some() {}
@@ -875,6 +904,104 @@ mod tests {
             .expect("the loop panicked");
         assert_eq!(harness.worker.started.load(Ordering::SeqCst), 2);
         assert!(harness.claims.try_recv().is_err(), "the loop claimed after the stop");
+    }
+
+    #[tokio::test]
+    async fn stopping_gives_up_on_a_claim_that_outlives_the_grace_period() {
+        let grace = Duration::from_millis(200);
+        let mut harness = Harness::start(Setup { concurrency: 4, grace, ..Setup::default() });
+        let (_, _, held) = harness.next_claim().await;
+        let stopped = Instant::now();
+        let _ = harness.stop.take().expect("not stopped").send(());
+        tokio::time::timeout(WAIT, &mut harness.running)
+            .await
+            .expect("the loop waited past its grace period for a claim")
+            .expect("the loop panicked");
+        assert!(stopped.elapsed() >= grace, "the loop returned before its grace period ended");
+        let _ = held.send(vec![FakeTask::ready()]);
+        assert_eq!(harness.worker.started.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_stalled_plain_claim_does_not_strand_a_fused_claim_that_returns_within_grace() {
+        let grace = Duration::from_millis(300);
+        let mut harness =
+            Harness::start(Setup { concurrency: 4, queue_count: 2, grace, ..Setup::default() });
+        let (limit, _, answer) = harness.next_claim().await;
+        assert_eq!(limit, 4);
+        let (tasks, mut fused) = gated_with(2, true);
+        let _ = answer.send(tasks);
+        let (_, _, held) = harness.next_claim().await;
+        let _ = fused.remove(0).send(());
+        let request = harness.next_fused().await;
+        assert!(request.limit.is_some(), "the completed task reserved a fused claim");
+
+        let _ = harness.stop.take().expect("not stopped").send(());
+        settled().await;
+        let _ = request.answer.send(Some(vec![FakeTask::ready()]));
+        drop(fused);
+        tokio::time::timeout(WAIT, &mut harness.running)
+            .await
+            .expect("the loop waited past its grace period for a claim")
+            .expect("the loop panicked");
+        assert_eq!(
+            harness.worker.started.load(Ordering::SeqCst),
+            3,
+            "the fused claim returned within grace, so its task ran"
+        );
+        drop(held);
+    }
+
+    /// Polls `future` once, so the test decides what is ready when the loop next looks.
+    async fn poll_once<T>(future: Pin<&mut impl Future<Output = T>>) -> std::task::Poll<T> {
+        let mut future = Some(future);
+        std::future::poll_fn(|context| {
+            std::task::Poll::Ready(future.take().expect("polled once").poll(context))
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_claim_that_returned_within_grace_runs_when_the_deadline_is_also_ready() {
+        let grace = Duration::from_millis(20);
+        // The select picks among ready branches at random, so each round gives the deadline a
+        // fresh chance to win. A loop that drops the returned claim fails nearly every run.
+        for round in 0..32 {
+            let setup = Setup { concurrency: 4, grace, ..Setup::default() };
+            let (worker, mut claims, _fused) = Fake::start(&setup);
+            let (notification, registry) = (Notify::new(), Notify::new());
+            let (mut executions, mut first_error) = (JoinSet::new(), None);
+            let (stop, stopped) = oneshot::channel::<()>();
+            let shutdown = std::pin::pin!(async move {
+                let _ = stopped.await;
+            });
+            let mut running = std::pin::pin!(dispatch(
+                &worker,
+                &mut executions,
+                shutdown,
+                &notification,
+                &registry,
+                &mut first_error,
+                grace,
+            ));
+            assert!(poll_once(running.as_mut()).await.is_pending());
+            let (_, _, answer) = tokio::time::timeout(WAIT, claims.recv())
+                .await
+                .expect("the loop never claimed")
+                .expect("the loop dropped its claim channel");
+
+            let _ = stop.send(());
+            assert!(poll_once(running.as_mut()).await.is_pending(), "the claim is still out");
+            let _ = answer.send(vec![FakeTask::ready()]);
+            // The loop is not polled while the claim returns and the deadline passes.
+            tokio::time::sleep(grace * 3).await;
+            assert!(poll_once(running.as_mut()).await.is_ready(), "the deadline has passed");
+            assert_eq!(
+                worker.started.load(Ordering::SeqCst),
+                1,
+                "round {round}: the claim returned within grace, so its task ran"
+            );
+        }
     }
 
     #[tokio::test]

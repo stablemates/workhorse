@@ -944,7 +944,9 @@ The Rust crate is `workhorse` in `rust/`, requires Rust 1.89 or newer, and runs 
 0074](decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md) records its shape. The sealed
 `Executor` trait covers `tokio_postgres::Client`, `tokio_postgres::Transaction`,
 `deadpool_postgres::Pool`, `deadpool_postgres::Object`, `deadpool_postgres::Transaction`, and a
-reference to any of them. A transaction executor makes every call part of the caller's transaction.
+reference to any of them. A `Pool` executor borrows one connection per statement. When the caller
+drops a statement before it returns, the executor discards that connection rather than return it
+to the pool mid-statement. A transaction executor makes every call part of the caller's transaction.
 The client never commits, rolls back, or closes what the caller owns. The crate exports
 `MIN_SCHEMA_VERSION` and `MAX_SCHEMA_VERSION` from `rust/src/sql_catalogue_generated.rs`, and they
 bound the schemas it accepts.
@@ -997,13 +999,25 @@ the callback returns, even when the member is cancelled. The shutdown drain coun
 `Worker::run(shutdown)` and `Worker::run_once` share one execution permit.
 
 When `shutdown` resolves, `Worker::run` stops claiming and drains within `shutdown_grace_period`.
-Handlers still running when grace ends see `CancelReason::Shutdown` and get 250 milliseconds to
-unwind. `run` abandons any that outlive that window and returns `Error::ShutdownIncomplete`. Their
-leases expire, and lease recovery reclaims the tasks. The notification listener reconnects after an
-exponential delay from 100 milliseconds through 5 seconds, and allows 1 second for `UNLISTEN` on
-clean shutdown. `run_worker_process(&worker)` in `rust/src/worker/process.rs` installs `SIGINT` and
-`SIGTERM` handlers, or waits for Ctrl-C on other platforms, and passes that signal as the shutdown
-future. It never exits the process, so the caller chooses the exit code.
+The deadline is fixed when `dispatch` in `rust/src/worker/dispatch.rs` observes `shutdown`. Claims
+still in flight, the draining `register_worker_v1` refresh, and running handlers all spend from it.
+Plain claims and fused claims settle together. A claim still pending at the deadline is dropped,
+and any task it claimed stays leased until lease recovery reclaims it. Tasks from claims that
+returned in time still run, even when another claim stalls. Handlers still running
+when grace ends see `CancelReason::Shutdown` and get 250 milliseconds to unwind. `run` abandons any
+that outlive that window and returns `Error::ShutdownIncomplete`. Their leases expire, and lease
+recovery reclaims the tasks. Stopping the registry loop and the listener, then
+`deregister_worker_v1` and the release of the reserved heartbeat connection share a cleanup window.
+That window ends 1 second after the later of the deadline and the end of the drain. `run` aborts a
+loop still running at that point and logs a deregistration that has not returned. A statement
+either bound cuts off discards its pooled connection, and so does a claim the deadline drops.
+Aborting the listener also aborts the task that drives its connection, so that connection closes.
+A heartbeat round still holding the reserved connection then releases it when the round ends. The
+registry row then ages out through `prune_worker_registry_v1`. The notification listener reconnects
+after an exponential delay from 100 milliseconds through 5 seconds, and allows 1 second for
+`UNLISTEN` on clean shutdown. `run_worker_process(&worker)` in `rust/src/worker/process.rs`
+installs `SIGINT` and `SIGTERM` handlers, or waits for Ctrl-C on other platforms, and passes that
+signal as the shutdown future. It never exits the process, so the caller chooses the exit code.
 
 `HandlerContext` in `rust/src/context.rs`, `rust/src/waits.rs`, and `rust/src/children.rs` gives
 each handler its durable calls over the worker's pool. Every checkpoint, wait, and child name

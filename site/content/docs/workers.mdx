@@ -324,7 +324,10 @@ so recovery can rerun the task elsewhere.
 
 Rust applications call `run_worker_process`, which drains on `SIGINT` or `SIGTERM`. To own the
 boundary instead, pass any shutdown future to `Worker::run`. A handler panic becomes a recorded
-attempt failure there too.
+attempt failure there too. The Rust grace period, `shutdown_grace_period`, starts as soon as `run`
+observes the shutdown future. It bounds a claim still in flight and the registry update that marks
+the worker draining, as in Go.
+A short cleanup window after it bounds deregistration and the heartbeat connection release.
 
 Ruby applications call `Stablemates::Workhorse.run_worker_process`, which drains on `SIGINT` or
 `SIGTERM` within `shutdown_grace`. To own the boundary instead, call `Worker#run` on a thread and

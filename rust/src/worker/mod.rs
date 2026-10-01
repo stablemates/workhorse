@@ -55,6 +55,9 @@ const PROMOTE_LIMIT: i32 = 100;
 const RECOVER_LIMIT: i32 = 100;
 /// How long a stopped handler may unwind after its cancellation fires at the end of grace.
 const UNWIND_WINDOW: Duration = Duration::from_millis(250);
+/// How long shutdown waits, past its deadline, for the registry loop and the listener to stop and
+/// for the worker to deregister.
+const CLEANUP_WINDOW: Duration = Duration::from_secs(1);
 /// The heartbeat connection plus one claim and one settlement.
 const MIN_DEDICATED_POOL: usize = 3;
 /// How long a worker claims a queue that rejected a fast claim through `claim_many_v1` before
@@ -135,7 +138,9 @@ pub struct WorkerOptions {
     /// Schedule namespaces this worker fires during maintenance. Empty fires none.
     pub schedule_namespaces: Vec<String>,
     pub schedule_catchup_limit: i32,
-    /// How long running handlers may finish before their cancellation fires.
+    /// How long shutdown may take before running handlers see their cancellation, counted from the
+    /// moment the worker observes shutdown. Draining claims and refreshing the registration spend
+    /// from the same period.
     pub shutdown_grace_period: Duration,
     /// Never opens the `LISTEN` connection.
     pub polling_only: bool,
@@ -403,13 +408,16 @@ impl RunScope {
     }
 
     /// Waits for the teardown, which keeps running if this future is dropped.
-    async fn close(mut self) {
-        if let Some(teardown) = self.teardown() {
+    ///
+    /// With a `cleanup` deadline, teardown aborts a loop that outlives it and stops waiting for a
+    /// heartbeat round in flight, which then releases its connection itself.
+    async fn close(mut self, cleanup: Option<Instant>) {
+        if let Some(teardown) = self.teardown(cleanup) {
             let _ = teardown.await;
         }
     }
 
-    fn teardown(&mut self) -> Option<JoinHandle<()>> {
+    fn teardown(&mut self, cleanup: Option<Instant>) -> Option<JoinHandle<()>> {
         let permit = self.permit.take()?;
         self.background.cancel();
         // Every execution has ended or is being dropped, so no renewal is still owed.
@@ -421,13 +429,17 @@ impl RunScope {
                 let _ = starting.await;
             }
             for running in loops {
-                let _ = running.await;
+                join_until(running, cleanup).await;
             }
-            // A round in flight finishes before its connection can go back to the pool.
+            // A round in flight finishes before its connection can go back to the pool, so the
+            // loop is never aborted: one that outlives the deadline releases the connection itself.
             if let Some(heartbeats) = inner.heartbeat_loop() {
-                let _ = heartbeats.await;
+                match cleanup {
+                    Some(cleanup) => drop(timeout_at(cleanup, heartbeats).await),
+                    None => drop(heartbeats.await),
+                }
             }
-            inner.stop().await;
+            inner.stop(cleanup).await;
             drop(permit);
         }))
     }
@@ -435,7 +447,7 @@ impl RunScope {
 
 impl Drop for RunScope {
     fn drop(&mut self) {
-        self.teardown();
+        self.teardown(None);
     }
 }
 
@@ -535,9 +547,12 @@ impl Worker {
 
     /// Claims and executes until `shutdown` resolves, then drains within the grace period.
     ///
-    /// Handlers still running when grace ends see [`crate::CancelReason::Shutdown`] and get a
-    /// short unwind window. Any that outlive it are abandoned, their leases expire, and PostgreSQL
-    /// recovers them; `run` then returns [`Error::ShutdownIncomplete`].
+    /// The grace period starts when the worker observes `shutdown`. Claims in flight, the draining
+    /// registration refresh, and running handlers all finish within it. Handlers still running
+    /// when grace ends see [`crate::CancelReason::Shutdown`] and get a short unwind window. Any
+    /// that outlive it are abandoned, their leases expire, and PostgreSQL recovers them; `run` then
+    /// returns [`Error::ShutdownIncomplete`]. Stopping the background loops and deregistering wait
+    /// at most a short cleanup window past the grace period.
     ///
     /// Dropping the future instead abandons every task it owns at once: renewals stop and the
     /// leases expire. The worker deregisters in the background, and its next run waits for that.
@@ -572,30 +587,28 @@ impl Worker {
             shutdown: shutdown_token.clone(),
             listening,
         });
-        dispatch::dispatch(
+        let deadline = dispatch::dispatch(
             &dispatcher,
             &mut executions,
             shutdown.as_mut(),
             &wake,
             &registry_wake,
             &mut first_error,
+            inner.options.shutdown_grace_period,
         )
         .await;
 
         inner.draining.store(true, Ordering::SeqCst);
-        inner.refresh_registration().await;
+        if timeout_at(deadline, inner.refresh_registration()).await.is_err() {
+            tracing::warn!(workhorse.worker.id = %inner.worker_id, "draining registration refresh outlived the shutdown grace period");
+        }
         maintenance_stop.cancel();
         // The handle stays in the scope until it resolves, so a drop here still joins it.
         if let Some(maintenance) = scope.loops.last_mut() {
             let _ = maintenance.await;
             scope.loops.pop();
         }
-        drain(
-            &mut executions,
-            Instant::now() + inner.options.shutdown_grace_period,
-            &mut first_error,
-        )
-        .await;
+        drain(&mut executions, deadline, &mut first_error).await;
         if !executions.is_empty() {
             shutdown_token.cancel();
             drain(&mut executions, Instant::now() + UNWIND_WINDOW, &mut first_error).await;
@@ -606,7 +619,7 @@ impl Worker {
             executions.abort_all();
             while executions.join_next().await.is_some() {}
         }
-        scope.close().await;
+        scope.close(Some(deadline.max(Instant::now()) + CLEANUP_WINDOW)).await;
         if abandoned > 0 {
             if let Some(error) = first_error {
                 tracing::error!(error = %error, workhorse.worker.id = %inner.worker_id, "task execution failed");
@@ -648,7 +661,7 @@ impl Worker {
             }
         }
         .await;
-        scope.close().await;
+        scope.close(None).await;
         result
     }
 }
@@ -745,6 +758,18 @@ async fn drain(
     }
 }
 
+/// Waits for a background loop to stop until `deadline`, then aborts it.
+async fn join_until(mut task: tokio::task::JoinHandle<()>, deadline: Option<Instant>) {
+    let Some(deadline) = deadline else {
+        let _ = task.await;
+        return;
+    };
+    if timeout_at(deadline, &mut task).await.is_err() {
+        task.abort();
+        let _ = task.await;
+    }
+}
+
 impl Inner {
     fn handler(&self, task_type: &str) -> Option<ErasedHandler> {
         self.handlers
@@ -779,7 +804,7 @@ impl Inner {
     async fn start(&self) -> Result<(), Error> {
         self.reserve_heartbeat_connection().await;
         if let Err(error) = crate::compatibility::assert_schema_compatible(&self.pool).await {
-            self.release_heartbeat_connection().await;
+            self.release_heartbeat_connection(None).await;
             return Err(error);
         }
         *lock(&self.instance) = Uuid::new_v4();
@@ -790,14 +815,26 @@ impl Inner {
         Ok(())
     }
 
-    async fn stop(&self) {
+    /// Deregisters the worker and releases the heartbeat connection, giving up at `deadline`.
+    async fn stop(&self, deadline: Option<Instant>) {
         if self.registered.swap(false, Ordering::SeqCst) {
-            if let Err(error) = self.pool.rows(sql::DEREGISTER_WORKER_V1, &[&self.worker_id]).await
-            {
-                tracing::warn!(error = %error, workhorse.worker.id = %self.worker_id, "worker deregistration failed");
+            let deregister =
+                async { self.pool.rows(sql::DEREGISTER_WORKER_V1, &[&self.worker_id]).await };
+            let result = match deadline {
+                Some(deadline) => timeout_at(deadline, deregister).await.ok(),
+                None => Some(deregister.await),
+            };
+            match result {
+                Some(Ok(_)) => {}
+                Some(Err(error)) => {
+                    tracing::warn!(error = %error, workhorse.worker.id = %self.worker_id, "worker deregistration failed");
+                }
+                None => {
+                    tracing::warn!(workhorse.worker.id = %self.worker_id, "worker deregistration outlived the shutdown cleanup window");
+                }
             }
         }
-        self.release_heartbeat_connection().await;
+        self.release_heartbeat_connection(deadline).await;
     }
 
     fn poll_delay(&self, consecutive_empty: u32, listening: bool) -> Duration {
@@ -1253,7 +1290,7 @@ mod tests {
     async fn a_cancelled_close_finishes_its_teardown_before_the_next_run() {
         let (port, mut accepted) = silent_server();
         let worker = Worker::new(silent_pool_on(port), WorkerOptions::default()).unwrap();
-        let closing = tokio::spawn(registered_scope(&worker).await.close());
+        let closing = tokio::spawn(registered_scope(&worker).await.close(None));
         // Deregistration is the only step here that connects, so `close` is inside it.
         let deregistering = tokio::time::timeout(ACCEPTED, accepted.recv()).await;
         assert!(deregistering.unwrap().is_some(), "close never began to deregister");

@@ -4,11 +4,12 @@
 //! A statement that fails or outlives the interval discards that connection, and the next round
 //! acquires a fresh one. Go shares one reserved connection per pool; a Rust worker holds its own.
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
 use tokio::sync::{mpsc, Notify};
-use tokio::time::{timeout, Instant};
+use tokio::time::{timeout, timeout_at, Instant};
 use uuid::Uuid;
 
 use super::{Inner, OwnershipStatus};
@@ -57,6 +58,8 @@ pub(super) struct Heartbeats {
     state: Mutex<State>,
     wake: Notify,
     reserved: tokio::sync::Mutex<Option<deadpool_postgres::Object>>,
+    /// Set when a stop gave up waiting for a round, so that round releases the connection.
+    release_pending: AtomicBool,
 }
 
 #[derive(Default)]
@@ -79,14 +82,30 @@ impl Inner {
             return;
         }
         let mut reserved = self.heartbeats.reserved.lock().await;
+        self.heartbeats.release_pending.store(false, Ordering::SeqCst);
         if reserved.is_none() {
             *reserved =
                 timeout(self.heartbeat_interval, self.pool.get()).await.ok().and_then(Result::ok);
         }
     }
 
-    pub(super) async fn release_heartbeat_connection(&self) {
-        self.heartbeats.reserved.lock().await.take();
+    /// Releases the round connection, waiting for a round in flight until `deadline` at most.
+    ///
+    /// A round that outlives the deadline releases the connection itself when it ends.
+    pub(super) async fn release_heartbeat_connection(&self, deadline: Option<Instant>) {
+        self.heartbeats.release_pending.store(true, Ordering::SeqCst);
+        let mut reserved = match deadline {
+            Some(deadline) => match timeout_at(deadline, self.heartbeats.reserved.lock()).await {
+                Ok(reserved) => reserved,
+                Err(_) => {
+                    tracing::warn!(workhorse.worker.id = %self.worker_id, "heartbeat round outlived the shutdown cleanup window");
+                    return;
+                }
+            },
+            None => self.heartbeats.reserved.lock().await,
+        };
+        reserved.take();
+        self.heartbeats.release_pending.store(false, Ordering::SeqCst);
     }
 
     /// Adds `task` to the rounds until the returned membership leaves or is dropped.
@@ -153,23 +172,23 @@ impl Inner {
                 *reserved = Some(self.pool.get().await?);
             }
             let connection = reserved.as_ref().expect("reserved above");
-            match timeout(
+            let rows = timeout(
                 self.heartbeat_interval,
                 fenced_rows(connection, sql::HEARTBEAT_MANY_V1, &params),
             )
             .await
             .map_err(|_| expired())
-            .and_then(|rows| rows)
-            {
-                Ok(rows) => rows,
-                Err(error) => {
-                    // A failed round discards the connection instead of returning it to the pool.
-                    if let Some(connection) = reserved.take() {
-                        drop(deadpool_postgres::Object::take(connection));
-                    }
-                    return Err(error);
+            .and_then(|rows| rows);
+            if rows.is_err() {
+                // A failed round discards the connection instead of returning it to the pool.
+                if let Some(connection) = reserved.take() {
+                    drop(deadpool_postgres::Object::take(connection));
                 }
             }
+            if self.heartbeats.release_pending.swap(false, Ordering::SeqCst) {
+                reserved.take();
+            }
+            rows?
         };
         let mut statuses = HashMap::with_capacity(rows.len());
         for row in &rows {

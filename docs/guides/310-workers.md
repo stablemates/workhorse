@@ -129,6 +129,11 @@ flight. Tasks that claim already returned still run. A claim the deadline cuts s
 lease it never returned, and that lease expires so recovery picks the task up. A handler cancelled
 at the deadline does not turn a clean shutdown into an error.
 
+A Rust worker starts its grace period as soon as `Worker::run` observes its shutdown future. The
+same deadline bounds a claim in flight and the registry update that marks the worker draining. A
+short cleanup window after it bounds deregistration and the heartbeat connection release. A locked
+registry row or a stalled heartbeat cannot hold `run`.
+
 `Run` returning is not the process exiting. A handler that ignores its cancellation keeps running
 inside the process, and `Run` reports it with `ErrShutdownIncomplete`. Its lease stops renewing, so
 recovery can rerun the task elsewhere.
