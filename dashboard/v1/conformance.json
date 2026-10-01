@@ -5719,6 +5719,114 @@
           }
         },
         {
+          "id": "set-queue-paused-options-method-not-supported",
+          "procedure": "setQueuePaused",
+          "request": {
+            "json": {
+              "queue": "conformance-paused",
+              "paused": true,
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "method": "OPTIONS",
+          "expect": {
+            "status": 405,
+            "body": {
+              "json": {
+                "defined": false,
+                "code": "METHOD_NOT_SUPPORTED",
+                "status": 405,
+                "message": "Method Not Supported"
+              }
+            }
+          }
+        },
+        {
+          "id": "set-queue-paused-put-method-not-supported",
+          "procedure": "setQueuePaused",
+          "request": {
+            "json": {
+              "queue": "conformance-paused",
+              "paused": true,
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "method": "PUT",
+          "expect": {
+            "status": 405,
+            "body": {
+              "json": {
+                "defined": false,
+                "code": "METHOD_NOT_SUPPORTED",
+                "status": 405,
+                "message": "Method Not Supported"
+              }
+            }
+          }
+        },
+        {
+          "id": "set-queue-paused-patch-method-not-supported",
+          "procedure": "setQueuePaused",
+          "request": {
+            "json": {
+              "queue": "conformance-paused",
+              "paused": true,
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "method": "PATCH",
+          "expect": {
+            "status": 405,
+            "body": {
+              "json": {
+                "defined": false,
+                "code": "METHOD_NOT_SUPPORTED",
+                "status": 405,
+                "message": "Method Not Supported"
+              }
+            }
+          }
+        },
+        {
+          "id": "set-queue-paused-delete-method-not-supported",
+          "procedure": "setQueuePaused",
+          "request": {
+            "json": {
+              "queue": "conformance-paused",
+              "paused": true,
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "method": "DELETE",
+          "expect": {
+            "status": 405,
+            "body": {
+              "json": {
+                "defined": false,
+                "code": "METHOD_NOT_SUPPORTED",
+                "status": 405,
+                "message": "Method Not Supported"
+              }
+            }
+          }
+        },
+        {
           "id": "enqueue-test-missing-feature",
           "procedure": "enqueueTest",
           "request": {

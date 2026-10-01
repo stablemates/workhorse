@@ -254,6 +254,20 @@ async function compressRpcResponse(response: Response, request: Request): Promis
   return new Response(new Uint8Array(compressed), { status: response.status, headers });
 }
 
+function methodNotSupported(): Response {
+  return Response.json(
+    {
+      json: {
+        defined: false,
+        code: "METHOD_NOT_SUPPORTED",
+        status: 405,
+        message: "Method Not Supported",
+      },
+    },
+    { status: 405, headers: { allow: "POST" } },
+  );
+}
+
 function payloadTooLarge(): Response {
   return Response.json(
     {
@@ -578,6 +592,9 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
       if (pathname === `${basePath}/rpc` || pathname.startsWith(`${basePath}/rpc/`)) {
         const rpcPrefix = `${basePath}/rpc`;
         const procedure = rpcProcedure(pathname, rpcPrefix);
+        // The oRPC matcher ignores the method, and the demo's operator throttles count only POST
+        // as a mutation, so any other method must be refused before it can reach a procedure.
+        if (request.method !== "POST") return methodNotSupported();
         if (Number(request.headers.get("content-length")) > MAX_RPC_BODY_BYTES) {
           return payloadTooLarge();
         }

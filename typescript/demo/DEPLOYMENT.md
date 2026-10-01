@@ -301,7 +301,8 @@ must satisfy:
 - A managed WAF ruleset, such as Cloudflare Managed Rules, on the demo hostname.
 - An edge rate limit on `POST` requests to `*/rpc/dashboard/*` stricter than the server's
   per-client bucket, so a flood spread across many addresses sheds load before it reaches the
-  container.
+  container. The server answers every other method on that path with `405`, so `POST` is the only
+  method that reaches a procedure.
 - A method allowlist of `GET`, `HEAD`, `POST`, and `OPTIONS` on the demo hostname.
 - A request-body ceiling at or below the server's 131,072 bytes.
 
