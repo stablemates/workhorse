@@ -122,13 +122,14 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
-    # Three base images carry a version this repository decides elsewhere. The Go line is a
+    # Four base images carry a version this repository decides elsewhere. The Go line is a
     # supported runtime recorded in support.json. The uv line is a pinned image that
     # typescript/demo/src/multilang-workers.test.ts names, and moving it is a decision about the
     # Python toolchain. The Node line is the toolchain support.json and mise.toml pin, and adopting
-    # a new major is a decision that carries the tested matrix with it. Tests hold the Dockerfiles
-    # to all three. Dependabot reads none of them, so a version bump here is always wrong by
-    # default and arrives every week until someone closes it.
+    # a new major is a decision that carries the tested matrix with it. The Rust version is the
+    # toolchain rust-toolchain.toml and mise.toml pin, so it moves with those files and CI; #363
+    # moved it alone. Tests hold the Dockerfiles to all four. Dependabot reads none of them, so a
+    # version bump here is always wrong by default and arrives every week until someone closes it.
     #
     # Node ignores the major alone. A 24.x release still opens, because that is the same supported
     # major with its own fixes, and only the major is the decision. The bump this entry exists for
@@ -144,6 +145,11 @@ updates:
           - version-update:semver-minor
           - version-update:semver-patch
       - dependency-name: ghcr.io/astral-sh/uv
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
+      - dependency-name: rust
         update-types:
           - version-update:semver-major
           - version-update:semver-minor

@@ -19,6 +19,22 @@ import {
 import { sharedWorkerTask } from "./handlers.js";
 
 describe("multilanguage demo worker topology", () => {
+  it("builds the Rust worker with the toolchain rust-toolchain.toml and mise.toml pin", async () => {
+    const [dockerfile, rustToolchain, miseConfig] = await Promise.all([
+      readFile(resolve("Dockerfile"), "utf8"),
+      readFile(resolve("rust-toolchain.toml"), "utf8"),
+      readFile(resolve("mise.toml"), "utf8"),
+    ]);
+    const channel = /^channel = "(\d+\.\d+\.\d+)"$/m.exec(rustToolchain)?.[1];
+    const imageTag = /^FROM rust:(\S+)-alpine@sha256:[0-9a-f]{64} AS rust-build$/m.exec(
+      dockerfile,
+    )?.[1];
+
+    expect(channel).toBeDefined();
+    expect(miseConfig).toMatch(new RegExp(`^rust = "${channel}"$`, "m"));
+    expect(imageTag).toBe(channel);
+  });
+
   it("declares one equal-capacity worker in each runtime", () => {
     expect(DEMO_WORKER_CONCURRENCY).toEqual([3, 3, 3, 3]);
     expect([
@@ -46,9 +62,6 @@ describe("multilanguage demo worker topology", () => {
 
     expect(dockerfile).toContain("FROM golang:1.25-alpine@sha256:");
     expect(dockerfile).toContain("FROM python:3.14-alpine@sha256:");
-    expect(dockerfile).toMatch(
-      /^FROM rust:\d+\.\d+(\.\d+)?-alpine@sha256:[0-9a-f]{64} AS rust-build$/m,
-    );
     expect(dockerfile).toContain("cargo build --locked --release -p workhorse-demo-worker");
     expect(dockerfile).toMatch(
       /^FROM ghcr\.io\/astral-sh\/uv:\d+\.\d+\.\d+@sha256:[0-9a-f]{64} AS uv$/m,
