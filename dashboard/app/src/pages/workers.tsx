@@ -25,6 +25,7 @@ import { EmptyState, PageHeader } from "../components/task-list.js";
 import { formatDuration, formatExact, formatRelative } from "../preferences.js";
 import { workerStatus } from "../presentation-policy.js";
 import { HelpButton } from "../components/help-button.js";
+import { formatCount } from "../count-format.js";
 
 /**
  * A right-aligned metric header that may wrap.
@@ -405,7 +406,7 @@ export function WorkersPage({
                           aria-label={
                             worker.concurrency === null
                               ? `${worker.id} slot use is unknown because it has never registered`
-                              : `${worker.id} is using ${worker.activeSlots ?? 0} of ${worker.concurrency} configured execution slots`
+                              : `${worker.id} is using ${formatCount(worker.activeSlots ?? 0)} of ${formatCount(worker.concurrency)} configured execution slots`
                           }
                         >
                           {worker.concurrency === null ? (
@@ -419,17 +420,18 @@ export function WorkersPage({
                           ) : (
                             <Text
                               size="sm"
-                              title={`${worker.id} uses ${worker.activeSlots ?? 0} of ${worker.concurrency} execution slots`}
+                              title={`${worker.id} uses ${formatCount(worker.activeSlots ?? 0)} of ${formatCount(worker.concurrency)} execution slots`}
                             >
-                              {worker.activeSlots ?? 0} / {worker.concurrency}
+                              {formatCount(worker.activeSlots ?? 0)} /{" "}
+                              {formatCount(worker.concurrency)}
                             </Text>
                           )}
                         </Table.Td>
-                        <Table.Td ta="right">{worker.activeTasks}</Table.Td>
-                        <Table.Td ta="right">{worker.completedAttempts}</Table.Td>
+                        <Table.Td ta="right">{formatCount(worker.activeTasks)}</Table.Td>
+                        <Table.Td ta="right">{formatCount(worker.completedAttempts)}</Table.Td>
                         <Table.Td ta="right">
                           <Text c={worker.failedAttempts > 0 ? "red.7" : undefined} size="sm">
-                            {worker.failedAttempts}
+                            {formatCount(worker.failedAttempts)}
                           </Text>
                         </Table.Td>
                         <Table.Td ta="right">{formatDuration(worker.averageExecutionMs)}</Table.Td>

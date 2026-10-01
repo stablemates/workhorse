@@ -30,6 +30,7 @@ import {
   hasStoredValue,
 } from "../preferences.js";
 import { useDashboardClient } from "../core.js";
+import { formatCount } from "../count-format.js";
 
 type Checkpoint = DashboardTaskDetail["checkpoints"][number];
 
@@ -472,7 +473,7 @@ function PlannedDurability({ task }: { task: DashboardTaskDetail }) {
           </Text>
         </Box>
         <Badge variant="light" color="violet">
-          {completedPlanSteps}/{plan.steps.length} durable
+          {formatCount(completedPlanSteps)}/{formatCount(plan.steps.length)} durable
         </Badge>
       </Group>
       {persistentFailure ? (
@@ -587,7 +588,7 @@ export function TaskCheckpoints({ task }: { task: DashboardTaskDetail }) {
       title="Interim results"
       aside={
         <Badge variant="light" color={task.checkpoints.length > 0 ? "teal" : "gray"}>
-          {task.checkpoints.length}
+          {formatCount(task.checkpoints.length)}
           {task.truncated.checkpoints ? "+" : ""}
         </Badge>
       }
@@ -820,5 +821,5 @@ export function coalescingEvidenceFor(task: DashboardTaskDetail): CoalescingEvid
   };
 }
 export function enqueueCount(count: number, adjective: string): string {
-  return `${count} ${adjective} enqueue${count === 1 ? "" : "s"}`;
+  return `${formatCount(count)} ${adjective} enqueue${count === 1 ? "" : "s"}`;
 }

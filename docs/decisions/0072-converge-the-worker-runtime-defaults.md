@@ -39,13 +39,13 @@ row publishes one value.
 
 The four divergent rows resolve as follows.
 
-1. **Claim poll interval.** All three wait the 5000 ms ceiling between empty claims while a `LISTEN`
+1. **Claim poll interval.** All three wait the 5,000 ms ceiling between empty claims while a `LISTEN`
    subscription is live, and start at 250 ms with exponential backoff toward that ceiling when they
-   cannot subscribe. Go moves to both. Its previous flat 1000 ms sent five times the idle claim
+   cannot subscribe. Go moves to both. Its previous flat 1,000 ms sent five times the idle claim
    traffic in the deployment shape most installations run.
-2. **Maintenance routine offer interval.** All three offer the slow routines every 60000 ms, which
+2. **Maintenance routine offer interval.** All three offer the slow routines every 60,000 ms, which
    restores ADR 0011. Python and Go gain the option that gates it.
-3. **Shutdown grace.** All three bound the drain at 25000 ms.
+3. **Shutdown grace.** All three bound the drain at 25,000 ms.
 4. **Handler retry delay override.** All three carry it, unset by default. Python and Go gain the
    worker option; PostgreSQL already accepted the parameter through `fail_v1`.
 
@@ -99,13 +99,13 @@ that is not its own. The two existing runners are not one surface either: only t
 serves liveness and readiness probes. A third shape would add a governed surface to fix a
 difference that the database cannot observe.
 
-### Converge the claim poll interval on 1000 ms instead of 250 ms
+### Converge the claim poll interval on 1,000 ms instead of 250 ms
 
 This would move one number in Go instead of two, and reduce polling-only claim traffic further.
 
 It was rejected because it regresses every TypeScript and Python deployment that cannot use
 `LISTEN`, which is the common shape behind a connection pooler in transaction mode. The exposure it
-would fix is bounded: the backoff reaches the shared 5000 ms ceiling within about eight seconds of
+would fix is bounded: the backoff reaches the shared 5,000 ms ceiling within about eight seconds of
 a queue draining, so the shorter base costs a handful of extra claims per drain.
 
 ### Keep the divergences and document them

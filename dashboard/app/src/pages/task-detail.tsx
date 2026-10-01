@@ -33,6 +33,7 @@ import {
 import { SignalTaskPanel } from "../components/signal-task.js";
 import type { useDashboardController } from "../shell/controller.js";
 import { taskDrawerOpened, taskDrawerViewportProps } from "../task-drawer.js";
+import { formatCount } from "../count-format.js";
 
 type DashboardController = ReturnType<typeof useDashboardController>;
 
@@ -199,7 +200,7 @@ function TaskDetailContent({
         title="Attempt history"
         aside={
           <Badge variant="light" color={task.attempts.length > 0 ? "blue" : "gray"}>
-            {task.attempts.length}
+            {formatCount(task.attempts.length)}
             {task.truncated.attempts ? "+" : ""}
           </Badge>
         }

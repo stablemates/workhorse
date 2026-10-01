@@ -16,6 +16,7 @@ import {
 } from "../core.js";
 import { capActivityGroups } from "../presentation-policy.js";
 import { displayTimeZone, getDateTimeFormatter } from "../preferences.js";
+import { formatCount } from "../count-format.js";
 import type { TaskLocationState } from "../task-location.js";
 
 const activityStatusColors: Record<string, string> = {
@@ -171,10 +172,11 @@ export default function TasksActivityChart({
         tickLine="y"
         withYAxis
         withTooltip
+        valueFormatter={formatCount}
         // Each poll re-reads this chart's series, and an animated redraw would replay every bar
         // from zero on data the operator was already reading.
         barProps={{ radius: 2, isAnimationActive: false }}
-        yAxisProps={{ allowDecimals: false, width: 36 }}
+        yAxisProps={{ allowDecimals: false, width: 44 }}
         xAxisProps={{ interval: "preserveStartEnd", minTickGap: 24 }}
       />
     </Paper>

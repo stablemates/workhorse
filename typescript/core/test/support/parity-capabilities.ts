@@ -1068,27 +1068,27 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   {
     setting: "Lease duration",
     rust: {
-      value: "30000 ms",
+      value: "30,000 ms",
       file: "rust/src/worker/mod.rs",
       pattern: "const DEFAULT_LEASE: Duration = Duration::from_secs(30);",
     },
     typescript: {
-      value: "30000 ms",
+      value: "30,000 ms",
       file: "typescript/core/src/worker.ts",
       pattern: "options.leaseMs ?? 30_000",
     },
     python: {
-      value: "30000 ms",
+      value: "30,000 ms",
       file: "python/src/workhorse/worker.py",
       pattern: "lease_ms: int = 30_000",
     },
     go: {
-      value: "30000 ms",
+      value: "30,000 ms",
       file: "go/worker.go",
       pattern: "defaultWorkerLease         = 30 * time.Second",
     },
     ruby: {
-      value: "30000 ms",
+      value: "30,000 ms",
       file: "ruby/lib/stablemates/workhorse/worker.rb",
       pattern: "concurrency: 1, lease: 30,",
     },
@@ -1120,27 +1120,27 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   {
     setting: "Claim poll interval (subscription live)",
     rust: {
-      value: "5000 ms",
+      value: "5,000 ms",
       file: "rust/src/worker/mod.rs",
       pattern: "const LISTENING_POLL: Duration = Duration::from_secs(5);",
     },
     typescript: {
-      value: "5000 ms",
+      value: "5,000 ms",
       file: "typescript/core/src/worker.ts",
       pattern: "DEFAULT_NOTIFICATION_FALLBACK_POLL_MS = 5_000",
     },
     python: {
-      value: "5000 ms",
+      value: "5,000 ms",
       file: "python/src/workhorse/worker.py",
       pattern: "poll_ms if poll_ms is not None else 5_000",
     },
     go: {
-      value: "5000 ms",
+      value: "5,000 ms",
       file: "go/worker.go",
       pattern: "defaultNotificationPollInterval = maximumEmptyPollInterval",
     },
     ruby: {
-      value: "5000 ms",
+      value: "5,000 ms",
       file: "ruby/lib/stablemates/workhorse/worker.rb",
       pattern: "NOTIFICATION_POLL_MS = 5_000",
     },
@@ -1176,27 +1176,27 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   {
     setting: "Empty-claim backoff ceiling",
     rust: {
-      value: "5000 ms",
+      value: "5,000 ms",
       file: "rust/src/worker/mod.rs",
       pattern: "const MAX_EMPTY_POLL: Duration = Duration::from_secs(5);",
     },
     typescript: {
-      value: "5000 ms",
+      value: "5,000 ms",
       file: "typescript/core/src/worker.ts",
       pattern: "MAX_EMPTY_POLL_MS = 5_000",
     },
     python: {
-      value: "5000 ms",
+      value: "5,000 ms",
       file: "python/src/workhorse/worker.py",
       pattern: "_MAX_EMPTY_POLL_MS = 5_000",
     },
     go: {
-      value: "5000 ms",
+      value: "5,000 ms",
       file: "go/worker.go",
       pattern: "maximumEmptyPollInterval   = 5 * time.Second",
     },
     ruby: {
-      value: "5000 ms",
+      value: "5,000 ms",
       file: "ruby/lib/stablemates/workhorse/worker.rb",
       pattern: "MAX_EMPTY_POLL_MS = 5_000",
     },
@@ -1204,27 +1204,27 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   {
     setting: "Maintenance tick interval",
     rust: {
-      value: "1000 ms",
+      value: "1,000 ms",
       file: "rust/src/worker/mod.rs",
       pattern: "maintenance_interval: Duration::from_secs(1),",
     },
     typescript: {
-      value: "1000 ms",
+      value: "1,000 ms",
       file: "typescript/core/src/worker.ts",
       pattern: "options.maintenanceIntervalMs ?? 1_000",
     },
     python: {
-      value: "1000 ms",
+      value: "1,000 ms",
       file: "python/src/workhorse/worker.py",
       pattern: "maintenance_interval_ms: int = 1_000",
     },
     go: {
-      value: "1000 ms",
+      value: "1,000 ms",
       file: "go/worker.go",
       pattern: "defaultMaintenanceInterval = time.Second",
     },
     ruby: {
-      value: "1000 ms",
+      value: "1,000 ms",
       file: "ruby/lib/stablemates/workhorse/worker.rb",
       pattern: "maintenance_interval: 1,",
     },
@@ -1232,27 +1232,27 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   {
     setting: "Maintenance routine offer interval",
     rust: {
-      value: "60000 ms",
+      value: "60,000 ms",
       file: "rust/src/worker/mod.rs",
       pattern: "maintenance_routine_interval: Duration::from_secs(60),",
     },
     typescript: {
-      value: "60000 ms",
+      value: "60,000 ms",
       file: "typescript/core/src/worker.ts",
       pattern: "options.maintenanceRoutinePollMs ?? 60_000",
     },
     python: {
-      value: "60000 ms",
+      value: "60,000 ms",
       file: "python/src/workhorse/worker.py",
       pattern: "maintenance_routine_poll_ms: int = 60_000",
     },
     go: {
-      value: "60000 ms",
+      value: "60,000 ms",
       file: "go/worker.go",
       pattern: "defaultMaintenanceRoutineInterval = time.Minute",
     },
     ruby: {
-      value: "60000 ms",
+      value: "60,000 ms",
       file: "ruby/lib/stablemates/workhorse/worker.rb",
       pattern: "maintenance_routine_interval: 60,",
     },
@@ -1260,27 +1260,27 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   {
     setting: "Worker registry interval",
     rust: {
-      value: "5000 ms",
+      value: "5,000 ms",
       file: "rust/src/worker/mod.rs",
       pattern: "registry_interval: Duration::from_secs(5),",
     },
     typescript: {
-      value: "5000 ms",
+      value: "5,000 ms",
       file: "typescript/core/src/worker.ts",
       pattern: "options.registryIntervalMs ?? 5_000",
     },
     python: {
-      value: "5000 ms",
+      value: "5,000 ms",
       file: "python/src/workhorse/worker.py",
       pattern: "registry_interval_ms: int = 5_000",
     },
     go: {
-      value: "5000 ms",
+      value: "5,000 ms",
       file: "go/worker.go",
       pattern: "defaultRegistryInterval    = 5 * time.Second",
     },
     ruby: {
-      value: "5000 ms",
+      value: "5,000 ms",
       file: "ruby/lib/stablemates/workhorse/worker.rb",
       pattern: "registry_interval: 5,",
     },
@@ -1336,27 +1336,27 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   {
     setting: "Shutdown grace, then",
     rust: {
-      value: "25000 ms, then abandon the handlers",
+      value: "25,000 ms, then abandon the handlers",
       file: "rust/src/worker/mod.rs",
       pattern: "shutdown_grace_period: Duration::from_secs(25),",
     },
     typescript: {
-      value: "25000 ms, then exit the process",
+      value: "25,000 ms, then exit the process",
       file: "typescript/core/src/worker-process.ts",
       pattern: "DEFAULT_SHUTDOWN_TIMEOUT_MS = 25_000",
     },
     python: {
-      value: "25000 ms, then exit the process",
+      value: "25,000 ms, then exit the process",
       file: "python/src/workhorse/worker_process.py",
       pattern: "_DEFAULT_SHUTDOWN_TIMEOUT_MS = 25_000",
     },
     go: {
-      value: "25000 ms, then abandon the handlers",
+      value: "25,000 ms, then abandon the handlers",
       file: "go/worker.go",
       pattern: "defaultShutdownGracePeriod = 25 * time.Second",
     },
     ruby: {
-      value: "25000 ms, then abandon the handlers",
+      value: "25,000 ms, then abandon the handlers",
       file: "ruby/lib/stablemates/workhorse/worker.rb",
       pattern: "shutdown_grace: 25,",
     },

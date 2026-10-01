@@ -62,6 +62,7 @@ import { DemoTaskKind, DurableDemoScenario, taskHref, useDashboardClient } from 
 import { TaskListingFilters, TaskSortSelect, useTaskFacets } from "../components/task-list.js";
 import { TaskListRow } from "../components/task-row.js";
 import { currentTimeZoneValue, subscribeTimeZone } from "../preferences.js";
+import { formatCount } from "../count-format.js";
 
 const TasksActivityChart = lazy(() => import("../charts/activity.js"));
 
@@ -286,13 +287,15 @@ export const TasksPage = memo(function TasksPage({
         centered
       >
         <Text size="sm" mb="sm">
-          Workhorse redrives at most {dashboardRedriveBatchDefault} dead letters at a time, oldest
-          failure first, and reports where the next batch starts. {redriveAtLeastOnceWarning}
+          Workhorse redrives at most {formatCount(dashboardRedriveBatchDefault)} dead letters at a
+          time, oldest failure first, and reports where the next batch starts.{" "}
+          {redriveAtLeastOnceWarning}
         </Text>
         <Code block>{redriveSelection.selected}</Code>
         {redrivingSelection && redrivingSelection.redriven > 0 ? (
           <Text size="sm" mt="sm">
-            {redrivingSelection.redriven} redriven so far, and more still match this filter.
+            {formatCount(redrivingSelection.redriven)} redriven so far, and more still match this
+            filter.
           </Text>
         ) : null}
         <Group justify="flex-end" mt="lg">
@@ -309,7 +312,7 @@ export const TasksPage = memo(function TasksPage({
           >
             {redrivingSelection && redrivingSelection.redriven > 0
               ? "Redrive the next batch"
-              : `Redrive up to ${dashboardRedriveBatchDefault}`}
+              : `Redrive up to ${formatCount(dashboardRedriveBatchDefault)}`}
           </Button>
         </Group>
       </Modal>

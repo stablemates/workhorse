@@ -22,6 +22,7 @@ import {
 import { useEffect, useState } from "react";
 import { dashboardRefreshBlockers, useRefreshBlocker } from "../../refresh-blockers.js";
 import { Select } from "../../dropdown-activity.js";
+import { formatCount } from "../../count-format.js";
 import {
   currentTimeZoneValue,
   formatDuration,
@@ -165,7 +166,7 @@ export function formatMaintenanceInterval(milliseconds: number): string {
   return formatDuration(milliseconds);
 }
 export function formatRetentionDefault(value: number | null, suffix: string): string {
-  return value === null ? "indefinitely" : `${value.toLocaleString()}${suffix}`;
+  return value === null ? "indefinitely" : `${formatCount(value)}${suffix}`;
 }
 export function formatStatisticsRollupInterval(milliseconds: number): string {
   return milliseconds === 0 ? "Opted out" : formatMaintenanceInterval(milliseconds);
@@ -416,7 +417,7 @@ export function SettingsPage({
                         "Distinct queue and task-type pairs kept per statistics minute before overflow.",
                       effective: data.maintenance.statisticsGroupLimit,
                       provenance: data.maintenance.provenance.statisticsGroupLimit,
-                      format: (value: number) => `${value.toLocaleString()} groups`,
+                      format: (value: number) => `${formatCount(value)} groups`,
                     },
                     {
                       label: "Statistics recompute window",
@@ -424,7 +425,7 @@ export function SettingsPage({
                         "Closed minutes rewritten behind the rollup watermark to absorb late history.",
                       effective: data.maintenance.statisticsRecomputeBuckets,
                       provenance: data.maintenance.provenance.statisticsRecomputeBuckets,
-                      format: (value: number) => `${value.toLocaleString()} minutes`,
+                      format: (value: number) => `${formatCount(value)} minutes`,
                     },
                   ].map((setting) => (
                     <Grid.Col key={setting.label} span={{ base: 12, md: 6 }}>
@@ -526,7 +527,7 @@ export function SettingsPage({
                     <Table.Tr key={worker.id}>
                       <Table.Td>{worker.id}</Table.Td>
                       <Table.Td>{worker.queues.join(", ")}</Table.Td>
-                      <Table.Td>{worker.concurrency}</Table.Td>
+                      <Table.Td>{formatCount(worker.concurrency)}</Table.Td>
                       <Table.Td>{formatDuration(worker.leaseMs)} lease</Table.Td>
                       <Table.Td>{formatDuration(worker.heartbeatMs)}</Table.Td>
                       <Table.Td>{formatDuration(worker.pollMs)}</Table.Td>

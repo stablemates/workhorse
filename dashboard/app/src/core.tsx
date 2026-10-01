@@ -12,6 +12,7 @@ import type {
   DashboardWorkersPage,
   DashboardSettingsPage,
 } from "@stablemates/workhorse-dashboard-server/wire";
+import { formatCount } from "./count-format.js";
 import {
   ArrowCounterClockwise,
   CheckCircle,
@@ -79,11 +80,14 @@ export const SystemOutcomeChart = lazy(async () => {
           />
           <YAxis
             allowDecimals={false}
-            width={38}
+            width={46}
+            tickFormatter={formatCount}
             tick={{ fontSize: 11, fill: "var(--mantine-color-dimmed)" }}
             tickLine={false}
           />
-          <RechartsTooltip />
+          <RechartsTooltip
+            formatter={(value) => (typeof value === "number" ? formatCount(value) : value)}
+          />
           <Legend wrapperStyle={{ fontSize: 12 }} />
           <Bar
             dataKey="succeeded"

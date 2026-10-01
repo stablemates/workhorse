@@ -33,6 +33,7 @@ import {
 } from "./task-detail-overview.js";
 import { formatDuration, formatExact, formatRelative } from "../preferences.js";
 import { HelpButton } from "./help-button.js";
+import { formatCount } from "../count-format.js";
 
 function KeyEvidenceRows({
   scope,
@@ -260,8 +261,8 @@ export function RetryPolicyLine({ task }: { task: DashboardTaskDetail }) {
   const exhausted = attempt !== null && attempt >= task.identity.maxAttempts;
   const budget =
     attempt === null
-      ? `${task.identity.maxAttempts} attempt budget`
-      : `attempt ${attempt} of ${task.identity.maxAttempts}`;
+      ? `${formatCount(task.identity.maxAttempts)} attempt budget`
+      : `attempt ${attempt} of ${formatCount(task.identity.maxAttempts)}`;
   const title = `${policy.exact}. ${
     exhausted
       ? "The attempt budget is exhausted, so no further retry will be scheduled."
@@ -398,7 +399,7 @@ export function BatchExecutionLine({
       <Group justify="space-between" align="flex-start" gap="xs">
         <Box>
           <Text fw={600} size="sm">
-            Processed in a batch of {batch.members.length}
+            Processed in a batch of {formatCount(batch.members.length)}
           </Text>
           <Text c="dimmed" size="xs" title={formatExact(batch.dispatchedAt)}>
             Attempt {batch.attempt} · dispatched {formatRelative(batch.dispatchedAt)}

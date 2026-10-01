@@ -60,6 +60,7 @@ import {
 } from "../preferences.js";
 import { useDashboardClient } from "../core.js";
 import { taskEventsLinkProps } from "../task-events-link.js";
+import { formatCount } from "../count-format.js";
 
 export function DurableProgressBadge({ task }: { task: DashboardTaskRow }) {
   if (!task.durability) {
@@ -75,14 +76,14 @@ export function DurableProgressBadge({ task }: { task: DashboardTaskRow }) {
       variant="light"
       color="violet"
       tt="none"
-      title={`${task.durability.completedSteps} of ${task.durability.totalSteps} durable steps completed`}
+      title={`${formatCount(task.durability.completedSteps)} of ${formatCount(task.durability.totalSteps)} durable steps completed`}
       role="progressbar"
       aria-label="Durable steps completed"
       aria-valuemin={0}
       aria-valuemax={task.durability.totalSteps}
       aria-valuenow={task.durability.completedSteps}
     >
-      {task.durability.completedSteps}/{task.durability.totalSteps}
+      {formatCount(task.durability.completedSteps)}/{formatCount(task.durability.totalSteps)}
     </Badge>
   );
 }
@@ -125,7 +126,7 @@ export function TaskStatusDetail({ task }: { task: DashboardTaskRow }) {
   let detail: string | null = null;
   let exactTime: string | null = null;
   if (task.blockedReason === "prerequisite_pending") {
-    detail = `${task.prerequisiteTaskIds.length} unresolved ${task.prerequisiteTaskIds.length === 1 ? "prerequisite" : "prerequisites"}`;
+    detail = `${formatCount(task.prerequisiteTaskIds.length)} unresolved ${task.prerequisiteTaskIds.length === 1 ? "prerequisite" : "prerequisites"}`;
   } else if (task.state === "scheduled" && task.wait) {
     // A durable wait is a scheduled restart boundary, not an owned execution.
     detail = `sleeping until ${formatClock(task.wait.wakeAt)} · ${task.wait.name}`;

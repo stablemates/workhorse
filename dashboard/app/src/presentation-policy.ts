@@ -11,6 +11,7 @@ import type {
   DashboardWorkerRow,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import type { QueueHealthReason, QueueHealthReasonCode } from "@stablemates/workhorse";
+import { formatCount } from "./count-format.js";
 
 const DAY_MS = 86_400_000;
 const CEILING_PRESSURE = 0.8;
@@ -71,9 +72,9 @@ export function deriveSettingsRecommendations(
         severity: "warning",
         settings: ["terminalCleanupIntervalMs", "terminalTaskPruneLimit"],
         summary:
-          `Tasks arrive at roughly ${measuredPerDay.toLocaleString("en-US")} per day, but ` +
-          `terminal cleanup can delete at most ${ceilingPerDay.toLocaleString("en-US")} per day ` +
-          `(${retention.terminalTaskPruneLimit.toLocaleString("en-US")} rows every ` +
+          `Tasks arrive at roughly ${formatCount(measuredPerDay)} per day, but ` +
+          `terminal cleanup can delete at most ${formatCount(ceilingPerDay)} per day ` +
+          `(${formatCount(retention.terminalTaskPruneLimit)} rows every ` +
           `${Math.round(maintenance.terminalCleanupIntervalMs / 1000)}s). If the rate holds, ` +
           `completed history accumulates: raise the prune limit or shorten the cleanup interval.`,
         measured: {
@@ -159,7 +160,7 @@ export function deriveSettingsRecommendations(
       severity: "warning",
       settings: ["partitionPreparationIntervalMs"],
       summary:
-        `${capped ? "At least " : ""}${spill.toLocaleString("en-US")} history rows landed in the ` +
+        `${capped ? "At least " : ""}${formatCount(spill)} history rows landed in the ` +
         `default partition because no daily partition covered them. Those rows are deleted row by ` +
         `row instead of dropped with their day: prepare partitions more frequently.`,
       measured: {
@@ -251,7 +252,7 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
       case "overdue-external-waits":
         criticalChecks.push({
           code: reason.code,
-          message: `External waits are overdue (${reason.observed})`,
+          message: `External waits are overdue (${formatCount(reason.observed)})`,
           advice:
             "A signal or human decision passed its deadline. Review waiting tasks and complete " +
             "the decisions an operator can resolve now.",
@@ -298,7 +299,7 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
       case "eligible-history-partitions":
         degradedChecks.push({
           code: reason.code,
-          message: `History days await deletion (${reason.observed})`,
+          message: `History days await deletion (${formatCount(reason.observed)})`,
           advice:
             "Each retention pass deletes a limited number of history days. If the count keeps " +
             "growing, raise the per-pass limits shown on the Settings page.",
@@ -308,7 +309,7 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
       case "default-history-rows":
         degradedChecks.push({
           code: reason.code,
-          message: `History rows use fallback storage (${reason.observed})`,
+          message: `History rows use fallback storage (${formatCount(reason.observed)})`,
           advice:
             "These rows arrived before their daily storage existed and must be deleted row by " +
             "row. Prepare history storage more frequently to stop the spill.",
@@ -321,7 +322,7 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
           ...scopedHealthMessage(
             "Queue",
             reason.queue,
-            `has ${reason.observed}+ ready tasks waiting for concurrency capacity`,
+            `has ${formatCount(reason.observed)}+ ready tasks waiting for concurrency capacity`,
           ),
           advice:
             "The configured concurrency limit keeps active work within capacity. Waiting tasks " +
@@ -335,7 +336,7 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
           ...scopedHealthMessage(
             "Queue",
             reason.queue,
-            `has ${reason.observed}+ ready tasks waiting for rate-limit tokens`,
+            `has ${formatCount(reason.observed)}+ ready tasks waiting for rate-limit tokens`,
           ),
           advice:
             "The configured rate limit controls how quickly tasks start. Waiting for tokens is " +
@@ -349,7 +350,7 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
           ...scopedHealthMessage(
             "Budget",
             reason.budgetName,
-            `holds ${reason.observed}+ ready tasks across queues`,
+            `holds ${formatCount(reason.observed)}+ ready tasks across queues`,
           ),
           advice:
             "The configured budget protects capacity shared across queues. Waiting for capacity " +

@@ -21,6 +21,7 @@ import { HelpButton } from "../components/help-button.js";
 import { EmptyState, PageHeader } from "../components/task-list.js";
 import { formatDuration, formatExact, formatRelative } from "../preferences.js";
 import { presentSchedules } from "../presentation-policy.js";
+import { formatCount } from "../count-format.js";
 
 export const resumeScheduleWarnings = {
   skip: "Workhorse will skip occurrences missed while this schedule was paused. The next occurrence will fire on schedule. Tasks already enqueued are unchanged.",
@@ -57,13 +58,13 @@ export function MaintenanceRunHistory({
               </Text>
             </Group>
             <Text c="dimmed" size="xs">
-              {formatDuration(run.durationMs)} · {run.rowsAffected} rows affected
+              {formatDuration(run.durationMs)} · {formatCount(run.rowsAffected)} rows affected
             </Text>
           </Group>
           <Group gap="xs" mt="xs" wrap="wrap">
             {run.phases.map((phase) => (
               <Code key={phase.phase} fz="xs">
-                {phase.phase.replaceAll("_", " ")} · {phase.rowsAffected} rows ·{" "}
+                {phase.phase.replaceAll("_", " ")} · {formatCount(phase.rowsAffected)} rows ·{" "}
                 {formatDuration(phase.durationMs)}
               </Code>
             ))}
@@ -260,7 +261,7 @@ export function CronPage({
                               label={
                                 schedule.evaluatorCount === 0
                                   ? "No live workers offer this schedule namespace."
-                                  : `${schedule.evaluatorCount} live ${schedule.evaluatorCount === 1 ? "worker offers" : "workers offer"} this schedule namespace.`
+                                  : `${formatCount(schedule.evaluatorCount ?? 0)} live ${schedule.evaluatorCount === 1 ? "worker offers" : "workers offer"} this schedule namespace.`
                               }
                               withArrow
                               events={{ hover: true, focus: true, touch: true }}
@@ -272,10 +273,12 @@ export function CronPage({
                                 aria-label={
                                   schedule.evaluatorCount === 0
                                     ? "No workers"
-                                    : `${schedule.evaluatorCount} ${schedule.evaluatorCount === 1 ? "worker" : "workers"}`
+                                    : `${formatCount(schedule.evaluatorCount ?? 0)} ${schedule.evaluatorCount === 1 ? "worker" : "workers"}`
                                 }
                               >
-                                {schedule.evaluatorCount === 0 ? "None" : schedule.evaluatorCount}
+                                {schedule.evaluatorCount === 0
+                                  ? "None"
+                                  : formatCount(schedule.evaluatorCount ?? 0)}
                               </Badge>
                             </Tooltip>
                           )}
@@ -378,7 +381,7 @@ export function CronPage({
                                   setExpandedMaintenance(runsExpanded ? null : scheduleKey)
                                 }
                               >
-                                {recordedRunCount} retained
+                                {formatCount(recordedRunCount)} retained
                               </Button>
                             )
                           ) : (
@@ -392,7 +395,7 @@ export function CronPage({
                               aria-label={`View tasks of type ${schedule.type} in the ${schedule.queue} queue in a new window`}
                             >
                               <Group component="span" gap={4} wrap="nowrap" justify="flex-end">
-                                <span>{schedule.occurrenceCount ?? 0}</span>
+                                <span>{formatCount(schedule.occurrenceCount ?? 0)}</span>
                                 <ArrowSquareOut size={13} aria-hidden />
                               </Group>
                             </Anchor>
@@ -403,8 +406,8 @@ export function CronPage({
                         <Table.Tr>
                           <Table.Td colSpan={7} p={0} bg="var(--mantine-color-default-hover)">
                             <Text c="dimmed" size="xs" px="sm" pt="sm">
-                              Showing the latest {schedule.maintenance.runs.length} of{" "}
-                              {schedule.maintenance.recordedRunCount} retained runs.{" "}
+                              Showing the latest {formatCount(schedule.maintenance.runs.length)} of{" "}
+                              {formatCount(schedule.maintenance.recordedRunCount)} retained runs.{" "}
                               {schedule.name === "tick"
                                 ? "Successful task-changing ticks are sampled at most once per minute; tick errors are recorded immediately."
                                 : "Every eligible run is recorded."}

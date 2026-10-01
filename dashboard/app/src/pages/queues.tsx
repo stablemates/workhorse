@@ -11,6 +11,7 @@ import { BudgetsTable, budgetCappedFootnote } from "../budgets-table.js";
 import { describeQueueTier } from "../queue-tier.js";
 import { EmptyState, PageHeader } from "../components/task-list.js";
 import { HelpButton } from "../components/help-button.js";
+import { formatCount } from "../count-format.js";
 
 export function QueuesPage({
   data,
@@ -158,9 +159,9 @@ export function QueuesPage({
                           </Text>
                         )}
                       </Table.Td>
-                      <Table.Td ta="right">{queue.scheduled}</Table.Td>
-                      <Table.Td ta="right">{queue.ready}</Table.Td>
-                      <Table.Td ta="right">{queue.active}</Table.Td>
+                      <Table.Td ta="right">{formatCount(queue.scheduled)}</Table.Td>
+                      <Table.Td ta="right">{formatCount(queue.ready)}</Table.Td>
+                      <Table.Td ta="right">{formatCount(queue.active)}</Table.Td>
                       <Table.Td ta="right">
                         <Text size="sm" title={limit.title} aria-label={`Limit: ${limit.title}`}>
                           {limit.label}
@@ -213,14 +214,14 @@ export function QueuesPage({
                         title={queue.terminalCountsApproximate ? "PostgreSQL estimate" : undefined}
                       >
                         {approximatePrefix}
-                        {queue.succeeded}
+                        {formatCount(queue.succeeded)}
                       </Table.Td>
                       <Table.Td
                         ta="right"
                         title={queue.terminalCountsApproximate ? "PostgreSQL estimate" : undefined}
                       >
                         {approximatePrefix}
-                        {queue.failed}
+                        {formatCount(queue.failed)}
                       </Table.Td>
                       <Table.Td ta="right">
                         {confirmingQueue === queue.queue ? (
