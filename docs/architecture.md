@@ -1086,7 +1086,9 @@ A second mismatch returns `ErrContractPolicyChanged`. A warm enqueue therefore i
 accepts, and `enqueue_many_v1` never sees that request. When a cached definition returns
 `*TaskContractValidationError`, `applyPayloadContracts` reloads that task type's definition once per
 enqueue through the queue's `Executor`, which is the caller's transaction when the queue wraps one,
-and validates again. The second result stands. Go has no enqueue-side size check, because
+and validates again. The second result stands. Later requests of that type in the same enqueue use
+the definition that enqueue read, because a concurrent enqueue can store an older one in the shared
+cache. Go has no enqueue-side size check, because
 `enqueue_many_v1` reports a stale version before it applies `payload_max_bytes`. Child-task
 creation and `SyncSchedules` read the current definition on every call.
 `AssertCompatible` remains as a deprecated Go alias for the rest of the `0.x` line and is removed in
