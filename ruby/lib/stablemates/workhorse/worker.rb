@@ -302,7 +302,8 @@ module Stablemates
       end
 
       # Slot cohorts for fast-tier dispatch (ADR 0076). Without the option, a worker keeps one
-      # pooled connection per cohort after the listener and the heartbeat connection.
+      # pooled connection per cohort after the listener and the heartbeat connection, which every
+      # worker on the pool shares.
       def dispatch_cohorts(cohorts, pool, shared_heartbeats)
         unless cohorts.nil?
           raise ArgumentError, "cohorts must be an integer between 1 and concurrency" unless
@@ -360,7 +361,7 @@ module Stablemates
         claimed_any = false
         begin
           if continuous && !@polling_only
-            listener = Listener.new(@pool, @queues, on_wake: method(:notify),
+            listener = Listener.shared(@pool).subscribe(@queues, on_wake: method(:notify),
               on_error: ->(error) { @on_notification_error&.call(error) })
           end
           refresh_registration(force: true)
