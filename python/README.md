@@ -73,9 +73,12 @@ effects; named checkpoints prevent completed application stages from running aft
 
 An `AsyncWorker` checkpoint operation follows asyncio cancellation. When a timeout or task group
 cancels the handler's `await context.checkpoint(name, operation)`, the worker cancels the
-operation and waits for its cleanup before the cancellation reaches the handler. The worker
-stores no checkpoint for a cancelled operation, even one that catches the cancellation and returns
-a value, so a later attempt runs it again.
+operation and waits for its cleanup before the cancellation reaches the handler. Cancellation
+before the operation returns stops the save, even when the operation catches the cancellation and
+returns a value, so a later attempt runs it again. Once the operation returns, its save may already
+be under way. The worker waits for that save instead of undoing it, so the handler sees
+`CancelledError` while a later attempt replays the saved value. A cancelled await therefore never
+proves that no checkpoint exists, and it does not undo the operation's effects on other systems.
 
 The operation runs on the event loop in a copy of the handler's context. It sees the handler's
 context variables and current OpenTelemetry span, so its spans are children of the handler span.

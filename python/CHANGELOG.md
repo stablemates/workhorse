@@ -33,6 +33,14 @@ an annotation. A `$ref` must also point at a subschema, so it cannot reach a sch
    applies. Each payload was checked at enqueue, so a keyword in the payload schema does not affect
    tasks already queued.
 
+**A cancelled `AsyncWorker` checkpoint can still leave a checkpoint.** The documentation said a
+cancelled `await context.checkpoint(name, operation)` stores nothing. That holds only while the
+operation runs. Once the operation returns, its save may already be under way, and the worker waits
+for that save instead of undoing it. The handler then sees `CancelledError` while a later attempt
+replays the saved value without calling the operation. The behavior is unchanged; the worker guide,
+the architecture reference, and the package README now describe it. Treat a cancelled await as
+proof of neither a missing checkpoint nor undone effects on other systems.
+
 ## 0.5.0 — 2026-09-28
 
 The npm packages, Python distribution, Go module, and Rust crate release from one source commit.

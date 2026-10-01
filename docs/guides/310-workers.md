@@ -9,8 +9,12 @@ task renews its lease and delivers ownership signals through its context cancell
 Both workers can open a dedicated notification connection and offer recurring namespaces for
 PostgreSQL to evaluate.
 `AsyncWorker` uses native Psycopg or asyncpg connections, while its handlers and durable context
-methods are awaitable. A cancelled `checkpoint` cancels its operation, waits for the operation's
-cleanup, and stores no checkpoint, so a later attempt runs the operation again.
+methods are awaitable. A cancelled `checkpoint` cancels its operation and waits for the
+operation's cleanup. Cancellation before the operation returns stops the save, so a later attempt
+runs the operation again. Once the operation returns, its save may already be under way. The worker
+waits for that save instead of undoing it, so the handler sees `CancelledError` while a later
+attempt replays the saved value. A cancelled await therefore never proves that no checkpoint
+exists, and it does not undo the operation's effects on other systems.
 The operation runs in a copy of the handler's context, so it sees the handler's context variables
 and current OpenTelemetry span.
 TypeScript, Python, Go, Rust, and Ruby workers all participate in the worker registry.
