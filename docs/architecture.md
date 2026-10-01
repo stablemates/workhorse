@@ -330,6 +330,9 @@ before `operation` is called or cancels it while the awaitable runs, including a
 that `operation` returned, and waits for its cleanup. If `operation` absorbs the cancellation and
 returns a value, the tracked task raises `asyncio.CancelledError` instead. Either way, `checkpoint`
 stores no row in `workhorse.task_checkpoint`, so a later attempt runs the operation again.
+`checkpoint` copies the caller's `contextvars` context and the event loop creates the tracked task
+in that copy. Context variables and the current OpenTelemetry span reach `operation`, and its own
+changes stay inside it, as they would in a task the handler created.
 
 `Worker.run_once()` and `Worker.run()` use a cached compatibility check. A dispatch sweep runs
 `tick_v1(100, 100)` when `maintenance_interval_ms` has elapsed since the last tick. The tick

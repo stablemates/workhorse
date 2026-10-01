@@ -11,6 +11,8 @@ PostgreSQL to evaluate.
 `AsyncWorker` uses native Psycopg or asyncpg connections, while its handlers and durable context
 methods are awaitable. A cancelled `checkpoint` cancels its operation, waits for the operation's
 cleanup, and stores no checkpoint, so a later attempt runs the operation again.
+The operation runs in a copy of the handler's context, so it sees the handler's context variables
+and current OpenTelemetry span.
 TypeScript, Python, Go, Rust, and Ruby workers all participate in the worker registry.
 Python's `handle_batch` follows the grouping contract in
 [315-batch-handlers.md](315-batch-handlers.md).

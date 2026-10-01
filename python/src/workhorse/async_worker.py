@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import random
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from concurrent.futures import Future
@@ -216,6 +217,9 @@ class _AsyncCheckpointAdapter:
         # The operation and the cancellation callback both run on the event loop. The
         # tracked task calls the operation in its first step, so a cancellation either
         # stops it before the operation is created or cancels it while it runs.
+        # The task runs in a copy of the handler's context, as a task the handler
+        # created would, so context variables and the current span reach the operation.
+        handler_context = contextvars.copy_context()
         cancelled = False
         running: asyncio.Task[Any] | None = None
 
@@ -232,7 +236,11 @@ class _AsyncCheckpointAdapter:
             return value
 
         def invoke_operation() -> Json:
-            return asyncio.run_coroutine_threadsafe(run_operation(), self._loop).result()
+            # The bridge thread's own context is empty. Scheduling from the handler's
+            # context makes the loop create the tracked task in that context.
+            return handler_context.run(
+                asyncio.run_coroutine_threadsafe, run_operation(), self._loop
+            ).result()
 
         def cancel_operation() -> None:
             nonlocal cancelled

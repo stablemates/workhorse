@@ -2,6 +2,7 @@ from __future__ import annotations
 # ruff: noqa
 
 
+import asyncio
 import json
 import subprocess
 from collections.abc import Iterable, Mapping
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
+import pytest
 from opentelemetry import metrics, trace
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.sdk._logs import LoggerProvider
@@ -21,7 +23,15 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
-from workhorse import EnqueueOptions, HandlerContext, Queue, Worker
+from workhorse import (
+    AsyncHandlerContext,
+    AsyncWorker,
+    EnqueueOptions,
+    HandlerContext,
+    Json,
+    Queue,
+    Worker,
+)
 from workhorse._telemetry import (
     record_batch,
     record_failure,
@@ -178,6 +188,34 @@ def test_worker_telemetry_matches_the_typescript_contract(database_url: str) -> 
         if record.log_record.event_name == "workhorse.worker.stopped"
     )
     assert stopped.attributes["workhorse.worker.active_slots"] == 0
+
+
+@pytest.mark.asyncio
+async def test_an_async_checkpoint_operation_traces_inside_the_handler_span(
+    database_url: str, asyncpg_pool: Any
+) -> None:
+    SPAN_EXPORTER.clear()
+    with psycopg.connect(database_url) as connection:
+        Queue(connection).enqueue("async.traced", {}, EnqueueOptions(queue="async-traced"))
+    tracer = trace.get_tracer("checkpoint-operation")
+
+    async def operation() -> Json:
+        with tracer.start_as_current_span("checkpoint.operation"):
+            await asyncio.sleep(0)
+        return "traced"
+
+    async def handle(_payload: Json, context: AsyncHandlerContext) -> Json:
+        return await context.checkpoint("traced", operation)
+
+    worker = AsyncWorker.from_asyncpg(asyncpg_pool, queue="async-traced", worker_id="py-traced")
+    worker.handle("async.traced", handle)
+    assert await worker.run_once() is True
+
+    spans = SPAN_EXPORTER.get_finished_spans()
+    handler_span = next(span for span in spans if span.name == "workhorse.handler")
+    operation_span = next(span for span in spans if span.name == "checkpoint.operation")
+    assert operation_span.parent is not None
+    assert operation_span.parent.span_id == handler_span.context.span_id
 
 
 def test_worker_telemetry_never_exports_payloads_or_error_values(database_url: str) -> None:
