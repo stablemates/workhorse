@@ -2,7 +2,7 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript, Python, Go, and Rust `Queue`, `Admin`, and `Worker` remain thin protocol clients.
 
-The current schema version is 51 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
+The current schema version is 52 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
 (`WORKHORSE_SCHEMA_BASELINE_VERSION`). `sql/releases/0006.sql` contains the baseline clean-install
 artifact, which is the 0.2.0 schema. The chain began at 1 and was pruned to this baseline when
 0.1.x support was dropped
@@ -18,8 +18,8 @@ contract step pending at the installed version through `workhorse schema contrac
 `--yes` and first names every worker still live on a retiring protocol. The current migration plan
 has one contract step: `0025-add-a-fast-task-tier.sql` moves schema 24 to 25 and retires
 protocols 1 through 4. `migrateSchema` therefore stops at schema 24 on an older installation, and
-`contractSchema` applies step 25. The additive steps 26 through 51 follow, so a second `migrateSchema`
-run completes the plan. Their files run from `0026` to `0052`: file number `0035` was reserved and
+`contractSchema` applies step 25. The additive steps 26 through 52 follow, so a second `migrateSchema`
+run completes the plan. Their files run from `0026` to `0053`: file number `0035` was reserved and
 never used, so from `0036` on a file's number is one above the version it produces. Step 25 ships without the usual retention window, as
 [ADR 0077](decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) §6 records.
 
@@ -60,7 +60,7 @@ failure leaves the earlier statements applied at the starting version and report
 `Workhorse migration <file> failed part-way and rolled nothing back`. `lock_timeout` is not set for
 such a step.
 
-An installed version below the baseline 6 or above the current 51, a version no step starts from, and
+An installed version below the baseline 6 or above the current 52, a version no step starts from, and
 a `workhorse.schema_version` table without exactly one row fail without running a migration.
 `typescript/core/test/schema-migrations.test.ts` migrates every frozen artifact under
 `sql/releases/` and requires schema-only dump equality with a clean installation.
@@ -2618,6 +2618,16 @@ of the `tick_v1` lock. The function takes one transaction advisory lock per name
 callers for one namespace return without evaluation, while workers offering different namespaces
 can progress in parallel. Persisted occurrence keys remain the final duplicate barrier.
 
+`sync_schedule_definitions_v2` takes the same namespace lock, `workhorse:schedule-namespace:<namespace>`,
+with the blocking `pg_advisory_xact_lock` before it reads or writes any definition row. A tick only
+tries that lock, so it skips a namespace whose synchronization is open and never waits on one. A
+synchronization waits for a running tick to commit. Two synchronizations of one namespace therefore
+also run one after the other, whatever order their definitions are listed in. Before schema version
+52 the synchronization wrote rows in its argument order without that lock. A tick that had moved one
+row's evaluation position could then wait on a second row the synchronization held, and PostgreSQL
+aborted one of them with `40P01`. A caller that locks definition rows in its own transaction before
+it synchronizes can still deadlock with a tick.
+
 The four-argument `run_task_now_v1(task_id, requested_by, reason, request_id)` releases an
 ordinary future-scheduled task without changing its recurring definition or bypassing a durable
 wait. Actor contains 1 through 200 characters, reason contains 1 through 2,000 characters, and the
@@ -4966,10 +4976,10 @@ interactive stdin and stdout is refused with exit 1.
 
 ## Operational limits
 
-- The canonical artifact installs version 51, the whole current schema. Version 6 is the migration
+- The canonical artifact installs version 52, the whole current schema. Version 6 is the migration
   baseline and is frozen as `sql/releases/0006.sql`. A schema change is an upgrade rather than a
   reinstall: `migrateSchema` applies the ordered steps under `sql/migrations/`, which run from 6
-  to 51. A database below 6 is not carried forward
+  to 52. A database below 6 is not carried forward
   ([ADR 0073](decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)).
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
   `uuid_v7_v1()` uses core UUID and byte functions rather than `pgcrypto` or `uuid-ossp`.

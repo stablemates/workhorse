@@ -4701,6 +4701,10 @@ AS $$
 DECLARE
   v_previous jsonb;
 BEGIN
+  -- A tick holds this lock while it moves its namespace's definition rows. Taking it before any
+  -- row means a tick never waits on this synchronization, and a running tick finishes first.
+  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:schedule-namespace:' || p_namespace, 0));
+
   IF COALESCE(p_namespace, '') = '' THEN RAISE EXCEPTION 'namespace must not be empty'; END IF;
   IF p_definitions IS NULL OR jsonb_typeof(p_definitions) <> 'array' THEN
     RAISE EXCEPTION 'schedule definitions must be a JSON array';
@@ -19293,10 +19297,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (48, 'prune past redrive sources pinned by younger targets'),
   (49, 'serialize budget synchronization with claims'),
   (50, 'sample the clock after the row lock'),
-  (51, 'keep cold-export segments one UTC day')
+  (51, 'keep cold-export segments one UTC day'),
+  (52, 'serialize schedule synchronization with the tick')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (51) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (52) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

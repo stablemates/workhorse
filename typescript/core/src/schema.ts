@@ -369,6 +369,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "keep cold-export segments one UTC day",
     kind: "additive",
   },
+  {
+    fromVersion: 51,
+    toVersion: 52,
+    file: "0053-serialize-schedule-synchronization-with-the-tick.sql",
+    description: "serialize schedule synchronization with the tick",
+    kind: "additive",
+  },
 ];
 
 /**

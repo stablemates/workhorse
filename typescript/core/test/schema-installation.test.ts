@@ -525,6 +525,7 @@ describe("schema installation", () => {
       { version: 49, description: "serialize budget synchronization with claims" },
       { version: 50, description: "sample the clock after the row lock" },
       { version: 51, description: "keep cold-export segments one UTC day" },
+      { version: 52, description: "serialize schedule synchronization with the tick" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
