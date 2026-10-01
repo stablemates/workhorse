@@ -113,7 +113,7 @@
     "python:test:unit": "tsx scripts/with-env.ts uv run --project python pytest -m 'not integration and not slow' python/tests",
     "python:test:database": "tsx scripts/with-env.ts uv run --project python pytest -m integration python/tests",
     "go:fmt": "tsx scripts/with-env.ts gofmt -w go",
-    "go:fmt:check": "tsx scripts/with-env.ts sh -c 'gofmt -l go | diff -u /dev/null -'",
+    "go:fmt:check": "tsx scripts/with-env.ts sh -c 'unformatted=$( gofmt -l go ) || exit; test -z \"$unformatted\" || { echo \"gofmt would reformat:\"; echo \"$unformatted\"; exit 1; }'",
     "go:vet": "tsx scripts/with-env.ts go -C go vet ./...",
     "go:lint": "tsx scripts/with-env.ts go -C go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...",
     "go:vuln": "tsx scripts/with-env.ts go -C go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...",
