@@ -175,6 +175,52 @@ function markdownTable(source: string, heading: string): Record<string, Record<s
   );
 }
 
+// Every script a command reaches through `pnpm <script>`, including the command itself.
+function reachableScripts(scripts: Record<string, string>, root: string): Set<string> {
+  const reached = new Set<string>();
+  const pending = [root];
+  for (let name = pending.pop(); name !== undefined; name = pending.pop()) {
+    if (reached.has(name)) continue;
+    reached.add(name);
+    for (const match of (scripts[name] ?? "").matchAll(/\bpnpm ([a-z][\w:-]*)/g)) {
+      if (match[1] && match[1] in scripts) pending.push(match[1]);
+    }
+  }
+  return reached;
+}
+
+// The gates `pnpm check` must reach for each governed language line. Removing one from the command
+// makes the full local check green while that line's formatting, lint, or tests fail.
+const LANGUAGE_GATES = {
+  TypeScript: [
+    "format:check",
+    "lint",
+    "lint:dead-code",
+    "typecheck",
+    "test",
+    "npm:vuln",
+    "typescript-api:check",
+  ],
+  Python: [
+    "python:format:check",
+    "python:lint",
+    "python:typecheck",
+    "python:test",
+    "python:vuln",
+    "python-api:check",
+  ],
+  Go: ["go:fmt:check", "go:lint", "go:vet", "go:test", "go:test:race", "go:vuln", "go-api:check"],
+  Rust: [
+    "rust:format:check",
+    "rust:clippy",
+    "rust:test",
+    "rust:conformance:check",
+    "rust:vuln",
+    "rust-api:check",
+  ],
+  Ruby: ["ruby:lint", "ruby:test", "ruby:vuln", "ruby-api:check"],
+} as const;
+
 /** The Active Job minor a Bundler lockfile resolved. */
 const lockedActiveJob = (source: string) => /^ {4}activejob \((\d+\.\d+)\./m.exec(source)?.[1];
 
@@ -586,6 +632,17 @@ describe("continuous integration", () => {
     expect(check).toContain("pnpm go:test:race");
     expect(check).toContain("pnpm build:verified");
     expect(check.indexOf("pnpm build:verified")).toBeLessThan(check.indexOf("pnpm test"));
+  });
+
+  it("runs every governed language's gates in pnpm check", async () => {
+    const scripts = (await readManifest("package.json")).scripts as Record<string, string>;
+    const reached = reachableScripts(scripts, "check");
+
+    expect(reached).toContain("rust:gates");
+    for (const [language, gates] of Object.entries(LANGUAGE_GATES)) {
+      const missing = gates.filter((gate) => !reached.has(gate));
+      expect({ language, missing }).toEqual({ language, missing: [] });
+    }
   });
 
   it("smoke-tests exactly the declared JS runtimes without claiming them as supported", async () => {
