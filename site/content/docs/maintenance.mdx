@@ -121,19 +121,25 @@ if (health.status.level !== "healthy") {
 }
 ```
 
-For continuous export rather than polling, Workhorse emits OpenTelemetry metrics for in-process
-activity automatically once your application configures an SDK. Database-wide gauges — queue
-depth, ready-work age, expired leases, fleet capacity — come from a dedicated observer:
+For continuous export rather than polling, Workhorse emits OpenTelemetry metrics. In TypeScript,
+core stays silent until a telemetry provider is registered, even when your application configures
+an SDK. Configure the SDK first, then call `registerOpenTelemetry()` from
+`@stablemates/workhorse-otel` once during startup; [OpenTelemetry](/docs/operations#opentelemetry)
+covers the setup. Database-wide gauges — queue depth, ready-work age, expired leases, fleet
+capacity — come from a dedicated observer:
 
 ```ts
 import { WorkhorseMetricsObserver } from "@stablemates/workhorse";
+import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
 
+const unregisterTelemetry = registerOpenTelemetry();
 const observer = new WorkhorseMetricsObserver(pool, {
   onError: (error) => logger.error({ error }, "workhorse metrics collection failed"),
 }).start();
 
-// During service shutdown:
+// During service shutdown, stop the observer before unregistering telemetry:
 observer.stop();
+unregisterTelemetry();
 ```
 
 Run exactly one observer per database, beside a long-lived service — every replica sees the same

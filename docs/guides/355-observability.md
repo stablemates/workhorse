@@ -5,8 +5,9 @@ activity and shared PostgreSQL state. This guide explains how to collect and int
 
 ## Runtime metrics happen automatically
 
-Workhorse records metrics when it enqueues, claims, executes, cancels, recovers, or performs redrive
-operations. It also records schedule firing and maintenance.
+Once the application [registers telemetry](350-production-telemetry.md), Workhorse records metrics
+when it enqueues, claims, executes, cancels, recovers, or performs redrive operations. It also
+records schedule firing and maintenance. Until then, TypeScript core records nothing.
 
 The Python worker records the same bounded runtime metrics across the same execution stages.
 The Go worker emits the worker-owned subset through the OpenTelemetry Go API. Claims, settlements,
