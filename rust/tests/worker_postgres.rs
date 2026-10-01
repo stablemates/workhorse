@@ -365,6 +365,135 @@ async fn a_batch_handler_receives_its_members_in_one_call() {
     assert_eq!(failed.error.unwrap()["name"], "Odd");
 }
 
+/// Reports which task a member's cancellation token fired for, and why.
+type Cancellations = mpsc::UnboundedReceiver<(Uuid, Option<CancelReason>)>;
+
+/// Reports each member's cancellation once its token fires, without ending the callback.
+fn watch_cancellations(
+    items: &[BatchItem<impl Send + 'static>],
+    cancelled: &mpsc::UnboundedSender<(Uuid, Option<CancelReason>)>,
+) {
+    for item in items {
+        let (id, token, cancelled) =
+            (item.context.task().id, item.context.cancellation().clone(), cancelled.clone());
+        tokio::spawn(async move {
+            token.cancelled().await;
+            let _ = cancelled.send((id, token.reason()));
+        });
+    }
+}
+
+/// A batch callback that never returns and ignores cancellation, reporting each task it starts.
+fn stuck_batches(
+    worker: &Worker,
+    max_size: usize,
+) -> (mpsc::UnboundedReceiver<Uuid>, Cancellations, Arc<AtomicUsize>) {
+    let (started, starts) = mpsc::unbounded_channel();
+    let (cancelled, cancellations) = mpsc::unbounded_channel();
+    let peak = Arc::new(AtomicUsize::new(0));
+    let (active, highest) = (Arc::new(AtomicUsize::new(0)), Arc::clone(&peak));
+    worker.handle_batch(
+        "rust.stuck",
+        BatchOptions { max_size, linger: Duration::ZERO },
+        move |items: Vec<BatchItem<Value>>| {
+            highest.fetch_max(active.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+            for item in &items {
+                let _ = started.send(item.context.task().id);
+            }
+            watch_cancellations(&items, &cancelled);
+            async move { std::future::pending::<Vec<BatchResult<Value>>>().await }
+        },
+    );
+    (starts, cancellations, peak)
+}
+
+#[tokio::test]
+async fn cancelled_batch_members_keep_their_callbacks_inside_the_concurrency() {
+    let Some(harness) = harness("worker_batch_bound").await else { return };
+    for _ in 0..3 {
+        harness.enqueue("rust.stuck", json!({}), EnqueueOptions::default()).await;
+    }
+    let worker = harness.worker(WorkerOptions {
+        concurrency: 1,
+        heartbeat_interval: Some(Duration::from_millis(50)),
+        shutdown_grace_period: Duration::from_millis(100),
+        ..options()
+    });
+    let (mut starts, mut cancellations, peak) = stuck_batches(&worker, 1);
+    let (stop, running) = run(&worker);
+    let first = tokio::time::timeout(WAIT, starts.recv()).await.unwrap().unwrap();
+    harness.queue.cancel(first, None, None).await.unwrap();
+    let cancellation = tokio::time::timeout(WAIT, cancellations.recv()).await.unwrap();
+    assert_eq!(cancellation, Some((first, Some(CancelReason::Requested))));
+    // A member freed by its cancellation would let the next claim start a second callback.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(starts.try_recv().is_err(), "a second callback started beside the first");
+    assert_eq!(peak.load(Ordering::SeqCst), 1);
+    stop.send(()).unwrap();
+    assert!(matches!(running.await.unwrap(), Err(Error::ShutdownIncomplete { abandoned: 1 })));
+}
+
+#[tokio::test]
+async fn shutdown_counts_a_batch_callback_that_outlives_the_grace_period() {
+    let Some(harness) = harness("worker_batch_drain").await else { return };
+    harness.enqueue("rust.stuck", json!({}), EnqueueOptions::default()).await;
+    let worker = harness.worker(WorkerOptions {
+        concurrency: 1,
+        shutdown_grace_period: Duration::from_millis(200),
+        ..options()
+    });
+    let (mut starts, _, _) = stuck_batches(&worker, 1);
+    let (stop, running) = run(&worker);
+    tokio::time::timeout(WAIT, starts.recv()).await.unwrap().unwrap();
+    stop.send(()).unwrap();
+    let stopped = tokio::time::timeout(WAIT, running).await.unwrap().unwrap();
+    assert!(
+        matches!(stopped, Err(Error::ShutdownIncomplete { abandoned: 1 })),
+        "shutdown reported {stopped:?} while the callback still ran"
+    );
+}
+
+#[tokio::test]
+async fn cancelling_one_batch_member_keeps_the_others_outcome() {
+    let Some(harness) = harness("worker_batch_cancel").await else { return };
+    let cancelled = harness.enqueue("rust.gated", json!(1), EnqueueOptions::default()).await;
+    let kept = harness.enqueue("rust.gated", json!(2), EnqueueOptions::default()).await;
+    let worker = harness.worker(WorkerOptions {
+        concurrency: 2,
+        heartbeat_interval: Some(Duration::from_millis(50)),
+        ..options()
+    });
+    let (called, mut calls) = mpsc::unbounded_channel();
+    let (watched, mut cancellations) = mpsc::unbounded_channel();
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let opened = Arc::clone(&gate);
+    worker.handle_batch(
+        "rust.gated",
+        BatchOptions { max_size: 2, linger: Duration::from_millis(500) },
+        move |items: Vec<BatchItem<i64>>| {
+            let _ = called.send(items.len());
+            watch_cancellations(&items, &watched);
+            let opened = Arc::clone(&opened);
+            async move {
+                opened.notified().await;
+                items.iter().map(|item| BatchResult::Succeeded(item.payload * 10)).collect()
+            }
+        },
+    );
+    let (stop, running) = run(&worker);
+    assert_eq!(tokio::time::timeout(WAIT, calls.recv()).await.unwrap(), Some(2));
+    harness.queue.cancel(cancelled, None, None).await.unwrap();
+    // The callback still holds both members when the cancelled one learns why it stopped.
+    let cancellation = tokio::time::timeout(WAIT, cancellations.recv()).await.unwrap();
+    assert_eq!(cancellation, Some((cancelled, Some(CancelReason::Requested))));
+    gate.notify_one();
+    harness.wait_for(kept, TaskState::Succeeded).await;
+    let result = harness.admin.get_task(kept).await.unwrap().unwrap().result;
+    assert_eq!(result, Some(json!(20)));
+    stop.send(()).unwrap();
+    running.await.unwrap().unwrap();
+}
+
 #[tokio::test]
 async fn maintenance_fires_due_schedules_in_its_namespaces() {
     let Some(harness) = harness("worker_schedules").await else { return };
