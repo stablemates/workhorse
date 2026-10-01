@@ -341,6 +341,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "refuse a claim below read committed isolation",
     kind: "additive",
   },
+  {
+    fromVersion: 47,
+    toVersion: 48,
+    file: "0049-prune-past-redrive-sources-pinned-by-younger-targets.sql",
+    description: "prune past redrive sources pinned by younger targets",
+    kind: "additive",
+  },
 ];
 
 /**

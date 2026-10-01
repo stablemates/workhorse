@@ -4,8 +4,15 @@ import { describe, expect, it } from "vitest";
 import { installSchema, Queue, type RetentionPolicyDefinition, Worker } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { defaultRetentionPolicy, pool, queue, waitForDatabaseCondition, admin } =
-  createIntegrationTestContext(import.meta.url);
+const {
+  defaultRetentionPolicy,
+  pool,
+  queue,
+  waitForDatabaseCondition,
+  admin,
+  adminAudit,
+  createFailedTask,
+} = createIntegrationTestContext(import.meta.url);
 
 const stored = async () =>
   (
@@ -1371,6 +1378,104 @@ describe("retention maintenance", () => {
         )
       ).rows[0]?.count,
     ).toBe(0);
+  });
+
+  it("prunes past a window of redrive sources pinned by younger targets", async () => {
+    // A source stays while its target exists, and its target finishes later. A window filled with
+    // pinned sources once kept every pass from reaching the targets that release them.
+    const limit = 2;
+    const sources: string[] = [];
+    for (let index = 0; index < limit * 4; index += 1) {
+      sources.push(await createFailedTask({ type: "redriven-source" }));
+    }
+    const liveSource = await createFailedTask({ type: "live-redrive-source" });
+    const targets: string[] = [];
+    for (const source of sources) {
+      const redrive = await admin.redrive(source, adminAudit("bulk recovery"));
+      targets.push(redrive.targetTaskId!);
+    }
+    for (let index = 0; index < targets.length; index += 1) {
+      const task = await queue.claim("redrive-retention-worker");
+      expect(targets).toContain(task?.id);
+      expect(await queue.complete(task!, "redrive-retention-worker", { done: true })).toBe(true);
+    }
+    const unrelated: string[] = [];
+    for (let index = 0; index < limit; index += 1) {
+      const id = await queue.enqueue("unrelated", {});
+      const task = await queue.claim("redrive-retention-worker");
+      expect(task?.id).toBe(id);
+      expect(await queue.complete(task!, "redrive-retention-worker", { done: true })).toBe(true);
+      unrelated.push(id);
+    }
+    const liveTarget = (await admin.redrive(liveSource, adminAudit("live recovery"))).targetTaskId!;
+
+    const age = async (ids: string[], finishedDaysAgo: number) => {
+      await pool.query(
+        `UPDATE workhorse.task SET created_at = clock_timestamp() - interval '41 days'
+          WHERE id = ANY($1::uuid[])`,
+        [ids],
+      );
+      await pool.query(
+        `UPDATE workhorse.task_outcome
+            SET finished_at = clock_timestamp() - make_interval(days => $2),
+                history_through_at = clock_timestamp() - make_interval(days => $2)
+          WHERE task_id = ANY($1::uuid[])`,
+        [ids, finishedDaysAgo],
+      );
+    };
+    await age([liveSource, liveTarget], 40);
+    await age(sources, 39);
+    await age(targets, 35);
+    await age(unrelated, 33);
+    await pool.query("DELETE FROM workhorse.task_event");
+    await pool.query("DELETE FROM workhorse.attempt_history");
+
+    const prune = async () => {
+      const result = await pool.query<{ pruned: number }>(
+        `SELECT workhorse.prune_terminal_tasks_v1(
+                  clock_timestamp() - interval '30 days',
+                  clock_timestamp() - interval '30 days',
+                  date_trunc('day', clock_timestamp() - interval '30 days'), $1
+                ) AS pruned`,
+        [limit],
+      );
+      // Read the flag in its own statement so it sees this pass's update, not the previous one.
+      const state = await pool.query<{ starved: boolean }>(
+        `SELECT terminal_prune_dependency_starved AS starved FROM workhorse.maintenance_state
+          WHERE routine_name = 'terminal_storage'`,
+      );
+      expect(state.rows).toEqual([{ starved: false }]);
+      return result.rows[0]!.pruned;
+    };
+    const remaining = async (ids: string[]) =>
+      new Set(
+        (
+          await pool.query<{ id: string }>(
+            "SELECT id FROM workhorse.task WHERE id = ANY($1::uuid[])",
+            [ids],
+          )
+        ).rows.map(({ id }) => id),
+      );
+
+    // Each pass deletes a full batch. A source goes only after its own target, and the younger
+    // unrelated tasks go only after every redriven task has.
+    const tracked = [...sources, ...targets, ...unrelated];
+    const deletedInPass = new Map<string, number>();
+    for (let pass = 1; pass <= tracked.length / limit; pass += 1) {
+      expect(await prune()).toBe(limit);
+      const left = await remaining(tracked);
+      for (const id of tracked)
+        if (!left.has(id) && !deletedInPass.has(id)) deletedInPass.set(id, pass);
+    }
+    expect(deletedInPass.size).toBe(tracked.length);
+    sources.forEach((source, index) => {
+      expect(deletedInPass.get(source)).toBeGreaterThan(deletedInPass.get(targets[index]!)!);
+    });
+    const lastRedriven = Math.max(...[...sources, ...targets].map((id) => deletedInPass.get(id)!));
+    for (const id of unrelated) expect(deletedInPass.get(id)).toBeGreaterThan(lastRedriven);
+
+    expect(await prune()).toBe(0);
+    expect(await remaining([liveSource, liveTarget])).toEqual(new Set([liveSource, liveTarget]));
   });
 
   it("reports retention boundaries, lag, eligible partitions, and exact default counts", async () => {

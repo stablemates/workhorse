@@ -48,7 +48,8 @@ from raw history, so cleanup won't pass the statistics watermark. See
 
 **A task with descendants stays.** If a failed task was [redriven](340-redrive.md), it's the
 parent of another task, and deleting it would break the lineage. It waits until the child is
-gone too.
+gone too. A waiting task does not hold up the rest: cleanup steps past it to the younger tasks
+behind it, the child included.
 
 A task on a [fast-tier queue](305-fast-tier.md) usually has no events or attempts, so its outcome
 row stands in for its history. Cleanup deletes that row only once both the outcome and history
