@@ -2036,7 +2036,8 @@ stale or expired ownership generation. Both errors expose the boundary through `
 `send_signal_v1` accepts the task identity, signal name, JSON payload, idempotency key, and trusted
 actor. `MAX_EXTERNAL_WAIT_VALUE_BYTES` limits payloads to 65,536 bytes of canonical JSONB text.
 `MAX_EXTERNAL_WAIT_IDEMPOTENCY_KEY_BYTES` limits keys to 512 UTF-8 bytes.
-`MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS` limits actors to 200 characters. The function serializes
+`MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS` limits actors to 200 characters. The TypeScript client counts
+name and actor characters in Unicode code points, as PostgreSQL `char_length` does. The function serializes
 delivery with declaration. It stores only a SHA-256 key hash and request fingerprint. The same
 transaction makes the waiting runtime ready.
 The first accepted payload is retained. An equal same-key retry returns `duplicate`; a changed
@@ -3236,6 +3237,8 @@ claims and completions that start after it commits.
 `Admin.setQueueTier(queueName, tier, { actor, reason, requestId })` validates the whole `AdminAudit`
 and wraps `set_queue_tier_v1`. It passes only `actor` and `reason`, so the tier change records no
 request ID. It returns the `QueueTier` and emits the `workhorse.queue.tier_set` log event with `workhorse.queue.tier`.
+Every `Admin` method counts `AdminAudit` actor and reason characters in Unicode code points, as
+PostgreSQL `char_length` does.
 `Admin.setQueueHistory(queueName, settings)` takes a partial `QueueHistorySettings`
 (`recordAttempts`, `recordClaims`) and returns the full settings. The other SDKs expose the same
 pair: Python `Admin.set_queue_tier` and `set_queue_history(queue_name, *, record_attempts=None,
