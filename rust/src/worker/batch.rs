@@ -41,6 +41,22 @@ struct Pending<P, R> {
     queues: HashMap<String, Vec<Member<P, R>>>,
 }
 
+/// Removes a member from its queue when the execution that added it ends, however it ends.
+///
+/// Removing a member that a callback already took finds nothing, so the guard is harmless after
+/// a dispatch.
+struct Registration<'a, P, R> {
+    coordinator: &'a Coordinator<P, R>,
+    queue: &'a str,
+    arrival: u64,
+}
+
+impl<P, R> Drop for Registration<'_, P, R> {
+    fn drop(&mut self) {
+        self.coordinator.remove(self.queue, self.arrival);
+    }
+}
+
 struct Coordinator<P, R> {
     /// Weak, because the worker's handler map owns this coordinator through the erased handler.
     worker: Weak<Inner>,
@@ -114,6 +130,18 @@ impl Worker {
     }
 }
 
+impl<P, R> Coordinator<P, R> {
+    fn remove(&self, queue: &str, arrival: u64) {
+        let mut pending = lock(&self.pending);
+        if let Some(members) = pending.queues.get_mut(queue) {
+            members.retain(|member| member.arrival != arrival);
+            if members.is_empty() {
+                pending.queues.remove(queue);
+            }
+        }
+    }
+}
+
 impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
     async fn join(self: Arc<Self>, payload: P, context: HandlerContext) -> Result<R, HandlerError> {
         let queue = context.task().queue.clone();
@@ -140,6 +168,8 @@ impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
                 ready.then(|| self.take(&mut pending, &queue, arrival)).flatten(),
             )
         };
+        // Dropping this execution drops the guard, so an abandoned member never joins a later batch.
+        let _registration = Registration { coordinator: &self, queue: &queue, arrival };
         #[cfg(test)]
         (self.arrived)(arrival);
         // The member that dispatches runs the callback in its own execution, so the callback holds
@@ -156,19 +186,13 @@ impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
                         self.dispatch(batch).await;
                     }
                 }
-                () = cancellation.cancelled() => {
-                    self.remove(&queue, arrival);
-                    return Err(cancelled());
-                }
+                () = cancellation.cancelled() => return Err(cancelled()),
             }
         }
         tokio::select! {
             biased;
             result = &mut receiver => result.unwrap_or_else(|_| Err(abandoned())),
-            () = cancellation.cancelled() => {
-                self.remove(&queue, arrival);
-                Err(cancelled())
-            }
+            () = cancellation.cancelled() => Err(cancelled()),
         }
     }
 
@@ -198,16 +222,6 @@ impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
                 .then(left.arrival.cmp(&right.arrival))
         });
         Some(batch)
-    }
-
-    fn remove(&self, queue: &str, arrival: u64) {
-        let mut pending = lock(&self.pending);
-        if let Some(members) = pending.queues.get_mut(queue) {
-            members.retain(|member| member.arrival != arrival);
-            if members.is_empty() {
-                pending.queues.remove(queue);
-            }
-        }
     }
 
     async fn dispatch(&self, batch: Vec<Member<P, R>>) {
@@ -481,6 +495,30 @@ mod tests {
         gates[1].add_permits(1);
         assert_eq!(tokio::time::timeout(LINGER * 5, third).await.unwrap().unwrap(), 30);
         assert_eq!(calls.recv().await.unwrap(), vec![3]);
+    }
+
+    // SM-1085: dropping a join while it lingers abandons its member (ADR 0074). The retained
+    // coordinator would otherwise hand the abandoned payload to the next callback on this worker.
+    #[tokio::test(start_paused = true)]
+    async fn a_dropped_join_leaves_no_member_for_the_next_callback() {
+        let (called, mut calls) = mpsc::unbounded_channel();
+        let coordinator = coordinator(move |items: Vec<BatchItem<i64>>| {
+            let _ = called.send(items.iter().map(|item| item.payload).collect::<Vec<_>>());
+            let results = times_ten(&items);
+            async move { results }
+        });
+        let dropped = join(&coordinator, 1);
+        tokio::task::yield_now().await;
+        assert_eq!(pending(&coordinator), 1, "the first member is pending");
+        dropped.abort();
+        assert!(dropped.await.unwrap_err().is_cancelled());
+        assert_eq!(pending(&coordinator), 0, "the dropped join left its member pending");
+
+        let surviving = join(&coordinator, 2);
+        tokio::task::yield_now().await;
+        assert_eq!(pending(&coordinator), 1, "only the surviving member is pending");
+        assert_eq!(tokio::time::timeout(LINGER * 5, surviving).await.unwrap().unwrap(), 20);
+        assert_eq!(calls.recv().await.unwrap(), vec![2]);
     }
 
     fn context() -> HandlerContext {

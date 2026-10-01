@@ -413,6 +413,58 @@ async fn a_dropped_run_once_stops_renewing_its_lease() {
     assert_lease_lapses(&harness, &observer, task).await;
 }
 
+/// SM-1085: dropping `run_once` while its batch member lingers abandons the member too.
+///
+/// The worker keeps its batch coordinator, so a member left pending would join the next batch on
+/// the same worker. Recovery hands the same task back for its next attempt, and the callback must
+/// see only that attempt.
+#[tokio::test]
+async fn a_dropped_run_once_leaves_no_batch_member_for_the_next_run() {
+    let Some(harness) = harness("worker_dropped_batch_member").await else { return };
+    let observer = harness.database.connect().await;
+    let worker = harness.worker(WorkerOptions { concurrency: 2, ..lapsing_options() });
+    let (called, mut calls) = mpsc::unbounded_channel();
+    // The second member never arrives, so the first lingers until its run is dropped.
+    worker.handle_batch(
+        "rust.batch.dropped",
+        BatchOptions { max_size: 2, linger: Duration::from_secs(2) },
+        move |items: Vec<BatchItem<Value>>| {
+            let attempts =
+                items.iter().map(|item| (item.context.task().id, item.context.task().attempt));
+            let _ = called.send(attempts.collect::<Vec<_>>());
+            let results: Vec<_> =
+                items.iter().map(|_| BatchResult::Succeeded(Value::Null)).collect();
+            async move { results }
+        },
+    );
+    let retry = json!({"type": "fixed", "delayMs": 0});
+    let task = harness
+        .enqueue(
+            "rust.batch.dropped",
+            json!({}),
+            EnqueueOptions {
+                max_attempts: 2,
+                retry_policy: Some(retry.as_object().unwrap().clone()),
+                ..Default::default()
+            },
+        )
+        .await;
+
+    let once = worker.clone();
+    let running = tokio::spawn(async move { once.run_once().await });
+    harness.wait_for(task, TaskState::Active).await;
+    // The claimed member joins its batch and lingers well inside the two-second linger.
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    running.abort();
+    assert!(running.await.unwrap_err().is_cancelled());
+    assert_lease_lapses(&harness, &observer, task).await;
+
+    assert!(worker.run_once().await.unwrap(), "the recovered task did not run");
+    assert_eq!(harness.state(task).await, TaskState::Succeeded);
+    assert_eq!(calls.recv().await.unwrap(), vec![(task, 2)], "the dropped member joined the batch");
+    assert!(calls.try_recv().is_err(), "the dropped member ran in a callback of its own");
+}
+
 /// Drops a run while PostgreSQL holds its initial registration, and expects no registry row.
 async fn assert_cancelled_registration_deregisters<F>(name: &str, start: impl FnOnce(Worker) -> F)
 where
