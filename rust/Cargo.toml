@@ -83,6 +83,7 @@ tracing-subscriber = { version = "0.3", default-features = false, features = [
   "registry",
   "std",
 ] }
+tokio = { version = "1", features = ["test-util"] }
 tower = { version = "0.5", default-features = false, features = ["util"] }
 
 [[test]]

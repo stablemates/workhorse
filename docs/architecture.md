@@ -982,8 +982,10 @@ settlement. `shared_heartbeats` opts out and sends heartbeat rounds through the 
 that fails to decode fails the attempt through the task's retry policy. `Worker::handle_batch` takes
 `BatchOptions`. Its `max_size` accepts 1 through 100 and must not exceed the worker's concurrency.
 Its `linger` accepts whole milliseconds from zero through 60 seconds. Both methods panic on an empty
-task type, and `handle_batch` panics on invalid options. `Worker::run(shutdown)` and
-`Worker::run_once` share one execution permit.
+task type, and `handle_batch` panics on invalid options. The member whose arrival fills or lingers
+out a batch runs its callback inside its own execution, as Go does. That member keeps its slot until
+the callback returns, even when the member is cancelled. The shutdown drain counts it the same way.
+`Worker::run(shutdown)` and `Worker::run_once` share one execution permit.
 
 When `shutdown` resolves, `Worker::run` stops claiming and drains within `shutdown_grace_period`.
 Handlers still running when grace ends see `CancelReason::Shutdown` and get 250 milliseconds to
