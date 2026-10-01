@@ -6,6 +6,8 @@
   [ADR 0070](0070-publish-the-verified-sqlalchemy-transaction-accessor.md)
 - **Amended:** 2026-09-19 (SM-827): Kysely and Prisma take the pool as an adapter option, not as a
   `createWorker` argument.
+- **Amended:** 2026-09-30 (SM-1059): Python and Rust workers each take their own heartbeat
+  connection. The section on the shared heartbeat connection records the exception.
 
 ## Context
 
@@ -54,6 +56,12 @@ ADR 0070 depends on that, and this decision does not change it.
 Every worker on one pool shares one heartbeat connection, the way workers share the listener. This
 supersedes the "one extra connection per worker" wording in SM-808's first decision comment.
 PR #121 found that a per-worker reservation deadlocks several workers on a small pool.
+
+TypeScript, Go, and Ruby workers share the connection this way. Python and Rust workers do not. A
+Python worker takes its own heartbeat connection and its own listener connection from its pool. A
+Rust worker takes its own heartbeat connection from its pool and opens its listener outside the
+pool. Each such worker therefore adds its own connections to the budget. The minimum pool of 3
+still applies to every worker that reserves one.
 
 Each heartbeat round on that connection is bounded by the heartbeat interval. A round that exceeds
 the bound, or whose statement fails, destroys the connection. The next round takes a fresh one

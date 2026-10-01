@@ -10,6 +10,8 @@
   [ADR 0030](0030-distinguish-suspensions-gates-and-child-joins.md),
   [ADR 0071](0071-give-every-worker-a-pool-and-a-dedicated-heartbeat-connection.md),
   [ADR 0072](0072-converge-the-worker-runtime-defaults.md)
+- **Amended:** 2026-09-30 (SM-1059): Each Rust worker takes its own heartbeat connection and opens
+  its listener connection outside the pool. The connection model section records the change.
 
 ## Context
 
@@ -80,6 +82,12 @@ pool follows ADR 0071.
   duration.
 - A pool smaller than three connections is refused at construction. The error names the size
   found, the size needed, and `shared_heartbeats`, which is the opt-out.
+
+The 2026-09-30 amendment supersedes the shared heartbeat bullet and the pooled listener sentence,
+because neither describes the crate that shipped. Statements still borrow pooled connections. Each
+Rust worker takes its own heartbeat connection from the pool, so workers on one pool do not share
+it. Each worker opens its listener connection outside the pool, from `WorkerOptions::listen_config`.
+ADR 0071's amendment records the same exception.
 
 `Queue` takes an executor, as Go's `NewQueue` does. The crate defines a sealed `Executor` trait
 with explicit implementations for `tokio_postgres::Client`, `tokio_postgres::Transaction<'_>`,
