@@ -10,7 +10,9 @@ PostgreSQL.
 > **Public beta:** Workhorse is usable for evaluation and early production adoption. A 0.x minor
 > release may change behaviour, so read the changelog before you upgrade. It will not ask you to
 > recreate your database: migrations are ordered, and inside a major line a migration only adds, so
-> a running deployment upgrades in place.
+> a running deployment upgrades in place. The one exception is migration 0025: a database from
+> before 0.5.0 crosses it offline, with the [0.5.0 upgrade steps](CHANGELOG.md#050--2026-09-28).
+> The upgrade from 0.5 to 0.6 only adds.
 
 [![Build status](https://github.com/stablemates/workhorse/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/stablemates/workhorse/actions/workflows/ci.yml?query=branch%3Amain)
 

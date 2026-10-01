@@ -191,7 +191,8 @@ changelog dates them and names their source commits. [Releases](/docs/releases) 
 version of each line, with its date and whether it still receives fixes. Any 0.x minor release may
 change behaviour, so read the changelog before you upgrade. It will not ask you to recreate your
 database: the schema upgrades in place, because a release ships ordered migrations and a migration
-inside a major line only adds.
+inside a major line only adds. The one exception is migration 0025: a database from before 0.5.0 crosses it offline, as
+[Upgrade a 0.4.x database offline](/docs/installation#upgrade-a-04x-database-offline) describes. The upgrade from 0.5 to 0.6 only adds.
 
 The dashboard and core may use different patch releases within the same minor line. The dashboard
 server reads core-owned versioned views and functions, so a core patch remains compatible when its

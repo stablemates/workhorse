@@ -7,7 +7,10 @@ PostgreSQL.
 > release may change behaviour, so read the
 > [changelog](https://github.com/stablemates/workhorse/blob/main/rust/CHANGELOG.md) before you
 > upgrade. It will not ask you to recreate your database: migrations are ordered, and inside a major
-> line a migration only adds, so a running deployment upgrades in place.
+> line a migration only adds, so a running deployment upgrades in place. The one exception is
+> migration 0025: a database from before 0.5.0 crosses it offline, with the
+> [0.5.0 upgrade steps](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md#050--2026-09-28).
+> The upgrade from 0.5 to 0.6 only adds.
 
 An AI agent should read [the Workhorse documentation index](https://workhorse.run/llms.txt) first.
 

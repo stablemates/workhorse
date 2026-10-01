@@ -5,6 +5,8 @@
 - **Assembled by:** [ADR 0059](0059-assemble-the-1-0-0-specification.md)
 - **Amends:** [ADR 0053](0053-start-migrations-at-0-1-0-and-keep-them-additive.md),
   [ADR 0027](0027-keep-versioned-dashboard-views.md)
+- **Amended by:** [ADR 0077](0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) (migration 0025
+  ships its contract step in the 0.5.0 minor, without the retention window)
 - **Related:** [ADR 0054](0054-define-what-1-0-0-promises.md),
   [ADR 0034](0034-reset-the-pre-release-schema-baseline.md),
   WH-582,
