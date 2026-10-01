@@ -1996,6 +1996,12 @@ func (worker *Worker) execute(
 		outcome = handlerOutcomeCanceled
 		return ctx.Err()
 	}
+	// A result the task cannot store fails the attempt like a handler error, so it settles under the
+	// retry policy instead of reaching complete_v1, whose refusal would end Run.
+	var encodedResult []byte
+	if handlerError == nil {
+		encodedResult, handlerError = worker.encodeResult(ctx, executor, task, result)
+	}
 	if handlerError != nil {
 		span.RecordError(handlerTelemetryError(handlerError, task.RedactErrorDetails))
 		span.SetStatus(codes.Error, handlerFailedSpanStatusMessage)
@@ -2020,7 +2026,7 @@ func (worker *Worker) execute(
 		return nil
 	}
 	outcome = handlerOutcomeSucceeded
-	if err := worker.complete(ctx, executor, task, result); errors.Is(err, ErrStaleLease) {
+	if err := worker.complete(ctx, executor, task, encodedResult); errors.Is(err, ErrStaleLease) {
 		outcome = handlerOutcomeLeaseLost
 		return worker.reconcileRejectedSettlement(ctx, executor, task, err)
 	} else {
@@ -2496,18 +2502,28 @@ func (worker *Worker) cancellationAccepted(
 	return accepted, nil
 }
 
-func (worker *Worker) complete(ctx context.Context, executor Executor, task ClaimedTask, result any) error {
+// encodeResult serializes a handler result and checks it against what the task accepts: the
+// result schema of its contract version and its result_max_bytes. An error here is a failure of
+// the attempt, never of the worker.
+func (worker *Worker) encodeResult(ctx context.Context, executor Executor, task ClaimedTask, result any) ([]byte, error) {
 	encoded, err := json.Marshal(result)
 	if err != nil {
-		return worker.fail(ctx, executor, task, err)
+		return nil, err
 	}
 	var normalizedResult any
 	if err := decodeContractJSON(encoded, &normalizedResult); err != nil {
-		return worker.fail(ctx, executor, task, err)
+		return nil, err
 	}
 	if err := worker.validateResultContract(ctx, executor, task, normalizedResult); err != nil {
-		return worker.fail(ctx, executor, task, err)
+		return nil, err
 	}
+	if err := checkValueSize(task.Type, contractResultKind, encoded, normalizedResult, task.ResultMaxBytes); err != nil {
+		return nil, err
+	}
+	return encoded, nil
+}
+
+func (worker *Worker) complete(ctx context.Context, executor Executor, task ClaimedTask, encoded []byte) error {
 	accepted, err := worker.writeCompletion(ctx, executor, task, encoded)
 	if err != nil {
 		return err
@@ -2655,11 +2671,6 @@ func (worker *Worker) retryDelayOverride(task ClaimedTask) any {
 		return nil
 	}
 	return delay.Milliseconds()
-}
-
-func (worker *Worker) fail(ctx context.Context, executor Executor, task ClaimedTask, handlerError error) error {
-	_, err := worker.failWithState(ctx, executor, task, handlerError)
-	return err
 }
 
 func (worker *Worker) failWithState(
