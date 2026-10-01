@@ -1,6 +1,10 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { once } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
 import {
   loadDashboardConformanceFixtures,
@@ -12,20 +16,33 @@ import { createDatabaseTestHarness } from "../../core/test/support/db.js";
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const database = createDatabaseTestHarness(import.meta.url);
 let server: ChildProcessWithoutNullStreams | undefined;
+let buildDirectory: string | undefined;
 
 afterEach(async () => {
-  server?.kill("SIGTERM");
+  if (server && server.exitCode === null && server.signalCode === null) {
+    const exited = once(server, "exit");
+    server.kill("SIGTERM");
+    await exited;
+  }
   server = undefined;
+  if (buildDirectory) await rm(buildDirectory, { recursive: true, force: true });
+  buildDirectory = undefined;
   await database.teardown();
 });
 
 it("passes dashboard/v1 through the Go embedded backend", { timeout: 120_000 }, async () => {
   await database.setup();
   const { fixtures } = await loadDashboardConformanceFixtures(repository);
-  server = spawn("go", ["run", "./dashboard/cmd/conformance"], {
+  // `go run` exits on SIGTERM without forwarding it, so spawn the built server to signal it directly.
+  buildDirectory = await mkdtemp(path.join(tmpdir(), "workhorse-go-conformance-"));
+  const binary = path.join(buildDirectory, "conformance");
+  await promisify(execFile)("go", ["build", "-o", binary, "./dashboard/cmd/conformance"], {
     cwd: path.join(repository, "go"),
+  });
+  // The server exits when stdin closes, which also covers a runner that dies before afterEach.
+  server = spawn(binary, [], {
     env: { ...process.env, DATABASE_URL: database.databaseUrl },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
   });
   const address = await firstLine(server);
   const report = await verifyDashboardConformanceFixtures(database.pool, repository, {

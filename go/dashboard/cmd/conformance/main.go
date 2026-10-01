@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -92,6 +93,8 @@ func main() {
 		panic(err)
 	}
 	fmt.Println(listener.Addr().String())
+	// The fixture runner holds stdin open, so EOF means the runner is gone even if it never signaled.
+	go func() { _, _ = io.Copy(io.Discard, os.Stdin); stop() }()
 	go func() { <-ctx.Done(); _ = server.Shutdown(context.Background()) }()
 	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		panic(err)
