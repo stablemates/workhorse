@@ -8737,7 +8737,7 @@ LANGUAGE plpgsql
 SET plan_cache_mode = force_generic_plan
 AS $$
 DECLARE
-  v_now timestamptz := clock_timestamp();
+  v_now timestamptz;
   v_accepted uuid[];
   v_oversized uuid[] := '{}'::uuid[];
   v_rejection record;
@@ -8748,6 +8748,9 @@ BEGIN
      ORDER BY runtime.task_id
        FOR UPDATE
   ) locked;
+  -- Sample time only after the row locks. A timestamp taken before a blocked lock wait could accept
+  -- a lease that expired during the wait and record a finish time earlier than the real one.
+  v_now := clock_timestamp();
   FOR v_rejection IN
     SELECT input.task_id, input.fence_token, runtime.task_type
       FROM unnest(p_task_ids, p_fence_tokens, p_results) AS input(task_id, fence_token, result)
@@ -9013,7 +9016,7 @@ LANGUAGE plpgsql
 AS $$
 #variable_conflict use_column
 DECLARE
-  v_now timestamptz := clock_timestamp();
+  v_now timestamptz;
 BEGIN
   PERFORM 1 FROM (
     SELECT FROM workhorse.fast_task_runtime runtime
@@ -9021,6 +9024,9 @@ BEGIN
      ORDER BY runtime.task_id
        FOR NO KEY UPDATE
   ) locked;
+  -- Sample time only after the row locks, so a lease that expired during a blocked lock wait is not
+  -- renewed and a renewed lease starts from the time it was granted.
+  v_now := clock_timestamp();
   RETURN QUERY
   WITH leases AS MATERIALIZED (
     SELECT input.ordinal, input.task_id, input.fence_token, input.lease_ms
@@ -10593,7 +10599,7 @@ CREATE OR REPLACE FUNCTION workhorse.heartbeat_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_now timestamptz := clock_timestamp();
+  v_now timestamptz;
   v_status text;
 BEGIN
   IF p_worker_id IS NULL OR p_worker_id = '' THEN RAISE EXCEPTION 'worker_id must not be empty'; END IF;
@@ -10605,6 +10611,13 @@ BEGIN
       p_worker_id, ARRAY[p_task_id], ARRAY[p_fence_token], ARRAY[p_lease_ms]
     ) beat);
   END IF;
+  PERFORM 1 FROM workhorse.task_runtime r
+   WHERE r.task_id = p_task_id AND r.state = 'active' AND r.worker_id = p_worker_id
+     AND r.fence_token = p_fence_token
+     FOR NO KEY UPDATE;
+  -- Sample time only after the row lock, so a lease that expired during a blocked lock wait is not
+  -- renewed and a renewed lease starts from the time it was granted.
+  v_now := clock_timestamp();
   UPDATE workhorse.task_runtime r
      SET heartbeat_at = CASE
            WHEN r.cancel_requested_at IS NULL
@@ -10644,7 +10657,7 @@ CREATE OR REPLACE FUNCTION workhorse.heartbeat_many_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_now timestamptz := clock_timestamp();
+  v_now timestamptz;
   v_fast_count bigint;
   v_full_count bigint;
 BEGIN
@@ -10698,6 +10711,18 @@ BEGIN
       SELECT beats.n, beats.task_id, beats.status FROM beats ORDER BY beats.n;
     RETURN;
   END IF;
+  PERFORM 1 FROM (
+    SELECT FROM workhorse.task_runtime runtime
+     WHERE runtime.task_id IN (
+             SELECT (item->>'taskId')::uuid FROM jsonb_array_elements(p_leases) item
+           )
+       AND runtime.worker_id = p_worker_id
+     ORDER BY runtime.task_id
+       FOR NO KEY UPDATE
+  ) locked;
+  -- Sample time only after the row locks, so a lease that expired during a blocked lock wait is not
+  -- renewed and a renewed lease starts from the time it was granted.
+  v_now := clock_timestamp();
   RETURN QUERY
   WITH leases AS MATERIALIZED (
     SELECT item.ordinality AS ordinal,
@@ -19255,10 +19280,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (46, 'reject a NULL limit or lease before any lock'),
   (47, 'refuse a claim below read committed isolation'),
   (48, 'prune past redrive sources pinned by younger targets'),
-  (49, 'serialize budget synchronization with claims')
+  (49, 'serialize budget synchronization with claims'),
+  (50, 'sample the clock after the row lock')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (49) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (50) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

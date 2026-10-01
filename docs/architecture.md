@@ -3015,9 +3015,9 @@ caller repeats the transaction.
 
 ### Heartbeat
 
-`heartbeat_v1` performs one `UPDATE` against the exact active `task_id`, `worker_id`, and `fence_token`. It takes no advisory or concurrency-policy row lock because renewal does not change admission counts. The function returns `accepted`, `cancel_requested`, `deadline_exceeded`, `timeout_exceeded`, or `stale`, and changes heartbeat, expiry, and `updated_at` only for `accepted`.
+`heartbeat_v1` locks the exact active `task_id`, `worker_id`, and `fence_token` row with `FOR NO KEY UPDATE`, then performs one `UPDATE` against it. It takes no advisory or concurrency-policy row lock because renewal does not change admission counts. Since migration 0051 (schema version 50) it samples `clock_timestamp()` after the row lock, as `update_progress_v1` does. A lease that expired while the call waited for the lock is therefore not renewed, and a renewed lease counts from the post-lock time. The function returns `accepted`, `cancel_requested`, `deadline_exceeded`, `timeout_exceeded`, or `stale`, and changes heartbeat, expiry, and `updated_at` only for `accepted`.
 
-`heartbeat_many_v1(p_worker_id, p_leases jsonb)` accepts one through 100 `{ taskId, fenceToken, leaseMs }` entries. One `UPDATE ... FROM` renews every matching generation and returns `(ordinal, task_id, status)` in input order, with missing or mismatched generations reported as `stale`. TypeScript, Python, Go, and Rust workers keep one non-overlapping heartbeat round per worker and send every active lease through this function. Per-task deadline timers and abort signals remain independent.
+`heartbeat_many_v1(p_worker_id, p_leases jsonb)` accepts one through 100 `{ taskId, fenceToken, leaseMs }` entries. On the full tier it locks the worker's named rows in `task_id` order. It samples `clock_timestamp()` after those locks. One `UPDATE ... FROM` then renews every matching generation. The function returns `(ordinal, task_id, status)` in input order. It reports a missing or mismatched generation as `stale`. TypeScript, Python, Go, and Rust workers keep one non-overlapping heartbeat round per worker and send every active lease through this function. Per-task deadline timers and abort signals remain independent.
 
 A heartbeat round that throws leaves every task running in every SDK, and the next round
 retries. The round's result says nothing about ownership, so the worker never aborts or fails a task
@@ -3404,14 +3404,28 @@ UPDATE`, filtered on `task_id = ANY (p_task_ids)` and `worker_id = p_worker_id`.
 own heartbeat round could each hold a row the other waits for, and PostgreSQL rolled one back with
 SQLSTATE `40P01`. The fused claim held the completion's locks longer and made that more likely. A
 caller may therefore name its tasks and leases in any order. The full-tier `heartbeat_many_v1`
-branch takes no such lock, because a full-tier completion settles one task per statement.
+branch takes the same ordered `FOR NO KEY UPDATE` lock on `task_runtime` before its `UPDATE`.
+
+Since migration 0051 (schema version 50), a completion or heartbeat that waited for a row lock
+checks expiry against a clock sample taken after that lock. A lease that expired during the wait is
+rejected rather than accepted or renewed. An accepted completion records the post-lock time as
+`finished_at`, and a renewal counts from it. Recovery and reclaim skip locked rows and change the
+fence, so the earlier pre-lock time could not duplicate or lose a task.
+
+`fast_complete_many_v1`, `fast_heartbeat_many_v1`, and the single-tier paths of
+`heartbeat_many_v1` sample `clock_timestamp()` once, after every row lock of the call is held, not
+before the first. In such a batch, a lease that was live when its own row was locked is still
+rejected if it expired while the call waited for a later row. A mixed-tier `heartbeat_many_v1`
+batch validates each lease separately, as the next paragraph describes.
 
 `heartbeat_many_v1` sends a batch to `fast_heartbeat_many_v1` when the batch names at least one
 `fast_task_runtime` row and no `task_runtime` row. A named task in neither table counts as neither,
 so a heartbeat round that races its worker's own completion keeps the ordered path and reports that
 task `stale`. A batch naming no fast-tier task takes the full-tier `UPDATE ... FROM` unchanged. A
 batch naming both tiers calls `heartbeat_v1` once per lease in `task_id` order, then returns rows in
-input order.
+input order. Each of those calls samples the clock after its own row lock, so in a mixed batch the
+sample of one lease follows only the locks of the leases before it. An earlier lease can
+therefore be accepted before the call waits for a later lease's lock.
 
 `complete_many_and_claim_v1(p_worker_id, p_task_ids, p_fence_tokens, p_results, p_queue_name,
 p_limit, p_lease_ms)` completes up to 100 tasks and claims up to `p_limit` more from one fast-tier
