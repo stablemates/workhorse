@@ -368,7 +368,6 @@ class AsyncWorker:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._running = False
         self._threads = _BridgeThreads()
-        self._heartbeat_connection_factory = None
         self._inner = Worker(
             cast(Any, pool),
             on_notification_error=on_notification_error,
