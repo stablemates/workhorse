@@ -427,6 +427,44 @@ function assertDocumentationRegions(
 assertDocumentationRegions("rust", "Rust", ".rs", "//");
 assertDocumentationRegions("ruby", "Ruby", ".rb", "#");
 
+// Go fences stay gofmt-checked fragments, so a Go fence need not match a region. A Go example whose
+// error handling is the point lives instead as a `docs:start <name>` region in a tested example
+// under `go/examples/`, and each page named here must carry that region verbatim.
+const goRegionPages: Record<string, string[]> = {
+  "transactional-enqueue": [
+    "docs/guides/200-transactional-enqueue.md",
+    "site/content/docs/enqueue.mdx",
+  ],
+};
+const goRegions = new Map<string, string>();
+for (const example of readdirSync(resolve(repositoryRoot, "go/examples"), { recursive: true })) {
+  if (typeof example !== "string" || !example.endsWith(".go")) continue;
+  const source = readFileSync(resolve(repositoryRoot, "go/examples", example), "utf8");
+  for (const region of source.matchAll(
+    /^\/\/ docs:start (\S+)[ \t]*\n([\s\S]*?)\n+\/\/ docs:end[ \t]*$/gm,
+  )) {
+    if (goRegions.has(region[1]!)) throw new Error(`Go docs region ${region[1]} is duplicated`);
+    goRegions.set(region[1]!, region[2]!);
+  }
+}
+for (const [name, pages] of Object.entries(goRegionPages)) {
+  const code = goRegions.get(name);
+  if (code === undefined) throw new Error(`go/examples has no docs region ${name}`);
+  for (const page of pages) {
+    const source = readFileSync(resolve(repositoryRoot, page), "utf8");
+    const backticks = "`".repeat(3);
+    const fences = source.matchAll(
+      new RegExp(`^[ \\t]*${backticks}go\\n([\\s\\S]*?)\\n[ \\t]*${backticks}[ \\t]*$`, "gm"),
+    );
+    if (![...fences].some((fence) => dedent(fence[1]!) === code)) {
+      throw new Error(`${page} does not carry Go docs region ${name} from go/examples`);
+    }
+  }
+}
+for (const name of goRegions.keys()) {
+  if (!(name in goRegionPages)) throw new Error(`Go docs region ${name} names no page`);
+}
+
 // Every tab group that carries Go carries Rust and then Ruby, except where the API the example needs
 // has not landed in that SDK. Each exclusion names the Issue that removes it, and an exclusion a page
 // no longer needs fails the check.

@@ -61,12 +61,26 @@ Go has no transaction argument either. An executor wraps whatever you already ho
 `NewPGXExecutor` accepts a `pgx.Tx` as readily as a pool:
 
 ```go
-tx, err := pool.Begin(ctx)
-_, err = tx.Exec(ctx, "INSERT INTO account (id, email) VALUES ($1, $2)", id, email)
-queue := workhorse.NewQueue(workhorse.NewPGXExecutor(tx), "default")
-_, err = queue.Enqueue(ctx, "account.created", map[string]any{"accountId": id})
-err = tx.Commit(ctx)
+func createAccount(ctx context.Context, pool *pgxpool.Pool, id, email string) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, "INSERT INTO account (id, email) VALUES ($1, $2)", id, email); err != nil {
+		return err
+	}
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(tx), "default")
+	if _, err := queue.Enqueue(ctx, "account.created", map[string]any{"accountId": id}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
 ```
+
+When any step fails, the function returns before `Commit`. The deferred `Rollback` then discards
+the account row, and no task exists without it.
 
 `NewSQLExecutor` does the same for the standard library, and accepts a `*sql.Tx`. Either way the
 queue reads and writes through the handle you passed, so your commit covers the task.
