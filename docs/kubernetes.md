@@ -341,4 +341,4 @@ cluster and local fixture images after either success or failure.
 - [Kubernetes Jobs](https://kubernetes.io/docs/concepts/workloads/controllers/job/)
 - [Supavisor pool modes](https://supabase.github.io/supavisor/configuration/pool_modes/)
 - [Workhorse worker lifecycle](architecture.md#worker-process-lifecycle)
-- [Workhorse connection poolers](compatibility.md#connection-poolers)
+- [Workhorse connection poolers](compatibility.md#postgresql-connection-poolers)
