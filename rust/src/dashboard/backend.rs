@@ -148,7 +148,7 @@ impl<E: Executor> Backend<E> {
             "events" => self.json_query(sql::DASHBOARD_EVENTS_V1, Some(input)).await,
             "eventDetail" => {
                 let result = self.raw_json_query(sql::DASHBOARD_EVENT_DETAIL_V1, Some(input)).await;
-                found(result.map(|value| value.map(normalize)), "Event not found")
+                found(result, "Event not found")
             }
             "previewRetentionPolicy" => self.preview_retention_policy(input).await,
             "taskDetail" => self.task_detail(input).await,
@@ -210,12 +210,12 @@ impl<E: Executor> Backend<E> {
     }
 
     async fn json_query(&self, statement: &str, input: Option<Value>) -> Procedure {
-        let value = self.raw_json_query(statement, input).await?;
-        Ok(value.map(normalize).unwrap_or_default())
+        Ok(self.raw_json_query(statement, input).await?.unwrap_or_default())
     }
 
-    /// Reads the `result` column without normalizing it, because SQL-owned cursor timestamps must
-    /// pass through without display-time rounding.
+    /// Reads the `result` column exactly as SQL wrote it. SQL formats every metadata timestamp
+    /// through `dashboard_iso_v1`, and payloads, results, checkpoints, progress and event
+    /// details are application or Workhorse values the dashboard must show unchanged.
     async fn raw_json_query(
         &self,
         statement: &str,
@@ -235,7 +235,7 @@ impl<E: Executor> Backend<E> {
         statement: &str,
         input: Value,
     ) -> Result<Option<Value>, ProcedureError> {
-        Ok(self.raw_json_query(statement, Some(input)).await?.map(normalize))
+        self.raw_json_query(statement, Some(input)).await
     }
 
     /// Reads the raw `queue_health_v1` document and shares it for [`QUEUE_HEALTH_TTL`].
@@ -614,33 +614,9 @@ fn optional_timestamp(value: Option<DateTime<Utc>>) -> Value {
     value.map_or(Value::Null, |value| timestamp(value).into())
 }
 
-/// Rewrites every RFC 3339 string in a projection to the dashboard's one timestamp layout.
-fn normalize(value: Value) -> Value {
-    match value {
-        Value::Object(items) => {
-            items.into_iter().map(|(key, item)| (key, normalize(item))).collect()
-        }
-        Value::Array(items) => items.into_iter().map(normalize).collect(),
-        Value::String(item) if item.contains('T') => match DateTime::parse_from_rfc3339(&item) {
-            Ok(moment) => timestamp(moment.with_timezone(&Utc)).into(),
-            Err(_) => item.into(),
-        },
-        other => other,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn normalizes_nested_timestamps_to_milliseconds() {
-        let value = json!({ "at": ["2026-01-02T03:04:05.123456+02:00", "2026-01-02T03:04:05Z", "Tuesday"] });
-        assert_eq!(
-            normalize(value),
-            json!({ "at": ["2026-01-02T01:04:05.123Z", "2026-01-02T03:04:05.000Z", "Tuesday"] })
-        );
-    }
 
     #[test]
     fn snake_cases_setting_names() {

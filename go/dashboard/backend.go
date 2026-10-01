@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -40,7 +39,7 @@ func (service *backend) queueHealth(ctx context.Context) (any, error) {
 	if service.healthValue != nil && time.Now().Before(service.healthExpiresAt) {
 		return service.healthValue, nil
 	}
-	value, err := service.rawJSONQuery(ctx, "SELECT workhorse.queue_health_v1() AS result")
+	value, err := service.jsonQuery(ctx, "SELECT workhorse.queue_health_v1() AS result")
 	if err != nil {
 		return nil, err
 	}
@@ -71,16 +70,10 @@ func (service *backend) procedures() map[string]Procedure {
 	}
 }
 
+// jsonQuery returns the projection exactly as SQL wrote it. SQL formats every metadata timestamp
+// through dashboard_iso_v1, and payloads, results, checkpoints, progress and event
+// details are application or Workhorse values the dashboard must show unchanged.
 func (service *backend) jsonQuery(ctx context.Context, statement string, arguments ...any) (any, error) {
-	value, err := service.rawJSONQuery(ctx, statement, arguments...)
-	if err != nil {
-		return nil, err
-	}
-	return normalizeJSON(value), nil
-}
-
-// SQL-owned cursor timestamps must pass through without display-time rounding.
-func (service *backend) rawJSONQuery(ctx context.Context, statement string, arguments ...any) (any, error) {
 	rows, err := service.executor.Query(ctx, statement, arguments...)
 	if err != nil {
 		return nil, err
@@ -89,19 +82,10 @@ func (service *backend) rawJSONQuery(ctx context.Context, statement string, argu
 	if err != nil {
 		return nil, err
 	}
-	value := row["result"]
-	return decodeRawJSONCell(value)
+	return decodeJSONCell(row["result"])
 }
 
 func decodeJSONCell(value any) (any, error) {
-	decoded, err := decodeRawJSONCell(value)
-	if err != nil {
-		return nil, err
-	}
-	return normalizeJSON(decoded), nil
-}
-
-func decodeRawJSONCell(value any) (any, error) {
 	var decoded any
 	switch encoded := value.(type) {
 	case []byte:
@@ -117,26 +101,6 @@ func decodeRawJSONCell(value any) (any, error) {
 	default:
 		return value, nil
 	}
-}
-
-func normalizeJSON(value any) any {
-	switch current := value.(type) {
-	case map[string]any:
-		for key, item := range current {
-			current[key] = normalizeJSON(item)
-		}
-	case []any:
-		for index, item := range current {
-			current[index] = normalizeJSON(item)
-		}
-	case string:
-		if strings.Contains(current, "T") {
-			if moment, err := time.Parse(time.RFC3339Nano, current); err == nil {
-				return moment.UTC().Format(dashboardTimestampLayout)
-			}
-		}
-	}
-	return value
 }
 
 func (service *backend) meta(context.Context, any, string) (any, error) {

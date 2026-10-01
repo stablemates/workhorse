@@ -3824,7 +3824,9 @@ one exact grouped terminal-count query. Since schema version 37, each queue row 
 `recordAttempts`, and `recordClaims` from `queue_control`. A queue without a control row reports
 `full`, `false`, and `false`. An older schema omits the three keys, and the Queues page shows a dash
 in its Tier column. `dashboard_iso_v1(p_value timestamptz)` renders procedure timestamps in UTC with
-millisecond precision and a `Z` suffix.
+millisecond precision and a `Z` suffix. Every backend returns a procedure document as PostgreSQL
+wrote it. Task payloads, results, checkpoints, progress, and event details keep their stored text,
+including strings that look like timestamps.
 
 `dashboard_human_waits_v1(p_input jsonb)` accepts `canComplete` and `canSignal`. It returns the
 first 50 human waits in `(created_at, task_id, token_name)` order. It returns the first 50 signal

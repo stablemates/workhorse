@@ -196,10 +196,13 @@ value of that shape (`uuid`, `timestamp`, `string`, `integer`, `number`, `boolea
 where the concrete value is inherently nondeterministic — generated identifiers, clock-derived
 timestamps, durations, and time-bucketed series.
 
-Every timestamp in a response body is UTC with exactly three fractional digits, the format
-JavaScript `Date.toISOString()` writes: `2026-09-02T14:30:00.000Z`. One instant has one string, so
-a backend may not drop a trailing zero or pass through the microsecond precision PostgreSQL
-supplies. Most timestamps in the fixtures are clock-derived and match through `{"$type":
+Every dashboard metadata timestamp in a response body is UTC with exactly three fractional digits,
+the format JavaScript `Date.toISOString()` writes: `2026-09-02T14:30:00.000Z`. One instant has one
+string, so a backend may not drop a trailing zero or pass through the microsecond precision
+PostgreSQL supplies. The rule covers the timestamp fields the dashboard itself reports, not
+application data. Task payloads, results, checkpoints, progress, and event details keep their
+stored text, and a backend must not rewrite a string inside them that looks like a timestamp. Most
+timestamps in the fixtures are clock-derived and match through `{"$type":
 "timestamp"}`, which hides a format difference; the fixed far-future `run_at` of a task waiting at
 a durable signal is committed literally and does not.
 

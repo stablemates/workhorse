@@ -221,6 +221,158 @@
           }
         },
         {
+          "id": "enqueue-preserved",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+          "parameters": [
+            [
+              {
+                "queue": "conformance-preserved",
+                "type": "conformance.preserve",
+                "payload": {
+                  "at": "2026-09-30T09:00:00.123456-04:00",
+                  "nested": {
+                    "window": [
+                      "2026-09-30T09:00:00Z",
+                      "1999-12-31T23:59:59.999999999+14:00"
+                    ],
+                    "label": "Tuesday"
+                  },
+                  "opaqueId": "2026-09-30T09:00:00+00:00"
+                },
+                "tags": [
+                  "conformance"
+                ]
+              }
+            ]
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "taskId": {
+                    "$type": "uuid"
+                  },
+                  "outcome": "accepted"
+                }
+              }
+            ]
+          },
+          "capture": {
+            "preservedTask": "0.value.taskId"
+          }
+        },
+        {
+          "id": "claim-preserved",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
+          "parameters": [
+            "conformance-preserved",
+            "conformance-worker",
+            30000
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "taskId": {
+                    "$ref": "preservedTask"
+                  },
+                  "fenceToken": {
+                    "$type": "integer"
+                  }
+                }
+              }
+            ]
+          },
+          "capture": {
+            "preservedFence": "0.value.fenceToken"
+          }
+        },
+        {
+          "id": "update-progress-preserved",
+          "sql": "SELECT status FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)",
+          "parameters": [
+            {
+              "$ref": "preservedTask"
+            },
+            "conformance-worker",
+            {
+              "$ref": "preservedFence"
+            },
+            {
+              "phase": "copying",
+              "since": "2026-09-30T09:15:00.5+05:30",
+              "marks": [
+                "2026-09-30T03:45:00.500Z"
+              ]
+            }
+          ],
+          "expect": {
+            "rows": [
+              {
+                "status": "updated"
+              }
+            ]
+          }
+        },
+        {
+          "id": "save-checkpoint-preserved",
+          "sql": "SELECT status FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
+          "parameters": [
+            {
+              "$ref": "preservedTask"
+            },
+            "conformance-worker",
+            {
+              "$ref": "preservedFence"
+            },
+            "preserved-step",
+            {
+              "cursor": "2026-09-30T09:00:00.000001Z",
+              "history": [
+                {
+                  "seenAt": "2026-09-30T09:00:00-04:00"
+                }
+              ]
+            }
+          ],
+          "expect": {
+            "rows": [
+              {
+                "status": "saved"
+              }
+            ]
+          }
+        },
+        {
+          "id": "complete-preserved",
+          "sql": "SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted",
+          "parameters": [
+            {
+              "$ref": "preservedTask"
+            },
+            "conformance-worker",
+            {
+              "$ref": "preservedFence"
+            },
+            {
+              "finishedAt": "2026-09-30T09:00:00.987654321-07:00",
+              "items": [
+                "2026-09-30T16:00:00Z",
+                {
+                  "due": "2026-10-01T00:00:00+09:00"
+                }
+              ]
+            }
+          ],
+          "expect": {
+            "rows": [
+              {
+                "accepted": true
+              }
+            ]
+          }
+        },
+        {
           "id": "enqueue-failed",
           "sql": "SELECT jsonb_build_object('taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
           "parameters": [
@@ -785,14 +937,14 @@
             "status": 200,
             "body": {
               "json": {
-                "all": 10,
+                "all": 11,
                 "queued": 3,
                 "blocked": 0,
                 "retried": 0,
                 "running": 0,
                 "waiting": 2,
                 "canceled": 0,
-                "completed": 1,
+                "completed": 2,
                 "discarded": 3,
                 "scheduled": 3
               }
@@ -1165,6 +1317,47 @@
                   },
                   {
                     "id": {
+                      "$ref": "preservedTask"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.preserve",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-preserved",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "succeeded",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
+                  {
+                    "id": {
                       "$ref": "succeededTask"
                     },
                     "tags": [
@@ -1205,7 +1398,7 @@
                     "prerequisiteTaskIds": []
                   }
                 ],
-                "total": 10,
+                "total": 11,
                 "filter": "all",
                 "search": null,
                 "worker": null,
@@ -1274,6 +1467,7 @@
                 ],
                 "queues": [
                   "conformance",
+                  "conformance-preserved",
                   "conformance-purge",
                   "conformance-redrive"
                 ],
@@ -1284,6 +1478,7 @@
                   "conformance.cancel-target",
                   "conformance.fail",
                   "conformance.human",
+                  "conformance.preserve",
                   "conformance.purge",
                   "conformance.ready",
                   "conformance.redrive.batch",
@@ -1314,6 +1509,7 @@
                   "conformance.cancel-target",
                   "conformance.fail",
                   "conformance.human",
+                  "conformance.preserve",
                   "conformance.purge",
                   "conformance.ready",
                   "conformance.redrive.batch",
@@ -1644,7 +1840,7 @@
                     "durationMs": {
                       "$type": "integer"
                     },
-                    "fenceToken": "6",
+                    "fenceToken": "7",
                     "occurredAt": {
                       "$type": "timestamp"
                     },
@@ -1666,7 +1862,7 @@
                       "expires_at": {
                         "$type": "timestamp"
                       },
-                      "fence_token": "6"
+                      "fence_token": "7"
                     },
                     "recordId": {
                       "$type": "uuid"
@@ -1761,7 +1957,7 @@
                     "durationMs": {
                       "$type": "integer"
                     },
-                    "fenceToken": "5",
+                    "fenceToken": "6",
                     "occurredAt": {
                       "$type": "timestamp"
                     },
@@ -1783,7 +1979,7 @@
                       "expires_at": {
                         "$type": "timestamp"
                       },
-                      "fence_token": "5"
+                      "fence_token": "6"
                     },
                     "recordId": {
                       "$type": "uuid"
@@ -1970,7 +2166,7 @@
                     "attempt": 1,
                     "details": {
                       "name": "review",
-                      "fence_token": "4",
+                      "fence_token": "5",
                       "context_bytes": 44
                     },
                     "recordId": {
@@ -2001,7 +2197,7 @@
                       "expires_at": {
                         "$type": "timestamp"
                       },
-                      "fence_token": "4"
+                      "fence_token": "5"
                     },
                     "recordId": {
                       "$type": "uuid"
@@ -2060,7 +2256,7 @@
                     "attempt": 1,
                     "details": {
                       "name": "approval",
-                      "fence_token": "3"
+                      "fence_token": "4"
                     },
                     "recordId": {
                       "$type": "uuid"
@@ -2090,7 +2286,7 @@
                       "expires_at": {
                         "$type": "timestamp"
                       },
-                      "fence_token": "3"
+                      "fence_token": "4"
                     },
                     "recordId": {
                       "$type": "uuid"
@@ -2185,7 +2381,7 @@
                     "durationMs": {
                       "$type": "integer"
                     },
-                    "fenceToken": "2",
+                    "fenceToken": "3",
                     "occurredAt": {
                       "$type": "timestamp"
                     },
@@ -2207,7 +2403,7 @@
                       "expires_at": {
                         "$type": "timestamp"
                       },
-                      "fence_token": "2"
+                      "fence_token": "3"
                     },
                     "recordId": {
                       "$type": "uuid"
@@ -2259,18 +2455,18 @@
                     },
                     "kind": "event",
                     "type": "succeeded",
-                    "queue": "conformance",
+                    "queue": "conformance-preserved",
                     "taskId": {
-                      "$ref": "succeededTask"
+                      "$ref": "preservedTask"
                     },
                     "attempt": 1,
                     "details": {
-                      "fence_token": "1"
+                      "fence_token": "2"
                     },
                     "recordId": {
                       "$type": "uuid"
                     },
-                    "taskType": "conformance.succeed",
+                    "taskType": "conformance.preserve",
                     "workerId": "conformance-worker",
                     "durationMs": null,
                     "fenceToken": null,
@@ -2285,21 +2481,21 @@
                     },
                     "kind": "attempt",
                     "type": "succeeded",
-                    "queue": "conformance",
+                    "queue": "conformance-preserved",
                     "taskId": {
-                      "$ref": "succeededTask"
+                      "$ref": "preservedTask"
                     },
                     "attempt": 1,
                     "details": null,
                     "recordId": {
                       "$type": "uuid"
                     },
-                    "taskType": "conformance.succeed",
+                    "taskType": "conformance.preserve",
                     "workerId": "conformance-worker",
                     "durationMs": {
                       "$type": "integer"
                     },
-                    "fenceToken": "1",
+                    "fenceToken": "2",
                     "occurredAt": {
                       "$type": "timestamp"
                     },
@@ -2311,19 +2507,19 @@
                     },
                     "kind": "event",
                     "type": "checkpoint_saved",
-                    "queue": "conformance",
+                    "queue": "conformance-preserved",
                     "taskId": {
-                      "$ref": "succeededTask"
+                      "$ref": "preservedTask"
                     },
                     "attempt": 1,
                     "details": {
-                      "name": "conformance-step",
-                      "fence_token": "1"
+                      "name": "preserved-step",
+                      "fence_token": "2"
                     },
                     "recordId": {
                       "$type": "uuid"
                     },
-                    "taskType": "conformance.succeed",
+                    "taskType": "conformance.preserve",
                     "workerId": "conformance-worker",
                     "durationMs": null,
                     "fenceToken": null,
@@ -2541,6 +2737,22 @@
                   },
                   {
                     "tier": "full",
+                    "queue": "conformance-preserved",
+                    "ready": 0,
+                    "active": 0,
+                    "failed": 0,
+                    "paused": false,
+                    "canceled": 0,
+                    "scheduled": 0,
+                    "succeeded": 1,
+                    "recordClaims": false,
+                    "recordAttempts": false,
+                    "rateLimitPolicy": null,
+                    "concurrencyPolicy": null,
+                    "terminalCountsApproximate": false
+                  },
+                  {
+                    "tier": "full",
                     "queue": "conformance-purge",
                     "ready": 1,
                     "active": 0,
@@ -2598,8 +2810,8 @@
                 "kpis": {
                   "drain": {
                     "netPerMinute": -0.1,
-                    "enqueuedPerMinute": 0.16666666666666666,
-                    "completedPerMinute": 0.06666666666666667
+                    "enqueuedPerMinute": 0.18333333333333332,
+                    "completedPerMinute": 0.08333333333333333
                   },
                   "lease": {
                     "active": 0,
@@ -2658,8 +2870,8 @@
                     "overdueTimeouts": 0
                   },
                   "errorRate": {
-                    "delta": 0.75,
-                    "current": 0.75,
+                    "delta": 0.6,
+                    "current": 0.6,
                     "previous": 0
                   },
                   "queueWait": {
@@ -2722,6 +2934,20 @@
                     "concurrencyPolicy": null,
                     "enqueuedPerMinute": 0.11666666666666667,
                     "completedPerMinute": 0.03333333333333333
+                  },
+                  {
+                    "queue": "conformance-preserved",
+                    "ready": 0,
+                    "active": 0,
+                    "paused": false,
+                    "dueSoon": 0,
+                    "retrying": 0,
+                    "oldestReadyMs": null,
+                    "priorityBacklog": [],
+                    "rateLimitPolicy": null,
+                    "concurrencyPolicy": null,
+                    "enqueuedPerMinute": 0.016666666666666666,
+                    "completedPerMinute": 0.016666666666666666
                   },
                   {
                     "queue": "conformance-purge",
@@ -4628,7 +4854,7 @@
                     "lastHeartbeatAt": {
                       "$type": "timestamp"
                     },
-                    "completedAttempts": 4,
+                    "completedAttempts": 5,
                     "averageExecutionMs": {
                       "$type": "number"
                     },
@@ -4801,7 +5027,7 @@
                     }
                   },
                   "enqueueRate": {
-                    "tasks": 10,
+                    "tasks": 11,
                     "windowMs": 3600000
                   },
                   "defaultHistoryRows": {
@@ -5559,6 +5785,47 @@
                     "retryPolicy": null,
                     "cancellation": null,
                     "errorMessage": "conformance.fail failed",
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "preservedTask"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.preserve",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-preserved",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "succeeded",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "prerequisiteTaskIds": []
@@ -7032,6 +7299,47 @@
                   },
                   {
                     "id": {
+                      "$ref": "preservedTask"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.preserve",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-preserved",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "succeeded",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
+                  {
+                    "id": {
                       "$ref": "succeededTask"
                     },
                     "tags": [
@@ -7072,7 +7380,7 @@
                     "prerequisiteTaskIds": []
                   }
                 ],
-                "total": 10,
+                "total": 11,
                 "filter": "all",
                 "search": null,
                 "worker": null,
@@ -7123,7 +7431,7 @@
                     "lastHeartbeatAt": {
                       "$type": "timestamp"
                     },
-                    "completedAttempts": 4,
+                    "completedAttempts": 5,
                     "averageExecutionMs": {
                       "$type": "number"
                     },
@@ -7297,7 +7605,7 @@
                     }
                   },
                   "enqueueRate": {
-                    "tasks": 10,
+                    "tasks": 11,
                     "windowMs": 3600000
                   },
                   "defaultHistoryRows": {
@@ -7798,6 +8106,47 @@
                     "retryPolicy": null,
                     "cancellation": null,
                     "errorMessage": "conformance.fail failed",
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "preservedTask"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.preserve",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-preserved",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "succeeded",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "prerequisiteTaskIds": []
@@ -8513,6 +8862,365 @@
                   }
                 ],
                 "nextCursor": null
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "value-preservation",
+      "exchanges": [
+        {
+          "id": "task-detail",
+          "procedure": "taskDetail",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "preservedTask"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "tags": [
+                  "conformance"
+                ],
+                "waits": [],
+                "events": [
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "enqueued",
+                    "attempt": null,
+                    "details": {
+                      "state": "ready",
+                      "run_at": {
+                        "$type": "timestamp"
+                      },
+                      "priority": 0,
+                      "deadline_at": null,
+                      "execution_timeout_ms": null
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "claimed",
+                    "attempt": 1,
+                    "details": {
+                      "worker_id": "conformance-worker",
+                      "expires_at": {
+                        "$type": "timestamp"
+                      },
+                      "fence_token": "2"
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "progress_updated",
+                    "attempt": 1,
+                    "details": {
+                      "bytes": 99,
+                      "revision": "1",
+                      "fence_token": "2"
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "checkpoint_saved",
+                    "attempt": 1,
+                    "details": {
+                      "name": "preserved-step",
+                      "fence_token": "2"
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "succeeded",
+                    "attempt": 1,
+                    "details": {
+                      "fence_token": "2"
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  }
+                ],
+                "current": {
+                  "error": null,
+                  "outcome": {
+                    "error": null,
+                    "state": "succeeded",
+                    "result": {
+                      "items": [
+                        "2026-09-30T16:00:00Z",
+                        {
+                          "due": "2026-10-01T00:00:00+09:00"
+                        }
+                      ],
+                      "finishedAt": "2026-09-30T09:00:00.987654321-07:00"
+                    },
+                    "attempt": 1,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "resultBytes": 126,
+                    "resultOmitted": false
+                  },
+                  "runtime": null
+                },
+                "payload": {
+                  "at": "2026-09-30T09:00:00.123456-04:00",
+                  "nested": {
+                    "label": "Tuesday",
+                    "window": [
+                      "2026-09-30T09:00:00Z",
+                      "1999-12-31T23:59:59.999999999+14:00"
+                    ]
+                  },
+                  "opaqueId": "2026-09-30T09:00:00+00:00"
+                },
+                "attempts": [
+                  {
+                    "error": null,
+                    "attempt": 1,
+                    "outcome": "succeeded",
+                    "workerId": "conformance-worker",
+                    "claimedAt": {
+                      "$type": "timestamp"
+                    },
+                    "elapsedMs": {
+                      "$type": "number"
+                    },
+                    "startedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durationMs": {
+                      "$type": "number"
+                    },
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "executionMs": {
+                      "$type": "number"
+                    }
+                  }
+                ],
+                "identity": {
+                  "id": {
+                    "$ref": "preservedTask"
+                  },
+                  "type": "conformance.preserve",
+                  "queue": "conformance-preserved",
+                  "state": "succeeded",
+                  "priority": 0,
+                  "createdAt": {
+                    "$type": "timestamp"
+                  },
+                  "deadlineAt": null,
+                  "maxAttempts": 25,
+                  "retryPolicy": null,
+                  "blockedReason": null,
+                  "concurrencyKey": null,
+                  "dependencyPolicy": null,
+                  "executionTimeoutMs": null,
+                  "prerequisiteTaskId": null,
+                  "prerequisiteTaskIds": [],
+                  "dependencyReleasedAt": null
+                },
+                "progress": {
+                  "value": {
+                    "marks": [
+                      "2026-09-30T03:45:00.500Z"
+                    ],
+                    "phase": "copying",
+                    "since": "2026-09-30T09:15:00.5+05:30"
+                  },
+                  "attempt": 1,
+                  "revision": "1",
+                  "workerId": "conformance-worker",
+                  "createdAt": {
+                    "$type": "timestamp"
+                  },
+                  "updatedAt": {
+                    "$type": "timestamp"
+                  },
+                  "fenceToken": "2"
+                },
+                "canSignal": true,
+                "humanWait": null,
+                "truncated": {
+                  "waits": false,
+                  "events": false,
+                  "attempts": false,
+                  "checkpoints": false
+                },
+                "durability": null,
+                "signalWait": null,
+                "checkpoints": [
+                  {
+                    "name": "preserved-step",
+                    "value": {
+                      "cursor": "2026-09-30T09:00:00.000001Z",
+                      "history": [
+                        {
+                          "seenAt": "2026-09-30T09:00:00-04:00"
+                        }
+                      ]
+                    },
+                    "attempt": 1,
+                    "workerId": "conformance-worker",
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "fenceToken": "2",
+                    "valueBytes": 95,
+                    "valueOmitted": false
+                  }
+                ],
+                "childLineage": {
+                  "records": [],
+                  "truncated": false
+                },
+                "payloadBytes": 190,
+                "payloadOmitted": false,
+                "redriveLineage": {
+                  "records": [],
+                  "truncated": false
+                },
+                "batchExecutions": [],
+                "concurrencyPolicy": null,
+                "dependencyLineage": {
+                  "records": [],
+                  "truncated": false
+                },
+                "canCompleteHumanWait": true
+              }
+            }
+          }
+        },
+        {
+          "id": "checkpoint-value",
+          "procedure": "checkpointValue",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "preservedTask"
+              },
+              "name": "preserved-step"
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "name": "preserved-step",
+                "value": {
+                  "cursor": "2026-09-30T09:00:00.000001Z",
+                  "history": [
+                    {
+                      "seenAt": "2026-09-30T09:00:00-04:00"
+                    }
+                  ]
+                },
+                "attempt": 1,
+                "workerId": "conformance-worker",
+                "createdAt": {
+                  "$type": "timestamp"
+                },
+                "fenceToken": "2",
+                "valueBytes": 95
+              }
+            }
+          }
+        },
+        {
+          "id": "task-value-payload",
+          "procedure": "taskValue",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "preservedTask"
+              },
+              "kind": "payload"
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "id": {
+                  "$ref": "preservedTask"
+                },
+                "kind": "payload",
+                "value": {
+                  "at": "2026-09-30T09:00:00.123456-04:00",
+                  "nested": {
+                    "label": "Tuesday",
+                    "window": [
+                      "2026-09-30T09:00:00Z",
+                      "1999-12-31T23:59:59.999999999+14:00"
+                    ]
+                  },
+                  "opaqueId": "2026-09-30T09:00:00+00:00"
+                },
+                "valueBytes": 190
+              }
+            }
+          }
+        },
+        {
+          "id": "task-value-result",
+          "procedure": "taskValue",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "preservedTask"
+              },
+              "kind": "result"
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "id": {
+                  "$ref": "preservedTask"
+                },
+                "kind": "result",
+                "value": {
+                  "items": [
+                    "2026-09-30T16:00:00Z",
+                    {
+                      "due": "2026-10-01T00:00:00+09:00"
+                    }
+                  ],
+                  "finishedAt": "2026-09-30T09:00:00.987654321-07:00"
+                },
+                "valueBytes": 126
               }
             }
           }

@@ -183,5 +183,5 @@ func (service *backend) settings(ctx context.Context, _ any, _ string) (any, err
 func (service *backend) tasksCursor(ctx context.Context, input any, _ string) (any, error) {
 	value, _ := document(input)
 	value["canCompleteHumanWait"] = !service.readOnly
-	return service.rawJSONQuery(ctx, "SELECT workhorse.dashboard_tasks_cursor_v1($1::jsonb) AS result", string(mustJSON(value)))
+	return service.jsonQuery(ctx, "SELECT workhorse.dashboard_tasks_cursor_v1($1::jsonb) AS result", string(mustJSON(value)))
 }
