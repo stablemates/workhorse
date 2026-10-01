@@ -3,7 +3,7 @@ import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { publishedPackages, repositoryRoot } from "./packages.js";
+import { corePackage, publishedPackages, repositoryRoot } from "./packages.js";
 
 /**
  * Post-publish version checks for each registry on the release train.
@@ -146,7 +146,7 @@ async function npmSteps(
       expect: version,
     })),
     { command: "npm", args: ["init", "--yes"] },
-    { command: "npm", args: ["install", `${packages[0]!.name}@${version}`] },
+    { command: "npm", args: ["install", `${(await corePackage()).name}@${version}`] },
     { command: "npm", args: ["audit", "signatures"] },
     { command: "npx", args: ["--no-install", "workhorse", "--version"], expect: version },
   ];

@@ -127,6 +127,9 @@ describe("findPreflightProblems", () => {
     const message = describeProblems(problems);
     expect(message).toContain("Already on the registry:\n    @stablemates/workhorse@0.1.0");
     expect(message).toContain("Not on the registry:\n    @stablemates/workhorse-dashboard@0.1.0");
+    expect(message).toContain("This publisher refuses\n  to resume it");
+    expect(message).toContain("this project recovers a partial release by re-cutting the train");
+    expect(message).not.toContain("ever existed");
     expect(message).toContain("Recover it with docs/compatibility.md");
   });
 
@@ -158,11 +161,16 @@ describe("describeLedger", () => {
       pending: [third],
     });
     expect(report).toContain("npm publication stopped at package 2 of 3.");
-    expect(report).toContain("Published, and permanent");
+    expect(report).toContain(
+      "Published, and permanent — npm never accepts these name@version pairs",
+    );
     expect(report).toContain("  @stablemates/workhorse@0.1.0");
     expect(report).toContain("Failed:\n  @stablemates/workhorse-dashboard@0.1.0");
     expect(report).toContain("Not attempted:\n  @stablemates/workhorse-hono@0.1.0");
     expect(report).toContain("npm now holds a partial 0.1.0 release");
+    expect(report).toContain("This publisher refuses to resume it");
+    expect(report).toContain("this project recovers a partial release by re-cutting the train");
+    expect(report).not.toContain("ever existed");
   });
 
   it("reports the failed package's registry state as unknown, because npm never confirmed it", () => {

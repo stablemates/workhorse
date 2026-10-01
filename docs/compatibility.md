@@ -654,9 +654,12 @@ after npm, as [Rust crate](#rust-crate) and [Ruby gem](#ruby-gem) describe.
    Test registries are not part of the rehearsal.
 2. Publish Python first. One distribution is the smallest production test of trusted publishing.
    Its PEP 740 attestations are verified on PyPI before the train continues.
-3. Publish npm second. `@stablemates/workhorse` goes before its eight dependents, and every
-   package's provenance is verified. The same run then publishes the Rust crate and the Ruby gem. Each
-   version is verified on its registry before the train continues.
+3. Publish npm second. Each package goes after the published packages it requires, so
+   `@stablemates/workhorse-dashboard-contract` precedes `@stablemates/workhorse`, and the dashboard
+   server precedes the dashboard facade.
+   [ADR 0085](decisions/0085-publish-npm-packages-in-dependency-order.md) records this order. Every
+   package's provenance is verified. The same run then publishes the Rust crate and the Ruby gem.
+   Each version is verified on its registry before the train continues.
 4. Publish Go last. The `go/vX.Y.Z` tag is pushed after the gate passes, and the version is
    verified through the public module proxy.
 
@@ -917,9 +920,13 @@ serves what the public repository already holds.
 npm publishes one package at a time. Nine packages cannot be published atomically, so a failure in
 the middle leaves some at the new version and the rest at the old one.
 
-That state is permanent. npm refuses any version that has ever existed, so the packages that did not
-publish can never carry this version number. Unpublishing is available only within 72 hours, and
-only while nothing depends on the version, so it is not a recovery plan.
+npm's immutable unit is the name@version pair. npm refuses a pair that has ever existed, so the
+packages that did publish keep this version permanently. Unpublishing is available only within 72
+hours, and only while nothing depends on the version, so it is not a recovery plan.
+
+The packages that published stay installable. `scripts/packages.ts` orders the train so each package
+follows the published packages it requires. A stopped run therefore never leaves a package that
+needs one it skipped.
 
 The publish step reports the split. It names every package npm confirmed, every package it never
 attempted, and the version each one carries. It reports the package that failed as unknown, because
@@ -927,7 +934,10 @@ npm can store an upload and still fail before it confirms it. The next run's pre
 registry and settles that package. The report goes to the task log and to the run summary. Read that
 report. Do not infer registry state from whichever npm command logged last.
 
-Recover by re-cutting the whole train at the next patch version.
+Recover by re-cutting the whole train at the next patch version. That is this project's policy, not
+npm's constraint: npm would still accept the packages that did not publish at this version.
+Completing a partial train from the same commit is not an allowed recovery. `pnpm npm:publish`
+refuses to resume a version the registry partly holds, and no other path publishes npm packages.
 [ADR 0050](decisions/0050-release-0-1-0-without-a-prerelease-suffix.md) requires one version across
 the five registries, so every package moves, not only the ones that failed. The packages that did
 publish stay published, because removal is unavailable and would break anyone who installed them.

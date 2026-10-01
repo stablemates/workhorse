@@ -8,6 +8,14 @@
 
 ## Entry points
 
+### @stablemates/workhorse-dashboard-contract .
+
+interface DashboardCommandOptions
+interface DashboardSingleAdminOptions
+interface DashboardStandaloneModule
+type DashboardStandaloneTarget
+interface RunningDashboard
+
 ### @stablemates/workhorse .
 
 interface AdapterConnectionPool
@@ -330,6 +338,170 @@ function startWorkerProcess
 
 const WORKHORSE_VERSION
 
+### @stablemates/workhorse-dashboard-server .
+
+type DashboardAuditInput
+type DashboardClient
+type DashboardDemoFeature
+type DashboardDemoScenario
+type DashboardDemoTaskKind
+type DashboardDemoTools
+
+### @stablemates/workhorse-dashboard-server ./wire
+
+interface DashboardActivityBucket
+type DashboardActivityGroupBy
+interface DashboardActivityPage
+type DashboardActivityPeriod
+type DashboardAttemptOutcome
+interface DashboardBudgetSummary
+type DashboardCancelStatus
+interface DashboardCancellationRequest
+interface DashboardCheckpointValue
+type DashboardChildHealth
+interface DashboardConcurrencyPolicySummary
+interface DashboardCronPage
+type DashboardDemoFeature
+type DashboardDemoScenario
+type DashboardDemoTaskKind
+type DashboardDependencyHealth
+interface DashboardDurabilityPlan
+interface DashboardEventDetail
+type DashboardEventKind
+interface DashboardEventRow
+type DashboardEventTypeFilter
+interface DashboardEventsPage
+type DashboardEventsWindow
+type DashboardExternalWaitHealth
+interface DashboardFailureRow
+interface DashboardHumanWaitPage
+interface DashboardHumanWaitRow
+interface DashboardHumanWaitSummary
+interface DashboardIdempotencyEvidence
+type DashboardLifecycleState
+type DashboardListingCount
+interface DashboardMaintenanceLoopCadences
+type DashboardMaintenancePolicy
+interface DashboardMaintenanceRun
+interface DashboardManagedQueueRow
+interface DashboardMetricBucket
+interface DashboardQueueRow
+interface DashboardQueuesPage
+interface DashboardRateLimitPolicySummary
+interface DashboardRedriveCursor
+type DashboardRedriveStatus
+type DashboardRetentionCategory
+interface DashboardRetentionCategoryRow
+type DashboardRetentionPolicy
+type DashboardRunNowStatus
+interface DashboardScheduleRow
+interface DashboardSettingsPage
+interface DashboardSignalWaitRow
+interface DashboardSignalWaitSummary
+interface DashboardStorageRelation
+interface DashboardSystemFailingType
+interface DashboardSystemOutcomeBucket
+interface DashboardSystemPage
+interface DashboardSystemQueueRow
+interface DashboardSystemRetention
+interface DashboardSystemRetryBucket
+interface DashboardSystemStorage
+type DashboardSystemWindow
+type DashboardTaskCounts
+interface DashboardTaskCursor
+interface DashboardTaskDetail
+type DashboardTaskEventType
+interface DashboardTaskFacets
+type DashboardTaskFilter
+interface DashboardTaskRow
+type DashboardTaskSort
+interface DashboardTaskValue
+type DashboardTaskValueKind
+interface DashboardTasksCursorPage
+interface DashboardTasksPage
+type DashboardTerminalState
+interface DashboardWorkerRow
+interface DashboardWorkersPage
+type IdempotencyEvidence
+type MaintenanceLoopCadences
+const dashboardAttemptOutcomes
+function dashboardBudgetSummary
+function dashboardConcurrencyPolicySummary
+const dashboardIdempotencyEventDetailKeys
+const dashboardListingCounts
+function dashboardRateLimitPolicySummary
+const dashboardRedriveBatchDefault
+const dashboardRedriveBatchMax
+const dashboardTaskEventTypes
+const dashboardTaskFilters
+const dashboardTaskPriorityMax
+const dashboardTaskSorts
+const dashboardTaskValueKinds
+function hasDashboardIdempotencyEvidence
+function hasIdempotencyEvidence
+const idempotencyEventDetailKeys
+function readDashboardIdempotencyEvidence
+function readIdempotencyEvidence
+
+### @stablemates/workhorse-dashboard-server ./server
+
+const DASHBOARD_BROWSER_MODULES_PLACEHOLDER
+const DASHBOARD_RUNTIME_CONFIG_PLACEHOLDER
+interface DashboardAuditContext
+interface DashboardCancelTaskResult
+interface DashboardCancellationAuditContext
+interface DashboardCompleteHumanWaitResult
+interface DashboardDatabase
+interface DashboardDurabilityProjector
+type DashboardEnqueueTestOutcome
+interface DashboardEnqueueTestResult
+interface DashboardHost
+interface DashboardHostOptions
+type DashboardNodeMiddleware
+interface DashboardNodeMiddlewareOptions
+interface DashboardOperator
+type DashboardOperatorAction
+interface DashboardOperatorControllerOptions
+interface DashboardOperatorControllers
+interface DashboardPrincipal
+interface DashboardQueueController
+interface DashboardRedriveBatch
+interface DashboardRedriveFilter
+interface DashboardRedriveResult
+type DashboardRouter
+interface DashboardRpcContext
+interface DashboardRunNowResult
+type DashboardRuntimeConfig
+interface DashboardScheduleController
+interface DashboardSettingsController
+interface DashboardSignalTaskResult
+interface DashboardSingleAdminOptions
+interface DashboardTaskController
+interface DashboardWorkerController
+interface DashboardWorkspaceLink
+interface DashboardWorkspaceOptions
+interface RenderDashboardHtmlOptions
+function createDashboardHost
+function createDashboardOperatorControllers
+function dashboardAssetsDirectory
+function dashboardDatabase
+function dashboardNodeMiddleware
+const dashboardRouter
+function isDashboardMutation
+function normalizeDashboardPath
+function normalizeDashboardPublicOrigin
+function renderDashboardHtml
+
+### @stablemates/workhorse-dashboard-server ./standalone
+
+const startDashboardServer
+
+### @stablemates/workhorse-dashboard-server ./client
+
+interface DashboardAuthenticationRoutes
+interface DashboardClientOptions
+function createDashboardClient
+
 ### @stablemates/workhorse-dashboard .
 
 function Dashboard
@@ -571,178 +743,6 @@ function createDashboardClient
 interface DashboardDevServer
 interface DashboardDevServerOptions
 function createDashboardDevServer
-
-### @stablemates/workhorse-dashboard-contract .
-
-interface DashboardCommandOptions
-interface DashboardSingleAdminOptions
-interface DashboardStandaloneModule
-type DashboardStandaloneTarget
-interface RunningDashboard
-
-### @stablemates/workhorse-dashboard-server .
-
-type DashboardAuditInput
-type DashboardClient
-type DashboardDemoFeature
-type DashboardDemoScenario
-type DashboardDemoTaskKind
-type DashboardDemoTools
-
-### @stablemates/workhorse-dashboard-server ./wire
-
-interface DashboardActivityBucket
-type DashboardActivityGroupBy
-interface DashboardActivityPage
-type DashboardActivityPeriod
-type DashboardAttemptOutcome
-interface DashboardBudgetSummary
-type DashboardCancelStatus
-interface DashboardCancellationRequest
-interface DashboardCheckpointValue
-type DashboardChildHealth
-interface DashboardConcurrencyPolicySummary
-interface DashboardCronPage
-type DashboardDemoFeature
-type DashboardDemoScenario
-type DashboardDemoTaskKind
-type DashboardDependencyHealth
-interface DashboardDurabilityPlan
-interface DashboardEventDetail
-type DashboardEventKind
-interface DashboardEventRow
-type DashboardEventTypeFilter
-interface DashboardEventsPage
-type DashboardEventsWindow
-type DashboardExternalWaitHealth
-interface DashboardFailureRow
-interface DashboardHumanWaitPage
-interface DashboardHumanWaitRow
-interface DashboardHumanWaitSummary
-interface DashboardIdempotencyEvidence
-type DashboardLifecycleState
-type DashboardListingCount
-interface DashboardMaintenanceLoopCadences
-type DashboardMaintenancePolicy
-interface DashboardMaintenanceRun
-interface DashboardManagedQueueRow
-interface DashboardMetricBucket
-interface DashboardQueueRow
-interface DashboardQueuesPage
-interface DashboardRateLimitPolicySummary
-interface DashboardRedriveCursor
-type DashboardRedriveStatus
-type DashboardRetentionCategory
-interface DashboardRetentionCategoryRow
-type DashboardRetentionPolicy
-type DashboardRunNowStatus
-interface DashboardScheduleRow
-interface DashboardSettingsPage
-interface DashboardSignalWaitRow
-interface DashboardSignalWaitSummary
-interface DashboardStorageRelation
-interface DashboardSystemFailingType
-interface DashboardSystemOutcomeBucket
-interface DashboardSystemPage
-interface DashboardSystemQueueRow
-interface DashboardSystemRetention
-interface DashboardSystemRetryBucket
-interface DashboardSystemStorage
-type DashboardSystemWindow
-type DashboardTaskCounts
-interface DashboardTaskCursor
-interface DashboardTaskDetail
-type DashboardTaskEventType
-interface DashboardTaskFacets
-type DashboardTaskFilter
-interface DashboardTaskRow
-type DashboardTaskSort
-interface DashboardTaskValue
-type DashboardTaskValueKind
-interface DashboardTasksCursorPage
-interface DashboardTasksPage
-type DashboardTerminalState
-interface DashboardWorkerRow
-interface DashboardWorkersPage
-type IdempotencyEvidence
-type MaintenanceLoopCadences
-const dashboardAttemptOutcomes
-function dashboardBudgetSummary
-function dashboardConcurrencyPolicySummary
-const dashboardIdempotencyEventDetailKeys
-const dashboardListingCounts
-function dashboardRateLimitPolicySummary
-const dashboardRedriveBatchDefault
-const dashboardRedriveBatchMax
-const dashboardTaskEventTypes
-const dashboardTaskFilters
-const dashboardTaskPriorityMax
-const dashboardTaskSorts
-const dashboardTaskValueKinds
-function hasDashboardIdempotencyEvidence
-function hasIdempotencyEvidence
-const idempotencyEventDetailKeys
-function readDashboardIdempotencyEvidence
-function readIdempotencyEvidence
-
-### @stablemates/workhorse-dashboard-server ./server
-
-const DASHBOARD_BROWSER_MODULES_PLACEHOLDER
-const DASHBOARD_RUNTIME_CONFIG_PLACEHOLDER
-interface DashboardAuditContext
-interface DashboardCancelTaskResult
-interface DashboardCancellationAuditContext
-interface DashboardCompleteHumanWaitResult
-interface DashboardDatabase
-interface DashboardDurabilityProjector
-type DashboardEnqueueTestOutcome
-interface DashboardEnqueueTestResult
-interface DashboardHost
-interface DashboardHostOptions
-type DashboardNodeMiddleware
-interface DashboardNodeMiddlewareOptions
-interface DashboardOperator
-type DashboardOperatorAction
-interface DashboardOperatorControllerOptions
-interface DashboardOperatorControllers
-interface DashboardPrincipal
-interface DashboardQueueController
-interface DashboardRedriveBatch
-interface DashboardRedriveFilter
-interface DashboardRedriveResult
-type DashboardRouter
-interface DashboardRpcContext
-interface DashboardRunNowResult
-type DashboardRuntimeConfig
-interface DashboardScheduleController
-interface DashboardSettingsController
-interface DashboardSignalTaskResult
-interface DashboardSingleAdminOptions
-interface DashboardTaskController
-interface DashboardWorkerController
-interface DashboardWorkspaceLink
-interface DashboardWorkspaceOptions
-interface RenderDashboardHtmlOptions
-function createDashboardHost
-function createDashboardOperatorControllers
-function dashboardAssetsDirectory
-function dashboardDatabase
-function dashboardNodeMiddleware
-const dashboardRouter
-function isDashboardMutation
-function normalizeDashboardPath
-function normalizeDashboardPublicOrigin
-function renderDashboardHtml
-
-### @stablemates/workhorse-dashboard-server ./standalone
-
-const startDashboardServer
-
-### @stablemates/workhorse-dashboard-server ./client
-
-interface DashboardAuthenticationRoutes
-interface DashboardClientOptions
-function createDashboardClient
 
 ### @stablemates/workhorse-drizzle .
 

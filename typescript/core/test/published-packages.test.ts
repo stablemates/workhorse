@@ -39,7 +39,7 @@ describe("the derived package list", () => {
     expect(packages.map((entry) => entry.directory)).toEqual([
       ...new Set(packages.map((entry) => entry.directory)),
     ]);
-    // Core is published too, but is kept first because the other packages consume it.
+    // Core is published too; publishedPackages() places it among the others by dependency order.
     expect(core.name).toBe("@stablemates/workhorse");
     expect(packages.map((entry) => entry.name)).toEqual([
       "@stablemates/workhorse-dashboard",
@@ -51,7 +51,45 @@ describe("the derived package list", () => {
       "@stablemates/workhorse-prisma",
       "@stablemates/workhorse-typeorm",
     ]);
-    expect((await publishedPackages())[0]).toEqual(core);
+  });
+
+  // A dependent that reaches npm before its dependency is uninstallable until the dependency
+  // follows, so an interrupted release must never leave one behind. Core itself depends on the
+  // dashboard contract, which is why "core first" stopped being a safe order.
+  it("publishes every workspace dependency before the package that requires it", async () => {
+    const order = (await publishedPackages()).map((entry) => entry.name);
+    expect(order).toEqual([
+      "@stablemates/workhorse-dashboard-contract",
+      "@stablemates/workhorse",
+      "@stablemates/workhorse-dashboard-server",
+      "@stablemates/workhorse-dashboard",
+      "@stablemates/workhorse-drizzle",
+      "@stablemates/workhorse-kysely",
+      "@stablemates/workhorse-otel",
+      "@stablemates/workhorse-prisma",
+      "@stablemates/workhorse-typeorm",
+    ]);
+    expect(order.toSorted()).toEqual(
+      [core.name, ...packages.map((entry) => entry.name)].toSorted(),
+    );
+    for (const entry of await publishedPackages()) {
+      const manifest = JSON.parse(await read(entry.manifest)) as {
+        dependencies?: Record<string, string>;
+        peerDependencies?: Record<string, string>;
+        peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+      };
+      const required = [
+        ...Object.keys(manifest.dependencies ?? {}),
+        ...Object.keys(manifest.peerDependencies ?? {}).filter(
+          (name) => manifest.peerDependenciesMeta?.[name]?.optional !== true,
+        ),
+      ].filter((name) => order.includes(name));
+      for (const name of required) {
+        expect(order.indexOf(name), `${name} publishes before ${entry.name}`).toBeLessThan(
+          order.indexOf(entry.name),
+        );
+      }
+    }
   });
 
   it("names each tarball the way pnpm pack does", () => {

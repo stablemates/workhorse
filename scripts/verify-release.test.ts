@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { publishedPackages } from "./packages.js";
+import { corePackage, publishedPackages } from "./packages.js";
 import { verificationSteps } from "./verify-release.js";
 
 describe("verificationSteps", () => {
@@ -30,6 +30,12 @@ describe("verificationSteps", () => {
     const viewed = steps.filter((step) => step.args[0] === "view").map((step) => step.args[1]);
 
     expect(viewed).toEqual((await publishedPackages()).map((entry) => `${entry.name}@1.2.3`));
+    // Publication order puts core's dependencies first, so the consumer names core, which carries
+    // the `workhorse` CLI, instead of the first package published.
+    expect(steps.find((step) => step.args[0] === "install")?.args).toEqual([
+      "install",
+      `${(await corePackage()).name}@1.2.3`,
+    ]);
     expect(steps.at(-1)).toMatchObject({
       args: ["--no-install", "workhorse", "--version"],
       expect: "1.2.3",

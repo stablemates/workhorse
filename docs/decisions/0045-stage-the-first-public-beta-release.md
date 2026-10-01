@@ -1,6 +1,6 @@
 # ADR 0045: Stage the first public beta release
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by [ADR 0085](0085-publish-npm-packages-in-dependency-order.md)
 - **Date:** 2026-08-25
 - **Related:** Plane WH-440
 
@@ -19,6 +19,8 @@ controlled release window, but publish each language line separately.
 
 Python publishes first because its single distribution provides the smallest production test of
 trusted publishing. npm follows, with `@stablemates/workhorse` before its eight peer dependents.
+[ADR 0085](0085-publish-npm-packages-in-dependency-order.md) replaces that npm order with
+dependency order.
 Go publishes last because public module proxies can retain a tag permanently.
 
 Rehearse only after public CI passes for the candidate commit. Manually dispatch

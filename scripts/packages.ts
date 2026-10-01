@@ -35,6 +35,9 @@ interface Manifest {
   readonly name?: string;
   readonly version?: string;
   readonly private?: boolean;
+  readonly dependencies?: Readonly<Record<string, string>>;
+  readonly peerDependencies?: Readonly<Record<string, string>>;
+  readonly peerDependenciesMeta?: Readonly<Record<string, { readonly optional?: boolean }>>;
 }
 
 async function readManifest(relativePath: string): Promise<Manifest> {
@@ -75,7 +78,7 @@ export async function corePackage(): Promise<PublishedPackage> {
   return describe("typescript/core/package.json", "core");
 }
 
-/** Publishable workspace packages other than core, in build order. */
+/** Publishable workspace packages other than core, in directory order. */
 export async function workspacePackages(): Promise<readonly PublishedPackage[]> {
   const entries = await readdir(path.join(repositoryRoot, "typescript"), { withFileTypes: true });
   const directories = entries
@@ -95,14 +98,66 @@ export async function workspacePackages(): Promise<readonly PublishedPackage[]> 
 }
 
 /**
- * Every published package, core first.
+ * The published packages a manifest cannot install without: its `dependencies`, and every peer it
+ * does not mark optional. An optional peer is satisfied by its absence, so it imposes no order.
+ */
+function requiredPublishedPackages(manifest: Manifest, names: ReadonlySet<string>): string[] {
+  const optional = manifest.peerDependenciesMeta ?? {};
+  return [
+    ...Object.keys(manifest.dependencies ?? {}),
+    ...Object.keys(manifest.peerDependencies ?? {}).filter(
+      (name) => optional[name]?.optional !== true,
+    ),
+  ].filter((name) => names.has(name));
+}
+
+/**
+ * Every published package, each after the published packages it requires.
  *
- * Order matters to the release: the packages under `typescript/` declare `@stablemates/workhorse` as a
- * peer, so a failed core publish must not leave dependents pointing at a version nobody can
- * install.
+ * Order matters to the release, because `scripts/publish-npm.ts` publishes in this order and stops
+ * at the first failure. A package that reaches npm before a package it requires cannot be installed
+ * until that one follows. `@stablemates/workhorse` requires the dashboard contract, the dashboard
+ * facade requires the dashboard server, and most other packages require core as a peer. Sorting by
+ * those edges keeps every package an interrupted release did publish installable. Optional peers
+ * are left out, which is what breaks the cycle between core and the dashboard facade. Packages with
+ * no remaining requirement go in name order, so the order is stable.
  */
 export async function publishedPackages(): Promise<readonly PublishedPackage[]> {
-  return [await corePackage(), ...(await workspacePackages())];
+  const candidates = [await corePackage(), ...(await workspacePackages())];
+  const names = new Set(candidates.map((entry) => entry.name));
+  const requirements = new Map(
+    await Promise.all(
+      candidates.map(
+        async (entry) =>
+          [
+            entry.name,
+            new Set(requiredPublishedPackages(await readManifest(entry.manifest), names)),
+          ] as const,
+      ),
+    ),
+  );
+  const ordered: PublishedPackage[] = [];
+  const placed = new Set<string>();
+  while (ordered.length < candidates.length) {
+    const next = candidates
+      .filter((entry) => !placed.has(entry.name))
+      .filter((entry) =>
+        [...(requirements.get(entry.name) ?? [])].every((name) => placed.has(name)),
+      )
+      .reduce<PublishedPackage | undefined>(
+        (first, entry) => (first === undefined || entry.name < first.name ? entry : first),
+        undefined,
+      );
+    if (!next) {
+      const cycle = candidates
+        .filter((entry) => !placed.has(entry.name))
+        .map((entry) => entry.name);
+      throw new Error(`Published packages require each other in a cycle: ${cycle.join(", ")}`);
+    }
+    ordered.push(next);
+    placed.add(next.name);
+  }
+  return ordered;
 }
 
 // Run directly to print one field per package for shell consumers such as the release workflow.
