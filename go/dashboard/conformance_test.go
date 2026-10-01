@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	workhorse "github.com/stablemates/workhorse/go"
 )
 
@@ -77,6 +79,26 @@ type dashboardExchangeExpected struct {
 }
 
 func TestDashboardSatisfiesEverySharedHTTPScenario(t *testing.T) {
+	runDashboardConformance(t, func(t *testing.T, _ string, pool *pgxpool.Pool) workhorse.Executor {
+		return workhorse.NewPGXExecutor(pool)
+	})
+}
+
+// The fixture runs again through database/sql, which hands jsonb back as bytes rather than
+// decoded values, so both executors keep the same response shapes.
+func TestDashboardSatisfiesEverySharedHTTPScenarioOverDatabaseSQL(t *testing.T) {
+	runDashboardConformance(t, func(t *testing.T, databaseURL string, _ *pgxpool.Pool) workhorse.Executor {
+		database, err := sql.Open("pgx", databaseURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = database.Close() })
+		return workhorse.NewSQLExecutor(database)
+	})
+}
+
+func runDashboardConformance(t *testing.T, open func(*testing.T, string, *pgxpool.Pool) workhorse.Executor) {
+	t.Helper()
 	if testing.Short() {
 		t.Skip("PostgreSQL integration tests do not run in short mode")
 	}
@@ -91,7 +113,7 @@ func TestDashboardSatisfiesEverySharedHTTPScenario(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	executor := workhorse.NewPGXExecutor(pool)
+	executor := open(t, databaseURL, pool)
 	fixture := readDashboardFixture(t)
 	references := make(map[string]any)
 	for _, scenario := range fixture.Scenarios {
