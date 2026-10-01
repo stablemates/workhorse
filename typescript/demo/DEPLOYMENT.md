@@ -48,9 +48,11 @@ builder between image builds. The site build compiles every Go documentation exa
 the demo build compiles its Go worker; with a warm cache, each recompiles only what changed. The demo
 build also keeps the Cargo registry and target directory in cache mounts for its Rust worker. The
 `rust-build` stage's image tag pins the same toolchain as `rust-toolchain.toml`, so the build downloads
-no toolchain. The
-caches never reach an image. Pruning the builder's cache, for example with `docker builder prune`,
-makes the next build of each image cold and slower, not different.
+no toolchain. Its Rust version therefore changes only together with `rust-toolchain.toml` and
+`mise.toml`, and a test fails the build when they disagree. A new digest for the same version, which
+carries the base image's own patches, can land on its own. The caches never reach an image. Pruning
+the builder's cache, for example with `docker builder prune`, makes the next build of each image cold
+and slower, not different.
 
 The demo image installs Python runtime dependencies from the committed `python/uv.lock`. Update that
 lock with uv whenever `python/pyproject.toml` changes; the image build rejects a stale lock.
