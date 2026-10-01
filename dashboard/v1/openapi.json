@@ -200,14 +200,14 @@
                     "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: task-counts.",
                     "value": {
                       "json": {
-                        "all": 10,
+                        "all": 11,
                         "queued": 3,
                         "blocked": 0,
                         "retried": 0,
                         "running": 0,
                         "waiting": 2,
                         "canceled": 0,
-                        "completed": 1,
+                        "completed": 2,
                         "discarded": 3,
                         "scheduled": 3
                       }
@@ -976,6 +976,37 @@
                             "tags": [
                               "conformance"
                             ],
+                            "type": "conformance.preserve",
+                            "wait": null,
+                            "keyed": false,
+                            "queue": "conformance-preserved",
+                            "runAt": "2026-01-01T00:00:00.000Z",
+                            "state": "succeeded",
+                            "wakeAt": null,
+                            "attempt": 1,
+                            "priority": 0,
+                            "waitName": null,
+                            "workerId": null,
+                            "createdAt": "2026-01-01T00:00:00.000Z",
+                            "humanWait": null,
+                            "updatedAt": "2026-01-01T00:00:00.000Z",
+                            "durability": null,
+                            "finishedAt": "2026-01-01T00:00:00.000Z",
+                            "signalWait": null,
+                            "enqueueMode": null,
+                            "maxAttempts": 25,
+                            "retryPolicy": null,
+                            "cancellation": null,
+                            "errorMessage": null,
+                            "lastWorkerId": null,
+                            "blockedReason": null,
+                            "prerequisiteTaskIds": []
+                          },
+                          {
+                            "id": "00000000-0000-7000-8000-000000000000",
+                            "tags": [
+                              "conformance"
+                            ],
                             "type": "conformance.succeed",
                             "wait": null,
                             "keyed": false,
@@ -1100,6 +1131,7 @@
                         ],
                         "queues": [
                           "conformance",
+                          "conformance-preserved",
                           "conformance-purge",
                           "conformance-redrive"
                         ],
@@ -1110,6 +1142,7 @@
                           "conformance.cancel-target",
                           "conformance.fail",
                           "conformance.human",
+                          "conformance.preserve",
                           "conformance.purge",
                           "conformance.ready",
                           "conformance.redrive.batch",
@@ -1290,6 +1323,7 @@
                           "conformance.cancel-target",
                           "conformance.fail",
                           "conformance.human",
+                          "conformance.preserve",
                           "conformance.purge",
                           "conformance.ready",
                           "conformance.redrive.batch",
@@ -2139,6 +2173,22 @@
                           },
                           {
                             "tier": "full",
+                            "queue": "conformance-preserved",
+                            "ready": 0,
+                            "active": 0,
+                            "failed": 0,
+                            "paused": false,
+                            "canceled": 0,
+                            "scheduled": 0,
+                            "succeeded": 1,
+                            "recordClaims": false,
+                            "recordAttempts": false,
+                            "rateLimitPolicy": null,
+                            "concurrencyPolicy": null,
+                            "terminalCountsApproximate": false
+                          },
+                          {
+                            "tier": "full",
                             "queue": "conformance-purge",
                             "ready": 1,
                             "active": 0,
@@ -2280,8 +2330,8 @@
                         "kpis": {
                           "drain": {
                             "netPerMinute": -0.1,
-                            "enqueuedPerMinute": 0.16666666666666666,
-                            "completedPerMinute": 0.06666666666666667
+                            "enqueuedPerMinute": 0.18333333333333332,
+                            "completedPerMinute": 0.08333333333333333
                           },
                           "lease": {
                             "active": 0,
@@ -2336,8 +2386,8 @@
                             "overdueTimeouts": 0
                           },
                           "errorRate": {
-                            "delta": 0.75,
-                            "current": 0.75,
+                            "delta": 0.6,
+                            "current": 0.6,
                             "previous": 0
                           },
                           "queueWait": {
@@ -2386,6 +2436,20 @@
                             "concurrencyPolicy": null,
                             "enqueuedPerMinute": 0.11666666666666667,
                             "completedPerMinute": 0.03333333333333333
+                          },
+                          {
+                            "queue": "conformance-preserved",
+                            "ready": 0,
+                            "active": 0,
+                            "paused": false,
+                            "dueSoon": 0,
+                            "retrying": 0,
+                            "oldestReadyMs": null,
+                            "priorityBacklog": [],
+                            "rateLimitPolicy": null,
+                            "concurrencyPolicy": null,
+                            "enqueuedPerMinute": 0.016666666666666666,
+                            "completedPerMinute": 0.016666666666666666
                           },
                           {
                             "queue": "conformance-purge",
@@ -3346,7 +3410,7 @@
                             "sdkLanguage": "conformance-sdk",
                             "failedAttempts": 3,
                             "lastHeartbeatAt": "2026-01-01T00:00:00.000Z",
-                            "completedAttempts": 4,
+                            "completedAttempts": 5,
                             "averageExecutionMs": 0,
                             "scheduleNamespaces": [
                               "conformance"
@@ -3570,7 +3634,7 @@
                             "rolledUpThrough": "2026-01-01T00:00:00.000Z"
                           },
                           "enqueueRate": {
-                            "tasks": 10,
+                            "tasks": 11,
                             "windowMs": 3600000
                           },
                           "defaultHistoryRows": {
