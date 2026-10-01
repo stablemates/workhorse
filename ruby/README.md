@@ -76,7 +76,10 @@ The gem is `stablemates-workhorse`, and its namespace is `Stablemates::Workhorse
 - `Queue` enqueues, cancels, signals, and synchronizes schedules, policies, budgets, and contracts.
   `Queue.new` accepts a `PG::Connection`, a `ConnectionPool`, or an open `pg` transaction.
   `ActiveRecordExecutor` joins the caller's Active Record transaction instead. Either way, the
-  enqueue becomes part of your commit.
+  enqueue becomes part of your commit. When a statement finds its pooled connection unusable, the
+  SDK discards that connection through the pool's `discard_current_connection`. The SDK never
+  closes a connection the caller owns. A source without `discard_current_connection` must replace
+  an unusable connection itself.
 - `Worker` takes a pool, registers handlers by task type, and runs them under a lease with a shared
   heartbeat connection. `run_worker_process` drains it on `TERM` or `INT`.
 - `HandlerContext` offers checkpoints, durable sleeps, signal and human waits, child tasks, and
