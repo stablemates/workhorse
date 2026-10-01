@@ -194,6 +194,32 @@ advisories, or when it is not a git checkout that a refresh can move. bundler-au
 a directory it cannot list, so the script also reads every advisory directory and file itself. An
 unreadable one refuses the run. Each refusal names the database and no acceptance entry as stale.
 
+`pnpm tooling:vuln` audits the build and publication tooling, in a lane separate from the five
+production gates. [ADR 0058](decisions/0058-fix-the-current-line-and-gate-floors-on-upstream-end-of-life.md)
+records why. The lane runs `pnpm audit` over the whole workspace, development dependencies included.
+It runs `pip-audit` over the uv export with every dependency group, and separately over
+`python/build-constraints.txt`, which pins the Python build backend. The `static` task in
+`.github/workflows/ci.yml` runs it, and so does `pnpm check`. The build job of `release-python.yml`
+runs it before anything is built for publication. The build job of `release.yml` installs no Python
+toolchain, so it runs only the npm half, `pnpm tooling:vuln:npm`, at the same point.
+
+`scripts/audit-tooling-dependencies.ts` judges only advisories the production scans do not report.
+An advisory the production scan reports belongs to the production gate and its acceptance list. A
+remaining advisory passes only when `scripts/tooling-advisory-acceptances.json` states a reason and
+a review date for it. That file has an `npm` and a `python` section. The check fails once a date
+passes, and when an entry stops matching anything. It also fails on an entry that names an advisory
+the production scan reports, so a tooling acceptance can never let a production finding pass. An
+entry without a reason, or whose review date is not a real calendar date, fails the check before any
+advisory is judged. pip-audit exits non-zero both on an advisory and on a scan it could not finish.
+The script refuses a run whose report lists no dependencies, and names no acceptance entry as stale.
+It also refuses a report in which pip-audit skipped a dependency, because a skipped dependency has
+no advisories and would otherwise read as clean. The development export and the build backend are
+separate environments, so each gets its own pip-audit run, and they may pin different versions.
+
+uv.lock does not pin the build backend, and `python/pyproject.toml` accepts a range of hatchling
+versions. `ci.yml` and `release-python.yml` set `UV_BUILD_CONSTRAINT` to
+`python/build-constraints.txt`, so every editable build in CI uses the backend the lane audits.
+
 Fixing beats accepting. Prefer a lockfile bump, then a declared-range bump; write an entry only when
 no released version carries the fix, or when the path is provably outside what this repository
 publishes. [`SECURITY.md`](../SECURITY.md) states the triage window and fix target per severity.

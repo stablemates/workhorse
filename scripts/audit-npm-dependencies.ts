@@ -127,16 +127,32 @@ interface AuditRun {
 }
 
 /**
- * Run `pnpm audit --prod --json` in one directory and return a report worth reading.
+ * Which part of a tree `pnpm audit` reads. `prod` is the published closure the production gates
+ * judge; `all` adds the development dependencies, which only `pnpm tooling:vuln` judges.
+ */
+export type AuditScope = "prod" | "all";
+
+function auditArguments(scope: AuditScope): readonly string[] {
+  return scope === "prod" ? ["audit", "--prod", "--json"] : ["audit", "--json"];
+}
+
+/**
+ * Run `pnpm audit --json` in one directory and return a report worth reading.
  *
  * The directory is a parameter because two gates audit two different trees. `pnpm npm:vuln` audits
  * the workspace the lockfile pins; the packed-release gate audits a throwaway consumer that has the
  * published tarballs installed. Both meet the same service and both can be handed the same
- * unusable answer, so both come through here.
+ * unusable answer, so both come through here. The scope is a parameter because the tooling lane
+ * reads the same workspace with its development dependencies included.
  */
-export async function readAuditReport(directory: string = repositoryRoot): Promise<AuditReport> {
+export async function readAuditReport(
+  directory: string = repositoryRoot,
+  scope: AuditScope = "prod",
+  acceptanceList: string = acceptanceFileName,
+): Promise<AuditReport> {
+  const command = `pnpm ${auditArguments(scope).join(" ")}`;
   const run = await new Promise<AuditRun>((resolve, reject) => {
-    const child = spawn("pnpm", ["audit", "--prod", "--json"], {
+    const child = spawn("pnpm", auditArguments(scope), {
       cwd: directory,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -152,11 +168,9 @@ export async function readAuditReport(directory: string = repositoryRoot): Promi
     parsed = JSON.parse(run.report) as AuditReport;
   } catch {
     const detail = run.diagnostics.trim() || run.report.trim() || "no output";
-    throw new Error(
-      `pnpm audit --prod --json exited with ${String(run.exitCode)} and no report: ${detail}`,
-    );
+    throw new Error(`${command} exited with ${String(run.exitCode)} and no report: ${detail}`);
   }
-  return requireReadableReport(parsed, run.diagnostics);
+  return requireReadableReport(parsed, run.diagnostics, command, acceptanceList);
 }
 
 /**
@@ -167,15 +181,20 @@ export async function readAuditReport(directory: string = repositoryRoot): Promi
  * {@link acceptanceFileName}, because nothing about the acceptance list is known when the audit did
  * not answer, and the failure this replaces told the reader to delete four reviewed decisions.
  */
-export function requireReadableReport(report: AuditReport, diagnostics = ""): AuditReport {
+export function requireReadableReport(
+  report: AuditReport,
+  diagnostics = "",
+  command = "pnpm audit --prod --json",
+  acceptanceList = acceptanceFileName,
+): AuditReport {
   if (!report.error && report.advisories !== undefined) return report;
   const reason =
     report.error?.message || diagnostics.trim() || "the report carried no advisories and no error";
   const code = report.error?.code;
   throw new Error(
-    `pnpm audit --prod --json could not read the npm advisory service: ${reason}` +
+    `${command} could not read the npm advisory service: ${reason}` +
       `${code ? ` (${code})` : ""}. No decision was made about any dependency, and no acceptance ` +
-      `in ${acceptanceFileName} is stale. Re-run when the service answers.`,
+      `in ${acceptanceList} is stale. Re-run when the service answers.`,
   );
 }
 
@@ -226,12 +245,14 @@ function describeFinding(finding: AdvisoryFinding): readonly string[] {
  *
  * Three things fail, and each is a question someone has to answer:
  * an advisory nobody has written about, an acceptance whose review date has passed, and an
- * acceptance that no longer matches anything.
+ * acceptance that no longer matches anything. `fileName` names the list the reader has to edit,
+ * because the tooling lane applies the same rules to its own list.
  */
 export function findProblems(
   findings: readonly AdvisoryFinding[],
   acceptances: readonly Acceptance[],
   today: string,
+  fileName: string = acceptanceFileName,
 ): readonly AuditProblem[] {
   const problems: AuditProblem[] = [];
   const matched = new Set<Acceptance>();
@@ -249,8 +270,8 @@ export function findProblems(
     if (elsewhere) matched.add(elsewhere);
     problems.push({
       headline: elsewhere
-        ? `Advisory ${String(finding.advisory)} now reaches ${finding.workspacePackage}, which ${acceptanceFileName} does not accept`
-        : `Advisory ${String(finding.advisory)} in ${finding.module} is not accepted in ${acceptanceFileName}`,
+        ? `Advisory ${String(finding.advisory)} now reaches ${finding.workspacePackage}, which ${fileName} does not accept`
+        : `Advisory ${String(finding.advisory)} in ${finding.module} is not accepted in ${fileName}`,
       detail: describeFinding(finding),
     });
   }
@@ -261,7 +282,7 @@ export function findProblems(
         detail: [
           `${acceptance.module} · ${acceptance.githubAdvisoryId}`,
           `reason: ${acceptance.reason}`,
-          `Take the fix, or restate the reason and move reviewBy forward in ${acceptanceFileName}.`,
+          `Take the fix, or restate the reason and move reviewBy forward in ${fileName}.`,
         ],
       });
       continue;
@@ -271,7 +292,7 @@ export function findProblems(
         headline: `Acceptance of advisory ${String(acceptance.advisory)} matches nothing pnpm audit reports`,
         detail: [
           `${acceptance.module} · ${acceptance.githubAdvisoryId}`,
-          `Delete the entry from ${acceptanceFileName}; the advisory is gone from the tree.`,
+          `Delete the entry from ${fileName}; the advisory is gone from the tree.`,
         ],
       });
     }
@@ -285,14 +306,17 @@ async function readAcceptances(): Promise<readonly Acceptance[]> {
 }
 
 /** Assemble one message from every problem, so both gates report a finding in the same shape. */
-export function describeProblems(problems: readonly AuditProblem[]): string {
+export function describeProblems(
+  problems: readonly AuditProblem[],
+  heading = "npm dependency advisories need a decision:",
+): string {
   const lines: string[] = [];
   for (const problem of problems) {
     lines.push(problem.headline);
     for (const line of problem.detail) lines.push(`  ${line}`);
     lines.push("");
   }
-  return `npm dependency advisories need a decision:\n\n${lines.join("\n")}`;
+  return `${heading}\n\n${lines.join("\n")}`;
 }
 
 export async function auditNpmDependencies(): Promise<void> {

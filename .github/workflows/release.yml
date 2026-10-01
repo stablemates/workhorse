@@ -75,6 +75,10 @@ jobs:
           sudo apt-get install --yes postgresql-client-18
           echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
       - run: pnpm install --frozen-lockfile
+      # The npm tooling that builds these artifacts runs beside the publishing credentials, so its
+      # advisories are judged before anything is built for publication. This job installs no
+      # Python toolchain; `release-python.yml` and main CI judge the Python half.
+      - run: pnpm tooling:vuln:npm
       - run: pnpm npm:release-check
       # Under CI the Rust database tests refuse to skip, and they read only `DATABASE_URL_TEST`.
       # Scoping it to this step leaves the npm check on the database it has always used.
