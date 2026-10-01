@@ -216,7 +216,12 @@ result, success or `ProtocolCompatibilityError`, for worker loops and producer e
 error is not cached, so the next call queries again. After `sync_contracts`, each queue caches the
 `get_contract_definition_v1` row for a task type on first enqueue. It refreshes that entry on a
 `contract_mismatch` row and retries once, as TypeScript does. A second mismatch raises
-`RuntimeError`. `python/src/workhorse/compatibility.py` publishes
+`RuntimeError`. A cached row can also reject a payload that the current selection accepts, so
+`enqueue_many_v1` never sees the request. When a cached row raises `TaskContractValidationError`,
+`enqueue_many_with_results` rereads that task type's row once per call through the caller's
+connection and validates again. The second result stands. A row read for the same enqueue is not
+reread. `enqueue_many_v1` checks the size limit after the version, so a raised payload limit
+arrives through the `contract_mismatch` refresh. `python/src/workhorse/compatibility.py` publishes
 that check to applications as `assert_schema_compatible(connection)` for synchronous Psycopg, and
 `assert_schema_compatible_psycopg(connection)` and `assert_schema_compatible_asyncpg(connection)`
 for the two asynchronous drivers. Each wraps the caller-owned connection in the matching executor,

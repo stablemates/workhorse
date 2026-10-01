@@ -44,6 +44,7 @@ from ._telemetry import inject_trace_context as _inject_trace_context
 from .errors import (
     HumanWaitIdempotencyConflictError,
     SignalIdempotencyConflictError,
+    TaskContractValidationError,
     _translate_database_error,
 )
 from .types import (
@@ -84,8 +85,8 @@ class Queue:
         self.default_queue = default_queue
         self._compatibility = _CachedCompatibilityCheck(self._executor)
         self._contract_validators: dict[tuple[str, str], Any] = {}
-        # A task type's current contract, or None when it has none. A contract_mismatch row
-        # refreshes a stale entry, so the cache needs no expiry.
+        # A task type's current contract, or None when it has none. A contract_mismatch row or a
+        # payload the cached entry rejects refreshes a stale entry, so the cache needs no expiry.
         self._contract_definitions: dict[str, _Row | None] = {}
         self._contracts_enabled = False
 
@@ -130,16 +131,37 @@ class Queue:
         if not requests:
             return []
         self._compatibility.assert_compatible()
+        # An operator can select a version the cached definition rejects after sync_contracts().
+        # That payload never reaches enqueue_many_v1, so each task type reloads once before the
+        # queue reports the rejection.
+        reloaded: set[str] = set()
         for _attempt in range(2):
             values = _serialize_request_values(
                 requests, self.default_queue, _inject_trace_context()
             )
             for request, value in zip(requests, values, strict=True):
+                cached = request.type in self._contract_definitions
                 definition = self._contract_definition(request.type)
-                if definition is not None:
+                if definition is None:
+                    continue
+                try:
                     _apply_contract(
                         definition, request.type, request.payload, value, self._contract_validators
                     )
+                except TaskContractValidationError:
+                    if not cached or request.type in reloaded:
+                        raise
+                    reloaded.add(request.type)
+                    definition = self._load_contract(request.type)
+                    self._contract_definitions[request.type] = definition
+                    if definition is not None:
+                        _apply_contract(
+                            definition,
+                            request.type,
+                            request.payload,
+                            value,
+                            self._contract_validators,
+                        )
             payload = _encode_request_values(values)
             try:
                 rows = self._executor.rows(_STATEMENTS.enqueue_many, (payload,))
@@ -289,8 +311,8 @@ class AsyncQueue:
         self.default_queue = default_queue
         self._compatibility = _AsyncCachedCompatibilityCheck(executor)
         self._contract_validators: dict[tuple[str, str], Any] = {}
-        # A task type's current contract, or None when it has none. A contract_mismatch row
-        # refreshes a stale entry, so the cache needs no expiry.
+        # A task type's current contract, or None when it has none. A contract_mismatch row or a
+        # payload the cached entry rejects refreshes a stale entry, so the cache needs no expiry.
         self._contract_definitions: dict[str, _Row | None] = {}
         self._contracts_enabled = False
 
@@ -351,16 +373,37 @@ class AsyncQueue:
         if not requests:
             return []
         await self._compatibility.assert_compatible()
+        # An operator can select a version the cached definition rejects after sync_contracts().
+        # That payload never reaches enqueue_many_v1, so each task type reloads once before the
+        # queue reports the rejection.
+        reloaded: set[str] = set()
         for _attempt in range(2):
             values = _serialize_request_values(
                 requests, self.default_queue, _inject_trace_context()
             )
             for request, value in zip(requests, values, strict=True):
+                cached = request.type in self._contract_definitions
                 definition = await self._contract_definition(request.type)
-                if definition is not None:
+                if definition is None:
+                    continue
+                try:
                     _apply_contract(
                         definition, request.type, request.payload, value, self._contract_validators
                     )
+                except TaskContractValidationError:
+                    if not cached or request.type in reloaded:
+                        raise
+                    reloaded.add(request.type)
+                    definition = await self._load_contract(request.type)
+                    self._contract_definitions[request.type] = definition
+                    if definition is not None:
+                        _apply_contract(
+                            definition,
+                            request.type,
+                            request.payload,
+                            value,
+                            self._contract_validators,
+                        )
             payload = _encode_request_values(values)
             try:
                 rows = await self._executor.rows(_STATEMENTS.enqueue_many, (payload,))
