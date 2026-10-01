@@ -51,7 +51,10 @@ walks. That file also states when a pull request has to re-walk a row.
 The npm, PyPI, Go, Rust, and Ruby dependency trees are scanned on each run of CI: `pnpm npm:vuln`
 for npm, `pnpm python:vuln` for PyPI, `pnpm go:vuln` for the Go module, `pnpm rust:vuln` for the
 Rust crate, and `pnpm ruby:vuln` for the Ruby gem. An advisory the scan reports fails the build
-until it is fixed or accepted in writing with a review date.
+until it is fixed or accepted in writing with a review date. `pnpm tooling:vuln` scans the npm
+development tree and the Python development and build tooling in a separate lane. That lane runs in
+CI and again before each release is built for publication, and its acceptances cannot answer an
+advisory in a published tree.
 [`docs/compatibility.md`](docs/compatibility.md) states that policy.
 
 ## Supported versions

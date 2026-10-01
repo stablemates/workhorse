@@ -37,6 +37,9 @@ env:
   # a different version. Under UV_LOCKED the commands fail instead, which makes the lockfile the
   # only thing that decides which Python packages CI executes.
   UV_LOCKED: "1"
+  # uv.lock does not cover the build backend, so every editable build of the project would otherwise
+  # pick the newest hatchling. This makes it the pinned backend `pnpm tooling:vuln` audits.
+  UV_BUILD_CONSTRAINT: ${{ github.workspace }}/python/build-constraints.txt
 
 jobs:
   plan:
@@ -120,6 +123,8 @@ jobs:
       - run: pnpm go:vuln
       - run: pnpm rust:vuln
       - run: pnpm ruby:vuln
+      # The build and publication tooling, in its own lane under ADR 0058.
+      - run: pnpm tooling:vuln
       - run: pnpm typecheck
 
   unit:

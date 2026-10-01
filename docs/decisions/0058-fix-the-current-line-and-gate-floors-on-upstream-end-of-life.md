@@ -171,6 +171,37 @@ The site gets no security page. Reporting happens through GitHub's private advis
 GitHub, and `SECURITY.md` is rendered there beside it. A second copy on the site would be a second
 place to drift. The releases page links to it.
 
+## Amendment: build and publication tooling is inside the advisory gate, in its own lane (2026-09-30)
+
+The out-of-scope list above sends a dependency advisory with no reachable path through Workhorse's
+own code to an ordinary Issue. That held for consumers but left a gap. Development dependencies and
+the Python build backend never reach a consumer. They do execute in CI and in the release jobs, next
+to the credentials that publish every package. Before this amendment no gate read them:
+`pnpm npm:vuln` audits only the production tree, and `pnpm python:vuln` exports the lockfile without
+the development group.
+
+That tooling is now inside the advisory gate. `pnpm tooling:vuln` audits it in a lane separate from
+the production gates:
+
+- **npm:** `pnpm audit` over the whole workspace, development dependencies included.
+- **Python:** `pip-audit` over the uv export with every dependency group, and a separate run over
+  `python/build-constraints.txt`, which pins the build backend. CI and the PyPI release build name
+  that file in `UV_BUILD_CONSTRAINT`, so the backend they execute is the one the lane audits.
+
+The CI `static` task runs the lane. Each release build runs it before anything is built for
+publication. The PyPI build runs both halves. The build that publishes to npm, crates.io and RubyGems
+installs no Python toolchain, so it runs the npm half, `pnpm tooling:vuln:npm`.
+
+The lane keeps its own acceptance list, `scripts/tooling-advisory-acceptances.json`. Each entry needs
+a reason and a review date, under the same rules as the production lists. The two lanes stay
+separate so that a tooling decision can never answer a production finding. The lane leaves an
+advisory the production scan reports to the production gate. A tooling entry that names such an
+advisory fails the lane, and the production gate still fails until its own list answers.
+
+A tooling advisory follows the same severity targets as any other. The exposure differs, so the
+reason in an entry can differ: tooling that never runs in CI or in a release job is a fair reason
+that would never pass for a published dependency.
+
 ## Consequences
 
 An operator who pins a version and stops upgrading receives no fixes, and the policy now says so in

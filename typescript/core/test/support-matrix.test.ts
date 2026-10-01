@@ -675,6 +675,14 @@ describe("continuous integration", () => {
     expect(workflow).not.toContain("pnpm check");
     expect(workflow).not.toContain("actions/setup-go");
     expect(workflow).not.toContain("astral-sh/setup-uv");
+    // The tooling that builds the tarballs runs beside the publishing credentials, so its
+    // advisories are judged before the release check builds anything. Without a Python toolchain
+    // here, this job judges the npm half; release-python.yml and main CI judge both.
+    expect(workflow.indexOf("pnpm tooling:vuln:npm")).toBeGreaterThan(-1);
+    expect(workflow.indexOf("pnpm tooling:vuln:npm")).toBeLessThan(
+      workflow.indexOf("pnpm npm:release-check"),
+    );
+    expect(scripts["tooling:vuln:npm"]).toContain("--npm-only");
     expect(releaseCheck).toContain('checkRelease("npm", releaseTag(version))');
     expect(releaseCheck).toContain('["sql-catalogues:check:typescript"]');
     expect(scripts["sql-catalogues:check:typescript"]).toContain("--typescript-only");
@@ -852,6 +860,16 @@ describe("continuous integration", () => {
     const pythonRelease = await read(".github/workflows/release-python.yml");
     expect(pythonRelease).toMatch(/astral-sh\/setup-uv@[0-9a-f]{40}/);
     expect(pythonRelease).not.toContain("actions/setup-go");
+    expect(pythonRelease).toContain("- run: pnpm tooling:vuln\n");
+    expect(pythonRelease.indexOf("pnpm tooling:vuln")).toBeLessThan(
+      pythonRelease.indexOf("pnpm python:release-check"),
+    );
+    expect(ci).toContain("- run: pnpm tooling:vuln\n");
+    // uv.lock does not pin the build backend, so an editable build would pick the newest hatchling
+    // rather than the one the tooling lane audits, unless every job that runs uv names the pin.
+    const constraint = "UV_BUILD_CONSTRAINT: ${{ github.workspace }}/python/build-constraints.txt";
+    expect(ci).toContain(`\n  ${constraint}\n`);
+    expect(pythonRelease).toContain(`\n  ${constraint}\n`);
   });
 
   // A tag is a pointer its owner can move, so a workflow that names one lets whoever controls that

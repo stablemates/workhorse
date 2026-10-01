@@ -22,6 +22,9 @@ env:
   # A release must build what the lockfile pins. Without this, `uv` re-resolves a pyproject.toml
   # that has moved past uv.lock and publishes a distribution nobody reviewed. See ci.yml.
   UV_LOCKED: "1"
+  # uv.lock does not cover the build backend, so every editable build of the project would otherwise
+  # pick the newest hatchling. This makes it the pinned backend `pnpm tooling:vuln` audits.
+  UV_BUILD_CONSTRAINT: ${{ github.workspace }}/python/build-constraints.txt
 
 jobs:
   build:
@@ -78,6 +81,8 @@ jobs:
         with:
           version: 0.8.9 # Pinned to the uv version in mise.toml.
       - run: pnpm install --frozen-lockfile
+      # The tooling that builds these distributions is judged before they are built for publication.
+      - run: pnpm tooling:vuln
       - run: pnpm python:release-check
       - run: pnpm rust:release-check
 
