@@ -3,14 +3,24 @@ use serde_json::{json, Value};
 use workhorse::deadpool_postgres::tokio_postgres::NoTls;
 use workhorse::deadpool_postgres::{Manager, Pool};
 use workhorse::{
-    run_worker_process, ChildTaskRequest, HandlerContext, HandlerError, Worker, WorkerOptions,
+    run_worker_process, ChildTaskRequest, EnqueueOptions, HandlerContext, HandlerError, Worker,
+    WorkerOptions,
 };
+
+const QUEUE: &str = "orders";
+
+/// A child omitted from any queue goes to `default`, which this worker does not serve.
+fn child(name: &str, task_type: &str, payload: &Value) -> Result<ChildTaskRequest, HandlerError> {
+    let mut request = ChildTaskRequest::new(name, task_type, payload)?;
+    request.options = EnqueueOptions { queue: Some(QUEUE.into()), ..Default::default() };
+    Ok(request)
+}
 
 async fn process_order(payload: Value, context: HandlerContext) -> Result<Value, HandlerError> {
     let children = context
         .run_children_all(vec![
-            ChildTaskRequest::new("invoice", "invoice.create", &payload)?,
-            ChildTaskRequest::new("receipt", "receipt.send", &payload)?,
+            child("invoice", "invoice.create", &payload)?,
+            child("receipt", "receipt.send", &payload)?,
         ])
         .await?;
     let approval: Value = context.wait_for_signal("approval", None).await?.payload;
@@ -29,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = Pool::builder(Manager::new(url.parse()?, NoTls)).max_size(10).build()?;
 
     let worker =
-        Worker::new(pool, WorkerOptions { queues: vec!["orders".into()], ..Default::default() })?;
+        Worker::new(pool, WorkerOptions { queues: vec![QUEUE.into()], ..Default::default() })?;
     worker.handle("order.process", process_order);
     worker.handle("invoice.create", complete_child);
     worker.handle("receipt.send", complete_child);
