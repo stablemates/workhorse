@@ -161,6 +161,10 @@ class _AsyncExecutorBridge:
         self._executor = executor
         self._loop: asyncio.AbstractEventLoop | None = None
 
+    @property
+    def dialect(self) -> str:
+        return cast(str, getattr(self._executor, "dialect", "psycopg"))
+
     def bind(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
 

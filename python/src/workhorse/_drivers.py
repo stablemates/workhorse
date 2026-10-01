@@ -167,6 +167,7 @@ class PooledAsyncpgExecutor:
 _JSON_COLUMNS = frozenset(
     {
         "checkpoint_value",
+        "children",
         "context",
         "details",
         "error",

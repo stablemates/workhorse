@@ -319,6 +319,8 @@ duration_ms)`, `sleep_until(name, wake_at)`, `get_progress()`, `set_progress(val
 `run_children(children)`, and `run_children_all(children)`. `AsyncWorker.handle_batch(type, handler, *, max_size, linger_ms)` uses
 the same limits as `Worker.handle_batch`. `run_once()`, `run()`, `pause()`, `resume()`,
 `is_paused()`, and `stop()` match their synchronous names and return contracts.
+The asyncpg executor decodes the JSON text of every SDK-read JSON column, including the
+`children` array that `create_children_v1` returns, so both drivers join a child set.
 
 Each awaitable context method runs its synchronous call on a bridge thread. A cancelled caller
 waits for that call to return before it re-raises `asyncio.CancelledError`, because the thread
@@ -444,6 +446,14 @@ suspension. Status `created` submits `suspended_for_child`; status `completed` r
 child to the parent. The methods
 map `stale`, `conflict`, `limit_exceeded`, and `result_too_large` to the corresponding child errors.
 `ChildResultLimitExceededError` retains `result_bytes` and `result_limit_bytes`.
+A contracted Python child carries the current contract that `get_contract_definition_v1` returns,
+because a child write has no stale-contract retry. The stamp includes the version,
+`payload_max_bytes`, `result_max_bytes`, and the sensitive payload and result keys. Every child
+method validates each payload first and raises `TaskContractValidationError` before it writes. PostgreSQL compares a replayed request with the
+accepted one, contract stamp included. On `conflict`, the context therefore reads each existing
+child's `contract_version` through `task_child` and `get_task`. It retries once with those versions
+stamped. When the current contract rejects a replayed payload, the context builds the request again
+under those versions before it writes. The `AsyncHandlerContext` methods share this path.
 
 `concurrency` accepts integers from 1 through 100 and defaults to 1. The dispatcher refills slots
 with overlapping batched `claim_many_v1` calls under the rules that
