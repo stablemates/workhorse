@@ -13482,6 +13482,11 @@ BEGIN
        AND NOT EXISTS (
              SELECT 1 FROM workhorse.attempt_history attempt WHERE attempt.task_id = task.id
            )
+       -- A redrive source waits for its younger target, so it stays out of the window. Otherwise a
+       -- window of sources would hide the targets that release them, and no pass would progress.
+       AND NOT EXISTS (
+             SELECT 1 FROM workhorse.task_redrive redrive WHERE redrive.source_task_id = task.id
+           )
      ORDER BY outcome.finished_at, task.id
      FOR UPDATE OF task SKIP LOCKED
      LIMIT LEAST(p_limit * 4, 100000)
@@ -13495,10 +13500,6 @@ BEGIN
        AND NOT EXISTS (
              SELECT 1 FROM workhorse.enqueue_idempotency idempotency
               WHERE idempotency.task_id = candidate.id
-           )
-       AND NOT EXISTS (
-             SELECT 1 FROM workhorse.task_redrive redrive
-              WHERE redrive.source_task_id = candidate.id
            )
        AND NOT EXISTS (
              SELECT 1 FROM workhorse.task_dependency dependency
@@ -19233,10 +19234,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (44, 'make schedule-run retention health respect daily cleanup'),
   (45, 'date an unrun history pass from the oldest expired schedule run'),
   (46, 'reject a NULL limit or lease before any lock'),
-  (47, 'refuse a claim below read committed isolation')
+  (47, 'refuse a claim below read committed isolation'),
+  (48, 'prune past redrive sources pinned by younger targets')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (47) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (48) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

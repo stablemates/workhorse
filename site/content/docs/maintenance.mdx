@@ -83,7 +83,9 @@ totals and mergeable wait percentiles without retaining the finest detail foreve
 
 PostgreSQL guards the dependency order: it rejects any `RetentionPolicyDefinition` that could
 remove a task's identity before its retained evidence, and a retained `task_redrive` descendant
-keeps its source identity available for lineage. A fast-tier task usually has no events or
+keeps its source identity available for lineage. A retained source does not hold up cleanup:
+terminal pruning steps past it to eligible younger tasks, including the descendant that releases
+it. A fast-tier task usually has no events or
 attempts, so its outcome row stands in for its history and waits for both windows.
 
 Delete terminal data through the retention functions rather than deleting `task` rows directly.

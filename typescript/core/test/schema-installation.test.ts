@@ -521,6 +521,7 @@ describe("schema installation", () => {
       },
       { version: 46, description: "reject a NULL limit or lease before any lock" },
       { version: 47, description: "refuse a claim below read committed isolation" },
+      { version: 48, description: "prune past redrive sources pinned by younger targets" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
