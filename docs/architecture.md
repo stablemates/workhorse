@@ -3045,7 +3045,7 @@ of an idle worker, destroys the client the same way and changes no lease. A chec
 node-postgres client has no listener of its own, so without this one the error would end the
 process. The Go, Python, and Rust drivers report a lost connection only on the next statement, which
 fails that round and discards the connection. No session `SET` is involved, so the reservation is
-safe under transaction pooling. Go workers use the pool's dedicated heartbeat connection unless `WorkerOptions.SharedHeartbeats` opts out. A Python worker
+safe under transaction pooling. Go workers use the pool's dedicated heartbeat connection unless `WorkerOptions.SharedHeartbeats` opts out. A Go worker's invocations share one hold. `Worker.Run` and `Worker.RunOnce` take it after they acquire the execution permit and release it before they return the permit. A `RunOnce` that waits for the permit therefore cannot release the hold of the invocation it waits behind. A Python worker
 takes its dedicated heartbeat connection from the supplied pool. A Rust worker reserves one pooled
 heartbeat connection unless `WorkerOptions::shared_heartbeats` is set. It bounds a round on that
 connection by one heartbeat interval and discards the connection when the round fails. A round under
