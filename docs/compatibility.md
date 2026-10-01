@@ -921,9 +921,11 @@ That state is permanent. npm refuses any version that has ever existed, so the p
 publish can never carry this version number. Unpublishing is available only within 72 hours, and
 only while nothing depends on the version, so it is not a recovery plan.
 
-The publish step reports the split. It names every package that reached the registry, every package
-it never attempted, and the version each one carries. The report goes to the task log and to the run
-summary. Read that report. Do not infer registry state from whichever npm command logged last.
+The publish step reports the split. It names every package npm confirmed, every package it never
+attempted, and the version each one carries. It reports the package that failed as unknown, because
+npm can store an upload and still fail before it confirms it. The next run's preflight reads the
+registry and settles that package. The report goes to the task log and to the run summary. Read that
+report. Do not infer registry state from whichever npm command logged last.
 
 Recover by re-cutting the whole train at the next patch version.
 [ADR 0050](decisions/0050-release-0-1-0-without-a-prerelease-suffix.md) requires one version across
