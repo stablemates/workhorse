@@ -145,6 +145,32 @@ describe("documentation site guide coverage", () => {
     expect(page).toContain("borrow a connection\nfrom that pool and open its transaction there");
   });
 
+  it("describes Python worker entry points as taking caller-owned pools", async () => {
+    const [guide, page, readme] = await Promise.all(
+      ["docs/guides/310-workers.md", "site/content/docs/workers.mdx", "python/README.md"].map(
+        async (file) => (await readFile(path.join(root, file), "utf8")).replaceAll(/\s+/g, " "),
+      ),
+    );
+
+    // The worker pages outlived the move to pools: the guide passed a connection to
+    // AsyncWorker.from_asyncpg, and the site and README called query connections dedicated.
+    for (const contents of [guide, page, readme]) {
+      expect(contents).not.toMatch(/from_(asyncpg|psycopg)\(connection/);
+      expect(contents).not.toMatch(/dedicated[^.]*\b(query|claims)\b/);
+      expect(contents).toContain("takes an asyncpg `Pool`");
+      expect(contents).toContain(
+        "borrows a pool connection for each claim and lifecycle statement and returns it afterwards",
+      );
+      expect(contents).toContain("reserves its own heartbeat and listener connections");
+      expect(contents).toMatch(/never closes (it|the pool it was given)/);
+    }
+    expect(guide).toContain("AsyncWorker.from_asyncpg(worker_pool,");
+    expect(guide).not.toContain("Workers that share a database pool also share the listener");
+    expect(guide).toContain("A Python or Rust worker holds its own.");
+    expect(readme).toContain("Queue(application_connection).enqueue(");
+    expect(readme).toContain("Worker(worker_pool)");
+  });
+
   it("tells TypeScript readers to register telemetry before Workhorse metrics appear", async () => {
     const [guide, page] = await Promise.all([
       readFile(path.join(root, "docs/guides/355-observability.md"), "utf8"),

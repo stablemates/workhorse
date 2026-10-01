@@ -89,8 +89,13 @@ it found work — useful in tests and scripts.
 
 Python exposes this lifecycle through synchronous `Worker` and asynchronous `AsyncWorker`.
 Both rotate across configured queues, fill a bounded set of slots, and drain active handlers before
-`run` returns. `AsyncWorker` uses dedicated native Psycopg or asyncpg query and notification
-connections, and its handler context methods are awaitable. Each awaitable method runs on a
+`run` returns. `Worker` takes a Psycopg `ConnectionPool`. `AsyncWorker.from_psycopg` takes a
+Psycopg `AsyncConnectionPool`, and `AsyncWorker.from_asyncpg` takes an asyncpg `Pool`. Either worker
+borrows a pool connection for each claim and lifecycle statement and returns it afterwards. It also
+[reserves its own heartbeat and listener connections](/docs/pgbouncer#connection-budgets) from that
+pool, so size the pool for them. Your code creates the pool and closes it after `run` returns; the
+worker never closes it. `AsyncWorker` handler context methods are awaitable.
+Each awaitable method runs on a
 bridge thread, so a cancelled handler waits for that call to return before the cancellation reaches
 it. A cancelled `checkpoint` also cancels its operation and waits for the operation's cleanup.
 Cancellation before the operation returns stops the save, even when the operation catches the

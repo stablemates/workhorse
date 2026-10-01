@@ -6,15 +6,21 @@ Everything else in this guide is detail on top of that.
 Python supplies the same core loop through synchronous `Worker` and asynchronous `AsyncWorker`.
 Both rotate across queues, bound concurrent slots, and drain active work after `stop`. Each claimed
 task renews its lease and delivers ownership signals through its context cancellation token.
-Both workers can open a dedicated notification connection and offer recurring namespaces for
-PostgreSQL to evaluate.
-`AsyncWorker` uses native Psycopg or asyncpg connections, while its handlers and durable context
-methods are awaitable. A cancelled `checkpoint` cancels its operation and waits for the
-operation's cleanup. Cancellation before the operation returns stops the save, so a later attempt
-runs the operation again. Once the operation returns, its save may already be under way. The worker
-waits for that save instead of undoing it, so the handler sees `CancelledError` while a later
-attempt replays the saved value. A cancelled await therefore never proves that no checkpoint
-exists, and it does not undo the operation's effects on other systems.
+Both workers can listen for notifications and offer recurring namespaces for PostgreSQL to
+evaluate.
+`AsyncWorker.from_psycopg` takes a Psycopg `AsyncConnectionPool`, and `AsyncWorker.from_asyncpg`
+takes an asyncpg `Pool`. Its handlers and durable context methods are awaitable.
+The worker borrows a pool connection for each claim and lifecycle statement and returns it
+afterwards. It also [reserves its own heartbeat and listener connections](390-connection-pooling.md#how-do-i-budget-connections)
+from that pool, so size the pool for them.
+Your code creates the pool and owns it. Close it only after `run` returns, because the worker never
+closes the pool it was given.
+A cancelled `checkpoint` cancels its operation and waits for the operation's cleanup.
+Cancellation before the operation returns stops the save, so a later attempt runs the operation
+again. Once the operation returns, its save may already be under way. The worker waits for that
+save instead of undoing it, so the handler sees `CancelledError` while a later attempt replays the
+saved value. A cancelled await therefore never proves that no checkpoint exists, and it does not
+undo the operation's effects on other systems.
 The operation runs in a copy of the handler's context, so it sees the handler's context variables
 and current OpenTelemetry span.
 TypeScript, Python, Go, Rust, and Ruby workers all participate in the worker registry.
@@ -27,14 +33,14 @@ loop open until then. Task cancellation is not the process runner's second signa
 without waiting.
 
 ```python
-worker = AsyncWorker.from_asyncpg(connection, queues=("email", "billing"))
-
 async def deliver(payload, context):
     prepared = await context.checkpoint("prepare", prepare_delivery)
     return await send_message(payload, prepared)
 
-worker.handle("email.send", deliver)
-await worker.run()
+async with asyncpg.create_pool(database_url) as worker_pool:
+    worker = AsyncWorker.from_asyncpg(worker_pool, queues=("email", "billing"))
+    worker.handle("email.send", deliver)
+    await worker.run()
 ```
 
 ## Slots and concurrency
@@ -94,10 +100,11 @@ continuously.
 ## Waiting without constant polling
 
 An idle worker listens for `workhorse_tasks`, so a committed enqueue can wake it immediately.
-Workers that share a database pool also share the listener connection, while each worker receives
-only its queue's wake hints. Promotion and recovery notify each affected queue separately, so work
-on one queue does not wake workers assigned to another. A notification wakes dispatch without
-changing the cadence of maintenance or registration.
+TypeScript, Go, and Ruby workers that share a database pool also share the listener connection. A
+Python or Rust worker holds its own. Each worker receives only its queue's wake hints. Promotion and
+recovery notify each affected queue separately, so work on one queue does not wake workers assigned
+to another. A notification wakes dispatch without changing the cadence of maintenance or
+registration.
 
 The notification is only a hint. If PostgreSQL drops the listener or a message is missed, the
 worker reconnects and still checks through `pollMs`. This keeps the database state authoritative:
