@@ -557,10 +557,10 @@ describe("continuous integration", () => {
     expect(scripts["rust:test:no-features"]).toContain("cargo test --workspace");
     expect(scripts["rust:test:no-features"]).not.toContain("--features");
     expect(scripts["rust:gates"]).toContain("pnpm rust:test");
-    // All four language lines are scanned for advisories in the same task, or one line's tree
+    // All five language lines are scanned for advisories in the same task, or one line's tree
     // silently stops being checked.
     expect(workflow).toContain(
-      "- run: pnpm npm:vuln\n      - run: pnpm python:vuln\n      - run: pnpm go:vuln\n      - run: pnpm rust:vuln",
+      "- run: pnpm npm:vuln\n      - run: pnpm python:vuln\n      - run: pnpm go:vuln\n      - run: pnpm rust:vuln\n      - run: pnpm ruby:vuln",
     );
   });
 
@@ -577,10 +577,12 @@ describe("continuous integration", () => {
     expect(scripts["go:vuln"]).toContain("govulncheck");
     expect(scripts["npm:vuln"]).toContain("audit-npm-dependencies.ts");
     expect(scripts["rust:vuln"]).toContain("audit-rust-dependencies.ts");
+    expect(scripts["ruby:vuln"]).toContain("audit-ruby-dependencies.ts");
     expect(check).toContain("pnpm npm:vuln");
     expect(check).toContain("pnpm python:vuln");
     expect(check).toContain("pnpm go:vuln");
     expect(check).toContain("pnpm rust:vuln");
+    expect(check).toContain("pnpm ruby:vuln");
     expect(check).toContain("pnpm go:test:race");
     expect(check).toContain("pnpm build:verified");
     expect(check.indexOf("pnpm build:verified")).toBeLessThan(check.indexOf("pnpm test"));
@@ -692,7 +694,9 @@ describe("continuous integration", () => {
     expect(workflow).toContain(
       "- run: pnpm ruby:release-check\n        env:\n          DATABASE_URL_TEST: postgres://",
     );
-    expect(scripts["ruby:release-check"]).toBe("pnpm ruby:gates && pnpm ruby:package-check");
+    expect(scripts["ruby:release-check"]).toBe(
+      "pnpm ruby:gates && pnpm ruby:vuln && pnpm ruby:package-check",
+    );
     expect(scripts["ruby:package-check"]).toContain("scripts/check-ruby-release.ts");
     expect(job).toContain("if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true");
     expect(job).toContain("needs: publish");
@@ -811,6 +815,22 @@ describe("continuous integration", () => {
       const next = rules.search(/^ {0,6}\S/m);
       expect(`${group} rules: ${next === -1 ? rules : rules.slice(0, next)}`).toContain(
         'exclude-patterns: ["@mantine/*"]',
+      );
+    }
+  });
+
+  // Each line that `pnpm check` scans for advisories also receives Dependabot's weekly updates, so
+  // a reported advisory arrives with a pull request that fixes it.
+  it("updates every scanned language line through Dependabot", async () => {
+    const dependabot = await read(".github/dependabot.yml");
+    for (const [ecosystem, directory] of [
+      ["npm", "/"],
+      ["uv", "/python"],
+      ["gomod", "/go"],
+      ["bundler", "/ruby"],
+    ]) {
+      expect(dependabot).toContain(
+        `  - package-ecosystem: ${ecosystem}\n    directory: ${directory}\n`,
       );
     }
   });
