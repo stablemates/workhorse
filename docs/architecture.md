@@ -477,6 +477,11 @@ the dispatcher. `stop()` also wakes the dispatcher and makes `run()` return only
 handler settles.
 
 `AsyncWorker.run_once()`, `run()`, `pause()`, `resume()`, and `stop()` preserve those contracts.
+Cancelling the task that awaits `run_once()` or `run()` calls `stop()`, and `_run_inner` re-raises
+`CancelledError` only after the shared core drains. A later cancellation also waits for that drain,
+so the bridge threads stay open and a concurrent run call still fails until the core returns.
+`run()` also waits through later cancellations for its notification listener to release its
+connection before it closes the bridge threads and clears `_running`.
 `AsyncWorker.handle_batch` accepts an async callback and supplies `AsyncBatchHandlerItem` values.
 The shared coordinator still owns group selection, priority order, evidence writes, and per-member
 settlement. `AsyncBatchHandlerContext.get_progress()` and `set_progress(value)` are awaitable, like
