@@ -142,10 +142,13 @@ export class PurgeIdempotencyConflictError extends WorkhorseError {
 }
 
 function validateAdminAudit(audit: AdminAudit): void {
-  if (audit.actor.length === 0 || audit.actor.length > 200) {
+  // PostgreSQL bounds the actor and reason with char_length, which counts code points.
+  const actorCharacters = [...audit.actor].length;
+  if (actorCharacters === 0 || actorCharacters > 200) {
     throw new RangeError("actor must contain between 1 and 200 characters");
   }
-  if (audit.reason.length === 0 || audit.reason.length > 2_000) {
+  const reasonCharacters = [...audit.reason].length;
+  if (reasonCharacters === 0 || reasonCharacters > 2_000) {
     throw new RangeError("reason must contain between 1 and 2000 characters");
   }
   const requestBytes = new TextEncoder().encode(audit.requestId).byteLength;

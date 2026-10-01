@@ -1,6 +1,8 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import {
+  MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS,
+  MAX_EXTERNAL_WAIT_NAME_CHARACTERS,
   SignalIdempotencyConflictError,
   SignalWaitConflictError,
   SignalWaitLeaseLostError,
@@ -18,6 +20,37 @@ describe("signals", () => {
       /leading or trailing whitespace/,
     );
     await queue.cancel(id);
+  });
+
+  it("counts a name and an actor in code points, as PostgreSQL does", async () => {
+    // Each emoji is one code point and two UTF-16 code units.
+    const name = "🔔".repeat(MAX_EXTERNAL_WAIT_NAME_CHARACTERS);
+    const actor = "🧑".repeat(MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS);
+    const id = await queue.enqueue("signal-code-points", {});
+    const claimed = await queue.claim("signal-code-points-worker");
+
+    await expect(
+      queue.waitForSignal(claimed!, "signal-code-points-worker", `${name}🔔`),
+    ).rejects.toThrow(RangeError);
+    await expect(
+      queue.waitForSignal(claimed!, "signal-code-points-worker", name),
+    ).resolves.toMatchObject({ status: "waiting" });
+    await expect(
+      queue.sendSignal(
+        id,
+        name,
+        { approved: true },
+        { idempotencyKey: "signal-code-points-long", requestedBy: `${actor}🧑` },
+      ),
+    ).rejects.toThrow(RangeError);
+    await expect(
+      queue.sendSignal(
+        id,
+        name,
+        { approved: true },
+        { idempotencyKey: "signal-code-points", requestedBy: actor },
+      ),
+    ).resolves.toMatchObject({ status: "delivered", payload: { approved: true } });
   });
 
   it("distinguishes an existing wait from a lost lease", async () => {

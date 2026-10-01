@@ -45,6 +45,21 @@ describe("operator reads", () => {
     });
   });
 
+  it("counts the audit actor and reason in code points, as PostgreSQL does", async () => {
+    // Each emoji is one code point and two UTF-16 code units.
+    const source = await createFailedTask({ type: "code-point-redrive" });
+    const audit = { actor: "🧑".repeat(200), reason: "📝".repeat(2_000), requestId: randomUUID() };
+
+    expect(() => admin.redrive(source, { ...audit, actor: `${audit.actor}🧑` })).toThrow(
+      new RangeError("actor must contain between 1 and 200 characters"),
+    );
+    expect(() => admin.redrive(source, { ...audit, reason: `${audit.reason}📝` })).toThrow(
+      new RangeError("reason must contain between 1 and 2000 characters"),
+    );
+    const redrive = await admin.redrive(source, audit);
+    await expect(admin.getTask(redrive.targetTaskId!)).resolves.toMatchObject({ state: "ready" });
+  });
+
   it("lists only failed outcomes with filters, a stable cursor, and a partial cold index", async () => {
     const smtp = await createFailedTask({
       type: "email",

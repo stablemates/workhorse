@@ -4,6 +4,8 @@ import {
   HumanWaitAlreadyWaitingError,
   HumanWaitIdempotencyConflictError,
   HumanWaitLeaseLostError,
+  MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS,
+  MAX_EXTERNAL_WAIT_NAME_CHARACTERS,
   MAX_EXTERNAL_WAIT_VALUE_BYTES,
   Worker,
 } from "../src/index.js";
@@ -53,6 +55,37 @@ describe("human waits", () => {
       queue.waitForHuman(claimed!, "human-name-worker", " review ", { prompt: "Review?" }),
     ).rejects.toThrow(/leading or trailing whitespace/);
     await queue.cancel(id);
+  });
+
+  it("counts a token name and an actor in code points, as PostgreSQL does", async () => {
+    // Each emoji is one code point and two UTF-16 code units.
+    const name = "📝".repeat(MAX_EXTERNAL_WAIT_NAME_CHARACTERS);
+    const actor = "🧑".repeat(MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS);
+    const id = await queue.enqueue("human-code-points", {});
+    const claimed = await queue.claim("human-code-points-worker");
+
+    await expect(
+      queue.waitForHuman(claimed!, "human-code-points-worker", `${name}📝`, { prompt: "Review?" }),
+    ).rejects.toThrow(RangeError);
+    await expect(
+      queue.waitForHuman(claimed!, "human-code-points-worker", name, { prompt: "Review?" }),
+    ).resolves.toMatchObject({ status: "waiting" });
+    await expect(
+      queue.completeHumanWait(
+        id,
+        name,
+        { approved: true },
+        { idempotencyKey: "human-code-points-long", requestedBy: `${actor}🧑` },
+      ),
+    ).rejects.toThrow(RangeError);
+    await expect(
+      queue.completeHumanWait(
+        id,
+        name,
+        { approved: true },
+        { idempotencyKey: "human-code-points", requestedBy: actor },
+      ),
+    ).resolves.toMatchObject({ status: "completed" });
   });
 
   it("distinguishes an existing decision from a lost lease", async () => {

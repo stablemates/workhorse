@@ -118,7 +118,9 @@ export function externalWaitCursor(row: ExternalWaitRow): ExternalWaitCursor {
 
 export function validateExternalWaitName(name: string, label: string): void {
   if (typeof name !== "string") throw new TypeError(`${label} name must be a string`);
-  if (name.length < 1 || name.length > MAX_EXTERNAL_WAIT_NAME_CHARACTERS) {
+  // PostgreSQL bounds the name with char_length, which counts code points, not UTF-16 units.
+  const characters = [...name].length;
+  if (characters < 1 || characters > MAX_EXTERNAL_WAIT_NAME_CHARACTERS) {
     throw new RangeError(
       `${label} name must contain between 1 and ${MAX_EXTERNAL_WAIT_NAME_CHARACTERS} characters`,
     );
@@ -153,11 +155,9 @@ export function validateExternalWaitDeliveryRequest(
       `${label} idempotency key must contain between 1 and ${MAX_EXTERNAL_WAIT_IDEMPOTENCY_KEY_BYTES} UTF-8 bytes`,
     );
   }
-  if (
-    typeof request.requestedBy !== "string" ||
-    request.requestedBy.length < 1 ||
-    request.requestedBy.length > MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS
-  ) {
+  const actorCharacters =
+    typeof request.requestedBy === "string" ? [...request.requestedBy].length : 0;
+  if (actorCharacters < 1 || actorCharacters > MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS) {
     throw new RangeError(
       `${label} requestedBy must contain between 1 and ${MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS} characters`,
     );
