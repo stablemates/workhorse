@@ -66,8 +66,8 @@ longer accepts that shape for new tasks.
 Queue defaults set size ceilings. A `TaskContractVersion` can override them. PostgreSQL checks its
 canonical JSON representation before the durable write, so every client gets the same decision.
 
-The TypeScript, Go, and Python workers also measure a handler result that way before they send its
-completion. An oversized result fails that attempt and follows the retry path. In Python, a `NaN` or
+The TypeScript, Go, Python, and Ruby workers also measure a handler result that way before they send
+its completion. An oversized result fails that attempt and follows the retry path. In Python, a `NaN` or
 infinite number fails the attempt the same way. Either failure stays local to its task, so the
 worker keeps running.
 

@@ -41,10 +41,13 @@ module Stablemates
       CANCEL_REASONS = {
         cancelled: :requested, deadline_exceeded: :deadline_exceeded, attempt_timeout: :execution_timeout
       }.freeze
+      # An exponent follows a digit in every JSON number that has one. A string can match too, which
+      # costs only an exact measure.
+      EXPONENT_NUMBER = /\d[eE]/
       private_constant :MAX_EMPTY_POLL_MS, :NOTIFICATION_POLL_MS, :NOTIFICATION_CLAIM_DELAY, :UNWIND_WINDOW,
         :THREAD_RETURN_WAIT, :EXPIRATION_RETRY, :REDACTED_NAME, :REDACTED_MESSAGE, :PROTOCOL, :LANGUAGE, :MIN_POOL_SIZE,
         :COMPLETION_BATCH_LIMIT, :TIER_PROBE_INTERVAL,
-        :STATUS_OUTCOMES, :TELEMETRY_OUTCOMES, :SPAN_OUTCOMES, :CANCEL_REASONS
+        :STATUS_OUTCOMES, :TELEMETRY_OUTCOMES, :SPAN_OUTCOMES, :CANCEL_REASONS, :EXPONENT_NUMBER
 
       # One attempt's hold on its lease: the heartbeat membership, the lease watchdog, and the lock
       # that orders settlements. Internal to the SDK.
@@ -1200,6 +1203,7 @@ module Stablemates
           result = invoke(handler, task.payload, context)
           validate_result(task, result)
           encoded = Values.json(result, "task result")
+          check_result_size(task, encoded)
         rescue HandlerContext::Suspension
           return if finish_ownership(task, ownership, arbiter)
 
@@ -1492,6 +1496,20 @@ module Stablemates
           @contracts[[task.type, version]] = schema
         end
         raise ContractValidationError.new(task.type, version, "result") unless schema.valid?(result)
+      end
+
+      # PostgreSQL refuses a result whose jsonb text exceeds the task's limit, and that refusal
+      # would end the worker rather than the attempt, so the worker measures the same text first.
+      # Without exponent notation that text is at most twice as long as the compact JSON, which
+      # lets most results skip the exact measure. The exact measure reads the JSON the worker sends,
+      # not the handler's object: a custom to_json changes the text, and jsonb keeps only the last
+      # of duplicate keys.
+      def check_result_size(task, encoded)
+        limit = task.result_max_bytes
+        return if limit.nil? || (encoded.bytesize * 2 <= limit && !EXPONENT_NUMBER.match?(encoded))
+
+        actual = Values.jsonb_text_bytes(encoded)
+        raise ValueSizeLimitError.new(task.type, "result", actual, limit) if actual > limit
       end
 
       # A lifecycle write returns exactly one row; anything else means the protocol changed.

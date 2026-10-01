@@ -136,6 +136,20 @@ module Stablemates
       end
     end
 
+    # A task value exceeds its byte limit, measured as the UTF-8 length of PostgreSQL's +jsonb+
+    # text. +part+ names the value; the worker raises it for a handler's result.
+    class ValueSizeLimitError < Error
+      attr_reader :task_type, :part, :actual_bytes, :max_bytes
+
+      def initialize(task_type, part, actual_bytes, max_bytes)
+        @task_type = task_type
+        @part = part
+        @actual_bytes = actual_bytes
+        @max_bytes = max_bytes
+        super("#{task_type} #{part} exceeds its configured size limit")
+      end
+    end
+
     # A contract version the request names is not installed.
     class ContractUnavailableError < Error
       attr_reader :task_type, :version

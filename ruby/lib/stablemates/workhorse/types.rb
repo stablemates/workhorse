@@ -148,6 +148,43 @@ module Stablemates
         JSON.generate(value)
       end
 
+      # The UTF-8 length of PostgreSQL's +jsonb+ text for a JSON document. That text keeps the last
+      # of duplicate keys, puts a space after each +:+ and +,+, escapes strings as JSON.generate
+      # does, and writes numbers in plain decimal notation without the sign of a zero. Each number
+      # is measured from its own token, because jsonb keeps the scale a Float would lose.
+      def jsonb_text_bytes(text)
+        document_bytes(JSON.parse(text, allow_duplicate_key: true, decimal_class: NumberToken))
+      end
+
+      def document_bytes(value)
+        case value
+        when nil, true then 4
+        when false then 5
+        when String then JSON.generate(value).bytesize
+        when Integer then value.to_s.bytesize
+        when NumberToken then numeric_text_bytes(value.text)
+        when Array then value.empty? ? 2 : value.sum { |item| document_bytes(item) } + 2 * value.size
+        else
+          return 2 if value.empty?
+
+          value.sum { |key, item| JSON.generate(key).bytesize + 2 + document_bytes(item) } + 2 * value.size
+        end
+      end
+
+      # numeric_out writes the integer part without leading zeros, or a single zero, and as many
+      # fraction digits as the token had after its decimal point, shifted by the exponent.
+      def numeric_text_bytes(token)
+        sign, integer, fraction, exponent = NUMBER.match(token).captures
+        exponent = exponent ? Integer(exponent, 10) : 0
+        digits = integer + fraction.to_s
+        significant = digits.sub(/\A0+/, "")
+        point = integer.size + exponent - (digits.size - significant.size)
+        scale = [0, fraction.to_s.size - exponent].max
+        integer_bytes = significant.empty? ? 1 : [1, point].max
+        sign_bytes = (sign.empty? || significant.empty?) ? 0 : 1
+        sign_bytes + integer_bytes + (scale.positive? ? 1 + scale : 0)
+      end
+
       def check_json(value, label)
         case value
         when String, Integer, true, false, nil then nil
@@ -218,10 +255,13 @@ module Stablemates
 
       def parse_text_array(text) = text.nil? ? nil : TEXT_ARRAY_DECODER.decode(text)
 
+      # A JSON number's token, which JSON.parse keeps as text in place of a Float.
+      NumberToken = Struct.new(:text)
+      NUMBER = /\A(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?\z/
       TEXT_ARRAY_ENCODER = PG::TextEncoder::Array.new
       TEXT_ARRAY_DECODER = PG::TextDecoder::Array.new
       TIMESTAMP_DECODER = PG::TextDecoder::TimestampWithTimeZone.new
-      private_constant :TEXT_ARRAY_ENCODER, :TEXT_ARRAY_DECODER, :TIMESTAMP_DECODER
+      private_constant :NumberToken, :NUMBER, :TEXT_ARRAY_ENCODER, :TEXT_ARRAY_DECODER, :TIMESTAMP_DECODER
     end
   end
 end
