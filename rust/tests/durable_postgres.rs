@@ -4,6 +4,7 @@
 //! replay reads back what the first attempt saved.
 mod support;
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -14,6 +15,7 @@ use support::{scratch_database, ScratchDatabase};
 use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::{Client, NoTls};
 use uuid::Uuid;
+use workhorse::contracts::{TaskContractVersion, TaskTypeContracts};
 use workhorse::{
     Admin, BatchItem, BatchOptions, BatchResult, ChildOutcome, ChildTaskRequest, DeliveryOptions,
     EnqueueOptions, Error, HandlerContext, HandlerError, HumanOutcome, Operation, Queue,
@@ -29,6 +31,7 @@ struct Harness {
     queue: Queue<Client>,
     admin: Admin<Client>,
     worker: Worker,
+    pool: deadpool_postgres::Pool,
 }
 
 async fn harness(name: &str) -> Option<Harness> {
@@ -47,8 +50,8 @@ async fn harness(name: &str) -> Option<Harness> {
         heartbeat_interval: Some(Duration::from_millis(100)),
         ..WorkerOptions::default()
     };
-    let worker = Worker::new(pool, options).unwrap();
-    Some(Harness { database, queue, admin, worker })
+    let worker = Worker::new(pool.clone(), options).unwrap();
+    Some(Harness { database, queue, admin, worker, pool })
 }
 
 impl Harness {
@@ -109,6 +112,69 @@ impl Harness {
 
 fn children_options() -> EnqueueOptions {
     EnqueueOptions { queue: Some(QUEUE.into()), max_attempts: 1, ..EnqueueOptions::default() }
+}
+
+/// Makes `current` the contract new `task_type` tasks use, retaining every version in `versions`.
+async fn sync_contract(
+    harness: &Harness,
+    task_type: &str,
+    current: &str,
+    versions: Vec<(&str, TaskContractVersion)>,
+) {
+    let versions = versions.into_iter().map(|(name, version)| (name.to_string(), version));
+    let contracts = TaskTypeContracts {
+        current_version: current.into(),
+        versions: BTreeMap::from_iter(versions),
+    };
+    harness
+        .queue
+        .sync_contracts(&BTreeMap::from([(task_type.to_string(), contracts)]))
+        .await
+        .unwrap();
+}
+
+/// A contract accepting `{"n": integer}` whose limits and keys a stamped child carries.
+fn counted_contract(max_payload_bytes: i32) -> TaskContractVersion {
+    TaskContractVersion {
+        payload_schema: json!({
+            "type": "object",
+            "properties": { "n": { "type": "integer" } },
+            "required": ["n"],
+        }),
+        max_payload_bytes,
+        max_result_bytes: 2048,
+        sensitive_payload_keys: vec!["secret".into()],
+        sensitive_result_keys: vec!["token".into()],
+        ..TaskContractVersion::default()
+    }
+}
+
+/// Each child of `task_type` as its contract version and stamped limits and keys, by child name.
+async fn child_stamps(harness: &Harness, task_type: &str) -> BTreeMap<String, Value> {
+    let client = harness.database.connect().await;
+    let rows = client
+        .query(
+            "SELECT child.child_name, task.contract_version, task.payload_max_bytes,
+                    task.result_max_bytes, task.payload_redact_keys, task.result_redact_keys
+               FROM workhorse.task task
+               JOIN workhorse.task_child child ON child.child_task_id = task.id
+              WHERE task.task_type = $1",
+            &[&task_type],
+        )
+        .await
+        .unwrap();
+    rows.iter()
+        .map(|row| {
+            let stamp = json!([
+                row.get::<_, Option<String>>(1),
+                row.get::<_, i32>(2),
+                row.get::<_, i32>(3),
+                row.get::<_, Vec<String>>(4),
+                row.get::<_, Vec<String>>(5),
+            ]);
+            (row.get::<_, String>(0), stamp)
+        })
+        .collect()
 }
 
 fn child(name: &str, task_type: &str, payload: Value) -> ChildTaskRequest {
@@ -300,6 +366,295 @@ async fn run_children_all_returns_every_result_by_name() {
     stop.send(()).unwrap();
     running.await.unwrap().unwrap();
     assert_eq!(harness.result(parent).await, Some(json!({ "a": 9, "b": 16 })));
+}
+
+#[tokio::test]
+async fn children_of_a_contracted_type_carry_its_current_contract() {
+    let Some(harness) = harness("durable_contracted_children").await else { return };
+    sync_contract(&harness, "counted", "v1", vec![("v1", counted_contract(4096))]).await;
+    // A task makes one child-set call, so each set mode gets its own parent.
+    let single = harness.enqueue("single-parent", Value::Null).await;
+    let settled = harness.enqueue("settled-parent", Value::Null).await;
+    let all = harness.enqueue("all-parent", Value::Null).await;
+    harness.worker.handle("single-parent", |_: Value, context: HandlerContext| async move {
+        let one: i64 =
+            context.run_child("one", "counted", &json!({ "n": 1 }), children_options()).await?;
+        Ok(json!(one))
+    });
+    harness.worker.handle("settled-parent", |_: Value, context: HandlerContext| async move {
+        let settled =
+            context.run_children(vec![child("two", "counted", json!({ "n": 2 }))]).await?;
+        let ChildOutcome::Succeeded(two) = &settled["two"] else {
+            panic!("two ended {:?}", settled["two"])
+        };
+        Ok(two.clone())
+    });
+    harness.worker.handle("all-parent", |_: Value, context: HandlerContext| async move {
+        let all = context
+            .run_children_all(vec![
+                child("three", "counted", json!({ "n": 3 })),
+                child("four", "counted", json!({ "n": 4 })),
+            ])
+            .await?;
+        Ok(json!([all["three"], all["four"]]))
+    });
+    harness.worker.handle("counted", |input: Value, _| async move { Ok(input["n"].clone()) });
+    let (stop, running) = harness.run();
+    for parent in [single, settled, all] {
+        harness.wait_for(parent, TaskState::Succeeded).await;
+    }
+    stop.send(()).unwrap();
+    running.await.unwrap().unwrap();
+    assert_eq!(harness.result(single).await, Some(json!(1)));
+    assert_eq!(harness.result(settled).await, Some(json!(2)));
+    assert_eq!(harness.result(all).await, Some(json!([3, 4])));
+    let stamp = json!(["v1", 4096, 2048, ["secret"], ["token"]]);
+    let stamps = child_stamps(&harness, "counted").await;
+    assert_eq!(stamps.keys().collect::<Vec<_>>(), ["four", "one", "three", "two"]);
+    assert!(stamps.values().all(|value| *value == stamp), "children were stamped {stamps:?}");
+}
+
+#[tokio::test]
+async fn a_child_payload_its_contract_rejects_fails_before_any_write() {
+    let Some(harness) = harness("durable_child_contract_validation").await else { return };
+    sync_contract(&harness, "counted", "v1", vec![("v1", counted_contract(4096))]).await;
+    let task = harness.enqueue("reject", Value::Null).await;
+    harness.worker.handle("reject", |_: Value, context: HandlerContext| async move {
+        let rejected = |error: &Error| {
+            matches!(error, Error::ContractValidation { task_type, version }
+                if task_type == "counted" && version == "v1")
+        };
+        let wrong = json!({ "n": "one" });
+        let checks = [
+            context
+                .run_child::<_, Value>("one", "counted", &wrong, children_options())
+                .await
+                .is_err_and(|e| rejected(&e)),
+            context
+                .run_children(vec![
+                    child("fine", "counted", json!({ "n": 1 })),
+                    child("wrong", "counted", wrong),
+                ])
+                .await
+                .is_err_and(|e| rejected(&e)),
+        ];
+        Ok(json!(checks))
+    });
+    harness.run_once().await;
+    assert_eq!(harness.result(task).await, Some(json!([true, true])));
+    assert!(child_stamps(&harness, "counted").await.is_empty());
+}
+
+#[tokio::test]
+async fn a_replayed_parent_joins_children_created_under_an_older_contract() {
+    let Some(harness) = harness("durable_child_contract_replay").await else { return };
+    sync_contract(&harness, "counted", "v1", vec![("v1", counted_contract(4096))]).await;
+    let single = harness.enqueue("single-parent", Value::Null).await;
+    let set = harness.enqueue("set-parent", Value::Null).await;
+    let runs = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&runs);
+    harness.worker.handle("single-parent", move |_: Value, context: HandlerContext| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        async move {
+            let one: i64 =
+                context.run_child("one", "counted", &json!({ "n": 1 }), children_options()).await?;
+            Ok(json!(one))
+        }
+    });
+    harness.worker.handle("set-parent", |_: Value, context: HandlerContext| async move {
+        let all = context
+            .run_children_all(vec![
+                child("two", "counted", json!({ "n": 2 })),
+                child("three", "counted", json!({ "n": 3 })),
+            ])
+            .await?;
+        Ok(json!([all["two"], all["three"]]))
+    });
+    // Each parent's first attempt creates its children under v1 and suspends.
+    harness.run_once().await;
+    harness.run_once().await;
+    assert_eq!(harness.state(single).await, TaskState::Blocked);
+    assert_eq!(harness.state(set).await, TaskState::Blocked);
+    // v2 accepts every payload with a different limit, so each current request differs from the
+    // accepted one.
+    let v2 = TaskContractVersion { payload_schema: json!(true), ..counted_contract(8192) };
+    sync_contract(&harness, "counted", "v2", vec![("v1", counted_contract(4096)), ("v2", v2)])
+        .await;
+    harness.worker.handle("counted", |input: Value, _| async move { Ok(input["n"].clone()) });
+    let (stop, running) = harness.run();
+    harness.wait_for(single, TaskState::Succeeded).await;
+    harness.wait_for(set, TaskState::Succeeded).await;
+    stop.send(()).unwrap();
+    running.await.unwrap().unwrap();
+    assert_eq!(harness.result(single).await, Some(json!(1)));
+    assert_eq!(harness.result(set).await, Some(json!([2, 3])));
+    assert_eq!(runs.load(Ordering::SeqCst), 2, "the single-child parent never replayed");
+    let stamp = json!(["v1", 4096, 2048, ["secret"], ["token"]]);
+    let stamps = child_stamps(&harness, "counted").await;
+    assert_eq!(stamps.len(), 3, "a replay created another child: {stamps:?}");
+    assert!(stamps.values().all(|value| *value == stamp), "children were stamped {stamps:?}");
+}
+
+#[tokio::test]
+async fn a_replayed_parent_keeps_a_child_its_new_contract_would_reject() {
+    let Some(harness) = harness("durable_child_contract_narrowed").await else { return };
+    sync_contract(&harness, "counted", "v1", vec![("v1", counted_contract(4096))]).await;
+    let parent = harness.enqueue("narrowed-parent", Value::Null).await;
+    harness.worker.handle("narrowed-parent", |_: Value, context: HandlerContext| async move {
+        let one: i64 =
+            context.run_child("one", "counted", &json!({ "n": 1 }), children_options()).await?;
+        Ok(json!(one))
+    });
+    harness.run_once().await;
+    // v2 no longer accepts the payload `one` was created with.
+    let v2 = TaskContractVersion {
+        payload_schema: json!({ "type": "object", "required": ["m"] }),
+        ..counted_contract(4096)
+    };
+    sync_contract(&harness, "counted", "v2", vec![("v1", counted_contract(4096)), ("v2", v2)])
+        .await;
+    harness.worker.handle("counted", |input: Value, _| async move { Ok(input["n"].clone()) });
+    let (stop, running) = harness.run();
+    harness.wait_for(parent, TaskState::Succeeded).await;
+    stop.send(()).unwrap();
+    running.await.unwrap().unwrap();
+    assert_eq!(harness.result(parent).await, Some(json!(1)));
+    assert_eq!(child_stamps(&harness, "counted").await["one"][0], json!("v1"));
+}
+
+#[tokio::test]
+async fn identical_replayed_calls_share_one_call_across_a_contract_change() {
+    let Some(harness) = harness("durable_child_contract_advance").await else { return };
+    sync_contract(&harness, "counted", "v1", vec![("v1", counted_contract(4096))]).await;
+    let parent = harness.enqueue("advanced-parent", Value::Null).await;
+    let (events, mut replay) = mpsc::unbounded_channel::<&'static str>();
+    let notify = || Arc::new(tokio::sync::Notify::new());
+    let (locked, advanced) = (notify(), notify());
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let handler_notices = (Arc::clone(&locked), Arc::clone(&advanced));
+    let pool = harness.pool.clone();
+    harness.worker.handle("advanced-parent", move |_: Value, context: HandlerContext| {
+        let replaying = attempts.fetch_add(1, Ordering::SeqCst) > 0;
+        let (locked, advanced) = handler_notices.clone();
+        let (events, pool) = (events.clone(), pool.clone());
+        async move {
+            let payload = json!({ "n": 1 });
+            let one =
+                || context.run_child::<_, i64>("one", "counted", &payload, children_options());
+            if !replaying {
+                return Ok(json!(one().await?));
+            }
+            events.send("replaying").unwrap();
+            locked.notified().await;
+            // The first call loads the current contract, then waits on the parent's locked row.
+            let cloned = context.clone();
+            let mut first = tokio::spawn(async move {
+                cloned
+                    .run_child::<_, i64>("one", "counted", &json!({ "n": 1 }), children_options())
+                    .await
+            });
+            events.send("first").unwrap();
+            advanced.notified().await;
+            // The second, identical call loads a newer contract while the first is in flight.
+            let second = one();
+            tokio::pin!(second);
+            // The second call holds a pooled connection from its first poll until its lookup
+            // returns, and it joins the first call without yielding in between. Only the first
+            // call's blocked statement then holds one, and other pool users can only add to that.
+            let in_use = || {
+                let status = pool.status();
+                status.size - status.available + status.waiting
+            };
+            let mut early = None;
+            let joined = tokio::time::timeout(WAIT, async {
+                loop {
+                    tokio::select! {
+                        biased;
+                        outcome = &mut second => {
+                            early = Some(outcome);
+                            return;
+                        }
+                        () = tokio::time::sleep(Duration::from_millis(10)) => {}
+                    }
+                    if in_use() <= 1 {
+                        return;
+                    }
+                }
+            })
+            .await
+            .is_ok();
+            events.send("release").unwrap();
+            let first = loop {
+                tokio::select! {
+                    biased;
+                    outcome = &mut second, if early.is_none() => early = Some(outcome),
+                    first = &mut first => break first.unwrap(),
+                }
+            };
+            let shown = |outcome: Result<i64, Error>| match outcome {
+                Ok(value) => json!(value),
+                Err(error) => json!(error.to_string()),
+            };
+            let second = match early {
+                Some(outcome) => shown(outcome),
+                None => shown(tokio::time::timeout(WAIT, &mut second).await.unwrap()),
+            };
+            if !joined {
+                return Ok(json!("the second call kept a connection while the first was blocked"));
+            }
+            Ok(json!([shown(first), second]))
+        }
+    });
+    harness.worker.handle("counted", |input: Value, _| async move { Ok(input["n"].clone()) });
+    harness.run_once().await;
+    assert_eq!(harness.state(parent).await, TaskState::Blocked);
+    let v2 = TaskContractVersion { payload_schema: json!(true), ..counted_contract(8192) };
+    let v3 = TaskContractVersion { payload_schema: json!(true), ..counted_contract(16384) };
+    let v1 = || ("v1", counted_contract(4096));
+    sync_contract(&harness, "counted", "v2", vec![v1(), ("v2", v2.clone())]).await;
+    let (stop, running) = harness.run();
+    assert_eq!(replay.recv().await, Some("replaying"));
+    let locker = harness.database.connect().await;
+    locker.batch_execute("BEGIN").await.unwrap();
+    locker
+        .execute("SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", &[&parent])
+        .await
+        .unwrap();
+    locked.notify_one();
+    assert_eq!(replay.recv().await, Some("first"));
+    // A transaction reads one snapshot of pg_stat_activity, so the locker cannot watch for waiters.
+    let watcher = harness.database.connect().await;
+    tokio::time::timeout(WAIT, async {
+        loop {
+            let waiting: i64 = watcher
+                .query_one(
+                    "SELECT count(*) FROM pg_stat_activity
+                      WHERE datname = current_database() AND pid <> pg_backend_pid()
+                        AND wait_event_type = 'Lock' AND query LIKE '%create_child_v1%'",
+                    &[],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            if waiting > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the first call never waited on the parent's row");
+    sync_contract(&harness, "counted", "v3", vec![v1(), ("v2", v2), ("v3", v3)]).await;
+    advanced.notify_one();
+    assert_eq!(replay.recv().await, Some("release"));
+    locker.batch_execute("COMMIT").await.unwrap();
+    harness.wait_for(parent, TaskState::Succeeded).await;
+    stop.send(()).unwrap();
+    running.await.unwrap().unwrap();
+    assert_eq!(harness.result(parent).await, Some(json!([1, 1])));
+    let stamps = child_stamps(&harness, "counted").await;
+    assert_eq!(stamps.len(), 1, "a replay created another child: {stamps:?}");
+    assert_eq!(stamps["one"][0], json!("v1"));
 }
 
 #[tokio::test]

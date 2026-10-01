@@ -635,7 +635,7 @@ fn validate_delivery(
     Ok(())
 }
 
-fn stamp_contract(input: &mut Map<String, Value>, contract: &Arc<PayloadContract>) {
+pub(crate) fn stamp_contract(input: &mut Map<String, Value>, contract: &Arc<PayloadContract>) {
     input.insert("contractVersion".into(), json!(contract.version));
     input.insert("payloadMaxBytes".into(), json!(contract.payload_max_bytes));
     input.insert("resultMaxBytes".into(), json!(contract.result_max_bytes));
