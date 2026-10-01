@@ -24,6 +24,34 @@ pub(super) enum Beat {
     Rejected(OwnershipStatus),
 }
 
+/// One task's place in the rounds. Dropping it, including with a dropped execution, stops renewals.
+pub(super) struct Membership {
+    inner: Arc<Inner>,
+    task: Uuid,
+    fence: i64,
+    pub(super) beats: mpsc::Receiver<Beat>,
+}
+
+impl Membership {
+    /// Stops renewing this claim. A later claim of the same task under another fence stays.
+    pub(super) fn leave(&self) {
+        let heartbeats = &self.inner.heartbeats;
+        let mut state = heartbeats.state();
+        if state.members.get(&self.task).is_some_and(|(fence, _)| *fence == self.fence) {
+            state.members.remove(&self.task);
+        }
+        if state.members.is_empty() {
+            heartbeats.wake.notify_one();
+        }
+    }
+}
+
+impl Drop for Membership {
+    fn drop(&mut self) {
+        self.leave();
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Heartbeats {
     state: Mutex<State>,
@@ -35,6 +63,7 @@ pub(super) struct Heartbeats {
 struct State {
     members: HashMap<Uuid, (i64, mpsc::Sender<Beat>)>,
     running: bool,
+    task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Heartbeats {
@@ -60,33 +89,27 @@ impl Inner {
         self.heartbeats.reserved.lock().await.take();
     }
 
-    pub(super) fn register_heartbeat(
-        self: &Arc<Self>,
-        task: Uuid,
-        fence: i64,
-    ) -> mpsc::Receiver<Beat> {
-        let (sender, receiver) = mpsc::channel(4);
+    /// Adds `task` to the rounds until the returned membership leaves or is dropped.
+    pub(super) fn register_heartbeat(self: &Arc<Self>, task: Uuid, fence: i64) -> Membership {
+        let (sender, beats) = mpsc::channel(4);
         let mut state = self.heartbeats.state();
         state.members.insert(task, (fence, sender));
         if !state.running {
             state.running = true;
-            tokio::spawn(Arc::clone(self).run_heartbeats());
+            state.task = Some(tokio::spawn(Arc::clone(self).run_heartbeats()));
         }
-        receiver
-    }
-
-    pub(super) fn unregister_heartbeat(&self, task: Uuid) {
-        let mut state = self.heartbeats.state();
-        state.members.remove(&task);
-        if state.members.is_empty() {
-            self.heartbeats.wake.notify_one();
-        }
+        Membership { inner: Arc::clone(self), task, fence, beats }
     }
 
     /// Drops every renewal at once, so the abandoned tasks expire and PostgreSQL recovers them.
     pub(super) fn abandon_heartbeats(&self) {
         self.heartbeats.state().members.clear();
         self.heartbeats.wake.notify_one();
+    }
+
+    /// The latest heartbeat loop, which ends once it finds no members.
+    pub(super) fn heartbeat_loop(&self) -> Option<tokio::task::JoinHandle<()>> {
+        self.heartbeats.state().task.take()
     }
 
     async fn run_heartbeats(self: Arc<Self>) {

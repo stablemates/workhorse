@@ -17,7 +17,9 @@ const CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 /// Listens until `stop` fires, waking the worker for a matching queue or the `*` wildcard.
 ///
 /// A pool cannot hand out a connection's notification stream, so the listener opens its own
-/// connection from `config`. It reconnects with a doubling delay after a failure.
+/// connection from `config`. It reconnects with a doubling delay after a failure. `stop` also ends
+/// a connection or a `LISTEN` that the server never answers, so a stalled server cannot hold the
+/// worker's teardown.
 pub(super) async fn listen(
     config: tokio_postgres::Config,
     queues: Vec<String>,
@@ -27,7 +29,11 @@ pub(super) async fn listen(
 ) {
     let mut delay = RECONNECT_INITIAL;
     while !stop.is_cancelled() {
-        let error = match config.connect(NoTls).await {
+        let connected = tokio::select! {
+            () = stop.cancelled() => return,
+            connected = config.connect(NoTls) => connected,
+        };
+        let error = match connected {
             Err(error) => error.to_string(),
             Ok((client, mut connection)) => {
                 let (sender, mut received) = tokio::sync::mpsc::unbounded_channel();
@@ -49,7 +55,14 @@ pub(super) async fn listen(
                     }
                     let _ = sender.send(Err("notification connection closed".into()));
                 });
-                let error = match client.batch_execute(LISTEN).await {
+                let listened = tokio::select! {
+                    () = stop.cancelled() => {
+                        driver.abort();
+                        return;
+                    }
+                    listened = client.batch_execute(LISTEN) => listened,
+                };
+                let error = match listened {
                     Err(error) => error.to_string(),
                     Ok(()) => {
                         listening.store(true, Ordering::SeqCst);
@@ -89,5 +102,38 @@ pub(super) async fn listen(
             () = tokio::time::sleep(delay) => {}
         }
         delay = (delay * 2).min(RECONNECT_MAXIMUM);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::worker::tests::silent_server;
+
+    /// SM-1028: a server that accepts the connection and never answers cannot hold teardown.
+    #[tokio::test]
+    async fn stop_ends_a_listener_whose_server_never_answers() {
+        let (port, mut accepted) = silent_server();
+        let mut config = tokio_postgres::Config::new();
+        config.host("127.0.0.1").port(port).user("unused").dbname("unused");
+        let stop = CancellationToken::new();
+        let listening = Arc::new(AtomicBool::new(false));
+        let listener = tokio::spawn(listen(
+            config,
+            vec!["default".into()],
+            Arc::new(Notify::new()),
+            Arc::clone(&listening),
+            stop.clone(),
+        ));
+        tokio::time::timeout(Duration::from_secs(5), accepted.recv())
+            .await
+            .expect("the listener never connected")
+            .expect("the listener connected");
+        stop.cancel();
+        tokio::time::timeout(Duration::from_millis(500), listener)
+            .await
+            .expect("the listener waited on a server that never answers")
+            .unwrap();
+        assert!(!listening.load(Ordering::SeqCst));
     }
 }

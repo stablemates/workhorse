@@ -73,7 +73,7 @@ impl Inner {
             "Handler started"
         );
         let task = Arc::new(task);
-        let mut beats = self.register_heartbeat(task.id, task.fence_token);
+        let mut membership = self.register_heartbeat(task.id, task.fence_token);
         let token = CancellationToken::default();
         let context = HandlerContext::new(
             Arc::clone(&task),
@@ -114,11 +114,11 @@ impl Inner {
                 () = &mut expiry, if expires.is_some() && expired.is_none() => {
                     let (_, reason) = expires.expect("guarded above");
                     token.cancel(reason);
-                    self.unregister_heartbeat(task.id);
+                    membership.leave();
                     watchdog_armed = false;
                     expired = Some(self.expire_ownership(&task).await);
                 }
-                beat = beats.recv(), if beats_open => match beat {
+                beat = membership.beats.recv(), if beats_open => match beat {
                     Some(Beat::Renewed(sent_at)) => watchdog.as_mut().reset(sent_at + lease),
                     Some(Beat::Rejected(status)) => {
                         rejected.get_or_insert(status);
@@ -130,7 +130,7 @@ impl Inner {
                 () = shutdown.cancelled(), if !token.is_cancelled() => token.cancel(CancelReason::Shutdown),
             }
         };
-        self.unregister_heartbeat(task.id);
+        drop(membership);
         let result: HandlerResult = result
             .unwrap_or_else(|panic| Err(HandlerError::from_panic(&task.task_type, false, panic)));
 
