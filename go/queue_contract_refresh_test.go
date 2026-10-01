@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	workhorse "github.com/stablemates/workhorse/go"
@@ -208,5 +210,102 @@ func TestQueueReportsAPayloadInvalidUnderTheCurrentContractAfterOneReload(t *tes
 	}
 	if statements := log.since(before); countDefinitionReads(statements) != 1 || len(statements) != 1 {
 		t.Fatalf("expected one contract reload for the batch, recorded %v", statements)
+	}
+}
+
+type contractRaceRole struct{}
+
+// contractRaceExecutor lets a test pause one enqueue between PostgreSQL statements. after runs once a
+// statement returns and before runs before a statement is sent, each with the caller's context.
+type contractRaceExecutor struct {
+	executor workhorse.Executor
+	before   func(ctx context.Context, statement string, arguments []any)
+	after    func(ctx context.Context, statement string, arguments []any)
+}
+
+func (race *contractRaceExecutor) Query(
+	ctx context.Context,
+	statement string,
+	arguments ...any,
+) ([]workhorse.Row, error) {
+	race.before(ctx, statement, arguments)
+	rows, err := race.executor.Query(ctx, statement, arguments...)
+	race.after(ctx, statement, arguments)
+	return rows, err
+}
+
+func TestQueueValidatesABatchAgainstTheDefinitionItReadDespiteAConcurrentStaleStore(t *testing.T) {
+	ctx := context.Background()
+	executor := workhorse.NewPGXExecutor(contractRefreshPool(t, "queue-override-race"))
+	staleRead, resumeStale, staleStored, freshDone := make(chan struct{}), make(chan struct{}),
+		make(chan struct{}), make(chan struct{})
+	var closeFreshDone, pauseStale sync.Once
+	t.Cleanup(func() { closeFreshDone.Do(func() { close(freshDone) }) })
+	await := func(step string, signal <-chan struct{}) {
+		select {
+		case <-signal:
+		case <-time.After(10 * time.Second):
+			t.Errorf("the race did not reach %s", step)
+		}
+	}
+	definitionRead := func(statement string, arguments []any, taskType string) bool {
+		return strings.Contains(statement, "get_contract_definition_v1") &&
+			len(arguments) > 0 && arguments[0] == taskType
+	}
+	race := &contractRaceExecutor{
+		executor: executor,
+		before: func(ctx context.Context, statement string, _ []any) {
+			// The stale enqueue sends its batch only after it stored version one in the shared cache.
+			if ctx.Value(contractRaceRole{}) == "stale" && strings.Contains(statement, "enqueue_many_v1") {
+				close(staleStored)
+				await("the end of the fresh batch", freshDone)
+			}
+		},
+		after: func(ctx context.Context, statement string, arguments []any) {
+			switch ctx.Value(contractRaceRole{}) {
+			case "stale":
+				// Only the first read pauses; the contract_mismatch refresh that follows reads again.
+				if definitionRead(statement, arguments, "email.send") {
+					pauseStale.Do(func() {
+						close(staleRead)
+						await("the fresh batch's second task type", resumeStale)
+					})
+				}
+			case "fresh":
+				// Between two email.send requests, let the stale enqueue overwrite the shared entry.
+				if definitionRead(statement, arguments, "audit.record") {
+					close(resumeStale)
+					await("the stale store", staleStored)
+				}
+			}
+		},
+	}
+	queue := workhorse.NewQueue(race, "override-race")
+	syncEmailContractVersions(t, queue)
+
+	staleDone := make(chan struct{})
+	go func() {
+		defer close(staleDone)
+		staleContext := context.WithValue(ctx, contractRaceRole{}, "stale")
+		_, _ = queue.Enqueue(staleContext, "email.send", map[string]any{"one": true})
+	}()
+	await("the stale definition read", staleRead)
+	overrideEmailContract(t, executor, "two")
+
+	freshContext := context.WithValue(ctx, contractRaceRole{}, "fresh")
+	taskIDs, err := queue.EnqueueMany(freshContext, []workhorse.EnqueueRequest{
+		{Type: "email.send", Payload: map[string]any{"two": true}},
+		{Type: "audit.record", Payload: map[string]any{}},
+		{Type: "email.send", Payload: map[string]any{"two": true}},
+	})
+	closeFreshDone.Do(func() { close(freshDone) })
+	await("the end of the stale enqueue", staleDone)
+	if err != nil {
+		t.Fatalf("a concurrent store of an older definition rejected the batch: %v", err)
+	}
+	for _, index := range []int{0, 2} {
+		if version := storedContractVersion(t, executor, taskIDs[index]); version != "two" {
+			t.Fatalf("expected request %d to carry version two, stored %q", index, version)
+		}
 	}
 }
