@@ -221,6 +221,7 @@ def test_contracted_batches_look_each_task_type_up_once() -> None:
                 {"ordinal": 2, "task_id": "second", "outcome": "accepted", "reason": None},
                 {"ordinal": 3, "task_id": "third", "outcome": "accepted", "reason": None},
             ],
+            [definition],
         ]
     )
     queue = Queue(connection, default_queue="go-contract")
@@ -249,4 +250,7 @@ def test_contracted_batches_look_each_task_type_up_once() -> None:
     with pytest.raises(TaskContractValidationError) as rejected:
         queue.enqueue_many_with_results([EnqueueRequest("email.send", {"missing": "name"})])
     assert rejected.value.kind == "payload"
-    assert len(connection.calls) == before
+    # The cached definition may be stale, so the rejection rereads it once and sends no enqueue.
+    reread = connection.calls[before:]
+    assert len(reread) == 1
+    assert "get_contract_definition_v1" in reread[0][0]
