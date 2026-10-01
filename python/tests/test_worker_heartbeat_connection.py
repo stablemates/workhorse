@@ -133,8 +133,8 @@ def test_a_held_checkpoint_does_not_delay_heartbeats(database_url: str) -> None:
         connection = lease.__enter__()
 
         class LoggedConnection:
-            def cursor(self) -> Any:
-                base = connection.cursor()
+            def cursor(self, *, row_factory: Any = None) -> Any:
+                base = connection.cursor(row_factory=row_factory)
 
                 class LoggedCursor:
                     @property

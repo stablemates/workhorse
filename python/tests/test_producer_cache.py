@@ -147,11 +147,11 @@ class FlakyConnection(Connection):
         super().__init__(responses)
         self.fail_next = True
 
-    def cursor(self) -> Any:
+    def cursor(self, *, row_factory: Any = None) -> Any:
         if self.fail_next:
             self.fail_next = False
             raise psycopg.OperationalError("connection reset")
-        return super().cursor()
+        return super().cursor(row_factory=row_factory)
 
 
 def test_a_transient_compatibility_failure_is_retried() -> None:
@@ -214,9 +214,9 @@ class StatementLog:
         self.connection = connection
         self.statements: list[str] = []
 
-    def cursor(self) -> Any:
+    def cursor(self, *, row_factory: Any = None) -> Any:
         log = self
-        cursor = self.connection.cursor()
+        cursor = self.connection.cursor(row_factory=row_factory)
 
         class LoggedCursor:
             description = property(lambda _self: cursor.description)

@@ -4,6 +4,7 @@ import json
 from collections.abc import Sequence
 
 import pytest
+from psycopg.rows import tuple_row
 
 from workhorse import (
     DependencyCycleError,
@@ -54,7 +55,8 @@ class Connection:
         self.error = error
         self.fail_compatibility = fail_compatibility
 
-    def cursor(self) -> Cursor:
+    def cursor(self, *, row_factory: object = None) -> Cursor:
+        assert row_factory is tuple_row
         return Cursor(self.error, self.fail_compatibility)
 
 

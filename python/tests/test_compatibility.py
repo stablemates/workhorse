@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 import pytest
+from psycopg.rows import tuple_row
 
 from workhorse import ProtocolCompatibilityError, assert_schema_compatible
 from workhorse._compatibility import (
@@ -141,7 +142,8 @@ class FakeConnection:
     def __init__(self, version: int) -> None:
         self._version = version
 
-    def cursor(self) -> FakeCursor:
+    def cursor(self, *, row_factory: object = None) -> FakeCursor:
+        assert row_factory is tuple_row
         return FakeCursor(self._version)
 
 

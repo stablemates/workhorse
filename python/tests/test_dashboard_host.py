@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterable
 from typing import cast
 
 import pytest
+from psycopg.rows import tuple_row
 
 from workhorse._version import WORKHORSE_VERSION
 from workhorse.dashboard import DashboardHost, DashboardPrincipal, DashboardResponse
@@ -14,7 +15,8 @@ from workhorse.dashboard import DashboardHost, DashboardPrincipal, DashboardResp
 class _Connection:
     autocommit = True
 
-    def cursor(self) -> object:
+    def cursor(self, *, row_factory: object = None) -> object:
+        assert row_factory is tuple_row
         raise AssertionError("the transport test must not query PostgreSQL")
 
 
