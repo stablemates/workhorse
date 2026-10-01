@@ -98,6 +98,16 @@ RSpec.describe "Queue#enqueue against PostgreSQL" do
     expect(task_count).to eq(1)
   end
 
+  it "reports not_pending when a debounced task is no longer pending" do
+    debounce = W::Debounce.new(key: "search-index-cancelled", window: 60)
+    first = queue.enqueue("index.rebuild", {"v" => 1}, debounce: debounce)
+    queue.cancel(first.task_id, requested_by: "ops")
+
+    second = queue.enqueue("index.rebuild", {"v" => 2}, debounce: debounce)
+    expect([second.task_id, second.outcome, second.reason]).to eq([first.task_id, :non_replaceable, :not_pending])
+    expect(first.reason).to be_nil
+  end
+
   it "coalesces requests inside a throttle window" do
     throttle = W::Throttle.new(key: "digest", window: 60)
     first = queue.enqueue("digest.send", {}, throttle: throttle)

@@ -68,6 +68,32 @@ RSpec.describe Stablemates::Workhorse::Queue do
     }
   end
 
+  it "reports why a debounced enqueue was not replaceable" do
+    %w[incompatible_key_mode not_pending window_elapsed_pending].each do |reason|
+      queue = described_class.new(FakeExecutor.new do
+        [{"ordinal" => "1", "task_id" => task, "outcome" => "non_replaceable", "reason" => reason}]
+      end)
+      result = queue.enqueue("t", {}, debounce: W::Debounce.new(key: "k", window: 1))
+      expect([result.outcome, result.reason]).to eq([:non_replaceable, reason.to_sym])
+    end
+
+    accepted = described_class.new(FakeExecutor.new do
+      [{"ordinal" => "1", "task_id" => task, "outcome" => "accepted", "reason" => nil}]
+    end).enqueue("t", {})
+    expect([accepted.outcome, accepted.reason]).to eq([:accepted, nil])
+    expect(W::EnqueueResult.new(task_id: task, outcome: :accepted).reason).to be_nil
+  end
+
+  it "refuses an enqueue reason that does not match its outcome" do
+    [["non_replaceable", nil], ["non_replaceable", "vanished"], ["accepted", "not_pending"]].each do |outcome, reason|
+      queue = described_class.new(FakeExecutor.new do
+        [{"ordinal" => "1", "task_id" => task, "outcome" => outcome, "reason" => reason}]
+      end)
+      expect { queue.enqueue("t", {}) }
+        .to raise_error(ArgumentError, "PostgreSQL returned an invalid enqueue result")
+    end
+  end
+
   it "refuses an incompatible schema before the statement" do
     executor = Class.new(FakeExecutor) do
       def rows(sql, params = [])

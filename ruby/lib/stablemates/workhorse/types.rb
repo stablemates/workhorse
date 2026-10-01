@@ -3,8 +3,14 @@
 module Stablemates
   module Workhorse
     # What PostgreSQL did with one enqueue request. +outcome+ is :accepted, :replayed, :replaced,
-    # :non_replaceable, or :coalesced.
-    EnqueueResult = Data.define(:task_id, :outcome)
+    # :non_replaceable, or :coalesced. +reason+ says why a debounced request was :non_replaceable:
+    # :incompatible_key_mode, :not_pending, or :window_elapsed_pending. It is nil for every other
+    # outcome.
+    EnqueueResult = Data.define(:task_id, :outcome, :reason) do
+      def initialize(task_id:, outcome:, reason: nil)
+        super
+      end
+    end
 
     # One request of an +enqueue_many+ batch. It carries the keywords +Queue#enqueue+ takes.
     EnqueueRequest = Data.define(
