@@ -1,7 +1,8 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import {
   executableName,
   gofmtTool,
@@ -356,16 +357,92 @@ describe("the container pnpm pin", () => {
   });
 });
 
-describe("the CI uv pin", () => {
-  it("names the version mise.toml pins", async () => {
-    const [pins, workflow] = await Promise.all([
-      readPins(repositoryRoot),
-      readFile(join(repositoryRoot, ".github/workflows/ci.yml"), "utf8"),
-    ]);
-    const setups = workflow.match(/astral-sh\/setup-uv@/g) ?? [];
-    const pinned = workflow.match(/^ {10}version: (\S+)/gm) ?? [];
+// Each setup-uv step installs whatever uv it resolves unless it names a version. A release that
+// builds with another uv than CI can publish an artifact nobody tested.
+interface WorkflowStep {
+  uses?: unknown;
+  with?: { version?: unknown };
+}
 
-    expect(pinned).toHaveLength(setups.length);
-    for (const line of pinned) expect(line).toContain(pins.get("uv"));
+function setupUvVersions(workflow: string, source: string): readonly string[] {
+  const jobs = (parse(source) as { jobs?: Record<string, { steps?: WorkflowStep[] }> }).jobs ?? {};
+  return Object.entries(jobs).flatMap(([job, { steps = [] }]) =>
+    steps.flatMap((step, index) =>
+      typeof step.uses === "string" && step.uses.startsWith("astral-sh/setup-uv@")
+        ? [`${workflow}:${job}[${index}] ${String(step.with?.version ?? "none")}`]
+        : [],
+    ),
+  );
+}
+
+describe("the workflow uv pin", () => {
+  it("names the version mise.toml pins in every setup-uv step", async () => {
+    const workflows = await readdir(join(repositoryRoot, ".github/workflows"));
+    const [pins, versions] = await Promise.all([
+      readPins(repositoryRoot),
+      Promise.all(
+        workflows.map(async (workflow) =>
+          setupUvVersions(
+            workflow,
+            await readFile(join(repositoryRoot, ".github/workflows", workflow), "utf8"),
+          ),
+        ),
+      ).then((found) => found.flat()),
+    ]);
+
+    // The release workflow builds what PyPI receives, so it must be among the steps checked.
+    expect(versions.filter((entry) => entry.startsWith("release-python.yml:"))).toHaveLength(2);
+    expect(versions).toEqual(versions.map((entry) => entry.replace(/ \S+$/, ` ${pins.get("uv")}`)));
+  });
+
+  it("finds a setup-uv step whatever order its keys take", () => {
+    const source = [
+      "jobs:",
+      "  build:",
+      "    steps:",
+      "      - name: Install uv",
+      "        uses: astral-sh/setup-uv@v7",
+      "      - with:",
+      "          version: 0.9.0",
+      "        uses: astral-sh/setup-uv@v7",
+    ].join("\n");
+
+    expect(setupUvVersions("named.yml", source)).toEqual([
+      "named.yml:build[0] none",
+      "named.yml:build[1] 0.9.0",
+    ]);
+  });
+});
+
+describe("the Python build backend pin", () => {
+  // uv.lock does not cover the build backend, so each build reads the hash-pinned constraints.
+  it("pins hatchling to one version with hashes", async () => {
+    const constraints = await readFile(
+      join(repositoryRoot, "python/build-constraints.txt"),
+      "utf8",
+    );
+    const requirements = constraints.split(/\n(?=\S)/).filter((entry) => !entry.startsWith("#"));
+
+    expect(requirements.some((entry) => /^hatchling==\S+ \\/.test(entry))).toBe(true);
+    for (const entry of requirements) {
+      expect(entry).toMatch(/^[\w.-]+==\S+ \\\n {4}--hash=sha256:[0-9a-f]{64}/);
+    }
+  });
+
+  it("is read by every Python distribution build", async () => {
+    const [manifest, releaseCheck, distributions] = await Promise.all(
+      ["package.json", "scripts/check-python-release.ts", "python/tests/distributions.py"].map(
+        (file) => readFile(join(repositoryRoot, file), "utf8"),
+      ),
+    );
+    const scripts = (JSON.parse(manifest!) as { scripts: Record<string, string> }).scripts;
+
+    expect(scripts["python:build"]).toContain(
+      "uv build --project python --build-constraints python/build-constraints.txt --require-hashes",
+    );
+    expect(releaseCheck).toContain('UV_BUILD_CONSTRAINT: "python/build-constraints.txt"');
+    expect(releaseCheck).toContain('UV_REQUIRE_HASHES: "1"');
+    expect(distributions).toContain('"build-constraints.txt"');
+    expect(distributions).toContain('"--require-hashes"');
   });
 });
