@@ -3654,6 +3654,7 @@ class Queue {
     queue?: string;
     leaseMs?: number;
   }): Promise<ClaimedTask<TPayload>[]>;
+  [workerQueueTierRead](queueName: string): Promise<boolean>;
   [workerCompletionPrepare](task: ClaimedTask, workerId: string, result: Json): Promise<(claim?: CompletionClaim) => Promise<CompletionClaimResult>>;
   [workerHeartbeatReservationProblem](): string | undefined;
   [workerStatementPoolCapacity](): number | undefined;

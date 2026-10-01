@@ -3652,6 +3652,13 @@ both the claim and the `HandlerContext` cache the answer. On `tier = 'fast'` the
 `FastTierUnsupportedError` and the worker ends the probe interval. `set_queue_tier_v1` refuses a
 queue with live tasks, so one read holds for every task of the claim.
 
+The TypeScript worker does the same. `Worker.trackFullTierClaim` gives the tasks of a non-empty
+`claim_many_v1` result one shared tier read, which caches only an answer. `createHandlerContext`
+awaits that read at the start of each call in the table, before any read, write, or callback. The
+read reaches `QueueAdministration.queueTier` through the internal `workerQueueTierRead` capability.
+A batch member's context comes from the same `createHandlerContext`, so its `checkpoint` and
+`setProgress` reject the same way.
+
 The read runs inside the handler, where the heartbeat already renews the lease. A slow read therefore
 cannot expire a lease that `claim_many_v1` committed. A failed read is not cached. It raises from the
 durable call before any durable write, and the next durable call retries it. A handler that makes no

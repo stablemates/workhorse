@@ -140,6 +140,7 @@ import {
   workerHeartbeatReservationProblem,
   workerStatementPoolCapacity,
   workerProgressRead,
+  workerQueueTierRead,
   workerWaitsRead,
   type WorkerHeartbeatChannel,
 } from "./worker-internal.js";
@@ -777,6 +778,10 @@ export class Queue {
     options: { queue?: string; leaseMs?: number } = {},
   ): Promise<ClaimedTask<TPayload>[]> {
     return this.modules.claimLeaseFence.claimFast<TPayload>(workerId, limit, options);
+  }
+
+  async [workerQueueTierRead](queueName: string): Promise<boolean> {
+    return (await this.modules.queueAdministration.queueTier(queueName)) === "fast";
   }
 
   async [workerCompletionPrepare](

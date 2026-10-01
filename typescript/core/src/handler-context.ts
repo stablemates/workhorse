@@ -22,30 +22,41 @@ import type { HandlerContext, WorkerQueueApi } from "./worker.js";
  * attempt still owns the task.
  *
  * A fast-tier task has no durable execution state (ADR 0077). Its context rejects every operation
- * that would write that state before any round trip, so the attempt fails with a clear error.
+ * that would write that state before any round trip, so the attempt fails with a clear error. When
+ * `fastTier` is a tier read, each such operation awaits it before any read, write, or callback.
  */
 export function createHandlerContext(
   queue: WorkerQueueApi,
   workerId: string,
   task: ClaimedTask,
   attempt: TaskAttempt,
-  fastTier = false,
+  fastTier: boolean | (() => Promise<boolean>) = false,
 ): HandlerContext {
   const context = createDurableHandlerContext(queue, workerId, task, attempt);
-  if (!fastTier) return context;
-  const reject = (feature: string) => (): Promise<never> =>
-    Promise.reject(new FastTierUnsupportedError(task.queue, feature));
+  if (fastTier === false) return context;
+  const guard = <TOperation extends (...args: never[]) => Promise<unknown>>(
+    feature: string,
+    operation: TOperation,
+  ): TOperation => {
+    if (fastTier === true) {
+      return (() => Promise.reject(new FastTierUnsupportedError(task.queue, feature))) as never;
+    }
+    return (async (...args: Parameters<TOperation>) => {
+      if (await fastTier()) throw new FastTierUnsupportedError(task.queue, feature);
+      return operation(...args);
+    }) as TOperation;
+  };
   return {
     ...context,
-    setProgress: reject("progress"),
-    checkpoint: reject("checkpoints"),
-    sleep: reject("durable waits"),
-    sleepUntil: reject("durable waits"),
-    waitForSignal: reject("signal waits"),
-    waitForHuman: reject("human waits"),
-    runChild: reject("child tasks"),
-    runChildren: reject("child tasks"),
-    runChildrenAll: reject("child tasks"),
+    setProgress: guard("progress", context.setProgress),
+    checkpoint: guard("checkpoints", context.checkpoint),
+    sleep: guard("durable waits", context.sleep),
+    sleepUntil: guard("durable waits", context.sleepUntil),
+    waitForSignal: guard("signal waits", context.waitForSignal),
+    waitForHuman: guard("human waits", context.waitForHuman),
+    runChild: guard("child tasks", context.runChild),
+    runChildren: guard("child tasks", context.runChildren),
+    runChildrenAll: guard("child tasks", context.runChildrenAll),
   };
 }
 
