@@ -385,8 +385,10 @@ one commit and one version number.
 
 The Python package releases from its own `python/vX.Y.Z` tag. The tag must match
 `python/pyproject.toml` and a heading in `python/CHANGELOG.md`. `.github/workflows/release-python.yml`
-runs `pnpm check`, then uv builds a source distribution and universal wheel. A separate `pypi`
-environment publishes those artifacts through PyPI trusted publishing with `id-token: write`.
+requires a successful `main` CI run on the tagged commit. It then runs `pnpm python:release-check`,
+which builds a source distribution and universal wheel with uv, and `pnpm rust:release-check`.
+A separate `pypi` environment publishes those artifacts through PyPI trusted publishing with
+`id-token: write`.
 Before publication, the publish task generates a PEP 740 attestation beside each distribution.
 
 The Go module releases from its own `go/vX.Y.Z` tag. `scripts/release-go.sh X.Y.Z` requires
