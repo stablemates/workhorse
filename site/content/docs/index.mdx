@@ -65,7 +65,9 @@ Use a stable provider idempotency key for effects such as charging a card.
 ```ts
 import { Worker } from "@stablemates/workhorse";
 
-const worker = new Worker(queue).handle("order.fulfill", async (payload, ctx) => {
+type OrderPayload = { orderId: string };
+
+const worker = new Worker(queue).handle<OrderPayload>("order.fulfill", async (payload, ctx) => {
   // These application helpers must use stable provider idempotency keys.
   const charge = await ctx.checkpoint("charge", () => chargeCard(payload.orderId));
   // Once the checkpoint is saved, a retry reuses the charge result.

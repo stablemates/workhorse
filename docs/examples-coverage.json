@@ -2,7 +2,7 @@
   "languages": ["typescript", "python", "go", "rust", "ruby"],
   "scenarios": {
     "quickstart": {
-      "typescript": { "file": "typescript/examples/quickstart.mjs" },
+      "typescript": { "file": "typescript/examples/quickstart.ts" },
       "python": { "file": "python/examples/quickstart.py" },
       "go": { "file": "go/examples/quickstart/main.go" },
       "rust": { "file": "rust/examples/quickstart.rs" },

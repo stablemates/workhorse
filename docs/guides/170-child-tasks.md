@@ -8,7 +8,7 @@ up its lease while waiting, so it does not occupy a worker slot.
 Call `HandlerContext.runChild` with a stable name, task type, payload, and optional enqueue settings:
 
 ```ts
-worker.handle("orders.checkout", async (order, ctx) => {
+worker.handle<{ id: string }>("orders.checkout", async (order, ctx) => {
   const charge = await ctx.runChild<{ orderId: string }, { receiptId: string }>(
     "charge",
     "payments.charge",

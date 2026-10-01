@@ -906,6 +906,12 @@ requires the TypeScript, Python, Go, and Rust README code blocks to be verbatim 
 release-tested quickstart files. `pnpm check` runs this focused test before the repository test
 suite.
 
+`scripts/typescript-doc-examples.test.ts` compiles the TypeScript `ts` fences in both READMEs, the
+site introduction, and the child-task guide with `strict: true`. It resolves
+`@stablemates/workhorse` to `typescript/core/src/index.ts` and declares application helpers in a
+typed harness. The TypeScript quickstart is `typescript/examples/quickstart.ts`, and the packed
+consumer type-checks it under the same strict settings before running it.
+
 The Rust crate is `workhorse` in `rust/`, requires Rust 1.89 or newer, and runs on Tokio over
 `tokio-postgres` 0.7 and `deadpool-postgres` 0.14. [ADR
 0074](decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md) records its shape. The sealed
