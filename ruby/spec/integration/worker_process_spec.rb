@@ -59,11 +59,15 @@ RSpec.describe "Worker processes against PostgreSQL" do
     end
   end
 
-  # Waits until +pid+ has exited but is not yet reaped.
-  def wait_zombie(pid, timeout = 5)
+  # Waits until +pid+ has exited and a wait would report it, without reaping it. Linux marks an
+  # exited thread-group leader as a zombie while its other threads are still exiting, but wait
+  # reports the child only after the last one has gone. A forked Ruby child has more than one thread.
+  def wait_reapable(pid, timeout = 5)
     deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
-    until File.read("/proc/#{pid}/stat").split[2] == "Z"
-      raise "process #{pid} did not exit within #{timeout}s" if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+    loop do
+      status = File.read("/proc/#{pid}/status")
+      return if status.match?(/^State:\s+Z/) && status.match?(/^Threads:\s+1$/)
+      raise "process #{pid} did not become reapable within #{timeout}s" if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
 
       sleep(0.01)
     end
@@ -261,10 +265,30 @@ RSpec.describe "Worker processes against PostgreSQL" do
       expect(@lines.to_a + [@reader.read_nonblock(4096, exception: false)].grep(String)).to be_empty
     end
 
+    it "treats an exited child as reapable only after its last thread has gone" do
+      exit_thread = {"x86_64" => 60, "aarch64" => 93}.fetch(RbConfig::CONFIG["host_cpu"]) do
+        skip "no exit syscall number for #{RbConfig::CONFIG["host_cpu"]}"
+      end
+      # Only the main thread exits, so the leader is a zombie while another thread keeps running.
+      child = fork_process do
+        Thread.new { sleep }
+        syscall(exit_thread, 0)
+      end
+
+      expect { wait_reapable(child, 0.5) }.to raise_error(/did not become reapable/)
+      expect(File.read("/proc/#{child}/status")).to match(/^State:\s+Z/)
+      expect(Process.wait(child, Process::WNOHANG)).to be_nil
+
+      Process.kill("KILL", child)
+      wait_reapable(child)
+      expect(Process.wait(child, Process::WNOHANG)).to eq(child)
+      @forked.delete(child)
+    end
+
     it "reaps only its own children, so another child of the application keeps its status" do
       unrelated = Process.fork { Kernel.exit!(7) }
       tracked = Process.fork { Kernel.exit!(0) }
-      [unrelated, tracked].each { |pid| wait_zombie(pid) }
+      [unrelated, tracked].each { |pid| wait_reapable(pid) }
       supervisor = W::Supervisor.new(1, 1.0, -> {})
       supervisor.instance_variable_set(:@children, {tracked => 0.0})
       supervisor.instance_variable_set(:@deadline, 0.0)
