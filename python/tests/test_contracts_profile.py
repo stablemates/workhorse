@@ -13,7 +13,24 @@ FIXTURES: list[dict[str, Any]] = json.loads(
 )
 
 
-@pytest.mark.parametrize("fixture", FIXTURES, ids=[fixture["id"] for fixture in FIXTURES])
+# Fixtures Python does not pass yet, each with the Issue that owns the gap. A listed fixture that
+# passes fails the run, so an entry cannot outlive its gap.
+UNSUPPORTED = {"pattern-property-outside-its-selector-rejected": "SM-1064"}
+
+
+@pytest.mark.parametrize(
+    "fixture",
+    [
+        pytest.param(
+            fixture,
+            id=fixture["id"],
+            marks=[pytest.mark.xfail(reason=UNSUPPORTED[fixture["id"]], strict=True)]
+            if fixture["id"] in UNSUPPORTED
+            else [],
+        )
+        for fixture in FIXTURES
+    ],
+)
 def test_contract_schema_profile(fixture: dict[str, Any]) -> None:
     if fixture.get("schemaError"):
         with pytest.raises((TypeError, ValueError)):

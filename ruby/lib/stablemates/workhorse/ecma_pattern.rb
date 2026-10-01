@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "ecma_pattern/properties"
+
 module Stablemates
   module Workhorse
     # Compiles an ECMA-262 regular expression, as JSON Schema's +pattern+ requires, into a Ruby
@@ -8,7 +10,13 @@ module Stablemates
     #
     # Onigmo differs from ECMA-262 where this translation intervenes. +^+ and +$+ match at line
     # ends, +.+ excludes only a newline, +\s+ and +\b+ follow Unicode, and a plain group stops
-    # capturing beside a named one. Internal to the SDK.
+    # capturing beside a named one. A backreference to a group that has not matched fails, where
+    # ECMA-262 matches the empty string.
+    #
+    # Three differences remain. A group keeps its capture from an earlier iteration of a
+    # quantifier, where ECMA-262 clears it. Onigmo has no +Script_Extensions+ escape, so +compile+
+    # refuses one. Property names and members follow Ruby's Unicode version, which can lag the one
+    # other validators read. Internal to the SDK.
     class EcmaPattern
       SPACE = '\t\n\u000b\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff'
       WORD = "[A-Za-z0-9_]"
@@ -18,12 +26,9 @@ module Stablemates
       SYNTAX = "^$\\.*+?()[]{}|/"
       CONTROLS = {"f" => '\f', "n" => '\n', "r" => '\r', "t" => '\t', "v" => '\u000b'}.freeze
       GROUP_NAME = /\A\?<([\p{ID_Start}$_][\p{ID_Continue}$\u200c\u200d]*)>/
-      # ECMA-262 names a property in case-sensitive words, where Onigmo matches any spelling and
-      # knows names ECMA-262 lacks. This checks the shape, not the Unicode tables.
-      PROPERTY = /\A\{(?:(?:General_Category|gc|Script|sc)=)?([A-Z][A-Za-z0-9]*(?:_[A-Z][A-Za-z0-9]*)*)\}/
-      ONIGMO_PROPERTIES = %w[Alnum Blank Cntrl Digit Graph Newline Print Punct Space Word XDigit].freeze
+      PROPERTY = /\A\{(?:(\w+)=)?(\w+)\}/
       private_constant :SPACE, :WORD, :DOT, :WORD_BOUNDARY, :NOT_WORD_BOUNDARY, :SYNTAX, :CONTROLS,
-        :GROUP_NAME, :PROPERTY, :ONIGMO_PROPERTIES
+        :GROUP_NAME, :PROPERTY
 
       def self.compile(source) = new(source).regexp
 
@@ -152,16 +157,20 @@ module Stablemates
           name = @source[@at..][/\A<([^>]*)>/, 1] or raise ArgumentError, "invalid named reference"
           number = @names[name] or raise ArgumentError, "no group named #{name}"
           @at += name.length + 2
-          emit("\\k<#{number}>", :atom)
+          emit(backreference(number), :atom)
         when "1".."9"
           digits = char + @source[@at..][/\A\d*/]
           @at += digits.length - 1
           raise ArgumentError, "no group #{digits}" if Integer(digits, 10) > @captures
 
-          emit("\\k<#{Integer(digits, 10)}>", :atom)
+          emit(backreference(Integer(digits, 10)), :atom)
         else emit(set_escape(char) || character_escape(char, SYNTAX), :atom)
         end
       end
+
+      # A group that has not matched yet, or that the matching alternative skipped, matches the empty
+      # string. The conditional gives Onigmo that rule.
+      def backreference(number) = "(?(#{number})\\k<#{number}>)"
 
       # A class like +\d+, or nil for any other escape.
       def set_escape(char)
@@ -171,13 +180,21 @@ module Stablemates
         when "S" then "[^#{SPACE}]"
         when "p", "P"
           escape = @source[@at..][PROPERTY] or raise ArgumentError, "invalid property escape"
-          name = escape[PROPERTY, 1]
-          if ONIGMO_PROPERTIES.include?(name) || name.start_with?("In_")
-            raise ArgumentError, "unknown property #{name}"
-          end
+          onigmo = property(*escape.match(PROPERTY).captures) or
+            raise ArgumentError, "unknown property #{escape[1...-1]}"
 
           @at += escape.length
-          "\\#{char}{#{name}}"
+          "\\#{char}{#{onigmo}}"
+        end
+      end
+
+      # The name Onigmo reads for a property ECMA-262 accepts, or nil. A bare name is a general
+      # category or a binary property, and a selector limits the name to its own property.
+      def property(selector, name)
+        case selector
+        when nil then GENERAL_CATEGORIES[name] || BINARY_PROPERTIES[name]
+        when "General_Category", "gc" then GENERAL_CATEGORIES[name]
+        when "Script", "sc" then SCRIPTS[name]
         end
       end
 

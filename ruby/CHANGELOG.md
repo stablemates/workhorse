@@ -12,7 +12,8 @@ other SDKs carry, because every tag names one release of all of them.
 - Durations, including a `RateLimit` interval, are finite Numeric seconds. The client refuses a
   value outside a protocol bound with `ArgumentError` before it sends any statement.
 - Contract schemas are checked against the draft 2020-12 meta-schema, and `pattern` matches with
-  ECMA-262 semantics.
+  ECMA-262 semantics. A backreference to a group that has not matched matches the empty string,
+  and a property escape accepts only the names ECMA-262 accepts for its property.
 - Add the executor forms: a `PG::Connection`, a `ConnectionPool`, or any object whose `with`
   yields a connection. `ActiveRecordExecutor` joins the caller's Active Record transaction.
 - Add the error hierarchy under `Stablemates::Workhorse::Error`.
