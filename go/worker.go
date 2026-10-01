@@ -50,6 +50,8 @@ const (
 	// honours its context returns well inside this window, so abandonment reports a handler that
 	// ignored cancellation rather than one that was about to finish.
 	handlerUnwindPeriod = 250 * time.Millisecond
+	// deregistrationTimeout bounds the last statement a stopping worker issues.
+	deregistrationTimeout = time.Second
 	// A worker that subscribes to task notifications polls only as a fallback, so it waits the
 	// ceiling between empty claims. A worker that cannot subscribe starts at the shorter interval
 	// and backs off toward the same ceiling.
@@ -571,15 +573,47 @@ func (worker *Worker) Run(ctx context.Context) error {
 	}()
 	executionContext, cancelExecutions := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancelExecutions()
+	// The grace period starts when the run stops, not when the claims in flight settle. Every
+	// shutdown step that needs a pooled connection waits on drainContext, so handlers that hold the
+	// whole pool cannot hold Run past its deadline.
+	drainContext, expireDrain := context.WithCancel(context.WithoutCancel(ctx))
+	defer expireDrain()
+	var graceStart sync.Once
+	var graceTimer *time.Timer
+	startGrace := func() {
+		graceStart.Do(func() {
+			graceTimer = time.AfterFunc(worker.shutdownGracePeriod, expireDrain)
+		})
+	}
+	defer func() {
+		graceStart.Do(func() {})
+		if graceTimer != nil {
+			graceTimer.Stop()
+		}
+	}()
+	runDone := make(chan struct{})
+	defer close(runDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+			startGrace()
+		case <-runDone:
+		}
+	}()
+	// A fused completion claims through its execution's context, so the deadline cancels the
+	// executions as well. Otherwise dispatch could wait on a completion claim that waits on the pool.
+	stopExecutionsAtDeadline := context.AfterFunc(drainContext, cancelExecutions)
+	defer stopExecutionsAtDeadline()
 	// A fused completion hands its slot to a replacement before its execution ends, so up to twice
 	// the concurrency of executions can finish at once.
 	executionResults := make(chan executionResult, 2*worker.concurrency)
 	active, firstError := worker.dispatch(ctx, dispatchEnvironment{
 		// A claim may commit tasks before a later queue fails. The claim must finish even when the
 		// run context is cancelled, and every task it returned still needs to be executed before the
-		// error is surfaced.
+		// error is surfaced. The drain deadline still ends it: a lease it committed but never
+		// returned expires on its own (ADR 0076).
 		claim: func(limit int, fastLimit int) ([]ClaimedTask, error) {
-			return worker.claimNextMany(context.WithoutCancel(ctx), executor, limit, fastLimit)
+			return worker.claimNextMany(drainContext, executor, limit, fastLimit)
 		},
 		execute: func(claimed ClaimedTask) error {
 			handler := worker.handlers[claimed.Type]
@@ -593,58 +627,18 @@ func (worker *Worker) Run(ctx context.Context) error {
 		registryWake:      registryWake,
 		maintenanceErrors: maintenanceErrors,
 		listening:         notificationListening.Load,
+		// A maintenance, claim, or execution error stops the run while the caller's context is
+		// still live. The grace period starts then, so a stalled claim cannot hold the settlement.
+		stopped: startGrace,
 	})
 
+	startGrace()
 	worker.draining.Store(true)
-	worker.refreshRegistration(context.WithoutCancel(ctx), executor, true)
+	worker.refreshRegistration(drainContext, executor, true)
 	stopMaintenance()
-	graceTimer := time.NewTimer(worker.shutdownGracePeriod)
-	abandoned := 0
-	for active > 0 {
-		select {
-		case result := <-executionResults:
-			active--
-			if result.err != nil && firstError == nil {
-				firstError = result.err
-			}
-			continue
-		case <-graceTimer.C:
-		}
-		// The grace period is the time a handler gets to finish on its own. What follows bounds
-		// what used to be unbounded: cancel, give the cancelled handlers one short window to
-		// unwind, then abandon whatever still runs so Run always returns.
-		cancelExecutions()
-		unwindTimer := time.NewTimer(handlerUnwindPeriod)
-		for active > 0 {
-			select {
-			case <-executionResults:
-				active--
-				continue
-			case <-unwindTimer.C:
-			}
-			break
-		}
-		if !unwindTimer.Stop() {
-			select {
-			case <-unwindTimer.C:
-			default:
-			}
-		}
-		// An abandoned handler keeps running inside the caller's process and settles its own task.
-		// Its lease renewal stops here, so a handler that never returns leaves a lease PostgreSQL
-		// recovers, which is what a worker process that exits at its deadline leaves behind too.
-		if active > 0 {
-			worker.abandonHeartbeats()
-			abandoned = active
-		}
-		break
-	}
-	if !graceTimer.Stop() {
-		select {
-		case <-graceTimer.C:
-		default:
-		}
-	}
+	abandoned, firstError := worker.drainExecutions(
+		drainContext, executionResults, active, firstError, cancelExecutions,
+	)
 	stopRegistry()
 	<-registryDone
 	worker.deregister(context.WithoutCancel(ctx), executor)
@@ -656,6 +650,55 @@ func (worker *Worker) Run(ctx context.Context) error {
 		return errors.Join(firstError, incomplete)
 	}
 	return firstError
+}
+
+// drainExecutions waits for the active executions to settle. The grace period is the time a handler
+// gets to finish on its own. After it, drainExecutions cancels the executions, gives the cancelled
+// handlers one short window to unwind, then abandons whatever still runs so Run always returns.
+// It returns how many executions it abandoned and the first error a settled execution reported.
+func (worker *Worker) drainExecutions(
+	drainContext context.Context,
+	executionResults <-chan executionResult,
+	active int,
+	firstError error,
+	cancelExecutions context.CancelFunc,
+) (int, error) {
+	for active > 0 {
+		select {
+		case result := <-executionResults:
+			active--
+			// The deadline cancels the executions as soon as the grace period ends, possibly
+			// before this loop observes it. A cancellation the deadline caused is part of the
+			// unwind, not an error of the run.
+			cancelledByDeadline := drainContext.Err() != nil && errors.Is(result.err, context.Canceled)
+			if result.err != nil && firstError == nil && !cancelledByDeadline {
+				firstError = result.err
+			}
+			continue
+		case <-drainContext.Done():
+		}
+		break
+	}
+	if active == 0 {
+		return 0, firstError
+	}
+	cancelExecutions()
+	unwindTimer := time.NewTimer(handlerUnwindPeriod)
+	defer unwindTimer.Stop()
+	for active > 0 {
+		select {
+		case <-executionResults:
+			active--
+		case <-unwindTimer.C:
+			// An abandoned handler keeps running inside the caller's process and settles its own
+			// task. Its lease renewal stops here, so a handler that never returns leaves a lease
+			// PostgreSQL recovers, which is what a worker process that exits at its deadline
+			// leaves behind too.
+			worker.abandonHeartbeats()
+			return active, firstError
+		}
+	}
+	return 0, firstError
 }
 
 // dispatchRefillBatch is how many free slots let a second claim start while one is in flight: a
@@ -687,6 +730,9 @@ type dispatchEnvironment struct {
 	// notificationDelay draws the delay before a claim that a notification woke from idle. Nil
 	// draws a random delay up to notificationClaimDelay.
 	notificationDelay func() time.Duration
+	// stopped runs once, when the loop stops and before it waits for the claims in flight. A claim
+	// that waits on a lifecycle error's shutdown must see that the shutdown has started.
+	stopped func()
 }
 
 // executionResult is one finished execution and the slot it held.
@@ -1141,6 +1187,9 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 		}
 	}
 
+	if environment.stopped != nil {
+		environment.stopped()
+	}
 	// No reservation is granted from here on. Every claim and fused claim still in flight settles
 	// first, so the executions the caller drains include every task they leased.
 	worker.completionClaims.CompareAndSwap(claimer, nil)
@@ -1262,7 +1311,10 @@ func (worker *Worker) deregister(ctx context.Context, executor Executor) {
 	if !worker.registryEnabled || !worker.registered.Swap(false) {
 		return
 	}
-	_, _ = executor.Query(ctx, internalStatementRegistry[deregisterWorkerStatementName], worker.workerID)
+	// A worker that cannot deregister in time ages out of the fleet view on its heartbeat window.
+	deregisterContext, cancel := context.WithTimeout(ctx, deregistrationTimeout)
+	defer cancel()
+	_, _ = executor.Query(deregisterContext, internalStatementRegistry[deregisterWorkerStatementName], worker.workerID)
 }
 
 func (worker *Worker) acquireRun(ctx context.Context) (func(), error) {

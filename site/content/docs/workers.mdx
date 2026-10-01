@@ -300,6 +300,17 @@ Go applications create the same boundary with `signal.NotifyContext`, then pass 
 `Worker.Run`. A handler panic becomes a recorded attempt failure, so it does not terminate the
 worker process or prevent later tasks from running.
 
+The Go grace period, `WorkerOptions.ShutdownGracePeriod`, starts as soon as `Run` stops. That
+happens when the context ends or a lifecycle error stops the run. The deadline bounds every shutdown
+step, including a claim still in flight and the registry update that marks the worker draining.
+Tasks that claim already returned still run. A claim the deadline cuts short may hold a lease it
+never returned, and PostgreSQL recovers that task once the lease expires. A handler cancelled at the
+deadline does not turn a clean shutdown into an error.
+
+`Run` returning is not the process exiting. A handler that ignores its cancellation keeps running in
+the process, and `Run` returns an error matching `ErrShutdownIncomplete`. Its lease stops renewing,
+so recovery can rerun the task elsewhere.
+
 Rust applications call `run_worker_process`, which drains on `SIGINT` or `SIGTERM`. To own the
 boundary instead, pass any shutdown future to `Worker::run`. A handler panic becomes a recorded
 attempt failure there too.

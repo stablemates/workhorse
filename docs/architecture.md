@@ -763,11 +763,18 @@ of at least 100. `WorkerOptions.DisableRegistry` prevents registration and remot
 after their first occurrence. An empty list disables schedule evaluation.
 `WorkerOptions.ScheduleCatchupLimit` defaults to 100 and accepts integers from 1 through 10,000.
 `WorkerOptions.ShutdownGracePeriod` defaults to 25000 milliseconds and accepts positive
-whole-millisecond values. It bounds the drain: `Run` cancels every handler still executing when the
-period expires, allows 250 milliseconds for those handlers to unwind, then stops renewing the
-leases of whatever still runs and returns an error matching `ErrShutdownIncomplete`, naming how
-many it abandoned. `recover_expired_telemetry_v1` recovers their tasks once the leases expire. The
+whole-millisecond values. It bounds the drain, starting when `Run` observes its context end or a
+lifecycle error, before `Run` waits for an in-flight claim. `Run` cancels every handler still
+executing when the period expires, allows 250 milliseconds for those handlers to unwind, then stops
+renewing the leases of whatever still runs and returns an error matching `ErrShutdownIncomplete`,
+naming how many it abandoned. `recover_expired_telemetry_v1` recovers their tasks once the leases expire. The
 abandoned goroutines keep running inside the caller's process and may still use the pool.
+After the period expires, `drainExecutions` does not report an execution error that matches
+`context.Canceled`, because the deadline caused it. An error it settled earlier is still returned.
+The same deadline cancels each shutdown statement that waits for a pooled connection: an in-flight
+claim, a fused completion claim, and the draining registration refresh. A claim the deadline cancels
+leaves any lease it committed to expire. `deregister_worker_v1` then gets at most 1000 milliseconds,
+so handlers that hold every pool connection cannot keep `Run` from returning.
 `WorkerOptions.Logger` accepts a `*slog.Logger` and defaults to `slog.Default()`.
 `Worker.Handle(type, handler)` registers a
 `Handler(context.Context, any, *HandlerContext) (any, error)`.
@@ -805,8 +812,8 @@ returning its connection to the pool.
 Cancelling the `Run` context stops new claims and the maintenance loop. An in-flight claim may still
 land and joins the drain. Active handlers retain a context without the caller's cancellation during
 `ShutdownGracePeriod`. When that period expires, `Run` cancels every remaining handler context.
-`Run` waits for every claimed handler goroutine before returning. A handler must observe context
-cancellation for a forced drain to finish. The SDK installs no process signal handlers;
+`Run` waits for each claimed handler goroutine until the unwind window ends, then abandons the rest
+as described for `ShutdownGracePeriod`. The SDK installs no process signal handlers;
 applications can pass a context from `signal.NotifyContext` for `SIGINT` and `SIGTERM`.
 
 While handlers run, one worker heartbeat goroutine serializes `heartbeat_many_v1` calls on a dedicated connection shared by workers on the pool. Each round has a heartbeat-interval timeout; failed rounds destroy the connection and retry without cancelling handlers. A local watchdog cancels a handler after one lease without an accepted renewal.

@@ -114,6 +114,16 @@ Python processes get the same boundary by passing their configured `Worker` to
 Go applications pass a context from `signal.NotifyContext` to `Worker.Run`. A handler panic fails
 that attempt, while the worker stays alive to serve later tasks.
 
+A Go worker starts its grace period as soon as `Run` stops. That happens when the context ends or a
+lifecycle error stops the run. The deadline bounds every shutdown step, including a claim still in
+flight. Tasks that claim already returned still run. A claim the deadline cuts short may hold a
+lease it never returned, and that lease expires so recovery picks the task up. A handler cancelled
+at the deadline does not turn a clean shutdown into an error.
+
+`Run` returning is not the process exiting. A handler that ignores its cancellation keeps running
+inside the process, and `Run` reports it with `ErrShutdownIncomplete`. Its lease stops renewing, so
+recovery can rerun the task elsewhere.
+
 A few consequences worth knowing:
 
 - A claim already in flight may still land after shutdown starts. The worker drains that
