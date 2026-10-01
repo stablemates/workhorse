@@ -230,3 +230,44 @@ fn child_request(
     }
     Ok(Value::Object(input))
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+
+    use super::*;
+
+    fn parent() -> ClaimedTask {
+        ClaimedTask {
+            id: uuid::Uuid::new_v4(),
+            task_type: "order.process".into(),
+            queue: "orders".into(),
+            priority: 0,
+            payload: json!({}),
+            contract_version: None,
+            result_max_bytes: None,
+            redact_error_details: false,
+            trace_context: None,
+            attempt: 1,
+            max_attempts: 1,
+            retry_policy: json!({}),
+            deadline_at: None,
+            execution_timeout: None,
+            attempt_timeout_at: None,
+            fence_token: 1,
+            lease_expires_at: Utc::now(),
+            claim_sent_at: tokio::time::Instant::now(),
+            fast_tier: false,
+        }
+    }
+
+    #[test]
+    fn a_child_goes_to_default_unless_its_options_name_a_queue() {
+        let queue = |options: &EnqueueOptions| {
+            child_request(&parent(), "invoice.create", json!({}), options).unwrap()["queue"].clone()
+        };
+        assert_eq!(queue(&EnqueueOptions::default()), json!("default"));
+        let orders = EnqueueOptions { queue: Some("orders".into()), ..Default::default() };
+        assert_eq!(queue(&orders), json!("orders"));
+    }
+}
