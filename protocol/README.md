@@ -39,6 +39,12 @@ queue's token-bucket row after it samples its ready rows. A budgeted task then c
 queue, and a claim of the same budget on another queue stays open until the parked claim either
 returns or waits for the budget's lock.
 
+Every claim call requires read committed isolation. Admission counts active leases after it takes
+its locks, so a transaction snapshot from before the lock wait could miss a concurrent lease.
+`claim_v1`, `claim_many_v1`, and `complete_many_and_claim_v1` therefore raise SQLSTATE `0A000`
+under repeatable read or serializable. A client issues each claim as its own statement at the
+session's read committed default, or in a transaction that runs at read committed.
+
 `v1/requests.json` maps public enqueue inputs to the exact JSON request sent to PostgreSQL. The
 TypeScript suite executes these mappings through `Queue`, so serialization changes fail alongside
 SQL projection, cast, argument-order, and arity changes.

@@ -9260,6 +9260,16 @@ BEGIN
      OR cardinality(p_task_ids) <> cardinality(p_results) THEN
     RAISE EXCEPTION 'completions must contain at most 100 entries with one fence token and result each';
   END IF;
+  -- Admission counts active leases after it takes its locks, and only a statement snapshot taken
+  -- after those locks sees every committed lease. PostgreSQL runs read uncommitted as read committed.
+  IF current_setting('transaction_isolation') NOT IN ('read committed', 'read uncommitted') THEN
+    RAISE EXCEPTION USING
+      ERRCODE = '0A000',
+      MESSAGE = format(
+        'Workhorse claims require read committed isolation, not %s',
+        current_setting('transaction_isolation')
+      );
+  END IF;
   SELECT * INTO v_control FROM workhorse.queue_control control
    WHERE control.queue_name = p_queue_name;
   IF NOT FOUND OR v_control.tier <> 'fast' THEN
@@ -9405,6 +9415,16 @@ BEGIN
   END IF;
   IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 100 THEN
     RAISE EXCEPTION 'limit must be between 1 and 100';
+  END IF;
+  -- Admission counts active leases after it takes its locks, and only a statement snapshot taken
+  -- after those locks sees every committed lease. PostgreSQL runs read uncommitted as read committed.
+  IF current_setting('transaction_isolation') NOT IN ('read committed', 'read uncommitted') THEN
+    RAISE EXCEPTION USING
+      ERRCODE = '0A000',
+      MESSAGE = format(
+        'Workhorse claims require read committed isolation, not %s',
+        current_setting('transaction_isolation')
+      );
   END IF;
   -- Shared queue locks allow claims to overlap while holding every deployment synchronization of
   -- this queue's policies, and the rebalance it performs, back until this claim commits.
@@ -9970,6 +9990,16 @@ BEGIN
   IF p_lease_ms IS NULL OR p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
     RAISE EXCEPTION 'lease_ms must be between 100 and 86400000';
   END IF;
+  -- Admission counts active leases after it takes its locks, and only a statement snapshot taken
+  -- after those locks sees every committed lease. PostgreSQL runs read uncommitted as read committed.
+  IF current_setting('transaction_isolation') NOT IN ('read committed', 'read uncommitted') THEN
+    RAISE EXCEPTION USING
+      ERRCODE = '0A000',
+      MESSAGE = format(
+        'Workhorse claims require read committed isolation, not %s',
+        current_setting('transaction_isolation')
+      );
+  END IF;
   SELECT * INTO v_control FROM workhorse.queue_control control
    WHERE control.queue_name = p_queue_name;
   IF FOUND AND v_control.tier = 'fast' THEN
@@ -10145,6 +10175,16 @@ DECLARE
 BEGIN
   IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 100 THEN
     RAISE EXCEPTION 'limit must be between 1 and 100';
+  END IF;
+  -- Admission counts active leases after it takes its locks, and only a statement snapshot taken
+  -- after those locks sees every committed lease. PostgreSQL runs read uncommitted as read committed.
+  IF current_setting('transaction_isolation') NOT IN ('read committed', 'read uncommitted') THEN
+    RAISE EXCEPTION USING
+      ERRCODE = '0A000',
+      MESSAGE = format(
+        'Workhorse claims require read committed isolation, not %s',
+        current_setting('transaction_isolation')
+      );
   END IF;
   -- A fast-tier queue has no admission policy to apply row by row, so it claims the whole batch in
   -- one statement.
@@ -19192,10 +19232,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (43, 'shard the admission counters'),
   (44, 'make schedule-run retention health respect daily cleanup'),
   (45, 'date an unrun history pass from the oldest expired schedule run'),
-  (46, 'reject a NULL limit or lease before any lock')
+  (46, 'reject a NULL limit or lease before any lock'),
+  (47, 'refuse a claim below read committed isolation')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (46) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (47) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

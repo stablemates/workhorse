@@ -60,6 +60,14 @@ Workhorse keeps no shard for a queue without a queue-wide rule. A queue with a p
 
 A release from a full shard wakes workers even when other shards have room. The releasing transaction cannot see a claim that has not committed, and that claim may have filled the other shards.
 
+## Claiming at read committed
+
+Admission must see every lease that another claim has committed. Otherwise two claims could each count room that only one of them may take.
+
+A claim takes its locks first and counts active leases after them. At read committed, PostgreSQL reads that count from a snapshot taken after the locks, so the count includes any claim that committed while this one waited. Under repeatable read or serializable, the count reads the transaction's snapshot instead. That snapshot can predate the wait, so two claims could both admit past a shared cap.
+
+Workhorse therefore refuses a claim at those levels. `claim_v1`, `claim_many_v1`, and `complete_many_and_claim_v1` raise SQLSTATE `0A000` before they take a lock unless the transaction runs at read committed. PostgreSQL runs read uncommitted as read committed, so Workhorse accepts it too. Read committed is the PostgreSQL default. Check the level when a claim runs inside a transaction you own, such as one passed to a provider's `forTransaction`.
+
 ## Avoiding a blocked queue
 
 If one key is full, `claim_v1` can admit later ready work for another key. It searches a bounded [priority-ordered window](150-priority.md), so admission cost cannot grow with an unlimited saturated prefix.

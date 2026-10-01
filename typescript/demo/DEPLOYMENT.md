@@ -416,8 +416,8 @@ therefore makes this release one offline cutover. For this release only, deploy 
    applies 0025 and leaves the database at version 25. Without `--yes`, the command applies nothing
    and names any old worker that still heartbeated inside its lease.
 4. From the same image, run `workhorse schema migrate` again against each database. It applies the
-   additive steps after 0025 and leaves the database at version 46.
-5. Deploy the new release as usual. Its pre-deploy hook finds version 46, installs the demo's own
+   additive steps after 0025 and leaves the database at version 47.
+5. Deploy the new release as usual. Its pre-deploy hook finds version 47, installs the demo's own
    tables, and verifies both workspaces before any container starts.
 
 The CLI reads the database from `--database-url`, `WORKHORSE_DATABASE_URL`, or `DATABASE_URL`. Pass
@@ -492,10 +492,10 @@ remember.
 
 ### Dashboard schema
 
-The current build ships Workhorse schema version 46; its packaged migrations carry a version 6
+The current build ships Workhorse schema version 47; its packaged migrations carry a version 6
 baseline forward to it. Version 25 is a contract step, which the
 [fast-tier cutover](#the-fast-tier-release-needs-one-offline-cutover) applies. Versions 26 through
-46 are additive, so the ordinary schema step applies them to a database at version 25. Every client in
+47 are additive, so the ordinary schema step applies them to a database at version 25. Every client in
 this build refuses mutations against a schema below 43, because its operator reads use the admission
 shards version 43 introduced. Run the schema step before any process from this build starts. The migration
 baseline is the `0.2.0` clean install, and the schema step refuses a
