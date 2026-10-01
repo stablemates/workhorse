@@ -581,6 +581,44 @@ describe("enqueue contracts", () => {
     });
   });
 
+  it("rejects a non-finite number that JSON would store as a contract-invalid null", async () => {
+    const contractedQueue = new Queue(pool, "default", {
+      contracts: {
+        "meter.read": {
+          currentVersion: "1",
+          versions: {
+            "1": {
+              payloadSchema: { type: "object", properties: { count: { type: "number" } } },
+              resultSchema: { type: "number" },
+            },
+          },
+        },
+      },
+    });
+
+    for (const count of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      await expect(contractedQueue.enqueue("meter.read", { count })).rejects.toBeInstanceOf(
+        TaskContractValidationError,
+      );
+    }
+    await expect(
+      pool.query("SELECT count(*)::integer AS count FROM workhorse.task"),
+    ).resolves.toMatchObject({ rows: [{ count: 0 }] });
+
+    const id = await contractedQueue.enqueue("meter.read", { count: 1 }, { maxAttempts: 1 });
+    const worker = new Worker(contractedQueue, { workerId: "contract-non-finite-worker" }).handle(
+      "meter.read",
+      async (): Promise<Json> => Number.POSITIVE_INFINITY,
+    );
+    await worker.runOnce();
+
+    await expect(admin.getTask(id)).resolves.toMatchObject({
+      state: "failed",
+      error: { name: "TaskContractValidationError" },
+      result: null,
+    });
+  });
+
   it("removes sensitive handler details before durable operator views", async () => {
     const secret = "operator-view-secret";
     const contractedQueue = new Queue(pool, "default", {

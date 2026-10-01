@@ -110,6 +110,10 @@ Workhorse accepts the shared JSON Schema profile only. Bundled references work i
 formats stay annotations, and Workhorse rejects remote references or custom keywords before
 compilation.
 
+Every SDK compiles each schema the profile allows. TypeScript does not add Ajv's stricter lint
+rules, so a union type, `properties` without an object type, or an open `prefixItems` array compiles
+there as it does in the other SDKs. Ajv still rejects a schema that is not valid JSON Schema.
+
 ## Rejection is safe by construction
 
 A schema mismatch produces a `TaskContractValidationError` that names the task type, version, and

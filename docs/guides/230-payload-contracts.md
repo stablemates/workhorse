@@ -46,6 +46,10 @@ Each SDK rejects keywords outside the shared profile before compiling a schema. 
 target bundled definitions in the same document, while remote references and custom keywords are
 rejected. Formats remain annotations, so an email format does not create a language-specific gate.
 
+Every SDK compiles each schema the profile allows. TypeScript does not add Ajv's stricter lint
+rules, so a union type, `properties` without an object type, or an open `prefixItems` array compiles
+there as it does in the other SDKs. Ajv still rejects a schema that is not valid JSON Schema.
+
 The queue validates a payload before enqueue writes anything. The worker validates a result before
 completion removes the active lease. If a handler returns an invalid result, the worker follows the
 normal failure and retry path instead of recording a successful outcome.
