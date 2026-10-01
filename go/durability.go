@@ -121,6 +121,7 @@ type HandlerContext struct {
 	context       context.Context
 	cancel        context.CancelCauseFunc
 	executor      Executor
+	contracts     *contractCache
 	workerID      string
 	checkpoint    sync.Mutex
 	checkpoints   map[string]*checkpointCall

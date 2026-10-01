@@ -1,10 +1,12 @@
 package workhorse
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // MaxChildTasks is PostgreSQL's linked-child limit for one parent.
@@ -91,10 +93,10 @@ type childEnqueueInput struct {
 	Payload              any      `json:"payload"`
 	Priority             int      `json:"priority"`
 	ContractVersion      any      `json:"contractVersion"`
-	PayloadMaxBytes      int      `json:"payloadMaxBytes"`
-	ResultMaxBytes       int      `json:"resultMaxBytes"`
-	SensitivePayloadKeys []string `json:"sensitivePayloadKeys"`
-	SensitiveResultKeys  []string `json:"sensitiveResultKeys"`
+	PayloadMaxBytes      any      `json:"payloadMaxBytes"`
+	ResultMaxBytes       any      `json:"resultMaxBytes"`
+	SensitivePayloadKeys any      `json:"sensitivePayloadKeys"`
+	SensitiveResultKeys  any      `json:"sensitiveResultKeys"`
 	TraceContext         any      `json:"traceContext,omitempty"`
 	RunAt                *string  `json:"runAt,omitempty"`
 	Deadline             *string  `json:"deadline"`
@@ -179,10 +181,20 @@ func (handler *HandlerContext) RunChild(
 	if len(options) == 1 {
 		childOptions = options[0]
 	}
-	_, canonical, err := serializeChildRequest(handler.Task, taskType, payload, childOptions)
+	build := func(versions childVersions) ([]byte, error) {
+		request, err := handler.serializeChildRequest(
+			name, taskType, payload, childOptions, versions, make(childContracts),
+		)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(request)
+	}
+	encoded, err := handler.initialChildRequest(build)
 	if err != nil {
 		return nil, err
 	}
+	canonical := string(encoded)
 
 	handler.child.Lock()
 	if handler.children == nil {
@@ -201,7 +213,7 @@ func (handler *HandlerContext) RunChild(
 	handler.children[name] = pending
 	handler.child.Unlock()
 
-	pending.value, pending.err = handler.createChild(name, []byte(canonical))
+	pending.value, pending.err = handler.createChild(name, encoded, build)
 	handler.child.Lock()
 	delete(handler.children, name)
 	close(pending.done)
@@ -209,34 +221,48 @@ func (handler *HandlerContext) RunChild(
 	return pending.value, pending.err
 }
 
-func (handler *HandlerContext) createChild(name string, request []byte) (any, error) {
-	if err := context.Cause(handler.context); err != nil {
-		return nil, err
+func (handler *HandlerContext) createChild(
+	name string,
+	request []byte,
+	build func(childVersions) ([]byte, error),
+) (any, error) {
+	write := func(request []byte) (map[string]any, error) {
+		if err := context.Cause(handler.context); err != nil {
+			return nil, err
+		}
+		rows, err := queryFencedWrite(
+			handler.context,
+			handler.executor,
+			protocolStatementRegistry[createChildStatementName],
+			handler.Task.ID,
+			handler.workerID,
+			handler.Task.FenceToken,
+			name,
+			request,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if len(rows) != 1 {
+			return nil, errors.New(invalidChildResultMessage)
+		}
+		return rows[0], nil
 	}
-	rows, err := queryFencedWrite(
-		handler.context,
-		handler.executor,
-		protocolStatementRegistry[createChildStatementName],
-		handler.Task.ID,
-		handler.workerID,
-		handler.Task.FenceToken,
-		name,
-		request,
-	)
+	row, err := write(request)
 	if err != nil {
 		return nil, err
 	}
-	if len(rows) != 1 {
-		return nil, errors.New(invalidChildResultMessage)
+	if row, err = handler.replayedChildRequest(row, request, build, write); err != nil {
+		return nil, err
 	}
-	status, _ := rows[0][rowStatusField].(string)
+	status, _ := row[rowStatusField].(string)
 	switch status {
 	case childCreatedValue:
 		handler.suspended.Store(true)
 		handler.cancel(errChildSuspension)
 		return nil, errChildSuspension
 	case childCompletedValue:
-		return decodedJSON(rows[0][rowResultField])
+		return decodedJSON(row[rowResultField])
 	case durableStaleValue:
 		return nil, &ChildLeaseLostError{ParentTaskID: handler.Task.ID}
 	case durableConflictValue:
@@ -274,9 +300,8 @@ func (handler *HandlerContext) createChildSet(children []ChildTaskRequest, mode 
 	if len(children) > MaxChildTasks {
 		return nil, &ChildLimitExceededError{ParentTaskID: handler.Task.ID}
 	}
-	requests := make([]childSetInput, len(children))
 	names := make(map[string]struct{}, len(children))
-	for index, child := range children {
+	for _, child := range children {
 		if err := validateDurableName(child.Name, childLabelValue); err != nil {
 			return nil, err
 		}
@@ -284,13 +309,22 @@ func (handler *HandlerContext) createChildSet(children []ChildTaskRequest, mode 
 			return nil, errors.New(uniqueChildNamesMessage)
 		}
 		names[child.Name] = struct{}{}
-		request, _, err := serializeChildRequest(handler.Task, child.Type, child.Payload, child.Options)
-		if err != nil {
-			return nil, fmt.Errorf(childRequestErrorFormat, index+1, err)
-		}
-		requests[index] = childSetInput{Name: child.Name, Request: request}
 	}
-	encoded, err := json.Marshal(requests)
+	build := func(versions childVersions) ([]byte, error) {
+		requests := make([]childSetInput, len(children))
+		contracts := make(childContracts)
+		for index, child := range children {
+			request, err := handler.serializeChildRequest(
+				child.Name, child.Type, child.Payload, child.Options, versions, contracts,
+			)
+			if err != nil {
+				return nil, fmt.Errorf(childRequestErrorFormat, index+1, err)
+			}
+			requests[index] = childSetInput{Name: child.Name, Request: request}
+		}
+		return json.Marshal(requests)
+	}
+	encoded, err := handler.initialChildRequest(build)
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +344,7 @@ func (handler *HandlerContext) createChildSet(children []ChildTaskRequest, mode 
 	handler.childSetCall = pending
 	handler.childSet.Unlock()
 
-	pending.value, pending.err = handler.createChildren(encoded, mode)
+	pending.value, pending.err = handler.createChildren(encoded, mode, build)
 	handler.childSet.Lock()
 	handler.childSetCall = nil
 	close(pending.done)
@@ -318,26 +352,41 @@ func (handler *HandlerContext) createChildSet(children []ChildTaskRequest, mode 
 	return pending.value, pending.err
 }
 
-func (handler *HandlerContext) createChildren(requests []byte, mode childJoinMode) (any, error) {
-	if err := context.Cause(handler.context); err != nil {
-		return nil, err
+func (handler *HandlerContext) createChildren(
+	requests []byte,
+	mode childJoinMode,
+	build func(childVersions) ([]byte, error),
+) (any, error) {
+	write := func(requests []byte) (map[string]any, error) {
+		if err := context.Cause(handler.context); err != nil {
+			return nil, err
+		}
+		rows, err := queryFencedWrite(
+			handler.context,
+			handler.executor,
+			protocolStatementRegistry[createChildrenStatementName],
+			handler.Task.ID,
+			handler.workerID,
+			handler.Task.FenceToken,
+			requests,
+			mode,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if len(rows) != 1 {
+			return nil, errors.New(invalidChildrenResultMessage)
+		}
+		return rows[0], nil
 	}
-	rows, err := queryFencedWrite(
-		handler.context,
-		handler.executor,
-		protocolStatementRegistry[createChildrenStatementName],
-		handler.Task.ID,
-		handler.workerID,
-		handler.Task.FenceToken,
-		requests,
-		mode,
-	)
+	row, err := write(requests)
 	if err != nil {
 		return nil, err
 	}
-	if len(rows) != 1 {
-		return nil, errors.New(invalidChildrenResultMessage)
+	if row, err = handler.replayedChildRequest(row, requests, build, write); err != nil {
+		return nil, err
 	}
+	rows := []map[string]any{row}
 	status, _ := rows[0][rowStatusField].(string)
 	switch status {
 	case childCreatedValue:
@@ -363,17 +412,142 @@ func (handler *HandlerContext) createChildren(requests []byte, mode childJoinMod
 	}
 }
 
-func serializeChildRequest(
-	parent ClaimedTask,
+// childVersions maps a child name to the contract version its existing task carries. A nil version
+// records a child created without a contract, and a name it omits takes the current contract.
+type childVersions map[string]*string
+
+type childContractKey struct {
+	taskType string
+	pinned   bool
+	version  string
+}
+
+// childContracts caches the contracts one child request build loads.
+type childContracts map[childContractKey]*payloadContract
+
+// initialChildRequest builds the request under the current contracts. When those contracts reject
+// a payload, a replayed parent builds again with each existing child at the version it was created
+// under. PostgreSQL still rejects a request that differs from the accepted one.
+func (handler *HandlerContext) initialChildRequest(build func(childVersions) ([]byte, error)) ([]byte, error) {
+	encoded, err := build(nil)
+	var validation *TaskContractValidationError
+	if err == nil {
+		return encoded, nil
+	}
+	if !errors.As(err, &validation) {
+		return nil, handler.childLookupError(err)
+	}
+	versions, loadErr := handler.acceptedChildVersions()
+	if loadErr != nil {
+		return nil, handler.childLookupError(loadErr)
+	}
+	if len(versions) == 0 {
+		return nil, err
+	}
+	accepted, acceptedErr := build(versions)
+	if acceptedErr != nil {
+		if errors.As(acceptedErr, &validation) {
+			return nil, err
+		}
+		return nil, handler.childLookupError(acceptedErr)
+	}
+	return accepted, nil
+}
+
+// childLookupError returns the handler's cancellation cause when a contract lookup failed after the
+// handler context ended, so a lost lease surfaces as LeaseLostError rather than context.Canceled.
+func (handler *HandlerContext) childLookupError(err error) error {
+	if cause := context.Cause(handler.context); cause != nil {
+		return cause
+	}
+	return err
+}
+
+// replayedChildRequest retries a conflict once with each existing child stamped with the contract
+// version it was created under. PostgreSQL compares a replayed request with the accepted one,
+// contract stamp included, so a contract change since the first activation would otherwise conflict.
+func (handler *HandlerContext) replayedChildRequest(
+	row map[string]any,
+	request []byte,
+	build func(childVersions) ([]byte, error),
+	write func([]byte) (map[string]any, error),
+) (map[string]any, error) {
+	if status, _ := row[rowStatusField].(string); status != durableConflictValue {
+		return row, nil
+	}
+	versions, err := handler.acceptedChildVersions()
+	if err != nil {
+		return nil, handler.childLookupError(err)
+	}
+	if len(versions) == 0 {
+		return row, nil
+	}
+	accepted, err := build(versions)
+	if err != nil {
+		var validation *TaskContractValidationError
+		if errors.As(err, &validation) {
+			return row, nil
+		}
+		return nil, handler.childLookupError(err)
+	}
+	if bytes.Equal(accepted, request) {
+		return row, nil
+	}
+	return write(accepted)
+}
+
+// acceptedChildVersions returns the contract version of each child this task created, by name.
+func (handler *HandlerContext) acceptedChildVersions() (childVersions, error) {
+	edges, err := handler.executor.Query(
+		handler.context,
+		internalStatementRegistry[taskChildStatementName],
+		handler.Task.ID,
+		MaxChildTasks+1,
+	)
+	if err != nil {
+		return nil, err
+	}
+	versions := make(childVersions)
+	for _, edge := range edges {
+		if parent, _ := uuidString(edge[rowParentTaskIDField]); !strings.EqualFold(parent, handler.Task.ID) {
+			continue
+		}
+		name, nameOK := edge[rowChildNameField].(string)
+		childID, idOK := uuidString(edge[rowChildTaskIDField])
+		if !nameOK || !idOK {
+			return nil, errors.New(invalidChildResultMessage)
+		}
+		rows, err := handler.executor.Query(handler.context, adminStatementRegistry[getTaskStatementName], childID)
+		if err != nil {
+			return nil, err
+		}
+		var version *string
+		if len(rows) == 1 {
+			if value, ok := rows[0][rowContractVersionField].(string); ok {
+				version = &value
+			}
+		}
+		versions[name] = version
+	}
+	return versions, nil
+}
+
+// serializeChildRequest renders the create-child request for one child. A contracted child carries
+// the contract PostgreSQL holds now, because a child write has no stale-contract retry. A name in
+// versions stamps that contract version instead, or none when the version is nil.
+func (handler *HandlerContext) serializeChildRequest(
+	name string,
 	taskType string,
 	payload any,
 	options EnqueueOptions,
-) (childEnqueueInput, string, error) {
+	versions childVersions,
+	contracts childContracts,
+) (childEnqueueInput, error) {
 	if err := validateEnqueueOptions(options); err != nil {
-		return childEnqueueInput{}, emptyString, err
+		return childEnqueueInput{}, err
 	}
 	if options.Idempotency != nil || options.Debounce != nil || options.Throttle != nil || options.Dependencies != nil {
-		return childEnqueueInput{}, emptyString, fmt.Errorf(childKeyedOptionsMessage, ErrInvalidEnqueueOptions)
+		return childEnqueueInput{}, fmt.Errorf(childKeyedOptionsMessage, ErrInvalidEnqueueOptions)
 	}
 	queueName := options.Queue
 	if queueName == emptyString {
@@ -387,7 +561,7 @@ func serializeChildRequest(
 		Queue: queueName, Type: taskType, Payload: payload, Priority: options.Priority,
 		PayloadMaxBytes: defaultTaskValueMaxBytes, ResultMaxBytes: defaultTaskValueMaxBytes,
 		SensitivePayloadKeys: []string{}, SensitiveResultKeys: []string{},
-		TraceContext: parent.TraceContext, ConcurrencyKey: nilIfEmpty(options.ConcurrencyKey),
+		TraceContext: handler.Task.TraceContext, ConcurrencyKey: nilIfEmpty(options.ConcurrencyKey),
 		Budget:             nilIfEmpty(options.Budget),
 		ExecutionTimeoutMS: nilIfZero(options.ExecutionTimeoutMS), MaxAttempts: maxAttempts,
 		RetryPolicy: options.RetryPolicy, Tags: append([]string{}, options.Tags...),
@@ -400,11 +574,50 @@ func serializeChildRequest(
 		formatted := formatTimestamp(*options.Deadline)
 		request.Deadline = &formatted
 	}
-	encoded, err := json.Marshal(request)
+	contract, err := handler.childContract(name, taskType, versions, contracts)
 	if err != nil {
-		return childEnqueueInput{}, emptyString, err
+		return childEnqueueInput{}, err
 	}
-	return request, string(encoded), nil
+	if contract == nil {
+		return request, nil
+	}
+	if err := contract.validatePayload(taskType, payload); err != nil {
+		return childEnqueueInput{}, err
+	}
+	request.ContractVersion = contract.version
+	request.PayloadMaxBytes = contract.payloadMaxBytes
+	request.ResultMaxBytes = contract.resultMaxBytes
+	request.SensitivePayloadKeys = contract.sensitivePayloadKeys
+	request.SensitiveResultKeys = contract.sensitiveResultKeys
+	return request, nil
+}
+
+// childContract loads the contract a child request carries, reusing loads within one build.
+func (handler *HandlerContext) childContract(
+	name string,
+	taskType string,
+	versions childVersions,
+	contracts childContracts,
+) (*payloadContract, error) {
+	version, pinned := versions[name]
+	key := childContractKey{taskType: taskType, pinned: pinned}
+	var requested any
+	if pinned {
+		if version == nil {
+			return nil, nil
+		}
+		key.version = *version
+		requested = *version
+	}
+	if contract, ok := contracts[key]; ok {
+		return contract, nil
+	}
+	contract, err := loadPayloadContract(handler.context, handler.executor, handler.contracts, taskType, requested)
+	if err != nil {
+		return nil, err
+	}
+	contracts[key] = contract
+	return contract, nil
 }
 
 type childSetRow struct {
