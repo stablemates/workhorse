@@ -7,13 +7,13 @@ import { type PublishedPackage, publishedPackages, repositoryRoot } from "./pack
  * The npm publication stage: a preflight the release can fail safely, then a loop that records what
  * it did.
  *
- * Publishing to npm is the one irreversible step in the release train. A version that reaches the
- * registry can never be republished, and unpublish stops being available after 72 hours. A bare
- * loop that fails on package five therefore leaves four packages at the new version, five at the
- * old one, and no way back.
+ * Publishing to npm is the one irreversible step in the release train. npm never accepts a
+ * name@version pair twice, and unpublish stops being available after 72 hours. A bare loop that
+ * fails on package five therefore leaves four packages at the new version and five at the old one.
  * [ADR 0050](../docs/decisions/0050-release-0-1-0-without-a-prerelease-suffix.md) requires one
- * version across npm, PyPI, and the Go module proxy, so the recovery is re-cutting the whole train
- * at a higher patch.
+ * version across every registry, and this project recovers a partial release by re-cutting the
+ * whole train at a higher patch. npm would accept the missing packages at the same version; this
+ * publisher refuses to resume instead.
  *
  * Two properties follow from that, and they are what this file is.
  *
@@ -172,8 +172,8 @@ export function findPreflightProblems(
         : [
             "Not on the registry:",
             ...absent.map((entry) => `  ${describeVersion(entry)}`),
-            `This is a partial ${version} release from an earlier attempt. Re-running cannot`,
-            "complete it: npm refuses a version that has ever existed.",
+            `This is a partial ${version} release from an earlier attempt. This publisher refuses`,
+            "to resume it, because this project recovers a partial release by re-cutting the train.",
             `Recover it with ${recoveryReference}.`,
           ]),
     ],
@@ -215,7 +215,7 @@ export function describeLedger(ledger: PublishLedger): string {
     "",
     published.length === 0
       ? "Confirmed published: nothing."
-      : "Published, and permanent — npm never accepts these versions again:",
+      : "Published, and permanent — npm never accepts these name@version pairs again:",
     ...published,
     "",
     "Failed:",
@@ -233,8 +233,8 @@ export function describeLedger(ledger: PublishLedger): string {
           "again if the preflight finds none of these versions on npm.",
         ]
       : [
-          `npm now holds a partial ${version} release. Re-running cannot complete it, because npm`,
-          `refuses a version that has ever existed. Recover it with ${recoveryReference}.`,
+          `npm now holds a partial ${version} release. This publisher refuses to resume it, because`,
+          `this project recovers a partial release by re-cutting the train. Recover it with ${recoveryReference}.`,
         ]),
   ].join("\n");
 }
@@ -365,8 +365,8 @@ export async function preflight(packages: readonly PublishedPackage[]): Promise<
 /**
  * Publish every package in order, stopping at the first refusal.
  *
- * The order comes from `scripts/packages.ts`: `@stablemates/workhorse` first, because every other
- * package declares it as a peer. Publication output is inherited rather than captured so the
+ * The order comes from `scripts/packages.ts`: each package follows the published packages it
+ * requires, so every package a stopped run did publish can be installed. Publication output is inherited rather than captured so the
  * provenance notices stay in the task log where a reader expects them.
  */
 export async function publishAll(packages: readonly PublishedPackage[]): Promise<PublishLedger> {

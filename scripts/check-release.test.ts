@@ -7,8 +7,9 @@ describe("checkRelease", () => {
   });
 
   it("rejects an npm tag that disagrees with the package manifests", async () => {
+    // The first package in publication order is reported, whichever package that is.
     await expect(checkRelease("npm", "v9.9.9")).rejects.toThrow(
-      "typescript/core/package.json is 0.5.0 but the tag is 9.9.9",
+      /^typescript\/[\w-]+\/package\.json is 0\.5\.0 but the tag is 9\.9\.9$/,
     );
   });
 
