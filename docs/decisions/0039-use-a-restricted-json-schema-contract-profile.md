@@ -38,6 +38,9 @@ same table before claiming parity.
 
 ## Amendment: patterns cannot use backreferences (2026-10-01)
 
+**Superseded** by the amendment below, which removes `pattern` and `patternProperties` from the
+profile.
+
 A `pattern` value or a `patternProperties` key that contains `\1` through `\9` or `\k<name>`
 outside a character class is a schema error. Each SDK rejects it in the profile check, before a
 language library compiles the schema, with the profile's normal error.
@@ -50,6 +53,41 @@ that in every runtime would add a translation layer for a feature contracts rare
 `protocol/v1/contracts.json` pins the rejection for numeric, named, skipped-group, and forward
 references, and for a `patternProperties` key. A contract that used a backreference stops
 compiling; its owner publishes a new version without one.
+
+## Amendment: the profile excludes `pattern` and `patternProperties` (2026-10-01)
+
+`pattern` and `patternProperties` are outside the profile at any depth. Each SDK rejects either
+keyword in the profile check, before a language library compiles the schema, with the profile's
+normal error, `<path> is outside the Workhorse contract profile`. A property that is merely named
+`pattern` stays valid. This amendment supersedes the backreference amendment above.
+
+Regular expressions are the one keyword family where the SDK libraries cannot give one validity
+decision. The Go SDK's RE2 engine cannot compile Unicode script escapes, `\u` escapes, control
+escapes or lookaheads that the ECMA-262 reference accepts, so a Go worker could not load a contract
+a TypeScript producer synced. Go also disagrees on matches, such as `^\s$` against U+00A0. The Rust
+library accepts syntax that ECMA-262 refuses, such as `(?i)a`. Python and Ruby would each need an
+ECMA-262 translator, and a Python translator still diverged after repeated review.
+
+No shipped contract uses `pattern`. A contract author who needs a string-shape check makes it in
+handler code. `format` stays annotation-only. A contract version that used either keyword stops
+compiling. Its owner publishes a new version without the keyword and moves `currentVersion`. A task
+keeps the version it was enqueued with. A worker checks the task's result against that version, so a
+keyword in its result schema fails the attempt with the profile error. The task's retry policy then
+applies. A keyword in its payload schema does not affect the task, because the payload was checked
+at enqueue.
+
+A reference must point at a schema position the profile check visits. The fragment is empty, names
+an `$anchor` in the document, or is a JSON pointer whose tokens step only through schema keywords:
+the subschema keywords, an index of an array keyword, or a name in `$defs`, `dependentSchemas` or
+`properties`. Each SDK rejects any other reference with `<path>.$ref must point at a subschema of
+the contract`. Without this rule, a reference into `default` or `examples` would apply a schema
+that holds either keyword, and the profile check would never see it. A pointer token that
+percent-decodes to `/` is also rejected. JSON Schema libraries disagree on whether `%2F` separates
+tokens, so such a reference could resolve to a schema the profile check never saw.
+
+`protocol/v1/contracts.json` pins the rejection of each keyword at the root and inside `$defs`,
+`items` and `properties`, behind a reference into `default` or `examples`, and behind a reference
+with an encoded separator. A keyword can return only through the rule in Consequences.
 
 ## Consequences
 

@@ -25,18 +25,18 @@ module Stablemates
       DIALECT = "https://json-schema.org/draft/2020-12/schema"
       SCHEMA_VALUES = %w[additionalProperties contains else if items not propertyNames then].freeze
       SCHEMA_ARRAYS = %w[allOf anyOf oneOf prefixItems].freeze
-      SCHEMA_MAPS = %w[$defs dependentSchemas patternProperties properties].freeze
+      SCHEMA_MAPS = %w[$defs dependentSchemas properties].freeze
       PLAIN_KEYWORDS = %w[
         $anchor $comment $schema default deprecated description examples format readOnly title writeOnly
         const dependentRequired enum exclusiveMaximum exclusiveMinimum maxContains maximum maxItems
-        maxLength maxProperties minContains minimum minItems minLength minProperties multipleOf pattern
-        required type uniqueItems
+        maxLength maxProperties minContains minimum minItems minLength minProperties multipleOf required
+        type uniqueItems
       ].freeze
       MAX_DEPTH = 256
       TYPES = %w[array boolean integer null number object string].freeze
       NUMBERS = %w[exclusiveMaximum exclusiveMinimum maximum minimum].freeze
       COUNTS = %w[maxContains maxItems maxLength maxProperties minContains minItems minLength minProperties].freeze
-      STRINGS = %w[$comment description format pattern title].freeze
+      STRINGS = %w[$comment description format title].freeze
       BOOLEANS = %w[deprecated readOnly uniqueItems writeOnly].freeze
       ANCHOR = /\A[A-Za-z_][-A-Za-z0-9._]*\z/
       private_constant :DIALECT, :SCHEMA_VALUES, :SCHEMA_ARRAYS, :SCHEMA_MAPS, :PLAIN_KEYWORDS, :MAX_DEPTH, :TYPES,
@@ -68,12 +68,7 @@ module Stablemates
         elsif SCHEMA_MAPS.include?(keyword)
           return "#{path} must be an object" unless value.is_a?(Hash)
 
-          value.lazy.filter_map do |name, child|
-            (keyword == "patternProperties" && backreference_violation(name, "#{path}.#{name}")) ||
-              profile_violation(child, "#{path}.#{name}")
-          end.first
-        elsif keyword == "pattern" && value.is_a?(String)
-          backreference_violation(value, path)
+          value.lazy.filter_map { |name, child| profile_violation(child, "#{path}.#{name}") }.first
         elsif PLAIN_KEYWORDS.include?(keyword)
           value_violation(keyword, value, path)
         else
@@ -81,11 +76,6 @@ module Stablemates
         end
       end
       private_class_method :keyword_violation
-
-      def self.backreference_violation(source, path)
-        "#{path} uses a backreference, which is outside the Workhorse contract profile" if EcmaPattern.backreference?(source)
-      end
-      private_class_method :backreference_violation
 
       # The Draft 2020-12 meta-schema's rule for the value of +keyword+, as a violation or nil.
       def self.value_violation(keyword, value, path)
@@ -136,7 +126,6 @@ module Stablemates
 
         @schema = schema
         @anchors = {}
-        @patterns = {}
         prepare(schema)
       end
 
@@ -144,11 +133,12 @@ module Stablemates
 
       private
 
-      # Collects every anchor, then compiles every pattern and checks every reference, so +valid?+
-      # cannot fail on the schema and a reference may name an anchor that comes later.
+      # Collects every anchor, then checks every reference, so +valid?+ cannot fail on the schema and
+      # a reference may name an anchor that comes later. A reference must name a schema position the
+      # profile check visited; one into +default+ or +examples+ would apply a schema it never saw.
       def prepare(schema)
         collect_anchors(schema)
-        compile(schema)
+        check_references(schema, "$")
       end
 
       def collect_anchors(schema)
@@ -160,60 +150,69 @@ module Stablemates
 
           @anchors[anchor] = schema
         end
-        each_subschema(schema) { |child| collect_anchors(child) }
+        each_subschema(schema, "$") { |child, _path| collect_anchors(child) }
       end
 
-      def compile(schema)
+      def check_references(schema, path)
         return unless schema.is_a?(Hash)
 
-        pattern(schema["pattern"]) if schema.key?("pattern")
-        schema.fetch("patternProperties", {}).each_key { |source| pattern(source) }
-        each_subschema(schema) { |child| compile(child) }
-        return unless schema.key?("$ref")
+        if schema.key?("$ref") && resolve(schema["$ref"]).nil?
+          raise ArgumentError, "#{path}.$ref must point at a subschema of the contract"
+        end
 
-        target = resolve(schema["$ref"])
-        violation = ContractSchema.profile_violation(target, schema["$ref"])
-        raise ArgumentError, "invalid contract schema: #{violation}" if violation
+        each_subschema(schema, path) { |child, child_path| check_references(child, child_path) }
       end
 
-      def each_subschema(schema, &)
+      def each_subschema(schema, path)
         schema.each do |keyword, value|
-          if SCHEMA_VALUES.include?(keyword) then yield value
-          elsif SCHEMA_ARRAYS.include?(keyword) then value.each(&)
-          elsif SCHEMA_MAPS.include?(keyword) then value.each_value(&)
+          if SCHEMA_VALUES.include?(keyword)
+            yield value, "#{path}.#{keyword}"
+          elsif SCHEMA_ARRAYS.include?(keyword)
+            value.each_with_index { |child, index| yield child, "#{path}.#{keyword}[#{index}]" }
+          elsif SCHEMA_MAPS.include?(keyword)
+            value.each { |name, child| yield child, "#{path}.#{keyword}.#{name}" }
           end
         end
       end
 
-      def pattern(source)
-        @patterns[source] ||= EcmaPattern.compile(source)
-      rescue ArgumentError => e
-        raise ArgumentError, "invalid contract schema: pattern #{source.inspect} does not compile: #{e.message}"
-      end
-
+      # The schema +reference+ names, or nil when it names no schema position.
       def resolve(reference)
         fragment = reference.delete_prefix("#")
         return @schema if fragment.empty?
+        return @anchors[fragment] unless fragment.start_with?("/")
 
-        target = if fragment.start_with?("/")
-          pointer(fragment)
-        else
-          @anchors[fragment]
-        end
-        raise ArgumentError, "invalid contract schema: #{reference} does not resolve" if target.nil?
-
-        target
+        pointer(fragment.split("/", -1).drop(1).map { |token| pointer_token(token) })
+      rescue ArgumentError, Encoding::CompatibilityError
+        nil
       end
 
-      def pointer(fragment)
-        fragment.split("/", -1).drop(1).reduce(@schema) do |node, token|
-          token = URI.decode_uri_component(token).gsub("~1", "/").gsub("~0", "~")
-          case node
-          when Hash then node.fetch(token) { return nil }
-          when Array then token.match?(/\A(0|[1-9]\d*)\z/) ? node[Integer(token, 10)] : (return nil)
-          else return nil
+      # Libraries disagree on whether +%2F+ separates tokens, so the walk could check a different schema.
+      def pointer_token(token)
+        decoded = URI.decode_uri_component(token)
+        raise ArgumentError, "encoded separator" if decoded.include?("/")
+
+        decoded.gsub("~1", "/").gsub("~0", "~")
+      end
+
+      def pointer(tokens)
+        node = @schema
+        until tokens.empty?
+          return nil unless node.is_a?(Hash)
+
+          keyword = tokens.shift
+          value = node[keyword]
+          node = if SCHEMA_VALUES.include?(keyword)
+            value
+          elsif SCHEMA_ARRAYS.include?(keyword) && value.is_a?(Array) && tokens.first&.match?(/\A(0|[1-9]\d*)\z/)
+            value[Integer(tokens.shift, 10)]
+          elsif SCHEMA_MAPS.include?(keyword) && value.is_a?(Hash) && !tokens.empty?
+            value.fetch(tokens.shift) { return nil }
+          else
+            return nil
           end
+          return nil if node.nil?
         end
+        node
       end
 
       def valid_at?(schema, instance, depth)
@@ -264,7 +263,6 @@ module Stablemates
         case keyword
         when "minLength" then instance.length >= value
         when "maxLength" then instance.length <= value
-        when "pattern" then pattern(value).match?(instance)
         else true
         end
       end
@@ -300,10 +298,6 @@ module Stablemates
         when "propertyNames" then instance.each_key.all? { |name| valid_at?(value, name, depth + 1) }
         when "properties"
           value.all? { |name, child| !instance.key?(name) || valid_at?(child, instance[name], depth + 1) }
-        when "patternProperties"
-          value.all? do |source, child|
-            instance.all? { |name, item| !pattern(source).match?(name) || valid_at?(child, item, depth + 1) }
-          end
         when "additionalProperties" then additional_valid?(schema, value, instance, depth)
         else true
         end
@@ -311,10 +305,7 @@ module Stablemates
 
       def additional_valid?(schema, value, instance, depth)
         named = schema.fetch("properties", {})
-        patterns = schema.fetch("patternProperties", {}).keys.map { |source| pattern(source) }
-        instance.all? do |name, item|
-          named.key?(name) || patterns.any? { |regexp| regexp.match?(name) } || valid_at?(value, item, depth + 1)
-        end
+        instance.all? { |name, item| named.key?(name) || valid_at?(value, item, depth + 1) }
       end
 
       def type?(instance, type)

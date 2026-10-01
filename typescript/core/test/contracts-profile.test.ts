@@ -24,13 +24,22 @@ describe("contract schema profile", () => {
     expect(() => compileContractSchema({ type: "string", minLength: -1 })).toThrow(/minLength/);
   });
 
-  it("names the pattern that uses a backreference", () => {
+  it("names the pattern keyword it refuses at any depth", () => {
     expect(() =>
-      compileContractSchema({ properties: { a: { type: "string", pattern: "^(a)\\1$" } } }),
-    ).toThrow("$.properties.a.pattern uses a backreference, which is outside the Workhorse");
-    expect(() => compileContractSchema({ patternProperties: { "^(?<x>a)\\k<x>$": true } })).toThrow(
-      "$.patternProperties.^(?<x>a)\\k<x>$ uses a backreference",
+      compileContractSchema({ properties: { a: { type: "string", pattern: "^a$" } } }),
+    ).toThrow("$.properties.a.pattern is outside the Workhorse contract profile");
+    expect(() => compileContractSchema({ items: { patternProperties: { "^a": true } } })).toThrow(
+      "$.items.patternProperties is outside the Workhorse contract profile",
     );
+  });
+
+  it("refuses a reference that leaves the profile-checked schema tree", () => {
+    expect(() =>
+      compileContractSchema({
+        default: { pattern: "^a$" },
+        properties: { a: { $ref: "#/default" } },
+      }),
+    ).toThrow("$.properties.a.$ref must point at a subschema of the contract");
   });
 
   it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(

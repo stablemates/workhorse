@@ -11,9 +11,23 @@ other SDKs carry, because every tag names one release of all of them.
   replace a namespace's definitions, and the list methods read them back.
 - Durations, including a `RateLimit` interval, are finite Numeric seconds. The client refuses a
   value outside a protocol bound with `ArgumentError` before it sends any statement.
-- Contract schemas are checked against the draft 2020-12 meta-schema, and `pattern` matches with
-  ECMA-262 semantics. A property escape accepts only the names ECMA-262 accepts for its property,
-  and the contract profile rejects a backreference with `ArgumentError`.
+- Contract schemas are checked against the draft 2020-12 meta-schema. The contract profile rejects
+  `pattern` and `patternProperties` at any depth with `ArgumentError`, as every SDK does
+  ([ADR 0039](../docs/decisions/0039-use-a-restricted-json-schema-contract-profile.md)). Check a
+  string's shape in handler code instead. A `$ref` must point at a subschema, so it cannot reach a
+  schema hidden in `default` or `examples`; any other reference raises `ArgumentError` with
+  `<path>.$ref must point at a subschema of the contract`, including a pointer that encodes `/` as
+  `%2F`.
+- **Breaking: a contract version that another SDK's 0.5 release synced with `pattern` or
+  `patternProperties` does not compile in this gem.** Upgrade in this order:
+  1. Find each contract version that uses either keyword, or a `$ref` that points outside a
+     subschema.
+  2. Publish a new version without either keyword, and move `currentVersion` to it.
+  3. Let tasks that hold the old version finish before you run Ruby workers. A worker checks a
+     task's result against the version the task holds. If that version's result schema uses either
+     keyword, completing the task fails the attempt with `ArgumentError`, and the task's retry
+     policy applies. Each payload was checked at enqueue, so a keyword in the payload schema does
+     not affect tasks already queued.
 - Add the executor forms: a `PG::Connection`, a `ConnectionPool`, or any object whose `with`
   yields a connection. `ActiveRecordExecutor` joins the caller's Active Record transaction.
 - Add the error hierarchy under `Stablemates::Workhorse::Error`.

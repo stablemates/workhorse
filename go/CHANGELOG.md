@@ -9,6 +9,30 @@ upgrades in place: every release ships ordered migrations, and inside a major li
 adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses it offline, with the
 [0.5.0 upgrade steps](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md#050--2026-09-28). The upgrade from 0.5 to 0.6 only adds.
 
+### Unreleased
+
+**Breaking: contract schemas can no longer use `pattern` or `patternProperties`.** The SDKs' regular
+expression engines accept different syntax and match differently, so one contract could validate
+differently in each language.
+[ADR 0039](../docs/decisions/0039-use-a-restricted-json-schema-contract-profile.md) now leaves both
+keywords out of the contract profile. Compiling or synchronizing the contract returns an error with
+`<path> is outside the Workhorse contract profile` when either keyword appears at any depth. A
+property named `pattern` stays valid. Check a string's shape in handler code instead; `format` stays
+an annotation. A `$ref` must also point at a subschema, so it cannot reach a schema hidden in
+`default` or `examples`; every SDK rejects any other reference with
+`<path>.$ref must point at a subschema of the contract`. That includes a pointer that encodes
+`/` as `%2F`. Upgrade in this order:
+
+1. Find each contract version that uses `pattern` or `patternProperties`, or a `$ref` that points
+   outside a subschema. A version synced before the upgrade stops compiling once the SDK is
+   upgraded.
+2. Publish a new version without either keyword, and move `currentVersion` to it.
+3. Let tasks that hold the old version finish before you upgrade workers. A worker checks a task's
+   result against the version the task holds. If that version's result schema uses either keyword,
+   completing the task fails the attempt with the profile error, and the task's retry policy
+   applies. Each payload was checked at enqueue, so a keyword in the payload schema does not affect
+   tasks already queued.
+
 ## 0.5.0 — 2026-09-28
 
 The npm packages, Python distribution, Go module, and Rust crate release from one source commit.

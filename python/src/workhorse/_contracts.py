@@ -4,6 +4,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
+from urllib.parse import unquote
 
 from jsonschema import Draft202012Validator
 
@@ -11,6 +12,7 @@ from .errors import TaskContractValidationError
 from .types import Json, TaskTypeContracts
 
 DIALECT = "https://json-schema.org/draft/2020-12/schema"
+_MISSING = object()
 SCHEMA_VALUES = {
     "additionalProperties",
     "contains",
@@ -22,7 +24,7 @@ SCHEMA_VALUES = {
     "then",
 }
 SCHEMA_ARRAYS = {"allOf", "anyOf", "oneOf", "prefixItems"}
-SCHEMA_MAPS = {"$defs", "dependentSchemas", "patternProperties", "properties"}
+SCHEMA_MAPS = {"$defs", "dependentSchemas", "properties"}
 ANNOTATIONS = {
     "$anchor",
     "$comment",
@@ -53,14 +55,69 @@ VALIDATION = {
     "minLength",
     "minProperties",
     "multipleOf",
-    "pattern",
     "required",
     "type",
     "uniqueItems",
 }
 
 
-def check_contract_schema(schema: Json, path: str = "$") -> None:
+def check_contract_schema(schema: Json) -> None:
+    # Every reference must name a schema position the profile walk checked. A reference into
+    # `default` or `examples` would otherwise apply a schema the walk never saw.
+    anchors: set[str] = set()
+    references: list[tuple[str, str]] = []
+    _check_profile(schema, "$", anchors, references)
+    for path, reference in references:
+        if not _references_subschema(schema, reference, anchors):
+            raise TypeError(f"{path} must point at a subschema of the contract")
+
+
+def _references_subschema(root: Json, reference: str, anchors: set[str]) -> bool:
+    fragment = reference[1:]
+    if fragment == "":
+        return True
+    if not fragment.startswith("/"):
+        return fragment in anchors
+    try:
+        decoded = [unquote(token, errors="strict") for token in fragment.split("/")[1:]]
+    except UnicodeDecodeError:
+        return False
+    # Libraries disagree on whether `%2F` separates tokens, so the walk could check a
+    # different schema.
+    if any("/" in token for token in decoded):
+        return False
+    tokens = [token.replace("~1", "/").replace("~0", "~") for token in decoded]
+    node: object = root
+    index = 0
+    while index < len(tokens):
+        if not isinstance(node, dict):
+            return False
+        keyword = tokens[index]
+        value = node.get(keyword, _MISSING)
+        if keyword in SCHEMA_VALUES:
+            node = value
+        elif keyword in SCHEMA_ARRAYS and isinstance(value, list):
+            index += 1
+            if index == len(tokens) or not re.fullmatch(r"0|[1-9][0-9]*", tokens[index]):
+                return False
+            position = int(tokens[index])
+            node = value[position] if position < len(value) else _MISSING
+        elif keyword in SCHEMA_MAPS and isinstance(value, dict):
+            index += 1
+            if index == len(tokens):
+                return False
+            node = value.get(tokens[index], _MISSING)
+        else:
+            return False
+        if node is _MISSING:
+            return False
+        index += 1
+    return True
+
+
+def _check_profile(
+    schema: Json, path: str, anchors: set[str], references: list[tuple[str, str]]
+) -> None:
     if isinstance(schema, bool):
         return
     if not isinstance(schema, dict):
@@ -70,21 +127,25 @@ def check_contract_schema(schema: Json, path: str = "$") -> None:
         if keyword == "$ref":
             if not isinstance(value, str) or not value.startswith("#"):
                 raise TypeError(f"{keyword_path} must be a bundled local reference")
+            references.append((keyword_path, value))
+        elif keyword == "$anchor":
+            if isinstance(value, str):
+                anchors.add(value)
         elif keyword == "$schema":
             if value != DIALECT:
                 raise TypeError(f"{keyword_path} must select Draft 2020-12")
         elif keyword in SCHEMA_VALUES:
-            check_contract_schema(value, keyword_path)
+            _check_profile(value, keyword_path, anchors, references)
         elif keyword in SCHEMA_ARRAYS:
             if not isinstance(value, list):
                 raise TypeError(f"{keyword_path} must be an array")
             for index, child in enumerate(value):
-                check_contract_schema(child, f"{keyword_path}[{index}]")
+                _check_profile(child, f"{keyword_path}[{index}]", anchors, references)
         elif keyword in SCHEMA_MAPS:
             if not isinstance(value, dict):
                 raise TypeError(f"{keyword_path} must be an object")
             for name, child in value.items():
-                check_contract_schema(child, f"{keyword_path}.{name}")
+                _check_profile(child, f"{keyword_path}.{name}", anchors, references)
         elif keyword not in ANNOTATIONS and keyword not in VALIDATION:
             raise TypeError(f"{keyword_path} is outside the Workhorse contract profile")
 

@@ -44,11 +44,12 @@ current document.
 
 Each SDK rejects keywords outside the shared profile before compiling a schema. References can
 target bundled definitions in the same document, while remote references and custom keywords are
-rejected. Formats remain annotations, so an email format does not create a language-specific gate.
+rejected. A reference must point at a subschema, so it cannot reach a schema hidden in `default` or
+`examples`, where the profile check never looks. Formats remain annotations, so an email format does not create a language-specific gate.
 
-Regular expressions differ most at backreferences. Go's regex engine has none, and the others
-disagree when the group did not match. Each SDK therefore rejects a `pattern` or a
-`patternProperties` key that contains `\1` through `\9` or `\k<name>`.
+The profile leaves out `pattern` and `patternProperties`, because the SDKs' regular expression
+engines accept different syntax and match differently. Each SDK rejects either keyword at any depth,
+so a contract cannot depend on one engine. Check a string's shape in handler code instead.
 
 Every SDK compiles each schema the profile allows. TypeScript does not add Ajv's stricter lint
 rules, so a union type, `properties` without an object type, or an open `prefixItems` array compiles
