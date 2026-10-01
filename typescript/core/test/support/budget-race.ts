@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Pool, PoolClient } from "pg";
 import type { Queue } from "../../src/index.js";
@@ -121,4 +122,86 @@ async function waitFor(message: string, predicate: () => Promise<boolean>): Prom
     await sleep(10);
   }
   throw new Error(message);
+}
+
+export interface BudgetChargeGate {
+  /** Lets every claim parked at the gate charge its budgets and commit. */
+  readonly open: () => Promise<void>;
+  /** Opens the gate if needed and removes its trigger. */
+  readonly remove: () => Promise<void>;
+}
+
+/**
+ * Parks every claim on one queue after it has read its budgets' room and before it charges them.
+ * A test-only trigger on the claim's runtime update waits for a session lock this gate holds, and a
+ * claim updates its runtime rows between the room it computes and the bucket charge.
+ */
+export async function gateBudgetCharge(pool: Pool, queueName: string): Promise<BudgetChargeGate> {
+  const trigger = `budget_charge_gate_${randomUUID().replaceAll("-", "_")}`;
+  const literal = queueName.replaceAll("'", "''");
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION public.workhorse_test_budget_charge_gate() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+      PERFORM pg_advisory_xact_lock_shared(
+        hashtextextended('workhorse-test:budget-charge-gate:' || NEW.queue_name, 0));
+      RETURN NEW;
+    END
+    $$`);
+  const holder = await pool.connect();
+  let opened = false;
+  const open = async () => {
+    if (opened) return;
+    opened = true;
+    try {
+      await holder.query(
+        "SELECT pg_advisory_unlock(hashtextextended('workhorse-test:budget-charge-gate:' || $1, 0))",
+        [queueName],
+      );
+    } finally {
+      holder.release();
+    }
+  };
+  try {
+    await holder.query(
+      "SELECT pg_advisory_lock(hashtextextended('workhorse-test:budget-charge-gate:' || $1, 0))",
+      [queueName],
+    );
+    await pool.query(
+      `CREATE TRIGGER ${trigger} BEFORE UPDATE ON workhorse.task_runtime FOR EACH ROW
+        WHEN (NEW.queue_name = '${literal}' AND OLD.state = 'ready' AND NEW.state = 'active')
+        EXECUTE FUNCTION public.workhorse_test_budget_charge_gate()`,
+    );
+  } catch (error) {
+    await open();
+    throw error;
+  }
+  return {
+    open,
+    remove: async () => {
+      await open();
+      await pool.query(`DROP TRIGGER IF EXISTS ${trigger} ON workhorse.task_runtime`);
+    },
+  };
+}
+
+/** Waits until a statement in this database, named by a fragment of its text, waits on an advisory lock. */
+export async function waitForStatementOnAdvisoryLock(
+  pool: Pool,
+  fragment: string,
+  settled: () => boolean,
+): Promise<void> {
+  await waitFor(`no statement containing ${fragment} waited on an advisory lock`, async () => {
+    if (settled()) return true;
+    const result = await pool.query<{ waiting: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM pg_stat_activity
+          WHERE datname = current_database() AND pid <> pg_backend_pid()
+            AND wait_event_type = 'Lock' AND wait_event = 'advisory'
+            AND strpos(query, $1) > 0
+       ) AS waiting`,
+      [fragment],
+    );
+    return result.rows[0]!.waiting;
+  });
 }

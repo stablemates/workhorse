@@ -2259,8 +2259,12 @@ budget has no per-key sub-limit; keys stay queue-scoped.
 `AsyncQueue.sync_budgets(namespace, definitions, prune=True)`, plus Go
 `Queue.SyncBudgets(ctx, namespace, definitions, options...)` reconcile deployment-owned desired
 state. Each definition contains only `name`, optional `maxActive`, and optional `rate`, and at least
-one limit. Synchronization accepts at most 10,000 unique names, takes the exclusive
-`workhorse:budgets` transaction advisory lock, rejects cross-namespace ownership, prunes omitted
+one limit. Synchronization accepts at most 10,000 unique names and takes the exclusive
+`workhorse:budgets` transaction advisory lock. Since migration 0050 it then takes
+`workhorse:budget:<budget_name>` for every name it defines or can prune, in name order, before it
+reads a definition. A claim holds that lock from admission to the bucket charge, so a definition
+cannot change between the two, and the shared name order keeps a sync and a claim from
+deadlocking. Synchronization then rejects cross-namespace ownership, prunes omitted
 rows by default, and sends a `workhorse_tasks` wake hint to at most 100 queues holding ready work
 that names an affected budget. TypeScript `Queue.listBudgets(budgetNames)` and
 `Admin.listBudgets(budgetNames)`, Python `Queue.list_budgets(budget_names)` and
