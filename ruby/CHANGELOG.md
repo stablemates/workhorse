@@ -65,3 +65,6 @@ other SDKs carry, because every tag names one release of all of them.
   `active_job` task type. A typed job declares its task type with `workhorse_options` and carries
   one JSON `Hash`, so another SDK can enqueue or run it. `Stablemates::Workhorse::ActiveJob.handle`
   registers both formats on a `Worker`.
+- Workers built on one pool share one notification listener connection, as they share the
+  heartbeat connection. Each worker is woken only for its own queues, and the listener stops when
+  the last worker on the pool stops.
