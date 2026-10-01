@@ -66,13 +66,13 @@ function fencedExamples(contents: string, language: string): string[] {
 const contracts: readonly ReadmeContract[] = [
   {
     readme: "README.md",
-    example: "typescript/examples/quickstart.mjs",
+    example: "typescript/examples/quickstart.ts",
     exampleLanguage: "ts",
     languageSupport: (support) => `Node.js ${naturalList(support.node.tested)}`,
   },
   {
     readme: "typescript/core/README.md",
-    example: "typescript/examples/quickstart.mjs",
+    example: "typescript/examples/quickstart.ts",
     exampleLanguage: "ts",
     languageSupport: (support) => `Node.js ${naturalList(support.node.tested)}`,
   },

@@ -66,12 +66,12 @@ Requires Node.js 22 or 24 and PostgreSQL 15 through 18.
 ```ts
 import { Admin, Pool, Queue, Worker } from "@stablemates/workhorse";
 
-export async function runQuickstart(databaseUrl) {
+export async function runQuickstart(databaseUrl: string) {
   const pool = new Pool({ connectionString: databaseUrl });
   try {
     const queue = new Queue(pool);
     const admin = new Admin(pool);
-    const worker = new Worker(queue, { workerId: "quickstart-worker" }).handle(
+    const worker = new Worker(queue, { workerId: "quickstart-worker" }).handle<{ name: string }>(
       "welcome.send",
       async (payload) => ({ message: `Welcome, ${payload.name}!` }),
     );

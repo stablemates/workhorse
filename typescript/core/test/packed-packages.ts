@@ -490,7 +490,13 @@ try {
           noEmit: true,
           skipLibCheck: true,
         },
-        include: ["type-smoke.ts"],
+        // TypeScript examples run under Node type stripping, so only this compile checks their types.
+        include: [
+          "type-smoke.ts",
+          ...typescriptExamples
+            .map((example) => path.basename(example.file))
+            .filter((file) => file.endsWith(".ts")),
+        ],
       },
       null,
       2,
