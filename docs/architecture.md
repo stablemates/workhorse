@@ -996,7 +996,10 @@ Its `linger` accepts whole milliseconds from zero through 60 seconds. Both metho
 task type, and `handle_batch` panics on invalid options. The member whose arrival fills or lingers
 out a batch runs its callback inside its own execution, as Go does. That member keeps its slot until
 the callback returns, even when the member is cancelled. The shutdown drain counts it the same way.
-`Worker::run(shutdown)` and `Worker::run_once` share one execution permit.
+A batch coordinator holds only a weak reference to its worker, so dropping the last `Worker` handle
+frees the worker, its handlers, and whatever they captured. A batch that dispatches after that
+rejects each member with `BatchAbandoned` without calling the handler. `Worker::run(shutdown)` and
+`Worker::run_once` share one execution permit.
 
 When `shutdown` resolves, `Worker::run` stops claiming and drains within `shutdown_grace_period`.
 The deadline is fixed when `dispatch` in `rust/src/worker/dispatch.rs` observes `shutdown`. Claims
