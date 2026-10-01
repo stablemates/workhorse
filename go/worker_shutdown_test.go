@@ -3,6 +3,7 @@ package workhorse_test
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -127,5 +128,100 @@ func TestWorkerWaitsForAHandlerThatHonoursItsCancellation(t *testing.T) {
 	case <-finished:
 	default:
 		t.Fatal("Run returned before the cancelled handler unwound")
+	}
+}
+
+func TestWorkerReturnsWhenHandlersHoldEveryPoolConnection(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-shutdown-pool")
+	ctx := context.Background()
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MaxConns = 4
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "go-worker-shutdown-pool"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	for range 8 {
+		if _, err := queue.Enqueue(ctx, "hold", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const gracePeriod = 200 * time.Millisecond
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "shutdown-pool-worker", Concurrency: 8,
+		LeaseDuration: time.Second, PollInterval: 5 * time.Millisecond,
+		ShutdownGracePeriod: gracePeriod,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A failed run never cancels its handlers, so the test releases them before pool.Close waits.
+	released := make(chan struct{})
+	t.Cleanup(func() { close(released) })
+	var acquiring atomic.Int32
+	// Each handler holds a pooled connection until its context ends. There are more handlers than
+	// connections, so a handler already waits for every connection the worker releases at stop.
+	worker.Handle("hold", func(
+		handlerContext context.Context,
+		_ any,
+		_ *workhorse.HandlerContext,
+	) (any, error) {
+		acquireContext, cancelAcquire := context.WithCancel(handlerContext)
+		defer cancelAcquire()
+		go func() {
+			select {
+			case <-released:
+				cancelAcquire()
+			case <-acquireContext.Done():
+			}
+		}()
+		acquiring.Add(1)
+		connection, err := pool.Acquire(acquireContext)
+		if err != nil {
+			return nil, err
+		}
+		defer connection.Release()
+		select {
+		case <-handlerContext.Done():
+		case <-released:
+		}
+		return nil, context.Cause(handlerContext)
+	})
+
+	runContext, stop := context.WithCancel(ctx)
+	runResult := make(chan error, 1)
+	go func() { runResult <- worker.Run(runContext) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for acquiring.Load() < 8 || pool.Stat().AcquiredConns() < config.MaxConns {
+		if time.Now().After(deadline) {
+			t.Fatalf("handlers never exhausted the pool: %d acquiring, %d acquired",
+				acquiring.Load(), pool.Stat().AcquiredConns())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// Acquire may return just before the counter is read, so let every waiter reach the pool queue.
+	time.Sleep(50 * time.Millisecond)
+
+	stopped := time.Now()
+	stop()
+	// The grace period, the unwind window, and a margin for the bounded deregistration.
+	bound := gracePeriod + 250*time.Millisecond + 1500*time.Millisecond
+	select {
+	case err := <-runResult:
+		if elapsed := time.Since(stopped); elapsed > bound {
+			t.Fatalf("Run returned %s after stop, want within %s", elapsed, bound)
+		}
+		// Every handler unwinds once the deadline cancels it, so the shutdown is clean.
+		if err != nil {
+			t.Fatalf("Run returned %v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run never returned while handlers held every pool connection")
 	}
 }

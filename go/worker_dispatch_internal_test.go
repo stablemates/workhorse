@@ -3,6 +3,7 @@ package workhorse
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -597,5 +598,82 @@ func TestBatchedCompletionNamesTasksInIDOrderAndRetriesADeadlock(t *testing.T) {
 	}
 	if len(executor.sent) != fencedWriteDeadlockAttempts {
 		t.Fatalf("sent the chunk %d times", len(executor.sent))
+	}
+}
+
+// SM-1026: a lifecycle error stops the loop while the caller's context is still live. Run's grace
+// period ends a stalled claim, so the loop must start it before it waits for that claim.
+func TestDispatchStartsTheShutdownBeforeWaitingForAStalledClaim(t *testing.T) {
+	worker := newDefaultWorker(t, WorkerOptions{Concurrency: 2})
+	worker.Handle(dispatchTaskType, func(context.Context, any, *HandlerContext) (any, error) {
+		return nil, nil
+	})
+	drain, expireDrain := context.WithCancel(context.Background())
+	t.Cleanup(expireDrain)
+	claimStarted := make(chan struct{})
+	maintenanceErrors := make(chan error, 1)
+	outcome := make(chan dispatchOutcome, 1)
+	go func() {
+		active, err := worker.dispatch(context.Background(), dispatchEnvironment{
+			claim: func(int, int) ([]ClaimedTask, error) {
+				worker.markFullTier(worker.queues[0])
+				close(claimStarted)
+				<-drain.Done()
+				return nil, drain.Err()
+			},
+			execute:           func(ClaimedTask) error { return nil },
+			executionResults:  make(chan executionResult, 4),
+			notificationWake:  make(chan struct{}),
+			registryWake:      make(chan struct{}),
+			maintenanceErrors: maintenanceErrors,
+			listening:         func() bool { return true },
+			stopped:           expireDrain,
+		})
+		outcome <- dispatchOutcome{active: active, err: err}
+	}()
+	<-claimStarted
+	maintenanceErr := fmt.Errorf("maintenance failed")
+	maintenanceErrors <- maintenanceErr
+	select {
+	case result := <-outcome:
+		if result.err != maintenanceErr {
+			t.Fatalf("dispatch returned %v, want the maintenance error", result.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("dispatch waited for a claim that only the shutdown ends")
+	}
+}
+
+// The deadline cancels the executions as soon as the grace period ends, so a cancelled execution's
+// result can already be buffered when the drain observes the deadline. Both are ready at once, and
+// select picks either; repeating the drain makes a result that depends on the pick fail reliably.
+func TestDrainTreatsADeadlineCancellationAsPartOfTheUnwind(t *testing.T) {
+	worker := &Worker{}
+	operational := errors.New("operational failure")
+	for attempt := range 200 {
+		drainContext, expire := context.WithCancel(context.Background())
+		expire()
+		results := make(chan executionResult, 1)
+		results <- executionResult{err: fmt.Errorf("write failure: %w", context.Canceled)}
+		abandoned, err := worker.drainExecutions(drainContext, results, 1, nil, func() {})
+		if abandoned != 0 || err != nil {
+			t.Fatalf("attempt %d: drain returned %d abandoned and %v, want 0 and nil",
+				attempt, abandoned, err)
+		}
+
+		results <- executionResult{err: fmt.Errorf("write failure: %w", context.Canceled)}
+		_, err = worker.drainExecutions(drainContext, results, 1, operational, func() {})
+		if !errors.Is(err, operational) {
+			t.Fatalf("attempt %d: drain returned %v, want the error captured before the deadline",
+				attempt, err)
+		}
+	}
+
+	// Before the deadline, a cancellation is an ordinary execution error.
+	results := make(chan executionResult, 1)
+	results <- executionResult{err: context.Canceled}
+	_, err := worker.drainExecutions(context.Background(), results, 1, nil, func() {})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("drain before the deadline returned %v, want context.Canceled", err)
 	}
 }
