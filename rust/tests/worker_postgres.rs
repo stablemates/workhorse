@@ -236,6 +236,256 @@ async fn a_stuck_handler_is_abandoned_when_grace_ends() {
     assert_eq!(harness.state(task).await, TaskState::Active);
 }
 
+/// The lease expiry PostgreSQL holds for `task`.
+async fn lease_expiry(observer: &Client, task: Uuid) -> std::time::SystemTime {
+    observer
+        .query_one("SELECT expires_at FROM workhorse.task_runtime WHERE task_id = $1", &[&task])
+        .await
+        .unwrap()
+        .get(0)
+}
+
+/// SM-1028: once the future that owns a lease is dropped, no heartbeat renews it.
+///
+/// A round already in flight may still land, so the expiry must first hold still for five
+/// heartbeat intervals. A lease that keeps renewing never holds still. Recovery runs only after
+/// PostgreSQL reports the expiry has passed.
+async fn assert_lease_lapses(harness: &Harness, observer: &Client, task: Uuid) {
+    let settled = Duration::from_millis(500);
+    tokio::time::timeout(WAIT, async {
+        let mut expiry = lease_expiry(observer, task).await;
+        let mut since = tokio::time::Instant::now();
+        while since.elapsed() < settled {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let current = lease_expiry(observer, task).await;
+            if current != expiry {
+                expiry = current;
+                since = tokio::time::Instant::now();
+            }
+        }
+    })
+    .await
+    .expect("a dropped execution renewed its lease");
+    tokio::time::timeout(WAIT, async {
+        while !observer
+            .query_one(
+                "SELECT expires_at <= clock_timestamp() FROM workhorse.task_runtime WHERE task_id = $1",
+                &[&task],
+            )
+            .await
+            .unwrap()
+            .get::<_, bool>(0)
+        {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the lease never expired");
+    observer
+        .query("SELECT * FROM workhorse.recover_expired_telemetry_v1(100, 0)", &[])
+        .await
+        .unwrap();
+    assert_ne!(harness.state(task).await, TaskState::Active, "recovery left the lease in place");
+}
+
+fn lapsing_options() -> WorkerOptions {
+    WorkerOptions {
+        lease_duration: Duration::from_secs(1),
+        heartbeat_interval: Some(Duration::from_millis(100)),
+        registry_interval: Duration::from_millis(100),
+        ..options()
+    }
+}
+
+/// Waits for a handler to start, and fails when the worker ends first or never starts one.
+async fn started<T: std::fmt::Debug>(
+    running_handlers: &mut mpsc::UnboundedReceiver<()>,
+    running: &mut tokio::task::JoinHandle<T>,
+) {
+    tokio::time::timeout(WAIT, async {
+        tokio::select! {
+            started = running_handlers.recv() => started.expect("the handler was dropped"),
+            ended = running => panic!("the worker ended before its handler started: {ended:?}"),
+        }
+    })
+    .await
+    .expect("the handler never started");
+}
+
+/// Registers a handler that signals once it starts and then never returns.
+fn handle_forever(worker: &Worker) -> mpsc::UnboundedReceiver<()> {
+    let (started, running_handlers) = mpsc::unbounded_channel();
+    worker.handle("rust.forever", move |_: Value, _| {
+        let _ = started.send(());
+        std::future::pending::<Result<Value, HandlerError>>()
+    });
+    running_handlers
+}
+
+/// SM-1028: dropping the `run` future abandons its task, and the lease expires (ADR 0074).
+///
+/// The registry row, the background loops and the reserved heartbeat connection go with it, and
+/// the same worker runs again.
+#[tokio::test]
+async fn a_dropped_run_stops_renewing_its_leases_and_releases_the_worker() {
+    let Some(harness) = harness("worker_dropped_run").await else { return };
+    let observer = harness.database.connect().await;
+    let options = lapsing_options();
+    let worker_id = options.worker_id.clone().unwrap();
+    let manager = deadpool_postgres::Manager::new(harness.database.url().parse().unwrap(), NoTls);
+    let pool = deadpool_postgres::Pool::builder(manager).max_size(6).build().unwrap();
+    let worker = Worker::new(pool.clone(), options).unwrap();
+    let mut running_handlers = handle_forever(&worker);
+    let task = harness
+        .enqueue(
+            "rust.forever",
+            json!({}),
+            EnqueueOptions { max_attempts: 1, ..Default::default() },
+        )
+        .await;
+
+    let (_stop, mut running) = run(&worker);
+    started(&mut running_handlers, &mut running).await;
+    // A heartbeat round renews the lease before the run is dropped.
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    running.abort();
+    assert!(running.await.unwrap_err().is_cancelled());
+    assert_lease_lapses(&harness, &observer, task).await;
+
+    // Teardown runs after the run is dropped, so the test waits for it rather than for the lease.
+    tokio::time::timeout(WAIT, async {
+        loop {
+            let registered: i64 = observer
+                .query_one(
+                    "SELECT count(*) FROM workhorse.worker_registry WHERE worker_id = $1",
+                    &[&worker_id],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            let status = pool.status();
+            if registered == 0 && status.available == status.size {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "the dropped run kept its registry row or its reserved connection: {:?}",
+            pool.status()
+        )
+    });
+
+    worker.handle("rust.done", |_: Value, _| async { Ok(Value::Null) });
+    let next = harness.enqueue("rust.done", json!({}), EnqueueOptions::default()).await;
+    let (stop, running) = run(&worker);
+    harness.wait_for(next, TaskState::Succeeded).await;
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), running).await.unwrap().unwrap().unwrap();
+}
+
+/// SM-1028: dropping the `run_once` future abandons its task too.
+#[tokio::test]
+async fn a_dropped_run_once_stops_renewing_its_lease() {
+    let Some(harness) = harness("worker_dropped_run_once").await else { return };
+    let observer = harness.database.connect().await;
+    let worker = harness.worker(lapsing_options());
+    let mut running_handlers = handle_forever(&worker);
+    let task = harness
+        .enqueue(
+            "rust.forever",
+            json!({}),
+            EnqueueOptions { max_attempts: 1, ..Default::default() },
+        )
+        .await;
+
+    let once = worker.clone();
+    let mut running = tokio::spawn(async move { once.run_once().await });
+    started(&mut running_handlers, &mut running).await;
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    running.abort();
+    assert!(running.await.unwrap_err().is_cancelled());
+    assert_lease_lapses(&harness, &observer, task).await;
+}
+
+/// Drops a run while PostgreSQL holds its initial registration, and expects no registry row.
+async fn assert_cancelled_registration_deregisters<F>(name: &str, start: impl FnOnce(Worker) -> F)
+where
+    F: std::future::Future<Output = Result<(), workhorse::Error>> + Send + 'static,
+{
+    let Some(harness) = harness(name).await else { return };
+    let (locker, observer) = (harness.database.connect().await, harness.database.connect().await);
+    let options = options();
+    let worker_id = options.worker_id.clone().unwrap();
+    let worker = harness.worker(options);
+    locker
+        .batch_execute("BEGIN; LOCK TABLE workhorse.worker_registry IN ACCESS EXCLUSIVE MODE")
+        .await
+        .unwrap();
+    let running = tokio::spawn(start(worker.clone()));
+
+    let registering = "SELECT pid FROM pg_stat_activity WHERE datname = current_database() \
+         AND state = 'active' AND query LIKE '%workhorse.register_worker_v1%'";
+    let blocked = format!("{registering} AND wait_event_type = 'Lock'");
+    let pid: i32 = tokio::time::timeout(WAIT, async {
+        loop {
+            if let Some(row) = observer.query_opt(&blocked, &[]).await.unwrap() {
+                return row.get(0);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the registration never waited on the registry lock");
+
+    running.abort();
+    assert!(running.await.unwrap_err().is_cancelled());
+    locker.batch_execute("COMMIT").await.unwrap();
+    let still_registering = format!("{registering} AND pid = $1");
+    tokio::time::timeout(WAIT, async {
+        while observer.query_opt(&still_registering, &[&pid]).await.unwrap().is_some() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the abandoned registration never finished");
+
+    let registered = "SELECT count(*) FROM workhorse.worker_registry WHERE worker_id = $1";
+    let rows = tokio::time::timeout(WAIT, async {
+        loop {
+            let rows: i64 = observer.query_one(registered, &[&worker_id]).await.unwrap().get(0);
+            if rows == 0 {
+                return rows;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(rows.is_ok(), "the dropped run left its registration behind");
+}
+
+/// SM-1028: a run dropped while it registers removes the registration PostgreSQL still makes.
+#[tokio::test]
+async fn a_run_dropped_during_registration_deregisters() {
+    assert_cancelled_registration_deregisters(
+        "worker_dropped_registering_run",
+        |worker| async move { worker.run(std::future::pending::<()>()).await },
+    )
+    .await;
+}
+
+/// SM-1028: `run_once` cleans up a registration it was dropped during, as `run` does.
+#[tokio::test]
+async fn a_run_once_dropped_during_registration_deregisters() {
+    assert_cancelled_registration_deregisters(
+        "worker_dropped_registering_once",
+        |worker| async move { worker.run_once().await.map(drop) },
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn a_drain_finishes_running_handlers_within_grace() {
     let Some(harness) = harness("worker_drain").await else { return };

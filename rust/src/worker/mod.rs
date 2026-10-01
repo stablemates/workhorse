@@ -20,8 +20,8 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use futures_util::FutureExt;
 use serde_json::Value;
-use tokio::sync::{Notify, Semaphore};
-use tokio::task::JoinSet;
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
+use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{timeout_at, Instant};
 use tokio_util::sync::CancellationToken as StopToken;
 use uuid::Uuid;
@@ -312,7 +312,7 @@ pub(crate) struct Inner {
     heartbeats: heartbeat::Heartbeats,
     metrics: Metrics,
     handlers: RwLock<HashMap<String, ErasedHandler>>,
-    run_permit: Semaphore,
+    run_permit: Arc<Semaphore>,
     instance: Mutex<Uuid>,
     registered: AtomicBool,
     paused: AtomicBool,
@@ -357,6 +357,85 @@ impl Drop for ActiveSlot {
         if *self.counted.get_mut() {
             self.inner.active.fetch_sub(1, Ordering::SeqCst);
         }
+    }
+}
+
+/// What one `run` or `run_once` owns beyond its own future: the run permit, the background loops,
+/// the heartbeat loop, the registry row and the reserved heartbeat connection.
+///
+/// Startup and teardown each run as one task on the runtime the scope opened on, so cancelling the
+/// run future, even inside [`RunScope::start`] or [`RunScope::close`], cannot skip a step.
+/// Teardown waits for a startup still in flight, stops the loops and joins them, deregisters, then
+/// releases the connection. The permit goes with the teardown task, so the next run of the same
+/// worker starts only after the cleanup ends.
+struct RunScope {
+    inner: Arc<Inner>,
+    runtime: tokio::runtime::Handle,
+    permit: Option<OwnedSemaphorePermit>,
+    starting: Option<JoinHandle<Result<(), Error>>>,
+    background: StopToken,
+    loops: Vec<JoinHandle<()>>,
+}
+
+impl RunScope {
+    fn new(inner: &Arc<Inner>, permit: OwnedSemaphorePermit) -> Self {
+        Self {
+            inner: Arc::clone(inner),
+            runtime: tokio::runtime::Handle::current(),
+            permit: Some(permit),
+            starting: None,
+            background: StopToken::new(),
+            loops: Vec::new(),
+        }
+    }
+
+    /// Starts the worker in a task the scope owns.
+    ///
+    /// PostgreSQL may still execute an initial registration the dropped run already sent, so
+    /// teardown waits for it to answer before it deregisters.
+    async fn start(&mut self) -> Result<(), Error> {
+        let inner = Arc::clone(&self.inner);
+        let starting = self.starting.insert(self.runtime.spawn(async move { inner.start().await }));
+        let started = starting.await;
+        self.starting = None;
+        // Nothing aborts the startup task, so it ends only by returning or panicking.
+        started.unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic()))
+    }
+
+    /// Waits for the teardown, which keeps running if this future is dropped.
+    async fn close(mut self) {
+        if let Some(teardown) = self.teardown() {
+            let _ = teardown.await;
+        }
+    }
+
+    fn teardown(&mut self) -> Option<JoinHandle<()>> {
+        let permit = self.permit.take()?;
+        self.background.cancel();
+        // Every execution has ended or is being dropped, so no renewal is still owed.
+        self.inner.abandon_heartbeats();
+        let (inner, starting) = (Arc::clone(&self.inner), self.starting.take());
+        let loops = std::mem::take(&mut self.loops);
+        Some(self.runtime.spawn(async move {
+            if let Some(starting) = starting {
+                let _ = starting.await;
+            }
+            for running in loops {
+                let _ = running.await;
+            }
+            // A round in flight finishes before its connection can go back to the pool.
+            if let Some(heartbeats) = inner.heartbeat_loop() {
+                let _ = heartbeats.await;
+            }
+            inner.stop().await;
+            drop(permit);
+        }))
+    }
+}
+
+impl Drop for RunScope {
+    fn drop(&mut self) {
+        self.teardown();
     }
 }
 
@@ -407,7 +486,7 @@ impl Worker {
             heartbeats: heartbeat::Heartbeats::default(),
             metrics: Metrics::new(),
             handlers: RwLock::default(),
-            run_permit: Semaphore::new(1),
+            run_permit: Arc::new(Semaphore::new(1)),
             instance: Mutex::new(Uuid::nil()),
             registered: AtomicBool::new(false),
             paused: AtomicBool::new(false),
@@ -459,26 +538,31 @@ impl Worker {
     /// Handlers still running when grace ends see [`crate::CancelReason::Shutdown`] and get a
     /// short unwind window. Any that outlive it are abandoned, their leases expire, and PostgreSQL
     /// recovers them; `run` then returns [`Error::ShutdownIncomplete`].
+    ///
+    /// Dropping the future instead abandons every task it owns at once: renewals stop and the
+    /// leases expire. The worker deregisters in the background, and its next run waits for that.
     pub async fn run<F: Future<Output = ()> + Send>(&self, shutdown: F) -> Result<(), Error> {
         let inner = &self.0;
         tokio::pin!(shutdown);
-        let _permit = tokio::select! {
-            permit = inner.run_permit.acquire() => permit.map_err(|_| Error::invalid("worker is closed"))?,
+        let permit = tokio::select! {
+            permit = Arc::clone(&inner.run_permit).acquire_owned() => permit.map_err(|_| Error::invalid("worker is closed"))?,
             () = &mut shutdown => return Ok(()),
         };
-        inner.start().await?;
+        let mut scope = RunScope::new(inner, permit);
+        scope.start().await?;
 
         let wake = Arc::new(Notify::new());
         let registry_wake = Arc::new(Notify::new());
         let listening = Arc::new(AtomicBool::new(false));
-        let background = StopToken::new();
-        let maintenance_stop = StopToken::new();
-        let registry = tokio::spawn(
-            Arc::clone(inner).registry_loop(Arc::clone(&registry_wake), background.clone()),
-        );
-        let listener = inner.spawn_listener(&wake, &listening, &background);
-        let maintenance =
-            tokio::spawn(Arc::clone(inner).maintenance_loop(maintenance_stop.clone()));
+        let maintenance_stop = scope.background.child_token();
+        scope.loops.push(tokio::spawn(
+            Arc::clone(inner).registry_loop(Arc::clone(&registry_wake), scope.background.clone()),
+        ));
+        scope.loops.extend(inner.spawn_listener(&wake, &listening, &scope.background));
+        // Maintenance goes last, so the drain below can stop it before the other loops.
+        scope
+            .loops
+            .push(tokio::spawn(Arc::clone(inner).maintenance_loop(maintenance_stop.clone())));
 
         let shutdown_token = StopToken::new();
         let mut executions: JoinSet<Result<(), Error>> = JoinSet::new();
@@ -501,7 +585,11 @@ impl Worker {
         inner.draining.store(true, Ordering::SeqCst);
         inner.refresh_registration().await;
         maintenance_stop.cancel();
-        let _ = maintenance.await;
+        // The handle stays in the scope until it resolves, so a drop here still joins it.
+        if let Some(maintenance) = scope.loops.last_mut() {
+            let _ = maintenance.await;
+            scope.loops.pop();
+        }
         drain(
             &mut executions,
             Instant::now() + inner.options.shutdown_grace_period,
@@ -518,12 +606,7 @@ impl Worker {
             executions.abort_all();
             while executions.join_next().await.is_some() {}
         }
-        background.cancel();
-        let _ = registry.await;
-        if let Some(listener) = listener {
-            let _ = listener.await;
-        }
-        inner.stop().await;
+        scope.close().await;
         if abandoned > 0 {
             if let Some(error) = first_error {
                 tracing::error!(error = %error, workhorse.worker.id = %inner.worker_id, "task execution failed");
@@ -540,12 +623,16 @@ impl Worker {
 
     /// Runs one maintenance pass and at most one task, returning whether a handler ran.
     ///
-    /// A claimed task without a registered handler is released and reports `false`.
+    /// A claimed task without a registered handler is released and reports `false`. Dropping the
+    /// future abandons its task as dropping [`Worker::run`] does.
     pub async fn run_once(&self) -> Result<bool, Error> {
         let inner = &self.0;
-        let _permit =
-            inner.run_permit.acquire().await.map_err(|_| Error::invalid("worker is closed"))?;
-        inner.start().await?;
+        let permit = Arc::clone(&inner.run_permit)
+            .acquire_owned()
+            .await
+            .map_err(|_| Error::invalid("worker is closed"))?;
+        let mut scope = RunScope::new(inner, permit);
+        scope.start().await?;
         let result = async {
             if inner.paused.load(Ordering::SeqCst) {
                 return Ok(false);
@@ -561,7 +648,7 @@ impl Worker {
             }
         }
         .await;
-        inner.stop().await;
+        scope.close().await;
         result
     }
 }
@@ -1118,6 +1205,113 @@ mod tests {
         config.dbname = Some("unused".into());
         config.pool = Some(deadpool_postgres::PoolConfig::new(max_size));
         config.create_pool(Some(deadpool_postgres::Runtime::Tokio1), tokio_postgres::NoTls).unwrap()
+    }
+
+    /// A server that accepts connections and never answers. It reports each connection it accepts.
+    pub(in crate::worker) fn silent_server() -> (u16, tokio::sync::mpsc::UnboundedReceiver<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (accepted, receiver) = tokio::sync::mpsc::unbounded_channel();
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for stream in listener.incoming() {
+                held.push(stream);
+                let _ = accepted.send(());
+            }
+        });
+        (port, receiver)
+    }
+
+    /// A pool whose server accepts connections and never answers, so every borrow waits.
+    fn silent_pool_on(port: u16) -> deadpool_postgres::Pool {
+        let mut config = deadpool_postgres::Config::new();
+        config.host = Some("127.0.0.1".into());
+        config.port = Some(port);
+        config.user = Some("unused".into());
+        config.dbname = Some("unused".into());
+        config.pool = Some(deadpool_postgres::PoolConfig::new(4));
+        config.create_pool(Some(deadpool_postgres::Runtime::Tokio1), tokio_postgres::NoTls).unwrap()
+    }
+
+    /// Opens a scope for a registered worker, whose teardown then waits to deregister.
+    async fn registered_scope(worker: &Worker) -> RunScope {
+        let permit = Arc::clone(&worker.0.run_permit).acquire_owned().await.unwrap();
+        worker.0.registered.store(true, Ordering::SeqCst);
+        RunScope::new(&worker.0, permit)
+    }
+
+    const ACCEPTED: Duration = Duration::from_secs(5);
+
+    /// Whether the next run of `worker` could take the run permit within a short wait.
+    async fn next_run_starts(worker: &Worker) -> bool {
+        let acquire = worker.0.run_permit.acquire();
+        tokio::time::timeout(Duration::from_millis(100), acquire).await.is_ok()
+    }
+
+    /// SM-1028: a run dropped while it deregisters keeps that obligation and the run permit.
+    #[tokio::test]
+    async fn a_cancelled_close_finishes_its_teardown_before_the_next_run() {
+        let (port, mut accepted) = silent_server();
+        let worker = Worker::new(silent_pool_on(port), WorkerOptions::default()).unwrap();
+        let closing = tokio::spawn(registered_scope(&worker).await.close());
+        // Deregistration is the only step here that connects, so `close` is inside it.
+        let deregistering = tokio::time::timeout(ACCEPTED, accepted.recv()).await;
+        assert!(deregistering.unwrap().is_some(), "close never began to deregister");
+        closing.abort();
+        assert!(closing.await.unwrap_err().is_cancelled());
+        assert!(
+            !next_run_starts(&worker).await,
+            "the next run could start before the dropped run deregistered"
+        );
+    }
+
+    /// SM-1028: a scope dropped where no runtime is current tears down on the one it opened on.
+    #[test]
+    fn a_scope_dropped_outside_its_runtime_still_tears_down() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (port, mut accepted) = silent_server();
+        let (worker, scope) = runtime.block_on(async {
+            let worker = Worker::new(silent_pool_on(port), WorkerOptions::default()).unwrap();
+            let scope = registered_scope(&worker).await;
+            (worker, scope)
+        });
+        drop(scope);
+        runtime.block_on(async {
+            let deregistering = tokio::time::timeout(ACCEPTED, accepted.recv()).await;
+            assert!(deregistering.unwrap().is_some(), "the dropped scope never deregistered");
+            assert!(
+                !next_run_starts(&worker).await,
+                "the dropped scope released its permit before it deregistered"
+            );
+        });
+    }
+
+    /// SM-1028: the connection a heartbeat round is waiting on returns to the pool before the run ends.
+    #[tokio::test]
+    async fn teardown_waits_for_the_heartbeat_round_in_flight() {
+        let options = WorkerOptions {
+            shared_heartbeats: true,
+            heartbeat_interval: Some(Duration::from_millis(10)),
+            ..Default::default()
+        };
+        let (port, mut accepted) = silent_server();
+        let worker = Worker::new(silent_pool_on(port), options).unwrap();
+        let permit = Arc::clone(&worker.0.run_permit).acquire_owned().await.unwrap();
+        let scope = RunScope::new(&worker.0, permit);
+        let membership = worker.0.register_heartbeat(Uuid::new_v4(), 1);
+        // The round is in flight once the server holds the connection it asked for.
+        tokio::time::timeout(Duration::from_secs(5), accepted.recv())
+            .await
+            .expect("the heartbeat round never connected")
+            .expect("the heartbeat round connected");
+        drop(membership);
+        drop(scope);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            worker.0.run_permit.available_permits(),
+            0,
+            "the run ended while its heartbeat round still waited for a connection"
+        );
     }
 
     fn rejects(options: WorkerOptions, message: &str) {
