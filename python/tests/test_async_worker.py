@@ -411,3 +411,121 @@ def test_bridge_threads_add_a_thread_for_every_call_that_blocks() -> None:
         threads.close()
     with pytest.raises(RuntimeError):
         threads.run(lambda: 1)
+
+
+async def notification_listening(worker: AsyncWorker) -> bool:
+    return worker._inner._notification_listening.is_set()
+
+
+# SM-1071: run() cancels the listener, which skipped remove_listener and released a
+# connection that still carried the callback, so asyncpg warned on every stop.
+@pytest.mark.asyncio
+@pytest.mark.filterwarnings("error::asyncpg.InterfaceWarning")
+async def test_asyncpg_run_removes_the_notification_listener_before_release(
+    database_url: str,
+) -> None:
+    # A release that raises never returns its connection, so close() would wait forever.
+    pool = await asyncpg.create_pool(database_url, min_size=3, max_size=3)
+    reported: list[BaseException] = []
+    try:
+        worker = AsyncWorker.from_asyncpg(
+            pool, queue="sm-1071-listener", poll_ms=5_000, on_notification_error=reported.append
+        )
+        run = asyncio.create_task(worker.run())
+        try:
+            await eventually_async(
+                lambda: notification_listening(worker), "the asyncpg listener never started"
+            )
+        finally:
+            worker.stop()
+            await asyncio.wait_for(run, timeout=2)
+
+        assert reported == []
+        assert pool.get_idle_size() == 3
+    finally:
+        pool.terminate()
+
+
+# SM-1071: the async worker left the core's Psycopg listener enabled, so every run also
+# opened a thread that failed against the async pool and reported each retry.
+@pytest.mark.asyncio
+async def test_async_psycopg_run_reports_no_core_listener_failure(async_psycopg_pool) -> None:
+    reported: list[BaseException] = []
+    worker = AsyncWorker.from_psycopg(
+        async_psycopg_pool,
+        queue="sm-1071-core-listener",
+        poll_ms=5_000,
+        on_notification_error=reported.append,
+    )
+    run = asyncio.create_task(worker.run())
+    try:
+        await eventually_async(
+            lambda: notification_listening(worker), "the psycopg listener never started"
+        )
+        await asyncio.sleep(0.2)
+    finally:
+        worker.stop()
+        await asyncio.wait_for(run, timeout=2)
+
+    assert reported == []
+
+
+class RefusingListenerConnection:
+    """Stand in for an asyncpg connection whose UNLISTEN fails."""
+
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+
+    def is_in_transaction(self) -> bool:
+        return False
+
+    def is_closed(self) -> bool:
+        return False
+
+    async def add_listener(self, _channel: str, _callback: object) -> None:
+        return None
+
+    async def remove_listener(self, _channel: str, _callback: object) -> None:
+        raise self.error
+
+
+class RecordingPool:
+    def __init__(self, connection: RefusingListenerConnection) -> None:
+        self.connection = connection
+        self.released: list[object] = []
+        self.max_size = 10
+
+    async def acquire(self) -> RefusingListenerConnection:
+        return self.connection
+
+    async def release(self, connection: object) -> None:
+        self.released.append(connection)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error", [OSError("unlisten failed"), asyncio.CancelledError()], ids=["error", "cancelled"]
+)
+async def test_a_failed_listener_removal_still_releases_the_connection(
+    error: BaseException,
+) -> None:
+    connection = RefusingListenerConnection(error)
+    pool = RecordingPool(connection)
+    reported: list[BaseException] = []
+    worker = AsyncWorker.from_asyncpg(
+        pool,  # type: ignore[arg-type]
+        queue="sm-1071-refusal",
+        on_notification_error=reported.append,
+    )
+    stop = asyncio.Event()
+    listener = asyncio.create_task(worker._listen(stop))
+    await eventually_async(lambda: notification_listening(worker), "the listener never started")
+    stop.set()
+    listener.cancel()
+    with suppress(asyncio.CancelledError):
+        await asyncio.wait_for(listener, timeout=2)
+
+    assert pool.released == [connection]
+    assert not await notification_listening(worker)
+    if isinstance(error, OSError):
+        assert reported == [error]
