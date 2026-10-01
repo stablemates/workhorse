@@ -165,15 +165,34 @@ describe("describeLedger", () => {
     expect(report).toContain("npm now holds a partial 0.1.0 release");
   });
 
-  it("says the registry is unchanged when the first package failed", () => {
+  it("reports the failed package's registry state as unknown, because npm never confirmed it", () => {
     const report = describeLedger({
       published: [],
       failure: { entry: core, detail: "npm publish exited with 1" },
       pending: [dashboard],
     });
-    expect(report).toContain("Published: nothing. The registry is unchanged.");
-    expect(report).toContain("this tag can be released again");
+    // A lost response leaves an accepted upload behind a nonzero exit, and nothing reads the
+    // registry after the failure, so the ledger cannot claim the registry is unchanged.
+    expect(report).not.toContain("unchanged");
+    expect(report).toContain("Confirmed published: nothing.");
+    expect(report).toContain(
+      "Failed:\n  @stablemates/workhorse@0.1.0\n  npm publish exited with 1\n  Registry state unknown",
+    );
+    expect(report).toContain("The next run's preflight reads the registry again");
+    expect(report).toContain("if the preflight finds none of these versions");
     expect(report).not.toContain("partial");
+  });
+
+  it("reports the failed package as unknown after a partial release too", () => {
+    const report = describeLedger({
+      published: [core],
+      failure: { entry: dashboard, detail: "npm publish exited with 1" },
+      pending: [],
+    });
+    expect(report).toContain(
+      "Failed:\n  @stablemates/workhorse-dashboard@0.1.0\n  npm publish exited with 1\n  Registry state unknown",
+    );
+    expect(report).toContain("The next run's preflight reads the registry again");
   });
 });
 

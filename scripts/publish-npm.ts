@@ -30,10 +30,12 @@ import { type PublishedPackage, publishedPackages, repositoryRoot } from "./pack
  * the two conditions the exchange needs instead, and both are knowable in advance: npm performs the
  * exchange only from 11.5.1, and GitHub offers an identity only to a job that asked for one.
  *
- * **A failure says what the registry now holds.** The loop keeps a ledger and prints it on the way
- * out, naming every package that published and every one that did not, with versions. A maintainer
- * recovering a half-published release reads that ledger instead of inferring registry state from
- * whichever npm command logged last.
+ * **A failure says what the registry is known to hold.** The loop keeps a ledger and prints it on
+ * the way out, naming every package npm confirmed and every one never attempted, with versions. The
+ * package that failed is reported as unknown: the registry can accept an upload whose response the
+ * client never receives, and the ledger reads nothing after the failure. The next run's preflight
+ * reads the registry, so it settles that package. A maintainer recovering a half-published release
+ * reads that ledger instead of inferring registry state from whichever npm command logged last.
  *
  * The preflight also closes a smaller hole. `npm publish --provenance` signs to the public Sigstore
  * transparency log before it attempts the registry write, so every failed attempt leaves a
@@ -212,19 +214,24 @@ export function describeLedger(ledger: PublishLedger): string {
     `npm publication stopped at package ${String(attempted)} of ${String(total)}.`,
     "",
     published.length === 0
-      ? "Published: nothing. The registry is unchanged."
+      ? "Confirmed published: nothing."
       : "Published, and permanent — npm never accepts these versions again:",
     ...published,
     "",
     "Failed:",
     `  ${describeVersion(ledger.failure.entry)}`,
     `  ${ledger.failure.detail}`,
+    "  Registry state unknown: npm can store an upload and still fail before it confirms it.",
+    "  The next run's preflight reads the registry again before it writes anything.",
     "",
     ...(ledger.pending.length === 0
       ? []
       : ["Not attempted:", ...ledger.pending.map((entry) => `  ${describeVersion(entry)}`), ""]),
     ...(published.length === 0
-      ? ["No version was published, so this tag can be released again once the failure is fixed."]
+      ? [
+          "No package is confirmed published. Once the failure is fixed, this tag can be released",
+          "again if the preflight finds none of these versions on npm.",
+        ]
       : [
           `npm now holds a partial ${version} release. Re-running cannot complete it, because npm`,
           `refuses a version that has ever existed. Recover it with ${recoveryReference}.`,
