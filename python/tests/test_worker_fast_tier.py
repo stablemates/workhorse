@@ -341,8 +341,8 @@ def test_crash_mid_batch_loses_no_task_and_records_one_outcome_each(
             worker_id=f"python-crashing-{concurrency}",
             queue=queue_name,
             concurrency=concurrency,
-            lease_ms=500,
-            heartbeat_ms=100,
+            # A lease long enough that no host stall lets one lapse before the crash.
+            lease_ms=30_000,
             poll_ms=5,
             _executor=executor,
         ).handle("effect", effect)
@@ -354,8 +354,13 @@ def test_crash_mid_batch_loses_no_task_and_records_one_outcome_each(
         thread.join(timeout=10)
         assert not thread.is_alive()
 
-        time.sleep(0.6)
+        # Expire the dead worker's leases rather than waiting them out.
         with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute(
+                "UPDATE workhorse.fast_task_runtime SET expires_at = clock_timestamp() - "
+                "interval '1 ms' WHERE queue_name = %s AND state = 'active'",
+                (queue_name,),
+            )
             connection.execute("SELECT * FROM workhorse.recover_expired_telemetry_v1(100, 0)")
         survivor = Worker(
             pool,
@@ -372,6 +377,10 @@ def test_crash_mid_batch_loses_no_task_and_records_one_outcome_each(
     assert all(state == "succeeded" for _, state, _ in outcomes)
     assert all(effects[task_id] >= 1 for task_id in task_ids)
     rerun = [task_id for task_id in task_ids if effects[task_id] > 1]
+    # Only the tasks the worker held at the crash run again, and it never holds more than its
+    # concurrency. The bound needs every lease to stay live until the crash. A lease that lapses
+    # first ends its attempt and frees its slot. The worker claims another task in its place, so
+    # the lapsed task runs again on top of the ones held at the crash (SM-1072).
     assert 0 < len(rerun) <= concurrency
     assert max(effects.values()) == 2
 
