@@ -558,20 +558,8 @@ func (queue *Queue) applyPayloadContracts(ctx context.Context, inputs []enqueueI
 		if contract == nil {
 			continue
 		}
-		encoded, err := json.Marshal(input.Payload)
-		if err != nil {
+		if err := contract.validatePayload(input.Type, input.Payload); err != nil {
 			return err
-		}
-		var payload any
-		if err := decodeContractJSON(encoded, &payload); err != nil {
-			return err
-		}
-		if err := contract.validator.Validate(payload); err != nil {
-			return &TaskContractValidationError{
-				TaskType: input.Type,
-				Version:  contract.version,
-				Kind:     contractPayloadKind,
-			}
 		}
 		input.ContractVersion = contract.version
 		input.PayloadMaxBytes = contract.payloadMaxBytes
@@ -601,8 +589,28 @@ type payloadContract struct {
 	validator            *jsonschema.Schema
 	payloadMaxBytes      any
 	resultMaxBytes       any
-	sensitivePayloadKeys any
-	sensitiveResultKeys  any
+	sensitivePayloadKeys []string
+	sensitiveResultKeys  []string
+}
+
+// validatePayload returns TaskContractValidationError when payload does not match the contract.
+func (contract *payloadContract) validatePayload(taskType string, payload any) error {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	var decoded any
+	if err := decodeContractJSON(encoded, &decoded); err != nil {
+		return err
+	}
+	if err := contract.validator.Validate(decoded); err != nil {
+		return &TaskContractValidationError{
+			TaskType: taskType,
+			Version:  contract.version,
+			Kind:     contractPayloadKind,
+		}
+	}
+	return nil
 }
 
 // loadPayloadContract returns the current contract for a task type, or nil when the type has none.
@@ -638,13 +646,14 @@ func (queue *Queue) loadPayloadContract(ctx context.Context, taskType string) (*
 	if err != nil {
 		return nil, err
 	}
+	// database/sql scans a text[] column as its text form, which would serialize as a JSON string.
 	return &payloadContract{
 		version:              version,
 		validator:            validator,
 		payloadMaxBytes:      row[rowPayloadMaxBytesField],
 		resultMaxBytes:       row[rowResultMaxBytesField],
-		sensitivePayloadKeys: row[rowPayloadRedactKeysField],
-		sensitiveResultKeys:  row[rowResultRedactKeysField],
+		sensitivePayloadKeys: stringValues(row[rowPayloadRedactKeysField]),
+		sensitiveResultKeys:  stringValues(row[rowResultRedactKeysField]),
 	}, nil
 }
 
@@ -663,11 +672,18 @@ func (queue *Queue) SyncSchedules(
 	if len(options) == 1 {
 		prune = options[0].Prune
 	}
-	payload, err := serializeScheduleDefinitions(definitions, queue.defaultQueue)
+	inputs, err := scheduleInputs(definitions, queue.defaultQueue)
 	if err != nil {
 		return err
 	}
 	if err := AssertSchemaCompatible(ctx, queue.executor); err != nil {
+		return err
+	}
+	if err := queue.applyScheduleContracts(ctx, inputs); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(inputs)
+	if err != nil {
 		return err
 	}
 	_, err = queue.executor.Query(
@@ -681,26 +697,58 @@ func (queue *Queue) SyncSchedules(
 }
 
 type scheduleInput struct {
-	Name                 string   `json:"name"`
-	Schedule             string   `json:"schedule"`
-	Timezone             string   `json:"timezone"`
-	CatchupPolicy        string   `json:"catchupPolicy"`
-	Enabled              bool     `json:"enabled"`
-	Queue                string   `json:"queue"`
-	Priority             int      `json:"priority"`
-	ConcurrencyKey       any      `json:"concurrencyKey"`
-	Type                 string   `json:"type"`
-	Payload              any      `json:"payload"`
-	MaxAttempts          int      `json:"maxAttempts"`
-	RetryPolicy          any      `json:"retryPolicy"`
-	ContractVersion      any      `json:"contractVersion"`
-	PayloadMaxBytes      int      `json:"payloadMaxBytes"`
-	ResultMaxBytes       int      `json:"resultMaxBytes"`
-	SensitivePayloadKeys []string `json:"sensitivePayloadKeys"`
-	SensitiveResultKeys  []string `json:"sensitiveResultKeys"`
+	Name                 string `json:"name"`
+	Schedule             string `json:"schedule"`
+	Timezone             string `json:"timezone"`
+	CatchupPolicy        string `json:"catchupPolicy"`
+	Enabled              bool   `json:"enabled"`
+	Queue                string `json:"queue"`
+	Priority             int    `json:"priority"`
+	ConcurrencyKey       any    `json:"concurrencyKey"`
+	Type                 string `json:"type"`
+	Payload              any    `json:"payload"`
+	MaxAttempts          int    `json:"maxAttempts"`
+	RetryPolicy          any    `json:"retryPolicy"`
+	ContractVersion      any    `json:"contractVersion"`
+	PayloadMaxBytes      any    `json:"payloadMaxBytes"`
+	ResultMaxBytes       any    `json:"resultMaxBytes"`
+	SensitivePayloadKeys any    `json:"sensitivePayloadKeys"`
+	SensitiveResultKeys  any    `json:"sensitiveResultKeys"`
 }
 
-func serializeScheduleDefinitions(definitions []ScheduleDefinition, defaultQueue string) ([]byte, error) {
+// applyScheduleContracts validates each definition's payload against the current contract of its
+// task type and stamps the contract fields that fired occurrences carry. It reads each type from
+// PostgreSQL instead of the queue's cache: firing an occurrence does not check the contract
+// policy, so a stale version would persist on every occurrence.
+func (queue *Queue) applyScheduleContracts(ctx context.Context, inputs []scheduleInput) error {
+	contracts := make(map[string]*payloadContract)
+	for index := range inputs {
+		input := &inputs[index]
+		contract, loaded := contracts[input.Type]
+		if !loaded {
+			current, err := queue.loadPayloadContract(ctx, input.Type)
+			if err != nil {
+				return err
+			}
+			contract = current
+			contracts[input.Type] = contract
+		}
+		if contract == nil {
+			continue
+		}
+		if err := contract.validatePayload(input.Type, input.Payload); err != nil {
+			return err
+		}
+		input.ContractVersion = contract.version
+		input.PayloadMaxBytes = contract.payloadMaxBytes
+		input.ResultMaxBytes = contract.resultMaxBytes
+		input.SensitivePayloadKeys = contract.sensitivePayloadKeys
+		input.SensitiveResultKeys = contract.sensitiveResultKeys
+	}
+	return nil
+}
+
+func scheduleInputs(definitions []ScheduleDefinition, defaultQueue string) ([]scheduleInput, error) {
 	input := make([]scheduleInput, len(definitions))
 	for index, definition := range definitions {
 		if definition.Task.Priority < 0 || definition.Task.Priority > 100 {
@@ -744,7 +792,7 @@ func serializeScheduleDefinitions(definitions []ScheduleDefinition, defaultQueue
 			SensitiveResultKeys: []string{},
 		}
 	}
-	return json.Marshal(input)
+	return input, nil
 }
 
 type enqueueInput struct {

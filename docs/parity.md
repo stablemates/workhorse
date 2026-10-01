@@ -320,8 +320,9 @@ suite runs the SQL fixtures through `scripts/verify-sql-protocol.ts` and the run
 `Worker`. All four languages execute `protocol/v1/contracts.json`. The Python suite runs the SQL
 fixtures through `python/tests/test_protocol_conformance.py` and every runtime fixture through
 `python/tests/test_worker_runtime_conformance.py`. The Rust suite runs every `protocol/v1` fixture
-category through `rust/tests/protocol_conformance.rs`, and
-`rust/tests/conformance/expected-unsupported.json` lists no exception. The Ruby suite runs every
+category through `rust/tests/protocol_conformance.rs`.
+`rust/tests/conformance/expected-unsupported.json` lists each fixture the Rust SDK cannot pass yet,
+with the Issue that owns it. The Ruby suite runs every
 `protocol/v1` fixture through `ruby/spec/conformance/protocol_conformance_spec.rb`.
 `ruby/spec/conformance/expected-unsupported.json` lists each fixture the Ruby SDK cannot pass yet,
 with the Issue that owns it.

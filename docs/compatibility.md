@@ -656,8 +656,9 @@ asynchronous surface uses native Psycopg or asyncpg query and notification conne
 worker supports bounded multi-queue dispatch, fenced ownership, cooperative
 cancellation, durable checkpoints, durable timers, and graceful drain. Repository tests compile
 and exercise external module consumers before a release can create the module tag. The Rust crate
-runs every `protocol/v1` fixture category through `rust/tests/protocol_conformance.rs`, and
-`rust/tests/conformance/expected-unsupported.json` lists no exception.
+runs every `protocol/v1` fixture category through `rust/tests/protocol_conformance.rs`.
+`rust/tests/conformance/expected-unsupported.json` lists each fixture it cannot pass yet, with the
+Issue that owns it.
 
 ## Release process
 

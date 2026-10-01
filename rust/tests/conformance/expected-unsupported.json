@@ -1,4 +1,10 @@
 {
   "$comment": "protocol/v1 fixtures the Rust lane does not pass yet. Each entry names the Issue that owns the gap. protocol_conformance.rs fails when an unlisted fixture does not pass and when a listed fixture passes.",
-  "fixtures": []
+  "fixtures": [
+    {
+      "fixture": "schedules/contracted-schedule-definition",
+      "issue": "SM-1063",
+      "reason": "Rust schedule sync does not apply the current task contract yet."
+    }
+  ]
 }

@@ -311,6 +311,8 @@ export interface ScheduleFixture {
   namespace: string;
   defaultQueue: string;
   prune: boolean;
+  /** Task contracts PostgreSQL holds for the fixture's types, in the `QueueOptions` shape. */
+  contracts?: Record<string, { currentVersion: string; versions: Record<string, JsonValue> }>;
   application: {
     name: string;
     schedule: string;

@@ -233,7 +233,18 @@ func TestQueueSerializesEverySharedScheduleFixture(t *testing.T) {
 		Namespace    string `json:"namespace"`
 		DefaultQueue string `json:"defaultQueue"`
 		Prune        bool   `json:"prune"`
-		Application  []struct {
+		Contracts    map[string]struct {
+			CurrentVersion string `json:"currentVersion"`
+			Versions       map[string]struct {
+				PayloadSchema        any      `json:"payloadSchema"`
+				ResultSchema         any      `json:"resultSchema"`
+				MaxPayloadBytes      int64    `json:"maxPayloadBytes"`
+				MaxResultBytes       int64    `json:"maxResultBytes"`
+				SensitivePayloadKeys []string `json:"sensitivePayloadKeys"`
+				SensitiveResultKeys  []string `json:"sensitiveResultKeys"`
+			} `json:"versions"`
+		} `json:"contracts"`
+		Application []struct {
 			Name          string                          `json:"name"`
 			Schedule      string                          `json:"schedule"`
 			Timezone      string                          `json:"timezone"`
@@ -255,7 +266,30 @@ func TestQueueSerializesEverySharedScheduleFixture(t *testing.T) {
 	executed := make(map[string]struct{}, len(fixtures))
 	for _, fixture := range fixtures {
 		t.Run(fixture.ID, func(t *testing.T) {
-			executor := &queueExecutor{responses: [][]workhorse.Row{{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(workhorse.ProtocolVersion)}}, {}}}
+			responses := [][]workhorse.Row{{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(workhorse.ProtocolVersion)}}}
+			taskTypes := map[string]struct{}{}
+			for _, definition := range fixture.Application {
+				if _, seen := taskTypes[definition.Task.Type]; seen {
+					continue
+				}
+				taskTypes[definition.Task.Type] = struct{}{}
+				// The contract lookup returns the current definition PostgreSQL holds for the type.
+				contracts, contracted := fixture.Contracts[definition.Task.Type]
+				if !contracted {
+					responses = append(responses, []workhorse.Row{})
+					continue
+				}
+				current := contracts.Versions[contracts.CurrentVersion]
+				responses = append(responses, []workhorse.Row{{
+					"version":             contracts.CurrentVersion,
+					"schema":              map[string]any{"payload": current.PayloadSchema, "result": current.ResultSchema},
+					"payload_max_bytes":   current.MaxPayloadBytes,
+					"result_max_bytes":    current.MaxResultBytes,
+					"payload_redact_keys": current.SensitivePayloadKeys,
+					"result_redact_keys":  current.SensitiveResultKeys,
+				}})
+			}
+			executor := &queueExecutor{responses: append(responses, []workhorse.Row{})}
 			queue := workhorse.NewQueue(executor, fixture.DefaultQueue)
 			definitions := make([]workhorse.ScheduleDefinition, len(fixture.Application))
 			for index, definition := range fixture.Application {
@@ -280,14 +314,15 @@ func TestQueueSerializesEverySharedScheduleFixture(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(executor.calls) != 2 {
-				t.Fatalf("expected compatibility and schedule calls, received %d", len(executor.calls))
+			if len(executor.calls) != 2+len(taskTypes) {
+				t.Fatalf("expected compatibility, %d contract, and schedule calls, received %d", len(taskTypes), len(executor.calls))
 			}
-			if executor.calls[1].arguments[0] != fixture.Namespace || executor.calls[1].arguments[2] != fixture.Prune {
-				t.Fatalf("unexpected schedule arguments: %#v", executor.calls[1].arguments)
+			write := executor.calls[len(executor.calls)-1]
+			if write.arguments[0] != fixture.Namespace || write.arguments[2] != fixture.Prune {
+				t.Fatalf("unexpected schedule arguments: %#v", write.arguments)
 			}
 			var actual any
-			if err := decodeJSON(executor.calls[1].arguments[1].([]byte), &actual); err != nil {
+			if err := decodeJSON(write.arguments[1].([]byte), &actual); err != nil {
 				t.Fatal(err)
 			}
 			actual, err = normalizeProtocolValue(actual)

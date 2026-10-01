@@ -129,5 +129,119 @@
         "sensitiveResultKeys": []
       }
     ]
+  },
+  {
+    "id": "contracted-schedule-definition",
+    "namespace": "payments",
+    "defaultQueue": "default",
+    "prune": true,
+    "contracts": {
+      "payment.capture": {
+        "currentVersion": "v2",
+        "versions": {
+          "v1": {
+            "payloadSchema": true,
+            "resultSchema": true
+          },
+          "v2": {
+            "payloadSchema": {
+              "type": "object",
+              "required": ["account"],
+              "properties": {
+                "account": {
+                  "type": "string"
+                },
+                "card": {
+                  "type": "string"
+                }
+              }
+            },
+            "resultSchema": {
+              "type": "object"
+            },
+            "maxPayloadBytes": 4096,
+            "maxResultBytes": 8192,
+            "sensitivePayloadKeys": ["card"],
+            "sensitiveResultKeys": ["receipt"]
+          }
+        }
+      }
+    },
+    "application": [
+      {
+        "name": "nightly-capture",
+        "schedule": "0 1 * * *",
+        "timezone": "UTC",
+        "catchupPolicy": "latest",
+        "enabled": true,
+        "task": {
+          "type": "payment.capture",
+          "payload": {
+            "account": "acct-1",
+            "card": "card-1"
+          },
+          "priority": 0,
+          "maxAttempts": 25,
+          "retryPolicy": null
+        }
+      },
+      {
+        "name": "nightly-report",
+        "schedule": "0 2 * * *",
+        "timezone": "UTC",
+        "catchupPolicy": "skip",
+        "enabled": true,
+        "task": {
+          "type": "payment.report",
+          "payload": null,
+          "priority": 0,
+          "maxAttempts": 25,
+          "retryPolicy": null
+        }
+      }
+    ],
+    "postgres": [
+      {
+        "name": "nightly-capture",
+        "schedule": "0 1 * * *",
+        "timezone": "UTC",
+        "enabled": true,
+        "catchupPolicy": "latest",
+        "queue": "default",
+        "priority": 0,
+        "concurrencyKey": null,
+        "type": "payment.capture",
+        "payload": {
+          "account": "acct-1",
+          "card": "card-1"
+        },
+        "maxAttempts": 25,
+        "retryPolicy": null,
+        "contractVersion": "v2",
+        "payloadMaxBytes": 4096,
+        "resultMaxBytes": 8192,
+        "sensitivePayloadKeys": ["card"],
+        "sensitiveResultKeys": ["receipt"]
+      },
+      {
+        "name": "nightly-report",
+        "schedule": "0 2 * * *",
+        "timezone": "UTC",
+        "enabled": true,
+        "catchupPolicy": "skip",
+        "queue": "default",
+        "priority": 0,
+        "concurrencyKey": null,
+        "type": "payment.report",
+        "payload": null,
+        "maxAttempts": 25,
+        "retryPolicy": null,
+        "contractVersion": null,
+        "payloadMaxBytes": 1048576,
+        "resultMaxBytes": 1048576,
+        "sensitivePayloadKeys": [],
+        "sensitiveResultKeys": []
+      }
+    ]
   }
 ]

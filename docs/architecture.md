@@ -241,11 +241,17 @@ optional `Enabled`; nil enables the definition. `ScheduledTask` contains `Type`,
 `Priority`, `ConcurrencyKey`, `MaxAttempts`, and `RetryPolicy`. An omitted option prunes by default;
 `SyncSchedulesOptions{Prune: false}` preserves definitions omitted from the desired set. Every call
 serializes the full set, checks compatibility, and invokes `sync_schedule_definitions_v2` through
-the caller-owned `Executor`.
+the caller-owned `Executor`. Before that write, `applyScheduleContracts` reads each task type's
+current contract through `get_contract_definition_v1`, once per distinct type. It reads
+PostgreSQL instead of the queue's contract cache because `fire_schedule_v1` never checks
+`contract_policy`. A payload that fails the schema returns `TaskContractValidationError` and writes
+nothing.
 
 A zero `ScheduledTask.Queue` uses the queue default. `Priority` accepts 0 through 100. A zero
 `MaxAttempts` becomes 25. A zero `ConcurrencyKey` and `RetryPolicy` serialize as `null`.
-`contractVersion` is `null`. `payloadMaxBytes` and `resultMaxBytes` are 1048576.
+A type with a current contract serializes its `contractVersion`, `payloadMaxBytes`,
+`resultMaxBytes`, `sensitivePayloadKeys`, and `sensitiveResultKeys`. Without one,
+`contractVersion` is `null`. `payloadMaxBytes` and `resultMaxBytes` are then 1048576, and
 `sensitivePayloadKeys` and `sensitiveResultKeys` are empty arrays. `Enabled` serializes as true when
 its pointer is nil.
 

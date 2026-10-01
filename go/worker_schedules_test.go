@@ -2,6 +2,10 @@ package workhorse_test
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -50,6 +54,161 @@ func TestWorkerFiresSchedulesWhenAnotherWorkerOwnsTheMaintenanceTick(t *testing.
 		t.Fatalf("locked maintenance run: processed=%t err=%v", processed, err)
 	}
 	assertScheduleOccurrenceCount(t, ctx, pool, "go-worker", "billing-rollup", 1)
+}
+
+func TestFiredScheduleCarriesTheCurrentContract(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-schedule-contract")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if err := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "scheduled").SyncContracts(
+		ctx,
+		map[string]workhorse.TaskTypeContracts{"billing.statement": {
+			CurrentVersion: "v2",
+			Versions: map[string]workhorse.TaskContractVersion{"v2": {
+				PayloadSchema: map[string]any{
+					"type": "object", "required": []any{"account"},
+					"properties": map[string]any{"account": map[string]any{"type": "string"}},
+				},
+				ResultSchema:         map[string]any{"type": "object"},
+				MaxPayloadBytes:      4096,
+				MaxResultBytes:       8192,
+				SensitivePayloadKeys: []string{"cardNumber"},
+				SensitiveResultKeys:  []string{"receipt"},
+			}},
+		}},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// A separate queue has no cached contracts, as in an application that schedules from another
+	// process than the one that synchronized them.
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "scheduled")
+	statement := func(payload map[string]any) []workhorse.ScheduleDefinition {
+		return []workhorse.ScheduleDefinition{{
+			Name: "monthly-statement", Schedule: "* * * * * *",
+			Task: workhorse.ScheduledTask{Type: "billing.statement", Payload: payload},
+		}}
+	}
+	var validationErr *workhorse.TaskContractValidationError
+	err = queue.SyncSchedules(ctx, "go-contract", statement(map[string]any{"account": 7}))
+	if !errors.As(err, &validationErr) || validationErr.Version != "v2" || validationErr.Kind != "payload" {
+		t.Fatalf("invalid payload: expected TaskContractValidationError for v2, received %v", err)
+	}
+	assertScheduleCount(t, pool, "go-contract", 0)
+
+	if err := queue.SyncSchedules(
+		ctx,
+		"go-contract",
+		statement(map[string]any{"account": "acct-1", "cardNumber": "4111"}),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE workhorse.schedule_definition SET last_evaluated_at = clock_timestamp() - interval '1 second'"); err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: "scheduled", WorkerID: "go-schedule-contract-worker", ScheduleNamespaces: []string{"go-contract"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.Handle("billing.statement", func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+		return map[string]any{}, nil
+	})
+	if processed, err := worker.RunOnce(ctx); err != nil || !processed {
+		t.Fatalf("fire schedule: processed=%t err=%v", processed, err)
+	}
+
+	var (
+		contractVersion   *string
+		payloadMaxBytes   int
+		resultMaxBytes    int
+		resultRedactKeys  []string
+		dashboardPayload  []byte
+		payloadRedactKeys []string
+	)
+	if err := pool.QueryRow(ctx, `
+SELECT task.contract_version, task.payload_max_bytes, task.result_max_bytes, task.result_redact_keys,
+       dashboard.payload, dashboard.payload_redact_keys
+  FROM workhorse.schedule_occurrence occurrence
+  JOIN workhorse.task task ON task.id = occurrence.task_id
+  JOIN workhorse.dashboard_task_v1 dashboard ON dashboard.id = task.id
+ WHERE occurrence.namespace = $1`, "go-contract").Scan(
+		&contractVersion, &payloadMaxBytes, &resultMaxBytes, &resultRedactKeys,
+		&dashboardPayload, &payloadRedactKeys,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if contractVersion == nil || *contractVersion != "v2" || payloadMaxBytes != 4096 || resultMaxBytes != 8192 ||
+		!slices.Equal(resultRedactKeys, []string{"receipt"}) {
+		t.Fatalf(
+			"fired task contract: version=%v payloadMaxBytes=%d resultMaxBytes=%d resultRedactKeys=%v",
+			contractVersion, payloadMaxBytes, resultMaxBytes, resultRedactKeys,
+		)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(dashboardPayload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, exposed := payload["cardNumber"]; exposed || payload["account"] != "acct-1" ||
+		!slices.Equal(payloadRedactKeys, []string{"cardNumber"}) {
+		t.Fatalf("dashboard payload: payload=%v redactKeys=%v", payload, payloadRedactKeys)
+	}
+}
+
+func TestSQLExecutorSynchronizesContractedSchedules(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "sql-schedule-contract")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	database, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	// database/sql scans a text[] column as its text form, such as {cardNumber} or {}.
+	queue := workhorse.NewQueue(workhorse.NewSQLExecutor(database), "scheduled")
+	objectSchema := map[string]any{"type": "object"}
+	if err := queue.SyncContracts(ctx, map[string]workhorse.TaskTypeContracts{
+		"billing.statement": {CurrentVersion: "v1", Versions: map[string]workhorse.TaskContractVersion{"v1": {
+			PayloadSchema: objectSchema, ResultSchema: objectSchema,
+			SensitivePayloadKeys: []string{"cardNumber", "cvv"}, SensitiveResultKeys: []string{"receipt"},
+		}}},
+		"billing.rollup": {CurrentVersion: "v1", Versions: map[string]workhorse.TaskContractVersion{"v1": {
+			PayloadSchema: objectSchema, ResultSchema: objectSchema,
+		}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := queue.SyncSchedules(ctx, "sql-contract", []workhorse.ScheduleDefinition{
+		{Name: "statement", Schedule: "0 * * * *", Task: workhorse.ScheduledTask{Type: "billing.statement", Payload: map[string]any{}}},
+		{Name: "rollup", Schedule: "0 * * * *", Task: workhorse.ScheduledTask{Type: "billing.rollup", Payload: map[string]any{}}},
+	}); err != nil {
+		t.Fatalf("sync contracted schedules through database/sql: %v", err)
+	}
+
+	for name, want := range map[string][2][]string{
+		"statement": {{"cardNumber", "cvv"}, {"receipt"}},
+		"rollup":    {{}, {}},
+	} {
+		var payloadRedactKeys, resultRedactKeys []string
+		if err := pool.QueryRow(ctx, `
+SELECT payload_redact_keys, result_redact_keys
+  FROM workhorse.schedule_definition
+ WHERE namespace = 'sql-contract' AND schedule_name = $1`, name).Scan(&payloadRedactKeys, &resultRedactKeys); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(payloadRedactKeys, want[0]) || !slices.Equal(resultRedactKeys, want[1]) {
+			t.Fatalf("%s redact keys: payload=%v result=%v", name, payloadRedactKeys, resultRedactKeys)
+		}
+	}
 }
 
 func TestWorkerLimitsScheduleCatchup(t *testing.T) {
