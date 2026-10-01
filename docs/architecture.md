@@ -1376,6 +1376,24 @@ pool mode as a separate lane to prove the boundary.
 - The TypeScript worker's reserved heartbeat connection holds no session state. It runs only
   `heartbeat_many_v1`, bounds each round on the client, and never issues `SET`, so it works in
   every pool mode.
+- Connection budgets per language, before handlers and cohorts take anything:
+  - **TypeScript** keeps one `TaskNotificationHub` listener per pool in `notifications.ts`, and it
+    holds one pooled connection. It also keeps one shared heartbeat connection per pool in
+    `heartbeat-connection.ts`. Both are keyed by the pool object. `listeningPool` skips the
+    listener when `options.max` is 1 or less.
+  - **Go** follows the same pattern. One `taskNotificationHub` per `*pgxpool.Pool` holds the
+    listener connection, and `holdHeartbeatConnection` holds the shared heartbeat connection.
+    `subscribeToTaskNotifications` polls instead when `MaxConns` is below 2.
+  - **Ruby** keeps one `Worker::Listener.shared(pool)` and one `Worker::Heartbeat.dedicated(pool)`
+    per pool object, and each holds one pool connection.
+  - **Python** takes one listener connection and one heartbeat connection per `Worker` or
+    `AsyncWorker` from the supplied Psycopg or asyncpg pool.
+  - **Rust** takes one heartbeat connection per worker from the pool. Its listener connection is
+    opened per worker by `notifications::listen` from `WorkerOptions::listen_config`, outside the
+    pool.
+  - A dedicated heartbeat connection needs a pool of at least 3 connections in every language,
+    unless the opt-out is set: `sharedHeartbeats` in TypeScript, `SharedHeartbeats` in Go, and
+    `shared_heartbeats` in Python, Rust, and Ruby.
 - Schema operations run under transaction pooling: `installSchema` sends `schema.sql` as one
   multi-statement simple query, and each migration step is one `BEGIN`…`COMMIT` script that takes
   its transaction-scoped lock behind `SET LOCAL lock_timeout`.

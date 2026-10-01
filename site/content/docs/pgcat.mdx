@@ -44,5 +44,5 @@ entries. Name the pool after the database it serves.
 Session-level advisory locks — `pg_advisory_lock`, not the transaction-scoped forms Workhorse uses —
 stop excluding across clients under transaction pooling, because each statement may land on a
 different server session and a grant outlives the client that took it. Any `SET` left behind lands
-on the next client to borrow that backend. And the dead-listener slot is spent budget on both the
-client pool and PgCat's client cap.
+on the next client to borrow that backend. The dead listener connection still counts against PgCat's
+client cap and, except in Rust, against the client pool.

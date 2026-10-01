@@ -45,22 +45,37 @@ session-mode PgBouncer:
 
 ## Connection budgets
 
-A notification-capable pool holds one connection for the listener no matter how many `Queue` or
-`Worker` objects share it, so a listening pool needs room for the listener plus claims. A pool
-too small to spare a connection polls instead of listening. Behind any pooler that cannot deliver
-notifications the listener slot is held without delivering anything — budget for it on both
-sides, or drop the capability.
+Each language holds its listener and heartbeat connections differently:
+
+| Language   | Listener connection                                          | Heartbeat connection                       |
+| ---------- | ------------------------------------------------------------ | ------------------------------------------ |
+| TypeScript | One per pool, shared by every worker on it                   | One per pool, shared by every worker on it |
+| Go         | One per pool, shared by every worker on it                   | One per pool, shared by every worker on it |
+| Ruby       | One per pool, shared by every worker on it                   | One per pool, shared by every worker on it |
+| Python     | One per worker, taken from the pool                          | One per worker, taken from the pool        |
+| Rust       | One per worker, opened outside the pool from `listen_config` | One per worker, taken from the pool        |
+
+A TypeScript or Go pool too small to spare a listener connection polls instead of listening.
+Behind any pooler that cannot deliver notifications, the listener connection is held without
+delivering anything. It still counts against the pooler's client cap and, except in Rust, against
+the client pool. Budget for it, or drop the capability.
 
 Heartbeats need headroom too. If handlers hold every pooled connection, a heartbeat queued behind
-them never runs and every lease lapses at once. TypeScript workers therefore keep one dedicated
-heartbeat connection per pool, shared the way the listener is, so budget it on top of the listener
-and your handlers. If the pool cannot spare it, or states no size, the worker refuses to start and
-says why. Set `sharedHeartbeats` to send heartbeats through the shared pool instead, and accept
-that busy handlers can then delay renewal. The heartbeat connection runs only self-contained
-statements, so it works in every pool mode. Go workers share one heartbeat connection per pool
-the same way, and `SharedHeartbeats` opts out. A Python worker opens its own heartbeat connection
-from the supplied Psycopg or asyncpg pool. A Rust worker reserves its own pooled heartbeat
-connection, and so does a Ruby worker. Python, Rust, and Ruby name the opt-out `shared_heartbeats`.
+them never runs and every lease lapses at once. Every worker therefore keeps a dedicated heartbeat
+connection, so budget it on top of the listener and your handlers. If the pool cannot spare it, or
+states no size, the worker refuses to start and says why. Set `sharedHeartbeats` to send
+heartbeats through the shared pool instead, and accept that busy handlers can then delay renewal.
+The heartbeat connection runs only self-contained statements, so it works in every pool mode. Go
+names the opt-out `SharedHeartbeats`, and Python, Rust, and Ruby name it `shared_heartbeats`.
+
+For example, take four workers on one pool of 20 connections, each listening and with a dedicated
+heartbeat connection:
+
+- **TypeScript, Go, or Ruby:** one listener and one heartbeat connection, so 18 connections remain
+  for claims and handlers.
+- **Python:** four listeners and four heartbeat connections, so 12 connections remain.
+- **Rust:** four heartbeat connections, so 16 connections remain. The four listener connections
+  sit outside the pool, so the server or pooler they reach must allow four more clients.
 
 On a [fast-tier](/docs/fast-tier) queue, a busy worker in any language splits its slots into
 cohorts, and each cohort can hold a connection of its own. When the pool states its size, the
