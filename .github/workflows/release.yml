@@ -243,9 +243,13 @@ jobs:
   # no way to create a development database from a published artifact. Attaching the clean-install
   # SQL to the release gives them one. It is a development path: `psql -f` applies none of the CLI's
   # guards, so the documentation points deployments at the CLI.
+  #
+  # The release announces the version, so it waits for every registry that publishes from this tag.
+  # A crate or gem whose version does not match the tag sits the train out, and its job still
+  # succeeds. A failed crate or gem publication leaves no public release to retract.
   github-release:
     if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true
-    needs: publish
+    needs: [publish, crates-io, rubygems]
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 10
     permissions:
