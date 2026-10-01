@@ -381,7 +381,8 @@ impl Inner {
         version: &str,
         result: &Value,
     ) -> Result<(), HandlerError> {
-        let key = format!("{}|{version}|result", task.task_type);
+        // A joined string would let a separator inside a type or version collide with another pair.
+        let key = (task.task_type.clone(), version.to_owned());
         let cached = lock(&self.contracts).get(&key).cloned();
         let schema = match cached {
             Some(schema) => schema,

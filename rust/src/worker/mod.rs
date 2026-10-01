@@ -320,7 +320,8 @@ pub(crate) struct Inner {
     active: AtomicUsize,
     last_routine: Mutex<Option<Instant>>,
     next_queue: AtomicUsize,
-    contracts: Mutex<HashMap<String, Arc<ContractSchema>>>,
+    /// Compiled result schemas, keyed by task type and contract version.
+    contracts: Mutex<HashMap<(String, String), Arc<ContractSchema>>>,
     /// Queues that rejected a fast claim, with the instant to probe them again.
     full_tier_until: Mutex<HashMap<String, Instant>>,
     /// Queues whose last claim answered on the fast tier.
