@@ -291,18 +291,23 @@ return `EnqueueIdempotencyConflictError`, `DependencyCycleError`, and
 `IncompatibleKeyMode`, `NotPending`, and `WindowElapsedPending` remain as deprecated Go aliases of
 the same values for the rest of the `0.x` line and are removed in `1.0.0`.
 
-`python/src/workhorse/worker.py` exports `Worker` for a Psycopg `ConnectionPool`; it borrows one
-autocommit connection per statement. The pool replaces the dedicated synchronous connection.
-whose `autocommit` property is `True`. `Worker.handle(type, handler)` registers a handler whose
+`python/src/workhorse/worker.py` exports `Worker` for a Psycopg `ConnectionPool` whose connections
+use `autocommit=True`; it borrows one connection per statement and returns it afterwards.
+`Worker.handle(type, handler)` registers a handler whose
 arguments are the JSON payload and `HandlerContext`. `HandlerContext.task` is the `ClaimedTask`
 returned by `claim_v1`. `HandlerContext.cancellation` is a `CancellationToken` with `cancelled`,
 `reason`, `wait(timeout)`, and `raise_if_cancelled()`.
 
-`python/src/workhorse/async_worker.py` exports `AsyncWorker.from_psycopg` and
-`AsyncWorker.from_asyncpg`. Both require one dedicated query connection outside a transaction.
-Psycopg also requires `autocommit=True`. `_AsyncExecutorBridge` serializes calls through one
-`asyncio.Lock` and schedules them on the run loop, then passes the resulting rows into the same
-`Worker` lifecycle core. Async handlers run on that loop and receive `AsyncHandlerContext`.
+`python/src/workhorse/async_worker.py` exports `AsyncWorker.from_psycopg`, which takes a Psycopg
+`AsyncConnectionPool`, and `AsyncWorker.from_asyncpg`, which takes an asyncpg `Pool`. Each wraps the
+pool in `_PooledAsyncPsycopgExecutor` or `_PooledAsyncpgExecutor`, which borrows one connection per
+statement and returns it afterwards. `_AsyncExecutorBridge` schedules each call on the run loop
+without a lock. Concurrent statements run on separate pooled connections. The bridge passes the
+resulting rows into the same `Worker` lifecycle core. Unless `shared_heartbeats` is set,
+`_open_heartbeat_executor` reserves one pool connection for heartbeat rounds for the whole run. The
+listener holds another pool connection while it listens. Psycopg connections must use
+`autocommit=True`. If a Psycopg heartbeat or listener connection lacks it, the worker raises
+`ValueError`. Async handlers run on that loop and receive `AsyncHandlerContext`.
 Its durability methods are awaitable views of the same `_HandlerDurability` instance, so row
 mapping, attempt arbitration, batch grouping, error settlement, telemetry, and drain have no
 second async implementation. `AsyncCancellationToken.wait(timeout)` is awaitable; `cancelled`,
@@ -311,9 +316,9 @@ second async implementation. `AsyncCancellationToken.wait(timeout)` is awaitable
 Both factories accept `queue`, `queues`, `worker_id`, `concurrency`, `poll_ms`, `lease_ms`,
 `heartbeat_ms`, `maintenance_interval_ms`, `maintenance_routine_poll_ms`, `registry_interval_ms`,
 `retry_delay_ms`, `schedule_namespaces`, and `schedule_catchup_limit` with the same validation and
-limits as `Worker`. They also accept an
-awaitable `notification_connection_factory`, an awaitable `heartbeat_connection_factory`,
-and `on_notification_error` and `on_registration_error` callbacks.
+limits as `Worker`. They also accept `shared_heartbeats` and the `on_notification_error` and
+`on_registration_error` callbacks. Neither factory accepts a connection factory, because the worker
+takes its heartbeat and listener connections from the pool.
 `registry_interval_ms` defaults to 5000. It accepts `0` to disable registration or a non-boolean
 integer of at least 100 milliseconds.
 `AsyncWorker.handle(type, handler)` receives `(Json, AsyncHandlerContext)`. The context exposes
@@ -473,12 +478,13 @@ whole number of milliseconds or a callable over the attempt and the claimed task
 `None` to leave the delay to the policy. It is unset by default. Each claimed task starts one
 handler thread. One worker heartbeat timer submits every
 active lease through `heartbeat_many_v1`, and it schedules the next batch only after the prior call
-returns. Without `heartbeat_connection_factory`, heartbeats share the worker connection. A slow
-handler statement on that connection then delays lease renewal. With the factory, the worker opens
-one autocommit connection for heartbeats on first need. It reopens that connection after a failed
-heartbeat and closes it when the run returns. `AsyncWorker.from_psycopg` and `from_asyncpg` accept
-an awaitable factory with the same behavior. A handler that finishes releases its slot and wakes the
-dispatcher.
+returns. Unless `shared_heartbeats` is set, the worker reserves one pool connection for heartbeat
+rounds on first need, so a saturated pool cannot delay lease renewal. A Psycopg heartbeat connection
+must use `autocommit=True`. The worker returns that connection to the pool and reserves a fresh one
+after a failed round, and it releases the connection when the run returns. `AsyncWorker` reserves its
+heartbeat connection from its async pool through `_open_heartbeat_executor` with the same lifecycle.
+With `shared_heartbeats`, each round borrows a pool connection like any other statement. A handler
+that finishes releases its slot and wakes the dispatcher.
 
 `heartbeat_many_v1` status `cancel_requested` cancels the matching token with
 `CancellationRequestedError`.
@@ -560,26 +566,29 @@ member's heartbeat, cancellation context, fence token, completion, and failure s
 
 `Worker._run_loop()` clears the wake event before a sweep, so a completion or state change during
 an in-flight empty claim stays latched for the following wait. `poll_ms` defaults to 250 and must be
-positive. If `notification_connection_factory` is present, `run()` starts one daemon listener
-thread with a distinct autocommit Psycopg connection. The listener executes
-`LISTEN workhorse_tasks`, wakes for a configured queue or `*`, and uses a 5,000 millisecond fallback
-while connected. Before the listener connects, after it disconnects, or without a factory, the
-worker uses the 250 millisecond polling default. An explicit `poll_ms` replaces both defaults.
+positive. `run()` starts one daemon listener thread, `_TaskNotificationListener`, which borrows one
+autocommit connection from the pool through `_psycopg_pool_notification_factory` and holds it while
+it listens. The listener executes `LISTEN workhorse_tasks`, wakes for a configured queue or `*`, and
+uses a 5,000 millisecond fallback while connected. Before the listener connects or after it
+disconnects, the worker uses the 250 millisecond polling default. An explicit `poll_ms` replaces both
+defaults.
 
 The listener reconnects after errors with 10 percent jitter around exponential delays from 100 to
 5,000 milliseconds. Each successful `LISTEN` resets the delay and wakes the worker. The optional
 `on_notification_error` callback receives setup, connection, read, and close failures. Listener
 failure never stops dispatch. `stop()` waits at most 200 milliseconds for the listener thread, so a
-blocked connection factory cannot prevent the worker from draining.
+blocked pool checkout cannot prevent the worker from draining.
 
-`AsyncWorker.run()` holds one notification connection from its pool in an asyncio task and disables
-the core worker's Psycopg listener thread. Psycopg uses its asynchronous `notifies` iterator. asyncpg
-uses `add_listener` and `remove_listener`. Both filter `workhorse_tasks` payloads to the configured
-queues or `*`, wake the shared dispatcher, report listener errors, and reconnect with the same
-jittered backoff. When `run()` returns, it cancels the listener task. asyncpg calls `remove_listener`
-on every exit, including that cancellation, so the pool never receives a connection with a callback.
+`AsyncWorker.run()` listens through `AsyncWorker._listen`, which borrows one connection from the
+async pool and holds it in an asyncio task. `AsyncWorker` disables the core worker's Psycopg
+listener thread. A Psycopg listener connection must use `autocommit=True` and reads the asynchronous
+`notifies` iterator. asyncpg uses `add_listener` and `remove_listener`. Both filter
+`workhorse_tasks` payloads to the configured queues or `*`, wake the shared dispatcher, report
+listener errors to `on_notification_error`, and reconnect with the same jittered backoff. When
+`run()` returns, it cancels the listener task. asyncpg calls `remove_listener` on every exit,
+including that cancellation, so the pool never receives a connection with a callback.
 `on_notification_error` receives a failed `remove_listener`, and the connection still returns to the
-pool, whose reset discards the `LISTEN`.
+pool, whose reset discards the `LISTEN`. `AsyncWorker` never closes the pool it was given.
 
 Handler failures pass a JSON error envelope to `fail_v1` with a null retry override, so PostgreSQL
 selects `ready`, `scheduled`, or `failed` from the persisted attempt budget and retry policy.

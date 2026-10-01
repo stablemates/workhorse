@@ -46,14 +46,16 @@ with connection.transaction():
 
 If the block raises, Psycopg rolls back, and the task goes with your row.
 
-A worker needs a connection of its own, in autocommit mode. `Worker` raises `ValueError` if you
-hand it anything else, so that mistake is loud. The quiet mistake is sharing one connection between
-a worker and the code that enqueues: a Psycopg connection serializes its work, so the two take
-turns instead of running together, and nothing reports it. Give each its own connection.
+A worker takes a connection pool, not a connection. Give `Worker` a Psycopg `ConnectionPool`
+whose connections use autocommit mode. `AsyncWorker.from_psycopg` and `AsyncWorker.from_asyncpg`
+take the matching async pools. The worker borrows a connection for each statement and returns it
+afterwards. It also [reserves pool connections of its own](390-connection-pooling.md#how-do-i-budget-connections),
+so size the pool for them.
 
-Autocommit and an explicit transaction are not in conflict. `connection.transaction()` opens a real
-transaction block on an autocommit connection, which is why the example above is correct on the same
-connection style a worker requires.
+Your enqueue code can borrow a connection from that same pool. Open the transaction on the borrowed
+connection, and build the `Queue` on it as the example does. Autocommit and an explicit transaction
+are not in conflict. `connection.transaction()` opens a real transaction block on an autocommit
+connection.
 
 ## With pgx
 

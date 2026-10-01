@@ -210,9 +210,13 @@ TypeScript's fourth argument accepts anything with a pg-compatible `query` metho
 adapters pass their own transaction handles the same way. Go's `NewPGXExecutor` accepts a `pgx.Tx`
 and `NewSQLExecutor` accepts a `*sql.Tx`. Rust's `Queue::new` accepts a `tokio_postgres` client or
 `Transaction`, or their `deadpool_postgres` counterparts. Ruby's `Queue.new` accepts a
-`PG::Connection`, a `ConnectionPool` of them, or an `ActiveRecordExecutor` around a model class. Python's `Worker` needs its own connection
-in autocommit mode and raises `ValueError` otherwise, so keep the connection you enqueue on separate
-from the one a worker runs on.
+`PG::Connection`, a `ConnectionPool` of them, or an `ActiveRecordExecutor` around a model class.
+
+Python's `Worker` takes a Psycopg `ConnectionPool` of autocommit connections, not a single
+connection. `AsyncWorker.from_psycopg` and `AsyncWorker.from_asyncpg` take the matching async pools.
+A worker also [reserves pool connections of its own](/docs/pgbouncer#connection-budgets), so size
+the pool for them. Your enqueue code can borrow a connection
+from that pool and open its transaction there.
 
 SQLAlchemy applications using its Psycopg dialect can reach that same driver connection through
 `sqlalchemy_connection.connection.driver_connection`. Build the queue inside SQLAlchemy's own

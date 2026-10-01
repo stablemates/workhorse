@@ -114,6 +114,37 @@ describe("documentation site guide coverage", () => {
     expect(files[7]).toContain("Assert compatibility when a process starts");
   });
 
+  it("describes Python workers as pool-backed across source and site documentation", async () => {
+    const [architecture, guide, page] = await Promise.all(
+      [
+        "docs/architecture.md",
+        "docs/guides/200-transactional-enqueue.md",
+        "site/content/docs/enqueue.mdx",
+      ].map((file) => readFile(path.join(root, file), "utf8")),
+    );
+
+    // ADR 0071 moved both Python workers onto pools. The pages once told readers to give a worker
+    // its own connection, and the reference still described the removed connection factories.
+    expect(architecture).toContain("exports `Worker` for a Psycopg `ConnectionPool`");
+    expect(architecture).toContain("`_PooledAsyncPsycopgExecutor` or `_PooledAsyncpgExecutor`");
+    expect(architecture).toContain("reserves one pool connection for heartbeat");
+    expect(architecture).toContain("`AsyncWorker._listen`, which borrows one connection");
+    for (const contents of [architecture, guide, page]) {
+      expect(contents).not.toMatch(/notification_connection_factory|heartbeat_connection_factory/);
+      expect(contents).not.toMatch(/dedicated query connection|asyncio\.Lock/);
+      expect(contents).not.toMatch(/(needs|requires) (a|its own|one dedicated) connection/);
+    }
+
+    for (const contents of [guide, page]) {
+      expect(contents).toContain("Queue(connection).enqueue(");
+      expect(contents).toContain("`AsyncWorker.from_psycopg` and `AsyncWorker.from_asyncpg`");
+    }
+    expect(guide).toContain("A worker takes a connection pool, not a connection.");
+    expect(guide).toContain("Open the transaction on the borrowed");
+    expect(page).toContain("Python's `Worker` takes a Psycopg `ConnectionPool`");
+    expect(page).toContain("borrow a connection\nfrom that pool and open its transaction there");
+  });
+
   it("tells TypeScript readers to register telemetry before Workhorse metrics appear", async () => {
     const [guide, page] = await Promise.all([
       readFile(path.join(root, "docs/guides/355-observability.md"), "utf8"),
