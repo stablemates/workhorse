@@ -235,6 +235,7 @@ module Conformance
           [rows.first.merge(field => shifted)]
         end
         fixture["expectedAfterRuns"].each_with_index do |expected, index|
+          await_heartbeat_idle(subject)
           subject.resume
           check(subject.run_once == true, "run #{index + 1} did not run the task")
           expect_state(task_id, expected)
@@ -778,6 +779,14 @@ module Conformance
       yield pool
     ensure
       pool&.shutdown(&:close)
+    end
+
+    # Waits until no heartbeat round from an earlier attempt is still running. Such a round can
+    # begin before that attempt settles, and it holds the task's row lock until it ends. The claim
+    # skips a locked row, so a run that starts during that round finds no task to claim.
+    def await_heartbeat_idle(subject)
+      thread = subject.instance_variable_get(:@heartbeat).instance_variable_get(:@thread)
+      check(thread.nil? || !thread.join(5).nil?, "a heartbeat round outlived the previous attempt")
     end
 
     # Replaces the worker's executor calls with +block+, which receives the original call.
