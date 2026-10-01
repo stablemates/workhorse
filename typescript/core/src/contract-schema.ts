@@ -67,6 +67,34 @@ function assertContractSchema(schema: Json): void {
   visitSchema(schema, "$");
 }
 
+// A backreference to a group that has not matched behaves differently across regex engines, and
+// RE2 has no backreferences at all, so the profile rejects `\1`-`\9` and `\k<name>`. Inside a
+// character class those escapes are not backreferences, and ECMA-262 rejects them there anyway.
+function usesBackreference(source: string): boolean {
+  let inClass = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "\\") {
+      const escaped = source[index + 1] ?? "";
+      if (!inClass && (escaped === "k" || (escaped >= "1" && escaped <= "9"))) return true;
+      index += 1;
+    } else if (character === "[") {
+      inClass = true;
+    } else if (character === "]") {
+      inClass = false;
+    }
+  }
+  return false;
+}
+
+function assertNoBackreference(source: unknown, path: string): void {
+  if (typeof source === "string" && usesBackreference(source)) {
+    throw new TypeError(
+      `${path} uses a backreference, which is outside the Workhorse contract profile`,
+    );
+  }
+}
+
 function visitSchema(schema: Json, path: string): void {
   if (typeof schema === "boolean") return;
   if (schema === null || Array.isArray(schema) || typeof schema !== "object") {
@@ -89,8 +117,12 @@ function visitSchema(schema: Json, path: string): void {
       if (value === null || Array.isArray(value) || typeof value !== "object") {
         throw new TypeError(`${keywordPath} must be an object`);
       }
-      for (const [name, child] of Object.entries(value))
+      for (const [name, child] of Object.entries(value)) {
+        if (keyword === "patternProperties") assertNoBackreference(name, `${keywordPath}.${name}`);
         visitSchema(child, `${keywordPath}.${name}`);
+      }
+    } else if (keyword === "pattern") {
+      assertNoBackreference(value, keywordPath);
     } else if (!ANNOTATION_KEYWORDS.has(keyword) && !VALIDATION_KEYWORDS.has(keyword)) {
       throw new TypeError(`${keywordPath} is outside the Workhorse contract profile`);
     }

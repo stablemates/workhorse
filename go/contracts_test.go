@@ -47,6 +47,18 @@ func TestContractSchemaProfile(t *testing.T) {
 	}
 }
 
+func TestContractSchemaNamesTheBackreference(t *testing.T) {
+	for path, schema := range map[string]any{
+		"$.properties.a.pattern":              map[string]any{"properties": map[string]any{"a": map[string]any{"pattern": `^(a)\1$`}}},
+		"$.patternProperties.^(?<x>a)\\k<x>$": map[string]any{"patternProperties": map[string]any{`^(?<x>a)\k<x>$`: true}},
+	} {
+		_, err := compileContractSchema(schema)
+		if err == nil || err.Error() != path+" uses a backreference, which is outside the Workhorse contract profile" {
+			t.Fatalf("expected the profile to name %s, got %v", path, err)
+		}
+	}
+}
+
 func TestContractJSONNormalizationPreservesLargeIntegers(t *testing.T) {
 	var value any
 	if err := decodeContractJSON([]byte(`{"id":9007199254740993}`), &value); err != nil {

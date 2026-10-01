@@ -24,6 +24,15 @@ describe("contract schema profile", () => {
     expect(() => compileContractSchema({ type: "string", minLength: -1 })).toThrow(/minLength/);
   });
 
+  it("names the pattern that uses a backreference", () => {
+    expect(() =>
+      compileContractSchema({ properties: { a: { type: "string", pattern: "^(a)\\1$" } } }),
+    ).toThrow("$.properties.a.pattern uses a backreference, which is outside the Workhorse");
+    expect(() => compileContractSchema({ patternProperties: { "^(?<x>a)\\k<x>$": true } })).toThrow(
+      "$.patternProperties.^(?<x>a)\\k<x>$ uses a backreference",
+    );
+  });
+
   it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
     "rejects the non-finite number %s, which JSON would store as null",
     (value) => {

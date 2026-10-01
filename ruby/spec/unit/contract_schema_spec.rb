@@ -78,21 +78,24 @@ RSpec.describe Stablemates::Workhorse::ContractSchema do
     expect(schema("pattern" => "^\\s$").valid?("\u0085")).to be(false), "\\s excludes NEL"
     expect(schema("pattern" => "^\\w$").valid?("é")).to be(false), "\\w is ASCII"
     expect(schema("pattern" => "\\bb").valid?("éb")).to be(true), "\\b uses ASCII word characters"
-    expect(schema("pattern" => "^(?<x>a)(b)\\2$").valid?("abb")).to be(true), "a plain group still captures"
-    expect(schema("pattern" => "^(?:(?<x>a)|b)\\k<x>$").valid?("b")).to be(true), "a skipped group matches empty"
-    # The TypeScript reference's results. Backreferences stay out of protocol/v1/contracts.json until
-    # SM-1065 decides whether the profile admits them.
-    {"^(a|(b))\\2$" => {"a" => true, "b" => false, "bb" => true, "ab" => false},
-     "^\\1(a)$" => {"a" => true, "aa" => false}}.each do |source, values|
-      values.each { |value, valid| expect(schema("pattern" => source).valid?(value)).to be(valid), "#{source} #{value}" }
-    end
+    expect(schema("pattern" => "^(?<x>a)(b)$").valid?("ab")).to be(true), "a named group beside a plain one"
+    expect(schema("pattern" => "^\\\\1$").valid?("\\1")).to be(true), "an escaped backslash is not a backreference"
     expect(schema("pattern" => "^\\p{Lu}$").valid?("A")).to be(true)
     expect(schema("pattern" => "^\\p{Script=Greek}\\p{sc=Grek}$").valid?("αβ")).to be(true)
     expect(schema("pattern" => "^\\p{digit}$").valid?("٣")).to be(true), "digit is Decimal_Number"
     expect(schema("pattern" => "^\\P{gc=L}$").valid?("α")).to be(false)
     ["\\p{greek}", "\\p{Greek}", "\\p{Script=Lu}", "\\p{gc=ASCII}", "\\p{Other_Alphabetic}", "\\p{Alnum}",
-      "(?i)a", "\\A", "\\h", "a{2,1}", "\\1"].each do |source|
+      "(?i)a", "\\A", "\\h", "a{2,1}", "(?<x>a)(?<x>b)"].each do |source|
       expect { schema("pattern" => source) }.to raise_error(ArgumentError), source
+    end
+  end
+
+  it "refuses a backreference as outside the contract profile" do
+    {"$.pattern" => {"pattern" => "^(a)\\1$"},
+     "$.properties.a.pattern" => {"properties" => {"a" => {"pattern" => "^(?:(?<x>a)|b)\\k<x>$"}}},
+     "$.patternProperties.^(a)\\1$" => {"patternProperties" => {"^(a)\\1$" => true}}}.each do |path, document|
+      expect { schema(document) }
+        .to raise_error(ArgumentError, "#{path} uses a backreference, which is outside the Workhorse contract profile")
     end
   end
 

@@ -77,6 +77,30 @@ func keywordSet(values []string) map[string]bool {
 	return result
 }
 
+// usesBackreference reports whether an ECMA-262 pattern contains \1-\9 or \k<name> outside a
+// character class. A backreference to a group that has not matched behaves differently across regex
+// engines, and RE2 has none, so the profile rejects it before the compiler reports a syntax error.
+func usesBackreference(source string) bool {
+	inClass := false
+	for index := 0; index < len(source); index++ {
+		switch source[index] {
+		case '\\':
+			if index+1 < len(source) && !inClass {
+				escaped := source[index+1]
+				if escaped == 'k' || (escaped >= '1' && escaped <= '9') {
+					return true
+				}
+			}
+			index++
+		case '[':
+			inClass = true
+		case ']':
+			inClass = false
+		}
+	}
+	return false
+}
+
 func checkContractSchema(schema any, path string) error {
 	if _, ok := schema.(bool); ok {
 		return nil
@@ -117,9 +141,17 @@ func checkContractSchema(schema any, path string) error {
 				return fmt.Errorf(contractObjectErrorFormat, keywordPath)
 			}
 			for name, child := range values {
-				if err := checkContractSchema(child, keywordPath+contractPathSeparator+name); err != nil {
+				childPath := keywordPath + contractPathSeparator + name
+				if keyword == contractPatternPropertiesKeyword && usesBackreference(name) {
+					return fmt.Errorf(contractBackreferenceErrorFormat, childPath)
+				}
+				if err := checkContractSchema(child, childPath); err != nil {
 					return err
 				}
+			}
+		case keyword == contractPatternKeyword:
+			if source, ok := value.(string); ok && usesBackreference(source) {
+				return fmt.Errorf(contractBackreferenceErrorFormat, keywordPath)
 			}
 		case !annotationKeywords[keyword] && !validationKeywords[keyword]:
 			return fmt.Errorf(contractProfileErrorFormat, keywordPath)

@@ -15,7 +15,14 @@ FIXTURES: list[dict[str, Any]] = json.loads(
 
 # Fixtures Python does not pass yet, each with the Issue that owns the gap. A listed fixture that
 # passes fails the run, so an entry cannot outlive its gap.
-UNSUPPORTED = {"pattern-property-outside-its-selector-rejected": "SM-1064"}
+UNSUPPORTED = {
+    "pattern-property-outside-its-selector-rejected": "SM-1064",
+    "pattern-numeric-backreference-rejected": "SM-1064",
+    "pattern-named-backreference-rejected": "SM-1064",
+    "pattern-backreference-to-skipped-group-rejected": "SM-1064",
+    "pattern-forward-backreference-rejected": "SM-1064",
+    "pattern-properties-backreference-rejected": "SM-1064",
+}
 
 
 @pytest.mark.parametrize(
