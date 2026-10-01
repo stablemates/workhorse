@@ -2862,6 +2862,12 @@ is exposed as readonly `worker.concurrency`. `worker.runtimeState()` returns the
 `{ concurrency, activeSlots, paused, draining }`; it is an operational view of this object, not durable
 liveness or membership state.
 
+The constructor requires a safe integer for every timing and limit option, so `NaN`, the infinities,
+and fractions throw before any queue operation. `leaseMs` is at least 1. `heartbeatMs` is at least 1
+and less than `leaseMs`. `pollMs` and a fixed `retryDelayMs` are at least 0.
+`maintenanceIntervalMs` and `maintenanceRoutinePollMs` are at least 100. `registryIntervalMs` is 0,
+which opts out of registration, or at least 100. `scheduleCatchupLimit` accepts 1 through 10000.
+
 `WorkerOptions.queues` accepts one or more non-empty queue names. Duplicate names collapse to one
 entry while preserving first occurrence order. `WorkerOptions.queue` remains the single-queue
 compatibility option. Supplying both options throws. Omitting both uses `WorkerQueueApi.defaultQueue`.

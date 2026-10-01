@@ -452,6 +452,17 @@ export interface WorkerOptions {
   failpoint?: Failpoint | ((point: Failpoint, task: ClaimedTask) => boolean | Promise<boolean>);
 }
 
+function requireSafeInteger(
+  name: string,
+  value: number,
+  minimum: number,
+  range = `at least ${minimum}`,
+): void {
+  if (!Number.isSafeInteger(value) || value < minimum) {
+    throw new Error(`${name} must be a safe integer ${range}`);
+  }
+}
+
 /**
  * Generate a readable, unique default worker identity.
  *
@@ -727,15 +738,21 @@ export class Worker {
       throw new Error("concurrency must be a safe integer between 1 and 100");
     if (!Number.isSafeInteger(this.cohorts) || this.cohorts < 1 || this.cohorts > this.concurrency)
       throw new Error("cohorts must be a safe integer between 1 and concurrency");
+    // A comparison with NaN is always false, so each option must first be a safe integer. A bad
+    // value would otherwise surface later in a timer, a statement timeout, or a SQL parameter.
+    requireSafeInteger("leaseMs", this.leaseMs, 1);
+    requireSafeInteger("heartbeatMs", this.heartbeatMs, 1);
     if (this.heartbeatMs >= this.leaseMs) throw new Error("heartbeatMs must be less than leaseMs");
-    if (this.maintenanceIntervalMs < 100)
-      throw new Error("maintenanceIntervalMs must be at least 100");
-    if (this.maintenanceRoutinePollMs < 100)
-      throw new Error("maintenanceRoutinePollMs must be at least 100");
-    if (this.registryIntervalMs !== 0 && this.registryIntervalMs < 100)
-      throw new Error("registryIntervalMs must be 0 or at least 100");
-    if (this.scheduleCatchupLimit < 1 || this.scheduleCatchupLimit > 10_000)
-      throw new Error("scheduleCatchupLimit must be between 1 and 10000");
+    requireSafeInteger("pollMs", this.pollMs, 0);
+    requireSafeInteger("maintenanceIntervalMs", this.maintenanceIntervalMs, 100);
+    requireSafeInteger("maintenanceRoutinePollMs", this.maintenanceRoutinePollMs, 100);
+    if (this.registryIntervalMs !== 0)
+      requireSafeInteger("registryIntervalMs", this.registryIntervalMs, 100, "0 or at least 100");
+    requireSafeInteger("scheduleCatchupLimit", this.scheduleCatchupLimit, 1, "between 1 and 10000");
+    if (this.scheduleCatchupLimit > 10_000)
+      throw new Error("scheduleCatchupLimit must be a safe integer between 1 and 10000");
+    if (typeof options.retryDelayMs === "number")
+      requireSafeInteger("retryDelayMs", options.retryDelayMs, 0);
     if (options.sharedHeartbeats !== true) {
       // A custom WorkerQueueApi chooses its own transport, so only a Workhorse Queue is checked.
       const problem = (queue as Partial<WorkerHeartbeatReservation>)[
