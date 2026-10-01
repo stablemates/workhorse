@@ -372,7 +372,10 @@ recovery makes them claimable again.
 The protocol names make this lifecycle greppable. `claim_many_v1` admits the
 tasks that the queue's policies allow and writes each one's `task_runtime` lease; `claim_v1` is the
 same call with a limit of one. `heartbeat_many_v1` submits every active lease
-and extends the accepted `expires_at` values. `recover_expired_v1` makes abandoned work ready.
+and extends the accepted `expires_at` values. Workhorse reads the clock only after the call holds
+the row locks it needs, and a batch may lock all of its tasks before that reading. A
+heartbeat or completion that waited behind another transaction cannot revive a lease that expired
+during the wait, and an accepted heartbeat extends the lease from that clock reading. `recover_expired_v1` makes abandoned work ready.
 Workers claim from `workhorse_tasks`, TypeScript configures fallback polling with `pollMs`, and
 processes commonly begin graceful drain after `SIGINT`.
 

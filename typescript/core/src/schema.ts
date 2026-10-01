@@ -355,6 +355,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "serialize budget synchronization with claims",
     kind: "additive",
   },
+  {
+    fromVersion: 49,
+    toVersion: 50,
+    file: "0051-sample-the-clock-after-the-row-lock.sql",
+    description: "sample the clock after the row lock",
+    kind: "additive",
+  },
 ];
 
 /**

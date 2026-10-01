@@ -523,6 +523,7 @@ describe("schema installation", () => {
       { version: 47, description: "refuse a claim below read committed isolation" },
       { version: 48, description: "prune past redrive sources pinned by younger targets" },
       { version: 49, description: "serialize budget synchronization with claims" },
+      { version: 50, description: "sample the clock after the row lock" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
