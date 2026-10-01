@@ -1896,7 +1896,7 @@
             {
               "value": {
                 "promotionLagMs": 10000,
-                "schemaVersion": 45
+                "schemaVersion": 46
               }
             }
           ]
@@ -2186,6 +2186,15 @@
               "count": 4
             }
           ]
+        }
+      },
+      {
+        "id": "reject-null-limit",
+        "sql": "SELECT task_id FROM workhorse.claim_many_v1($1::text, $2::text, $3::integer, $4::integer)",
+        "parameters": ["protocol-batch-admission", "protocol-admission-worker", null, 30000],
+        "error": {
+          "code": "P0001",
+          "message": "limit must be between 1 and 100"
         }
       },
       {
@@ -2554,6 +2563,15 @@
         "capture": {
           "firstFastTask": "0.value.taskId",
           "secondFastTask": "1.value.taskId"
+        }
+      },
+      {
+        "id": "reject-null-limit",
+        "sql": "SELECT task_id FROM workhorse.claim_many_v1($1::text, $2::text, $3::integer, $4::integer)",
+        "parameters": ["protocol-fast", "protocol-fast-worker", null, 30000],
+        "error": {
+          "code": "P0001",
+          "message": "limit must be between 1 and 100"
         }
       },
       {

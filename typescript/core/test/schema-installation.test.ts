@@ -519,6 +519,7 @@ describe("schema installation", () => {
         version: 45,
         description: "date an unrun history pass from the oldest expired schedule run",
       },
+      { version: 46, description: "reject a NULL limit or lease before any lock" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

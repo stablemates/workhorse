@@ -1595,7 +1595,7 @@ DECLARE
   v_count integer := 0;
 BEGIN
   IF p_task_id IS NULL THEN RAISE EXCEPTION 'lineage task identity is required'; END IF;
-  IF p_limit NOT BETWEEN 1 AND 1001 THEN
+  IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 1001 THEN
     RAISE EXCEPTION 'redrive lineage limit must be between 1 and 1001';
   END IF;
 
@@ -4248,7 +4248,7 @@ DECLARE
 BEGIN
   IF COALESCE(btrim(p_expression), '') = '' THEN RAISE EXCEPTION 'cron expression must not be empty'; END IF;
   IF p_now IS NULL THEN RAISE EXCEPTION 'cron evaluation time is required'; END IF;
-  IF p_limit NOT BETWEEN 1 AND 10000 THEN RAISE EXCEPTION 'cron catch-up limit must be between 1 and 10000'; END IF;
+  IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 10000 THEN RAISE EXCEPTION 'cron catch-up limit must be between 1 and 10000'; END IF;
   IF COALESCE(p_timezone, '') = '' THEN RAISE EXCEPTION 'schedule timezone must not be empty'; END IF;
   -- Force PostgreSQL to validate the IANA name even when no occurrence is returned.
   PERFORM p_now AT TIME ZONE p_timezone;
@@ -4843,7 +4843,7 @@ BEGIN
     RAISE EXCEPTION 'schedule namespaces must contain non-empty names';
   END IF;
   p_now := COALESCE(p_now, clock_timestamp());
-  IF p_catchup_limit NOT BETWEEN 1 AND 10000 THEN
+  IF p_catchup_limit IS NULL OR p_catchup_limit NOT BETWEEN 1 AND 10000 THEN
     RAISE EXCEPTION 'schedule catch-up limit must be between 1 and 10000';
   END IF;
   IF p_evaluation_window_ms < 100 THEN
@@ -5003,7 +5003,7 @@ DECLARE
   v_count integer;
 BEGIN
   IF p_before IS NULL THEN RAISE EXCEPTION 'occurrence retention cutoff is required'; END IF;
-  IF p_limit NOT BETWEEN 1 AND 1000000 THEN
+  IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 1000000 THEN
     RAISE EXCEPTION 'occurrence prune limit must be between 1 and 1000000';
   END IF;
 
@@ -7239,7 +7239,7 @@ BEGIN
         <> '{}'::jsonb THEN
     RAISE EXCEPTION 'dead-letter filter must be an object containing only queue, type, tags, errorName, finishedAfter, and finishedBefore';
   END IF;
-  IF p_limit NOT BETWEEN 1 AND 1000 THEN
+  IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 1000 THEN
     RAISE EXCEPTION 'dead-letter limit must be between 1 and 1000';
   END IF;
   IF (p_cursor_finished_at IS NULL) <> (p_cursor_task_id IS NULL) THEN
@@ -7557,7 +7557,7 @@ DECLARE
   v_finished_before timestamptz;
   v_candidate record;
 BEGIN
-  IF p_limit NOT BETWEEN 1 AND 1000 THEN
+  IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 1000 THEN
     RAISE EXCEPTION 'bulk redrive limit must be between 1 and 1000';
   END IF;
   IF (p_cursor_finished_at IS NULL) <> (p_cursor_task_id IS NULL) THEN
@@ -9400,10 +9400,10 @@ DECLARE
   v_charges numeric[];
 BEGIN
   IF p_worker_id IS NULL OR p_worker_id = '' THEN RAISE EXCEPTION 'worker_id must not be empty'; END IF;
-  IF p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
+  IF p_lease_ms IS NULL OR p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
     RAISE EXCEPTION 'lease_ms must be between 100 and 86400000';
   END IF;
-  IF p_limit NOT BETWEEN 1 AND 100 THEN
+  IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 100 THEN
     RAISE EXCEPTION 'limit must be between 1 and 100';
   END IF;
   -- Shared queue locks allow claims to overlap while holding every deployment synchronization of
@@ -9967,7 +9967,7 @@ DECLARE
   v_control workhorse.queue_control%ROWTYPE;
 BEGIN
   IF p_worker_id IS NULL OR p_worker_id = '' THEN RAISE EXCEPTION 'worker_id must not be empty'; END IF;
-  IF p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
+  IF p_lease_ms IS NULL OR p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
     RAISE EXCEPTION 'lease_ms must be between 100 and 86400000';
   END IF;
   SELECT * INTO v_control FROM workhorse.queue_control control
@@ -10143,7 +10143,7 @@ AS $$
 DECLARE
   v_control workhorse.queue_control%ROWTYPE;
 BEGIN
-  IF p_limit NOT BETWEEN 1 AND 100 THEN
+  IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 100 THEN
     RAISE EXCEPTION 'limit must be between 1 and 100';
   END IF;
   -- A fast-tier queue has no admission policy to apply row by row, so it claims the whole batch in
@@ -10154,7 +10154,7 @@ BEGIN
     IF p_worker_id IS NULL OR p_worker_id = '' THEN
       RAISE EXCEPTION 'worker_id must not be empty';
     END IF;
-    IF p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
+    IF p_lease_ms IS NULL OR p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
       RAISE EXCEPTION 'lease_ms must be between 100 and 86400000';
     END IF;
     IF NOT v_control.paused THEN
@@ -10538,7 +10538,7 @@ DECLARE
   v_status text;
 BEGIN
   IF p_worker_id IS NULL OR p_worker_id = '' THEN RAISE EXCEPTION 'worker_id must not be empty'; END IF;
-  IF p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
+  IF p_lease_ms IS NULL OR p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
     RAISE EXCEPTION 'lease_ms must be between 100 and 86400000';
   END IF;
   IF EXISTS (SELECT 1 FROM workhorse.fast_task_runtime fast WHERE fast.task_id = p_task_id) THEN
@@ -13325,7 +13325,7 @@ BEGIN
     RAISE EXCEPTION 'history parent must be task_event or attempt_history';
   END IF;
   IF p_before IS NULL OR NOT isfinite(p_before) THEN RAISE EXCEPTION 'retention cutoff is required'; END IF;
-  IF p_limit NOT BETWEEN 1 AND 52 THEN RAISE EXCEPTION 'partition limit must be between 1 and 52'; END IF;
+  IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 52 THEN RAISE EXCEPTION 'partition limit must be between 1 and 52'; END IF;
 
   FOR v_partition IN
     SELECT child_namespace.nspname AS schema_name, child.relname,
@@ -13387,7 +13387,7 @@ AS $$
 DECLARE v_count integer;
 BEGIN
   IF p_before IS NULL OR NOT isfinite(p_before) THEN RAISE EXCEPTION 'retention cutoff is required'; END IF;
-  IF p_limit NOT BETWEEN 1 AND 1000000 THEN RAISE EXCEPTION 'row limit must be between 1 and 1000000'; END IF;
+  IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 1000000 THEN RAISE EXCEPTION 'row limit must be between 1 and 1000000'; END IF;
   IF p_parent = 'task_event' THEN
     WITH candidates AS (
       SELECT ctid FROM workhorse.task_event_default
@@ -13428,7 +13428,7 @@ BEGIN
      OR NOT isfinite(p_history_before) THEN
     RAISE EXCEPTION 'identity, outcome, and history cutoffs are required';
   END IF;
-  IF p_limit NOT BETWEEN 1 AND 100000 THEN RAISE EXCEPTION 'terminal task limit must be between 1 and 100000'; END IF;
+  IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 100000 THEN RAISE EXCEPTION 'terminal task limit must be between 1 and 100000'; END IF;
 
   WITH candidate_window AS MATERIALIZED (
     SELECT task.id, outcome.finished_at
@@ -13555,7 +13555,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE v_count integer;
 BEGIN
-  IF p_limit NOT BETWEEN 1 AND 100000 THEN
+  IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 100000 THEN
     RAISE EXCEPTION 'released dependency limit must be between 1 and 100000';
   END IF;
   WITH candidates AS MATERIALIZED (
@@ -13589,7 +13589,7 @@ BEGIN
   IF p_before IS NULL OR NOT isfinite(p_before) THEN
     RAISE EXCEPTION 'idempotency cutoff is required';
   END IF;
-  IF p_limit NOT BETWEEN 1 AND 100000 THEN
+  IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 100000 THEN
     RAISE EXCEPTION 'idempotency prune limit must be between 1 and 100000';
   END IF;
   WITH candidates AS MATERIALIZED (
@@ -14241,7 +14241,7 @@ DECLARE v_day_from timestamptz;
 DECLARE v_day_to timestamptz;
 DECLARE v_inserted integer; BEGIN
   IF p_now IS NULL OR NOT isfinite(p_now) THEN RAISE EXCEPTION 'maintenance time is required'; END IF;
-  IF p_max_buckets NOT BETWEEN 1 AND 100000 THEN
+  IF p_max_buckets IS NULL OR p_max_buckets NOT BETWEEN 1 AND 100000 THEN
     RAISE EXCEPTION 'bucket limit must be between 1 and 100000';
   END IF;
   IF NOT pg_try_advisory_xact_lock(hashtextextended('workhorse:maintenance:stat-rollup', 0)) THEN
@@ -19191,10 +19191,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (42, 'keep JIT compilation out of the task detail read'),
   (43, 'shard the admission counters'),
   (44, 'make schedule-run retention health respect daily cleanup'),
-  (45, 'date an unrun history pass from the oldest expired schedule run')
+  (45, 'date an unrun history pass from the oldest expired schedule run'),
+  (46, 'reject a NULL limit or lease before any lock')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (45) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (46) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

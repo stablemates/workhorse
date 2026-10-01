@@ -327,6 +327,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "date an unrun history pass from the oldest expired schedule run",
     kind: "additive",
   },
+  {
+    fromVersion: 45,
+    toVersion: 46,
+    file: "0047-reject-a-null-limit-or-lease-before-any-lock.sql",
+    description: "reject a NULL limit or lease before any lock",
+    kind: "additive",
+  },
 ];
 
 /**

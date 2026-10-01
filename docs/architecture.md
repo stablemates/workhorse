@@ -18,8 +18,8 @@ contract step pending at the installed version through `workhorse schema contrac
 `--yes` and first names every worker still live on a retiring protocol. The current migration plan
 has one contract step: `0025-add-a-fast-task-tier.sql` moves schema 24 to 25 and retires
 protocols 1 through 4. `migrateSchema` therefore stops at schema 24 on an older installation, and
-`contractSchema` applies step 25. The additive steps 26 through 45 follow, so a second `migrateSchema`
-run completes the plan. Their files run from `0026` to `0046`: file number `0035` was reserved and
+`contractSchema` applies step 25. The additive steps 26 through 46 follow, so a second `migrateSchema`
+run completes the plan. Their files run from `0026` to `0047`: file number `0035` was reserved and
 never used, so from `0036` on a file's number is one above the version it produces. Step 25 ships without the usual retention window, as
 [ADR 0077](decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) §6 records.
 
@@ -2700,6 +2700,10 @@ potentially blocking locks. Without a concurrency policy, it selects the strict-
 `task_runtime_active_queue_key_expiry_idx` and stops when its held shards are full. With a rate
 policy, it refills the held shards from PostgreSQL time and returns null when they hold no whole
 token.
+
+`claim_many_v1` accepts a limit from 1 through 100 and a lease from 100 through 86400000 ms. It
+raises before any lock when either is NULL or outside its range, on either tier. Since migration
+0047, every function that bounds a required limit or lease rejects NULL the same way.
 
 Priority dispatch has no aging or fair-share control. A sustained stream of higher-priority ready work can starve lower-priority rows in the same queue.
 
