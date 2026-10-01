@@ -533,9 +533,12 @@ func enqueueResults(rows []Row, requestCount int) ([]EnqueueResult, error) {
 
 // applyPayloadContracts validates each contracted payload and stamps the batch with the
 // contract fields PostgreSQL enforces. Each task type is looked up once for the queue's lifetime;
-// refreshPayloadContracts replaces an entry PostgreSQL reports as stale. Before SyncContracts,
-// only types PostgreSQL has reported are stamped.
+// refreshPayloadContracts replaces an entry PostgreSQL reports as stale, and revalidatePayload
+// replaces one that rejects a payload. Before SyncContracts, only types PostgreSQL has reported are
+// stamped.
 func (queue *Queue) applyPayloadContracts(ctx context.Context, inputs []enqueueInput) error {
+	// A task type is read from PostgreSQL at most once per enqueue.
+	loaded := make(map[string]bool)
 	for index := range inputs {
 		input := &inputs[index]
 		queue.contracts.mu.RLock()
@@ -546,20 +549,29 @@ func (queue *Queue) applyPayloadContracts(ctx context.Context, inputs []enqueueI
 			if !contractsEnabled {
 				continue
 			}
-			loaded, err := queue.loadPayloadContract(ctx, input.Type)
+			current, err := queue.loadPayloadContract(ctx, input.Type)
 			if err != nil {
 				return err
 			}
-			contract = loaded
-			queue.contracts.mu.Lock()
-			queue.contracts.definitions[input.Type] = contract
-			queue.contracts.mu.Unlock()
+			contract = current
+			loaded[input.Type] = true
+			queue.storePayloadContract(input.Type, contract)
 		}
 		if contract == nil {
 			continue
 		}
 		if err := contract.validatePayload(input.Type, input.Payload); err != nil {
-			return err
+			if loaded[input.Type] {
+				return err
+			}
+			loaded[input.Type] = true
+			contract, err = queue.revalidatePayload(ctx, input, err)
+			if err != nil {
+				return err
+			}
+			if contract == nil {
+				continue
+			}
 		}
 		input.ContractVersion = contract.version
 		input.PayloadMaxBytes = contract.payloadMaxBytes
@@ -577,11 +589,40 @@ func (queue *Queue) refreshPayloadContracts(ctx context.Context, taskTypes []str
 		if err != nil {
 			return err
 		}
-		queue.contracts.mu.Lock()
-		queue.contracts.definitions[taskType] = contract
-		queue.contracts.mu.Unlock()
+		queue.storePayloadContract(taskType, contract)
 	}
 	return nil
+}
+
+// revalidatePayload answers a payload that a cached contract rejected. An operator can select
+// another version after SyncContracts, and PostgreSQL never sees a request the queue rejects, so no
+// contract_mismatch row would refresh the entry. The queue reloads the current contract once through
+// its executor and validates again. The second result stands, and a nil contract means the task
+// type no longer has one.
+func (queue *Queue) revalidatePayload(
+	ctx context.Context,
+	input *enqueueInput,
+	rejection error,
+) (*payloadContract, error) {
+	var validation *TaskContractValidationError
+	if !errors.As(rejection, &validation) {
+		return nil, rejection
+	}
+	contract, err := queue.loadPayloadContract(ctx, input.Type)
+	if err != nil {
+		return nil, err
+	}
+	queue.storePayloadContract(input.Type, contract)
+	if contract == nil {
+		return nil, nil
+	}
+	return contract, contract.validatePayload(input.Type, input.Payload)
+}
+
+func (queue *Queue) storePayloadContract(taskType string, contract *payloadContract) {
+	queue.contracts.mu.Lock()
+	queue.contracts.definitions[taskType] = contract
+	queue.contracts.mu.Unlock()
 }
 
 type payloadContract struct {
