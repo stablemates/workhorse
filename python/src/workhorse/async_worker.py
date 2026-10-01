@@ -30,6 +30,7 @@ from .types import (
     BatchHandlerOutcome,
     ChildOutcome,
     ChildTaskRequest,
+    ClaimedTask as _ClaimedTask,
     EnqueueOptions,
     HandlerContext,
     Json,
@@ -37,7 +38,7 @@ from .types import (
     TaskProgress,
     TaskWait,
 )
-from .worker import ClaimedTask as _ClaimedTask, Worker
+from .worker import Worker
 
 AsyncHandler = Callable[[Any, AsyncHandlerContext], Awaitable[Json]]
 AsyncBatchHandler = Callable[

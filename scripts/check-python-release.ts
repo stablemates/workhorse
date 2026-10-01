@@ -34,6 +34,29 @@ async function pythonVersion(): Promise<string> {
   return version;
 }
 
+// mypy reads no configuration from the repository root, so a typecheck that omits this flag runs
+// without the package's strict settings and still reports success.
+const packageMypyConfig = "--config-file=python/pyproject.toml";
+
+/** Name the reason a `python:typecheck` script would skip the package's mypy configuration. */
+export function typecheckConfigProblem(script: string | undefined): string | undefined {
+  if (script === undefined) return "package.json defines no python:typecheck script";
+  const words = script.split(/\s+/);
+  if (!words.includes("mypy")) return "python:typecheck does not run mypy";
+  if (!words.includes(packageMypyConfig)) {
+    return `python:typecheck does not pass ${packageMypyConfig}, so mypy skips strict mode`;
+  }
+  return undefined;
+}
+
+async function assertTypecheckLoadsPackageConfig(): Promise<void> {
+  const manifest = JSON.parse(
+    await readFile(path.join(repositoryRoot, "package.json"), "utf8"),
+  ) as { scripts?: Record<string, string> };
+  const problem = typecheckConfigProblem(manifest.scripts?.["python:typecheck"]);
+  if (problem) throw new Error(problem);
+}
+
 function releaseTag(version: string): string {
   const requested = process.argv[2];
   if (requested) return requested;
@@ -75,6 +98,7 @@ export async function checkPythonRelease(): Promise<void> {
   await run("pnpm", ["python:format:check"]);
   await run("pnpm", ["python:lint"]);
   await run("pnpm", ["python:vuln"]);
+  await assertTypecheckLoadsPackageConfig();
   await run("pnpm", ["python:typecheck"]);
   await run("pnpm", ["dashboard-bundle:fetch"]);
 
