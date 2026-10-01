@@ -17,7 +17,11 @@
   },
   "fixtureCoverage": {
     "requests": ["keyed-enqueue-request", "minimal-enqueue-request"],
-    "schedules": ["recurring-schedule-definition", "minimal-schedule-definition"],
+    "schedules": [
+      "recurring-schedule-definition",
+      "minimal-schedule-definition",
+      "contracted-schedule-definition"
+    ],
     "interpreter": ["matcher-semantics"]
   },
   "coverage": [

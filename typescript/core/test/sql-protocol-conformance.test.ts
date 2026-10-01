@@ -1514,7 +1514,9 @@ describe("SQL protocol conformance fixtures", () => {
           return { rows: [] } as never;
         },
       };
-      const queue = new Queue(database, fixture.defaultQueue);
+      const queue = new Queue(database, fixture.defaultQueue, {
+        contracts: fixture.contracts as never,
+      });
       await queue.syncSchedules(fixture.namespace, fixture.application as never, {
         prune: fixture.prune,
       });
