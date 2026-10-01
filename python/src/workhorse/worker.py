@@ -8,7 +8,7 @@ import traceback
 from bisect import insort
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
-from contextlib import suppress
+from contextlib import nullcontext, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from itertools import islice
@@ -1588,14 +1588,19 @@ class Worker:
         claims: dict[int, tuple[int, int | None, int]] = {}
         results: SimpleQueue[_ClaimOutcome] = SimpleQueue()
         next_claim_id = 0
-        # A long-running worker does not wait for its first maintenance pass: that pass runs on
-        # its own thread beside the first claim. A failed pass still ends the run.
-        startup_maintenance: Thread | None = None
+        # A long-running worker runs maintenance on its own thread, so a full, paused, or idle
+        # dispatcher never delays a tick or a schedule offer. The first pass runs beside the first
+        # claim (ADR 0078). The thread is the only caller, so passes never overlap, and a failed
+        # pass still ends the run.
+        maintenance: Thread | None = None
+        maintenance_stopped = Event()
         maintenance_errors: list[BaseException] = []
 
-        def run_startup_maintenance() -> None:
+        def run_maintenance() -> None:
             try:
-                self._run_maintenance_if_due()
+                while not maintenance_stopped.is_set():
+                    self._run_maintenance_if_due()
+                    maintenance_stopped.wait(self._seconds_until_maintenance_due())
             except BaseException as error:
                 maintenance_errors.append(error)
             finally:
@@ -1682,12 +1687,12 @@ class Worker:
         with self._state_lock:
             stopping_at_start = self._stopping
         if continuous and not stopping_at_start:
-            startup_maintenance = Thread(
-                target=run_startup_maintenance,
-                name="workhorse-startup-maintenance",
+            maintenance = Thread(
+                target=run_maintenance,
+                name="workhorse-maintenance",
                 daemon=True,
             )
-            startup_maintenance.start()
+            maintenance.start()
 
         try:
             try:
@@ -1727,8 +1732,10 @@ class Worker:
                         self._wake.wait(remaining)
                         continue
                     if next_claim() is not None:
-                        # tick_v1 promotes and recovers, so a claim between ticks only claims.
-                        if startup_maintenance is None or not startup_maintenance.is_alive():
+                        # tick_v1 promotes and recovers, so a claim between ticks only claims. A
+                        # single pass has no maintenance thread and runs a due pass before it
+                        # claims.
+                        if not continuous:
                             self._run_maintenance_if_due()
                         while (claim := next_claim()) is not None:
                             start_claim(*claim)
@@ -1741,8 +1748,9 @@ class Worker:
                 while claims:
                     settle(results.get())
         finally:
-            if startup_maintenance is not None:
-                startup_maintenance.join()
+            maintenance_stopped.set()
+            if maintenance is not None:
+                maintenance.join()
             if listener is not None:
                 listener.close()
             self._refresh_registration(force=True, draining=True)
@@ -2178,18 +2186,29 @@ class Worker:
             raise ValueError("retry_delay_ms must be a whole number of milliseconds, or None")
         return override
 
+    def _seconds_until_maintenance_due(self) -> float:
+        """Report how long the maintenance thread waits before the tick or the routines are due."""
+        due_at = min(
+            self._last_maintenance_at + self.maintenance_interval_ms / 1000,
+            self._last_routine_offer_at + self.maintenance_routine_poll_ms / 1000,
+        )
+        return max(0.0, due_at - monotonic())
+
     def _run_maintenance_if_due(self) -> bool:
+        """Run the tick and the slow routines, each only when its own cadence is due."""
         now_monotonic = monotonic()
-        if now_monotonic - self._last_maintenance_at < self.maintenance_interval_ms / 1000:
+        tick_due = now_monotonic - self._last_maintenance_at >= self.maintenance_interval_ms / 1000
+        routines_due = self._due_for_maintenance_routines(now_monotonic)
+        if not tick_due and not routines_due:
             return False
         with (
             _start_span(
                 "workhorse.maintenance",
                 {"workhorse.maintenance.operation": "tick"},
             ) as maintenance_span,
-            _start_span("workhorse.recovery", {}) as recovery_span,
+            _start_span("workhorse.recovery", {}) if tick_due else nullcontext() as recovery_span,
         ):
-            tick = self._executor.rows(_STATEMENTS.tick, (100, 100))
+            tick = self._executor.rows(_STATEMENTS.tick, (100, 100)) if tick_due else []
             total_rows = 0
             for row in tick:
                 phase = str(row["phase"])
@@ -2206,6 +2225,8 @@ class Worker:
                     has_error,
                 )
                 if phase == "recover":
+                    # Only a tick returns a recover row, and a tick opens the recovery span.
+                    assert recovery_span is not None
                     recovery_span.set_attribute("workhorse.recovery.skipped", skipped_lock)
                     if not skipped_lock and not has_error:
                         expired_leases = int(cast(int, row["expired_leases"]))
@@ -2252,7 +2273,7 @@ class Worker:
                     )
             slow_maintenance = (
                 self._executor.rows(_STATEMENTS.run_maintenance, (datetime.now(UTC),))
-                if self._due_for_maintenance_routines(now_monotonic)
+                if routines_due
                 else ()
             )
             for row in slow_maintenance:
@@ -2270,6 +2291,8 @@ class Worker:
                     has_error,
                 )
             maintenance_span.set_attribute("workhorse.maintenance.rows_affected", total_rows)
+        if not tick_due:
+            return True
         self._last_maintenance_at = now_monotonic
         if not self.schedule_namespaces:
             return True

@@ -5,6 +5,7 @@ import asyncio
 import threading
 import time
 from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from contextlib import suppress
 from typing import Any
 
@@ -216,6 +217,100 @@ async def test_async_worker_notifications_wake_continuous_dispatch_and_stop_drai
         worker.stop()
         await run
         await query_connection.close()
+
+
+def task_state(database_url: str, task_id: str) -> str | None:
+    """Read the live state of a task, or its final state once it has an outcome."""
+    with psycopg.connect(database_url) as connection:
+        row = connection.execute(
+            "SELECT coalesce("
+            "(SELECT state FROM workhorse.task_outcome WHERE task_id = %s), "
+            "(SELECT state FROM workhorse.task_runtime WHERE task_id = %s))",
+            (task_id, task_id),
+        ).fetchone()
+    assert row is not None
+    return None if row[0] is None else str(row[0])
+
+
+# SM-1014: a full or paused worker stopped running tick_v1, so no due task left scheduled.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pause", ["local", "remote"])
+async def test_saturated_and_paused_async_worker_keeps_promoting_due_tasks(
+    database_url: str, pause: str, async_psycopg_pool, asyncpg_pool
+) -> None:
+    queue = f"async-maintenance-{pause}"
+    worker_id = f"python-async-maintenance-{pause}"
+    handled = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handler(_payload: object, _context: AsyncHandlerContext) -> dict[str, bool]:
+        handled.set()
+        await release.wait()
+        return {"handled": True}
+
+    worker = AsyncWorker.from_psycopg(
+        async_psycopg_pool,
+        queue=queue,
+        worker_id=worker_id,
+        concurrency=1,
+        poll_ms=5_000,
+        maintenance_interval_ms=100,
+        registry_interval_ms=100,
+    ).handle("async.maintenance", handler)
+
+    def enqueue_delayed() -> str:
+        # Nothing serves this queue, so only the worker's tick can promote the task.
+        with psycopg.connect(database_url) as connection:
+            return Queue(connection).enqueue(
+                "async.unserved",
+                {},
+                EnqueueOptions(
+                    queue=f"{queue}-unserved",
+                    run_at=datetime.now(UTC) + timedelta(milliseconds=300),
+                ),
+            )
+
+    async def has_state(task_id: str, state: str) -> bool:
+        return await asyncio.to_thread(task_state, database_url, task_id) == state
+
+    async def promoted(task_id: str) -> None:
+        await eventually_async(
+            lambda: has_state(task_id, "ready"), "the worker did not promote the due task"
+        )
+
+    held_id = await asyncio.to_thread(enqueue, database_url, "async.maintenance", {}, queue=queue)
+    run = asyncio.create_task(worker.run())
+    try:
+        await asyncio.wait_for(handled.wait(), timeout=5)
+        # Every slot is held, so the worker has nothing to claim with.
+        await promoted(await asyncio.to_thread(enqueue_delayed))
+
+        if pause == "local":
+            worker.pause()
+        else:
+            with psycopg.connect(database_url, autocommit=True) as connection:
+                connection.execute(
+                    "SELECT * FROM workhorse.set_worker_paused_v1(%s, true, %s, %s, %s)",
+                    (worker_id, "test", "remote pause", "pause-request"),
+                )
+            deadline = time.monotonic() + 5
+            while not worker.is_paused():
+                assert time.monotonic() < deadline, "the remote pause did not reach the worker"
+                await asyncio.sleep(0.02)
+        release.set()
+        await eventually_async(
+            lambda: has_state(held_id, "succeeded"), "the held task did not finish"
+        )
+        waiting_id = await asyncio.to_thread(
+            enqueue, database_url, "async.maintenance", {}, queue=queue
+        )
+        # A paused worker claims nothing but still promotes due tasks.
+        await promoted(await asyncio.to_thread(enqueue_delayed))
+        assert await asyncio.to_thread(task_state, database_url, waiting_id) == "ready"
+    finally:
+        release.set()
+        worker.stop()
+        await asyncio.wait_for(run, timeout=5)
 
 
 @pytest.mark.asyncio
