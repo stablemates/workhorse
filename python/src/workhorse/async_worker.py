@@ -59,6 +59,32 @@ async def _await_value[T](value: Awaitable[T]) -> T:
     return await value
 
 
+async def _await_bridge_call[T](
+    call: asyncio.Future[T], on_cancel: Callable[[], None] | None = None
+) -> T:
+    """Await a bridge call, and on cancellation wait for it to return before re-raising.
+
+    A thread cannot be interrupted, so a cancelled caller waits for the call to
+    return. The handler then never settles while its context call still writes for
+    the attempt. The call's own outcome is consumed so that it is never reported as
+    unretrieved, and the caller's cancellation wins over it. ``asyncio.wait`` leaves
+    the call running when the caller is cancelled, unlike ``asyncio.shield``, which
+    on Python 3.14 reports a later failure of the call as an unhandled exception.
+    """
+    try:
+        await asyncio.wait((call,))
+    except asyncio.CancelledError:
+        if on_cancel is not None:
+            on_cancel()
+        while not call.done():
+            with suppress(asyncio.CancelledError):
+                await asyncio.wait((call,))
+        if not call.cancelled():
+            call.exception()
+        raise
+    return call.result()
+
+
 class _BridgeThreads:
     """Run blocking context calls on threads that grow with the calls in flight.
 
@@ -179,16 +205,51 @@ class _AsyncCheckpointAdapter:
 
     async def _call(self, operation: Callable[..., _T], /, *arguments: Any) -> _T:
         """Await a synchronous context call without holding an event loop thread."""
-        return await asyncio.wrap_future(self._threads.run(partial(operation, *arguments)))
+        return await _await_bridge_call(
+            asyncio.wrap_future(self._threads.run(partial(operation, *arguments)))
+        )
 
     async def get_checkpoint(self, name: str) -> TaskCheckpoint | None:
         return await self._call(self._checkpoint_context.get_checkpoint, name)
 
     async def checkpoint(self, name: str, operation: Callable[[], Awaitable[Json]]) -> Json:
-        def invoke_operation() -> Json:
-            return asyncio.run_coroutine_threadsafe(_await_value(operation()), self._loop).result()
+        # The operation and the cancellation callback both run on the event loop. The
+        # tracked task calls the operation in its first step, so a cancellation either
+        # stops it before the operation is created or cancels it while it runs.
+        cancelled = False
+        running: asyncio.Task[Any] | None = None
 
-        return await self._call(self._checkpoint_context.checkpoint, name, invoke_operation)
+        async def run_operation() -> Json:
+            nonlocal running
+            if cancelled:
+                raise asyncio.CancelledError
+            running = asyncio.current_task()
+            value = await operation()
+            if cancelled:
+                # The operation absorbed its cancellation, but the caller has moved on,
+                # so the core must not save the value as a checkpoint.
+                raise asyncio.CancelledError
+            return value
+
+        def invoke_operation() -> Json:
+            return asyncio.run_coroutine_threadsafe(run_operation(), self._loop).result()
+
+        def cancel_operation() -> None:
+            nonlocal cancelled
+            cancelled = True
+            if running is not None:
+                running.cancel()
+
+        # The operation's cleanup finishes before the core sees the cancellation, and
+        # the core saves no checkpoint for it.
+        return await _await_bridge_call(
+            asyncio.wrap_future(
+                self._threads.run(
+                    partial(self._checkpoint_context.checkpoint, name, invoke_operation)
+                )
+            ),
+            cancel_operation,
+        )
 
     async def get_progress(self) -> TaskProgress | None:
         return await self._call(self._checkpoint_context.get_progress)

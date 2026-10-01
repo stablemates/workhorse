@@ -71,6 +71,12 @@ print(task_id)
 Handlers receive at-least-once delivery. Use stable provider idempotency keys around external
 effects; named checkpoints prevent completed application stages from running after a later restart.
 
+An `AsyncWorker` checkpoint operation follows asyncio cancellation. When a timeout or task group
+cancels the handler's `await context.checkpoint(name, operation)`, the worker cancels the
+operation and waits for its cleanup before the cancellation reaches the handler. The worker
+stores no checkpoint for a cancelled operation, even one that catches the cancellation and returns
+a value, so a later attempt runs it again.
+
 ## Package boundary
 
 This distribution provides synchronous Psycopg and asynchronous Psycopg or asyncpg clients and

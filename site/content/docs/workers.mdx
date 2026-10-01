@@ -90,7 +90,11 @@ it found work — useful in tests and scripts.
 Python exposes this lifecycle through synchronous `Worker` and asynchronous `AsyncWorker`.
 Both rotate across configured queues, fill a bounded set of slots, and drain active handlers before
 `run` returns. `AsyncWorker` uses dedicated native Psycopg or asyncpg query and notification
-connections, and its handler context methods are awaitable. Both surfaces share the same claim,
+connections, and its handler context methods are awaitable. Each awaitable method runs on a
+bridge thread, so a cancelled handler waits for that call to return before the cancellation reaches
+it. A cancelled `checkpoint` also cancels its operation and waits for the operation's cleanup. It
+stores no checkpoint for that operation, even one that catches the cancellation and returns a
+value, so a later attempt runs the operation again. Both surfaces share the same claim,
 heartbeat, batch, settlement, telemetry, and drain core. Workers in every SDK language also
 participate in the worker registry.
 Python's `handle_batch` follows the same grouping contract described in
