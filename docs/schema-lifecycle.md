@@ -2,7 +2,7 @@
 
 ## Current policy
 
-Schema version 6 is the migration baseline and schema version 50 is current. `sql/schema/current.sql` is the tracked source and
+Schema version 6 is the migration baseline and schema version 51 is current. `sql/schema/current.sql` is the tracked source and
 `sql/schema.sql` is a build artifact for published packages. `sql/releases/` holds the frozen
 clean-install artifact of every supported published release: `0006.sql` is 0.2.0, `0009.sql` is
 0.2.1, `0023.sql` is 0.3.0, `0024.sql` is 0.4.0, and `0043.sql` is 0.5.0.
@@ -26,6 +26,13 @@ suffix, so every one of them can be superseded this way. Migration 0025 is the o
 That rule is what makes a rolling deployment safe. A pipeline migrates the database before any
 process from the new release starts, and every still-running process keeps working, because the
 schema only grew.
+
+Migration 0052 asks one more step of an installation that runs cold exporters. Stop every exporter
+and let each finish its object and manifest uploads before the migration runs. Keep cold export
+enabled, so retention keeps waiting for the export. Restart the exporters once the migration has
+committed. The migration repairs the export ledger, but it cannot stop an upload already in flight;
+see [the cold export guide](guides/335-cold-export.md#a-day-is-a-utc-day). An installation that never
+enabled cold export needs no extra step.
 
 Every schema change ships as an ordered, immutable step:
 

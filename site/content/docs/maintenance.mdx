@@ -161,6 +161,36 @@ console.log(await queue.getColdExportStatus());
 ```
 
 Object names derive from the day, so a crashed export resumes by rewriting the same object.
+
+A day is always a UTC day: a segment starts at a UTC midnight and lasts one UTC day, whatever time
+zone the exporter's session uses. Earlier releases stepped a calendar day in the session time zone,
+so across a daylight-saving change two segments could share a UTC date and one object name, and the
+later export overwrote the earlier day's object. The schema upgrade that adds the UTC-day rule
+repairs such a ledger.
+
+Before you run that upgrade, stop every exporter and let each finish its object and manifest
+uploads. Keep export enabled, so retention still waits for the export. The repair fences an earlier
+exporter out of the ledger, but it cannot stop an upload already in flight, and that upload would
+overwrite the corrected day's object with the old range. The repair then does this:
+
+- It waits for any running retention pass and holds off new ones until it commits, so no pass that
+  read the old watermark deletes history the repair exports again. An exporter that claims or
+  completes a day meanwhile waits for it too.
+- When a dataset lost a completed day to a short or long segment, it moves the watermark back to
+  the first day that segment may have overwritten, so the exporter writes those days again.
+  Retention keeps those days until the export has copied them.
+- A damaged segment that starts at a UTC midnight at or after the new watermark becomes one UTC day
+  and is exported again, with its attempt count raised so its earlier exporter cannot complete it.
+- It drops every other segment that is not one UTC day. Their objects stay in your store, but the
+  ledger no longer names them. It warns per dataset with the counts and ranges.
+- The rewind reaches only history still in PostgreSQL. If retention already removed some of those
+  days, the watermark stops at the oldest retained day, and a second warning names the days that
+  cannot be written again. Treat their archive objects as suspect and restore them from another
+  copy if you have one.
+- Retention can also remove part of a day, as the fast tier does row by row. The rewind stops after
+  the last completed day whose source now holds fewer rows than its archive recorded, so it never
+  overwrites a complete object with a smaller one. The same warning names those days.
+
 `queue.getColdExportStatus()` reports the watermark, the segment being exported, and the last
 error. Read exports back with a JSON-lines tool such as DuckDB, or `COPY` a day into a scratch
 schema as `jsonb` lines; never load it into the live `workhorse` schema.

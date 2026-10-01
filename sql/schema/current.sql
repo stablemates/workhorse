@@ -2079,12 +2079,16 @@ ON CONFLICT (singleton) DO NOTHING;
 CREATE TABLE IF NOT EXISTS workhorse.cold_export_dataset (
   dataset text PRIMARY KEY CHECK (dataset IN ('task_event', 'attempt_history', 'fast_task_outcome')),
   exported_through timestamptz NOT NULL CHECK (isfinite(exported_through)),
-  updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  CONSTRAINT cold_export_dataset_utc_midnight_check CHECK (
+    exported_through = date_trunc('day', exported_through AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+  )
 );
 
 -- The export ledger: one row per (dataset, UTC day). Object names derive from this identity, so a
 -- retried segment rewrites the same key with the same bytes. `attempts` fences completion the way a
 -- fence token fences a task attempt: a stale exporter cannot complete a segment another one holds.
+-- A segment starts at a UTC midnight and spans exactly 86,400 seconds, whatever the session TimeZone.
 CREATE TABLE IF NOT EXISTS workhorse.cold_export_segment (
   dataset text NOT NULL CHECK (dataset IN ('task_event', 'attempt_history', 'fast_task_outcome')),
   segment_start timestamptz NOT NULL CHECK (isfinite(segment_start)),
@@ -2111,7 +2115,11 @@ CREATE TABLE IF NOT EXISTS workhorse.cold_export_segment (
     status <> 'complete'
     OR (row_count IS NOT NULL AND byte_length IS NOT NULL AND completed_at IS NOT NULL)
   ),
-  CHECK ((row_count IS NULL OR row_count = 0) OR (object_key IS NOT NULL AND checksum_sha256 IS NOT NULL))
+  CHECK ((row_count IS NULL OR row_count = 0) OR (object_key IS NOT NULL AND checksum_sha256 IS NOT NULL)),
+  CONSTRAINT cold_export_segment_utc_day_check CHECK (
+    segment_start = date_trunc('day', segment_start AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+    AND extract(epoch FROM segment_end - segment_start) = 86400
+  )
 );
 CREATE INDEX IF NOT EXISTS cold_export_segment_exporting_idx
   ON workhorse.cold_export_segment (dataset, segment_start)
@@ -14210,7 +14218,8 @@ $$;
 
 -- Statistics for [p_from, p_to) stitched from materialized buckets and a live tail. Callers never
 -- need to know where the rollup watermark sits: everything below it is read, everything above it is
--- derived from the few minutes of raw history a rollup pass has not closed yet.
+-- derived from the few minutes of raw history a rollup pass has not closed yet. A day boundary steps
+-- a fixed 24 hours, so a session TimeZone with daylight saving cannot move it off UTC midnight.
 CREATE OR REPLACE FUNCTION workhorse.stat_buckets_v1(
   p_from timestamptz, p_to timestamptz
 ) RETURNS TABLE (
@@ -14234,7 +14243,7 @@ AS $$
            date_bin('1 hour', p_to, timestamp '2000-01-01' AT TIME ZONE 'UTC') AS hour_end,
            CASE WHEN p_from = date_bin('1 day', p_from, timestamp '2000-01-01' AT TIME ZONE 'UTC')
              THEN p_from ELSE date_bin('1 day', p_from,
-               timestamp '2000-01-01' AT TIME ZONE 'UTC') + interval '1 day' END AS day_start,
+               timestamp '2000-01-01' AT TIME ZONE 'UTC') + interval '24 hours' END AS day_start,
            date_bin('1 day', p_to, timestamp '2000-01-01' AT TIME ZONE 'UTC') AS day_end,
            (SELECT state.rolled_up_through FROM workhorse.task_stat_state state WHERE singleton)
              AS minute_watermark
@@ -19066,12 +19075,14 @@ BEGIN
        AND segment.segment_start = v_segment.segment_start
     RETURNING * INTO v_segment;
   ELSE
-    IF v_exported_through + interval '1 day' > v_limit THEN RETURN; END IF;
+    -- A fixed 24 hours, not '1 day': timestamptz plus a day interval steps a calendar day in the
+    -- session TimeZone, which is 23 or 25 hours across a daylight-saving transition.
+    IF v_exported_through + interval '24 hours' > v_limit THEN RETURN; END IF;
     INSERT INTO workhorse.cold_export_segment(
       dataset, segment_start, segment_end, status, attempts, exporter_id, lease_expires_at,
       started_at
     ) VALUES (
-      p_dataset, v_exported_through, v_exported_through + interval '1 day', 'exporting', 1,
+      p_dataset, v_exported_through, v_exported_through + interval '24 hours', 'exporting', 1,
       p_exporter_id, p_now + make_interval(secs => p_lease_ms / 1000.0), p_now
     )
     RETURNING * INTO v_segment;
@@ -19281,10 +19292,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (47, 'refuse a claim below read committed isolation'),
   (48, 'prune past redrive sources pinned by younger targets'),
   (49, 'serialize budget synchronization with claims'),
-  (50, 'sample the clock after the row lock')
+  (50, 'sample the clock after the row lock'),
+  (51, 'keep cold-export segments one UTC day')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (50) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (51) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

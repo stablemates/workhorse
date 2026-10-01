@@ -1,6 +1,6 @@
 # Feature support matrix
 
-This is the authoritative implementation snapshot for schema version 50. “Supported” means exposed through the current SQL or TypeScript contract and covered by live PostgreSQL integration tests where applicable. Per-language SDK support lives in [docs/parity.md](parity.md).
+This is the authoritative implementation snapshot for schema version 51. “Supported” means exposed through the current SQL or TypeScript contract and covered by live PostgreSQL integration tests where applicable. Per-language SDK support lives in [docs/parity.md](parity.md).
 
 ## At a glance
 

@@ -19,6 +19,10 @@ const EXCLUSIVE_SCANS_SHIPPED = new Map([
     "0030-release-dependents-through-a-pending-prerequisite-counter.sql",
     "backfills and validates task_runtime in one step; fresh installs and schemas past 30 skip it",
   ],
+  [
+    "0052-keep-cold-export-segments-one-utc-day.sql",
+    "the cold-export ledger holds one row per dataset and UTC day",
+  ],
 ]);
 
 /** The work in one transactional step that holds a table's ACCESS EXCLUSIVE for time its size sets. */
