@@ -248,10 +248,14 @@ func (service *backend) redriveDeadLetters(ctx context.Context, input any, actor
 	return response, nil
 }
 
+// signalTask and completeHumanWait read the retained JSON as text. The pgx executor decodes jsonb
+// into Go values while database/sql hands back raw bytes, so text gives both executors one shape
+// for decodeJSONCell, and a JSON string or null survives the round trip. The retained JSON is an
+// application value, so the dashboard returns it without timestamp normalization.
 func (service *backend) signalTask(ctx context.Context, input any, actor string) (any, error) {
 	value, _ := document(input)
 	payload, _ := json.Marshal(value["payload"])
-	rows, err := service.executor.Query(ctx, "SELECT status,payload,delivered_at,delivered_by FROM workhorse.send_signal_v1($1::uuid,$2::text,$3::jsonb,$4::text,$5::text)", value["id"], value["name"], payload, value["idempotencyKey"], actor)
+	rows, err := service.executor.Query(ctx, "SELECT status,payload::text AS payload,delivered_at,delivered_by FROM workhorse.send_signal_v1($1::uuid,$2::text,$3::jsonb,$4::text,$5::text)", value["id"], value["name"], payload, value["idempotencyKey"], actor)
 	if err != nil {
 		return nil, err
 	}
@@ -259,13 +263,17 @@ func (service *backend) signalTask(ctx context.Context, input any, actor string)
 	if row["status"] == "not_found" {
 		return nil, &RPCError{Status: 404, Code: "NOT_FOUND", Message: "Task not found"}
 	}
-	return map[string]any{"status": row["status"], "taskId": value["id"], "name": value["name"], "payload": row["payload"], "deliveredAt": timestamp(row["delivered_at"]), "deliveredBy": row["delivered_by"]}, nil
+	delivered, err := decodeJSONCell(row["payload"])
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"status": row["status"], "taskId": value["id"], "name": value["name"], "payload": delivered, "deliveredAt": timestamp(row["delivered_at"]), "deliveredBy": row["delivered_by"]}, nil
 }
 
 func (service *backend) completeHumanWait(ctx context.Context, input any, actor string) (any, error) {
 	value, _ := document(input)
 	payload, _ := json.Marshal(value["result"])
-	rows, err := service.executor.Query(ctx, "SELECT status,result,completed_at,completed_by FROM workhorse.complete_human_wait_v1($1::uuid,$2::text,$3::jsonb,$4::text,$5::text)", value["id"], value["name"], payload, value["idempotencyKey"], actor)
+	rows, err := service.executor.Query(ctx, "SELECT status,result::text AS result,completed_at,completed_by FROM workhorse.complete_human_wait_v1($1::uuid,$2::text,$3::jsonb,$4::text,$5::text)", value["id"], value["name"], payload, value["idempotencyKey"], actor)
 	if err != nil {
 		return nil, err
 	}
@@ -273,5 +281,9 @@ func (service *backend) completeHumanWait(ctx context.Context, input any, actor 
 	if row["status"] == "not_found" {
 		return nil, &RPCError{Status: 404, Code: "NOT_FOUND", Message: "Task not found"}
 	}
-	return map[string]any{"status": row["status"], "taskId": value["id"], "name": value["name"], "result": row["result"], "completedAt": timestamp(row["completed_at"]), "completedBy": row["completed_by"]}, nil
+	decision, err := decodeJSONCell(row["result"])
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"status": row["status"], "taskId": value["id"], "name": value["name"], "result": decision, "completedAt": timestamp(row["completed_at"]), "completedBy": row["completed_by"]}, nil
 }
