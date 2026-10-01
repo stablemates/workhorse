@@ -75,19 +75,22 @@ func main() {
 	}
 	pgxWritable, pgxReadOnly := harness(workhorse.NewPGXExecutor(pool), false), harness(workhorse.NewPGXExecutor(pool), true)
 	sqlWritable, sqlReadOnly := harness(workhorse.NewSQLExecutor(sqlDatabase), false), harness(workhorse.NewSQLExecutor(sqlDatabase), true)
-	server := &http.Server{Handler: http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		// The fixture runner cannot set Host through fetch, so it names the request host here.
-		request.Host = request.Header.Get("X-Workhorse-Conformance-Host")
-		writable, readOnly := pgxWritable, pgxReadOnly
-		if request.Header.Get("X-Workhorse-Executor") == "database-sql" {
-			writable, readOnly = sqlWritable, sqlReadOnly
-		}
-		if request.Header.Get("X-Workhorse-Conformance-Mode") == "read-only" {
-			readOnly.ServeHTTP(response, request)
-		} else {
-			writable.ServeHTTP(response, request)
-		}
-	})}
+	server := &http.Server{
+		// Requests inherit the shutdown context so a handler blocked in a query cannot hold shutdown open.
+		BaseContext: func(net.Listener) context.Context { return ctx },
+		Handler: http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			// The fixture runner cannot set Host through fetch, so it names the request host here.
+			request.Host = request.Header.Get("X-Workhorse-Conformance-Host")
+			writable, readOnly := pgxWritable, pgxReadOnly
+			if request.Header.Get("X-Workhorse-Executor") == "database-sql" {
+				writable, readOnly = sqlWritable, sqlReadOnly
+			}
+			if request.Header.Get("X-Workhorse-Conformance-Mode") == "read-only" {
+				readOnly.ServeHTTP(response, request)
+			} else {
+				writable.ServeHTTP(response, request)
+			}
+		})}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		panic(err)
