@@ -280,9 +280,17 @@ answer before the server answers 504 in its place.
 More than four operator mutations executing at once answer 503. A mutation keeps its slot until its
 database transaction commits or rolls back, even after its client disconnects or receives a 504.
 PostgreSQL cancels any statement inside an operator mutation after ten seconds, which rolls the
-mutation back. The three admissions that create tasks — `enqueueTest`, `redriveTask`, and
-`redriveDeadLetters` — additionally refuse once fifty tasks are ready or running,
-so a flood of distinct clients cannot pile work on the demo fleet faster than it drains.
+mutation back.
+
+The three admissions that create tasks — `enqueueTest`, `redriveTask`, and `redriveDeadLetters` —
+share a budget of fifty tasks ready or running, so a flood of distinct clients cannot pile work on
+the demo fleet faster than it drains. The budget counts both tiers. A fast-tier task delayed to a
+future run time does not count, like a scheduled full-tier task. An admission refuses unless the
+budget has room for every task it creates; a feature example that seeds three tasks needs three. A
+bulk redrive is clipped to the room left and returns a continuation cursor for the rest. Those
+admissions take a transaction-scoped advisory lock before counting, so concurrent operator
+admissions cannot overshoot the budget. Work the demo itself starts, such as its schedules, still
+counts against the budget but is not refused by it.
 
 Those guards classify a request by the procedure the dashboard host would dispatch it to, not by
 the literal path, so a trailing slash or a doubled slash cannot carry a mutation past them.

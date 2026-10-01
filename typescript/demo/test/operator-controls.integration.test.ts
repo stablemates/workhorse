@@ -6,7 +6,7 @@
  */
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
-import { Queue } from "@stablemates/workhorse";
+import { Admin, Queue } from "@stablemates/workhorse";
 import { sql } from "drizzle-orm";
 import { readDashboardIdempotencyEvidence } from "@stablemates/workhorse-dashboard-server/wire";
 import {
@@ -16,6 +16,7 @@ import {
   DEMO_OPERATOR_IDEMPOTENCY_SCOPE,
   DEMO_OPERATOR_MAX_PENDING_TASKS,
   DEMO_OPERATOR_STATEMENT_TIMEOUT_MS,
+  DEMO_OPERATOR_WORK_BUDGET_LOCK,
   DEMO_QUEUE,
   DEMO_SCHEDULE_NAMESPACE,
   DEMO_WORKER_CONCURRENCY,
@@ -454,6 +455,200 @@ describe("Workhorse demo", () => {
         audit: { actor: "operator", reason: "drained budget", requestId: "audit-budget-drained" },
       }),
     ).resolves.toMatchObject({ taskId: expect.any(String) });
+  });
+
+  // One bulk redrive used to admit up to a thousand tasks past a budget checked only before it
+  // ran, so forty-nine pending tasks let a single request pile 1,049 on the fleet (SM-1017).
+  it("clips a bulk redrive to the pending-work budget it has left", async () => {
+    const { app } = createTestApplication({ operator: createLocalOperator(database) });
+    const client = dashboardClient(app);
+    const deadLetterQueue = new Queue(pool, "budget-dead-letters");
+    const deadLetterIds = await deadLetterQueue.enqueueMany(
+      Array.from({ length: 3 }, (_, index) => ({
+        type: RECURRING_TASK_TYPE,
+        payload: { source: "budget-dead-letter", index },
+        options: { maxAttempts: 1 },
+      })),
+    );
+    const claimed = await deadLetterQueue.claimMany("budget-test-worker", deadLetterIds.length);
+    for (const task of claimed) {
+      await expect(
+        deadLetterQueue.fail(task, "budget-test-worker", new Error("dead letter")),
+      ).resolves.toBe("failed");
+    }
+    await new Queue(pool, DEMO_QUEUE).enqueueMany(
+      Array.from({ length: DEMO_OPERATOR_MAX_PENDING_TASKS - 1 }, (_, index) => ({
+        type: RECURRING_TASK_TYPE,
+        payload: { source: "budget-fill", index },
+      })),
+    );
+
+    const page = await client.dashboard.redriveDeadLetters({
+      queue: "budget-dead-letters",
+      taskType: null,
+      tags: [],
+      limit: 1_000,
+      cursor: null,
+      audit: { actor: "operator", reason: "large batch", requestId: "audit-budget-clip" },
+    });
+
+    expect(page.results).toHaveLength(1);
+    expect(page.nextCursor).not.toBeNull();
+    await expect(
+      client.dashboard.redriveDeadLetters({
+        queue: "budget-dead-letters",
+        taskType: null,
+        tags: [],
+        limit: 1_000,
+        cursor: page.nextCursor,
+        audit: { actor: "operator", reason: "large batch", requestId: "audit-budget-clip-next" },
+      }),
+    ).rejects.toThrow(/operator-admitted work/);
+    const audit = await database.execute<{ before: unknown }>(sql`
+      SELECT before FROM public.workhorse_demo_audit WHERE request_id = 'audit-budget-clip'
+    `);
+    expect(audit.rows).toEqual([
+      { before: { deadLetters: 3, limit: 1_000, admittedLimit: 1, continued: false } },
+    ]);
+  });
+
+  // Each admission used to count before it wrote with nothing ordering it against the others, so
+  // concurrent admissions could all claim the same free room (SM-1017).
+  it("makes an operator admission count the work a concurrent admission commits", async () => {
+    const { app } = createTestApplication({ operator: createLocalOperator(database) });
+    const client = dashboardClient(app);
+    await new Queue(pool, DEMO_QUEUE).enqueueMany(
+      Array.from({ length: DEMO_OPERATOR_MAX_PENDING_TASKS - 1 }, (_, index) => ({
+        type: RECURRING_TASK_TYPE,
+        payload: { source: "budget-fill", index },
+      })),
+    );
+    // Stand in for a concurrent admission that holds the budget while it takes the last slot.
+    const concurrent = await pool.connect();
+    let admission: Promise<unknown> | undefined;
+    try {
+      await concurrent.query("BEGIN");
+      await concurrent.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+        DEMO_OPERATOR_WORK_BUDGET_LOCK,
+      ]);
+      admission = client.dashboard.enqueueTest({
+        kind: "success",
+        audit: { actor: "operator", reason: "race", requestId: "audit-budget-race" },
+      });
+      admission.catch(() => undefined);
+      const settled = await Promise.race([
+        admission.then(
+          () => "admitted",
+          () => "refused",
+        ),
+        sleep(200).then(() => "waiting"),
+      ]);
+      expect(settled).toBe("waiting");
+      await new Queue(concurrent, DEMO_QUEUE).enqueue(RECURRING_TASK_TYPE, {
+        source: "budget-race",
+      });
+      await concurrent.query("COMMIT");
+    } finally {
+      concurrent.release();
+    }
+
+    await expect(admission).rejects.toThrow(/operator-admitted work/);
+  });
+
+  // The waiting admission's transaction began before the lock wait, and fast-tier enqueue stamps
+  // run_at with clock_timestamp(), so a count against now() saw that work as delayed (SM-1017).
+  it("makes an operator admission count fast-tier work committed while it waits", async () => {
+    const { app } = createTestApplication({ operator: createLocalOperator(database) });
+    const client = dashboardClient(app);
+    await new Admin(pool).setQueueTier("budget-fast-race", "fast", {
+      actor: "budget-test",
+      reason: "exercise the fast-tier budget race",
+      requestId: "budget-fast-race-tier",
+    });
+    await new Queue(pool, "budget-fast-race").enqueueMany(
+      Array.from({ length: DEMO_OPERATOR_MAX_PENDING_TASKS - 1 }, (_, index) => ({
+        type: RECURRING_TASK_TYPE,
+        payload: { source: "budget-fast-race-fill", index },
+      })),
+    );
+    const concurrent = await pool.connect();
+    let admission: Promise<unknown> | undefined;
+    try {
+      await concurrent.query("BEGIN");
+      await concurrent.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+        DEMO_OPERATOR_WORK_BUDGET_LOCK,
+      ]);
+      admission = client.dashboard.enqueueTest({
+        kind: "success",
+        audit: { actor: "operator", reason: "fast race", requestId: "audit-budget-fast-race" },
+      });
+      admission.catch(() => undefined);
+      const settled = await Promise.race([
+        admission.then(
+          () => "admitted",
+          () => "refused",
+        ),
+        sleep(200).then(() => "waiting"),
+      ]);
+      expect(settled).toBe("waiting");
+      await new Queue(concurrent, "budget-fast-race").enqueue(RECURRING_TASK_TYPE, {
+        source: "budget-fast-race",
+      });
+      await concurrent.query("COMMIT");
+    } finally {
+      concurrent.release();
+    }
+
+    await expect(admission).rejects.toThrow(/operator-admitted work/);
+  });
+
+  // A redrive lands in its queue's current tier, and the demo runs fast-tier queues, so the budget
+  // has to see fast-tier work as well (SM-1017).
+  it("counts fast-tier work that is ready or running against the pending-work budget", async () => {
+    const { app } = createTestApplication({ operator: createLocalOperator(database) });
+    const client = dashboardClient(app);
+    await new Admin(pool).setQueueTier("budget-fast", "fast", {
+      actor: "budget-test",
+      reason: "exercise the fast-tier budget",
+      requestId: "budget-fast-tier",
+    });
+    const fastQueue = new Queue(pool, "budget-fast");
+    // A delayed fast-tier task waits as a ready row with a future run_at and claims no worker slot.
+    await fastQueue.enqueueMany(
+      Array.from({ length: 5 }, (_, index) => ({
+        type: RECURRING_TASK_TYPE,
+        payload: { source: "budget-fast-delayed", index },
+        options: { runAt: new Date(Date.now() + 3_600_000) },
+      })),
+    );
+    await fastQueue.enqueueMany(
+      Array.from({ length: DEMO_OPERATOR_MAX_PENDING_TASKS - 1 }, (_, index) => ({
+        type: RECURRING_TASK_TYPE,
+        payload: { source: "budget-fast-fill", index },
+      })),
+    );
+    const tiers = await database.execute<{ state: string; due: boolean; count: number }>(sql`
+      SELECT state, run_at <= now() AS due, count(*)::integer AS count
+        FROM workhorse.fast_task_runtime WHERE queue_name = 'budget-fast'
+       GROUP BY 1, 2 ORDER BY 2
+    `);
+    expect(tiers.rows).toEqual([
+      { state: "ready", due: false, count: 5 },
+      { state: "ready", due: true, count: DEMO_OPERATOR_MAX_PENDING_TASKS - 1 },
+    ]);
+
+    await expect(
+      client.dashboard.enqueueTest({
+        kind: "success",
+        audit: { actor: "operator", reason: "last slot", requestId: "audit-budget-fast-last" },
+      }),
+    ).resolves.toMatchObject({ taskId: expect.any(String) });
+    await expect(
+      client.dashboard.enqueueTest({
+        kind: "success",
+        audit: { actor: "operator", reason: "fast saturated", requestId: "audit-budget-fast-full" },
+      }),
+    ).rejects.toThrow(/operator-admitted work/);
   });
 
   it("pauses a local worker through RPC and audits the in-memory state change", async () => {

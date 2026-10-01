@@ -4433,9 +4433,18 @@ milliseconds, to answer; past it the client receives `504` and the slot stays he
 settles. `runOperatorTransaction` sets a transaction-local `statement_timeout` of
 `DEMO_OPERATOR_STATEMENT_TIMEOUT_MS`, 10,000 milliseconds. That bounds each statement of an
 operator transaction, not the transaction as a whole. Independently of the HTTP layer, every RPC that creates tasks —
-`enqueueTest`, `redriveTask`, and `redriveDeadLetters` — refuses with `TOO_MANY_REQUESTS` once 50
-tasks in the demo database are in `ready` or `active` state. Scheduled and blocked tasks do not
-count, and mutations that act on existing tasks stay available under saturation.
+`enqueueTest`, `redriveTask`, and `redriveDeadLetters` — shares a budget of `DEMO_OPERATOR_MAX_PENDING_TASKS`, 50 tasks. `assertDemoOperatorWorkBudget` counts
+`task_runtime` rows in `ready` or `active` state, plus `fast_task_runtime` rows that are `active`, or
+`ready` with `run_at <= statement_timestamp()`. A fast-tier task delayed into the future does not
+count. The count uses `statement_timestamp()` because `now()` predates the lock wait, and fast-tier
+work committed during that wait would otherwise look delayed. An RPC
+refuses with `TOO_MANY_REQUESTS` unless the budget has room for every task it creates; a feature
+example of `enqueueTest` seeds up to three. `redriveDeadLetters` clips its `limit` to the remaining
+room and returns a continuation cursor, and the audit row records `admittedLimit` beside `limit`.
+Each admission first takes `pg_advisory_xact_lock(hashtext('workhorse-demo:operator-work-budget'))`,
+so concurrent admissions count each other's committed work and cannot overshoot the budget. Scheduled
+and blocked tasks do not count, and mutations that act on existing tasks stay available under
+saturation.
 
 `public.workhorse_demo_audit` retains rows for seven days. The demo server deletes the oldest 1,000
 expired rows once at startup and once per minute, using the `(occurred_at, id)` index. One pass can

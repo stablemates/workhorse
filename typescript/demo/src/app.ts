@@ -125,26 +125,72 @@ export * from "./constants.js";
  */
 export const DEMO_OPERATOR_MAX_PENDING_TASKS = 50;
 
+/** The advisory lock that orders task-creating operator admissions against the budget. */
+export const DEMO_OPERATOR_WORK_BUDGET_LOCK = "workhorse-demo:operator-work-budget";
+
 /**
- * Refuse a new operator-admitted task while the demo's pending-work budget is saturated.
+ * Refuse operator-admitted work that would exceed the demo's pending-work budget, and return the
+ * capacity left before it.
  *
  * Every RPC that creates tasks — `enqueueTest`, `redriveTask`, and `redriveDeadLetters` — checks
- * the same ceiling. The count is approximate under concurrency, and the HTTP-layer mutation
- * guard bounds how far a wave can overshoot it.
+ * the same ceiling. Ready and active tasks count in both tiers, because a redrive lands in its
+ * queue's current tier and the demo runs one queue per language on the fast tier. A fast-tier
+ * retry waits as a ready row with a future `run_at`; it competes for no worker slot yet, so it is
+ * excluded like the full tier's scheduled state.
+ *
+ * The caller's transaction holds a lock until it ends, so concurrent admissions take turns: each
+ * counts the work the previous one committed instead of claiming the same free room. The count
+ * compares `run_at` with `statement_timestamp()`, not `now()`: `now()` is fixed when the
+ * transaction began, before the lock wait, so fast-tier work committed during that wait would look
+ * delayed and escape the count.
  */
 async function assertDemoOperatorWorkBudget(
   executor: Pick<DemoDatabase, "execute">,
-): Promise<void> {
+  requested = 1,
+): Promise<number> {
+  await executor.execute(
+    sql`SELECT pg_advisory_xact_lock(hashtext(${DEMO_OPERATOR_WORK_BUDGET_LOCK}))`,
+  );
   const result = await executor.execute<{ pending: number }>(sql`
-    SELECT count(*)::integer AS pending
-      FROM workhorse.task_runtime
-     WHERE state IN ('ready', 'active')
+    SELECT (SELECT count(*)::integer
+              FROM workhorse.task_runtime
+             WHERE state IN ('ready', 'active'))
+         + (SELECT count(*)::integer
+              FROM workhorse.fast_task_runtime
+             WHERE state = 'active'
+                   OR (state = 'ready' AND run_at <= statement_timestamp())) AS pending
   `);
-  if ((result.rows[0]?.pending ?? 0) >= DEMO_OPERATOR_MAX_PENDING_TASKS) {
+  const remaining = DEMO_OPERATOR_MAX_PENDING_TASKS - (result.rows[0]?.pending ?? 0);
+  if (remaining < requested) {
     throw new ORPCError("TOO_MANY_REQUESTS", {
       message:
         "The demo is already running its limit of operator-admitted work; try again once the backlog drains",
     });
+  }
+  return remaining;
+}
+
+/**
+ * An Admin whose bulk redrive admits no more tasks than the pending-work budget has left.
+ *
+ * A clipped page still returns its continuation cursor, so the caller can resume once the backlog
+ * drains instead of losing its place.
+ */
+class BudgetedRedriveAdmin extends Admin {
+  constructor(
+    database: ConstructorParameters<typeof Admin>[0],
+    private readonly capacity: number,
+  ) {
+    super(database);
+  }
+
+  override redriveMany(
+    filter: Parameters<Admin["redriveMany"]>[0],
+    audit: Parameters<Admin["redriveMany"]>[1],
+    options: Parameters<Admin["redriveMany"]>[2] = {},
+  ): ReturnType<Admin["redriveMany"]> {
+    const limit = Math.min(options.limit ?? this.capacity, this.capacity);
+    return super.redriveMany(filter, audit, { ...options, limit });
   }
 }
 
@@ -1131,7 +1177,13 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
       if (kind === "redrive") return redriveLatestDeadLetter(database, audit);
       const target = kind === "feature" ? `task:feature:${feature}` : `task:${kind}`;
       return runOperatorTransaction(database, async (transaction) => {
-        await assertDemoOperatorWorkBudget(transaction);
+        // A batch feature example accepts its whole member group at once, so it needs room for all.
+        await assertDemoOperatorWorkBudget(
+          transaction,
+          kind === "feature" && feature !== undefined
+            ? (DEMO_FEATURE_MENU_EXAMPLES[feature].seedCount ?? 1)
+            : 1,
+        );
         const workhorse = createDrizzleAdapter(transaction, {
           defaultQueue: DEMO_QUEUE,
           queueOptions: DEMO_QUEUE_OPTIONS,
@@ -1218,8 +1270,9 @@ export function createLocalOperatorControllers(database: DemoDatabase) {
       runOperatorTransaction(database, async (transaction) => {
         // Redrives are the only controller actions that admit new tasks; the rest act on existing
         // ones, so they stay available while the budget is saturated (canceling even drains it).
+        let capacity = DEMO_OPERATOR_MAX_PENDING_TASKS;
         if (action.kind === "redriveTask" || action.kind === "redriveDeadLetters") {
-          await assertDemoOperatorWorkBudget(transaction);
+          capacity = await assertDemoOperatorWorkBudget(transaction);
         }
         let before: Json;
         let target: string;
@@ -1305,22 +1358,25 @@ export function createLocalOperatorControllers(database: DemoDatabase) {
           }
           case "redriveDeadLetters": {
             const { queue, taskType, tags } = action.filter;
-            const selectedTags = [...tags];
+            // Drizzle expands a bare array into a parenthesized list, which is invalid SQL when
+            // the filter selects no tags; an ARRAY constructor stays well-formed when empty.
+            const selectedTags = textArrayValue(tags);
             const rows = await transaction.execute<{ dead_letters: number }>(sql`
               SELECT count(*)::integer AS dead_letters
-                FROM workhorse.task_outcome o
+                FROM (SELECT task_id FROM workhorse.task_outcome WHERE state = 'failed'
+                      UNION ALL
+                      SELECT task_id FROM workhorse.fast_task_outcome WHERE state = 'failed') o
                 JOIN workhorse.task j ON j.id = o.task_id
-               WHERE o.state = 'failed'
-                 AND (${queue}::text IS NULL OR j.queue_name = ${queue})
+               WHERE (${queue}::text IS NULL OR j.queue_name = ${queue})
                  AND (${taskType}::text IS NULL OR j.task_type = ${taskType})
-                 AND (cardinality(${selectedTags}::text[]) = 0
-                      OR j.tags @> ${selectedTags}::text[])
+                 AND (cardinality(${selectedTags}) = 0 OR j.tags @> ${selectedTags})
             `);
             // The whole selection, not the page: the audit row then shows how much of the backlog
-            // this bounded request could reach.
+            // this bounded request could reach, and how far the budget clipped it.
             before = {
               deadLetters: rows.rows[0]?.dead_letters ?? 0,
               limit: action.limit,
+              admittedLimit: Math.min(action.limit, capacity),
               continued: action.cursor !== null,
             };
             target = `dead-letters:${queue ?? "*"}/${taskType ?? "*"}`;
@@ -1341,7 +1397,7 @@ export function createLocalOperatorControllers(database: DemoDatabase) {
           queueOptions: DEMO_QUEUE_OPTIONS,
         });
         const result = await operation({
-          admin: new Admin(workhorse.database),
+          admin: new BudgetedRedriveAdmin(workhorse.database, capacity),
           queue: workhorse.queue,
         });
         const status = operatorAuditStatus(action, result);
