@@ -49,7 +49,7 @@ sends another batch while the first is still out. That keeps slots full without 
 per task. The worker never claims more tasks than it has slots, because each claimed task holds a
 lease. It stops asking when its slots are full or the queue has nothing left. One worker
 timer submits every running lease in one heartbeat batch. Each accepted result renews its
-task. Every task still has its own abort signal and final write, so cancellation and settlement
+task. A task stays in that batch after its handler returns, until its final write is done. Every task still has its own abort signal and final write, so cancellation and settlement
 remain independent.
 
 Concurrency here is per worker. More workers add more process slots. Use a

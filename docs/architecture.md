@@ -509,8 +509,10 @@ wait raises a new suspension instance, so a suspended handler's frames are relea
 One locked attempt-outcome arbiter accepts the first lifecycle outcome. Cancellation calls
 `acknowledge_cancel_v1` under the claimed worker and fence even if the handler catches the signal
 and returns. Deadline and timeout transitions remain owned by `expire_owned_v1`. Lease loss raises
-`StaleLeaseError` and prevents completion or failure. The worker stops and joins the background
-thread before final settlement. A lost lease ends only that attempt: the handler outcome records
+`StaleLeaseError` and prevents completion or failure. Supervision stays active through result
+preparation and the final fenced write. After settlement finishes or the attempt exits
+exceptionally, the outer `finally` in `_execute_claimed_task_within_span` removes the heartbeat
+registration, signals the expiration thread to stop, and joins it. A lost lease ends only that attempt: the handler outcome records
 `lease_lost`, and `run()` and `run_once()` keep dispatching because lease recovery owns the task.
 
 `run_once()` refills freed slots until one empty queue sweep, drains every claimed task, and returns
@@ -3164,6 +3166,27 @@ watchdog submits `lease_expired`, stops the heartbeat, and aborts the handler's 
 context. Settlement then records `lease_lost` without calling `fail_v1`. A heartbeat call that never
 settles blocks later rounds, because rounds do not overlap, so the watchdog is what bounds how long
 a handler outlives its lease.
+
+A TypeScript, Python, or Go task stays in the heartbeat round, and keeps its watchdog, until its
+final transition is written. Result validation and the fenced write can therefore wait on the pool
+past a lease without handing a finished task to recovery, because every accepted renewal still
+extends the lease. The SDKs differ in what a refusal does once the handler has returned.
+
+- TypeScript `TaskAttempt` has no handler-returned state. A `stale` renewal or a lapsed watchdog
+  submits `lease_expired`, and a due deadline or attempt timeout calls `expire_owned_v1` in the
+  background.
+- Go `superviseOwnership` and Python `_run_supervised_attempt` mark when the handler returned. After
+  that, a refused renewal, a lapsed watchdog, or a due expiration only stops renewing. The fenced
+  completion or failure then meets the same verdict in PostgreSQL. `fail_v1` settles a due deadline
+  or attempt timeout itself. `complete_v1` and `fast_complete_many_v1` refuse it, along with a
+  requested cancellation, without writing. Python `_reconcile_rejected_completion` then calls
+  `expire_owned_v1` under the attempt's fence: it writes `deadline_exceeded` or `timeout_exceeded`,
+  or acknowledges a `cancel_requested` answer with `acknowledge_cancel_v1`. Go
+  `reconcileRejectedSettlement` does the same. A `stale` or `not_due` answer leaves the task to
+  recovery, and Python raises `StaleLeaseError`.
+
+Python ends supervision in one outer `finally` in `_execute_claimed_task_within_span`, on every
+path, including a `BaseException` from the handler.
 
 TypeScript workers send heartbeat rounds on one reserved pooled connection, so handlers that hold
 every other connection cannot starve lease renewal. The pool is the queryable's attached pool, else

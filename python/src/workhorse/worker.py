@@ -2782,6 +2782,17 @@ class Worker:
         # that lands after the settlement. They take turns, so a stale answer caused by this
         # attempt's own settlement arrives after its outcome and cannot replace it.
         settlement_lock = Lock()
+        # Renewal outlives the handler: result validation and the fenced final write can wait on
+        # the executor past a whole lease, and a lapsed lease would hand the finished task to
+        # recovery. Once the handler has returned, a refused renewal, a lapsed watchdog, or an
+        # expiry only stops renewing. The fenced settlement then meets the same verdict in
+        # PostgreSQL and reconciles it, so the attempt still ends with one transition.
+        handler_running = True
+
+        def handler_returned() -> None:
+            nonlocal handler_running
+            with settlement_lock:
+                handler_running = False
 
         def settle_expiration() -> object:
             status = self._expire_owned_task(task, handler_parent_context)
@@ -2791,14 +2802,21 @@ class Worker:
 
         def settle_heartbeat_status(status: object) -> None:
             with settlement_lock:
+                if not handler_running:
+                    if status != "accepted":
+                        unregister_heartbeat()
+                    return
                 if status in {"deadline_exceeded", "timeout_exceeded"}:
                     settle_expiration()
                     return
                 deliver_status(status)
 
         def expire_lease_locally() -> None:
-            arbiter.submit("lease_expired")
-            unregister_heartbeat()
+            with settlement_lock:
+                unregister_heartbeat()
+                if not handler_running:
+                    return
+                arbiter.submit("lease_expired")
             cancellation._cancel(StaleLeaseError(task.id))
 
         def watch_expiration() -> None:
@@ -2820,6 +2838,9 @@ class Worker:
                     return
                 try:
                     with settlement_lock:
+                        if not handler_running:
+                            unregister_heartbeat()
+                            return
                         status = settle_expiration()
                     if status == "not_due":
                         expiration_retry_at = monotonic() + 0.005
@@ -2835,6 +2856,40 @@ class Worker:
         )
         expiration_thread = Thread(target=watch_expiration, name=f"workhorse-expiration-{task.id}")
         expiration_thread.start()
+        try:
+            self._run_supervised_attempt(
+                task,
+                handler,
+                arbiter,
+                cancellation,
+                heartbeat_error,
+                handler_returned,
+                span_outcome,
+                span_errors,
+            )
+        finally:
+            # The one place this attempt leaves supervision, on every path: a written settlement,
+            # an error, a BaseException such as SystemExit, cancellation, expiry, or an accepted
+            # durable suspension. Joining the non-daemon expiration thread lets the process exit.
+            unregister_heartbeat()
+            heartbeat_stop.set()
+            expiration_thread.join()
+
+    def _run_supervised_attempt(
+        self,
+        task: ClaimedTask,
+        handler: Handler,
+        arbiter: _AttemptOutcomeArbiter,
+        cancellation: CancellationToken,
+        heartbeat_error: list[BaseException],
+        handler_returned: Callable[[], None],
+        span_outcome: dict[str, str],
+        span_errors: list[str],
+    ) -> None:
+        """Run the handler and write the attempt's final transition while its lease renews.
+
+        The caller owns heartbeat supervision and releases it once this returns or raises.
+        """
         with self._state_lock:
             fast_tier = task.id in self._fast_task_ids
         durability = _HandlerDurability(
@@ -2847,19 +2902,8 @@ class Worker:
             self._child_payload_validators,
         )
 
-        ownership_released = False
-
-        def release_ownership() -> None:
-            nonlocal ownership_released
-            if ownership_released:
-                return
-            ownership_released = True
-            unregister_heartbeat()
-            heartbeat_stop.set()
-            expiration_thread.join()
-
         def finish_ownership_lifecycle(cause: Exception | None = None) -> bool:
-            release_ownership()
+            handler_returned()
             if self._finish_lifecycle_outcome(task, arbiter.outcome):
                 return True
             if heartbeat_error:
@@ -2886,10 +2930,6 @@ class Worker:
             )
             arbiter.submit(failure_outcome)
             return
-        finally:
-            # A BaseException such as SystemExit skips both handlers above. Stop renewing the lease
-            # and join the non-daemon expiration thread anyway, or the process cannot exit.
-            release_ownership()
         if finish_ownership_lifecycle():
             if arbiter.outcome in {"suspended_for_wait", "suspended_for_child"}:
                 _emit_log(
@@ -2930,13 +2970,31 @@ class Worker:
                 },
             )
         if accepted is not True:
-            if self._acknowledge_cancel(task):
-                arbiter.submit("cancelled")
-                return
-            arbiter.submit("lease_expired")
-            raise StaleLeaseError(task.id)
+            self._reconcile_rejected_completion(task, arbiter)
+            return
         _record_completion(task)
         arbiter.submit("completed")
+
+    def _reconcile_rejected_completion(
+        self, task: ClaimedTask, arbiter: _AttemptOutcomeArbiter
+    ) -> None:
+        """Settle the boundary that made PostgreSQL refuse this attempt's completion.
+
+        A completion refuses a requested cancellation, a due deadline, or a due attempt timeout
+        without writing it. Once the handler has returned, renewal no longer settles them, so the
+        attempt settles them here under its own fence instead of leaving the task to recovery. Only
+        a lost lease remains an error.
+        """
+        status = self._expire_owned_task(task, _current_context())
+        outcome = _outcome_for_status(status, neutral=frozenset({"not_due"}))
+        if outcome == "cancelled" and self._acknowledge_cancel(task):
+            arbiter.submit("cancelled")
+            return
+        if outcome == "deadline_exceeded" or outcome == "attempt_timeout":
+            arbiter.submit(outcome)
+            return
+        arbiter.submit("lease_expired")
+        raise StaleLeaseError(task.id)
 
     def _finish_lifecycle_outcome(self, task: ClaimedTask, outcome: _AttemptOutcome | None) -> bool:
         if outcome in {"suspended_for_wait", "suspended_for_child"}:
