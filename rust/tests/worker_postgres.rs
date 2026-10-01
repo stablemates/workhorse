@@ -1097,6 +1097,61 @@ async fn cancelling_one_batch_member_keeps_the_others_outcome() {
     running.await.unwrap().unwrap();
 }
 
+/// A batch callback can panic before it returns its future or while that future is polled. Both
+/// panics fail every member with the panic detail and record the shared failure.
+#[tokio::test]
+async fn a_panicking_batch_callback_fails_every_member_with_failure_evidence() {
+    let Some(harness) = harness("worker_batch_panic").await else { return };
+    let once = || EnqueueOptions { max_attempts: 1, ..Default::default() };
+    let mut tasks = Vec::new();
+    for task_type in ["rust.batch.eager", "rust.batch.polled"] {
+        for index in 0..2 {
+            tasks.push((task_type, harness.enqueue(task_type, json!(index), once()).await));
+        }
+    }
+    let worker = harness.worker(WorkerOptions { concurrency: 4, ..options() });
+    let batch = BatchOptions { max_size: 2, linger: Duration::from_millis(500) };
+    worker.handle_batch("rust.batch.eager", batch, |_: Vec<BatchItem<i64>>| {
+        if true {
+            panic!("eager batch panic");
+        }
+        async { Vec::<BatchResult<i64>>::new() }
+    });
+    worker.handle_batch("rust.batch.polled", batch, |_: Vec<BatchItem<i64>>| async {
+        if true {
+            panic!("polled batch panic");
+        }
+        Vec::<BatchResult<i64>>::new()
+    });
+    let (stop, running) = run(&worker);
+    for &(_, task) in &tasks {
+        harness.wait_for(task, TaskState::Failed).await;
+    }
+    stop.send(()).unwrap();
+    running.await.unwrap().unwrap();
+    let observer = harness.database.connect().await;
+    for (task_type, task) in tasks {
+        let error = harness.admin.get_task(task).await.unwrap().unwrap().error.unwrap();
+        let detail = task_type.strip_prefix("rust.batch.").unwrap();
+        assert_eq!(error["name"], "HandlerPanic", "{task_type}");
+        assert_eq!(
+            error["message"],
+            format!("batch handler for {task_type} panicked: {detail} batch panic"),
+            "{task_type}"
+        );
+        let failures: i64 = observer
+            .query_one(
+                "SELECT count(*) FROM workhorse.task_event
+                  WHERE task_id = $1 AND event_type = 'batch_failed'",
+                &[&task],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(failures, 1, "{task_type} recorded no batch failure");
+    }
+}
+
 #[tokio::test]
 async fn maintenance_fires_due_schedules_in_its_namespaces() {
     let Some(harness) = harness("worker_schedules").await else { return };
