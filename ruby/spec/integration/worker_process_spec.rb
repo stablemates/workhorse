@@ -163,6 +163,27 @@ RSpec.describe "Worker processes against PostgreSQL" do
       expect(wait_status(pid, 5).exitstatus).to eq(128 + Signal.list.fetch("INT"))
     end
 
+    it "still exits on a second signal after the first signal's stop raised" do
+      queue.enqueue("slow", {"seconds" => 30})
+      writer = @writer
+      pid = fork_process do
+        worker = build_worker(shutdown_grace: 60)
+        worker.define_singleton_method(:stop) do
+          super()
+          writer.puts("stop #{Process.pid}")
+          writer.flush
+          raise "stop failed"
+        end
+        W.run_worker_process(worker)
+      end
+      read_line
+      expect(read_line).to eq("running #{pid}")
+      Process.kill("TERM", pid)
+      expect(read_line).to eq("stop #{pid}")
+      Process.kill("TERM", pid)
+      expect(wait_status(pid, 5).exitstatus).to eq(128 + Signal.list.fetch("TERM"))
+    end
+
     it "exits 1 and names the error when the run fails" do
       pid = fork_process do
         worker = build_worker

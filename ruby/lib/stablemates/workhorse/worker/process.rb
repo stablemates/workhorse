@@ -52,13 +52,18 @@ module Stablemates
         end
       end
 
-      # Yields each signal number and its running count on a relay thread.
+      # Yields each signal number and its running count on a relay thread. An error the block
+      # raises goes to standard error, and the thread keeps reading, so a later signal still runs.
       def start(&block)
         @thread = Thread.new do
           count = 0
           while (byte = next_signal)
             count += 1
-            block.call(byte.ord, count)
+            begin
+              block.call(byte.ord, count)
+            rescue => e
+              warn("#{e.class}: #{e.message}") rescue nil # standard:disable Style/RescueModifier
+            end
           end
         end
         @thread.name = "workhorse-signals"

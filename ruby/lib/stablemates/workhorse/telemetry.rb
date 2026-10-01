@@ -37,6 +37,8 @@ module Stablemates
       private_constant :INSTRUMENTS, :LEVELS
 
       @instruments = Concurrent::Map.new
+      @failed_loggers = ObjectSpace::WeakKeyMap.new
+      @failed_loggers_lock = Mutex.new
 
       module_function
 
@@ -110,12 +112,25 @@ module Stablemates
       end
 
       # Logs one named event through the caller's Logger. +logger+ may be nil.
+      #
+      # A logger that raises never reaches the caller, because lifecycle code such as lease renewal
+      # and shutdown logs on its way. The first failure of each logger goes to standard error
+      # instead, which never calls back into that logger.
       def log(logger, severity, event, body, attributes = nil)
         return if logger.nil?
 
         logger.add(LEVELS.fetch(severity), nil, INSTRUMENTATION_NAME) do
           (attributes.nil? || attributes.empty?) ? "#{event}: #{body}" : "#{event}: #{body} #{JSON.generate(attributes)}"
         end
+      rescue => e
+        report_log_failure(logger, event, e)
+      end
+
+      def report_log_failure(logger, event, error)
+        first = @failed_loggers_lock.synchronize { @failed_loggers.key?(logger) ? false : (@failed_loggers[logger] = true) }
+        Kernel.warn("workhorse: logger raised #{error.class} while logging #{event}: #{error.message}") if first
+      rescue
+        nil
       end
 
       def propagator = ::OpenTelemetry::Trace::Propagation::TraceContext.text_map_propagator
