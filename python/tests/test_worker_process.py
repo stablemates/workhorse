@@ -116,8 +116,10 @@ def test_signal_between_handler_installation_and_worker_run_is_not_lost() -> Non
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process signals are required")
-def test_signal_while_main_thread_holds_worker_state_lock_still_drains() -> None:
-    process = _start_fixture("state-lock", 30_000)
+@pytest.mark.parametrize("mode", ["state-lock", "state-lock-late-wait"])
+def test_signal_while_main_thread_holds_worker_state_lock_still_drains(mode: str) -> None:
+    # The late-wait mode delivers the signal before the main thread starts waiting.
+    process = _start_fixture(mode, 30_000)
 
     process.send_signal(signal.SIGTERM)
 

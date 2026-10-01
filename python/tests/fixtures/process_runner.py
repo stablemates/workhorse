@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import signal
 import sys
+import time
 from threading import Event, Lock
 
 from workhorse import run_worker_process
@@ -16,6 +17,7 @@ class FixtureWorker:
     def __init__(self, *, mode: str) -> None:
         self._mode = mode
         self._finished = Event()
+        self._stop_entered = Event()
         self._state_lock = Lock()
         self._stop_version = 0
         self._ready = False
@@ -30,10 +32,14 @@ class FixtureWorker:
             return self._stop_version
 
     def _run_continuously(self, requested_stop_version: int) -> None:
-        if self._mode == "state-lock":
+        if self._mode.startswith("state-lock"):
             with self._state_lock:
                 self._announce_ready()
-                signal.pause()
+                if self._mode == "state-lock-late-wait":
+                    time.sleep(0.2)
+                # Wait for stop() itself, not for the signal: a signal handled before this
+                # wait would otherwise leave the main thread holding the lock forever.
+                self._stop_entered.wait()
             self._finished.wait()
             return
         self._announce_ready()
@@ -50,6 +56,7 @@ class FixtureWorker:
         self._run_continuously(self._stop_version_snapshot())
 
     def stop(self) -> None:
+        self._stop_entered.set()
         with self._state_lock:
             self._stop_version += 1
         _emit("stopping")
