@@ -1,11 +1,10 @@
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import {
   loadDashboardConformanceFixtures,
   verifyDashboardConformanceFixtures,
@@ -15,35 +14,36 @@ import { createDatabaseTestHarness } from "../../core/test/support/db.js";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const database = createDatabaseTestHarness(import.meta.url);
-let server: ChildProcessWithoutNullStreams | undefined;
-let buildDirectory: string | undefined;
+let scope: Scope | undefined;
+
+beforeEach(() => {
+  scope = new Scope();
+});
 
 afterEach(async () => {
-  if (server && server.exitCode === null && server.signalCode === null) {
-    const exited = once(server, "exit");
-    server.kill("SIGTERM");
-    await exited;
-  }
-  server = undefined;
-  if (buildDirectory) await rm(buildDirectory, { recursive: true, force: true });
-  buildDirectory = undefined;
+  const failures = await scope!.close();
+  scope = undefined;
   await database.teardown();
+  if (failures.length > 0) throw new AggregateError(failures, "Go conformance cleanup failed");
 });
 
 it("passes dashboard/v1 through the Go embedded backend", { timeout: 120_000 }, async () => {
+  // A test that times out keeps running after afterEach, so it owns resources through its scope.
+  const owner = scope!;
   await database.setup();
   const { fixtures } = await loadDashboardConformanceFixtures(repository);
+  const directory = await mkdtemp(path.join(tmpdir(), "workhorse-go-conformance-"));
+  await owner.own(() => rm(directory, { recursive: true, force: true }));
   // `go run` exits on SIGTERM without forwarding it, so spawn the built server to signal it directly.
-  buildDirectory = await mkdtemp(path.join(tmpdir(), "workhorse-go-conformance-"));
-  const binary = path.join(buildDirectory, "conformance");
-  await promisify(execFile)("go", ["build", "-o", binary, "./dashboard/cmd/conformance"], {
-    cwd: path.join(repository, "go"),
-  });
+  const binary = path.join(directory, "conformance");
+  await build(owner, binary, directory);
+  owner.assertOpen();
   // The server exits when stdin closes, which also covers a runner that dies before afterEach.
-  server = spawn(binary, [], {
+  const server = spawn(binary, [], {
     env: { ...process.env, DATABASE_URL: database.databaseUrl },
     stdio: ["pipe", "pipe", "pipe"],
   });
+  await owner.own(() => stopServer(server));
   const address = await firstLine(server);
   const report = await verifyDashboardConformanceFixtures(database.pool, repository, {
     async handle(mode: DashboardConformanceMode, request: Request) {
@@ -174,6 +174,79 @@ async function rpc(
   });
   expect(response.status).toBe(200);
   return (await response.json()).json;
+}
+
+/** Cleanups for one test, run newest first; a resource created after close is released at once. */
+class Scope {
+  readonly #cleanups: (() => Promise<unknown>)[] = [];
+  #closed = false;
+
+  assertOpen() {
+    if (this.#closed) throw new Error("The test was torn down before it finished starting");
+  }
+
+  async own(cleanup: () => Promise<unknown>) {
+    if (!this.#closed) {
+      this.#cleanups.push(cleanup);
+      return;
+    }
+    await cleanup();
+    this.assertOpen();
+  }
+
+  async close() {
+    this.#closed = true;
+    const failures: unknown[] = [];
+    for (const cleanup of this.#cleanups.splice(0).toReversed()) {
+      await cleanup().catch((error: unknown) => failures.push(error));
+    }
+    return failures;
+  }
+}
+
+async function build(owner: Scope, binary: string, directory: string) {
+  // The go command compiles in child processes, so it leads its own process group to be stopped whole.
+  const child = spawn("go", ["build", "-o", binary, "./dashboard/cmd/conformance"], {
+    cwd: path.join(repository, "go"),
+    detached: true,
+    env: { ...process.env, GOTMPDIR: directory },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  let errors = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    errors += chunk.toString();
+  });
+  let done = false;
+  const finished = settled(child).finally(() => {
+    done = true;
+  });
+  await owner.own(async () => {
+    if (child.pid !== undefined && !done) process.kill(-child.pid, "SIGKILL");
+    await finished;
+  });
+  const code = await finished;
+  if (code !== 0) throw new Error(`go build exited with ${code}: ${errors.trim()}`);
+}
+
+/** Resolves once the process and every holder of its stderr are gone, or it never started. */
+function settled(child: ChildProcess): Promise<number | null> {
+  return new Promise((resolve) => {
+    child.once("error", () => resolve(null));
+    child.once("close", (code) => resolve(code));
+  });
+}
+
+async function stopServer(child: ChildProcessWithoutNullStreams) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = once(child, "exit");
+  child.kill("SIGTERM");
+  // A handler stuck in a query can hold graceful shutdown open, so bound it.
+  const deadline = setTimeout(() => child.kill("SIGKILL"), 5_000);
+  try {
+    await exited;
+  } finally {
+    clearTimeout(deadline);
+  }
 }
 
 function firstLine(process: ChildProcessWithoutNullStreams): Promise<string> {
