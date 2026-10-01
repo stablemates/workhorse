@@ -2,10 +2,74 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { SQL_STATEMENTS } from "../src/queue/sql-catalogue.generated.js";
-import { raceBudgetAdmission } from "./support/budget-race.js";
+import {
+  gateBudgetCharge,
+  raceBudgetAdmission,
+  waitForStatementOnAdvisoryLock,
+} from "./support/budget-race.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { pool, queue, admin } = createIntegrationTestContext(import.meta.url);
+
+type BudgetDefinition = Parameters<typeof queue.syncBudgets>[1][number];
+
+/**
+ * Parks a three-task claim of one budget between its room and its charge, starts `change` against the
+ * budget, and reports the budget, whether the change finished before the claim charged, the claim's
+ * size, and the bucket.
+ */
+async function changeBudgetDuringCharge(
+  initial: BudgetDefinition,
+  change: (budget: string) => Promise<unknown>,
+): Promise<{ budget: string; changedUnderClaim: boolean; claimed: number; tokens: number | null }> {
+  const budget = `budget-sync-${randomUUID()}`;
+  const queueName = `budget-sync-queue-${randomUUID()}`;
+  await queue.syncBudgets("budget-sync", [{ ...initial, name: budget }]);
+  await queue.enqueueMany(
+    [1, 2, 3].map((ordinal) => ({
+      type: "synced",
+      payload: { ordinal },
+      options: { queue: queueName, budget },
+    })),
+  );
+  const gate = await gateBudgetCharge(pool, queueName);
+  // Both operations outlive a failed assertion, so cleanup opens the gate and joins them before the
+  // next test resets the database.
+  let claim: Promise<unknown[]> | undefined;
+  let changed: Promise<unknown> | undefined;
+  try {
+    claim = queue.claimMany("sync-worker", 3, { queue: queueName });
+    claim.catch(() => undefined);
+    await waitForStatementOnAdvisoryLock(pool, "claim_many_v1", () => false);
+
+    const state = { settled: false };
+    changed = change(budget).finally(() => {
+      state.settled = true;
+    });
+    changed.catch(() => undefined);
+    await waitForStatementOnAdvisoryLock(pool, "sync_budgets_v1", () => state.settled);
+    // A change that finished here rewrote the budget between the claim's room and its charge.
+    const changedUnderClaim = state.settled;
+
+    await gate.open();
+    const claimed = await claim;
+    await changed;
+    const bucket = await pool.query<{ tokens: string }>(
+      "SELECT tokens FROM workhorse.budget_bucket WHERE budget_name = $1",
+      [budget],
+    );
+    return {
+      budget,
+      changedUnderClaim,
+      claimed: claimed.length,
+      tokens: bucket.rows[0] === undefined ? null : Number(bucket.rows[0].tokens),
+    };
+  } finally {
+    await gate.open();
+    await Promise.allSettled([claim, changed]);
+    await gate.remove();
+  }
+}
 
 describe("named budgets", () => {
   it("synchronizes, lists, prunes, and validates budgets per namespace", async () => {
@@ -339,5 +403,101 @@ describe("named budgets", () => {
       }
     }
     expect(await queue.budgetStatuses([budget])).toMatchObject([{ name: budget, active: 0 }]);
+  });
+
+  describe("synchronization during a claim", () => {
+    it("waits for the claim before lowering a burst the claim already admitted against", async () => {
+      const outcome = await changeBudgetDuringCharge(
+        { name: "", rate: { limit: 1, intervalMs: 60_000, burst: 5 } },
+        (budget) =>
+          queue.syncBudgets("budget-sync", [
+            { name: budget, rate: { limit: 1, intervalMs: 60_000, burst: 1 } },
+          ]),
+      );
+      // The claim charged the burst it read: five tokens less three starts.
+      expect(outcome).toMatchObject({ changedUnderClaim: false, claimed: 3, tokens: 2 });
+    });
+
+    it("waits for the claim before adding a rate limit", async () => {
+      const outcome = await changeBudgetDuringCharge({ name: "", maxActive: 10 }, (budget) =>
+        queue.syncBudgets("budget-sync", [
+          { name: budget, maxActive: 10, rate: { limit: 1, intervalMs: 60_000, burst: 1 } },
+        ]),
+      );
+      // The claim admitted without a rate, so it charged no bucket.
+      expect(outcome).toMatchObject({ changedUnderClaim: false, claimed: 3, tokens: null });
+    });
+
+    it("waits for the claim before removing a rate limit", async () => {
+      const outcome = await changeBudgetDuringCharge(
+        { name: "", rate: { limit: 1, intervalMs: 60_000, burst: 5 } },
+        (budget) => queue.syncBudgets("budget-sync", [{ name: budget, maxActive: 10 }]),
+      );
+      // The claim admitted against the rate, so it charged the bucket before the rate went away.
+      expect(outcome).toMatchObject({ changedUnderClaim: false, claimed: 3, tokens: 2 });
+    });
+
+    it("waits for the claim before pruning a budget, and a recreated budget starts fresh", async () => {
+      // The empty synchronization names no budget, so only the lock on the pruned name can make it
+      // wait for the claim.
+      const { budget, ...outcome } = await changeBudgetDuringCharge(
+        { name: "", rate: { limit: 1, intervalMs: 60_000, burst: 5 } },
+        () => queue.syncBudgets("budget-sync", []),
+      );
+      // The claim charged its bucket, then pruning deleted the budget and the bucket with it.
+      expect(outcome).toEqual({ changedUnderClaim: false, claimed: 3, tokens: null });
+      expect(await queue.listBudgets([budget])).toEqual([]);
+
+      await queue.syncBudgets("budget-sync", [
+        { name: budget, rate: { limit: 1, intervalMs: 60_000, burst: 1 } },
+      ]);
+      expect(await queue.listBudgets([budget])).toMatchObject([
+        { name: budget, rate: { limit: 1, intervalMs: 60_000, burst: 1 } },
+      ]);
+      const bucket = await pool.query(
+        "SELECT tokens FROM workhorse.budget_bucket WHERE budget_name = $1",
+        [budget],
+      );
+      expect(bucket.rows).toEqual([]);
+    });
+
+    it("never deadlocks overlapping multi-budget synchronizations and claims", async () => {
+      const suffix = randomUUID();
+      const budgets = ["a", "b", "c"].map((letter) => `budget-overlap-${letter}-${suffix}`);
+      const queues = [1, 2].map((ordinal) => `budget-overlap-queue-${ordinal}-${suffix}`);
+      const define = (order: readonly number[], burst: number) =>
+        order.map((index) => ({
+          name: budgets[index]!,
+          maxActive: 100,
+          rate: { limit: 1_000, intervalMs: 1_000, burst },
+        }));
+      await queue.syncBudgets(`budget-overlap-${suffix}`, define([0, 1, 2], 100));
+      await queue.syncRateLimitPolicies(
+        `budget-overlap-${suffix}`,
+        queues.map((name) => ({
+          queue: name,
+          rate: { limit: 1_000, intervalMs: 1_000, burst: 1_000 },
+        })),
+      );
+
+      for (let round = 0; round < 12; round += 1) {
+        await queue.enqueueMany(
+          queues.flatMap((queueName) =>
+            [0, 1, 2, 2, 1, 0].map((index) => ({
+              type: "overlap",
+              payload: { round },
+              options: { queue: queueName, budget: budgets[index]! },
+            })),
+          ),
+        );
+        const settled = await Promise.allSettled([
+          queue.claimMany("overlap-worker", 6, { queue: queues[0]! }),
+          queue.syncBudgets(`budget-overlap-${suffix}`, define([2, 0, 1], 50 + round)),
+          queue.claimMany("overlap-worker", 6, { queue: queues[1]! }),
+          queue.syncBudgets(`budget-overlap-${suffix}`, define([1, 2, 0], 80 + round)),
+        ]);
+        expect(settled.filter((outcome) => outcome.status === "rejected")).toEqual([]);
+      }
+    });
   });
 });

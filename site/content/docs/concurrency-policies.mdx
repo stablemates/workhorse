@@ -258,6 +258,10 @@ limited key and a limited budget can take a key rank and still miss its budget r
 another task of that key waiting although the key had room. Workhorse never admits past a cap, and
 a later round or claim takes the waiting task.
 
+A synchronization waits for every claim that is admitting work against a budget it changes or
+prunes. A claim therefore checks room and charges the rate under one definition, and a new
+definition applies from the next claim.
+
 ## Observe pressure
 
 `queue.health()` reports each policy's limit, active count, blocked ready work, and saturated-key

@@ -5392,7 +5392,8 @@ $$;
 
 -- Reconcile one namespace's budgets. Mirrors sync_rate_limit_policies_v1: strict definition
 -- shapes, cross-namespace ownership refusal, pruning by default, and a wake hint for queues that
--- hold ready work naming an affected budget.
+-- hold ready work naming an affected budget. It takes each named or pruned budget's lock in name
+-- order, the order a claim takes them, so a claim reads one definition from admission to charge.
 CREATE OR REPLACE FUNCTION workhorse.sync_budgets_v1(
   p_namespace text,
   p_definitions jsonb,
@@ -5430,6 +5431,24 @@ BEGIN
     RAISE EXCEPTION 'budget definitions exceed maximum size of 10000';
   END IF;
   PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:budgets', 0));
+  -- Lock every budget this call can write or prune before reading any definition. Name order
+  -- matches the claims, which take these locks in name order too, so the two cannot deadlock.
+  FOR v_budget_name IN
+    SELECT affected.budget_name
+      FROM (
+        SELECT definition.value->>'name' AS budget_name
+          FROM jsonb_array_elements(p_definitions) definition
+         WHERE jsonb_typeof(definition.value) = 'object'
+           AND jsonb_typeof(definition.value->'name') = 'string'
+        UNION
+        SELECT budget.budget_name
+          FROM workhorse.budget budget
+         WHERE p_prune AND budget.namespace = p_namespace
+      ) affected
+     ORDER BY affected.budget_name
+  LOOP
+    PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:budget:' || v_budget_name, 0));
+  END LOOP;
 
   FOR v_definition IN SELECT value FROM jsonb_array_elements(p_definitions)
   LOOP
@@ -19235,10 +19254,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (45, 'date an unrun history pass from the oldest expired schedule run'),
   (46, 'reject a NULL limit or lease before any lock'),
   (47, 'refuse a claim below read committed isolation'),
-  (48, 'prune past redrive sources pinned by younger targets')
+  (48, 'prune past redrive sources pinned by younger targets'),
+  (49, 'serialize budget synchronization with claims')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (48) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (49) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

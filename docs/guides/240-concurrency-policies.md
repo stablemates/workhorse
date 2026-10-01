@@ -82,6 +82,8 @@ A policy limits one queue. When several queues call the same downstream resource
 
 `Queue.syncBudgets` stores budgets in PostgreSQL the way policies are stored, and `Queue.listBudgets` reads them back. Go applications use `Queue.SyncBudgets` and `Queue.ListBudgets`. Python applications use `Queue.sync_budgets` or `AsyncQueue.sync_budgets`, and `Queue.list_budgets` or `AsyncQueue.list_budgets`. The namespace owns its budgets and prunes omitted ones unless you disable pruning.
 
+A synchronization waits for every claim that is admitting work against a budget it changes or prunes. A claim therefore checks room and charges the rate under one definition, and a new definition applies from the next claim.
+
 A task names its budget when it is enqueued, with the `budget` option beside `concurrencyKey`. The budget is an extra check: the task must still pass its queue's own policy. A budget can cap active tasks, cap the start rate, or both. It has no per-key limit, because keys stay queue-scoped. A task that names a budget nobody synchronized is not limited by it.
 
 ```ts

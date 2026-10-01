@@ -348,6 +348,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "prune past redrive sources pinned by younger targets",
     kind: "additive",
   },
+  {
+    fromVersion: 48,
+    toVersion: 49,
+    file: "0050-serialize-budget-synchronization-with-claims.sql",
+    description: "serialize budget synchronization with claims",
+    kind: "additive",
+  },
 ];
 
 /**
