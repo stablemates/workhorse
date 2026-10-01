@@ -122,17 +122,24 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
     expect(subject.instance_variable_get(:@full_tier_until)).not_to have_key(@queue_name)
   end
 
-  # Delays each tier read of +subject+ by +delay+ seconds, and fails the first one when +fail_first+.
-  def slow_tier_reads(subject, delay, fail_first: false)
+  # Holds each tier read of +subject+ until a heartbeat round renews a lease after the read began,
+  # and fails the first read when +fail_first+. A read that no heartbeat covers waits +limit+
+  # seconds, past the lease, so the lease expires. The shared heartbeat runs through this executor.
+  def slow_tier_reads(subject, limit, fail_first: false)
     reads = Concurrent::AtomicFixnum.new
+    renewals = Concurrent::AtomicFixnum.new
     executor = subject.instance_variable_get(:@executor)
     original = executor.method(:rows)
     executor.define_singleton_method(:rows) do |sql, params = []|
       if sql == W::SqlCatalogue::QUEUE_CONTROL
-        sleep delay
+        renewed = renewals.value
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + limit
+        sleep 0.01 until renewals.value > renewed || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
         raise "the tier read failed" if fail_first && reads.increment == 1
       end
-      original.call(sql, params)
+      rows = original.call(sql, params)
+      renewals.increment if sql == W::SqlCatalogue::HEARTBEAT_MANY_V1 && rows.any? { |row| row["status"] == "accepted" }
+      rows
     end
   end
 
@@ -155,14 +162,14 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
 
   it "reads the tier of a cutover claim under the heartbeat, so a slow read keeps the lease" do
     raised = Queue.new
-    subject = worker(concurrency: 1, lease: 0.2, heartbeat: 0.05).handle("fast-durable") do |_payload, context|
+    subject = worker(concurrency: 1, lease: 2, heartbeat: 0.1).handle("fast-durable") do |_payload, context|
       context.checkpoint("step") { raise "the checkpoint block must not run" }
     rescue => e
       raised << e
       raise
     end
     task_id = cut_over(subject)
-    slow_tier_reads(subject, 0.5)
+    slow_tier_reads(subject, 4)
 
     run_until(subject) { fast_outcome(task_id).any? }
 
@@ -174,14 +181,14 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
 
   it "raises a slow failed tier read from the durable call before any durable write" do
     raised = Queue.new
-    subject = worker(concurrency: 1, lease: 0.2, heartbeat: 0.05).handle("fast-durable") do |_payload, context|
+    subject = worker(concurrency: 1, lease: 2, heartbeat: 0.1).handle("fast-durable") do |_payload, context|
       context.checkpoint("step") { raise "the checkpoint block must not run" }
     rescue => e
       raised << e
       raise
     end
     task_id = cut_over(subject)
-    slow_tier_reads(subject, 0.5, fail_first: true)
+    slow_tier_reads(subject, 4, fail_first: true)
 
     run_until(subject) { fast_outcome(task_id).any? }
 
@@ -193,11 +200,11 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
 
   it "keeps the lease of a full-tier task while a slow tier read admits its checkpoint" do
     reads = Concurrent::AtomicFixnum.new
-    subject = worker(concurrency: 1, lease: 0.2, heartbeat: 0.05).handle("full-durable") do |_payload, context|
+    subject = worker(concurrency: 1, lease: 2, heartbeat: 0.1).handle("full-durable") do |_payload, context|
       context.checkpoint("step") { reads.increment }
       {}
     end
-    slow_tier_reads(subject, 0.5)
+    slow_tier_reads(subject, 4)
     task_id = queue.enqueue("full-durable", {}, max_attempts: 1).task_id
     state = lambda do
       @connection.exec_params("SELECT state FROM workhorse.task_outcome WHERE task_id = $1", [task_id]).values
@@ -378,7 +385,7 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
 
   it "replays a batch member's checkpoint after it lands in a batch of different composition" do
     retried = queue.enqueue("replay", {"key" => "retried"}, priority: 9, max_attempts: 2,
-      retry_policy: {"type" => "fixed", "delayMs" => 0}).task_id
+      retry_policy: {"type" => "fixed", "delayMs" => 60_000}).task_id
     queue.enqueue("replay", {"key" => "first"}, max_attempts: 1)
     runs = Concurrent::Array.new
     seen = Concurrent::Array.new
@@ -395,9 +402,16 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
         {status: :succeeded, result: {"before" => before, "charge" => charge}}
       end
     end
-    worker(concurrency: 2).handle_batch("replay", max_size: 2, linger: 1, &handler).run_once
+    # The first run_once claims until a claim finds nothing. The retry waits a minute, so that
+    # run_once cannot claim the second attempt. The spec then rewinds the wait and promotes it.
+    # Each linger outlasts any claim round, so a batch dispatches only once it is full or run_once
+    # has delivered every member it claimed.
+    worker(concurrency: 2).handle_batch("replay", max_size: 2, linger: 60, &handler).run_once
+    @connection.exec_params("UPDATE workhorse.task_runtime SET run_at = clock_timestamp() - " \
+      "interval '1 millisecond' WHERE task_id = $1", [retried])
+    @connection.exec("SELECT * FROM workhorse.tick_v1(100, 100)")
     2.times { |index| queue.enqueue("replay", {"key" => "later#{index}"}, max_attempts: 1) }
-    worker(concurrency: 3).handle_batch("replay", max_size: 3, linger: 1, &handler).run_once
+    worker(concurrency: 3).handle_batch("replay", max_size: 3, linger: 60, &handler).run_once
 
     expect(seen).to eq([%w[retried first], %w[retried later0 later1]])
     expect(runs).to eq(%w[retried first later0 later1])
