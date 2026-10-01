@@ -164,6 +164,157 @@ func TestWorkerHeartbeatsRenewWhileHandlersHoldEveryOtherPooledConnection(t *tes
 	}
 }
 
+// TestWorkerKeepsTheLeaseUntilTheCompletionIsWritten pins renewal through finalization: a
+// completion that waits longer than a whole lease for a pooled connection still settles the task
+// under the fence it was claimed with. A cancellation that arrives during that wait still ends the
+// attempt with one terminal transition, written by recovery once the refused renewal lets the lease lapse.
+func TestWorkerKeepsTheLeaseUntilTheCompletionIsWritten(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		cancel    bool
+		wantState string
+	}{
+		{name: "completes under the claimed fence", wantState: "succeeded"},
+		{name: "settles a cancellation requested during finalization", cancel: true, wantState: "canceled"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assertDelayedFinalization(t, test.cancel, test.wantState)
+		})
+	}
+}
+
+func assertDelayedFinalization(t *testing.T, cancel bool, wantState string) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-finalization-lease")
+	ctx := context.Background()
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MaxConns = 3
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	observer := observeDatabase(t, ctx, databaseURL)
+	operator, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(operator.Close)
+
+	queueName := "go-worker-finalization-lease"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(operator), queueName)
+	taskID, err := queue.Enqueue(ctx, "finalization-lease", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const lease = 300 * time.Millisecond
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue:             queueName,
+		WorkerID:          "finalization-lease-worker",
+		LeaseDuration:     lease,
+		HeartbeatInterval: 20 * time.Millisecond,
+		PollInterval:      5 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	worker.Handle("finalization-lease", func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
+		close(started)
+		<-release
+		return map[string]any{"settled": true}, nil
+	})
+	workerResult := make(chan error, 1)
+	go func() {
+		processed, err := worker.RunOnce(ctx)
+		if err == nil && !processed {
+			err = errors.New("worker did not process the finalization-lease task")
+		}
+		workerResult <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not start the handler")
+	}
+	var claimedFence int64
+	if err := observer.QueryRow(
+		ctx,
+		"SELECT fence_token FROM workhorse.task_runtime WHERE task_id = $1::uuid",
+		taskID,
+	).Scan(&claimedFence); err != nil {
+		t.Fatal(err)
+	}
+
+	// Hold every connection the pool can still lend, then let the handler return. The completion
+	// queues behind them for several leases while only the reserved heartbeat can renew.
+	held := make([]*pgxpool.Conn, 0, int(config.MaxConns))
+	for {
+		acquireContext, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		connection, err := pool.Acquire(acquireContext)
+		cancel()
+		if err != nil {
+			break
+		}
+		held = append(held, connection)
+	}
+	if len(held) == 0 {
+		t.Fatal("the pool lent no connection to the starving test")
+	}
+	expiresAt := leaseExpiry(t, ctx, observer, taskID)
+	close(release)
+	var cancelError error
+	if cancel {
+		_, cancelError = queue.Cancel(ctx, taskID, workhorse.CancellationRequest{})
+	}
+	time.Sleep(3 * lease)
+	renewed := leaseExpiry(t, ctx, observer, taskID)
+	for _, connection := range held {
+		connection.Release()
+	}
+	if cancelError != nil {
+		t.Fatal(cancelError)
+	}
+	if !cancel && !renewed.After(expiresAt.Add(lease)) {
+		t.Fatalf("lease stopped renewing during finalization: claimed until %s, now until %s", expiresAt, renewed)
+	}
+
+	select {
+	case err := <-workerResult:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not settle the delayed completion")
+	}
+	if cancel {
+		// Cancellation refuses renewal, so the starved acknowledgement finds the lease gone. Lease
+		// recovery then settles the requested cancellation under the claimed fence.
+		if _, err := observer.Exec(ctx, "SELECT workhorse.recover_expired_v1()"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var state string
+	var fence int64
+	var attempt int
+	if err := observer.QueryRow(
+		ctx,
+		"SELECT state, fence_token, current_attempt FROM workhorse.task_outcome WHERE task_id = $1::uuid",
+		taskID,
+	).Scan(&state, &fence, &attempt); err != nil {
+		t.Fatal(err)
+	}
+	if state != wantState || fence != claimedFence || attempt != 1 {
+		t.Fatalf(
+			"expected the delayed finalization to end %s under fence %d on attempt 1, received %s under fence %d on attempt %d",
+			wantState, claimedFence, state, fence, attempt,
+		)
+	}
+}
+
 // TestNewWorkerRefusesAPoolThatCannotLendAHeartbeatConnection pins the construction refusal and its
 // opt-out, so an operator learns about the risk instead of inheriting it silently.
 func TestNewWorkerRefusesAPoolThatCannotLendAHeartbeatConnection(t *testing.T) {

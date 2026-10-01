@@ -1927,7 +1927,10 @@ func (worker *Worker) execute(
 		handlerParent, cancelDeadline = context.WithDeadlineCause(handlerParent, *expiration, cause)
 	}
 	handlerContext, cancelHandler := context.WithCancelCause(handlerParent)
-	stopOwnership, ownershipDone := worker.superviseOwnership(ctx, task, cancelHandler)
+	handlerReturned, releaseOwnership := worker.superviseOwnership(ctx, task, cancelHandler)
+	// Renewal outlives the handler: result validation and the fenced final write can wait on the
+	// pool past a whole lease, and a lapsed lease would hand the finished task to recovery.
+	defer releaseOwnership()
 	durability := &HandlerContext{
 		Task: task, context: handlerContext, cancel: cancelHandler, executor: executor,
 		workerID: worker.workerID,
@@ -1938,8 +1941,7 @@ func (worker *Worker) execute(
 		}
 	}
 	result, handlerError := callHandler(task.Type, handler, handlerContext, task.Payload, durability)
-	stopOwnership()
-	ownership := <-ownershipDone
+	ownership := handlerReturned()
 	cause := context.Cause(handlerContext)
 	cancelHandler(nil)
 	cancelDeadline()
@@ -2043,19 +2045,29 @@ func callHandler(
 	return handler(ctx, payload, durability)
 }
 
+// superviseOwnership watches one attempt's lease. handlerReturned reports how ownership stood
+// when the handler returned. An accepted lease keeps renewing after that, so the settlement that
+// follows writes under a live lease. release ends the renewal and returns once the attempt has left the heartbeat batch.
+//
+// Once the handler has returned, a rejected renewal, a lapsed watchdog, or an expiry only stops
+// renewing. The fenced settlement write then meets the same verdict in PostgreSQL and reconciles
+// it, so the attempt still ends with one authoritative transition.
 func (worker *Worker) superviseOwnership(
 	ctx context.Context,
 	task ClaimedTask,
 	cancelHandler context.CancelCauseFunc,
-) (func(), <-chan ownershipResult) {
-	stop := make(chan struct{})
+) (handlerReturned func() ownershipResult, release func()) {
+	returned := make(chan struct{})
+	settled := make(chan struct{})
 	done := make(chan ownershipResult, 1)
+	exited := make(chan struct{})
 	member := &heartbeatMember{
 		ctx: ctx, task: task, cancelHandler: cancelHandler, result: make(chan ownershipResult, 1),
 		renewed: make(chan time.Time, 1),
 	}
 	worker.registerHeartbeat(member)
 	go func() {
+		defer close(exited)
 		defer worker.unregisterHeartbeat(member)
 		expirationTimer, expirationCause := ownershipExpirationTimer(task)
 		if expirationTimer != nil {
@@ -2066,29 +2078,45 @@ func (worker *Worker) superviseOwnership(
 		// task, so the worker stops the handler on its own clock rather than on an answer.
 		watchdog := time.NewTimer(worker.leaseFrom(task.claimSentAt))
 		defer watchdog.Stop()
+		handlerRunning := true
 		for {
 			var expiration <-chan time.Time
 			if expirationTimer != nil {
 				expiration = expirationTimer.C
 			}
+			awaitReturn := returned
+			if !handlerRunning {
+				awaitReturn = nil
+			}
 			select {
-			case <-stop:
+			case <-awaitReturn:
+				handlerRunning = false
 				done <- ownershipResult{status: workerOwnershipAccepted}
+			case <-settled:
 				return
 			case <-ctx.Done():
-				done <- ownershipResult{err: ctx.Err()}
+				if handlerRunning {
+					done <- ownershipResult{err: ctx.Err()}
+				}
 				return
 			case result := <-member.result:
-				done <- result
+				if handlerRunning {
+					done <- result
+				}
 				return
 			case sentAt := <-member.renewed:
 				resetTimer(watchdog, worker.leaseFrom(sentAt))
 			case <-watchdog.C:
-				cancelHandler(&LeaseLostError{TaskID: task.ID})
 				worker.recordLeaseWatchdog(ctx, task)
-				done <- ownershipResult{status: workerOwnershipStale}
+				if handlerRunning {
+					cancelHandler(&LeaseLostError{TaskID: task.ID})
+					done <- ownershipResult{status: workerOwnershipStale}
+				}
 				return
 			case <-expiration:
+				if !handlerRunning {
+					return
+				}
 				cancelHandler(expirationCause)
 				// Leave the heartbeat batch first: expireOwnership can retry for a while, and this
 				// goroutine does not read member.result until it returns.
@@ -2099,13 +2127,16 @@ func (worker *Worker) superviseOwnership(
 			}
 		}
 	}()
-	var once bool
-	return func() {
-		if !once {
-			once = true
-			close(stop)
-		}
-	}, done
+	var returnOnce, releaseOnce sync.Once
+	handlerReturned = func() ownershipResult {
+		returnOnce.Do(func() { close(returned) })
+		return <-done
+	}
+	release = func() {
+		releaseOnce.Do(func() { close(settled) })
+		<-exited
+	}
+	return handlerReturned, release
 }
 
 // leaseFrom reports how long one lease granted at sentAt still has to run. A task claimed before
