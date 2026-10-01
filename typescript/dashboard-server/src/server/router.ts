@@ -502,7 +502,9 @@ export const dashboardRouter = {
       ),
     events: procedure
       .input(eventsInput)
-      .handler(({ context, input }) => readDashboardEvents(context.database, input)),
+      .handler(({ context, input }) =>
+        readDashboardEvents(context.database, input, context.redactErrorStacks),
+      ),
     eventDetail: procedure.input(eventDetailInput).handler(async ({ context, input }) => {
       const detail = await readDashboardEventDetail(
         context.database,

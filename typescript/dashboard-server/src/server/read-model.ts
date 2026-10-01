@@ -367,7 +367,19 @@ function redactErrorStack(error: unknown): unknown {
   return redacted;
 }
 
-/** Remove persisted worker stacks while leaving user payloads, results, and event details intact. */
+/**
+ * Remove the worker stack from a lifecycle event's `details.error`.
+ *
+ * Workhorse copies the worker error into the details of the event that records a failure, such as
+ * `failed`, `retry_scheduled`, or a fast-tier `timeout`. Every other key stays as stored.
+ */
+function redactEventDetailsErrorStack(details: unknown): unknown {
+  if (details === null || typeof details !== "object" || Array.isArray(details)) return details;
+  if (!("error" in details)) return details;
+  return { ...details, error: redactErrorStack(details.error) };
+}
+
+/** Remove persisted worker stacks while leaving user payloads and results intact. */
 export function redactDashboardTaskDetailErrorStacks(
   detail: DashboardTaskDetail,
 ): DashboardTaskDetail {
@@ -400,6 +412,10 @@ export function redactDashboardTaskDetailErrorStacks(
     attempts: detail.attempts.map((attempt) => ({
       ...attempt,
       error: redactErrorStack(attempt.error),
+    })),
+    events: detail.events.map((event) => ({
+      ...event,
+      details: redactEventDetailsErrorStack(event.details),
     })),
   };
 }
@@ -444,24 +460,33 @@ export interface DashboardEventsQuery {
  * walking the whole retained history to fill a page that a narrow filter would otherwise starve.
  * The window is also what keeps the total count affordable: it is a count over one bounded slice of
  * two partitioned tables, not over everything retention still holds.
+ *
+ * A failure event carries the worker error in its details, so this honours `redactErrorStacks` as
+ * task detail does.
  */
 export async function readDashboardEvents(
   database: DashboardDatabase,
   query: DashboardEventsQuery = {},
+  redactErrorStacks = false,
 ): Promise<DashboardEventsPage> {
   const input = JSON.stringify(query);
   const rows = await database.execute<{ result: DashboardEventsPage }>(sql`
     SELECT workhorse.dashboard_events_v1(${input}::jsonb) AS result
   `);
-  return expectOneRow(rows, "the dashboard events procedure").result;
+  const page = expectOneRow(rows, "the dashboard events procedure").result;
+  if (redactErrorStacks) {
+    for (const event of page.events) event.details = redactEventDetailsErrorStack(event.details);
+  }
+  return page;
 }
 
 /**
  * Read one history record by the stable identity used in Events URLs.
  *
- * An attempt record carries the whole persisted error, so this honours `redactErrorStacks` exactly
- * as task detail does. Both surfaces project the same `attempt_history.error`, and a host that
- * withholds container paths from one door has to withhold them from the other.
+ * An attempt record carries the whole persisted error, and a failure event copies it into its
+ * details, so this honours `redactErrorStacks` exactly as task detail does. Both surfaces project
+ * the same errors, and a host that withholds container paths from one door has to withhold them
+ * from the other.
  */
 export async function readDashboardEventDetail(
   database: DashboardDatabase,
@@ -474,5 +499,9 @@ export async function readDashboardEventDetail(
   `);
   const detail = expectOneRow(rows, "the dashboard event detail procedure").result;
   if (!detail || !redactErrorStacks) return detail;
-  return { ...detail, error: redactErrorStack(detail.error) };
+  return {
+    ...detail,
+    error: redactErrorStack(detail.error),
+    details: redactEventDetailsErrorStack(detail.details),
+  };
 }

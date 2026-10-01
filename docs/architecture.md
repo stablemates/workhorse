@@ -3995,9 +3995,13 @@ the `canManageWorkers` decision, and the error-stack redaction live. Calling
 `readDashboardTaskDetail` directly defaults `redactErrorStacks` to false and returns persisted
 worker stacks that the mounted dashboard never shows. `readDashboardEventDetail` takes the same
 argument and defaults it the same way, because `dashboard_event_detail_v1` projects the whole
-`attempt_history.error` for an attempt record and the Events drawer renders it. Both procedures
-pass `DashboardRpcContext.redactErrorStacks`, so a host that withholds a stack from task detail
-withholds it from the event record that carries the same column. `startDashboardServer` sets
+`attempt_history.error` for an attempt record and the Events drawer renders it.
+`readDashboardEvents` takes the same argument and defaults it the same way. A lifecycle event copies
+the worker error into `details.error`: a `failed` or `retry_scheduled` row in `task_event`, and a
+fast-tier terminal event that `dashboard_task_event_v1` synthesizes. With the flag set, task detail,
+the event feed, and event detail drop `stack` from that `details.error` and keep every other details
+key. All three procedures pass `DashboardRpcContext.redactErrorStacks`, so a host that withholds a
+stack from task detail withholds it from every event record that carries a copy. `startDashboardServer` sets
 `redactErrorStacks` when the listener is remotely reachable: a TCP listener that is not loopback,
 or any listener whose `publicOrigin` names a non-loopback host.
 `DashboardCommandOptions.revealErrorStacks`, which the CLI maps from `--reveal-error-stacks`, turns
