@@ -1209,13 +1209,15 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 
 // RunOnce claims and processes at most one task.
 func (worker *Worker) RunOnce(ctx context.Context) (bool, error) {
-	worker.holdHeartbeats(ctx)
-	defer worker.releaseHeartbeatConnection()
+	// The reservation is shared by the worker's invocations, so only the permit holder may take or
+	// release it.
 	releaseRun, err := worker.acquireRun(ctx)
 	if err != nil {
 		return false, err
 	}
 	defer releaseRun()
+	worker.holdHeartbeats(ctx)
+	defer worker.releaseHeartbeatConnection()
 	if err := worker.compatibility.Assert(ctx); err != nil {
 		return false, err
 	}
