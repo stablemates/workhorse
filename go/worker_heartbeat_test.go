@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
+	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -41,6 +44,29 @@ func leaseExpiry(t *testing.T, ctx context.Context, observer *pgx.Conn, taskID s
 	return *expiresAt
 }
 
+// starvedLeaseExpiry reads the lease like leaseExpiry, but reports a missing task_runtime row
+// instead of failing on it. A starved completion cannot delete that row, so its absence names the
+// cause: the completion found a connection the test should have held.
+func starvedLeaseExpiry(t *testing.T, ctx context.Context, observer *pgx.Conn, taskID string) (time.Time, bool) {
+	t.Helper()
+	var expiresAt *time.Time
+	err := observer.QueryRow(
+		ctx,
+		"SELECT expires_at FROM workhorse.task_runtime WHERE task_id = $1::uuid",
+		taskID,
+	).Scan(&expiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expiresAt == nil {
+		t.Fatal("claimed task has no lease expiry")
+	}
+	return *expiresAt, true
+}
+
 // waitForLeaseRenewal waits until the lease expiry moves past previous, which only an accepted
 // heartbeat does.
 func waitForLeaseRenewal(
@@ -63,6 +89,51 @@ func waitForLeaseRenewal(
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+}
+
+// holdLendableConnections takes every connection the pool can still lend and keeps them until the
+// returned release runs or the test ends. A timed-out acquire is not proof of exhaustion: pgxpool
+// keeps dialing after the caller gives up and lends that connection to the next caller. So the
+// loop counts the pool instead, and the cleanup releases the connections before the pool closes.
+func holdLendableConnections(t *testing.T, ctx context.Context, pool *pgxpool.Pool) func() {
+	t.Helper()
+	var held []*pgxpool.Conn
+	release := func() {
+		for _, connection := range held {
+			connection.Release()
+		}
+		held = nil
+	}
+	t.Cleanup(release)
+	for pool.Stat().AcquiredConns() < pool.Config().MaxConns {
+		acquireContext, cancel := context.WithTimeout(ctx, 10*time.Second)
+		connection, err := pool.Acquire(acquireContext)
+		cancel()
+		if err != nil {
+			t.Fatalf("the starving test could not take a lendable connection: %v", err)
+		}
+		held = append(held, connection)
+	}
+	if len(held) == 0 {
+		t.Fatal("the pool lent no connection to the starving test")
+	}
+	if stat := pool.Stat(); stat.IdleConns() != 0 || stat.ConstructingConns() != 0 {
+		t.Fatalf(
+			"the starved pool still has %d idle and %d constructing connections",
+			stat.IdleConns(), stat.ConstructingConns(),
+		)
+	}
+	return release
+}
+
+// releaseOnce closes a handler's release channel at most once, and closes it at cleanup when a
+// failed assertion returned first, so a blocked handler cannot keep its connection from the pool.
+func releaseOnce(t *testing.T) (<-chan struct{}, func()) {
+	release := make(chan struct{})
+	var once sync.Once
+	closeRelease := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(closeRelease)
+	return release, closeRelease
 }
 
 // TestWorkerHeartbeatsRenewWhileHandlersHoldEveryOtherPooledConnection pins the reservation: a
@@ -100,7 +171,7 @@ func TestWorkerHeartbeatsRenewWhileHandlersHoldEveryOtherPooledConnection(t *tes
 		t.Fatal(err)
 	}
 	started := make(chan struct{})
-	release := make(chan struct{})
+	release, releaseHandler := releaseOnce(t)
 	worker.Handle("reserved-heartbeat", func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
 		close(started)
 		<-release
@@ -122,27 +193,13 @@ func TestWorkerHeartbeatsRenewWhileHandlersHoldEveryOtherPooledConnection(t *tes
 
 	// Take every connection the pool can still lend. The reservation left before the handler ran,
 	// so the heartbeat round does not compete for these.
-	held := make([]*pgxpool.Conn, 0, int(config.MaxConns))
-	for {
-		acquireContext, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
-		connection, err := pool.Acquire(acquireContext)
-		cancel()
-		if err != nil {
-			break
-		}
-		held = append(held, connection)
-	}
-	if len(held) == 0 {
-		t.Fatal("the pool lent no connection to the starving test")
-	}
+	releaseHeld := holdLendableConnections(t, ctx, pool)
 	expiresAt := leaseExpiry(t, ctx, observer, taskID)
 	renewed := waitForLeaseRenewal(t, ctx, observer, taskID, expiresAt, 2*time.Second)
 	waitForLeaseRenewal(t, ctx, observer, taskID, renewed, 2*time.Second)
-	for _, connection := range held {
-		connection.Release()
-	}
+	releaseHeld()
 
-	close(release)
+	releaseHandler()
 	select {
 	case err := <-workerResult:
 		if err != nil {
@@ -209,19 +266,22 @@ func assertDelayedFinalization(t *testing.T, cancel bool, wantState string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const lease = 300 * time.Millisecond
+	// A heartbeat round is bounded by the interval, and a round that overruns discards the reserved
+	// connection. The completion is already waiting on the pool and would take that freed slot. So
+	// the interval must leave a loaded runner room to finish a round.
+	const lease = time.Second
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
 		Queue:             queueName,
 		WorkerID:          "finalization-lease-worker",
 		LeaseDuration:     lease,
-		HeartbeatInterval: 20 * time.Millisecond,
+		HeartbeatInterval: 200 * time.Millisecond,
 		PollInterval:      5 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	started := make(chan struct{})
-	release := make(chan struct{})
+	release, releaseHandler := releaseOnce(t)
 	worker.Handle("finalization-lease", func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
 		close(started)
 		<-release
@@ -251,29 +311,18 @@ func assertDelayedFinalization(t *testing.T, cancel bool, wantState string) {
 
 	// Hold every connection the pool can still lend, then let the handler return. The completion
 	// queues behind them for several leases while only the reserved heartbeat can renew.
-	held := make([]*pgxpool.Conn, 0, int(config.MaxConns))
-	for {
-		acquireContext, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-		connection, err := pool.Acquire(acquireContext)
-		cancel()
-		if err != nil {
-			break
-		}
-		held = append(held, connection)
-	}
-	if len(held) == 0 {
-		t.Fatal("the pool lent no connection to the starving test")
-	}
+	releaseHeld := holdLendableConnections(t, ctx, pool)
 	expiresAt := leaseExpiry(t, ctx, observer, taskID)
-	close(release)
+	releaseHandler()
 	var cancelError error
 	if cancel {
 		_, cancelError = queue.Cancel(ctx, taskID, workhorse.CancellationRequest{})
 	}
 	time.Sleep(3 * lease)
-	renewed := leaseExpiry(t, ctx, observer, taskID)
-	for _, connection := range held {
-		connection.Release()
+	renewed, leased := starvedLeaseExpiry(t, ctx, observer, taskID)
+	releaseHeld()
+	if !leased {
+		t.Fatalf("the completion was written while the pool was starved: task %s has no task_runtime row", taskID)
 	}
 	if cancelError != nil {
 		t.Fatal(cancelError)
@@ -739,4 +788,49 @@ func TestWorkerRunSurvivesTheTerminationOfItsIdleHeartbeatConnection(t *testing.
 	if !strings.Contains(logs.String(), "heartbeat round failed; retrying") {
 		t.Fatalf("no heartbeat round failed on the terminated session, logged:\n%s", logs.String())
 	}
+}
+
+const heldConnectionFailureHelper = "WORKHORSE_TEST_HELD_CONNECTION_FAILURE"
+
+// A test that fails while it holds every lendable connection must still exit:
+// pool.Close waits for acquired connections, so the release cleanup has to run first.
+func TestAFailingTestReleasesTheConnectionsItHolds(t *testing.T) {
+	testDatabaseURL(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	command := exec.CommandContext(
+		ctx, os.Args[0], "-test.run", "^TestHeldConnectionFailureHelper$", "-test.count=1", "-test.v",
+	)
+	command.Env = append(os.Environ(), heldConnectionFailureHelper+"=1")
+	output, err := command.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("the failing test hung with its connections held:\n%s", output)
+	}
+	var exitError *exec.ExitError
+	if !errors.As(err, &exitError) || exitError.ExitCode() == 0 {
+		t.Fatalf("the failing test did not fail: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "held-connection failure") {
+		t.Fatalf("the failing test did not report its own failure:\n%s", output)
+	}
+}
+
+func TestHeldConnectionFailureHelper(t *testing.T) {
+	if os.Getenv(heldConnectionFailureHelper) != "1" {
+		t.Skip("runs only under TestAFailingTestReleasesTheConnectionsItHolds")
+	}
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-held-connection-failure")
+	ctx := context.Background()
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MaxConns = 3
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	holdLendableConnections(t, ctx, pool)
+	t.Fatal("held-connection failure")
 }
