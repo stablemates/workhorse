@@ -60,6 +60,9 @@ other SDKs carry, because every tag names one release of all of them.
   the error of the current call.
 - Add `run_worker_process`, which stops the worker on `TERM` or `INT` and exits at once on a second
   signal, and `run_worker_processes`, which forks, supervises, and restarts worker processes.
+- A `logger` that raises no longer reaches worker lifecycle code. An accepted heartbeat still
+  renews the lease, `Worker#stop` still wakes the dispatcher, and a second signal still exits the
+  process. The first failure of each logger is written to standard error.
 - Add the Active Job adapter, selected with `config.active_job.queue_adapter =
 :stablemates_workhorse`. It requires Active Job 8.0 or later. A default job runs under the
   `active_job` task type. A typed job declares its task type with `workhorse_options` and carries
