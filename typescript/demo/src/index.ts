@@ -1,5 +1,4 @@
 import { seedStagingData, syncStagingSchedules } from "./staging.js";
-import { getRequestListener } from "@hono/node-server";
 import { assertSchemaCompatible, installSchema } from "@stablemates/workhorse";
 import { createServer } from "node:http";
 import { Pool } from "pg";
@@ -32,11 +31,8 @@ import {
   reconciliationRestoredAnything,
 } from "./operator-reconciler.js";
 import { DemoOperatorRateLimiter } from "./operator-rate-limit.js";
-import {
-  DEMO_REQUEST_TIMEOUT_MS,
-  demoRequestBodyRejection,
-  DemoOperatorMutationGuard,
-} from "./request-guards.js";
+import { createDemoRequestListener } from "./request-listener.js";
+import { DEMO_REQUEST_TIMEOUT_MS, DemoOperatorMutationGuard } from "./request-guards.js";
 
 /**
  * The demo's web tier.
@@ -233,50 +229,14 @@ if (process.env.SEED_DEMO_DATA !== "false") {
     );
   }
 }
-const application = getRequestListener(app.fetch);
-const operatorRateLimiter = new DemoOperatorRateLimiter();
-const mutationGuard = new DemoOperatorMutationGuard();
-const server = createServer((request, response) => {
-  const reject = (status: number, message: string, retryAfterSeconds?: number) => {
-    response.statusCode = status;
-    response.setHeader("Cache-Control", "no-store");
-    response.setHeader("Content-Type", "application/json; charset=UTF-8");
-    if (retryAfterSeconds !== undefined) {
-      response.setHeader("Retry-After", String(retryAfterSeconds));
-    }
-    response.end(JSON.stringify({ message }));
-  };
-  const bodyRejection = demoRequestBodyRejection(request);
-  if (bodyRejection !== undefined) {
-    reject(
-      bodyRejection,
-      bodyRejection === 413 ? "Request body too large" : "A Content-Length header is required",
-    );
-    return;
-  }
-  const retryAfterSeconds = operatorRateLimiter.check(request);
-  if (retryAfterSeconds !== undefined) {
-    reject(429, "Operator request rate limit exceeded", retryAfterSeconds);
-    return;
-  }
-  if (!mutationGuard.tryAcquire(request)) {
-    reject(503, "Too many concurrent operator mutations", 1);
-    return;
-  }
-  // 'close' fires when the response completes or the connection drops early — either way the
-  // mutation is no longer executing, so the slot returns exactly once.
-  response.once("close", () => mutationGuard.release(request));
-  const next = (error?: unknown) => {
-    if (error) {
-      response.statusCode = 500;
-      response.end("Internal Server Error");
-      return;
-    }
-    application(request, response);
-  };
-  if (dashboardDev) dashboardDev.middlewares(request, response, next);
-  else next();
-});
+const server = createServer(
+  createDemoRequestListener({
+    fetch: app.fetch,
+    dev: dashboardDev?.middlewares,
+    rateLimiter: new DemoOperatorRateLimiter(),
+    mutationGuard: new DemoOperatorMutationGuard(),
+  }),
+);
 server.requestTimeout = DEMO_REQUEST_TIMEOUT_MS;
 await new Promise<void>((resolve, reject) => {
   server.once("error", reject);

@@ -7,6 +7,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { Queue } from "@stablemates/workhorse";
+import { sql } from "drizzle-orm";
 import { readDashboardIdempotencyEvidence } from "@stablemates/workhorse-dashboard-server/wire";
 import {
   createLocalOperator,
@@ -14,6 +15,7 @@ import {
   DEMO_OPERATOR_IDEMPOTENCY_KEY,
   DEMO_OPERATOR_IDEMPOTENCY_SCOPE,
   DEMO_OPERATOR_MAX_PENDING_TASKS,
+  DEMO_OPERATOR_STATEMENT_TIMEOUT_MS,
   DEMO_QUEUE,
   DEMO_SCHEDULE_NAMESPACE,
   DEMO_WORKER_CONCURRENCY,
@@ -21,6 +23,7 @@ import {
   HEARTBEAT_SCHEDULE_NAME,
   RECURRING_TASK_TYPE,
   REPORT_SCHEDULE_NAME,
+  runOperatorTransaction,
   syncDemoSchedules,
 } from "../src/app.js";
 import { createDemoIntegrationSuite } from "./support/demo-integration.js";
@@ -573,5 +576,40 @@ describe("Workhorse demo", () => {
         )
       ).rows[0],
     ).toEqual({ count: 2 });
+  });
+});
+
+// An operator mutation holds a pooled connection and a mutation slot until its transaction ends,
+// whether or not its client is still connected (SM-1013), so each statement in it is bounded.
+describe("operator mutation statement bound", () => {
+  it("bounds every statement of an operator mutation and nothing after it", async () => {
+    const inside = await runOperatorTransaction(database, (transaction) =>
+      transaction.execute<{ statement_timeout: string }>(sql`SHOW statement_timeout`),
+    );
+
+    expect(inside.rows[0]?.statement_timeout).toBe(`${DEMO_OPERATOR_STATEMENT_TIMEOUT_MS / 1000}s`);
+    const client = await pool.connect();
+    try {
+      const outside = await client.query<{ statement_timeout: string }>("SHOW statement_timeout");
+      expect(outside.rows[0]?.statement_timeout).toBe("0");
+    } finally {
+      client.release();
+    }
+  });
+
+  it("cancels a statement that outlasts the bound and rolls the mutation back", async () => {
+    const failure = await runOperatorTransaction(
+      database,
+      async (transaction) => {
+        await transaction.execute(sql`CREATE TABLE public.operator_bound_probe (id integer)`);
+        await transaction.execute(sql`SELECT pg_sleep(5)`);
+      },
+      100,
+    ).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ cause: { code: "57014" } });
+    await expect(
+      pool.query("SELECT to_regclass('public.operator_bound_probe') AS probe"),
+    ).resolves.toMatchObject({ rows: [{ probe: null }] });
   });
 });
