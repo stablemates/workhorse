@@ -334,6 +334,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "reject a NULL limit or lease before any lock",
     kind: "additive",
   },
+  {
+    fromVersion: 46,
+    toVersion: 47,
+    file: "0048-refuse-claims-below-read-committed.sql",
+    description: "refuse a claim below read committed isolation",
+    kind: "additive",
+  },
 ];
 
 /**

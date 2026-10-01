@@ -158,6 +158,19 @@ A queue with a per-key rule keeps a single shard, because keyed admission must s
 queue. `Queue.syncConcurrencyPolicies` and `Queue.syncRateLimitPolicies` rebuild the queue's shards each
 time they run, so the shares always match the current policy.
 
+## Claim at read committed
+
+A claim takes its locks first and counts active leases after them. At read committed, PostgreSQL
+reads that count from a snapshot taken after the locks, so it includes any claim that committed
+during the wait. Under repeatable read or serializable, the count reads the transaction's snapshot,
+which can predate the wait, so two claims could both admit past a shared cap.
+
+Workhorse therefore refuses a claim at those levels. `claim_v1`, `claim_many_v1`, and
+`complete_many_and_claim_v1` raise SQLSTATE `0A000` before they take a lock unless the transaction
+runs at read committed. PostgreSQL runs read uncommitted as read committed, so Workhorse accepts it
+too. Read committed is the PostgreSQL default. Check the level when a claim runs inside a
+transaction you own, such as one passed to a provider's `forTransaction`.
+
 ## Share one budget across queues
 
 A policy limits one queue. When several queues call the same downstream resource, a named budget

@@ -18,8 +18,8 @@ contract step pending at the installed version through `workhorse schema contrac
 `--yes` and first names every worker still live on a retiring protocol. The current migration plan
 has one contract step: `0025-add-a-fast-task-tier.sql` moves schema 24 to 25 and retires
 protocols 1 through 4. `migrateSchema` therefore stops at schema 24 on an older installation, and
-`contractSchema` applies step 25. The additive steps 26 through 46 follow, so a second `migrateSchema`
-run completes the plan. Their files run from `0026` to `0047`: file number `0035` was reserved and
+`contractSchema` applies step 25. The additive steps 26 through 47 follow, so a second `migrateSchema`
+run completes the plan. Their files run from `0026` to `0048`: file number `0035` was reserved and
 never used, so from `0036` on a file's number is one above the version it produces. Step 25 ships without the usual retention window, as
 [ADR 0077](decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) §6 records.
 
@@ -1279,7 +1279,8 @@ guarantees.
    that answers with anything other than a row array is a failed query, not an empty result.
 2. **Transaction adaptation.** `forTransaction(transaction)` returns a `Queue` bound to the
    caller's transaction. `adminForTransaction(transaction)` returns the matching `Admin`. Neither
-   client commits, rolls back, disconnects, or destroys the transaction.
+   client commits, rolls back, disconnects, or destroys the transaction. A claim through either client
+   requires that transaction to run at read committed; see [Claim](#claim).
 3. **Error translation.** A failed statement throws an error extending `QueryError`, which retains
    `statement` and the original `cause` and copies the SQLSTATE to `code`. The code comes from
    `databaseErrorCode` in `typescript/core/src/errors.ts`: breadth-first over `cause`, `driverError`, and `meta`,
@@ -2727,6 +2728,14 @@ token.
 `claim_many_v1` accepts a limit from 1 through 100 and a lease from 100 through 86400000 ms. It
 raises before any lock when either is NULL or outside its range, on either tier. Since migration
 0047, every function that bounds a required limit or lease rejects NULL the same way.
+
+Every claim entry point, `claim_v1`, `claim_many_v1`, and `complete_many_and_claim_v1`, requires
+read committed isolation. Admission counts active leases after it takes its locks, and only a
+statement snapshot taken after those locks sees a concurrent claim's committed lease. Under
+repeatable read or serializable, the transaction snapshot can predate the lock wait, so two claims
+could both admit past a shared budget's `maxActive`. Since migration 0048, each entry point raises
+SQLSTATE `0A000` before any lock unless `transaction_isolation` is `read committed` or
+`read uncommitted`, which PostgreSQL runs as read committed.
 
 Priority dispatch has no aging or fair-share control. A sustained stream of higher-priority ready work can starve lower-priority rows in the same queue.
 

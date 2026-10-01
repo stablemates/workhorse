@@ -302,4 +302,42 @@ describe("named budgets", () => {
       client.release();
     }
   });
+
+  it("refuses a claim below read committed instead of over-admitting a shared budget", async () => {
+    // Under repeatable read, each claim counts active tasks in a snapshot taken before it waits for
+    // the budget lock. Two queues share a concurrency-only budget, so no row write conflicts.
+    const budget = `budget-isolation-${randomUUID()}`;
+    const queueA = `budget-isolation-a-${randomUUID()}`;
+    const queueB = `budget-isolation-b-${randomUUID()}`;
+    await queue.syncBudgets("budget-test", [{ name: budget, maxActive: 1 }]);
+    await queue.enqueue("budgeted", { queue: "a" }, { queue: queueA, budget });
+    await queue.enqueue("budgeted", { queue: "b" }, { queue: queueB, budget });
+
+    const early = await pool.connect();
+    const late = await pool.connect();
+    const refusal = {
+      code: "0A000",
+      message: "Workhorse claims require read committed isolation, not repeatable read",
+    };
+    try {
+      for (const client of [early, late]) {
+        await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+        await client.query("SELECT 1");
+      }
+      await expect(
+        early.query(SQL_STATEMENTS["claim_v1"], [queueA, "isolation-worker-a", 30_000]),
+      ).rejects.toMatchObject(refusal);
+      await early.query("ROLLBACK");
+      await expect(
+        late.query(SQL_STATEMENTS["claim_v1"], [queueB, "isolation-worker-b", 30_000]),
+      ).rejects.toMatchObject(refusal);
+      await late.query("ROLLBACK");
+    } finally {
+      for (const client of [early, late]) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        client.release();
+      }
+    }
+    expect(await queue.budgetStatuses([budget])).toMatchObject([{ name: budget, active: 0 }]);
+  });
 });

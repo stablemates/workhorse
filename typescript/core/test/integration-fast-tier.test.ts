@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FastTierUnsupportedError, Worker } from "../src/index.js";
@@ -196,6 +197,40 @@ describe("fast task tier", () => {
     await queue.enqueue("full-work", {}, { queue: "full-queue" });
     expect(await worker.runOnce()).toBe(true);
     expect(claimFast).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses every claim entry point under serializable isolation", async () => {
+    const queueName = `fast-isolation-${randomUUID()}`;
+    await makeFast(queueName);
+    await queue.enqueue("fast-work", {}, { queue: queueName });
+    const statements = [
+      ["SELECT task_id FROM workhorse.claim_many_v1($1, 'isolation-worker', 1)", [queueName]],
+      ["SELECT task_id FROM workhorse.claim_v1($1, 'isolation-worker')", [queueName]],
+      [
+        `SELECT task_id FROM workhorse.complete_many_and_claim_v1(
+           'isolation-worker', '{}'::uuid[], '{}'::bigint[], '{}'::jsonb[], $1, 1)`,
+        [queueName],
+      ],
+    ] as const;
+    const client = await pool.connect();
+    try {
+      for (const [text, values] of statements) {
+        await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+        await expect(client.query(text, [...values])).rejects.toMatchObject({
+          code: "0A000",
+          message: "Workhorse claims require read committed isolation, not serializable",
+        });
+        await client.query("ROLLBACK");
+      }
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
+    await expect(
+      pool.query("SELECT task_id FROM workhorse.claim_many_v1($1, 'isolation-worker', 1)", [
+        queueName,
+      ]),
+    ).resolves.toMatchObject({ rowCount: 1 });
   });
 
   it("completes a fast task whose queue left the fast tier through complete_v1", async () => {
