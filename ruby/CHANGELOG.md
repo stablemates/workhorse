@@ -44,6 +44,10 @@ other SDKs carry, because every tag names one release of all of them.
   A fast-tier task's `HandlerContext` raises `FastTierUnsupportedError` for checkpoints,
   progress writes, durable waits, and child tasks before any durable write. That holds for a
   task claimed through `claim_many_v1` after its queue moved to the fast tier.
+- A pooled connection that PostgreSQL dropped is discarded through the pool's
+  `discard_current_connection`, so the next statement gets a fresh connection. Before, the pool
+  reused the dead connection until the process restarted. An ordinary SQL error keeps the
+  connection, and the failed statement is never resent.
 - Add `Worker#handle_batch` with `max_size:` and `linger:` in seconds. Once the worker stops, a
   lingering batch runs as soon as every task it claimed has arrived.
 - Change the `handle_batch` block from `|payloads, context|` to `|items|`. Each `BatchHandlerItem`

@@ -45,7 +45,12 @@ module Stablemates
       # String or nil the caller already encoded.
       def rows(sql, params = [])
         @source.with do |connection|
-          result = connection.exec_params(sql, params, 0, STRINGS)
+          result = begin
+            connection.exec_params(sql, params, 0, STRINGS)
+          rescue PG::Error => e
+            discard if Executor.unusable?(connection, e)
+            raise
+          end
           begin
             result.type_map = STRINGS
             result.to_a
@@ -56,6 +61,21 @@ module Stablemates
       rescue PG::Error => e
         raise Executor.translate(e)
       end
+
+      # Marks the checked-out connection for discard, so the pool builds a fresh one. The pool
+      # closes it when the outermost checkout ends, never while a caller's block still holds it. A
+      # caller-owned connection and a source without +discard_current_connection+ are left to their
+      # owner. The failed statement is never resent: its commit outcome is unknown.
+      def discard
+        return unless @source.respond_to?(:discard_current_connection)
+
+        @source.discard_current_connection do |connection|
+          connection.close
+        rescue
+          nil
+        end
+      end
+      private :discard
 
       # Sends a fenced write, and sends it again when PostgreSQL chose it as a deadlock victim.
       #
@@ -75,6 +95,16 @@ module Stablemates
           attempt += 1
           retry
         end
+      end
+
+      # Whether +error+ left +connection+ unable to run another statement. An ordinary SQL error
+      # leaves it usable.
+      def self.unusable?(connection, error)
+        return true if error.is_a?(PG::ConnectionBad) || error.is_a?(PG::UnableToSend)
+
+        connection.status != PG::CONNECTION_OK
+      rescue PG::Error
+        true
       end
 
       # Maps a PG::Error to the SDK's error for its SQLSTATE.
