@@ -14,7 +14,7 @@ import { createSingleAdminAuthentication } from "./authentication.js";
 import { renderDashboardHtml } from "./html.js";
 import { dashboardRouter, isDashboardMutation } from "./router.js";
 import { createDashboardQueueHealthReader, type DashboardQueueHealthReader } from "./read-model.js";
-import { DASHBOARD_STATEMENT_TIMEOUT_MS, dashboardDatabase } from "./sql.js";
+import { boundedQueryable, DASHBOARD_STATEMENT_TIMEOUT_MS, dashboardDatabase } from "./sql.js";
 import { createStaticAssetCache, negotiateAssetEncoding } from "./static-assets.js";
 import type {
   DashboardDurabilityProjector,
@@ -74,6 +74,11 @@ export interface DashboardHostOptions {
    * Defaults to `DASHBOARD_STATEMENT_TIMEOUT_MS`. Raise it for a database whose honest answers
    * genuinely take longer; the bound exists so that a read nobody is waiting for stops occupying a
    * connection of the embedding application's pool.
+   *
+   * The bound needs a pool to lend a connection: a queryable with `connect()`, such as a node-postgres
+   * `Pool`, or an adapter database whose attached pool resolves when the read runs. The Drizzle and
+   * TypeORM adapters attach their ORM's pool; the Prisma and Kysely adapters attach one only when
+   * given their `pool` option. A database with no pool is read without this bound.
    */
   statementTimeoutMs?: number;
   auditActor?: string;
@@ -425,7 +430,8 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
       workspace.database,
       workspace.statementTimeoutMs ?? options.statementTimeoutMs ?? DASHBOARD_STATEMENT_TIMEOUT_MS,
     );
-    const admin = new Admin(workspace.database);
+    // The router reads only the retention preview through Admin, so its Admin reads under the bound.
+    const admin = new Admin(boundedQueryable(database));
     return {
       name,
       basePath: name === null ? path : `${path}/${name}`,
@@ -433,7 +439,6 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
       databaseName: workspace.databaseName,
       queryable: workspace.database,
       database,
-      // Administrative policy and wait reads share the dashboard's caller-owned connection.
       admin,
       queue: new Queue(workspace.database),
       environment: workspace.environment ?? options.environment ?? "unknown",

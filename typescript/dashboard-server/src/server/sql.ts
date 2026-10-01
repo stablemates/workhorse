@@ -1,4 +1,9 @@
-import { databaseErrorCode, type Queryable } from "@stablemates/workhorse";
+import {
+  connectionPoolOf,
+  databaseErrorCode,
+  rowsToQueryResult,
+  type Queryable,
+} from "@stablemates/workhorse";
 
 /**
  * One parameterized SQL fragment.
@@ -114,15 +119,6 @@ interface LentClient extends Queryable {
   release(error?: unknown): void;
 }
 
-interface ConnectionLender {
-  connect(): Promise<unknown>;
-}
-
-function asLender(database: Queryable): ConnectionLender | undefined {
-  const candidate = database as Partial<ConnectionLender>;
-  return typeof candidate.connect === "function" ? (candidate as ConnectionLender) : undefined;
-}
-
 function asLentClient(value: unknown): LentClient | undefined {
   const candidate = value as Partial<LentClient> | null | undefined;
   return typeof candidate?.query === "function" && typeof candidate.release === "function"
@@ -139,23 +135,27 @@ function asLentClient(value: unknown): LentClient | undefined {
  * procedure: PostgreSQL arms the statement timer when the statement starts, so a function that sets
  * the value while it runs never bounds its own execution.
  *
- * Bounding a read needs a connection held across several statements, which only a lender can give.
- * A `Queryable` without `connect()` — an ORM adapter that exposes one pooled entry point and
- * nothing else — is read directly and unbounded, because issuing `BEGIN` and the read separately
- * against such a connection could leave a stranger's connection inside a transaction.
+ * Bounding a read needs a connection held across several statements, which only a pool can lend.
+ * The pool is the one Workhorse itself resolves for a worker: the database when it has `connect()`,
+ * or the pool an ORM adapter attached to it. An adapter that attaches a pool lazily may only reach
+ * it once its ORM connects, so the pool is resolved again for each read.
+ *
+ * A `Queryable` with neither is read directly and unbounded, because issuing `BEGIN` and the read
+ * separately through one shared entry point could leave a stranger's connection inside a
+ * transaction.
  */
 export function dashboardDatabase(
   database: Queryable,
   timeoutMs = DASHBOARD_STATEMENT_TIMEOUT_MS,
 ): DashboardDatabase {
-  const lender = asLender(database);
   return {
     async execute<Row extends Record<string, unknown>>(query: DashboardSql) {
-      if (!lender) {
+      const pool = connectionPoolOf(database);
+      if (!pool) {
         const result = await database.query<Row>(query.text, query.values);
         return { rows: result.rows };
       }
-      const client = asLentClient(await lender.connect());
+      const client = asLentClient(await pool.connect());
       if (!client) throw new TypeError("Database connect() did not return a releasable client");
       try {
         // READ ONLY is a second, cheaper guard: a dashboard read has no business writing, and a
@@ -175,6 +175,21 @@ export function dashboardDatabase(
       } finally {
         client.release();
       }
+    },
+  };
+}
+
+/**
+ * Present the bounded read surface as a `Queryable`, so a core read runs under the same bound.
+ *
+ * The retention preview is computed by `Admin`, which reads through a `Queryable`. Handing it the
+ * caller's connection directly would run that preview with no read-only transaction and no timeout.
+ */
+export function boundedQueryable(database: DashboardDatabase): Queryable {
+  return {
+    async query(text: string, values: readonly unknown[] = []) {
+      const { rows } = await database.execute({ text, values });
+      return rowsToQueryResult(rows) as never;
     },
   };
 }

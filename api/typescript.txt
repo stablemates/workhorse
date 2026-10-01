@@ -61,6 +61,7 @@ interface CompletionClaim
 interface CompletionClaimResult
 interface ConcurrencyPolicy
 interface ConcurrencyPolicyDefinition
+interface ConnectionPool
 interface ContractSchemaOptions
 type CreateChildResult
 type CreateChildrenResult
@@ -313,6 +314,7 @@ interface WorkhorseTelemetrySpan
 function assertSchemaCompatible
 function assertSupportedPostgres
 function attachConnectionPool
+function connectionPoolOf
 function contractSchema
 function createProviderAdapter
 function createProviderQueryable
@@ -1145,6 +1147,13 @@ interface ConcurrencyPolicyDefinition {
   maxActivePerKey?: number | null;
 }
 
+interface ConnectionPool {
+  connect(): Promise<unknown>;
+  options?: {
+    max?: number;
+  };
+}
+
 interface ContractSchemaOptions {
   /**
   * The explicit confirmation the command requires. Without it the outcome is `unconfirmed` and
@@ -1582,6 +1591,11 @@ interface DashboardHostOptions {
   * Defaults to `DASHBOARD_STATEMENT_TIMEOUT_MS`. Raise it for a database whose honest answers
   * genuinely take longer; the bound exists so that a read nobody is waiting for stops occupying a
   * connection of the embedding application's pool.
+  *
+  * The bound needs a pool to lend a connection: a queryable with `connect()`, such as a node-postgres
+  * `Pool`, or an adapter database whose attached pool resolves when the read runs. The Drizzle and
+  * TypeORM adapters attach their ORM's pool; the Prisma and Kysely adapters attach one only when
+  * given their `pool` option. A database with no pool is read without this bound.
   */
   statementTimeoutMs?: number;
   auditActor?: string;
@@ -5136,6 +5150,8 @@ function attachConnectionPool(queryable: Queryable, pool: AdapterConnectionPoolS
 function cancelOutcomeTone(status: DashboardCancelStatus): DashboardResultTone;
 
 function clearDashboardNotifications(): void;
+
+function connectionPoolOf(database: Queryable): ConnectionPool | undefined;
 
 function contractSchema(database: Queryable, options?: ContractSchemaOptions): Promise<SchemaContractOutcome>;
 
