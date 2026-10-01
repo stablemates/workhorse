@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 import asyncpg
 import psycopg
 import pytest
+from psycopg.rows import tuple_row
 from test_enqueue import Connection
 
 from workhorse import (
@@ -18,6 +21,7 @@ from workhorse import (
     TaskTypeContracts,
 )
 from workhorse._statements import MINIMUM_SCHEMA_VERSION, PROTOCOL_VERSION
+from workhorse.client import _ContractCache
 
 COMPATIBLE: list[dict[str, Any]] = [
     {"kind": "schema", "version": MINIMUM_SCHEMA_VERSION},
@@ -25,10 +29,10 @@ COMPATIBLE: list[dict[str, Any]] = [
 ]
 
 
-def definition(version: str) -> dict[str, Any]:
+def definition(version: str, required: str = "name") -> dict[str, Any]:
     return {
         "version": version,
-        "schema": {"payload": {"type": "object", "required": ["name"]}, "result": True},
+        "schema": {"payload": {"type": "object", "required": [required]}, "result": True},
         "payload_max_bytes": 2048,
         "result_max_bytes": 4096,
         "payload_redact_keys": [],
@@ -212,6 +216,220 @@ async def test_async_queue_caches_and_refreshes_on_mismatch() -> None:
     refreshed = connection.calls[before:]
     assert len(refreshed) == 3
     assert contract_version(refreshed[2]) == "v2"
+
+
+# A definition read during this call is current, so a local rejection never reads it again. Each
+# script ends with a spare definition that a second read would consume.
+COLD_BATCH: list[list[dict[str, Any]]] = [
+    COMPATIBLE,
+    [],
+    COMPATIBLE,
+    [definition("v1")],
+    [definition("v1")],
+]
+MISMATCH_THEN_REJECT: list[list[dict[str, Any]]] = [
+    COMPATIBLE,
+    [],
+    COMPATIBLE,
+    [definition("v1")],
+    mismatch("email.send"),
+    [definition("v2", required="other")],
+    [definition("v2", required="other")],
+]
+FRESHLY_READ = [
+    pytest.param(COLD_BATCH, [{"name": "valid"}, {"missing": "name"}], id="cold-batch"),
+    pytest.param(MISMATCH_THEN_REJECT, [{"name": "valid"}], id="mismatch-then-reject"),
+]
+
+
+@pytest.mark.parametrize(("script", "payloads"), FRESHLY_READ)
+def test_a_definition_read_during_the_call_is_not_read_again(
+    script: list[list[dict[str, Any]]], payloads: list[dict[str, Any]]
+) -> None:
+    connection = Connection([list(response) for response in script])
+    queue = Queue(connection)
+    queue.sync_contracts(contracts("v1"))
+
+    with pytest.raises(TaskContractValidationError):
+        queue.enqueue_many([EnqueueRequest("email.send", payload) for payload in payloads])
+    assert len(connection.responses) == 1
+
+
+@pytest.mark.parametrize(("script", "payloads"), FRESHLY_READ)
+async def test_async_queues_do_not_reread_a_definition_read_during_the_call(
+    script: list[list[dict[str, Any]]], payloads: list[dict[str, Any]]
+) -> None:
+    connection = ScriptedAsyncpg([list(response) for response in script])
+    queue = AsyncQueue.from_asyncpg(connection)
+    await queue.sync_contracts(contracts("v1"))
+
+    with pytest.raises(TaskContractValidationError):
+        await queue.enqueue_many([EnqueueRequest("email.send", payload) for payload in payloads])
+    assert len(connection.responses) == 1
+
+
+# A concurrent enqueue reads v1, and this batch then reads and publishes v2. The concurrent
+# enqueue's slower load must not put v1 back in the shared cache, and the batch's last item must
+# validate against the v2 it read. Its audit.log lookup is where it waits for the concurrent
+# enqueue to finish. A later enqueue then validates against the cached v2 without a lookup.
+INTERLEAVED_BATCH = [
+    EnqueueRequest("email.send", {"other": "first"}),
+    EnqueueRequest("audit.log", {}),
+    EnqueueRequest("email.send", {"other": "third"}),
+]
+
+
+def interleaved_rows(actor: str, sql: str, parameters: Sequence[object]) -> list[dict[str, Any]]:
+    if "'protocol' AS kind" in sql:
+        return COMPATIBLE
+    if "get_contract_definition_v1" in sql:
+        if parameters[0] == "audit.log":
+            return []
+        return [definition("v1") if actor == "concurrent" else definition("v2", required="other")]
+    if "enqueue_many_v1" in sql:
+        if actor != "batch":
+            return accepted(actor)
+        return [
+            {
+                "ordinal": ordinal,
+                "task_id": f"batch-{ordinal}",
+                "outcome": "accepted",
+                "reason": None,
+            }
+            for ordinal in range(1, len(INTERLEAVED_BATCH) + 1)
+        ]
+    return []
+
+
+class InterleavingCursor:
+    def __init__(self, connection: InterleavingConnection) -> None:
+        self._connection = connection
+        self.description: list[tuple[str]] = []
+        self._rows: list[dict[str, Any]] = []
+
+    def __enter__(self) -> InterleavingCursor:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def execute(self, sql: str, parameters: Sequence[object] = ()) -> None:
+        self._rows = self._connection.rows(sql, parameters)
+        self.description = [(name,) for name in self._rows[0]] if self._rows else []
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        return [tuple(row.values()) for row in self._rows]
+
+
+class InterleavingConnection:
+    def __init__(self) -> None:
+        self.concurrent_reading = threading.Event()
+        self.batch_stored = threading.Event()
+        self.concurrent_done = threading.Event()
+        self.statements: list[str] = []
+
+    def cursor(self, *, row_factory: Any = None) -> InterleavingCursor:
+        assert row_factory is tuple_row
+        return InterleavingCursor(self)
+
+    def rows(self, sql: str, parameters: Sequence[object]) -> list[dict[str, Any]]:
+        actor = threading.current_thread().name
+        self.statements.append(sql)
+        if "get_contract_definition_v1" in sql and actor == "concurrent":
+            self.concurrent_reading.set()
+            assert self.batch_stored.wait(5)
+        if "get_contract_definition_v1" in sql and parameters[0] == "audit.log":
+            self.batch_stored.set()
+            assert self.concurrent_done.wait(5)
+        if "enqueue_many_v1" in sql and actor == "concurrent":
+            self.concurrent_done.set()
+        return interleaved_rows(actor, sql, parameters)
+
+
+def test_a_concurrent_late_store_does_not_change_the_definition_a_batch_read() -> None:
+    connection = InterleavingConnection()
+    queue = Queue(cast(Any, connection))
+    queue.sync_contracts(contracts("v1"))
+    outcomes: dict[str, object] = {}
+
+    def run(actor: str, requests: list[EnqueueRequest]) -> None:
+        try:
+            outcomes[actor] = queue.enqueue_many(requests)
+        except Exception as error:
+            outcomes[actor] = error
+
+    concurrent = threading.Thread(
+        target=run,
+        args=("concurrent", [EnqueueRequest("email.send", {"name": "v1"})]),
+        name="concurrent",
+    )
+    concurrent.start()
+    assert connection.concurrent_reading.wait(5)
+    batch = threading.Thread(target=run, args=("batch", INTERLEAVED_BATCH), name="batch")
+    batch.start()
+    batch.join(5)
+    concurrent.join(5)
+
+    assert outcomes == {"concurrent": ["concurrent"], "batch": ["batch-1", "batch-2", "batch-3"]}
+    before = len(connection.statements)
+    assert queue.enqueue("email.send", {"other": "later"}) == threading.current_thread().name
+    assert not any("get_contract_definition_v1" in sql for sql in connection.statements[before:])
+
+
+class InterleavingAsyncpg:
+    def __init__(self) -> None:
+        self.concurrent_reading = asyncio.Event()
+        self.batch_stored = asyncio.Event()
+        self.concurrent_done = asyncio.Event()
+        self.statements: list[str] = []
+
+    async def fetch(self, sql: str, *parameters: object) -> Sequence[Mapping[str, object]]:
+        task = asyncio.current_task()
+        actor = task.get_name() if task is not None else ""
+        self.statements.append(sql)
+        if "get_contract_definition_v1" in sql and actor == "concurrent":
+            self.concurrent_reading.set()
+            await self.batch_stored.wait()
+        if "get_contract_definition_v1" in sql and parameters[0] == "audit.log":
+            self.batch_stored.set()
+            await self.concurrent_done.wait()
+        if "enqueue_many_v1" in sql and actor == "concurrent":
+            self.concurrent_done.set()
+        return interleaved_rows(actor, sql, parameters)
+
+
+async def test_a_concurrent_late_store_does_not_change_the_definition_an_async_batch_read() -> None:
+    connection = InterleavingAsyncpg()
+    queue = AsyncQueue.from_asyncpg(cast(Any, connection))
+    await queue.sync_contracts(contracts("v1"))
+
+    concurrent = asyncio.create_task(
+        queue.enqueue_many([EnqueueRequest("email.send", {"name": "v1"})]), name="concurrent"
+    )
+    await asyncio.wait_for(connection.concurrent_reading.wait(), 5)
+    batch = asyncio.create_task(queue.enqueue_many(INTERLEAVED_BATCH), name="batch")
+    results = await asyncio.wait_for(asyncio.gather(concurrent, batch, return_exceptions=True), 5)
+
+    assert results == [["concurrent"], ["batch-1", "batch-2", "batch-3"]]
+    before = len(connection.statements)
+    later = asyncio.create_task(queue.enqueue("email.send", {"other": "later"}), name="later")
+    assert await later == "later"
+    assert not any("get_contract_definition_v1" in sql for sql in connection.statements[before:])
+
+
+def test_a_load_older_than_the_cached_entry_or_a_clear_does_not_publish() -> None:
+    cache = _ContractCache()
+    slower = cache.start_load("email.send")
+    newer = cache.start_load("email.send")
+    cache.publish("email.send", newer, definition("v2"))
+    cache.publish("email.send", slower, definition("v1"))
+    assert cache.get("email.send") == definition("v2")
+
+    before_clear = cache.start_load("email.send")
+    cache.clear()
+    cache.publish("email.send", before_clear, definition("v1"))
+    with pytest.raises(KeyError):
+        cache.get("email.send")
 
 
 class StatementLog:
