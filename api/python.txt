@@ -874,6 +874,9 @@ class TaskTypeContracts
   current_version: str
   versions: Mapping[str, TaskContractVersion]
 
+class TaskValueSizeLimitError(WorkhorseError)
+  def __init__(self, task_type: str, value_kind: str, actual_bytes: int, max_bytes: int) -> None
+
 class TaskWait
   def __init__(self, task_id: str, name: str, mode: Literal['relative', 'absolute'], duration_ms: int | None, requested_wake_at: datetime | None, wake_at: datetime, attempt: int, fence_token: int, worker_id: str, created_at: datetime) -> None
   attempt: int
@@ -5587,6 +5590,9 @@ class TaskContractUnavailableError(WorkhorseError)
 
 class TaskContractValidationError(WorkhorseError)
   def __init__(self, task_type: str, version: str, kind: str) -> None
+
+class TaskValueSizeLimitError(WorkhorseError)
+  def __init__(self, task_type: str, value_kind: str, actual_bytes: int, max_bytes: int) -> None
 
 class WaitConflictError(WorkhorseError)
   def __init__(self, task_id: str, wait_name: str) -> None

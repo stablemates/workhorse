@@ -223,6 +223,17 @@ class TaskContractUnavailableError(WorkhorseError):
         super().__init__(f"{task_type} contract version {version} is unavailable")
 
 
+class TaskValueSizeLimitError(WorkhorseError):
+    """A task value measures more bytes than its configured limit allows."""
+
+    def __init__(self, task_type: str, value_kind: str, actual_bytes: int, max_bytes: int) -> None:
+        self.task_type = task_type
+        self.value_kind = value_kind
+        self.actual_bytes = actual_bytes
+        self.max_bytes = max_bytes
+        super().__init__(f"{task_type} {value_kind} exceeds its configured size limit")
+
+
 class EnqueueIdempotencyConflictError(WorkhorseError):
     def __init__(self, details: Mapping[str, object]) -> None:
         self.details = details
@@ -326,6 +337,7 @@ __all__ = [
     "StaleLeaseError",
     "TaskContractUnavailableError",
     "TaskContractValidationError",
+    "TaskValueSizeLimitError",
     "WaitConflictError",
     "WaitLeaseLostError",
     "WaitLimitExceededError",

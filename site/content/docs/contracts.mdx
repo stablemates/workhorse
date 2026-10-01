@@ -126,6 +126,11 @@ queue-wide limits, and a contract version can override them with `maxPayloadByte
 so clients cannot disagree about the accepted size — an oversized value throws
 `TaskValueSizeLimitError` with the actual and allowed byte counts.
 
+The TypeScript, Go, and Python workers measure a handler result the same way before they send its
+completion. An oversized result fails that attempt with `TaskValueSizeLimitError` and follows the
+retry path. In Python, a `NaN` or infinite number fails the attempt with `ValueError` the same way.
+Either failure stays local to its task, so the worker keeps claiming other work.
+
 ## Hide sensitive fields from operators
 
 `sensitivePayloadKeys` and `sensitiveResultKeys` name top-level object fields. The split is

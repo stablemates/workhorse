@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Mapping
 from typing import Any, cast
 
@@ -125,3 +127,64 @@ def serialize_contracts(contracts: Mapping[str, TaskTypeContracts]) -> list[dict
             }
         )
     return definitions
+
+
+_EXPONENT_NUMBER = re.compile(r"^(-?)(\d+)(?:\.(\d+))?e([+-]\d+)$")
+
+
+def jsonb_text_bytes(value: object) -> int:
+    """Measure octet_length(value::jsonb::text) for a value json.loads produced.
+
+    PostgreSQL prints jsonb with a space after every separator, keeps non-ASCII characters
+    unescaped, and prints numbers as numeric text, which never uses an exponent. The walk keeps
+    its own stack, so any nesting json.loads produced measures without reaching the recursion
+    limit.
+    """
+    total = 0
+    pending: list[object] = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, list):
+            total += 2 + max(0, len(item) - 1) * 2
+            pending.extend(item)
+        elif isinstance(item, dict):
+            total += 2 + max(0, len(item) - 1) * 2
+            for key, member in item.items():
+                total += _string_bytes(key) + 2
+                pending.append(member)
+        else:
+            total += _scalar_bytes(item)
+    return total
+
+
+def _scalar_bytes(value: object) -> int:
+    if value is None or value is True:
+        return 4
+    if value is False:
+        return 5
+    if isinstance(value, int):
+        return len(str(value))
+    if isinstance(value, float):
+        return _numeric_text_bytes(value)
+    if isinstance(value, str):
+        return _string_bytes(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _string_bytes(value: str) -> int:
+    # Python escapes exactly the characters PostgreSQL's escape_json escapes, with the same text.
+    return len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+
+
+def _numeric_text_bytes(value: float) -> int:
+    # Numeric text has no negative zero, so -0.0 prints as 0.0.
+    token = repr(abs(value) if value == 0 else value)
+    match = _EXPONENT_NUMBER.match(token)
+    if match is None:
+        return len(token)
+    sign, integer, fraction, exponent_text = match.groups()
+    fraction = fraction or ""
+    exponent = int(exponent_text)
+    scale = max(0, len(fraction) - exponent)
+    integer_length = max(1, len(integer) + exponent)
+    return len(sign) + integer_length + (1 + scale if scale > 0 else 0)
