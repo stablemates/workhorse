@@ -54,7 +54,12 @@ const VALIDATION_KEYWORDS = new Set([
   "type",
   "uniqueItems",
 ]);
-const ajv = new Ajv2020({ strict: true, validateFormats: false });
+// Ajv strict mode adds Ajv-only lint rules, such as union types, tuple bounds, and `then` without
+// `if`. Those rules narrow the shared profile, so they stay off. The whitelist above still rejects
+// unknown keywords, and Ajv still validates each schema against the Draft 2020-12 meta-schema.
+// `strictNumbers` is an instance rule, not a lint rule: it keeps NaN and the infinities out of a
+// number, since JSON.stringify would store them as a contract-invalid null.
+const ajv = new Ajv2020({ strict: false, strictNumbers: true, validateFormats: false });
 const objectValidators = new WeakMap<object, ValidateFunction<Json>>();
 const booleanValidators = new Map<boolean, ValidateFunction<Json>>();
 

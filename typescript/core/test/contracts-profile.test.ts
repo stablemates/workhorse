@@ -20,6 +20,24 @@ describe("contract schema profile", () => {
     expect(compileContractSchema(schema)).toBe(compileContractSchema(schema));
   });
 
+  it("still rejects a keyword value that the Draft 2020-12 meta-schema forbids", () => {
+    expect(() => compileContractSchema({ type: "string", minLength: -1 })).toThrow(/minLength/);
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "rejects the non-finite number %s, which JSON would store as null",
+    (value) => {
+      const number = compileContractSchema({ type: "number" });
+      const nested = compileContractSchema({
+        type: "object",
+        properties: { count: { type: "number" } },
+      });
+      expect(number(value as Json)).toBe(false);
+      expect(nested({ count: value } as Json)).toBe(false);
+      expect(nested({ count: 1 })).toBe(true);
+    },
+  );
+
   it.each(fixtures)("matches the shared table for $id", (fixture) => {
     let validator: ReturnType<typeof compileContractSchema> | undefined;
     let schemaError: unknown;

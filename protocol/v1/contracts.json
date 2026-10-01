@@ -33,6 +33,49 @@
     "instances": [{ "value": "deliberately not an email", "valid": true }]
   },
   {
+    "id": "union-type",
+    "schema": { "type": ["string", "number"] },
+    "instances": [
+      { "value": "text", "valid": true },
+      { "value": 1.5, "valid": true },
+      { "value": true, "valid": false }
+    ]
+  },
+  {
+    "id": "properties-without-object-type",
+    "schema": { "properties": { "count": { "type": "integer" } } },
+    "instances": [
+      { "value": { "count": 1 }, "valid": true },
+      { "value": "not an object", "valid": true },
+      { "value": { "count": "one" }, "valid": false }
+    ]
+  },
+  {
+    "id": "prefix-items-without-tuple-bounds",
+    "schema": { "type": "array", "prefixItems": [{ "type": "string" }] },
+    "instances": [
+      { "value": [], "valid": true },
+      { "value": ["first", 2], "valid": true },
+      { "value": [1], "valid": false }
+    ]
+  },
+  {
+    "id": "required-without-properties",
+    "schema": { "type": "object", "required": ["id"] },
+    "instances": [
+      { "value": { "id": 1 }, "valid": true },
+      { "value": {}, "valid": false }
+    ]
+  },
+  {
+    "id": "dependent-keywords-without-their-anchor",
+    "schema": { "type": "array", "minContains": 2, "then": false },
+    "instances": [
+      { "value": [], "valid": true },
+      { "value": "not an array", "valid": false }
+    ]
+  },
+  {
     "id": "remote-reference-rejected",
     "schema": { "$ref": "https://example.com/external.json" },
     "schemaError": true
