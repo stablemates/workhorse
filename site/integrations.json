@@ -143,6 +143,15 @@
       "verifiedOn": "2026-10-02"
     },
     {
+      "slug": "sqlalchemy",
+      "name": "SQLAlchemy",
+      "category": "orms",
+      "tier": "documented",
+      "summary": "Enqueues through SQLAlchemy's enlisted synchronous or asynchronous Psycopg connection.",
+      "boundary": "SQLAlchemy owns completion and pool return; its asyncpg dialect is not supported by this recipe.",
+      "verifiedOn": "2026-10-02"
+    },
+    {
       "slug": "serverless",
       "name": "Serverless and edge",
       "category": "runtimes",
