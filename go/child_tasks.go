@@ -121,11 +121,15 @@ func (err *ChildLeaseLostError) Unwrap() error { return ErrLeaseLost }
 
 // ChildConflictError identifies a retained child name or set replayed with another request.
 type ChildConflictError struct {
-	ParentTaskID string
-	ChildName    string
+	ParentTaskID    string
+	ChildName       string
+	StoredChildName string
 }
 
 func (err *ChildConflictError) Error() string {
+	if err.StoredChildName != emptyString && err.StoredChildName != err.ChildName {
+		return fmt.Sprintf(childRenameConflictErrorFormat, err.ParentTaskID, err.StoredChildName, err.ChildName)
+	}
 	return fmt.Sprintf(childConflictErrorFormat, err.ChildName, err.ParentTaskID)
 }
 
@@ -266,7 +270,8 @@ func (handler *HandlerContext) createChild(
 	case durableStaleValue:
 		return nil, &ChildLeaseLostError{ParentTaskID: handler.Task.ID}
 	case durableConflictValue:
-		return nil, &ChildConflictError{ParentTaskID: handler.Task.ID, ChildName: name}
+		storedName, _ := row[rowStoredChildNameField].(string)
+		return nil, &ChildConflictError{ParentTaskID: handler.Task.ID, ChildName: name, StoredChildName: storedName}
 	case durableLimitExceededValue:
 		return nil, &ChildLimitExceededError{ParentTaskID: handler.Task.ID}
 	default:

@@ -89,12 +89,23 @@ class ChildLeaseLostError(LifecycleError):
 
 
 class ChildConflictError(WorkhorseError):
-    def __init__(self, parent_task_id: str, child_name: str) -> None:
+    def __init__(
+        self, parent_task_id: str, child_name: str, stored_child_name: str | None = None
+    ) -> None:
         self.parent_task_id = parent_task_id
         self.child_name = child_name
-        super().__init__(
-            f"Child {child_name} for task {parent_task_id} already exists with a different request"
-        )
+        if stored_child_name is not None and stored_child_name != child_name:
+            message = (
+                f"Child replay for task {parent_task_id} conflicts: "
+                f"stored child {json.dumps(stored_child_name)}, "
+                f"requested child {json.dumps(child_name)}"
+            )
+        else:
+            message = (
+                f"Child {child_name} for task {parent_task_id} "
+                "already exists with a different request"
+            )
+        super().__init__(message)
 
 
 class ChildLimitExceededError(WorkhorseError):

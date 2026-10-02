@@ -405,6 +405,8 @@ describe("schema installation", () => {
         ORDER BY name`,
     );
     expect(versioned.rows).toEqual([
+      { name: "create_child_v2" },
+      { name: "create_single_child_v2" },
       { name: "fire_due_schedules_v2" },
       { name: "sync_schedule_definitions_v2" },
     ]);
@@ -526,6 +528,7 @@ describe("schema installation", () => {
       { version: 50, description: "sample the clock after the row lock" },
       { version: 51, description: "keep cold-export segments one UTC day" },
       { version: 52, description: "serialize schedule synchronization with the tick" },
+      { version: 53, description: "distinguish a single-child rename from a second child" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

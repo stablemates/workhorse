@@ -1057,7 +1057,7 @@
             },
             "keyDigest": "b0fd606eefe8",
             "keyLength": 17,
-            "keyPreview": "protocol…lict",
+            "keyPreview": "protocol\u2026lict",
             "ordinal": 1,
             "rejectedRequestDigest": "d5fdb44699fa0aec5063a464465be8690df99a41cfe56f19fde6f15cab76a9df",
             "scope": "protocol",
@@ -1757,6 +1757,267 @@
             }
           ]
         }
+      },
+      {
+        "id": "reclaim-single-parent",
+        "sql": "SELECT jsonb_build_object('fence', fence_token) AS value FROM workhorse.claim_v1($1, $2, 30000)",
+        "parameters": ["protocol-single-parent", "protocol-single-parent-worker"],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "fence": {
+                  "$type": "integer"
+                }
+              }
+            }
+          ]
+        },
+        "capture": {
+          "singleReplayFence": "0.value.fence"
+        }
+      },
+      {
+        "id": "renamed-single-child-replay",
+        "sql": "SELECT status, stored_child_name FROM workhorse.create_child_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
+        "parameters": [
+          {
+            "$ref": "singleParentTask"
+          },
+          "protocol-single-parent-worker",
+          {
+            "$ref": "singleReplayFence"
+          },
+          "renamed",
+          {
+            "queue": "protocol-single-child",
+            "type": "protocol.single-child",
+            "payload": {
+              "value": 8
+            }
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "status": "conflict",
+              "stored_child_name": "only"
+            }
+          ]
+        }
+      },
+      {
+        "id": "replay-original-single-child",
+        "sql": "SELECT status, stored_child_name FROM workhorse.create_child_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
+        "parameters": [
+          {
+            "$ref": "singleParentTask"
+          },
+          "protocol-single-parent-worker",
+          {
+            "$ref": "singleReplayFence"
+          },
+          "only",
+          {
+            "queue": "protocol-single-child",
+            "type": "protocol.single-child",
+            "payload": {
+              "value": 8
+            }
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "status": "completed",
+              "stored_child_name": "only"
+            }
+          ]
+        }
+      },
+      {
+        "id": "real-second-single-child",
+        "sql": "SELECT status, stored_child_name FROM workhorse.create_child_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
+        "parameters": [
+          {
+            "$ref": "singleParentTask"
+          },
+          "protocol-single-parent-worker",
+          {
+            "$ref": "singleReplayFence"
+          },
+          "second",
+          {
+            "queue": "protocol-single-child",
+            "type": "protocol.single-child",
+            "payload": {
+              "value": 8
+            }
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "status": "limit_exceeded",
+              "stored_child_name": "only"
+            }
+          ]
+        }
+      },
+      {
+        "id": "stale-single-child-rename",
+        "sql": "SELECT status, stored_child_name FROM workhorse.create_child_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
+        "parameters": [
+          {
+            "$ref": "singleParentTask"
+          },
+          "protocol-single-parent-worker",
+          {
+            "$ref": "singleParentFence"
+          },
+          "renamed",
+          {
+            "queue": "protocol-single-child",
+            "type": "protocol.single-child",
+            "payload": {
+              "value": 8
+            }
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "status": "stale",
+              "stored_child_name": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "release-single-parent-for-another-run",
+        "sql": "SELECT workhorse.release_owned_v1($1::uuid, $2::text, $3::bigint) AS status",
+        "parameters": [
+          {
+            "$ref": "singleParentTask"
+          },
+          "protocol-single-parent-worker",
+          {
+            "$ref": "singleReplayFence"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "status": "released"
+            }
+          ]
+        }
+      },
+      {
+        "id": "reclaim-already-joined-single-parent",
+        "sql": "SELECT jsonb_build_object('fence', fence_token) AS value FROM workhorse.claim_v1($1, $2, 30000)",
+        "parameters": ["protocol-single-parent", "protocol-single-parent-worker"],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "fence": {
+                  "$type": "integer"
+                }
+              }
+            }
+          ]
+        },
+        "capture": {
+          "singleLaterFence": "0.value.fence"
+        }
+      },
+      {
+        "id": "rename-already-joined-single-child",
+        "sql": "SELECT status, stored_child_name FROM workhorse.create_child_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
+        "parameters": [
+          {
+            "$ref": "singleParentTask"
+          },
+          "protocol-single-parent-worker",
+          {
+            "$ref": "singleLaterFence"
+          },
+          "renamed",
+          {
+            "queue": "protocol-single-child",
+            "type": "protocol.single-child",
+            "payload": {
+              "value": 8
+            }
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "status": "conflict",
+              "stored_child_name": "only"
+            }
+          ]
+        }
+      },
+      {
+        "id": "rejoin-already-joined-single-child",
+        "sql": "SELECT status, stored_child_name FROM workhorse.create_child_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
+        "parameters": [
+          {
+            "$ref": "singleParentTask"
+          },
+          "protocol-single-parent-worker",
+          {
+            "$ref": "singleLaterFence"
+          },
+          "only",
+          {
+            "queue": "protocol-single-child",
+            "type": "protocol.single-child",
+            "payload": {
+              "value": 8
+            }
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "status": "completed",
+              "stored_child_name": "only"
+            }
+          ]
+        }
+      },
+      {
+        "id": "second-child-after-rejoining",
+        "sql": "SELECT status, stored_child_name FROM workhorse.create_child_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
+        "parameters": [
+          {
+            "$ref": "singleParentTask"
+          },
+          "protocol-single-parent-worker",
+          {
+            "$ref": "singleLaterFence"
+          },
+          "second",
+          {
+            "queue": "protocol-single-child",
+            "type": "protocol.single-child",
+            "payload": {
+              "value": 8
+            }
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "status": "limit_exceeded",
+              "stored_child_name": "only"
+            }
+          ]
+        }
       }
     ]
   },
@@ -1896,7 +2157,7 @@
             {
               "value": {
                 "promotionLagMs": 10000,
-                "schemaVersion": 52
+                "schemaVersion": 53
               }
             }
           ]

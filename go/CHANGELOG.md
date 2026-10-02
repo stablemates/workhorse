@@ -9,6 +9,15 @@ upgrades in place: every release ships ordered migrations, and inside a major li
 adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses it offline, with the
 [0.5.0 upgrade steps](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md#050--2026-09-28). The upgrade from 0.5 to 0.6 only adds.
 
+## Unreleased
+
+Requires **schema v53**. Migrate the schema before starting updated processes.
+The final schema version is **53**, and the SDK compatibility floor is schema version **53**.
+Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
+
+A renamed individual child on replay now raises a conflict with the stored and requested names.
+A second child after joining the retained child in the same handler run still exceeds the child limit (SM-1106).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

@@ -18,10 +18,19 @@ a major line a migration only adds. Migration 0025 is the one exception: a datab
 0.5.0 crosses it offline, with the [0.5.0 upgrade steps](#050--2026-09-28). The upgrade from 0.5 to
 0.6 only adds. Breaking changes are always listed with upgrade steps.
 
+## Unreleased
+
+Requires **schema v53**. Migrate the schema before starting updated processes.
+The final schema version is **53**, and the SDK compatibility floor is schema version **53**.
+Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
+
+A renamed individual child on replay now raises a conflict with the stored and requested names.
+A second child after joining the retained child in the same handler run still exceeds the child limit (SM-1106).
+
 **Pending release — fixed:** TypeScript `runChild`, `runChildren`, and `runChildrenAll` join existing
 children after their task type's contract advances. Replay retries a contract conflict with the
 stored versions and rebuilds under those versions when the current contract rejects the payload.
-Changed payloads and child sets still raise `ChildConflictError`. No schema migration is required.
+Changed payloads and child sets still raise `ChildConflictError`. This contract replay fix requires no additional migration.
 
 ## 0.6.1 — 2026-10-02
 

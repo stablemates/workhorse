@@ -41,7 +41,14 @@ module Stablemates
 
     # A named primitive received a different request under its retained identity.
     class ConflictError < NamedOperationError
-      def initialize(operation, name) = super(operation, name, "conflicts with a different retained request")
+      def initialize(operation, name, stored_name: nil)
+        message = if stored_name && stored_name != name
+          "conflicts: stored child #{stored_name.inspect}, requested child #{name.inspect}"
+        else
+          "conflicts with a different retained request"
+        end
+        super(operation, name, message)
+      end
     end
 
     # A named primitive exceeded its limit.

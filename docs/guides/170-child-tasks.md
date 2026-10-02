@@ -104,6 +104,11 @@ unless a failure takes precedence.
 Code before `runChild` runs again after the parent resumes. Use ordinary idempotency or
 `HandlerContext.checkpoint` when repeating that work would cause an unwanted external effect.
 
+If a resumed handler requests a different single-child name, Workhorse raises a conflict that names the stored and requested children.
+That diagnosis identifies handler code changed under a suspended parent.
+If the same handler run first joins the stored child and then requests another name, Workhorse raises the child-limit error.
+Keep child names stable across deployments while parents still need their results.
+
 Changing a child name, payload, type, option, or set membership on replay raises
 `ChildConflictError`. Exceeding the bounded child set raises `ChildLimitExceededError`. If the
 joined object exceeds the parent's result contract, `ChildResultLimitExceededError` rejects it.

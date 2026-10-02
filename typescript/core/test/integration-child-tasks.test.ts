@@ -34,6 +34,45 @@ const underTrace = <T>(traceId: string, spanId: string, operation: () => Promise
   );
 
 describe("child tasks", () => {
+  it.each([false, true])(
+    "distinguishes a renamed replay from a second child (second=%s)",
+    async (second) => {
+      const parentId = await queue.enqueue("rename-parent", null, { queue: "rename-parents" });
+      let name = "a";
+      let refusal: unknown;
+      const worker = new Worker(queue, {
+        queue: "rename-parents",
+        workerId: "rename-parent-worker",
+      });
+      worker.handle("rename-parent", async (_payload, context) => {
+        try {
+          if (second)
+            await context.runChild("a", "rename-child", null, { queue: "rename-children" });
+          await context.runChild(name, "rename-child", null, { queue: "rename-children" });
+        } catch (error) {
+          if (name === "b") refusal = error;
+          else throw error;
+        }
+        return null;
+      });
+      expect(await worker.runOnce()).toBe(true);
+      await expect(admin.getTask(parentId)).resolves.toMatchObject({ state: "blocked" });
+      const child = await queue.claim("rename-child-worker", { queue: "rename-children" });
+      expect(await queue.complete(child!, "rename-child-worker", null)).toBe(true);
+      name = "b";
+      expect(await worker.runOnce()).toBe(true);
+      expect(refusal).toMatchObject({
+        name: second ? "ChildLimitExceededError" : "ChildConflictError",
+      });
+      expect((refusal as Error).message).toContain(
+        second ? "exceeds the supported child limit" : 'stored child "a", requested child "b"',
+      );
+      await expect(admin.getChildLineage(parentId)).resolves.toMatchObject({
+        records: [{ name: "a" }],
+      });
+    },
+  );
+
   it("creates bounded fan-out and joins results by stable child name", async () => {
     const parentId = await queue.enqueue("fan-out-parent", null, { queue: "fan-out-parents" });
     let activations = 0;
@@ -577,10 +616,22 @@ describe("child tasks", () => {
     // Reinstate the version-31 child path, which strands the parent this way.
     await pool.query(before.slice(start, end));
     try {
-      await queue.createChild(parent!, "stuck-child-worker", "late", "stuck-child", null, {
-        queue: "stuck-children",
-        deadline: new Date(Date.now() - 60_000),
-      });
+      // This rehearsal must call the retained v1 path whose historical definition was restored.
+      await pool.query(
+        "SELECT * FROM workhorse.create_child_v1($1::uuid, $2, $3::bigint, $4, $5::jsonb)",
+        [
+          parent!.id,
+          "stuck-child-worker",
+          parent!.fenceToken.toString(),
+          "late",
+          JSON.stringify({
+            queue: "stuck-children",
+            type: "stuck-child",
+            payload: null,
+            deadline: new Date(Date.now() - 60_000).toISOString(),
+          }),
+        ],
+      );
       await expect(admin.getTask(parentId)).resolves.toMatchObject({ state: "blocked" });
       await expect(
         pool.query(`SELECT pending_prerequisites FROM workhorse.task_runtime WHERE task_id = $1`, [

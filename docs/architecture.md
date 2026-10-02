@@ -2,7 +2,7 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript, Python, Go, and Rust `Queue`, `Admin`, and `Worker` remain thin protocol clients.
 
-The current schema version is 52 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
+The current schema version is 53 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
 (`WORKHORSE_SCHEMA_BASELINE_VERSION`). `sql/releases/0006.sql` contains the baseline clean-install
 artifact, which is the 0.2.0 schema. The chain began at 1 and was pruned to this baseline when
 0.1.x support was dropped
@@ -18,8 +18,8 @@ contract step pending at the installed version through `workhorse schema contrac
 `--yes` and first names every worker still live on a retiring protocol. The current migration plan
 has one contract step: `0025-add-a-fast-task-tier.sql` moves schema 24 to 25 and retires
 protocols 1 through 4. `migrateSchema` therefore stops at schema 24 on an older installation, and
-`contractSchema` applies step 25. The additive steps 26 through 52 follow, so a second `migrateSchema`
-run completes the plan. Their files run from `0026` to `0053`: file number `0035` was reserved and
+`contractSchema` applies step 25. The additive steps 26 through 53 follow, so a second `migrateSchema`
+run completes the plan. Their files run from `0026` to `0054`: file number `0035` was reserved and
 never used, so from `0036` on a file's number is one above the version it produces. Step 25 ships without the usual retention window, as
 [ADR 0077](decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) §6 records.
 
@@ -60,7 +60,7 @@ failure leaves the earlier statements applied at the starting version and report
 `Workhorse migration <file> failed part-way and rolled nothing back`. `lock_timeout` is not set for
 such a step.
 
-An installed version below the baseline 6 or above the current 52, a version no step starts from, and
+An installed version below the baseline 6 or above the current 53, a version no step starts from, and
 a `workhorse.schema_version` table without exactly one row fail without running a migration.
 `typescript/core/test/schema-migrations.test.ts` migrates every frozen artifact under
 `sql/releases/` and requires schema-only dump equality with a clean installation.
@@ -409,7 +409,7 @@ Status `stale` returns `WaitLeaseLostError`, which unwraps to `ErrLeaseLost`; `c
 
 Go `HandlerContext.RunChild(name, taskType, payload, options ...EnqueueOptions)` accepts one
 optional `EnqueueOptions` value. A child name contains 1 through 200 Unicode code points. The method
-rejects idempotency, debounce, throttle, and dependencies before it calls `create_child_v1`. The
+rejects idempotency, debounce, throttle, and dependencies before it calls `create_child_v2`. The
 default child queue is `default`. Status `created` records the private child suspension and cancels
 the handler context. Status `completed` returns the retained result. Concurrent calls with one name
 share one result only when their canonical requests match.
@@ -450,7 +450,7 @@ canonical encoded contexts match. A different in-flight or retained context rais
 
 `HandlerContext.run_child(name, type, payload, options=None)` accepts child names from 1 through 200
 characters. It encodes `EnqueueOptions` without keyed modes or dependencies and calls
-`create_child_v1`. An omitted child queue is `default`. Status `created` submits
+`create_child_v2`. An omitted child queue is `default`. Status `created` submits
 `suspended_for_child` to the attempt arbiter. Status `completed` returns the retained result.
 Concurrent calls with one name share a `Future` only when their canonical requests match. The
 method raises `ChildLeaseLostError`, `ChildConflictError`, or `ChildLimitExceededError` for `stale`,
@@ -658,7 +658,7 @@ or any statement. `wait_for_signal(name, timeout:)` and
 days. Their names contain 1 through 200 characters without surrounding whitespace, and the human
 context encodes to at most 65,536 bytes of JSON. `run_child(name, task_type, payload, **options)`
 takes the `Queue#enqueue` keywords less the coalescing and dependency options, and calls
-`create_child_v1`. `run_children(children)` and `run_children_all(children)` take at most 100
+`create_child_v2`. `run_children(children)` and `run_children_all(children)` take at most 100
 `ChildTaskRequest` values with unique names and call `create_children_v1` with mode `settled` or
 `all_success`. `run_children` maps each name to a `ChildOutcome`, and `run_children_all` maps each
 name to its result. An omitted child queue is the worker's first queue. A contracted child carries
@@ -1823,7 +1823,7 @@ touched-component advisory locks keep the pending graph stable.
 
 Propagation advances one dependency level per statement. The synthetic outcomes of one level are the last write of their statement, so the statement trigger fires for them after that level's events exist, and resolves the next level as one set. Every event of a level therefore precedes every event of the level below it, and within a level the events follow dependent identity order. One outcome transaction can recurse through at most 100 unresolved descendants, so a cascade is at most 100 levels deep and invokes at most 101 resolver calls. Runtime locks serialize concurrent prerequisite outcomes at the one state transition, so evidence, FIFO allocation, and notification happen once. The resolver locks a level only when it reaches it, so no single order covers a whole cascade. Two cascades that reach overlapping dependents at different levels can therefore lock them in different orders. PostgreSQL then aborts one statement with SQLSTATE `40P01`. The integration test `deadlocks two fenced failures whose cascades meet at different levels` in `typescript/core/test/integration-dependencies.test.ts` reproduces that cycle.
 
-Every SDK therefore sends a fenced write again when PostgreSQL rolls it back with `40P01`, up to 3 attempts in total. A fenced write is a statement that names a task, its worker, and its fence token. Nothing in the rolled-back statement committed, and the fence decides again whether the resend may still act. The retried statements are `complete_v1`, `fail_v1`, `release_owned_v1`, `acknowledge_cancel_v1`, `expire_owned_v1`, `expire_owned_telemetry_v1`, `heartbeat_v1`, `heartbeat_many_v1`, `complete_many_and_claim_v1`, `record_batch_dispatch_v1`, `record_batch_failure_v1`, `create_child_v1`, `create_children_v1`, `save_checkpoint_v1`, `update_progress_v1`, `schedule_wait_v1`, `wait_for_signal_v1`, and `wait_for_human_v1`. The helpers are `queryFencedWrite` with `FENCED_WRITE_DEADLOCK_ATTEMPTS` in TypeScript, `queryFencedWrite` with `fencedWriteDeadlockAttempts` in Go, `fenced_write_rows` and `async_fenced_write_rows` with `FENCED_WRITE_DEADLOCK_ATTEMPTS` in Python's `workhorse/_fenced_write.py`, and `fenced_rows` with `FENCED_WRITE_DEADLOCK_ATTEMPTS` in Rust. A deadlock aborts a caller-owned transaction, so a resend inside one fails with SQLSTATE `25P02`; the helper then raises the original `40P01` instead. Any other error is raised after one send. Statements without a fence are sent once: `enqueue_batch_v1`, `cancel_v1`, `send_signal_v1`, `complete_human_wait_v1`, `claim_many_v1`, `recover_expired_v1`, and every administrative statement raise `40P01` to their caller. The one administrative exception is `sync_concurrency_policies_v1`. Every SDK sends it through the same helper, so it also gets up to 3 attempts, and only `40P01` repeats it. A resend writes the same complete desired set, so a repeated sync is safe.
+Every SDK therefore sends a fenced write again when PostgreSQL rolls it back with `40P01`, up to 3 attempts in total. A fenced write is a statement that names a task, its worker, and its fence token. Nothing in the rolled-back statement committed, and the fence decides again whether the resend may still act. The retried statements are `complete_v1`, `fail_v1`, `release_owned_v1`, `acknowledge_cancel_v1`, `expire_owned_v1`, `expire_owned_telemetry_v1`, `heartbeat_v1`, `heartbeat_many_v1`, `complete_many_and_claim_v1`, `record_batch_dispatch_v1`, `record_batch_failure_v1`, `create_child_v2`, `create_children_v1`, `save_checkpoint_v1`, `update_progress_v1`, `schedule_wait_v1`, `wait_for_signal_v1`, and `wait_for_human_v1`. The helpers are `queryFencedWrite` with `FENCED_WRITE_DEADLOCK_ATTEMPTS` in TypeScript, `queryFencedWrite` with `fencedWriteDeadlockAttempts` in Go, `fenced_write_rows` and `async_fenced_write_rows` with `FENCED_WRITE_DEADLOCK_ATTEMPTS` in Python's `workhorse/_fenced_write.py`, and `fenced_rows` with `FENCED_WRITE_DEADLOCK_ATTEMPTS` in Rust. A deadlock aborts a caller-owned transaction, so a resend inside one fails with SQLSTATE `25P02`; the helper then raises the original `40P01` instead. Any other error is raised after one send. Statements without a fence are sent once: `enqueue_batch_v1`, `cancel_v1`, `send_signal_v1`, `complete_human_wait_v1`, `claim_many_v1`, `recover_expired_v1`, and every administrative statement raise `40P01` to their caller. The one administrative exception is `sync_concurrency_policies_v1`. Every SDK sends it through the same helper, so it also gets up to 3 attempts, and only `40P01` repeats it. A resend writes the same complete desired set, so a repeated sync is safe.
 
 `reject_self_task_dependency_v1` rejects a direct self-edge before the table check and returns SQLSTATE `P1003`. After each insert statement, `validate_task_dependencies_v1` uses the statement transition table to validate all inserted edges together. It first locks the `task` row of both endpoints of every inserted edge `FOR NO KEY UPDATE` in identity order. That lock does not conflict with the `FOR KEY SHARE` locks that enqueue and foreign key checks take. It then checks whether any inserted dependent is already a prerequisite. When one is, validation takes the full path. It finds every pre-existing weakly connected component touched by either endpoint and locks each task identity in those components in UUID order with a transaction advisory lock. Inserts into disconnected components do not share a lock. Inserts which join or mutate the same component serialize before validation. Per-task component locks remain stable when a concurrent transaction merges two components.
 
@@ -1874,6 +1874,15 @@ existing task instead of a new one.
 
 ### `task_child`
 
+`create_child_v2` and `create_single_child_v2` return `stored_child_name` alongside their status.
+`task_child.last_seen_fence_token` records the parent fence that created or successfully joined an individual child.
+When the requested name differs, the functions return `conflict` unless that fence equals the active parent's fence.
+When the fences match, the handler already used its individual child in this run, so another name returns `limit_exceeded`.
+A resumed handler receives a new fence even when suspension preserves its logical attempt.
+A null marker on an older edge makes its first renamed replay a conflict.
+Each SDK's conflict message includes the stored and requested names.
+The retained `create_child_v1` and `create_single_child_v1` functions keep their original limit diagnosis for older clients.
+
 One immutable row links a parent identity to each named child. The primary key is
 `(parent_task_id, child_name)`, and `child_task_id` is unique. One parent may own at most 100 children.
 Names contain 1 through 200 characters. `request_fingerprint` stores the complete normalized child
@@ -1881,7 +1890,7 @@ request for replay comparison. `created_as_set` distinguishes `runChildren` edge
 compatible single-child contract. `created_at` records creation, while nullable `joined_at`
 records the first accepted result read.
 
-`create_child_v1(parent_task_id, worker_id, fence_token, child_name, request)` locks and validates
+`create_child_v2(parent_task_id, worker_id, fence_token, child_name, request)` locks and validates
 the exact active, unexpired parent generation. It calls `enqueue_many_v1`, inserts `task_child`, and
 adds a `task_dependency` edge from parent to child with success `release`, failure `fail`, and
 cancellation `cancel`. It then moves the parent from active to blocked, sets its
@@ -1891,7 +1900,7 @@ before its edge exists. After the `parent_linked` event, the function therefore 
 to `resolve_dependents_many_v1`, which settles the blocked parent in the same transaction.
 Coalescing and additional dependency options are rejected for child requests.
 
-`create_single_child_v1` retains that implementation. The public `create_child_v1` wrapper rejects
+`create_single_child_v2` retains that implementation. The public `create_child_v2` wrapper rejects
 any `created_as_set` edge before it delegates, which keeps the single-child replay contract
 compatible without letting it consume a child-set replay.
 
@@ -5063,10 +5072,10 @@ interactive stdin and stdout is refused with exit 1.
 
 ## Operational limits
 
-- The canonical artifact installs version 52, the whole current schema. Version 6 is the migration
+- The canonical artifact installs version 53, the whole current schema. Version 6 is the migration
   baseline and is frozen as `sql/releases/0006.sql`. A schema change is an upgrade rather than a
   reinstall: `migrateSchema` applies the ordered steps under `sql/migrations/`, which run from 6
-  to 52. A database below 6 is not carried forward
+  to 53. A database below 6 is not carried forward
   ([ADR 0073](decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)).
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
   `uuid_v7_v1()` uses core UUID and byte functions rather than `pgcrypto` or `uuid-ossp`.

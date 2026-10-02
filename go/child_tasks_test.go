@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -324,5 +326,74 @@ func processChildrenWithTypeScript(t *testing.T, databaseURL, queueName string) 
 	command.Dir = ".."
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("TypeScript child worker failed: %v: %s", err, output)
+	}
+}
+
+func TestSingleChildRenameAndSecondChild(t *testing.T) {
+	for _, second := range []bool{false, true} {
+		t.Run(fmt.Sprintf("second=%t", second), func(t *testing.T) {
+			databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "go-child-rename")
+			ctx := context.Background()
+			pool, err := pgxpool.New(ctx, databaseURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(pool.Close)
+			queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "rename-parents")
+			parentID, err := queue.Enqueue(ctx, "rename-parent", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parent, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{Queue: "rename-parents", WorkerID: "rename-parent-worker"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			child, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{Queue: "rename-children", WorkerID: "rename-child-worker"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			name := "a"
+			var refusal error
+			parent.Handle("rename-parent", func(_ context.Context, _ any, handler *workhorse.HandlerContext) (any, error) {
+				if second {
+					if _, err := handler.RunChild("a", "rename-child", nil, workhorse.EnqueueOptions{Queue: "rename-children"}); err != nil {
+						return nil, err
+					}
+				}
+				_, err := handler.RunChild(name, "rename-child", nil, workhorse.EnqueueOptions{Queue: "rename-children"})
+				if name == "a" {
+					return nil, err
+				}
+				refusal = err
+				return nil, nil
+			})
+			child.Handle("rename-child", func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) { return nil, nil })
+			if ok, err := parent.RunOnce(ctx); err != nil || !ok {
+				t.Fatalf("suspend: %t %v", ok, err)
+			}
+			var state string
+			if err := pool.QueryRow(ctx, "SELECT state FROM workhorse.task_runtime WHERE task_id = $1", parentID).Scan(&state); err != nil || state != "blocked" {
+				t.Fatalf("state: %s %v", state, err)
+			}
+			if ok, err := child.RunOnce(ctx); err != nil || !ok {
+				t.Fatalf("child: %t %v", ok, err)
+			}
+			name = "b"
+			if ok, err := parent.RunOnce(ctx); err != nil || !ok {
+				t.Fatalf("replay: %t %v", ok, err)
+			}
+			var conflict *workhorse.ChildConflictError
+			var limit *workhorse.ChildLimitExceededError
+			if second {
+				if !errors.As(refusal, &limit) {
+					t.Fatalf("wanted limit: %v", refusal)
+				}
+			} else {
+				if !errors.As(refusal, &conflict) || !strings.Contains(refusal.Error(), `stored child "a", requested child "b"`) {
+					t.Fatalf("wanted rename conflict: %v", refusal)
+				}
+			}
+			assertChildCount(t, pool, parentID, 1)
+		})
 	}
 }

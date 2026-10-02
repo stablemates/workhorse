@@ -630,7 +630,7 @@ async fn identical_replayed_calls_share_one_call_across_a_contract_change() {
                 .query_one(
                     "SELECT count(*) FROM pg_stat_activity
                       WHERE datname = current_database() AND pid <> pg_backend_pid()
-                        AND wait_event_type = 'Lock' AND query LIKE '%create_child_v1%'",
+                        AND wait_event_type = 'Lock' AND query LIKE '%create_child_v2%'",
                     &[],
                 )
                 .await
@@ -835,4 +835,65 @@ async fn invalid_requests_fail_before_reaching_postgresql() {
     assert_eq!(harness.result(task).await, Some(Value::Array(vec![json!(true); 9])));
     // Nothing reached PostgreSQL, so no wait and no child exists.
     assert!(harness.admin.list_waits(task).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn single_child_rename_and_second_child() {
+    for second in [false, true] {
+        let Some(harness) = harness("durable_child_rename").await else { return };
+        let parent = harness.enqueue("rename-parent", Value::Null).await;
+        let runs = Arc::new(AtomicUsize::new(0));
+        harness.worker.handle("rename-parent", move |_: Value, context: HandlerContext| {
+            let runs = runs.clone();
+            async move {
+                let name = if runs.fetch_add(1, Ordering::SeqCst) == 0 { "a" } else { "b" };
+                if second {
+                    let _: Value = context
+                        .run_child("a", "rename-child", &Value::Null, children_options())
+                        .await?;
+                }
+                let result: Result<Value, Error> =
+                    context.run_child(name, "rename-child", &Value::Null, children_options()).await;
+                if name == "a" {
+                    return Ok(result?);
+                }
+                let error = result.expect_err("a renamed call must be refused");
+                let kind = match &error {
+                    Error::Conflict { .. } => "conflict",
+                    Error::LimitExceeded { .. } => "limit",
+                    _ => "other",
+                };
+                Ok(json!({"kind": kind, "message": error.to_string()}))
+            }
+        });
+        // Only the parent is registered until it has actually suspended.
+        let (stop, running) = harness.run();
+        harness.wait_for(parent, TaskState::Blocked).await;
+        harness.worker.handle("rename-child", |_: Value, _| async { Ok(Value::Null) });
+        harness.wait_for(parent, TaskState::Succeeded).await;
+        stop.send(()).unwrap();
+        running.await.unwrap().unwrap();
+        let result = harness.result(parent).await.unwrap();
+        assert_eq!(result["kind"], if second { "limit" } else { "conflict" });
+        if !second {
+            assert!(result["message"]
+                .as_str()
+                .unwrap()
+                .contains("stored child \"a\", requested child \"b\""));
+        }
+        assert_eq!(
+            harness
+                .database
+                .connect()
+                .await
+                .query_one(
+                    "SELECT count(*) FROM workhorse.task_child WHERE parent_task_id = $1",
+                    &[&parent]
+                )
+                .await
+                .unwrap()
+                .get::<_, i64>(0),
+            1
+        );
+    }
 }

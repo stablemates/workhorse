@@ -264,7 +264,7 @@ class ChildCanceled(dict)
   def values(...)
 
 class ChildConflictError(WorkhorseError)
-  def __init__(self, parent_task_id: str, child_name: str) -> None
+  def __init__(self, parent_task_id: str, child_name: str, stored_child_name: str | None = None) -> None
 
 class ChildFailed(dict)
   def __init__(self, *args, **kwargs)
@@ -5506,7 +5506,7 @@ class CheckpointLeaseLostError(LifecycleError)
   def __init__(self, task_id: str, checkpoint_name: str) -> None
 
 class ChildConflictError(WorkhorseError)
-  def __init__(self, parent_task_id: str, child_name: str) -> None
+  def __init__(self, parent_task_id: str, child_name: str, stored_child_name: str | None = None) -> None
 
 class ChildLeaseLostError(LifecycleError)
   def __init__(self, parent_task_id: str) -> None

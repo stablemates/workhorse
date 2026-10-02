@@ -150,6 +150,34 @@ RSpec.describe "Worker against PostgreSQL" do
     expect(JSON.parse(finished[/\{.*\}/])["workhorse.handler.outcome"]).to eq("suspended")
   end
 
+  [false, true].each do |second|
+    it "distinguishes a renamed single child from a second child (second=#{second})" do
+      parent = queue.enqueue("rename-parent", {}).task_id
+      name = "a"
+      refusal = nil
+      subject = worker
+      child_queue = "#{@queue_name}-children"
+      child_worker = W::Worker.new(@pool, queues: [child_queue], polling_only: true, disable_registry: true).handle("rename-child") { nil }
+      subject.handle("rename-parent") do |_payload, context|
+        begin
+          context.run_child("a", "rename-child", {}, queue: child_queue) if second
+          context.run_child(name, "rename-child", {}, queue: child_queue)
+        rescue W::ConflictError, W::LimitExceededError => error
+          refusal = error
+        end
+        nil
+      end
+      expect(subject.run_once).to be(true)
+      expect(status(parent)["state"]).to eq("blocked")
+      expect(child_worker.run_once).to be(true)
+      name = "b"
+      expect(subject.run_once).to be(true)
+      expect(refusal).to be_a(second ? W::LimitExceededError : W::ConflictError)
+      expect(refusal.message).to include('stored child "a", requested child "b"') unless second
+      expect(@connection.exec_params("SELECT child_name FROM workhorse.task_child WHERE parent_task_id = $1", [parent]).column_values(0)).to eq(["a"])
+    end
+  end
+
   it "suspends a parent on its children and joins their results on replay" do
     single = queue.enqueue("single", {}).task_id
     fan = queue.enqueue("fan", {}).task_id

@@ -5,8 +5,8 @@
 pub const CLIENT_PROTOCOL_VERSION: i32 = 5;
 pub const MINIMUM_PROTOCOL_VERSION: i32 = 5;
 pub const MAXIMUM_PROTOCOL_VERSION: i32 = 5;
-pub const MINIMUM_SCHEMA_VERSION: i32 = 43;
-pub const MAXIMUM_SCHEMA_VERSION: i32 = 52;
+pub const MINIMUM_SCHEMA_VERSION: i32 = 53;
+pub const MAXIMUM_SCHEMA_VERSION: i32 = 53;
 /// PostgreSQL's atomic enqueue batch limit.
 pub const MAX_ENQUEUE_BATCH_SIZE: usize = 1000;
 pub const DEFAULT_TASK_VALUE_MAX_BYTES: i64 = 1048576;
@@ -37,6 +37,9 @@ pub const COMPLETE_V1: &str =
 
 /// `create_child_v1` (protocol)
 pub const CREATE_CHILD_V1: &str = r#"SELECT status, child_task_id, child_type, created_at, joined_at, result FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)"#;
+
+/// `create_child_v2` (protocol)
+pub const CREATE_CHILD_V2: &str = r#"SELECT status, child_task_id, child_type, created_at, joined_at, result, stored_child_name FROM workhorse.create_child_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)"#;
 
 /// `create_children_v1` (protocol)
 pub const CREATE_CHILDREN_V1: &str = r#"SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)"#;

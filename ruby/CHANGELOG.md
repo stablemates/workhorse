@@ -3,6 +3,15 @@
 `stablemates-workhorse` gem versions and release notes live here. The gem carries the version the
 other SDKs carry, because every tag names one release of all of them.
 
+## Unreleased
+
+Requires **schema v53**. Migrate the schema before starting updated processes.
+The final schema version is **53**, and the SDK compatibility floor is schema version **53**.
+Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
+
+A renamed individual child on replay now raises a conflict with the stored and requested names.
+A second child after joining the retained child in the same handler run still exceeds the child limit (SM-1106).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

@@ -112,12 +112,12 @@ impl HandlerContext {
             .shared(Operation::RunChild, &key, identity.to_string(), || async {
                 self.check(Operation::RunChild)?;
                 let mut row =
-                    self.call(sql::CREATE_CHILD_V1, "create_child_v1", &[&name, &request]).await?;
+                    self.call(sql::CREATE_CHILD_V2, "create_child_v2", &[&name, &request]).await?;
                 if let Some(accepted) =
                     self.replayed(&row, &request, children, Shape::Single).await?
                 {
                     row = self
-                        .call(sql::CREATE_CHILD_V1, "create_child_v1", &[&name, &accepted])
+                        .call(sql::CREATE_CHILD_V2, "create_child_v2", &[&name, &accepted])
                         .await?;
                 }
                 match status(&row)?.as_str() {
@@ -125,6 +125,16 @@ impl HandlerContext {
                         Ok(row.try_get::<_, Option<Value>>("result")?.unwrap_or_default())
                     }
                     "created" => Err(self.suspend()),
+                    "conflict" => {
+                        let stored: Option<String> = row.try_get("stored_child_name")?;
+                        let diagnosis = match stored {
+                            Some(stored) if stored != name => {
+                                format!("stored child {stored:?}, requested child {name:?}")
+                            }
+                            _ => name.to_owned(),
+                        };
+                        Err(self.refusal(Operation::RunChild, &diagnosis, "conflict"))
+                    }
                     other => Err(self.refusal(Operation::RunChild, name, other)),
                 }
             })

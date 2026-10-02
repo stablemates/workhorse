@@ -2,9 +2,9 @@
   "formatVersion": 1,
   "protocolVersion": 5,
   "schema": {
-    "installedVersion": 52,
-    "minimumVersion": 43,
-    "maximumVersion": 52,
+    "installedVersion": 53,
+    "minimumVersion": 53,
+    "maximumVersion": 53,
     "baselineVersion": 6
   },
   "supportedClientProtocol": {
@@ -205,6 +205,11 @@
       "contract": "SELECT status, child_task_id, child_type, created_at, joined_at, result FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)"
     },
     {
+      "name": "create_child_v2",
+      "arity": 5,
+      "contract": "SELECT status, child_task_id, child_type, created_at, joined_at, result, stored_child_name FROM workhorse.create_child_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)"
+    },
+    {
       "name": "wait_for_signal_v1",
       "arity": 5,
       "contract": "SELECT status, payload FROM workhorse.wait_for_signal_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint)"
@@ -287,9 +292,15 @@
     },
     {
       "name": "create_child_v1",
-      "pythonBinding": "create_child",
       "arity": 5,
       "contract": "SELECT status, child_task_id, child_type, created_at, joined_at, result FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
+      "catalogues": ["protocol"]
+    },
+    {
+      "name": "create_child_v2",
+      "pythonBinding": "create_child",
+      "arity": 5,
+      "contract": "SELECT status, child_task_id, child_type, created_at, joined_at, result, stored_child_name FROM workhorse.create_child_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
       "catalogues": ["protocol"]
     },
     {

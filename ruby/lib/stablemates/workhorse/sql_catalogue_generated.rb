@@ -10,8 +10,8 @@ module Stablemates
       CLIENT_PROTOCOL_VERSION = 5
       MINIMUM_PROTOCOL_VERSION = 5
       MAXIMUM_PROTOCOL_VERSION = 5
-      MINIMUM_SCHEMA_VERSION = 43
-      MAXIMUM_SCHEMA_VERSION = 52
+      MINIMUM_SCHEMA_VERSION = 53
+      MAXIMUM_SCHEMA_VERSION = 53
       # PostgreSQL's atomic enqueue batch limit.
       MAX_ENQUEUE_BATCH_SIZE = 1000
       DEFAULT_TASK_VALUE_MAX_BYTES = 1048576
@@ -39,6 +39,9 @@ module Stablemates
 
       # `create_child_v1` (protocol)
       CREATE_CHILD_V1 = 'SELECT status, child_task_id, child_type, created_at, joined_at, result FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)'
+
+      # `create_child_v2` (protocol)
+      CREATE_CHILD_V2 = 'SELECT status, child_task_id, child_type, created_at, joined_at, result, stored_child_name FROM workhorse.create_child_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)'
 
       # `create_children_v1` (protocol)
       CREATE_CHILDREN_V1 = 'SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)'

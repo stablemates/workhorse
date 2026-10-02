@@ -356,7 +356,7 @@ rest are optional TypeScript packages.
 The nine TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional TypeScript package always declares the core version it was released with as a peer range.
 The Python package, the Go module, the Rust crate, and the Ruby gem declare no TypeScript peer range; SQL protocol
-5 and schema version 43 are their compatibility boundary instead. Their version numbers still match the npm
+5 and schema version 53 are their compatibility boundary instead. Their version numbers still match the npm
 packages, because every line releases from one commit.
 
 Every release publishes one version to npm, PyPI, the Go module proxy, crates.io, and RubyGems from

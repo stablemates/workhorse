@@ -832,7 +832,9 @@ class _HandlerDurability:
             if status == "stale":
                 raise ChildLeaseLostError(self._task.id)
             if status == "conflict":
-                raise ChildConflictError(self._task.id, name)
+                raise ChildConflictError(
+                    self._task.id, name, cast(str | None, row.get("stored_child_name"))
+                )
             if status == "limit_exceeded":
                 raise ChildLimitExceededError(self._task.id)
             if status in {"created", "completed"}:
