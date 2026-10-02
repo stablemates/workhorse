@@ -68,6 +68,13 @@ describe("the published Rust crate", () => {
 });
 
 describe("the release consumer", () => {
+  it("enables SQLx only through the archived crate's optional feature", () => {
+    const crate = { name: "workhorse", version: "0.6.1" };
+    expect(consumerManifest(crate, "/tmp/unpacked")).not.toContain("[features]");
+    const manifest = consumerManifest(crate, "/tmp/unpacked", true);
+    expect(manifest).toContain('[features]\nsqlx = ["workhorse/sqlx"]');
+    expect(manifest).not.toContain("sqlx = { version");
+  });
   it("imports the crate as workhorse under any package name", () => {
     const manifest = consumerManifest(
       { name: "stablemates-workhorse", version: "0.2.0" },

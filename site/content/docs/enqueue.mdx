@@ -9,6 +9,9 @@ living in the same PostgreSQL database as your data — an enqueue is a row your
 carry. This page covers everything an enqueue can do: run now, run later, join a transaction,
 batch, and target a named queue.
 
+Rust SQLx applications can use the optional [SQLx enqueue transport](/docs/sqlx) with their exact mutable PostgreSQL transaction.
+Rust worker drivers remain unchanged.
+
 ## Enqueue immediate or delayed work
 
 `queue.enqueue(type, payload, options?)` turns a type and JSON payload into a durable task and

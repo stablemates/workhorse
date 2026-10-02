@@ -113,11 +113,24 @@ fallback connection, commit, roll back, close, or spawn detached queries. The ca
 savepoints and cancellation. Dropping an enqueue future releases its Rust borrow, but does not
 guarantee server-side cancellation or recovery of an aborted transaction.
 
-This is an adapter-author foundation, not shipped SQLx, SeaORM, or Diesel support. The tested
-alternative transport is an external, mutable, non-`Sync` fixture over PostgreSQL. `Queue` retains
-its sealed tokio/deadpool executor, and workers still require a deadpool-postgres pool. No new
-feature or dependency is required. See the [design decision](../docs/decisions/0086-separate-rust-enqueue-preparation-from-mutable-transports.md)
-for the interface and compatibility limits.
+The optional `sqlx` feature implements this transport directly for SQLx 0.8.6
+`Transaction<'_, Postgres>`. Pass `&mut transaction` to the client, not a pool or connection.
+`workhorse::sqlx` re-exports the matching driver. The feature enables PostgreSQL, JSON, UUID, and
+Tokio support without SQLx defaults, macros, other databases, or a TLS backend.
+Applications select their required SQLx TLS feature themselves.
+Task timestamps remain shared-core UTC strings inside JSONB, not native timestamp binds.
+
+SQLx support is enqueue-only. `Queue` retains its sealed tokio/deadpool executor, and workers still
+require a deadpool-postgres pool. Neither SeaORM nor Diesel is implemented.
+Use a fresh client after rolling back contract changes, or synchronize the actual contracts again.
+See the [SQLx setup and limits](https://workhorse.run/docs/sqlx) and the
+[transport decision](../docs/decisions/0088-borrow-sqlx-transactions-for-rust-enqueue.md).
+The runnable `rust/examples/sqlx_transaction.rs` commits an application row and task together.
+After installing the schema in a disposable local development database, run it from the repository root:
+
+```sh
+WORKHORSE_DATABASE_URL=postgres://user:password@localhost/workhorse_dev pnpm rust:example:sqlx
+```
 
 ## Next
 
@@ -187,6 +200,7 @@ pnpm rust:clippy
 pnpm rust:test
 pnpm rust:test:no-features
 pnpm rust:integration
+pnpm rust:test:sqlx
 pnpm rust:package-check
 pnpm rust:release-check
 ```

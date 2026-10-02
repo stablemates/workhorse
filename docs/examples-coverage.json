@@ -38,6 +38,29 @@
       "rust": { "file": "rust/examples/transaction.rs" },
       "ruby": { "file": "ruby/examples/transaction.rb" }
     },
+    "sqlx-transaction": {
+      "typescript": {
+        "exclusion": {
+          "reason": "SQLx is a Rust PostgreSQL driver; TypeScript uses its own transaction adapters."
+        }
+      },
+      "python": {
+        "exclusion": {
+          "reason": "SQLx is a Rust PostgreSQL driver; Python uses its own transaction executors."
+        }
+      },
+      "go": {
+        "exclusion": {
+          "reason": "SQLx is a Rust PostgreSQL driver; Go uses its own transaction executors."
+        }
+      },
+      "rust": { "file": "rust/examples/sqlx_transaction.rs" },
+      "ruby": {
+        "exclusion": {
+          "reason": "SQLx is a Rust PostgreSQL driver; Ruby uses its own transaction executors."
+        }
+      }
+    },
     "dedicated-worker": {
       "typescript": { "file": "typescript/examples/dedicated-worker.mjs" },
       "python": { "file": "python/examples/dedicated_worker.py" },
