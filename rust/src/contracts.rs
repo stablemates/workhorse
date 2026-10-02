@@ -1,5 +1,5 @@
 //! Versioned payload contracts: the Workhorse JSON Schema profile, compilation, and sync.
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use serde_json::{json, Map, Value};
@@ -60,7 +60,6 @@ const SCHEMA_VALUES: &[&str] =
 const SCHEMA_ARRAYS: &[&str] = &["allOf", "anyOf", "oneOf", "prefixItems"];
 const SCHEMA_MAPS: &[&str] = &["$defs", "dependentSchemas", "properties"];
 const PLAIN_KEYWORDS: &[&str] = &[
-    "$anchor",
     "$comment",
     "$schema",
     "default",
@@ -93,99 +92,46 @@ const PLAIN_KEYWORDS: &[&str] = &[
 ];
 const DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 
-#[derive(Default)]
-struct SchemaWalk<'a> {
-    anchors: HashSet<&'a str>,
-    references: Vec<(String, &'a str)>,
-}
+const DEFINITION_NAME: &str = "^[A-Za-z_][-A-Za-z0-9._]*$";
+const DEFINITION_REFERENCE_PREFIX: &str = "#/$defs/";
 
-/// Requires every reference to name a schema position the profile walk checked. A reference into
-/// `default` or `examples` would otherwise apply a schema the walk never saw.
+/// Requires every reference to name the root schema or one root definition. The libraries behind
+/// the five SDKs resolve those two forms alike, and both name a schema position the profile walk
+/// checked.
 fn check_contract_profile(schema: &Value) -> Result<(), String> {
-    let mut walk = SchemaWalk::default();
-    check_profile(schema, "$", &mut walk)?;
-    for (path, reference) in &walk.references {
-        if !references_subschema(schema, reference, &walk.anchors) {
+    let mut references = Vec::new();
+    check_profile(schema, "$", &mut references)?;
+    for (path, reference) in &references {
+        if !references_subschema(schema, reference) {
             return Err(format!("{path} must point at a subschema of the contract"));
         }
     }
     Ok(())
 }
 
-fn references_subschema(root: &Value, reference: &str, anchors: &HashSet<&str>) -> bool {
-    let fragment = &reference[1..];
-    if fragment.is_empty() {
+fn references_subschema(root: &Value, reference: &str) -> bool {
+    if reference == "#" {
         return true;
     }
-    let Some(pointer) = fragment.strip_prefix('/') else {
-        return anchors.contains(fragment);
-    };
-    let Some(tokens) = pointer.split('/').map(pointer_token).collect::<Option<Vec<_>>>() else {
+    let Some(name) = reference.strip_prefix(DEFINITION_REFERENCE_PREFIX) else {
         return false;
     };
-    let mut tokens = tokens.iter();
-    let mut node = root;
-    while let Some(keyword) = tokens.next() {
-        let Value::Object(document) = node else {
-            return false;
-        };
-        let keyword = keyword.as_str();
-        let value = document.get(keyword);
-        let child = if SCHEMA_VALUES.contains(&keyword) {
-            value
-        } else if SCHEMA_ARRAYS.contains(&keyword) {
-            let index = tokens.next().filter(|token| {
-                token == &"0"
-                    || (!token.starts_with('0') && token.bytes().all(|b| b.is_ascii_digit()))
-            });
-            match (
-                value.and_then(Value::as_array),
-                index.and_then(|token| token.parse::<usize>().ok()),
-            ) {
-                (Some(children), Some(index)) => children.get(index),
-                _ => None,
-            }
-        } else if SCHEMA_MAPS.contains(&keyword) {
-            match (value.and_then(Value::as_object), tokens.next()) {
-                (Some(children), Some(name)) => children.get(name),
-                _ => None,
-            }
-        } else {
-            None
-        };
-        let Some(child) = child else {
-            return false;
-        };
-        node = child;
-    }
-    true
+    root.get("$defs")
+        .and_then(Value::as_object)
+        .is_some_and(|definitions| definitions.contains_key(name))
 }
 
-/// Decodes one JSON Pointer token from a URI fragment: percent-escapes, then `~1` and `~0`.
-fn pointer_token(token: &str) -> Option<String> {
-    let mut bytes = Vec::with_capacity(token.len());
-    let mut input = token.bytes();
-    while let Some(byte) = input.next() {
-        if byte == b'%' {
-            let high = (input.next()? as char).to_digit(16)?;
-            let low = (input.next()? as char).to_digit(16)?;
-            let decoded = (high * 16 + low) as u8;
-            // Libraries disagree on whether `%2F` separates tokens, so the walk could check a different schema.
-            if decoded == b'/' {
-                return None;
-            }
-            bytes.push(decoded);
-        } else {
-            bytes.push(byte);
-        }
-    }
-    Some(String::from_utf8(bytes).ok()?.replace("~1", "/").replace("~0", "~"))
+/// Matches `DEFINITION_NAME` without a regular expression engine.
+fn is_definition_name(name: &str) -> bool {
+    let mut characters = name.chars();
+    characters.next().is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && characters.all(|rest| rest.is_ascii_alphanumeric() || matches!(rest, '-' | '.' | '_'))
 }
 
 fn check_profile<'a>(
     schema: &'a Value,
     path: &str,
-    walk: &mut SchemaWalk<'a>,
+    references: &mut Vec<(String, &'a str)>,
 ) -> Result<(), String> {
     let document = match schema {
         Value::Bool(_) => return Ok(()),
@@ -200,29 +146,33 @@ fn check_profile<'a>(
                 return Err(format!("{keyword_path} must be a bundled local reference"));
             }
             if let Some(reference) = value.as_str() {
-                walk.references.push((keyword_path, reference));
-            }
-        } else if keyword == "$anchor" {
-            if let Some(anchor) = value.as_str() {
-                walk.anchors.insert(anchor);
+                references.push((keyword_path, reference));
             }
         } else if keyword == "$schema" {
             if value.as_str() != Some(DIALECT) {
                 return Err(format!("{keyword_path} must select Draft 2020-12"));
             }
+        } else if keyword == "$defs" && path != "$" {
+            return Err(format!("{keyword_path} must appear only on the root schema"));
         } else if SCHEMA_VALUES.contains(&keyword) {
-            check_profile(value, &keyword_path, walk)?;
+            check_profile(value, &keyword_path, references)?;
         } else if SCHEMA_ARRAYS.contains(&keyword) {
             let children =
                 value.as_array().ok_or_else(|| format!("{keyword_path} must be an array"))?;
             for (index, child) in children.iter().enumerate() {
-                check_profile(child, &format!("{keyword_path}[{index}]"), walk)?;
+                check_profile(child, &format!("{keyword_path}[{index}]"), references)?;
             }
         } else if SCHEMA_MAPS.contains(&keyword) {
             let children =
                 value.as_object().ok_or_else(|| format!("{keyword_path} must be an object"))?;
             for (name, child) in children {
-                check_profile(child, &format!("{keyword_path}.{name}"), walk)?;
+                let child_path = format!("{keyword_path}.{name}");
+                if keyword == "$defs" && !is_definition_name(name) {
+                    return Err(format!(
+                        "{child_path} must be a definition name matching {DEFINITION_NAME}"
+                    ));
+                }
+                check_profile(child, &child_path, references)?;
             }
         } else if !PLAIN_KEYWORDS.contains(&keyword) {
             return Err(format!("{keyword_path} is outside the Workhorse contract profile"));
@@ -371,5 +321,25 @@ mod tests {
             panic!("a reference into default compiled");
         };
         assert_eq!(message, "$.properties.a.$ref must point at a subschema of the contract");
+    }
+
+    #[test]
+    fn names_the_anchor_and_definition_forms_it_refuses() {
+        for (schema, expected) in [
+            (
+                json!({"items": {"$anchor": "a"}}),
+                "$.items.$anchor is outside the Workhorse contract profile",
+            ),
+            (json!({"items": {"$defs": {}}}), "$.items.$defs must appear only on the root schema"),
+            (
+                json!({"$defs": {"a b": true}}),
+                "$.$defs.a b must be a definition name matching ^[A-Za-z_][-A-Za-z0-9._]*$",
+            ),
+        ] {
+            let Err(Error::InvalidArgument(message)) = compile_contract_schema(&schema) else {
+                panic!("{schema} compiled");
+            };
+            assert_eq!(message, expected);
+        }
     }
 }

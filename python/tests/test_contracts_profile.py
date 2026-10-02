@@ -63,3 +63,21 @@ def test_contract_schema_refuses_a_reference_outside_the_schema_tree() -> None:
         TypeError, match=re.escape("$.properties.a.$ref must point at a subschema of the contract")
     ):
         compile_contract_schema(schema)
+
+
+@pytest.mark.parametrize(
+    ("schema", "message"),
+    [
+        ({"items": {"$anchor": "a"}}, "$.items.$anchor is outside the Workhorse contract profile"),
+        ({"items": {"$defs": {}}}, "$.items.$defs must appear only on the root schema"),
+        (
+            {"$defs": {"a b": True}},
+            "$.$defs.a b must be a definition name matching ^[A-Za-z_][-A-Za-z0-9._]*$",
+        ),
+    ],
+)
+def test_contract_schema_names_the_anchor_and_definition_forms_it_refuses(
+    schema: Json, message: str
+) -> None:
+    with pytest.raises(TypeError, match=re.escape(message)):
+        compile_contract_schema(schema)

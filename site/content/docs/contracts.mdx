@@ -106,10 +106,12 @@ payload the cached document rejects never reaches PostgreSQL, so the client relo
 once before it reports the rejection. Either way, the client validates the enqueue again against the
 current document.
 
-Workhorse accepts the shared JSON Schema profile only. Bundled references work inside one document,
-formats stay annotations, and Workhorse rejects remote references or custom keywords before
-compilation. A reference must point at a subschema, so it cannot reach a schema hidden in `default`
-or `examples`, where the profile check never looks.
+Workhorse accepts the shared JSON Schema profile only. Formats stay annotations, and Workhorse
+rejects remote references or custom keywords before compilation.
+
+A reference names the whole schema as `#`, or an entry of the root `$defs` as `#/$defs/<name>`.
+The SDKs' JSON Schema libraries resolve other forms and `$anchor` differently, so each SDK rejects
+them. To reuse a subschema, move it into the root `$defs` and reference it by name.
 
 The profile leaves out `pattern` and `patternProperties`, because the SDKs' regular expression
 engines accept different syntax and match differently. Each SDK rejects either keyword at any depth,

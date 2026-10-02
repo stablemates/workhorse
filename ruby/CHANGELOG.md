@@ -28,6 +28,21 @@ other SDKs carry, because every tag names one release of all of them.
      keyword, completing the task fails the attempt with `ArgumentError`, and the task's retry
      policy applies. Each payload was checked at enqueue, so a keyword in the payload schema does
      not affect tasks already queued.
+- **Breaking: a contract `$ref` must be `#` or `#/$defs/<name>`, and `$anchor` is no longer
+  accepted** ([ADR 0039](../docs/decisions/0039-use-a-restricted-json-schema-contract-profile.md)).
+  `<name>` is a key of the root `$defs`. `ArgumentError` names any other reference with
+  `<path>.$ref must point at a subschema of the contract`, and also `$defs` below the root, a
+  `$defs` name that does not match `^[A-Za-z_][-A-Za-z0-9._]*$`, and `$anchor` at any depth. A
+  property named `$anchor` stays valid. Upgrade in this order:
+  1. Find each contract version that references anything other than `#` or a root definition, nests
+     `$defs`, uses `$anchor`, or names a definition outside that pattern.
+  2. Move each referenced or anchored subschema into the root `$defs` and reference it as
+     `#/$defs/<name>`. Rename each definition outside the pattern and update the references to it.
+     Declare a new contract version, because contract rows are immutable, and move `currentVersion`
+     to it.
+  3. Let tasks that hold the old version finish before you run Ruby workers. A removed form in a
+     task's result schema fails the attempt with `ArgumentError`, and the task's retry policy
+     applies.
 - Add the executor forms: a `PG::Connection`, a `ConnectionPool`, or any object whose `with`
   yields a connection. `ActiveRecordExecutor` joins the caller's Active Record transaction.
 - Add the error hierarchy under `Stablemates::Workhorse::Error`.

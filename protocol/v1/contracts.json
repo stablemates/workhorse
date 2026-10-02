@@ -177,32 +177,8 @@
     "schemaError": true
   },
   {
-    "id": "pattern-behind-encoded-separator-rejected",
-    "schema": {
-      "$defs": { "x": { "default": { "type": "string", "pattern": "^a$" } }, "x/default": true },
-      "$ref": "#/$defs/x%2Fdefault"
-    },
-    "schemaError": true
-  },
-  {
-    "id": "pattern-properties-behind-encoded-separator-rejected",
-    "schema": {
-      "$defs": {
-        "x": { "default": { "type": "object", "patternProperties": { "^a": false } } },
-        "x/default": true
-      },
-      "$ref": "#/$defs/x%2Fdefault"
-    },
-    "schemaError": true
-  },
-  {
     "id": "reference-outside-schema-rejected",
     "schema": { "default": { "type": "string" }, "$ref": "#/default" },
-    "schemaError": true
-  },
-  {
-    "id": "anchor-outside-schema-rejected",
-    "schema": { "default": { "$anchor": "code", "type": "string" }, "$ref": "#code" },
     "schemaError": true
   },
   {
@@ -211,24 +187,117 @@
     "schemaError": true
   },
   {
-    "id": "references-to-subschemas",
+    "id": "reference-to-property-rejected",
     "schema": {
-      "$defs": { "a/b": { "type": "integer" }, "named": { "$anchor": "count", "minimum": 0 } },
+      "properties": { "a": { "type": "integer" }, "b": { "$ref": "#/properties/a" } }
+    },
+    "schemaError": true
+  },
+  {
+    "id": "reference-to-items-rejected",
+    "schema": {
+      "type": "array",
+      "items": { "type": "integer" },
+      "contains": { "$ref": "#/items" }
+    },
+    "schemaError": true
+  },
+  {
+    "id": "reference-to-all-of-entry-rejected",
+    "schema": {
+      "allOf": [{ "type": "integer" }],
+      "properties": { "a": { "$ref": "#/allOf/0" } }
+    },
+    "schemaError": true
+  },
+  {
+    "id": "reference-inside-definition-rejected",
+    "schema": {
+      "$defs": { "a": { "properties": { "b": { "type": "integer" } } } },
+      "properties": { "c": { "$ref": "#/$defs/a/properties/b" } }
+    },
+    "schemaError": true
+  },
+  {
+    "id": "percent-encoded-definition-reference-rejected",
+    "schema": { "$defs": { "a": { "type": "integer" } }, "$ref": "#/$defs/%61" },
+    "schemaError": true
+  },
+  {
+    "id": "percent-encoded-space-reference-rejected",
+    "schema": { "$defs": { "a b": { "type": "integer" } }, "$ref": "#/$defs/a%20b" },
+    "schemaError": true
+  },
+  {
+    "id": "escaped-slash-reference-rejected",
+    "schema": { "$defs": { "a/b": { "type": "integer" } }, "$ref": "#/$defs/a~1b" },
+    "schemaError": true
+  },
+  {
+    "id": "anchor-reference-rejected",
+    "schema": {
+      "$defs": { "a": { "$anchor": "name", "type": "integer" } },
+      "properties": { "b": { "$ref": "#name" } }
+    },
+    "schemaError": true
+  },
+  {
+    "id": "root-anchor-rejected",
+    "schema": { "$anchor": "root", "type": "integer" },
+    "schemaError": true
+  },
+  {
+    "id": "nested-anchor-rejected",
+    "schema": { "properties": { "a": { "$anchor": "a", "type": "integer" } } },
+    "schemaError": true
+  },
+  {
+    "id": "definition-name-outside-grammar-rejected",
+    "schema": { "$defs": { "1a": { "type": "integer" } }, "$ref": "#/$defs/1a" },
+    "schemaError": true
+  },
+  {
+    "id": "definitions-below-root-rejected",
+    "schema": { "properties": { "a": { "$defs": { "b": { "type": "integer" } } } } },
+    "schemaError": true
+  },
+  {
+    "id": "references-to-root-and-definitions",
+    "schema": {
+      "$defs": {
+        "__schema0": { "type": "string" },
+        "count": { "type": "integer", "minimum": 0 },
+        "node.v1": {
+          "type": "object",
+          "properties": { "next": { "$ref": "#/$defs/node.v1" } },
+          "additionalProperties": false
+        }
+      },
       "type": "object",
+      "required": ["$anchor"],
       "properties": {
-        "x": { "$ref": "#/$defs/a~1b" },
-        "y": { "$ref": "#count" },
-        "z": { "$ref": "#/properties/x" },
+        "$anchor": { "$ref": "#/$defs/__schema0" },
+        "count": { "$ref": "#/$defs/count" },
+        "chain": { "$ref": "#/$defs/node.v1" },
         "self": { "$ref": "#" }
       },
       "additionalProperties": false
     },
     "instances": [
-      { "value": { "x": 1, "y": 2, "z": 3, "self": { "x": 4 } }, "valid": true },
-      { "value": { "x": "a" }, "valid": false },
-      { "value": { "y": -1 }, "valid": false },
-      { "value": { "z": "a" }, "valid": false },
-      { "value": { "self": { "other": 1 } }, "valid": false }
+      {
+        "value": {
+          "$anchor": "a",
+          "count": 1,
+          "chain": { "next": { "next": {} } },
+          "self": { "$anchor": "b" }
+        },
+        "valid": true
+      },
+      { "value": { "$anchor": 1 }, "valid": false },
+      { "value": { "$anchor": "a", "count": -1 }, "valid": false },
+      { "value": { "$anchor": "a", "chain": { "next": { "other": 1 } } }, "valid": false },
+      { "value": { "$anchor": "a", "self": {} }, "valid": false },
+      { "value": {}, "valid": false }
     ]
   }
 ]

@@ -42,10 +42,13 @@ payload the cached document rejects never reaches PostgreSQL, so the client relo
 once before it reports the rejection. Either way, the client validates the enqueue again against the
 current document.
 
-Each SDK rejects keywords outside the shared profile before compiling a schema. References can
-target bundled definitions in the same document, while remote references and custom keywords are
-rejected. A reference must point at a subschema, so it cannot reach a schema hidden in `default` or
-`examples`, where the profile check never looks. Formats remain annotations, so an email format does not create a language-specific gate.
+Each SDK rejects keywords outside the shared profile before compiling a schema. Remote references
+and custom keywords are rejected. Formats remain annotations, so an email format does not create a
+language-specific gate.
+
+A reference names the whole schema as `#`, or an entry of the root `$defs` as `#/$defs/<name>`.
+The SDKs' JSON Schema libraries resolve other forms and `$anchor` differently, so each SDK rejects
+them. To reuse a subschema, move it into the root `$defs` and reference it by name.
 
 The profile leaves out `pattern` and `patternProperties`, because the SDKs' regular expression
 engines accept different syntax and match differently. Each SDK rejects either keyword at any depth,

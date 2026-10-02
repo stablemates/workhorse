@@ -6,12 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
-	"unicode/utf8"
 
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
@@ -68,8 +65,7 @@ func newContractCache() contractCache {
 }
 
 var schemaValues = keywordSet(contractSchemaValueKeywords)
-var contractArrayIndex = regexp.MustCompile(contractArrayIndexPattern)
-var contractPointerUnescaper = strings.NewReplacer(contractPointerEscapedSlash, contractPointerSeparator, contractPointerEscapedTilde, contractPointerTilde)
+var contractDefinitionName = regexp.MustCompile(contractDefinitionNamePattern)
 var schemaArrays = keywordSet(contractSchemaArrayKeywords)
 var schemaMaps = keywordSet(contractSchemaMapKeywords)
 var annotationKeywords = keywordSet(contractAnnotationKeywords)
@@ -88,83 +84,43 @@ type contractReference struct {
 	reference string
 }
 
-type contractSchemaWalk struct {
-	anchors    map[string]bool
-	references []contractReference
-}
-
-// checkContractSchema requires every reference to name a schema position the profile walk checked.
-// A reference into default or examples would otherwise apply a schema the walk never saw.
+// checkContractSchema requires every reference to name the root schema or one root definition. The
+// libraries behind the five SDKs resolve those two forms alike, and both name a schema position the
+// profile walk checked.
 func checkContractSchema(schema any, path string) error {
-	walk := &contractSchemaWalk{anchors: make(map[string]bool)}
-	if err := checkContractProfile(schema, path, walk); err != nil {
+	var references []contractReference
+	if err := checkContractProfile(schema, path, &references); err != nil {
 		return err
 	}
-	for _, reference := range walk.references {
-		if !referencesSubschema(schema, reference.reference, walk.anchors) {
+	for _, reference := range references {
+		if !referencesSubschema(schema, reference.reference) {
 			return fmt.Errorf(contractSubschemaReferenceErrorFormat, reference.path)
 		}
 	}
 	return nil
 }
 
-func referencesSubschema(root any, reference string, anchors map[string]bool) bool {
-	fragment := strings.TrimPrefix(reference, contractLocalReferencePrefix)
-	if fragment == emptyString {
+func referencesSubschema(root any, reference string) bool {
+	if reference == contractLocalReferencePrefix {
 		return true
 	}
-	if !strings.HasPrefix(fragment, contractPointerSeparator) {
-		return anchors[fragment]
+	name, ok := strings.CutPrefix(reference, contractDefinitionReferencePrefix)
+	if !ok {
+		return false
 	}
-	tokens := strings.Split(fragment, contractPointerSeparator)[1:]
-	for index, token := range tokens {
-		decoded, err := url.PathUnescape(token)
-		// Libraries disagree on whether `%2F` separates tokens, so the walk could check a different schema.
-		if err != nil || !utf8.ValidString(decoded) || strings.Contains(decoded, contractPointerSeparator) {
-			return false
-		}
-		tokens[index] = contractPointerUnescaper.Replace(decoded)
+	document, ok := root.(map[string]any)
+	if !ok {
+		return false
 	}
-	node := root
-	for index := 0; index < len(tokens); index++ {
-		document, ok := node.(map[string]any)
-		if !ok {
-			return false
-		}
-		keyword := tokens[index]
-		value, present := document[keyword]
-		switch {
-		case schemaValues[keyword]:
-			node = value
-		case schemaArrays[keyword]:
-			values, ok := value.([]any)
-			index++
-			if !ok || index == len(tokens) || !contractArrayIndex.MatchString(tokens[index]) {
-				return false
-			}
-			position, err := strconv.Atoi(tokens[index])
-			if err != nil || position >= len(values) {
-				return false
-			}
-			node, present = values[position], true
-		case schemaMaps[keyword]:
-			values, ok := value.(map[string]any)
-			index++
-			if !ok || index == len(tokens) {
-				return false
-			}
-			node, present = values[tokens[index]]
-		default:
-			return false
-		}
-		if !present {
-			return false
-		}
+	definitions, ok := document[contractDefinitionsKeyword].(map[string]any)
+	if !ok {
+		return false
 	}
-	return true
+	_, present := definitions[name]
+	return present
 }
 
-func checkContractProfile(schema any, path string, walk *contractSchemaWalk) error {
+func checkContractProfile(schema any, path string, references *[]contractReference) error {
 	if _, ok := schema.(bool); ok {
 		return nil
 	}
@@ -180,17 +136,15 @@ func checkContractProfile(schema any, path string, walk *contractSchemaWalk) err
 			if !ok || !strings.HasPrefix(ref, contractLocalReferencePrefix) {
 				return fmt.Errorf(contractBundledReferenceErrorFormat, keywordPath)
 			}
-			walk.references = append(walk.references, contractReference{path: keywordPath, reference: ref})
-		case keyword == contractAnchorKeyword:
-			if anchor, ok := value.(string); ok {
-				walk.anchors[anchor] = true
-			}
+			*references = append(*references, contractReference{path: keywordPath, reference: ref})
 		case keyword == contractDialectKeyword:
 			if value != contractDialectValue {
 				return fmt.Errorf(contractDialectErrorFormat, keywordPath)
 			}
+		case keyword == contractDefinitionsKeyword && path != contractRootPath:
+			return fmt.Errorf(contractRootDefinitionsErrorFormat, keywordPath)
 		case schemaValues[keyword]:
-			if err := checkContractProfile(value, keywordPath, walk); err != nil {
+			if err := checkContractProfile(value, keywordPath, references); err != nil {
 				return err
 			}
 		case schemaArrays[keyword]:
@@ -199,7 +153,7 @@ func checkContractProfile(schema any, path string, walk *contractSchemaWalk) err
 				return fmt.Errorf(contractArrayErrorFormat, keywordPath)
 			}
 			for index, child := range values {
-				if err := checkContractProfile(child, fmt.Sprintf(contractArrayPathFormat, keywordPath, index), walk); err != nil {
+				if err := checkContractProfile(child, fmt.Sprintf(contractArrayPathFormat, keywordPath, index), references); err != nil {
 					return err
 				}
 			}
@@ -209,7 +163,11 @@ func checkContractProfile(schema any, path string, walk *contractSchemaWalk) err
 				return fmt.Errorf(contractObjectErrorFormat, keywordPath)
 			}
 			for name, child := range values {
-				if err := checkContractProfile(child, keywordPath+contractPathSeparator+name, walk); err != nil {
+				childPath := keywordPath + contractPathSeparator + name
+				if keyword == contractDefinitionsKeyword && !contractDefinitionName.MatchString(name) {
+					return fmt.Errorf(contractDefinitionNameErrorFormat, childPath, contractDefinitionNamePattern)
+				}
+				if err := checkContractProfile(child, childPath, references); err != nil {
 					return err
 				}
 			}

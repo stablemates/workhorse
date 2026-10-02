@@ -42,6 +42,29 @@ with `<path>.$ref must point at a subschema of the contract`. That includes a po
    applies. Each payload was checked at enqueue, so a keyword in the payload schema does not affect
    tasks already queued.
 
+**Breaking: a contract `$ref` must be `#` or `#/$defs/<name>`, and `$anchor` is no longer
+accepted.** The SDKs' JSON Schema libraries disagreed on how to decode and resolve other reference
+forms, so a reference could reach a schema the profile check never saw.
+[ADR 0039](../docs/decisions/0039-use-a-restricted-json-schema-contract-profile.md) now names two reference forms: `#`, the root schema, and `#/$defs/<name>`, where
+`<name>` is a key of the root `$defs`. Compiling or synchronizing the contract returns `Error::InvalidArgument` for any other reference, with
+`<path>.$ref must point at a subschema of the contract`; for `$defs` below the root; for a `$defs`
+name that does not match `^[A-Za-z_][-A-Za-z0-9._]*$`; and for `$anchor` at any depth. A property
+named `$anchor` stays valid. Upgrade in this order:
+
+1. Find each contract version that references anything other than `#` or a root definition, nests
+   `$defs`, uses `$anchor`, or names a definition outside that pattern. A version synced before the
+   upgrade stops compiling once the SDK is upgraded.
+2. Move each referenced or anchored subschema into the root `$defs` and reference it as
+   `#/$defs/<name>`. Rename each definition outside the pattern and update the references to it.
+   Declare a new contract version, because contract rows are immutable, and move `currentVersion` to
+   it.
+3. Let tasks that hold the old version finish before you upgrade workers. A worker checks a task's
+   result against the version the task holds, so a removed form in that result schema fails the
+   attempt with the profile error, and the task's retry policy applies.
+
+**The crate now depends on `jsonschema` 0.58 instead of 0.57.** An application that also depends on
+`jsonschema` directly builds both versions until it moves to 0.58.
+
 ## 0.5.0 — 2026-09-28
 
 The npm packages, Python distribution, Go module, and Rust crate release from one source commit.

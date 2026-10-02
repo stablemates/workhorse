@@ -76,6 +76,7 @@ keyword in its result schema fails the attempt with the profile error. The task'
 applies. A keyword in its payload schema does not affect the task, because the payload was checked
 at enqueue.
 
+The amendment below supersedes this paragraph and removes `$anchor` from the profile.
 A reference must point at a schema position the profile check visits. The fragment is empty, names
 an `$anchor` in the document, or is a JSON pointer whose tokens step only through schema keywords:
 the subschema keywords, an index of an array keyword, or a name in `$defs`, `dependentSchemas` or
@@ -88,6 +89,36 @@ tokens, so such a reference could resolve to a schema the profile check never sa
 `protocol/v1/contracts.json` pins the rejection of each keyword at the root and inside `$defs`,
 `items` and `properties`, behind a reference into `default` or `examples`, and behind a reference
 with an encoded separator. A keyword can return only through the rule in Consequences.
+
+## Amendment: a reference names the root or a root definition (2026-10-01)
+
+This amendment supersedes the reference paragraph of the amendment above. A `$ref` is either `#`,
+which names the root schema, or `#/$defs/<name>`, where `<name>` is an own key of the root `$defs`.
+Each SDK rejects any other reference with `<path>.$ref must point at a subschema of the contract`.
+
+`$defs` may appear only on the root schema. Elsewhere it fails with `<path>.$defs must appear only
+on the root schema`. Each `$defs` key must match `^[A-Za-z_][-A-Za-z0-9._]*$`, or the schema fails
+with `<path>.<name> must be a definition name matching ^[A-Za-z_][-A-Za-z0-9._]*$`. `$anchor` is
+outside the profile at any depth. A property that is merely named `$anchor` stays valid.
+
+The general pointer rule needed each SDK to walk pointer tokens, decode `~0`, `~1` and percent
+escapes, and resolve anchors. Each of those steps had a library that disagreed with the others, and
+each disagreement let a reference reach a schema the profile check never saw. With two forms, no
+token needs decoding and the name grammar excludes `/`, `~` and `%`. Both forms name a position the
+profile check visits. The form zod emits for shared and recursive schemas, `#/$defs/__schema0` and
+`#`, stays inside the profile.
+
+A contract version that uses another reference form, a nested `$defs`, a definition name outside the
+grammar, or `$anchor` stops compiling. Its owner moves each referenced or anchored subschema into the
+root `$defs` and references it as `#/$defs/<name>`. The owner renames each definition outside the
+grammar and updates the references to it. The owner then declares a new contract version, because
+rows are immutable. The task, enqueue and worker consequences match the amendment above.
+
+`protocol/v1/contracts.json` pins the rejection of a reference to a property, an `items` subschema,
+an `allOf` entry and a position inside a definition, of percent-encoded and escaped definition
+references, of `$anchor` at the root and below it, of a definition name outside the grammar, and of
+`$defs` below the root. It also pins references to `#` and to definitions whose names use `_` and
+`.`, beside a property named `$anchor`.
 
 ## Consequences
 
