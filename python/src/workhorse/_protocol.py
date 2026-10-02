@@ -99,7 +99,9 @@ def encode_request_values(values: Sequence[Mapping[str, Json]]) -> str:
     return json.dumps(list(values), separators=(",", ":"), ensure_ascii=False)
 
 
-def serialize_schedules(definitions: Sequence[ScheduleDefinition], default_queue: str) -> str:
+def serialize_schedules(
+    definitions: Sequence[ScheduleDefinition], default_queue: str
+) -> list[dict[str, Json]]:
     values: list[dict[str, Json]] = []
     for definition in definitions:
         task = definition.task
@@ -125,7 +127,7 @@ def serialize_schedules(definitions: Sequence[ScheduleDefinition], default_queue
                 "sensitiveResultKeys": [],
             }
         )
-    return json.dumps(values, separators=(",", ":"), ensure_ascii=False)
+    return values
 
 
 def serialize_request(

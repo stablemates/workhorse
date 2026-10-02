@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use support::ScratchDatabase;
 use tokio_postgres::Client;
 use workhorse::compatibility::{check_compatibility, read_compatibility_state};
-use workhorse::contracts::compile_contract_schema;
+use workhorse::contracts::{compile_contract_schema, TaskContractVersion, TaskTypeContracts};
 use workhorse::{
     EnqueueOptions, Error as ClientError, Idempotency, Queue, RetryPolicy, ScheduleCatchupPolicy,
     ScheduleDefinition, ScheduledTask,
@@ -722,6 +722,49 @@ fn schedule_definition(definition: &Value) -> Result<ScheduleDefinition, String>
     Ok(result)
 }
 
+/// The `sync_contracts` input for a fixture's `contracts` map; an omitted limit selects the default.
+fn task_contracts(contracts: &Value) -> Result<BTreeMap<String, TaskTypeContracts>, String> {
+    let contracts = contracts.as_object().ok_or("fixture contracts are not an object")?;
+    contracts
+        .iter()
+        .map(|(task_type, contract)| {
+            let versions = contract["versions"]
+                .as_object()
+                .ok_or("fixture contract has no versions")?
+                .iter()
+                .map(|(version, document)| {
+                    let keys = |field: &str| -> Result<Vec<String>, String> {
+                        serde_json::from_value(document.get(field).cloned().unwrap_or(json!([])))
+                            .map_err(|error| format!("{field}: {error}"))
+                    };
+                    let limit = |field: &str| match document.get(field) {
+                        Some(value) => integer(value, field),
+                        None => Ok(0),
+                    };
+                    Ok((
+                        version.clone(),
+                        TaskContractVersion {
+                            payload_schema: document["payloadSchema"].clone(),
+                            result_schema: document["resultSchema"].clone(),
+                            max_payload_bytes: limit("maxPayloadBytes")?,
+                            max_result_bytes: limit("maxResultBytes")?,
+                            sensitive_payload_keys: keys("sensitivePayloadKeys")?,
+                            sensitive_result_keys: keys("sensitiveResultKeys")?,
+                        },
+                    ))
+                })
+                .collect::<Result<_, String>>()?;
+            let current_version = contract["currentVersion"]
+                .as_str()
+                .ok_or("fixture contract names no current version")?;
+            Ok((
+                task_type.clone(),
+                TaskTypeContracts { current_version: current_version.into(), versions },
+            ))
+        })
+        .collect()
+}
+
 async fn run_schedules(
     database: &ScratchDatabase,
     catalogue: &Catalogue,
@@ -743,6 +786,9 @@ async fn run_schedules(
             let default_queue =
                 fixture["defaultQueue"].as_str().ok_or("fixture names no default queue")?;
             let queue = Queue::new(database.connect().await, default_queue);
+            if let Some(contracts) = fixture.get("contracts") {
+                queue.sync_contracts(&task_contracts(contracts)?).await.map_err(client_error)?;
+            }
             queue.sync_schedules(namespace, definitions, prune).await.map_err(client_error)?;
             let calls = recorded(&setup, "sync_schedule_definitions_v2").await?;
             let [arguments] = calls.as_slice() else {

@@ -169,9 +169,19 @@ module Stablemates
         rescue ArgumentError => e
           raise ArgumentError, "schedule definition #{index + 1}: invalid schedule definition: #{e.message}"
         end
-        params = [namespace, Values.json(document), boolean(prune, "prune").to_s]
+        prune = boolean(prune, "prune").to_s
         assert_compatible
-        @executor.rows(SqlCatalogue::SYNC_SCHEDULE_DEFINITIONS_V2, params)
+        # Each type's current contract comes from PostgreSQL, not the cache: firing an occurrence
+        # never checks the contract policy, so a stale version would persist on every occurrence.
+        contracts = {}
+        schedules.zip(document) do |definition, input|
+          task = definition.task
+          contract = contracts.fetch(task.task_type) do
+            contracts[task.task_type] = Contracts.load(@executor, task.task_type)
+          end
+          stamp_contract(input, task, contract)
+        end
+        @executor.rows(SqlCatalogue::SYNC_SCHEDULE_DEFINITIONS_V2, [namespace, Values.json(document), prune])
         nil
       end
 
@@ -434,6 +444,7 @@ module Stablemates
         stamp_contract(input, request, contract)
       end
 
+      # +request+ is an EnqueueRequest or a ScheduledTask.
       def stamp_contract(input, request, contract)
         return if contract.nil?
         raise ContractValidationError.new(request.task_type, contract.version) unless

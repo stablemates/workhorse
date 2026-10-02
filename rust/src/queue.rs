@@ -451,7 +451,7 @@ impl<E: Executor> Queue<E> {
         definitions: Vec<ScheduleDefinition>,
         prune: bool,
     ) -> Result<(), Error> {
-        let document = definitions
+        let mut document = definitions
             .iter()
             .enumerate()
             .map(|(index, definition)| {
@@ -477,10 +477,31 @@ impl<E: Executor> Queue<E> {
                 input.insert("timezone".into(), json!(definition.timezone));
                 input.insert("catchupPolicy".into(), json!(definition.catchup_policy));
                 input.insert("enabled".into(), json!(definition.enabled));
-                Ok(Value::Object(input))
+                Ok(input)
             })
-            .collect::<Result<Value, Error>>()?;
+            .collect::<Result<Vec<_>, Error>>()?;
         self.assert_compatible().await?;
+        // Each type's current contract comes from PostgreSQL, not the cache: firing an occurrence
+        // never checks the contract policy, so a stale version would persist on every occurrence.
+        let mut contracts = BTreeMap::new();
+        for (definition, input) in definitions.iter().zip(document.iter_mut()) {
+            let task_type = &definition.task.task_type;
+            if !contracts.contains_key(task_type) {
+                contracts
+                    .insert(task_type.clone(), load_contract(&self.executor, task_type).await?);
+            }
+            let Some(contract) = &contracts[task_type] else {
+                continue;
+            };
+            if !contract.validator.is_valid(&definition.task.payload) {
+                return Err(Error::ContractValidation {
+                    task_type: task_type.clone(),
+                    version: contract.version.clone(),
+                });
+            }
+            stamp_contract(input, contract);
+        }
+        let document = Value::Array(document.into_iter().map(Value::Object).collect());
         self.executor
             .rows(sql::SYNC_SCHEDULE_DEFINITIONS_V2, &[&namespace, &document, &prune])
             .await?;

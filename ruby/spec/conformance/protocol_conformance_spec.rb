@@ -60,9 +60,8 @@ RSpec.describe "protocol/v1 conformance" do
       expect(problems).to eq(["requests/b was never executed"])
     end
 
-    it "lists only the contracted schedule fixture that SM-1063 owns" do
-      expect(Conformance::Ledger.load.map { |entry| [entry["fixture"], entry["issue"]] })
-        .to eq([["schedules/contracted-schedule-definition", "SM-1063"]])
+    it "lists no fixture: every protocol/v1 fixture passes on the Ruby lane" do
+      expect(Conformance::Ledger.load).to be_empty
     end
   end
 

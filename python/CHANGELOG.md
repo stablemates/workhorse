@@ -11,6 +11,13 @@ adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses 
 
 ### Unreleased
 
+**Schedule sync now applies the current task contract.** `Queue.sync_schedules` and
+`AsyncQueue.sync_schedules` wrote every definition without its contract, so a fired task skipped
+payload validation, used the default size limits, and exposed sensitive payload keys. Both now read
+each task type's current contract from PostgreSQL before the write. A payload that fails the schema
+raises `TaskContractValidationError` and writes nothing. A valid definition stores the contract
+version, its size limits, and its redaction keys, as TypeScript and Go do.
+
 **A task's lease now keeps renewing until its final transition is written.** The worker used to
 leave the heartbeat round as soon as the handler returned. A completion or failure that waited past
 the remaining lease let lease recovery take the task, so a peer could repeat finished work and the

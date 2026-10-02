@@ -20,6 +20,13 @@ NUL character or an unpaired surrogate, which PostgreSQL jsonb cannot store`. A 
 hold an unpaired surrogate. On the fast tier the other members of a completion batch still
 complete.
 
+**Schedule sync now applies the current task contract.** `Queue::sync_schedules` wrote every
+definition without its contract, so a fired task skipped payload validation, used the default size
+limits, and exposed sensitive payload keys. It now reads each task type's current contract from
+PostgreSQL before the write. A payload that fails the schema returns `Error::ContractValidation` and
+writes nothing. A valid definition stores the contract version, its size limits, and its redaction
+keys, as TypeScript and Go do.
+
 **A dropped batch member no longer joins a later batch.** Dropping `Worker::run` or
 `Worker::run_once` while a member waited for its batch's linger left that member in the worker's
 batch coordinator. The next batch on the same worker then passed the abandoned payload to the

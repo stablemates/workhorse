@@ -4797,6 +4797,15 @@ Schedule occurrence deduplication prevents duplicate enqueue for one occurrence 
 2. It atomically upserts deployment intent and by default deactivates omitted names through `sync_schedule_definitions_v2`, without changing the durable operator pause.
 3. A per-namespace advisory lock serializes concurrent deployments of the same namespace.
 
+Before the write, every SDK applies each task type's current contract to the definitions. TypeScript
+goes through `taskAcceptance`, and Go goes through `applyScheduleContracts`. Python `Queue.sync_schedules`
+and `AsyncQueue.sync_schedules`, Rust `Queue::sync_schedules`, and Ruby `Queue#sync_schedules` read
+`get_contract_definition_v1` once per distinct type. The four SDKs other than TypeScript bypass their
+contract cache because `fire_schedule_v1` never checks `contract_policy`, so a stale version would
+persist on every occurrence. A payload that fails the schema raises the SDK's contract validation
+error and writes nothing. `protocol/v1/schedules.json` fixture `contracted-schedule-definition`
+covers the stamped fields.
+
 Because definitions live only in the target database, a deployment is one transaction: there is no second metadata database to converge. Every material definition change increments a revision, and worker fires pass the revision they loaded. A stale in-process schedule therefore becomes a no-op instead of running a new payload at an old cadence. Definition row locking also makes a disable deployment wait for a fire that already began before returning.
 
 `Queue.syncConcurrencyPolicies(namespace, definitions, { prune })` reconciles queue dispatch budgets in

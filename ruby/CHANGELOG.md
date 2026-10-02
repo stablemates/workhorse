@@ -11,6 +11,9 @@ other SDKs carry, because every tag names one release of all of them.
   policy with an `ArgumentError`. Its message names the task type and carries no part of the value.
   On the fast tier the other members of a completion batch still complete. A database error during
   completion still ends `run`.
+- `Queue#sync_schedules` applies each task type's current contract, read from PostgreSQL, before
+  the write. A payload that fails the schema raises `ContractValidationError` and writes nothing. A
+  valid definition stores the contract version, its size limits, and its redaction keys.
 - Add the `Queue` client: `enqueue` and `enqueue_many` with every client enqueue option,
   cancellation, signal and human wait delivery, queue health, and schedule and contract
   synchronization. `sync_concurrency_policies`, `sync_rate_limit_policies`, and `sync_budgets`

@@ -115,6 +115,45 @@ RSpec.describe "Queue client operations against PostgreSQL" do
         "schedule definition 1: invalid schedule definition: priority must be an Integer between 0 and 100")
   end
 
+  it "applies the current contract to synced schedules" do
+    namespace = @queue_name
+    capture = "payment.capture.#{@queue_name}"
+    report = "payment.report.#{@queue_name}"
+    version = W::TaskContractVersion.new(
+      payload_schema: {"type" => "object", "required" => ["account"],
+                       "properties" => {"account" => {"type" => "string"}, "card" => {"type" => "string"}}},
+      max_payload_bytes: 4096, max_result_bytes: 8192, sensitive_payload_keys: ["card"],
+      sensitive_result_keys: ["receipt"]
+    )
+    queue.sync_contracts(capture => W::TaskTypeContracts.new(current_version: "v2", versions: {"v2" => version}))
+    schedules = lambda do |payload|
+      [W::ScheduleDefinition.new(name: "capture", schedule: "0 * * * *",
+        task: W::ScheduledTask.new(task_type: capture, payload: payload)),
+        W::ScheduleDefinition.new(name: "report", schedule: "0 3 * * *",
+          task: W::ScheduledTask.new(task_type: report, payload: {}))]
+    end
+    stored = lambda do
+      @connection.exec_params(<<~SQL, [namespace]).values
+        SELECT schedule_name, contract_version, payload_max_bytes, result_max_bytes, payload_redact_keys,
+               result_redact_keys
+          FROM workhorse.schedule_definition WHERE namespace = $1 ORDER BY schedule_name
+      SQL
+    end
+
+    # A Queue that never synced contracts still reads the current contract from PostgreSQL.
+    expect { queue.sync_schedules(namespace, schedules.call({"card" => "4242"})) }
+      .to raise_error(W::ContractValidationError) { |error|
+        expect([error.task_type, error.version]).to eq([capture, "v2"])
+      }
+    expect(stored.call).to eq([])
+
+    queue.sync_schedules(namespace, schedules.call({"account" => "acct_1"}))
+    expect(stored.call).to eq([
+      ["capture", "v2", "4096", "8192", "{card}", "{receipt}"],
+      ["report", nil, "1048576", "1048576", "{}", "{}"]
+    ])
+  end
+
   it "validates payloads against synced contracts and stamps contract fields" do
     task_type = "email.send.#{@queue_name}"
     version = W::TaskContractVersion.new(
