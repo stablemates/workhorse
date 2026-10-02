@@ -12,6 +12,14 @@ adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses 
 
 ### Unreleased
 
+**A dropped batch member no longer joins a later batch.** Dropping `Worker::run` or
+`Worker::run_once` while a member waited for its batch's linger left that member in the worker's
+batch coordinator. The next batch on the same worker then passed the abandoned payload to the
+callback beside current members, even after recovery handed the same task out again. The callback
+could repeat external effects, and the worker discarded that outcome. Dropping the execution now
+removes its waiting member at once, as
+[ADR 0074](../docs/decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md) promises.
+
 **Breaking: contract schemas can no longer use `pattern` or `patternProperties`.** The SDKs' regular
 expression engines accept different syntax and match differently, so one contract could validate
 differently in each language.
