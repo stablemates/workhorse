@@ -81,12 +81,10 @@ Install the SDK. Each package includes its default PostgreSQL driver.
   <Tab value="Ruby">
 
     ```bash
-    bundle add stablemates-workhorse --git https://github.com/stablemates/workhorse --glob ruby/stablemates-workhorse.gemspec
+    bundle add stablemates-workhorse
     bundle add connection_pool
     ```
 
-    The gem is not on RubyGems yet, so until its first release Bundler fetches it from the
-    repository.
     A Rails application can also run its jobs through the [Active Job adapter](/docs/active-job).
 
     Your application never installs the schema. A deployment step installs it once, and that step
@@ -138,7 +136,7 @@ A Python, Go, Rust, or Ruby project has no `node_modules` to resolve the binary 
 both the package and the version:
 
 ```bash
-npx --package @stablemates/workhorse@0.5.0 workhorse schema install
+npx --package @stablemates/workhorse@0.6.0 workhorse schema install
 ```
 
 Pin that to the version of the Python package, the Go module, the `workhorse` crate, or the Ruby
@@ -241,11 +239,11 @@ release instead. Download that asset from the release for the version your appli
 then apply it:
 
 ```bash
-curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.5.0/schema.sql
+curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.6.0/schema.sql
 psql "$DATABASE_URL" -f schema.sql
 ```
 
-The [`v0.5.0` release](https://github.com/stablemates/workhorse/releases/tag/v0.5.0) is the page
+The [`v0.6.0` release](https://github.com/stablemates/workhorse/releases/tag/v0.6.0) is the page
 that carries the file. Change both version numbers together when you pin a different one: the
 schema the file creates is the schema that release's SDK expects.
 

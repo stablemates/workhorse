@@ -3,10 +3,14 @@
 The Ruby queue client, operator client, and worker runtime for the Workhorse durable task queue for
 PostgreSQL.
 
-> **Unreleased:** the gem is not on RubyGems yet. Until its first release, Bundler installs it from
-> this repository. Read the
-> [changelog](https://github.com/stablemates/workhorse/blob/main/ruby/CHANGELOG.md) for what it
-> carries.
+> **Public beta:** Workhorse is usable for evaluation and early production adoption. A 0.x minor
+> release may change behaviour, so read the
+> [changelog](https://github.com/stablemates/workhorse/blob/main/ruby/CHANGELOG.md) before you
+> upgrade. It will not ask you to recreate your database: migrations are ordered, and inside a major
+> line a migration only adds, so a running deployment upgrades in place. The one exception is
+> migration 0025: a database from before 0.5.0 crosses it offline, with the
+> [0.5.0 upgrade steps](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md#050--2026-09-28).
+> The upgrade from 0.5 to 0.6 only adds.
 
 An AI agent should read [the Workhorse documentation index](https://workhorse.run/llms.txt) first.
 
@@ -15,17 +19,14 @@ An AI agent should read [the Workhorse documentation index](https://workhorse.ru
 Add the gem and the connection pool it runs on:
 
 ```bash
-bundle add stablemates-workhorse --git https://github.com/stablemates/workhorse --glob ruby/stablemates-workhorse.gemspec
+bundle add stablemates-workhorse
 bundle add connection_pool
 ```
-
-After the first release, `bundle add stablemates-workhorse` adds `gem "stablemates-workhorse"` from
-RubyGems instead.
 
 Install the schema once, as a deployment step. The application never installs or migrates it.
 
 ```bash
-npx --package @stablemates/workhorse@0.5.0 workhorse schema install
+npx --package @stablemates/workhorse@0.6.0 workhorse schema install
 ```
 
 The machine that runs that deployment step needs Node.js 22 or newer. The application itself needs

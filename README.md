@@ -89,11 +89,11 @@ export async function runQuickstart(databaseUrl: string) {
 The [quickstart](https://workhorse.run/docs/quickstart) continues through failure and recovery. See
 [worker processes](https://workhorse.run/docs/worker-processes) before deploying a worker.
 
-Every other SDK README runs the same first task in its own language. The Ruby gem is not on RubyGems
-yet, so until its first release Bundler installs it from this repository:
+Every other SDK README runs the same first task in its own language. A Ruby application adds the gem
+and the connection pool it runs on:
 
 ```bash
-bundle add stablemates-workhorse --git https://github.com/stablemates/workhorse --glob ruby/stablemates-workhorse.gemspec
+bundle add stablemates-workhorse
 bundle add connection_pool
 ```
 

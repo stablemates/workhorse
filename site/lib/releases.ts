@@ -95,6 +95,5 @@ export const releaseLines: readonly ReleaseLine[] = [
     registry: "RubyGems",
     registryUrl: "https://rubygems.org/gems/stablemates-workhorse",
     changelog: "ruby/CHANGELOG.md",
-    unpublished: true,
   },
 ];

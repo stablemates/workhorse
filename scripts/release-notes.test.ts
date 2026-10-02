@@ -30,12 +30,15 @@ function read(path: string): string {
   return readFileSync(join(root, path), "utf8");
 }
 
-/** The text between the Unreleased heading and the next release heading. */
-function unreleased(path: string): string {
+/** The 0.6.0 release: the first entry whose notes cover migrations 0045 through 0053. */
+const release = "## 0.6.0 — 2026-10-02";
+
+/** One release entry, from its heading to the next `##` heading. */
+function entry(path: string, heading: string): string {
   const text = read(path);
-  const start = text.search(/^#{2,3} Unreleased$/m);
-  expect(start, `${path} has no Unreleased heading`).toBeGreaterThanOrEqual(0);
-  const rest = text.slice(start).split("\n").slice(1).join("\n");
+  const start = text.indexOf(`\n${heading}\n`);
+  expect(start, `${path} has no "${heading}" heading`).toBeGreaterThanOrEqual(0);
+  const rest = text.slice(start + heading.length + 2);
   const end = rest.search(/^## /m);
   return end === -1 ? rest : rest.slice(0, end);
 }
@@ -77,14 +80,15 @@ function links(
 
 describe("release notes", () => {
   it("leave the 0.5.0 notes on the schema version that release shipped", () => {
-    const text = read("CHANGELOG.md");
-    const release = text.slice(text.indexOf("## 0.5.0 — 2026-09-28"));
-    expect(release).toMatch(/^Requires \*\*schema v43\*\*/m);
+    expect(entry("CHANGELOG.md", "## 0.5.0 — 2026-09-28")).toMatch(/^Requires \*\*schema v43\*\*/m);
   });
 
   it("name every migration the release adds in the root notes", () => {
-    const shipped = Number(/Requires \*\*schema v(\d+)\*\*/.exec(read("CHANGELOG.md"))?.[1]);
-    const section = unreleased("CHANGELOG.md");
+    // 0.5.0 shipped schema version 43, so every migration after 0044 is new in 0.6.0.
+    const shipped = Number(
+      /Requires \*\*schema v(\d+)\*\*/.exec(entry("CHANGELOG.md", "## 0.5.0 — 2026-09-28"))?.[1],
+    );
+    const section = entry("CHANGELOG.md", release);
     const added = readdirSync(join(root, "sql/migrations"))
       .map((name) => /^(\d{4})-/.exec(name)?.[1])
       .filter((number): number is string => number !== undefined && Number(number) > shipped + 1);
@@ -93,7 +97,7 @@ describe("release notes", () => {
   });
 
   describe.each(changelogs)("%s", (path) => {
-    const section = unreleased(path);
+    const section = entry(path, release);
 
     it("states the final schema version and the compatibility floor separately", () => {
       expect(section).toMatch(phrase(`final schema version is **${WORKHORSE_SCHEMA_VERSION}**`));
@@ -116,7 +120,6 @@ describe("release notes", () => {
     it("links only to files and headings that exist", () => {
       const broken = links(path, section)
         .filter(({ file, anchor }) => {
-          if (anchor === "unreleased") return true;
           if (file === undefined) return false;
           if (!existsSync(join(root, file))) return true;
           return anchor !== undefined && file.endsWith(".md") && !anchors(file).has(anchor);

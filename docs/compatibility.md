@@ -347,7 +347,7 @@ rest are optional TypeScript packages.
 | `@stablemates/workhorse-typeorm`            | TypeORM provider                                  | `@stablemates/workhorse`, `typeorm` >= 0.3 and < 2                                                            |
 | `@stablemates/workhorse-kysely`             | Kysely provider                                   | `@stablemates/workhorse`, `kysely` >= 0.29 and < 0.30                                                         |
 | `@stablemates/workhorse-otel`               | OpenTelemetry adapter                             | `@stablemates/workhorse`, `@opentelemetry/api` >= 1.9 and < 2, `@opentelemetry/api-logs` >= 0.200 and < 0.300 |
-| `@stablemates/workhorse-dashboard`          | Operator dashboard and its framework-neutral host | `@stablemates/workhorse` >= 0.5.0 and < 0.6, React 19                                                         |
+| `@stablemates/workhorse-dashboard`          | Operator dashboard and its framework-neutral host | `@stablemates/workhorse` >= 0.6.0 and < 0.7, React 19                                                         |
 | `@stablemates/workhorse-dashboard-server`   | Authenticated standalone dashboard server         | `@stablemates/workhorse-dashboard-contract`                                                                   |
 | `@stablemates/workhorse-dashboard-contract` | Type-only dashboard server boundary               | None                                                                                                          |
 | `stablemates-workhorse`                     | Python clients, workers, and WSGI dashboard       | None; includes Psycopg >= 3.3 and < 4; `asyncpg` extra supports >= 0.31 and < 1                               |
@@ -360,7 +360,7 @@ The Python package, the Go module, the Rust crate, and the Ruby gem declare no T
 packages, because every line releases from one commit.
 
 Every release publishes one version to npm, PyPI, the Go module proxy, crates.io, and RubyGems from
-one source commit. The current release is `0.5.0`. “Public beta” means the release is usable for evaluation and early production adoption without a
+one source commit. The current release is `0.6.0`. “Public beta” means the release is usable for evaluation and early production adoption without a
 0.x compatibility promise. The label is retired at 1.0.0 and replaced by “stable”; see
 [What SemVer governs](#what-semver-governs).
 
@@ -867,17 +867,12 @@ accept it.
 
 The Ruby SDK publishes one gem, `stablemates-workhorse`, from `ruby/`
 ([ADR 0075](decisions/0075-shape-the-ruby-sdk-as-one-gem-with-an-active-job-adapter.md)). Like the
-crate, it has no tag of its own and publishes from the npm `v*` tag. It joins the release train on
-the first release after the gem name is reserved.
+crate, it has no tag of its own and publishes from the npm `v*` tag. It joined the release train at
+0.6.0, its first release.
 
 1. Set `VERSION` in `ruby/lib/stablemates/workhorse/version.rb` to the release version. Move the
    `## Unreleased` entries of `ruby/CHANGELOG.md` under a `## X.Y.Z` heading, and commit both with
-   the candidate. For the first release, also remove the "Unreleased" note from `ruby/README.md`.
-   Replace the Git install in `install.ruby` of `support.json` with `bundle add
-stablemates-workhorse`, and change every surface `scripts/install-commands.test.ts` governs to
-   match. Drop the not-yet-released sentences from the site's compatibility, installation,
-   quickstart, and agent pages, and the `unpublished` flag from the Ruby entry in
-   `site/lib/releases.ts`.
+   the candidate.
 2. Tag `vX.Y.Z`. The build job of `.github/workflows/release.yml` runs `pnpm ruby:release-check`.
    It runs the Ruby gates, then builds the `.gem` once with `gem build --strict`. It installs that
    archive into an empty gem home and runs a clean consumer project without Bundler. With PostgreSQL

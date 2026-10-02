@@ -2,4 +2,4 @@
 
 from __future__ import annotations
 
-WORKHORSE_VERSION = "0.5.0"
+WORKHORSE_VERSION = "0.6.0"

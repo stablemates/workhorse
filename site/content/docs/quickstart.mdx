@@ -54,12 +54,9 @@ PostgreSQL connection string.
   <Tab value="Ruby">
 
     ```bash
-    bundle add stablemates-workhorse --git https://github.com/stablemates/workhorse --glob ruby/stablemates-workhorse.gemspec
+    bundle add stablemates-workhorse
     bundle add connection_pool
     ```
-
-    The gem is not on RubyGems yet, so until its first release Bundler fetches it from the
-    repository.
 
     Your application never installs the schema. A deployment step installs it once, and that step
     runs on Node.js.
@@ -83,7 +80,7 @@ A Python, Go, Rust, or Ruby project has no `node_modules` to resolve that binary
 version instead — the same version as the SDK it installed above:
 
 ```bash
-npx --package @stablemates/workhorse@0.5.0 workhorse schema install
+npx --package @stablemates/workhorse@0.6.0 workhorse schema install
 ```
 
 That step runs on Node.js, even when the application is written in Python, Go, Rust, or

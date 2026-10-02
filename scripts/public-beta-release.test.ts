@@ -10,9 +10,9 @@ import {
 } from "./public-beta-notice.js";
 
 /** The release this repository cuts next: one version on every registry from one commit. */
-const releaseVersion = "0.5.0";
-const releaseDate = "2026-09-28";
-const corePeerRange = ">=0.5.0 <0.6.0";
+const releaseVersion = "0.6.0";
+const releaseDate = "2026-10-02";
+const corePeerRange = ">=0.6.0 <0.7.0";
 
 /** The published beta. Its entries stay in the changelogs as history and must keep their facts. */
 const betaNpmVersion = "0.1.0-beta.2";
@@ -51,7 +51,7 @@ function changelogEntry(changelog: string, version: string, date: string): strin
   return next === -1 ? body : body.slice(0, next);
 }
 
-describe("the 0.5.0 release", () => {
+describe("the 0.6.0 release", () => {
   it("carries the plain version and peer range in every published manifest", async () => {
     for (const entry of await publishedPackages()) {
       const manifest = JSON.parse(await read(entry.manifest)) as {
@@ -85,12 +85,22 @@ describe("the 0.5.0 release", () => {
       `name = "workhorse"\nversion = "${releaseVersion}"`,
     );
     expect(await read("Cargo.lock")).toContain(`name = "workhorse"\nversion = "${releaseVersion}"`);
+
+    expect(await read("go/version.go")).toContain(`const Version = "${releaseVersion}"`);
+    expect(await read("ruby/lib/stablemates/workhorse/version.rb")).toContain(
+      `VERSION = "${releaseVersion}"`,
+    );
+    expect(await read("ruby/Gemfile.lock")).toContain(`stablemates-workhorse (${releaseVersion})`);
   });
 
   it("dates each release entry with the schema version and runtime requirements", async () => {
     const manifest = JSON.parse(await read("support.json")) as SupportManifest;
     const rustMinimum = /^rust-version = "([^"]+)"$/m.exec(await read("rust/Cargo.toml"))?.[1];
     expect(rustMinimum).toBeDefined();
+    const rubyMinimum = /required_ruby_version = ">= ([^"]+)"$/m.exec(
+      await read("ruby/stablemates-workhorse.gemspec"),
+    )?.[1];
+    expect(rubyMinimum).toBeDefined();
     const floors = [
       [
         "CHANGELOG.md",
@@ -108,6 +118,13 @@ describe("the 0.5.0 release", () => {
           `PostgreSQL **${manifest.support.postgres.minimum}** or newer`,
         ],
       ],
+      [
+        "ruby/CHANGELOG.md",
+        [
+          `Ruby **${rubyMinimum}** or newer`,
+          `PostgreSQL **${manifest.support.postgres.minimum}** or newer`,
+        ],
+      ],
     ] as const;
 
     for (const [relativePath, requirements] of floors) {
@@ -116,9 +133,9 @@ describe("the 0.5.0 release", () => {
       // An entry states the schema version that release refuses to run below, which is the
       // compatibility gate's floor rather than the migration baseline. 0.2.1 stated v1 because
       // both were 1 then; 0.3.0 and 0.4.0 state v18, the floor SM-812 derived from the newest
-      // statement the SDKs call. 0.5.0 states v43, the floor SM-932 raised it to. The number is
-      // written here rather than read from the manifest, because a published entry is immutable
-      // and a later release moving the floor must not rewrite it.
+      // statement the SDKs call. 0.5.0 states v43, the floor SM-932 raised it to, and 0.6.0 keeps
+      // it. The number is written here rather than read from the manifest, because a published
+      // entry is immutable and a later release moving the floor must not rewrite it.
       expect(entry).toContain("**schema v43**");
       expect(entry).toContain("from one source commit");
       for (const requirement of requirements) {
@@ -156,6 +173,7 @@ describe("the public beta line", () => {
       "python/README.md",
       "go/README.md",
       "rust/README.md",
+      "ruby/README.md",
     ];
 
     for (const relativePath of readmes) {

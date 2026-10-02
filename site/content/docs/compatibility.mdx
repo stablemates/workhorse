@@ -160,8 +160,7 @@ the TypeScript packages, and its version matches theirs.
 The Ruby `stablemates-workhorse` gem runs on the `pg` gem. It accepts a single connection, a
 `connection_pool`, or an Active Record connection through `ActiveRecordExecutor`. Telemetry turns on
 when the application loads the OpenTelemetry API gems, and the gem declares no dependency on them.
-Rails applications can also run jobs through the [Active Job adapter](/docs/active-job). The gem
-is not on RubyGems yet, so an application installs it from the repository until its first release.
+Rails applications can also run jobs through the [Active Job adapter](/docs/active-job).
 
 ## Bun and Deno
 
@@ -185,8 +184,8 @@ dashboard contracts, and exported types describe the same source revision. The
 [changelog](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md) records breaking
 changes and the schema version each release requires.
 
-Every release publishes one version to npm, PyPI, the Go module proxy, and crates.io from one source
-commit. The current release is `0.5.0`. Earlier beta versions stay on the registries, and each
+Every release publishes one version to npm, PyPI, the Go module proxy, crates.io, and RubyGems from
+one source commit. The current release is `0.6.0`. Earlier beta versions stay on the registries, and each
 changelog dates them and names their source commits. [Releases](/docs/releases) prints the current
 version of each line, with its date and whether it still receives fixes. Any 0.x minor release may
 change behaviour, so read the changelog before you upgrade. It will not ask you to recreate your
