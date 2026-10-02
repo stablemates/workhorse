@@ -244,6 +244,12 @@ still owns the commit, rollback, and pool checkout.
 One boundary to keep in mind: the transaction covers durable acceptance only. Handlers run later,
 outside your transaction, so their external effects still need their own idempotency.
 
+### Django
+
+Inside `transaction.atomic(using=alias)`, Django lends its enlisted Psycopg connection to a
+short-lived `Queue`. Follow the [tested Django recipe](/docs/django) for alias, lifetime, error,
+and async boundaries. `on_commit()` provides ordering, not atomic task acceptance.
+
 ## Enqueue a batch
 
 If a single operation produces many tasks — a fan-out to every subscriber, an import — use

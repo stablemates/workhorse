@@ -67,6 +67,29 @@
         }
       }
     },
+    "django-transaction": {
+      "typescript": {
+        "exclusion": {
+          "reason": "Django is a Python framework; this framework-specific transaction recipe has no TypeScript counterpart."
+        }
+      },
+      "python": { "file": "python/examples/django_enqueue.py" },
+      "go": {
+        "exclusion": {
+          "reason": "Django is a Python framework; this framework-specific transaction recipe has no Go counterpart."
+        }
+      },
+      "rust": {
+        "exclusion": {
+          "reason": "Django is a Python framework; this framework-specific transaction recipe has no Rust counterpart."
+        }
+      },
+      "ruby": {
+        "exclusion": {
+          "reason": "Django is a Python framework; this framework-specific transaction recipe has no Ruby counterpart."
+        }
+      }
+    },
     "async-worker": {
       "typescript": {
         "exclusion": {

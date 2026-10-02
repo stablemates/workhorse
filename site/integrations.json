@@ -116,6 +116,15 @@
       "verifiedOn": "2026-09-30"
     },
     {
+      "slug": "django",
+      "name": "Django",
+      "category": "frameworks",
+      "tier": "documented",
+      "summary": "Enqueues through Django's enlisted Psycopg connection inside an atomic business transaction.",
+      "boundary": "Psycopg 3 only; Django owns the connection and workers run in separate processes. This is a tested recipe, not a Django Tasks backend.",
+      "verifiedOn": "2026-10-02"
+    },
+    {
       "slug": "pgbouncer",
       "name": "PgBouncer",
       "category": "poolers",
