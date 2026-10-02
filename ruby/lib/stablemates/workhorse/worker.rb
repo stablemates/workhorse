@@ -1453,7 +1453,7 @@ module Stablemates
       def settle_failure(task, error, arbiter)
         envelope = error_envelope(error, task.redact_error_details)
         state = Telemetry.span("workhorse.retry", Telemetry.task_span_attributes(task)) do |span|
-          delay = retry_delay_override(task)
+          delay = error.is_a?(ConflictError) ? -1 : retry_delay_override(task)
           state = fenced_row(SqlCatalogue::FAIL_V1, task, JSON.generate(envelope), delay&.to_s)["state"]
           Telemetry.set_attribute(span, "workhorse.retry.outcome", state.to_s)
           state

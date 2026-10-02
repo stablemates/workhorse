@@ -3095,7 +3095,19 @@ class Worker:
                         self.worker_id,
                         task.fence_token,
                         json.dumps(envelope),
-                        self._retry_delay_override(task),
+                        (
+                            -1
+                            if isinstance(
+                                error,
+                                (
+                                    CheckpointConflictError,
+                                    WaitConflictError,
+                                    ChildConflictError,
+                                    HumanWaitConflictError,
+                                ),
+                            )
+                            else self._retry_delay_override(task)
+                        ),
                     ),
                 )
             )["state"]

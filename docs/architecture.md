@@ -2,7 +2,7 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript, Python, Go, and Rust `Queue`, `Admin`, and `Worker` remain thin protocol clients.
 
-The current schema version is 53 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
+The current schema version is 54 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
 (`WORKHORSE_SCHEMA_BASELINE_VERSION`). `sql/releases/0006.sql` contains the baseline clean-install
 artifact, which is the 0.2.0 schema. The chain began at 1 and was pruned to this baseline when
 0.1.x support was dropped
@@ -18,8 +18,8 @@ contract step pending at the installed version through `workhorse schema contrac
 `--yes` and first names every worker still live on a retiring protocol. The current migration plan
 has one contract step: `0025-add-a-fast-task-tier.sql` moves schema 24 to 25 and retires
 protocols 1 through 4. `migrateSchema` therefore stops at schema 24 on an older installation, and
-`contractSchema` applies step 25. The additive steps 26 through 53 follow, so a second `migrateSchema`
-run completes the plan. Their files run from `0026` to `0054`: file number `0035` was reserved and
+`contractSchema` applies step 25. The additive steps 26 through 54 follow, so a second `migrateSchema`
+run completes the plan. Their files run from `0026` to `0055`: file number `0035` was reserved and
 never used, so from `0036` on a file's number is one above the version it produces. Step 25 ships without the usual retention window, as
 [ADR 0077](decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) §6 records.
 
@@ -60,7 +60,7 @@ failure leaves the earlier statements applied at the starting version and report
 `Workhorse migration <file> failed part-way and rolled nothing back`. `lock_timeout` is not set for
 such a step.
 
-An installed version below the baseline 6 or above the current 53, a version no step starts from, and
+An installed version below the baseline 6 or above the current 54, a version no step starts from, and
 a `workhorse.schema_version` table without exactly one row fail without running a migration.
 `typescript/core/test/schema-migrations.test.ts` migrates every frozen artifact under
 `sql/releases/` and requires schema-only dump equality with a clean installation.
@@ -70,9 +70,8 @@ function or reinterpret that suffix.
 ## SQL protocol conformance
 
 `protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 5. It accepts installed
-schema versions 43 and newer inside the major line, and client protocol 5 only. Schema version 43
-is the floor because the rate-limit operator read sums the `admission_shard` rows that version
-introduced. `protocol/v1/compatibility.json` distinguishes an absent,
+schema versions 54 and newer inside the major line, and client protocol 5 only. Schema version 54
+is the floor because earlier schemas treat the terminal failure override as an immediate retry. `protocol/v1/compatibility.json` distinguishes an absent,
 older, current, or newer installed schema from the client's protocol version. Every incompatible
 case requires refusal before a mutating function runs.
 
@@ -114,6 +113,24 @@ whole step, so an executor that only counts empty polls fails on every run inste
 load. The TypeScript suite
 runs every fixture through `Worker`; Python, Go, and Rust runtimes must run the same fixtures.
 
+All five SDK workers settle durable replay conflicts through `fail_v1` with `p_retry_delay_ms = -1`.
+Schema version 54 reserves that override for terminal failure, even when `current_attempt < max_attempts`.
+Both `fail_v1` and `fast_fail_v1` preserve the current attempt and write the usual failed outcome and history.
+Ownership, cancellation, deadline, and execution-timeout checks still precede failure settlement.
+NULL uses the persisted retry policy; zero requests an immediate retry. Other negative values retain their legacy zero-delay behavior.
+Workers require schema version 54, because earlier schemas interpret the terminal override as an immediate retry.
+
+The terminal classes are `CheckpointConflictError`, `WaitConflictError`, `ChildConflictError`, and `HumanWaitConflictError`.
+`ChildConflictError` includes a changed child set. Go recognizes wrapped conflicts with `errors.As` and preserves their class names.
+Rust converts `Error::Conflict` for `Operation::Checkpoint`, `Sleep`, `RunChild`, `RunChildren`, and `WaitForHuman` into those named `HandlerError` values.
+Its generic error conversion requires an owned (`'static`) error so it can inspect the error chain.
+Conversion examines at most 16 errors, including the root, so a cyclic source chain cannot block settlement.
+Ruby uses `ConflictError`; its message identifies the operation and retained name.
+The worker skips its retry-delay callback for these errors, then records the conflict name in the failure envelope.
+Configured redaction still records `RedactedTaskError`, while terminal classification happens before redaction.
+Transient failures, lease loss, child-limit refusals, and already-waiting signal refusals keep their existing settlement behavior.
+`protocol/v1/runtime.json` pins terminal conflicts and those retryable controls in every SDK.
+
 `protocol/v1/failures.json` pins the JSON error envelope a worker passes to `fail_v1`. An
 unredacted envelope carries exactly `name`, `message`, and `stack`; `stack` is a string or null. A
 redacted envelope carries exactly `name` and `message`, holding `RedactedTaskError` and
@@ -123,7 +140,7 @@ envelope a worker redacts locally cannot differ in shape from one PostgreSQL red
 Each language resolves `name` from its own error, and never from its type system. TypeScript reads
 `Error.name`, and records `NonErrorThrown` with a null stack for a thrown non-`Error`. Python reads
 `type(error).__name__` and always renders a stack through `traceback.format_exception`. Go has no
-name on an error, so `handlerErrorName` takes the first of: the result of `ErrorName()` on any error
+name on an error, so `handlerErrorName` preserves a wrapped durable conflict's class, then takes the first of: the result of `ErrorName()` on any error
 in the chain that implements `ErrorNamer`, the declared name of an exported concrete error type, or
 `Error`. `handlerErrorStack` reads `ErrorStack()` from any error in the chain that implements
 `ErrorStacker`, and records null otherwise. `errors.As` walks the chain, so a wrapped error still
@@ -203,7 +220,7 @@ bytes, and `requested_by` contains 1 through 200 characters.
 
 Every non-empty Python mutation first executes `SELECT version FROM workhorse.schema_version ORDER
 BY version`. `Queue` and `AsyncQueue` enqueue through a per-queue cached check instead, so a warm
-enqueue issues only `enqueue_many_v1`. `python/src/workhorse/_protocol.py` accepts schema version 43 or newer and client protocol 5.
+enqueue issues only `enqueue_many_v1`. `python/src/workhorse/_protocol.py` accepts schema version 54 or newer and client protocol 5.
 It refuses an unreadable, missing, older, or newer schema before the mutating statement. Enqueue
 batches contain at most 1,000 requests. Default priority is 0, default attempt budget is 25, default
 payload and result limits are 1,048,576 bytes, and default idempotency retention is 86,400,000
@@ -601,7 +618,7 @@ including that cancellation, so the pool never receives a connection with a call
 `on_notification_error` receives a failed `remove_listener`, and the connection still returns to the
 pool, whose reset discards the `LISTEN`. `AsyncWorker` never closes the pool it was given.
 
-Handler failures pass a JSON error envelope to `fail_v1` with a null retry override, so PostgreSQL
+Ordinary handler failures pass a JSON error envelope to `fail_v1` with the configured retry override, so PostgreSQL
 selects `ready`, `scheduled`, or `failed` from the persisted attempt budget and retry policy.
 `_error_envelope` builds that envelope in the shape `protocol/v1/failures.json` pins.
 
@@ -912,7 +929,7 @@ duration and claim throughput do not delay it. A phase error that `tick_v1` retu
 logged at warn level with `workhorse.maintenance.phase`, and the next tick retries the phase. It
 stops neither `Run` nor `RunOnce`. Heartbeat, maintenance, claim, and settlement queries
 serialize safely when the pool has one connection.
-A handler error passes a JSON envelope and a null retry override to `fail_v1`, so PostgreSQL selects
+An ordinary handler error passes a JSON envelope and the configured retry override to `fail_v1`, so PostgreSQL selects
 retry timing and attempt exhaustion. A `stale` heartbeat, a rejected completion, or a `stale`
 failure ends that attempt with the `lease_lost` handler outcome. `Run` and `RunOnce` keep
 dispatching, because lease recovery already owns the task. An expiration that PostgreSQL still
@@ -5153,10 +5170,10 @@ interactive stdin and stdout is refused with exit 1.
 
 ## Operational limits
 
-- The canonical artifact installs version 53, the whole current schema. Version 6 is the migration
+- The canonical artifact installs version 54, the whole current schema. Version 6 is the migration
   baseline and is frozen as `sql/releases/0006.sql`. A schema change is an upgrade rather than a
   reinstall: `migrateSchema` applies the ordered steps under `sql/migrations/`, which run from 6
-  to 53. A database below 6 is not carried forward
+  to 54. A database below 6 is not carried forward
   ([ADR 0073](decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)).
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
   `uuid_v7_v1()` uses core UUID and byte functions rather than `pgcrypto` or `uuid-ossp`.

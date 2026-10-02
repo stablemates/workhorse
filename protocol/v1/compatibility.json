@@ -1,14 +1,14 @@
 [
   {
     "id": "current",
-    "installedSchemaVersion": 53,
+    "installedSchemaVersion": 54,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [5],
     "compatible": true
   },
   {
     "id": "schema-newer-inside-major-line",
-    "installedSchemaVersion": 54,
+    "installedSchemaVersion": 55,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [5],
     "compatible": true,
@@ -16,7 +16,7 @@
   },
   {
     "id": "served-protocol-undeclared",
-    "installedSchemaVersion": 53,
+    "installedSchemaVersion": 54,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [],
     "compatible": true,
@@ -61,6 +61,15 @@
     "note": "The served protocol matches, so only the schema floor refuses this client."
   },
   {
+    "id": "schema-before-terminal-failure-override",
+    "installedSchemaVersion": 53,
+    "clientProtocolVersion": 5,
+    "servedProtocolVersions": [5],
+    "compatible": false,
+    "refusalCode": "schema-too-old",
+    "refusal": "Refuse mutations until schema 54 is installed: earlier fail_v1 treats -1 as an immediate retry."
+  },
+  {
     "id": "schema-before-the-admission-shards",
     "installedSchemaVersion": 42,
     "clientProtocolVersion": 5,
@@ -72,7 +81,7 @@
   },
   {
     "id": "schema-serves-only-older-protocols",
-    "installedSchemaVersion": 53,
+    "installedSchemaVersion": 54,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [4],
     "compatible": false,
@@ -91,7 +100,7 @@
   },
   {
     "id": "schema-no-longer-serves-client",
-    "installedSchemaVersion": 53,
+    "installedSchemaVersion": 54,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [6],
     "compatible": false,
@@ -100,7 +109,7 @@
   },
   {
     "id": "client-protocol-too-old",
-    "installedSchemaVersion": 53,
+    "installedSchemaVersion": 54,
     "clientProtocolVersion": 4,
     "servedProtocolVersions": [5],
     "compatible": false,
@@ -110,7 +119,7 @@
   },
   {
     "id": "client-protocol-too-new",
-    "installedSchemaVersion": 53,
+    "installedSchemaVersion": 54,
     "clientProtocolVersion": 6,
     "servedProtocolVersions": [5],
     "compatible": false,

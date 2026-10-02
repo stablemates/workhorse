@@ -96,3 +96,9 @@ fails when an unlisted fixture does not pass, and when a listed fixture passes.
 
 Run `pnpm rust:conformance:check` for generated evidence and `pnpm rust:release-check` for the
 pinned-toolchain, crate-package, and clean-project consumer checks.
+
+`fail_v1` reserves the delay override `-1` for terminal failure from schema version 54 onward.
+It preserves the current attempt even when retry budget remains. NULL, zero, and every other
+value retain their retry semantics. Ownership, cancellation, and expiration checks still run first.
+The replay-conflict runtime fixture checks that all SDKs select this override for deterministic
+conflicts, preserve conflict names, and leave transient and capacity refusals retryable.

@@ -18,6 +18,17 @@ RSpec.describe "protocol/v1 conformance" do
       "Ruby protocol conformance disagrees with its list:\n  #{problems.join("\n  ")}"
   end
 
+  it "fails replay conflicts on their first occurrence" do
+    reason = ScratchDatabase.skip_reason
+    skip(reason) if reason
+    fixture = JSON.parse(File.read(File.join(Conformance::PROTOCOL, "runtime.json")))
+      .find { |entry| entry["kind"] == "replay-conflict" }
+    url = ScratchDatabase.extra("replay_conflict_regression")
+    PG.connect(url) { |connection| Conformance::Runtime.new(url, connection).run(fixture) }
+  ensure
+    ScratchDatabase.drop_extra("replay_conflict_regression") if url
+  end
+
   describe "the expected-unsupported list" do
     def outcome(status, reason = nil) = Conformance::Outcome.new(status: status, reason: reason)
 

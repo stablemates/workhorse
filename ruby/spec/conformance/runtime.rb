@@ -78,6 +78,7 @@ module Conformance
       when "suspension-replay" then suspension_replay(fixture)
       when "lease-loss" then lease_loss(fixture)
       when "batch" then batch(fixture)
+      when "replay-conflict" then replay_conflict(fixture)
       else raise Failure, "unknown runtime fixture kind #{Matcher.render(fixture["kind"])}"
       end
     rescue Failure
@@ -565,6 +566,40 @@ module Conformance
         end
         late_thread&.join(10)
         sessions.each(&:close)
+      end
+    end
+
+    def replay_conflict(fixture)
+      fixture.fetch("cases").each do |entry|
+        name = "#{queue_name(fixture)}-#{entry["errorKind"]}"
+        task_id = queue.enqueue(fixture["taskType"], {}, queue: name, max_attempts: fixture["maxAttempts"]).task_id
+        @connection.exec_params("UPDATE workhorse.task SET payload_redact_keys = ARRAY['secret'] WHERE id=$1", [task_id]) if entry["redactErrorDetails"]
+        delay_calls = 0
+        with_pool do |pool|
+          subject = W::Worker.new(pool, queues: [name], polling_only: true, disable_registry: true,
+            retry_delay: ->(*) {
+              delay_calls += 1
+              60
+            })
+            .handle(fixture["taskType"]) do
+              operation = {"checkpoint" => :checkpoint, "wait" => :sleep, "child" => :run_child,
+                           "redacted-child" => :run_child, "child-set" => :run_children, "human" => :wait_for_human}
+              case entry["errorKind"]
+              when "child-limit" then raise W::LimitExceededError.new(:run_child, "saved")
+              when "signal-wait" then raise W::AlreadyWaitingError.new(:wait_for_signal, "saved")
+              when "transient" then raise StandardError, "transient"
+              else raise W::ConflictError.new(operation.fetch(entry["errorKind"]), "saved")
+              end
+            end
+          check(subject.run_once == true, "conflict handler did not run")
+        end
+        expect_state(task_id, {"state" => entry["expectedState"], "attempt" => entry["expectedAttempt"],
+          "errorName" => entry["expectedErrorNames"]["ruby"]})
+        terminal = entry["expectedState"] == "failed"
+        check(delay_calls == (terminal ? 0 : 1), "retry callback called #{delay_calls} times")
+        outcomes = @connection.exec_params("SELECT outcome FROM workhorse.attempt_history WHERE task_id = $1", [task_id])
+          .map { |row| row["outcome"] }
+        check(outcomes == [terminal ? "failed" : "retry"], "attempt outcomes #{outcomes}")
       end
     end
 

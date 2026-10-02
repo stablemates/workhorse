@@ -2157,7 +2157,7 @@
             {
               "value": {
                 "promotionLagMs": 10000,
-                "schemaVersion": 53
+                "schemaVersion": 54
               }
             }
           ]
@@ -2953,6 +2953,260 @@
                 "result": {
                   "index": 1
                 }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "terminal-failure-override-full",
+    "steps": [
+      {
+        "id": "enqueue",
+        "sql": "SELECT jsonb_build_object('taskId', task_id) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-terminal-override-full",
+              "type": "protocol.terminal",
+              "payload": {},
+              "maxAttempts": 5
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$type": "uuid"
+                }
+              }
+            }
+          ]
+        },
+        "capture": {
+          "task": "0.value.taskId"
+        }
+      },
+      {
+        "id": "claim",
+        "sql": "SELECT jsonb_build_object('attempt', attempt, 'fence', fence_token) AS value FROM workhorse.claim_many_v1($1,$2,1,30000)",
+        "parameters": ["protocol-terminal-override-full", "terminal-worker"],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "attempt": 1,
+                "fence": {
+                  "$type": "integer"
+                }
+              }
+            }
+          ]
+        },
+        "capture": {
+          "fence": "0.value.fence"
+        }
+      },
+      {
+        "id": "stale-terminal-override",
+        "sql": "SELECT workhorse.fail_v1($1::uuid,$2,$3::bigint,$4::jsonb,-1) AS state",
+        "parameters": [
+          {
+            "$ref": "task"
+          },
+          "other-owner",
+          {
+            "$ref": "fence"
+          },
+          {
+            "name": "ChildConflictError",
+            "message": "changed request"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "state": "stale"
+            }
+          ]
+        }
+      },
+      {
+        "id": "terminal-override",
+        "sql": "SELECT workhorse.fail_v1($1::uuid,$2,$3::bigint,$4::jsonb,-1) AS state",
+        "parameters": [
+          {
+            "$ref": "task"
+          },
+          "terminal-worker",
+          {
+            "$ref": "fence"
+          },
+          {
+            "name": "ChildConflictError",
+            "message": "changed request"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "state": "failed"
+            }
+          ]
+        }
+      },
+      {
+        "id": "retained-outcome",
+        "sql": "SELECT jsonb_build_object('state', state, 'attempt', current_attempt, 'name', error->>'name') AS value FROM workhorse.task_outcome WHERE task_id=$1::uuid",
+        "parameters": [
+          {
+            "$ref": "task"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "state": "failed",
+                "attempt": 1,
+                "name": "ChildConflictError"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "terminal-failure-override-fast",
+    "steps": [
+      {
+        "id": "set-tier",
+        "sql": "SELECT workhorse.set_queue_tier_v1($1, $2, $3, $4) AS tier",
+        "parameters": ["protocol-terminal-override-fast", "fast", "fixture", "terminal failure"],
+        "expect": {
+          "rows": [
+            {
+              "tier": "fast"
+            }
+          ]
+        }
+      },
+      {
+        "id": "enqueue",
+        "sql": "SELECT jsonb_build_object('taskId', task_id) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-terminal-override-fast",
+              "type": "protocol.terminal",
+              "payload": {},
+              "maxAttempts": 5
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$type": "uuid"
+                }
+              }
+            }
+          ]
+        },
+        "capture": {
+          "task": "0.value.taskId"
+        }
+      },
+      {
+        "id": "claim",
+        "sql": "SELECT jsonb_build_object('attempt', attempt, 'fence', fence_token) AS value FROM workhorse.claim_many_v1($1,$2,1,30000)",
+        "parameters": ["protocol-terminal-override-fast", "terminal-worker"],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "attempt": 1,
+                "fence": {
+                  "$type": "integer"
+                }
+              }
+            }
+          ]
+        },
+        "capture": {
+          "fence": "0.value.fence"
+        }
+      },
+      {
+        "id": "stale-terminal-override",
+        "sql": "SELECT workhorse.fail_v1($1::uuid,$2,$3::bigint,$4::jsonb,-1) AS state",
+        "parameters": [
+          {
+            "$ref": "task"
+          },
+          "other-owner",
+          {
+            "$ref": "fence"
+          },
+          {
+            "name": "ChildConflictError",
+            "message": "changed request"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "state": "stale"
+            }
+          ]
+        }
+      },
+      {
+        "id": "terminal-override",
+        "sql": "SELECT workhorse.fail_v1($1::uuid,$2,$3::bigint,$4::jsonb,-1) AS state",
+        "parameters": [
+          {
+            "$ref": "task"
+          },
+          "terminal-worker",
+          {
+            "$ref": "fence"
+          },
+          {
+            "name": "ChildConflictError",
+            "message": "changed request"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "state": "failed"
+            }
+          ]
+        }
+      },
+      {
+        "id": "retained-outcome",
+        "sql": "SELECT jsonb_build_object('state', state, 'attempt', attempt, 'name', error->>'name') AS value FROM workhorse.fast_task_outcome WHERE task_id=$1::uuid",
+        "parameters": [
+          {
+            "$ref": "task"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "state": "failed",
+                "attempt": 1,
+                "name": "ChildConflictError"
               }
             }
           ]

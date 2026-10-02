@@ -68,7 +68,7 @@ impl CancellationToken {
 
 /// A handler failure, submitted through the task's persisted retry policy.
 ///
-/// Any `std::error::Error` converts into it, so a handler can use `?`.
+/// Any owned (`'static`) `std::error::Error` converts into it, so a handler can use `?`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HandlerError {
     pub name: Option<String>,
@@ -109,8 +109,30 @@ impl fmt::Display for HandlerError {
     }
 }
 
-impl<E: std::error::Error> From<E> for HandlerError {
+impl<E: std::error::Error + 'static> From<E> for HandlerError {
     fn from(error: E) -> Self {
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+        // Error implementations can expose cyclic source chains, so conversion stays bounded.
+        for _ in 0..16 {
+            let Some(current) = source else { break };
+            if let Some(crate::Error::Conflict { operation, .. }) =
+                current.downcast_ref::<crate::Error>()
+            {
+                let name = match operation {
+                    crate::Operation::Checkpoint => Some("CheckpointConflictError"),
+                    crate::Operation::Sleep => Some("WaitConflictError"),
+                    crate::Operation::RunChild | crate::Operation::RunChildren => {
+                        Some("ChildConflictError")
+                    }
+                    crate::Operation::WaitForHuman => Some("HumanWaitConflictError"),
+                    _ => None,
+                };
+                if let Some(name) = name {
+                    return Self::named(name, error.to_string());
+                }
+            }
+            source = current.source();
+        }
         Self::new(error.to_string())
     }
 }

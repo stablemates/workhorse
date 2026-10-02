@@ -383,6 +383,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "distinguish a single-child rename from a second child",
     kind: "additive",
   },
+  {
+    fromVersion: 53,
+    toVersion: 54,
+    file: "0055-fail-durable-replay-conflicts-without-retrying.sql",
+    description: "fail durable replay conflicts without retrying",
+    kind: "additive",
+  },
 ];
 
 /**

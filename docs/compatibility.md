@@ -356,7 +356,7 @@ rest are optional TypeScript packages.
 The nine TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional TypeScript package always declares the core version it was released with as a peer range.
 The Python package, the Go module, the Rust crate, and the Ruby gem declare no TypeScript peer range; SQL protocol
-5 and schema version 53 are their compatibility boundary instead. Their version numbers still match the npm
+5 and schema version 54 are their compatibility boundary instead. Their version numbers still match the npm
 packages, because every line releases from one commit.
 
 Every release publishes one version to npm, PyPI, the Go module proxy, crates.io, and RubyGems from
@@ -1048,3 +1048,8 @@ So a supported version is not automatically a version with published performance
 benchmarked configuration is not a statement that other supported versions are slower or faster.
 Requirements for making a performance claim at all are in [`benchmarking.md`](benchmarking.md);
 until a scenario has a recorded live artifact, no performance claim is made for any version.
+
+The unreleased SDKs require schema version 54 before workers start. Migration
+`0055-fail-durable-replay-conflicts-without-retrying.sql` reserves the `fail_v1` delay override `-1`
+for terminal replay conflicts. Migrate the database before upgrading workers, because older
+schemas treat that value as an immediate retry. Existing workers keep their ordinary retry policy.

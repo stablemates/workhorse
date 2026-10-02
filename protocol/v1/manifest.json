@@ -2,9 +2,9 @@
   "formatVersion": 1,
   "protocolVersion": 5,
   "schema": {
-    "installedVersion": 53,
-    "minimumVersion": 53,
-    "maximumVersion": 53,
+    "installedVersion": 54,
+    "minimumVersion": 54,
+    "maximumVersion": 54,
     "baselineVersion": 6
   },
   "supportedClientProtocol": {
@@ -53,7 +53,8 @@
     "human-tokens",
     "retention-maintenance",
     "enqueue-trace-propagation",
-    "unknown-type-release"
+    "unknown-type-release",
+    "terminal-replay-conflict"
   ],
   "contractSchemaProfile": {
     "dialect": "https://json-schema.org/draft/2020-12/schema",
@@ -81,7 +82,8 @@
     "missing-handler-release",
     "json-value-round-trip",
     "heartbeat-failure-tolerance",
-    "maintenance-phase-resilience"
+    "maintenance-phase-resilience",
+    "terminal-replay-conflict"
   ],
   "functions": [
     {

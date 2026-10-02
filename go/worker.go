@@ -2752,6 +2752,26 @@ func (worker *Worker) retryDelayOverride(task ClaimedTask) any {
 	return delay.Milliseconds()
 }
 
+// durableReplayConflictName recognizes typed conflicts through ordinary Go error wrapping.
+func durableReplayConflictName(err error) string {
+	var checkpoint *CheckpointConflictError
+	var wait *WaitConflictError
+	var child *ChildConflictError
+	var human *HumanWaitConflictError
+	switch {
+	case errors.As(err, &checkpoint):
+		return checkpointConflictErrorName
+	case errors.As(err, &wait):
+		return waitConflictErrorName
+	case errors.As(err, &child):
+		return childConflictErrorName
+	case errors.As(err, &human):
+		return humanWaitConflictErrorName
+	default:
+		return emptyString
+	}
+}
+
 func (worker *Worker) failWithState(
 	ctx context.Context,
 	executor Executor,
@@ -2764,7 +2784,13 @@ func (worker *Worker) failWithState(
 		return emptyString, err
 	}
 	lease := worker.fencedLease(task)
-	arguments := append(lease.parameters(), encoded, worker.retryDelayOverride(task))
+	var delay any
+	if durableReplayConflictName(handlerError) != emptyString {
+		delay = int64(-1)
+	} else {
+		delay = worker.retryDelayOverride(task)
+	}
+	arguments := append(lease.parameters(), encoded, delay)
 	rows, err := queryFencedWrite(ctx, executor, protocolStatementRegistry[failStatementName], arguments...)
 	if err != nil {
 		return emptyString, err
@@ -2950,12 +2976,16 @@ func newHandlerPanicError(format string, taskType string, recovered any) *Handle
 
 // handlerErrorName resolves the name a failure envelope records for a handler error.
 //
-// An error that names itself through ErrorNamer wins, because only the error knows which failure
+// A durable replay conflict keeps its class even through a wrapper. For other errors, an error
+// that names itself through ErrorNamer wins, because only the error knows which failure
 // it reports. An exported concrete type names itself next, which keeps a declared error type
 // legible without asking every declaration to implement an interface. Everything else, including
 // every errors.New and fmt.Errorf value, is the generic error TypeScript and Python also call
 // "Error".
 func handlerErrorName(err error) string {
+	if name := durableReplayConflictName(err); name != emptyString {
+		return name
+	}
 	var namer ErrorNamer
 	if errors.As(err, &namer) && namer.ErrorName() != emptyString {
 		return namer.ErrorName()

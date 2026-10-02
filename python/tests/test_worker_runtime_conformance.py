@@ -66,6 +66,7 @@ SYNC_ONLY_RUNTIME_FIXTURE_KINDS = frozenset(
         "poll-cadence",
         "slot-refill",
         "suspension-replay",
+        "replay-conflict",
         "trace-propagation",
     }
 )
@@ -125,6 +126,7 @@ def execute_runtime_fixture(
             execute_budget_admission_race_fixture(setup_connection, race_fixture, database_url)
         ),
         "missing-handler": execute_missing_handler_fixture,
+        "replay-conflict": execute_replay_conflict_fixture,
         "json-round-trip": execute_json_round_trip_fixture,
         "heartbeat-failure": execute_heartbeat_failure_fixture,
         "maintenance-phase-error": execute_maintenance_phase_error_fixture,
@@ -1593,3 +1595,79 @@ def runtime_queue(fixture: Mapping[str, Any]) -> str:
 
 def read_json(relative: str) -> Any:
     return json.loads((REPOSITORY / relative).read_text())
+
+
+def execute_replay_conflict_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> None:
+    from workhorse.errors import (
+        CheckpointConflictError,
+        WaitConflictError,
+        ChildConflictError,
+        HumanWaitConflictError,
+        ChildLimitExceededError,
+        SignalWaitConflictError,
+    )
+
+    errors = {
+        "checkpoint": CheckpointConflictError,
+        "wait": WaitConflictError,
+        "child": ChildConflictError,
+        "child-set": ChildConflictError,
+        "redacted-child": ChildConflictError,
+        "human": HumanWaitConflictError,
+        "signal-wait": SignalWaitConflictError,
+    }
+    for entry in fixture["cases"]:
+        queue_name = runtime_queue(fixture) + "-" + entry["errorKind"]
+        task_id = Queue(connection).enqueue(
+            fixture["taskType"],
+            {},
+            EnqueueOptions(
+                queue=queue_name,
+                max_attempts=fixture["maxAttempts"],
+            ),
+        )
+        if entry["redactErrorDetails"]:
+            connection.execute(
+                "UPDATE workhorse.task SET payload_redact_keys = ARRAY['secret'] WHERE id=%s",
+                (task_id,),
+            )
+        delay_calls: list[int] = []
+
+        def delay(attempt: int, task: object) -> int:
+            delay_calls.append(attempt)
+            return 60_000
+
+        def handler(payload: object, context: HandlerContext) -> None:
+            kind = entry["errorKind"]
+            if kind == "child-limit":
+                raise ChildLimitExceededError(task_id)
+            if kind == "transient":
+                raise Exception("transient")
+            raise errors[kind](task_id, "child set" if kind == "child-set" else "saved")
+
+        subject = Worker(
+            worker_pool, queue=queue_name, worker_id="python-conflict", retry_delay_ms=delay
+        ).handle(fixture["taskType"], handler)
+        assert subject.run_once() is True
+        row = connection.execute(
+            "SELECT state, current_attempt, error FROM workhorse.task_runtime WHERE task_id = %s UNION ALL SELECT state, current_attempt, error FROM workhorse.task_outcome WHERE task_id = %s",
+            (task_id, task_id),
+        ).fetchone()
+        assert row is not None
+        assert row[0:2] == (entry["expectedState"], entry["expectedAttempt"])
+        assert row[2]["name"] == entry["expectedErrorNames"]["python"]
+        assert len(delay_calls) == (0 if entry["expectedState"] == "failed" else 1)
+        outcomes = connection.execute(
+            "SELECT outcome FROM workhorse.attempt_history WHERE task_id = %s", (task_id,)
+        ).fetchall()
+        assert outcomes == [("failed" if entry["expectedState"] == "failed" else "retry",)]
+
+
+def test_replay_conflicts_fail_on_first_occurrence(database_url: str) -> None:
+    fixture = next(
+        f for f in read_json("protocol/v1/runtime.json") if f["kind"] == "replay-conflict"
+    )
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        execute_replay_conflict_fixture(connection, fixture)

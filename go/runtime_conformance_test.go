@@ -66,6 +66,7 @@ func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 			executeWorkerBatchFixture(t, loadBatchRuntimeFixture(t, fixture.ID))
 		},
 		"suspension-replay":        executeWorkerSuspensionReplayFixture,
+		"replay-conflict":          executeReplayConflictFixture,
 		"cooperative-cancellation": executeWorkerCancellationFixture,
 		"expiration":               executeWorkerExpirationFixture,
 		"lease-loss":               executeWorkerLeaseLossFixture,
@@ -1202,5 +1203,103 @@ func executeWorkerSlotRefillFixture(t *testing.T, fixture workerRuntimeFixture) 
 	tracer.mu.Unlock()
 	if claimsPerTask > fixture.ExpectedMaximumClaimsPerTask {
 		t.Fatalf("claims per task: got %.3f, want at most %.3f", claimsPerTask, fixture.ExpectedMaximumClaimsPerTask)
+	}
+}
+
+func executeReplayConflictFixture(t *testing.T, fixture workerRuntimeFixture) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-replay-conflict")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	for _, entry := range fixture.Cases {
+		t.Run(entry.ErrorKind, func(t *testing.T) {
+			queueName := "runtime-" + fixture.ID + "-" + entry.ErrorKind
+			queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+			opts := workhorse.EnqueueOptions{MaxAttempts: fixture.MaxAttempts}
+			id, err := queue.Enqueue(ctx, fixture.TaskType, map[string]any{}, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if entry.RedactErrorDetails {
+				if _, err := pool.Exec(ctx, "UPDATE workhorse.task SET payload_redact_keys=ARRAY['secret'] WHERE id=$1", id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			delayCalls := 0
+			subject, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{Queue: queueName, DisableRegistry: true,
+				RetryDelay: func(int, workhorse.ClaimedTask) *time.Duration { delayCalls++; delay := time.Minute; return &delay },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			subject.Handle(fixture.TaskType, func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+				var failure error
+				switch entry.ErrorKind {
+				case "checkpoint":
+					failure = &workhorse.CheckpointConflictError{TaskID: id, CheckpointName: "saved"}
+				case "wait":
+					failure = &workhorse.WaitConflictError{TaskID: id, WaitName: "saved"}
+				case "child", "redacted-child":
+					failure = &workhorse.ChildConflictError{ParentTaskID: id, ChildName: "saved"}
+				case "child-set":
+					failure = &workhorse.ChildConflictError{ParentTaskID: id, ChildName: "child set"}
+				case "human":
+					failure = &workhorse.HumanWaitConflictError{TaskID: id, WaitName: "saved"}
+				case "child-limit":
+					failure = &workhorse.ChildLimitExceededError{ParentTaskID: id}
+				case "signal-wait":
+					failure = &workhorse.SignalWaitConflictError{TaskID: id, WaitName: "saved"}
+				default:
+					failure = errors.New("transient")
+				}
+				if entry.ExpectedState == "failed" {
+					return nil, fmt.Errorf("handler: %w", failure)
+				}
+				return nil, failure
+			})
+			if processed, err := subject.RunOnce(ctx); err != nil || !processed {
+				t.Fatalf("processed=%t err=%v", processed, err)
+			}
+			var state, name string
+			var attempt int
+			err = pool.QueryRow(ctx, "SELECT state, current_attempt, error->>'name' FROM workhorse.task_runtime WHERE task_id=$1 UNION ALL SELECT state, current_attempt, error->>'name' FROM workhorse.task_outcome WHERE task_id=$1", id).Scan(&state, &attempt, &name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state != entry.ExpectedState || attempt != entry.ExpectedAttempt || name != entry.ExpectedErrorNames["go"] {
+				t.Fatalf("state=%s attempt=%d name=%s", state, attempt, name)
+			}
+			expectedCalls := 1
+			expectedOutcome := "retry"
+			if entry.ExpectedState == "failed" {
+				expectedCalls = 0
+				expectedOutcome = "failed"
+			}
+			if delayCalls != expectedCalls {
+				t.Fatalf("retry callback called %d times, want %d", delayCalls, expectedCalls)
+			}
+			var outcomes []string
+			rows, err := pool.Query(ctx, "SELECT outcome FROM workhorse.attempt_history WHERE task_id=$1", id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for rows.Next() {
+				var outcome string
+				if err := rows.Scan(&outcome); err != nil {
+					t.Fatal(err)
+				}
+				outcomes = append(outcomes, outcome)
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(outcomes, []string{expectedOutcome}) {
+				t.Fatalf("outcomes=%v", outcomes)
+			}
+		})
 	}
 }
