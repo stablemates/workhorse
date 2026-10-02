@@ -91,4 +91,4 @@ crash. These are different problems and you often need both fixes.
 ---
 
 Exact fingerprint contents, limits, and conflict shape:
-[`architecture.md`](../architecture.md#enqueue_idempotency).
+[`architecture/data-model.md`](../architecture/data-model.md#enqueue_idempotency).

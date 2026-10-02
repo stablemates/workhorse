@@ -139,7 +139,7 @@ Terminal identity pruning is gated transitively: `prune_terminal_storage_v1` alr
 
 In normal operation the clamp never binds — the rollup runs every minute, and retention cutoffs are days back.
 
-Cold export, when enabled, adds a second clamp per dataset to `cold_export_dataset.exported_through`, and a day becomes exportable only once `rolled_up_through` has passed it. The export gate is described in [`architecture.md`](architecture.md#cold_export_policy-cold_export_dataset-and-cold_export_segment) and [ADR 0068](decisions/0068-export-cold-history-behind-the-rollup-watermark.md).
+Cold export, when enabled, adds a second clamp per dataset to `cold_export_dataset.exported_through`, and a day becomes exportable only once `rolled_up_through` has passed it. The export gate is described in [`architecture/data-model.md`](architecture/data-model.md#cold_export_policy-cold_export_dataset-and-cold_export_segment) and [ADR 0068](decisions/0068-export-cold-history-behind-the-rollup-watermark.md).
 
 ## Bucket retention
 

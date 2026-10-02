@@ -119,4 +119,4 @@ direct `fireSchedule` call made against an older definition.
 ---
 
 Exact reconciliation and revision-fencing rules:
-[`architecture.md`](../architecture.md#declarative-schedules).
+[`architecture/data-model.md`](../architecture/data-model.md#declarative-schedules).

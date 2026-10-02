@@ -147,4 +147,4 @@ If an edge would create a cycle or exceed a graph bound, `Queue` throws `Depende
 ---
 
 Exact dependency schema and lifecycle semantics:
-[`architecture.md`](../architecture.md#task_dependency).
+[`architecture/data-model.md`](../architecture/data-model.md#task_dependency).

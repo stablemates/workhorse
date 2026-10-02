@@ -46,4 +46,4 @@ A throttled task cannot declare the deprecated `prerequisiteTaskId` or `dependen
 ---
 
 Exact SQL functions, limits, outcomes, and lifecycle rules:
-[`architecture.md`](../architecture.md#keyed-throttle).
+[`architecture/lifecycle.md`](../architecture/lifecycle.md#keyed-throttle).

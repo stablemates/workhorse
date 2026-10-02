@@ -84,7 +84,7 @@ describe("documentation site guide coverage", () => {
   it("keeps corrected lifecycle claims aligned across source and site documentation", async () => {
     const files = await Promise.all(
       [
-        "docs/architecture.md",
+        "docs/architecture/overview.md",
         "docs/guides/010-tasks-and-state.md",
         "docs/guides/140-deadlines-and-timeouts.md",
         "docs/guides/340-redrive.md",
@@ -117,7 +117,7 @@ describe("documentation site guide coverage", () => {
   it("describes Python workers as pool-backed across source and site documentation", async () => {
     const [architecture, guide, page] = await Promise.all(
       [
-        "docs/architecture.md",
+        "docs/architecture/schema-and-protocol.md",
         "docs/guides/200-transactional-enqueue.md",
         "site/content/docs/enqueue.mdx",
       ].map((file) => readFile(path.join(root, file), "utf8")),

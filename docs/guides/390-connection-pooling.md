@@ -76,4 +76,4 @@ for.
 - [Who owns a task right now?](020-leases-and-fences.md)
 
 Exact lock names, listener behavior, connection budgets, and lane coverage:
-[architecture reference](../architecture.md#connection-poolers).
+[architecture reference](../architecture/overview.md#connection-poolers).

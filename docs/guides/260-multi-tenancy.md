@@ -95,4 +95,4 @@ one queue with a widening ladder of tenant counts and shows claim latency flat a
 ---
 
 Exact limits on keys, tags, budgets, and the admission window, plus the benchmark evidence:
-[`architecture.md`](../architecture.md#tenancy).
+[`architecture/overview.md`](../architecture/overview.md#tenancy).

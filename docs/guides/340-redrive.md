@@ -74,4 +74,4 @@ call redrive.
 ---
 
 Exact lineage columns, copy rules, and conflict shape:
-[`architecture.md`](../architecture.md#task_redrive).
+[`architecture/data-model.md`](../architecture/data-model.md#task_redrive).

@@ -153,17 +153,19 @@ variable turns either refusal off. `pnpm toolchain:verify` reports the state of 
 
 The product documentation has two source layers for different readers. Keep both.
 
-- `docs/architecture.md` is the precise reference. Name every function, column, and limit so it can
-  answer whether observed behavior is a bug.
+- `docs/architecture/` is the precise reference, one page per area. Name every function, column,
+  and limit so it can answer whether observed behavior is a bug. `docs/architecture.md` is the index:
+  it links every page and states what each one owns. A new page needs a row there.
 - `docs/guides/` explains one concept per file for a reader new to the system. Explain the problem
   before naming the mechanism, keep every identifier, and match the register of
   `020-leases-and-fences.md`.
 
 Rules that keep the two layers from drifting:
 
-- A guide states no numbers. Describe bounded behavior in the guide and keep the exact value in
-  `architecture.md`.
-- Link to `architecture.md` once per guide, in the footer, and never inline.
+- A guide states no numbers. Describe bounded behavior in the guide and keep the exact value on
+  its architecture page.
+- Link once per guide, in the footer, to the architecture page that owns the concept, and never
+  inline.
 - Give each concept one guide owner. Other guides should use one clause and a link.
 - Never renumber a guide because its number appears in links. Insert new guides into existing gaps.
 - Verify examples against the source before writing them. `HandlerContext` is in

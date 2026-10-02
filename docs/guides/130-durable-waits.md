@@ -92,4 +92,4 @@ its ownership rules. An already-waiting signal refusal keeps its existing behavi
 ---
 
 Exact wait semantics, limits, and replay rules:
-[`architecture.md`](../architecture.md#durable-timer-suspension).
+[`architecture/lifecycle.md`](../architecture/lifecycle.md#durable-timer-suspension).

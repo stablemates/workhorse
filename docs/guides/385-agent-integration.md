@@ -53,4 +53,4 @@ this page, because compiling its programs is the stronger check.
 ---
 
 Exact enqueue and transaction semantics:
-[`architecture.md`](../architecture.md#enqueue).
+[`architecture/lifecycle.md`](../architecture/lifecycle.md#enqueue).

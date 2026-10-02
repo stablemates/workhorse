@@ -89,4 +89,4 @@ describe its transitions and current state rather than reconstructing queue trut
 ---
 
 Exact instrument names, attributes, units, and observer behavior:
-[`architecture.md`](../architecture.md#opentelemetry-metrics).
+[`architecture/telemetry.md`](../architecture/telemetry.md#opentelemetry-metrics).

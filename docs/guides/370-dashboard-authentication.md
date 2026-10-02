@@ -156,4 +156,4 @@ boundary instead of guessing which identity system owns the request.
 - [How do I observe production behavior?](350-production-telemetry.md)
 - [How do I know whether the queue is healthy?](360-queue-health.md)
 
-[Authentication reference](../architecture.md#dashboard-package-boundary)
+[Authentication reference](../architecture/dashboard.md#dashboard-package-boundary)

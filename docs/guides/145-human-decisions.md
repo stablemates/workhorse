@@ -79,4 +79,4 @@ returns `stale`. The token row follows the parent task's safe [retention](330-re
 ---
 
 Exact human wait bounds, statuses, and SQL transitions:
-[`architecture.md`](../architecture.md#human-decision-suspension).
+[`architecture/lifecycle.md`](../architecture/lifecycle.md#human-decision-suspension).

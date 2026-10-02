@@ -209,4 +209,4 @@ work to stop _durably_, pause the queue, not the worker.
 ---
 
 Exact registry columns, options, and lifecycle:
-[`architecture.md`](../architecture.md#worker_registry).
+[`architecture/data-model.md`](../architecture/data-model.md#worker_registry).

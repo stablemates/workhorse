@@ -70,4 +70,4 @@ It orders the tasks that PostgreSQL may admit after those rules apply.
 ---
 
 Exact priority limits and dispatch rules:
-[`architecture.md`](../architecture.md#claim).
+[`architecture/lifecycle.md`](../architecture/lifecycle.md#claim).

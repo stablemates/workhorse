@@ -79,4 +79,4 @@ you call cancel.
 ---
 
 Exact transitions and race guarantees:
-[`architecture.md`](../architecture.md#cancellation).
+[`architecture/lifecycle.md`](../architecture/lifecycle.md#cancellation).

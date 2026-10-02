@@ -88,4 +88,4 @@ deployment, and the settings page warns while retention depends on the watermark
 ---
 
 Exact measures, bucket definition, and health fields:
-[`architecture.md`](../architecture.md#task_stat_bucket-task_stat_bucket_hour-task_stat_bucket_day-and-task_stat_state).
+[`architecture/data-model.md`](../architecture/data-model.md#task_stat_bucket-task_stat_bucket_hour-task_stat_bucket_day-and-task_stat_state).

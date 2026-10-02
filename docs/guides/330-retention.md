@@ -90,4 +90,4 @@ history and removing evidence before statistics can be rebuilt.
 ---
 
 Exact windows, bounds, and health fields:
-[`architecture.md`](../architecture.md#retention_policy).
+[`architecture/data-model.md`](../architecture/data-model.md#retention_policy).

@@ -108,4 +108,4 @@ A worker that asks for several tasks can receive fewer than every cap allows. Wo
 ---
 
 Exact limits, SQL functions, indexes, and admission semantics:
-[`architecture.md`](../architecture.md#concurrency_policy).
+[`architecture/data-model.md`](../architecture/data-model.md#concurrency_policy).

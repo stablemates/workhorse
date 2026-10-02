@@ -61,4 +61,4 @@ result and progress projection.
 ---
 
 Exact child-join contracts and limits:
-[`architecture.md`](../architecture.md#task_child).
+[`architecture/data-model.md`](../architecture/data-model.md#task_child).

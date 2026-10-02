@@ -529,7 +529,7 @@ so a new read governs its target on the next generate:
 - The three dashboard backends, `typescript/dashboard-server/src/server`, `go/dashboard`, and
   `python/src/workhorse/dashboard`, each of which builds its own SQL.
 - Every `dashboard_*_v1` view, plus `dashboard_task_result_v1`, whose exact columns
-  [`architecture.md`](architecture.md) publishes as core's relational read contract. They are
+  [`architecture/dashboard.md`](architecture/dashboard.md#dashboard-package-boundary) publishes as core's relational read contract. They are
   governed whether or not this repository's own backends still read them.
 
 A view is governed whole, because its projection is the contract. A table is governed one column at

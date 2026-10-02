@@ -198,4 +198,4 @@ call `close` on the adapter.
 ---
 
 Exact adapter guarantees, error translation, and notification wiring:
-[`architecture.md`](../architecture.md#what-an-adapter-must-guarantee).
+[`architecture/overview.md`](../architecture/overview.md#what-an-adapter-must-guarantee).

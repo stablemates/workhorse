@@ -163,4 +163,4 @@ For a parent, the detail also summarizes how many retained child results it has 
 ---
 
 Exact child schema and lifecycle semantics:
-[`architecture.md`](../architecture.md#task_child).
+[`architecture/data-model.md`](../architecture/data-model.md#task_child).

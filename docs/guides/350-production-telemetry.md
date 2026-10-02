@@ -108,4 +108,4 @@ use the handler histogram when you need unsampled percentiles for one task type.
 ---
 
 Exact instruments, attributes, storage bounds, and alert thresholds:
-[`architecture.md`](../architecture.md#opentelemetry-traces-logs-and-baseline-metrics).
+[`architecture/telemetry.md`](../architecture/telemetry.md#opentelemetry-traces-logs-and-baseline-metrics).

@@ -371,7 +371,7 @@ def test_a_cancellation_during_the_save_leaves_a_checkpoint_the_next_attempt_rep
 CANCELLATION_DOCUMENTS = (
     "docs/guides/310-workers.md",
     "site/content/docs/workers.mdx",
-    "docs/architecture.md",
+    "docs/architecture/schema-and-protocol.md",
     "python/README.md",
 )
 

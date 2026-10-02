@@ -175,4 +175,4 @@ the rows came from, so a reader knows which columns to expect.
 ---
 
 Exact table columns, function signatures, and bounds:
-[`architecture.md`](../architecture.md#cold_export_policy-cold_export_dataset-and-cold_export_segment).
+[`architecture/data-model.md`](../architecture/data-model.md#cold_export_policy-cold_export_dataset-and-cold_export_segment).
