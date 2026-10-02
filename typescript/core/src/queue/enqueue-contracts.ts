@@ -617,8 +617,24 @@ export class EnqueueContractsModule extends QueueModule {
     };
   }
 
-  async taskAcceptance(taskType: string, payload: Json): Promise<TaskAcceptance> {
-    return (await this.serializedTaskAcceptance(taskType, payload)).acceptance;
+  async taskAcceptance(
+    taskType: string,
+    payload: Json,
+    version?: string | null,
+  ): Promise<TaskAcceptance> {
+    if (version === undefined) {
+      return (await this.serializedTaskAcceptance(taskType, payload)).acceptance;
+    }
+    // A retained child without a contract must stay uncontracted on replay, even when its type
+    // now has a current version. Pinned versions never replace the current-contract cache.
+    let definition: CachedContractDefinition | null = null;
+    if (version !== null) {
+      definition = await this.loadContract(taskType, version);
+      const local = this.context.options.contracts?.[taskType]?.versions[version];
+      if (definition === null && local !== undefined) definition = { version, contract: local };
+      if (definition === null) throw new TaskContractUnavailableError(taskType, version);
+    }
+    return this.serializedTaskAcceptanceUnder(taskType, payload, definition).acceptance;
   }
 
   // An operator can change the selected version or its limits after syncContracts(). A payload the
@@ -656,10 +672,10 @@ export class EnqueueContractsModule extends QueueModule {
   private serializedTaskAcceptanceUnder(
     taskType: string,
     payload: Json,
-    databaseContract: CachedContractDefinition | undefined,
+    databaseContract: CachedContractDefinition | null | undefined,
   ): SerializedTaskAcceptance {
     const { options } = this.context;
-    const typeContracts = options.contracts?.[taskType];
+    const typeContracts = databaseContract === null ? undefined : options.contracts?.[taskType];
     const contractVersion = databaseContract?.version ?? typeContracts?.currentVersion ?? null;
     const contract =
       databaseContract?.contract ??

@@ -16,7 +16,24 @@ import type {
 import { expectOneRow } from "../errors.js";
 import { QueueModule, type QueueModuleContext } from "./module-context.js";
 import type { EnqueueContractsModule } from "./enqueue-contracts.js";
-import { validateTaskPriority } from "./enqueue-contracts.js";
+import {
+  TaskContractValidationError,
+  TaskValueSizeLimitError,
+  validateTaskPriority,
+} from "./enqueue-contracts.js";
+
+// Missing or changed children use the current contract; null preserves an uncontracted child.
+type ChildVersions = ReadonlyMap<string, { type: string; version: string | null }>;
+type BuildChildRequest = (versions?: ChildVersions) => Promise<string>;
+
+function childVersion(versions: ChildVersions | undefined, name: string, type: string) {
+  const stored = versions?.get(name);
+  return stored?.type === type ? stored.version : undefined;
+}
+
+function contractRejected(error: unknown): boolean {
+  return error instanceof TaskContractValidationError || error instanceof TaskValueSizeLimitError;
+}
 
 interface CreateChildRow {
   status: string;
@@ -117,6 +134,7 @@ export class ChildTasksModule extends QueueModule {
     type: string,
     payload: TPayload,
     options: ChildTaskOptions,
+    version?: string | null,
   ): Promise<Record<string, unknown>> {
     const unsafe = options as EnqueueOptions;
     if (
@@ -128,7 +146,7 @@ export class ChildTasksModule extends QueueModule {
     ) {
       throw new TypeError("Child tasks cannot use coalescing or dependency enqueue options");
     }
-    const acceptance = await this.enqueueContracts.taskAcceptance(type, payload);
+    const acceptance = await this.enqueueContracts.taskAcceptance(type, payload, version);
     return {
       queue: options.queue ?? this.context.defaultQueue,
       type,
@@ -149,6 +167,69 @@ export class ChildTasksModule extends QueueModule {
     };
   }
 
+  private async acceptedChildVersions(parentTaskId: string): Promise<ChildVersions> {
+    const edges = await this.context.database.query<{
+      parent_task_id: string;
+      child_task_id: string;
+      child_name: string;
+      child_type: string;
+    }>(SQL_STATEMENTS["task_child"], [parentTaskId, 101]);
+    const versions = new Map<string, { type: string; version: string | null }>();
+    for (const edge of edges.rows) {
+      if (edge.parent_task_id.toLowerCase() !== parentTaskId.toLowerCase()) continue;
+      const child = await this.context.database.query<{ contract_version: string | null }>(
+        SQL_STATEMENTS["get_task"],
+        [edge.child_task_id],
+      );
+      versions.set(edge.child_name, {
+        type: edge.child_type,
+        version: expectOneRow(child, "get_task").contract_version,
+      });
+    }
+    return versions;
+  }
+
+  private async initialChildRequest(
+    parentTaskId: string,
+    build: BuildChildRequest,
+  ): Promise<string> {
+    try {
+      return await build();
+    } catch (error) {
+      if (!contractRejected(error)) throw error;
+      const versions = await this.acceptedChildVersions(parentTaskId);
+      if (versions.size === 0) throw error;
+      try {
+        return await build(versions);
+      } catch (acceptedError) {
+        if (contractRejected(acceptedError)) throw error;
+        throw acceptedError;
+      }
+    }
+  }
+
+  private async replayedChildRow<TRow extends { status: string }>(
+    parentTaskId: string,
+    row: TRow,
+    request: string,
+    build: BuildChildRequest,
+    write: (request: string) => Promise<TRow>,
+  ): Promise<TRow> {
+    if (row.status !== "conflict") return row;
+    const versions = await this.acceptedChildVersions(parentTaskId);
+    if (versions.size === 0) return row;
+    let accepted: string;
+    try {
+      accepted = await build(versions);
+    } catch (error) {
+      if (contractRejected(error)) return row;
+      throw error;
+    }
+    // PostgreSQL still compares the entire request. Re-stamping never accepts a changed payload,
+    // type, option, or set, and a second conflict is returned without another retry.
+    return accepted === request ? row : write(accepted);
+  }
+
   async createChild<TPayload extends Json, TResult extends Json = Json>(
     parent: ClaimedTask,
     workerId: string,
@@ -161,13 +242,20 @@ export class ChildTasksModule extends QueueModule {
     if (typeof workerId !== "string" || workerId.length === 0) {
       throw new TypeError("Worker ID must be a non-empty string");
     }
-    const request = await this.childRequest(parent, type, payload, options);
-    const result = await queryFencedWrite<CreateChildRow>(
-      this.context.database,
-      SQL_STATEMENTS["create_child_v1"],
-      [parent.id, workerId, parent.fenceToken.toString(), name, JSON.stringify(request)],
-    );
-    const row = expectOneRow(result, "workhorse.create_child_v1");
+    const build: BuildChildRequest = async (versions) =>
+      JSON.stringify(
+        await this.childRequest(parent, type, payload, options, childVersion(versions, name, type)),
+      );
+    const request = await this.initialChildRequest(parent.id, build);
+    const write = async (encoded: string): Promise<CreateChildRow> => {
+      const result = await queryFencedWrite<CreateChildRow>(
+        this.context.database,
+        SQL_STATEMENTS["create_child_v1"],
+        [parent.id, workerId, parent.fenceToken.toString(), name, encoded],
+      );
+      return expectOneRow(result, "workhorse.create_child_v1");
+    };
+    const row = await this.replayedChildRow(parent.id, await write(request), request, build, write);
     if (row.status === "stale") throw new ChildLeaseLostError(parent.id);
     if (row.status === "conflict") throw new ChildConflictError(parent.id, name);
     if (row.status === "limit_exceeded") throw new ChildLimitExceededError(parent.id);
@@ -216,23 +304,36 @@ export class ChildTasksModule extends QueueModule {
     }
     if (children.length > 100) throw new ChildLimitExceededError(parent.id);
     const names = new Set<string>();
-    const requests = await Promise.all(
-      children.map(async ({ name, type, payload, options = {} }) => {
-        validateChildName(name);
-        if (names.has(name)) throw new TypeError("Child names must be unique");
-        names.add(name);
-        return {
-          name,
-          request: await this.childRequest(parent, type, payload, options),
-        };
-      }),
-    );
-    const result = await queryFencedWrite<CreateChildrenRow>(
-      this.context.database,
-      SQL_STATEMENTS["create_children_v1"],
-      [parent.id, workerId, parent.fenceToken.toString(), JSON.stringify(requests), mode],
-    );
-    const row = expectOneRow(result, "workhorse.create_children_v1");
+    for (const { name } of children) {
+      validateChildName(name);
+      if (names.has(name)) throw new TypeError("Child names must be unique");
+      names.add(name);
+    }
+    const build: BuildChildRequest = async (versions) =>
+      JSON.stringify(
+        await Promise.all(
+          children.map(async ({ name, type, payload, options = {} }) => ({
+            name,
+            request: await this.childRequest(
+              parent,
+              type,
+              payload,
+              options,
+              childVersion(versions, name, type),
+            ),
+          })),
+        ),
+      );
+    const request = await this.initialChildRequest(parent.id, build);
+    const write = async (encoded: string): Promise<CreateChildrenRow> => {
+      const result = await queryFencedWrite<CreateChildrenRow>(
+        this.context.database,
+        SQL_STATEMENTS["create_children_v1"],
+        [parent.id, workerId, parent.fenceToken.toString(), encoded, mode],
+      );
+      return expectOneRow(result, "workhorse.create_children_v1");
+    };
+    const row = await this.replayedChildRow(parent.id, await write(request), request, build, write);
     if (row.status === "stale") throw new ChildLeaseLostError(parent.id);
     if (row.status === "conflict") throw new ChildConflictError(parent.id, "child set");
     if (row.status === "limit_exceeded") throw new ChildLimitExceededError(parent.id);

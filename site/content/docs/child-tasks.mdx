@@ -86,8 +86,10 @@ type's current contract and validates its payload first. An invalid payload rais
 `ContractValidationError`, and Rust returns `Error::ContractValidation`.
 
 After a deploy moves the child's current contract, PostgreSQL still compares a replayed request
-with the accepted one. The Go, Python, Ruby, and Rust contexts stamp each existing child's accepted
-version, so the replay joins that child instead of raising `ChildConflictError`. Python covers both
+with the accepted one. Every context stamps each existing child's accepted version after a contract
+conflict. If the current contract rejects the replayed payload, the context rebuilds under those
+accepted versions first. The replay joins that child instead of raising `ChildConflictError`.
+A changed payload or child set still conflicts. Python covers both
 `HandlerContext` and `AsyncHandlerContext`. [Contracts](/docs/contracts) explains versions and
 stamping.
 

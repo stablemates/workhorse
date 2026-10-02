@@ -1903,6 +1903,16 @@ the retained result when `runChild` replays. `child_created`, `parent_linked`, a
 another child or appending another join event. A handler that creates no child completes through
 the ordinary completion path.
 
+TypeScript `runChild`, `runChildren`, and `runChildrenAll` validate and stamp each child's current
+contract through `EnqueueContractsModule.taskAcceptance`. On `conflict`, `ChildTasksModule` reads
+each existing child's `contract_version` through `task_child` and `get_task`. It rebuilds the request
+under those versions and retries once if the rebuilt request differs. A stored null version keeps
+the child uncontracted. The rebuild restores both size limits and both sensitive-key lists without
+changing the current-contract cache. If the current contract rejects the replayed payload's schema
+or size, the module rebuilds under the stored versions before writing. If that rebuild also rejects
+the payload, the original validation error remains. PostgreSQL still compares the complete request,
+so a changed payload, type, option, set membership, or join mode remains a `ChildConflictError`.
+
 `create_children_v1(parent_task_id, worker_id, fence_token, children, mode)` accepts zero through
 100 unique named requests and mode `settled` or `all_success`. A non-empty first call creates every
 child and dependency edge before it moves the parent to blocked and sets its

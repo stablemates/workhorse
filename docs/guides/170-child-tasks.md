@@ -116,9 +116,11 @@ payload first. An invalid payload raises `TaskContractValidationError` before Po
 child. Ruby raises `ContractValidationError`, and Rust returns `Error::ContractValidation`.
 
 A replayed parent may run after a deploy has moved the child's current contract. PostgreSQL still
-compares the replayed request with the accepted one. The Go, Python, Ruby, and Rust contexts
-therefore re-stamp the request with each existing child's accepted version. The replay then joins the existing
-child instead of raising `ChildConflictError`. Python applies this to both `HandlerContext` and
+compares the replayed request with the accepted one. Every context re-stamps the request with each
+existing child's accepted version after a contract conflict. If the current contract rejects the
+replayed payload, the context rebuilds the request under those accepted versions first.
+The replay then joins the existing child instead of raising `ChildConflictError`.
+A changed payload or child set still conflicts. Python applies this to both `HandlerContext` and
 `AsyncHandlerContext`. [Payload contracts](230-payload-contracts.md) explains versions and stamping.
 
 ## Failure, cancellation, and lookup

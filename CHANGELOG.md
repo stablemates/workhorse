@@ -18,6 +18,11 @@ a major line a migration only adds. Migration 0025 is the one exception: a datab
 0.5.0 crosses it offline, with the [0.5.0 upgrade steps](#050--2026-09-28). The upgrade from 0.5 to
 0.6 only adds. Breaking changes are always listed with upgrade steps.
 
+**Pending release — fixed:** TypeScript `runChild`, `runChildren`, and `runChildrenAll` join existing
+children after their task type's contract advances. Replay retries a contract conflict with the
+stored versions and rebuilds under those versions when the current contract rejects the payload.
+Changed payloads and child sets still raise `ChildConflictError`. No schema migration is required.
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
