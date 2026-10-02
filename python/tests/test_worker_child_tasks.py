@@ -382,3 +382,48 @@ def test_child_calls_surface_stale_fences_and_local_limits_as_typed_errors(
         assert result_limit_errors[0].result_limit_bytes == 1
         assert len(stale_errors) == 1
         assert stale_errors[0].parent_task_id == parent_id
+
+
+def test_single_child_rename_and_second_child(database_url: str) -> None:
+    for second in (False, True):
+        name = "a"
+        refusals: list[Exception] = []
+        suffix = str(second)
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            parent_queue = "rename-parents-" + suffix
+            child_queue = "rename-children-" + suffix
+            parent_id = Queue(connection).enqueue(
+                "rename-parent", None, EnqueueOptions(queue=parent_queue)
+            )
+
+            def handle(_payload: object, context: HandlerContext) -> None:
+                try:
+                    if second:
+                        context.run_child(
+                            "a", "rename-child", None, EnqueueOptions(queue=child_queue)
+                        )
+                    context.run_child(name, "rename-child", None, EnqueueOptions(queue=child_queue))
+                except (ChildConflictError, ChildLimitExceededError) as error:
+                    refusals.append(error)
+
+            parent = Worker(worker_pool, queue=parent_queue).handle("rename-parent", handle)
+            child = Worker(worker_pool, queue=child_queue).handle(
+                "rename-child", lambda _payload, _context: None
+            )
+            assert parent.run_once() is True
+            assert connection.execute(
+                "SELECT state FROM workhorse.task_runtime WHERE task_id = %s", (parent_id,)
+            ).fetchone() == ("blocked",)
+            assert child.run_once() is True
+            name = "b"
+            assert parent.run_once() is True
+            assert len(refusals) == 1
+            assert isinstance(
+                refusals[0], ChildLimitExceededError if second else ChildConflictError
+            )
+            if not second:
+                assert 'stored child "a", requested child "b"' in str(refusals[0])
+            assert connection.execute(
+                "SELECT child_name FROM workhorse.task_child WHERE parent_task_id = %s",
+                (parent_id,),
+            ).fetchall() == [("a",)]

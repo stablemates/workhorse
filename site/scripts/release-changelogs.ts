@@ -50,14 +50,20 @@ function isCalendarDate(value: string): boolean {
 export function parseReleases(source: string, changelog: string): Release[] {
   const releases: Release[] = [];
   const seen = new Set<string>();
+  let unreleased = false;
 
   for (const line of source.split("\n")) {
     if (!anyHeading.test(line)) continue;
+    // Upcoming work must not change the published version shown on the site.
+    if (line.trim() === "## Unreleased" && !unreleased && releases.length === 0) {
+      unreleased = true;
+      continue;
+    }
     const heading = releaseHeading.exec(line);
     if (!heading?.[1] || !heading?.[2]) {
       throw new Error(
         `${changelog} has the heading "${line.trim()}", which is not "## <version> — <date>". ` +
-          "Every second-level heading in a changelog is a release.",
+          "Only one leading Unreleased section may precede the release headings.",
       );
     }
     const [, version, date] = heading;

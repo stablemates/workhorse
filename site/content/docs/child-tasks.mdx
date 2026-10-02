@@ -93,6 +93,11 @@ A changed payload or child set still conflicts. Python covers both
 `HandlerContext` and `AsyncHandlerContext`. [Contracts](/docs/contracts) explains versions and
 stamping.
 
+If a resumed handler requests a different single-child name, Workhorse raises a conflict that names the stored and requested children.
+That diagnosis identifies handler code changed under a suspended parent.
+If the same handler run first joins the stored child and then requests another name, Workhorse raises the child-limit error.
+Keep child names stable across deployments while parents still need their results.
+
 ## Inspect the tree
 
 `Admin.getTask` and `Admin.listTasks` expose `parentTaskId` and `childTaskIds`.

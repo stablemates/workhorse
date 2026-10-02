@@ -130,7 +130,7 @@ describe("child contract replay", () => {
       const writes = queries.mock.calls.filter(
         ([statement]) =>
           statement ===
-          SQL_STATEMENTS[api === "runChild" ? "create_child_v1" : "create_children_v1"],
+          SQL_STATEMENTS[api === "runChild" ? "create_child_v2" : "create_children_v1"],
       );
       expect(writes).toHaveLength(validation === "accepts" ? 2 : 1);
       await expect(admin.getTask(parentId)).resolves.toMatchObject({
@@ -220,7 +220,7 @@ describe("child contract replay", () => {
         queries.mock.calls.filter(
           ([statement]) =>
             statement ===
-            SQL_STATEMENTS[api === "runChild" ? "create_child_v1" : "create_children_v1"],
+            SQL_STATEMENTS[api === "runChild" ? "create_child_v2" : "create_children_v1"],
         ),
       ).toHaveLength(api === "runChild" && changedField === "type" ? 1 : 2);
       expect(await storedChildren(parentId)).toEqual(stored);

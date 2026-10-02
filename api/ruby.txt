@@ -124,7 +124,7 @@ class Stablemates::Workhorse::ConcurrencyPolicyDefinition
 
 class Stablemates::Workhorse::ConflictError
   superclass Stablemates::Workhorse::NamedOperationError
-  def initialize(operation, name)
+  def initialize(operation, name, stored_name: nil)
 
 class Stablemates::Workhorse::ContractPolicyChangedError
   superclass Stablemates::Workhorse::Error

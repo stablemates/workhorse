@@ -91,7 +91,10 @@ describe("release notes", () => {
     const section = entry("CHANGELOG.md", release);
     const added = readdirSync(join(root, "sql/migrations"))
       .map((name) => /^(\d{4})-/.exec(name)?.[1])
-      .filter((number): number is string => number !== undefined && Number(number) > shipped + 1);
+      .filter(
+        (number): number is string =>
+          number !== undefined && Number(number) > shipped + 1 && Number(number) <= 53,
+      );
     expect(added.length).toBeGreaterThan(0);
     for (const number of added) expect(section, `migration ${number}`).toContain(number);
   });
@@ -100,10 +103,8 @@ describe("release notes", () => {
     const section = entry(path, release);
 
     it("states the final schema version and the compatibility floor separately", () => {
-      expect(section).toMatch(phrase(`final schema version is **${WORKHORSE_SCHEMA_VERSION}**`));
-      expect(section).toMatch(
-        phrase(`compatibility floor (?:stays at|is) schema version **${MINIMUM_SCHEMA_VERSION}**`),
-      );
+      expect(section).toMatch(phrase(`final schema version is **52**`));
+      expect(section).toMatch(phrase(`compatibility floor (?:stays at|is) schema version **43**`));
     });
 
     it("warns that cold exporters stop across migration 0052", () => {
@@ -145,13 +146,9 @@ describe("0.6.1 release notes", () => {
 
     it("keep the schema version 0.6.0 shipped", () => {
       expect(section).toMatch(/^Requires \*\*schema v43\*\*/m);
-      expect(section).toMatch(phrase(`final schema version is **${WORKHORSE_SCHEMA_VERSION}**`));
-      expect(entry(path, release)).toMatch(
-        phrase(`final schema version is **${WORKHORSE_SCHEMA_VERSION}**`),
-      );
-      expect(section).toMatch(
-        phrase(`compatibility floor stays at schema version **${MINIMUM_SCHEMA_VERSION}**`),
-      );
+      expect(section).toMatch(phrase(`final schema version is **52**`));
+      expect(entry(path, release)).toMatch(phrase(`final schema version is **52**`));
+      expect(section).toMatch(phrase(`compatibility floor stays at schema version **43**`));
     });
 
     it("link only to files and headings that exist", () => {
@@ -163,6 +160,20 @@ describe("0.6.1 release notes", () => {
         })
         .map(({ target }) => target);
       expect(broken).toEqual([]);
+    });
+  });
+});
+
+describe("unreleased schema notes", () => {
+  describe.each(changelogs)("%s", (path) => {
+    it("states the current schema, compatibility floor, and migration before rollout", () => {
+      const section = entry(path, "## Unreleased");
+      expect(section).toMatch(phrase(`final schema version is **${WORKHORSE_SCHEMA_VERSION}**`));
+      expect(section).toMatch(
+        phrase(`compatibility floor is schema version **${MINIMUM_SCHEMA_VERSION}**`),
+      );
+      expect(section).toMatch(phrase("Migration 0054"));
+      expect(section).toMatch(phrase("Migrate the schema before starting updated processes"));
     });
   });
 });

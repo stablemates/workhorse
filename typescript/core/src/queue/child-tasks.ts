@@ -36,6 +36,7 @@ function contractRejected(error: unknown): boolean {
 }
 
 interface CreateChildRow {
+  stored_child_name: string | null;
   status: string;
   child_task_id: string | null;
   child_type: string | null;
@@ -71,8 +72,13 @@ export class ChildConflictError extends WorkhorseError {
   constructor(
     readonly parentTaskId: string,
     readonly childName: string,
+    storedChildName?: string,
   ) {
-    super(`Child ${childName} for task ${parentTaskId} already exists with a different request`);
+    super(
+      storedChildName !== undefined && storedChildName !== childName
+        ? `Child replay for task ${parentTaskId} conflicts: stored child ${JSON.stringify(storedChildName)}, requested child ${JSON.stringify(childName)}`
+        : `Child ${childName} for task ${parentTaskId} already exists with a different request`,
+    );
     this.name = "ChildConflictError";
   }
 }
@@ -250,14 +256,15 @@ export class ChildTasksModule extends QueueModule {
     const write = async (encoded: string): Promise<CreateChildRow> => {
       const result = await queryFencedWrite<CreateChildRow>(
         this.context.database,
-        SQL_STATEMENTS["create_child_v1"],
+        SQL_STATEMENTS["create_child_v2"],
         [parent.id, workerId, parent.fenceToken.toString(), name, encoded],
       );
-      return expectOneRow(result, "workhorse.create_child_v1");
+      return expectOneRow(result, "workhorse.create_child_v2");
     };
     const row = await this.replayedChildRow(parent.id, await write(request), request, build, write);
     if (row.status === "stale") throw new ChildLeaseLostError(parent.id);
-    if (row.status === "conflict") throw new ChildConflictError(parent.id, name);
+    if (row.status === "conflict")
+      throw new ChildConflictError(parent.id, name, row.stored_child_name ?? undefined);
     if (row.status === "limit_exceeded") throw new ChildLimitExceededError(parent.id);
     if (row.status !== "created" && row.status !== "completed") {
       throw new Error(`Unexpected child status: ${row.status}`);

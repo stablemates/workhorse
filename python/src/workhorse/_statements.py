@@ -9,8 +9,8 @@ from typing import Literal
 PROTOCOL_VERSION = 5
 MINIMUM_PROTOCOL_VERSION = 5
 MAXIMUM_PROTOCOL_VERSION = 5
-MINIMUM_SCHEMA_VERSION = 43
-MAXIMUM_SCHEMA_VERSION = 52
+MINIMUM_SCHEMA_VERSION = 53
+MAXIMUM_SCHEMA_VERSION = 53
 DEFAULT_VALUE_MAX_BYTES = 1048576
 MAX_BATCH_SIZE = 1000
 
@@ -58,6 +58,10 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
     "create_child_v1": (
         "SELECT status, child_task_id, child_type, created_at, joined_at, result FROM workhorse.create_child_v1(%s::uuid, %s::text, %s::bigint, %s::text, %s::jsonb)",
         "SELECT status, child_task_id, child_type, created_at, joined_at, result FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
+    ),
+    "create_child_v2": (
+        "SELECT status, child_task_id, child_type, created_at, joined_at, result, stored_child_name FROM workhorse.create_child_v2(%s::uuid, %s::text, %s::bigint, %s::text, %s::jsonb)",
+        "SELECT status, child_task_id, child_type, created_at, joined_at, result, stored_child_name FROM workhorse.create_child_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
     ),
     "create_children_v1": (
         "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1(%s::uuid, %s::text, %s::bigint, %s::jsonb, %s::text)",
@@ -662,7 +666,7 @@ STATEMENTS = StatementRegistry(
     complete_many_and_claim=_statement("complete_many_and_claim_v1"),
     complete_human_wait=_statement("complete_human_wait_v1"),
     complete=_statement("complete_v1"),
-    create_child=_statement("create_child_v1"),
+    create_child=_statement("create_child_v2"),
     create_children=_statement("create_children_v1"),
     deregister_worker=_statement("deregister_worker_v1"),
     enqueue_many=_statement("enqueue_many_v1"),

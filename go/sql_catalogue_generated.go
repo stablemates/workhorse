@@ -7,8 +7,8 @@ const (
 	ProtocolVersion        = 5
 	minimumProtocolVersion = 5
 	maximumProtocolVersion = 5
-	minimumSchemaVersion   = 43
-	maximumSchemaVersion   = 52
+	minimumSchemaVersion   = 53
+	maximumSchemaVersion   = 53
 	// MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
 	MaxEnqueueBatchSize      = 1000
 	defaultTaskValueMaxBytes = 1048576
@@ -687,6 +687,7 @@ var protocolStatementRegistry = map[string]string{
 	"complete_human_wait_v1":       `SELECT status, result, completed_at, completed_by FROM workhorse.complete_human_wait_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,
 	"complete_v1":                  `SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted`,
 	"create_child_v1":              `SELECT status, child_task_id, child_type, created_at, joined_at, result FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
+	"create_child_v2":              `SELECT status, child_task_id, child_type, created_at, joined_at, result, stored_child_name FROM workhorse.create_child_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
 	"create_children_v1":           `SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)`,
 	"dashboard_human_wait_v1":      `SELECT task_id, queue_name, task_type, token_name AS wait_name, context, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_human_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, task_id, token_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, task_id, token_name LIMIT $1::integer`,
 	"dashboard_signal_wait_v1":     `SELECT task_id, queue_name, task_type, signal_name AS wait_name, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_signal_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, task_id, signal_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, task_id, signal_name LIMIT $1::integer`,

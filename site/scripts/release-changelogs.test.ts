@@ -35,9 +35,25 @@ describe("reading the release lines out of the changelogs", () => {
   });
 
   it("rejects a second-level heading that is not a release", () => {
-    expect(() => parseReleases("## Unreleased\n", "CHANGELOG.md")).toThrow(
+    expect(() => parseReleases("## Invalid\n", "CHANGELOG.md")).toThrow(
       /not "## <version> — <date>"/,
     );
+  });
+
+  it("keeps a leading Unreleased entry out of the published versions", () => {
+    expect(
+      parseReleases("## Unreleased\nUpcoming notes.\n## 0.6.1 — 2026-10-02\n", "CHANGELOG.md"),
+    ).toEqual([{ version: "0.6.1", date: "2026-10-02" }]);
+    expect(() => parseReleases("## Unreleased\n", "CHANGELOG.md")).toThrow(
+      /records no release heading/,
+    );
+  });
+
+  it.each([
+    "## Unreleased\n## Unreleased\n## 0.6.1 — 2026-10-02",
+    "## 0.6.1 — 2026-10-02\n## Unreleased",
+  ])("rejects duplicated or misplaced Unreleased headings", (source) => {
+    expect(() => parseReleases(source, "CHANGELOG.md")).toThrow(/Only one leading Unreleased/);
   });
 
   it("rejects a date that names no day", () => {

@@ -1,14 +1,14 @@
 [
   {
     "id": "current",
-    "installedSchemaVersion": 52,
+    "installedSchemaVersion": 53,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [5],
     "compatible": true
   },
   {
     "id": "schema-newer-inside-major-line",
-    "installedSchemaVersion": 50,
+    "installedSchemaVersion": 54,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [5],
     "compatible": true,
@@ -16,11 +16,20 @@
   },
   {
     "id": "served-protocol-undeclared",
-    "installedSchemaVersion": 43,
+    "installedSchemaVersion": 53,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [],
     "compatible": true,
     "note": "A schema that declares no served protocol has made no statement to enforce."
+  },
+  {
+    "id": "schema-before-single-child-rename-diagnosis",
+    "installedSchemaVersion": 52,
+    "clientProtocolVersion": 5,
+    "servedProtocolVersions": [5],
+    "compatible": false,
+    "refusalCode": "schema-too-old",
+    "refusal": "Refuse every mutation until the schema is migrated: the release calls create_child_v2, which schema 52 does not carry."
   },
   {
     "id": "schema-not-installed",
@@ -63,7 +72,7 @@
   },
   {
     "id": "schema-serves-only-older-protocols",
-    "installedSchemaVersion": 43,
+    "installedSchemaVersion": 53,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [4],
     "compatible": false,
@@ -82,7 +91,7 @@
   },
   {
     "id": "schema-no-longer-serves-client",
-    "installedSchemaVersion": 43,
+    "installedSchemaVersion": 53,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [6],
     "compatible": false,
@@ -91,7 +100,7 @@
   },
   {
     "id": "client-protocol-too-old",
-    "installedSchemaVersion": 43,
+    "installedSchemaVersion": 53,
     "clientProtocolVersion": 4,
     "servedProtocolVersions": [5],
     "compatible": false,
@@ -101,7 +110,7 @@
   },
   {
     "id": "client-protocol-too-new",
-    "installedSchemaVersion": 43,
+    "installedSchemaVersion": 53,
     "clientProtocolVersion": 6,
     "servedProtocolVersions": [5],
     "compatible": false,

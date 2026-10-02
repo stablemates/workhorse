@@ -146,6 +146,19 @@
         "status": "text"
       }
     },
+    "create_child_v2": {
+      "arguments": ["uuid", "text", "bigint", "text", "jsonb"],
+      "returns": "table",
+      "returnsColumns": {
+        "child_task_id": "uuid",
+        "child_type": "text",
+        "created_at": "timestamptz",
+        "joined_at": "timestamptz",
+        "result": "jsonb",
+        "status": "text",
+        "stored_child_name": "text"
+      }
+    },
     "create_children_v1": {
       "arguments": ["uuid", "text", "bigint", "jsonb", "text"],
       "returns": "table",
@@ -1591,6 +1604,7 @@
       "cold_export_oldest_history_day_internal_v1",
       "create_history_day_v1",
       "create_single_child_v1",
+      "create_single_child_v2",
       "cron_field_values_v1",
       "cron_occurrences_v1",
       "dashboard_budgets_v1",

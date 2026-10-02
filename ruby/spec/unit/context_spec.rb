@@ -330,7 +330,7 @@ RSpec.describe W::HandlerContext do
       end
     end
     expect { context(executor).run_child("c", "t", {}) }.to raise_error(W::ConflictError)
-    expect(executor.statements.map(&:first).count(W::SqlCatalogue::CREATE_CHILD_V1)).to eq(1)
+    expect(executor.statements.map(&:first).count(W::SqlCatalogue::CREATE_CHILD_V2)).to eq(1)
   end
 
   it "shares a relative sleep between concurrent callers and refuses a different wake time" do

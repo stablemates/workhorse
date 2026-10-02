@@ -376,6 +376,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "serialize schedule synchronization with the tick",
     kind: "additive",
   },
+  {
+    fromVersion: 52,
+    toVersion: 53,
+    file: "0054-distinguish-a-single-child-rename-from-a-second-child.sql",
+    description: "distinguish a single-child rename from a second child",
+    kind: "additive",
+  },
 ];
 
 /**

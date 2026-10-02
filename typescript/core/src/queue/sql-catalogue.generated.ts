@@ -3,9 +3,9 @@ export const PROTOCOL_VERSION = 5;
 export const MINIMUM_PROTOCOL_VERSION = 5;
 export const MAXIMUM_PROTOCOL_VERSION = 5;
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
-export const WORKHORSE_SCHEMA_VERSION = 52;
-export const MINIMUM_SCHEMA_VERSION = 43;
-export const MAXIMUM_SCHEMA_VERSION = 52;
+export const WORKHORSE_SCHEMA_VERSION = 53;
+export const MINIMUM_SCHEMA_VERSION = 53;
+export const MAXIMUM_SCHEMA_VERSION = 53;
 export const DEFAULT_TASK_VALUE_MAX_BYTES = 1048576;
 export const MAX_ENQUEUE_BATCH_SIZE = 1000;
 
@@ -25,6 +25,8 @@ export const SQL_STATEMENTS = {
     "SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted",
   create_child_v1:
     "SELECT status, child_task_id, child_type, created_at, joined_at, result FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
+  create_child_v2:
+    "SELECT status, child_task_id, child_type, created_at, joined_at, result, stored_child_name FROM workhorse.create_child_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
   create_children_v1:
     "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)",
   dashboard_human_wait_v1:

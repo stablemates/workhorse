@@ -215,12 +215,12 @@ module Stablemates
         encoded = initial(build)
         once(:run_child, name, encoded) do
           live!(:run_child)
-          row = write(SqlCatalogue::CREATE_CHILD_V1, name, encoded)
-          row = replayed(row, encoded, build) { |accepted| write(SqlCatalogue::CREATE_CHILD_V1, name, accepted) }
+          row = write(SqlCatalogue::CREATE_CHILD_V2, name, encoded)
+          row = replayed(row, encoded, build) { |accepted| write(SqlCatalogue::CREATE_CHILD_V2, name, accepted) }
           status = row.fetch("status")
           case status
           when "stale" then raise LeaseLostError.new(@task.id, :run_child)
-          when "conflict" then raise ConflictError.new(:run_child, name)
+          when "conflict" then raise ConflictError.new(:run_child, name, stored_name: row["stored_child_name"])
           when "limit_exceeded" then raise LimitExceededError.new(:run_child, name)
           when "created", "completed"
             processed(status == "created" && :suspended_for_child) do
