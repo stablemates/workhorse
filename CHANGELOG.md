@@ -18,6 +18,22 @@ a major line a migration only adds. Migration 0025 is the one exception: a datab
 0.5.0 crosses it offline, with the [0.5.0 upgrade steps](#050--2026-09-28). The upgrade from 0.5 to
 0.6 only adds. Breaking changes are always listed with upgrade steps.
 
+## 0.6.1 — 2026-10-02
+
+The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
+
+Requires **schema v43**, Node.js **22** or newer, and PostgreSQL **15** or newer.
+
+**0.6.1 exists to publish the Python distribution with provenance.** The 0.6.0 Python distributions
+on PyPI have no PEP 740 attestations, and the 0.6.1 distributions have them. The
+[Python changelog](python/CHANGELOG.md) describes the release workflow fix. No package changes its
+code. The npm packages have no changes, and every package releases at 0.6.1 to keep one version
+across the registries ([ADR 0050](docs/decisions/0050-release-0-1-0-without-a-prerelease-suffix.md)).
+
+**A 0.6.0 database needs no migration.** 0.6.1 adds no migration, so the final schema version is
+**52** and the SDK compatibility floor stays at schema version **43**. An installation on 0.5
+follows the [0.6.0 upgrade steps](#060--2026-10-02).
+
 ## 0.6.0 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

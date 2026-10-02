@@ -360,7 +360,7 @@ The Python package, the Go module, the Rust crate, and the Ruby gem declare no T
 packages, because every line releases from one commit.
 
 Every release publishes one version to npm, PyPI, the Go module proxy, crates.io, and RubyGems from
-one source commit. The current release is `0.6.0`. “Public beta” means the release is usable for evaluation and early production adoption without a
+one source commit. The current release is `0.6.1`. “Public beta” means the release is usable for evaluation and early production adoption without a
 0.x compatibility promise. The label is retired at 1.0.0 and replaced by “stable”; see
 [What SemVer governs](#what-semver-governs).
 

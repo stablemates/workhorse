@@ -1082,7 +1082,7 @@ every region to back at least one of them.
 `npm install @stablemates/workhorse`, `python` is `pip install stablemates-workhorse`, `go` is
 `go get github.com/stablemates/workhorse/go`, `rust` is `cargo add workhorse`, `schema` is
 `npm exec --no -- workhorse schema install`, and `schemaPinned` is
-`npx --package @stablemates/workhorse@0.6.0 workhorse schema install`. The four language commands
+`npx --package @stablemates/workhorse@0.6.1 workhorse schema install`. The four language commands
 carry no version. The two schema commands are the deployment tool rather than an adoption step, and
 their version must equal the SDK the application depends on: `schema` achieves that by resolving
 the binary from the project's own `node_modules`, which `--no` requires and never installs, and
