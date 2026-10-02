@@ -249,6 +249,17 @@ RSpec.describe "Documentation examples against PostgreSQL" do
       expect(result(tasks["email.send"])).to eq({"sent" => true})
     end
 
+    it "completes each task of the landing batch handler with its payload" do
+      subject = worker(concurrency: 3)
+      LandingExamples::BatchHandlers.register_email_batch(subject, 3, 0.05)
+      payloads = %w[ada grace edsger].map { |name| {"to" => "#{name}@example.com"} }
+      task_ids = payloads.map { |payload| queue.enqueue("email.send", payload).task_id }
+      drain(subject, *task_ids)
+
+      expect(task_ids.map { |task_id| status(task_id)["state"] }).to eq(%w[succeeded] * 3)
+      expect(task_ids.map { |task_id| result(task_id) }).to eq(payloads)
+    end
+
     it "suspends on a durable sleep" do
       subject = worker
       LandingExamples::Sleep.register_settlement(subject)
