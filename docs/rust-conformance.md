@@ -20,14 +20,12 @@ fixture does not pass, and when a listed fixture passes. `pnpm rust:test` runs i
 | `requests.json`         |        2 |       2 |                    0 |
 | `runtime.json`          |       17 |      17 |                    0 |
 | `scenarios.json`        |       16 |      16 |                    0 |
-| `schedules.json`        |        3 |       2 |                    1 |
+| `schedules.json`        |        3 |       3 |                    0 |
 
 ## Expected unsupported fixtures
 
 The list gives the reason for each entry. Remove an entry in the commit that makes it pass.
 
-### SM-1063
-
-- `schedules/contracted-schedule-definition`
+The list is empty: every fixture passes.
 
 Regenerate with `pnpm rust:conformance:generate`; CI uses `pnpm rust:conformance:check`.

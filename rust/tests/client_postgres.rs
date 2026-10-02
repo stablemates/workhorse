@@ -248,6 +248,92 @@ async fn sync_schedules_stores_and_prunes_definitions() {
 }
 
 #[tokio::test]
+async fn sync_schedules_applies_the_current_contract() {
+    let Some(database) = scratch_database("client_schedule_contracts").await else { return };
+    let contracts = BTreeMap::from([(
+        "payment.capture".to_string(),
+        TaskTypeContracts {
+            current_version: "v2".into(),
+            versions: BTreeMap::from([(
+                "v2".to_string(),
+                TaskContractVersion {
+                    payload_schema: json!({
+                        "type": "object",
+                        "properties": {"account": {"type": "string"}},
+                        "required": ["account"],
+                    }),
+                    max_payload_bytes: 4096,
+                    max_result_bytes: 8192,
+                    sensitive_payload_keys: vec!["card".into()],
+                    sensitive_result_keys: vec!["receipt".into()],
+                    ..TaskContractVersion::default()
+                },
+            )]),
+        },
+    )]);
+    Queue::connect(database.url(), "rust-schedules")
+        .await
+        .unwrap()
+        .sync_contracts(&contracts)
+        .await
+        .unwrap();
+    // A second Queue has synced no contract, so only PostgreSQL can name the current version.
+    let queue = Queue::connect(database.url(), "rust-schedules").await.unwrap();
+    let observer = database.connect().await;
+    let schedules = |payload: Value| {
+        vec![
+            ScheduleDefinition::new(
+                "nightly-capture",
+                "0 2 * * *",
+                ScheduledTask::new("payment.capture", payload),
+            ),
+            ScheduleDefinition::new(
+                "nightly-report",
+                "0 3 * * *",
+                ScheduledTask::new("payment.report", json!({})),
+            ),
+        ]
+    };
+
+    let refusal = queue.sync_schedules("billing", schedules(json!({"card": "4242"})), true).await;
+    assert!(
+        matches!(&refusal, Err(Error::ContractValidation { task_type, version })
+            if task_type == "payment.capture" && version == "v2"),
+        "got {refusal:?}"
+    );
+    let written: i64 = observer
+        .query_one("SELECT count(*) FROM workhorse.schedule_definition", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(written, 0, "a rejected payload writes no definition");
+
+    queue.sync_schedules("billing", schedules(json!({"account": "acct_1"})), true).await.unwrap();
+    let rows = observer
+        .query(
+            "SELECT contract_version, payload_max_bytes, result_max_bytes,
+                    payload_redact_keys, result_redact_keys
+               FROM workhorse.schedule_definition
+              WHERE namespace = 'billing' ORDER BY schedule_name",
+            &[],
+        )
+        .await
+        .unwrap();
+    type StoredContract = (Option<String>, i32, i32, Vec<String>, Vec<String>);
+    let stored: Vec<StoredContract> = rows
+        .iter()
+        .map(|row| (row.get(0), row.get(1), row.get(2), row.get(3), row.get(4)))
+        .collect();
+    assert_eq!(
+        stored,
+        [
+            (Some("v2".into()), 4096, 8192, vec!["card".into()], vec!["receipt".into()]),
+            (None, 1_048_576, 1_048_576, vec![], vec![]),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn sync_concurrency_policies_stores_lists_and_prunes() {
     let Some(database) = scratch_database("client_concurrency_policies").await else { return };
     let queue = Queue::connect(database.url(), "rust-policies").await.unwrap();

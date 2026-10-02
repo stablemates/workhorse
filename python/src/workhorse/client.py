@@ -212,7 +212,20 @@ class Queue:
         prune: bool = True,
     ) -> None:
         _assert_sync_compatible(self._executor)
-        payload = _serialize_schedules(definitions, self.default_queue)
+        values = _serialize_schedules(definitions, self.default_queue)
+        # Each type's current contract comes from PostgreSQL, not the cache: firing an occurrence
+        # never checks the contract policy, so a stale version would persist on every occurrence.
+        contracts: dict[str, _Row | None] = {}
+        for value in values:
+            task_type = cast(str, value["type"])
+            if task_type not in contracts:
+                contracts[task_type] = self._load_contract(task_type)
+            definition = contracts[task_type]
+            if definition is not None:
+                _apply_contract(
+                    definition, task_type, value["payload"], value, self._contract_validators
+                )
+        payload = _encode_request_values(values)
         self._executor.rows(_STATEMENTS.sync_schedules, (namespace, payload, prune))
 
     def sync_concurrency_policies(
@@ -471,7 +484,20 @@ class AsyncQueue:
         prune: bool = True,
     ) -> None:
         await _assert_async_compatible(self._executor)
-        payload = _serialize_schedules(definitions, self.default_queue)
+        values = _serialize_schedules(definitions, self.default_queue)
+        # Each type's current contract comes from PostgreSQL, not the cache: firing an occurrence
+        # never checks the contract policy, so a stale version would persist on every occurrence.
+        contracts: dict[str, _Row | None] = {}
+        for value in values:
+            task_type = cast(str, value["type"])
+            if task_type not in contracts:
+                contracts[task_type] = await self._load_contract(task_type)
+            definition = contracts[task_type]
+            if definition is not None:
+                _apply_contract(
+                    definition, task_type, value["payload"], value, self._contract_validators
+                )
+        payload = _encode_request_values(values)
         await self._executor.rows(_STATEMENTS.sync_schedules, (namespace, payload, prune))
 
     async def sync_concurrency_policies(

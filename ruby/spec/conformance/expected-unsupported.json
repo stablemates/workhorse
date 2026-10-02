@@ -1,10 +1,4 @@
 {
   "$comment": "protocol/v1 fixtures the Ruby lane does not pass yet. Each entry names the Issue that owns the gap. protocol_conformance_spec.rb fails when an unlisted fixture does not pass and when a listed fixture passes.",
-  "fixtures": [
-    {
-      "fixture": "schedules/contracted-schedule-definition",
-      "issue": "SM-1063",
-      "reason": "Ruby schedule sync does not apply the current task contract yet."
-    }
-  ]
+  "fixtures": []
 }

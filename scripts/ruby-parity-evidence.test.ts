@@ -50,9 +50,7 @@ describe("Ruby parity evidence", () => {
 
   it("reads the declared fixtures, the expected-unsupported list, and the spec examples", () => {
     expect(state.declared.has("scenarios/fast-tier")).toBe(true);
-    expect([...state.unsupported]).toEqual([
-      ["schedules/contracted-schedule-definition", "SM-1063"],
-    ]);
+    expect([...state.unsupported]).toEqual([]);
     expect(state.examples.get(example.file)?.has(example.example)).toBe(true);
   });
 

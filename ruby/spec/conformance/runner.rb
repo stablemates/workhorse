@@ -502,6 +502,23 @@ module Conformance
       )
     end
 
+    # The contracts a schedule fixture syncs before its schedules. An omitted limit uses the
+    # protocol default.
+    def self.task_contracts(contracts)
+      contracts.to_h do |task_type, contract|
+        versions = contract["versions"].transform_values do |version|
+          Stablemates::Workhorse::TaskContractVersion.new(
+            payload_schema: version["payloadSchema"], result_schema: version["resultSchema"],
+            max_payload_bytes: version["maxPayloadBytes"], max_result_bytes: version["maxResultBytes"],
+            sensitive_payload_keys: version.fetch("sensitivePayloadKeys", []),
+            sensitive_result_keys: version.fetch("sensitiveResultKeys", [])
+          )
+        end
+        [task_type, Stablemates::Workhorse::TaskTypeContracts.new(current_version: contract["currentVersion"],
+          versions: versions)]
+      end
+    end
+
     def run_schedules(url, setup)
       interposed = attempt { Runner.record_calls(setup, "sync_schedule_definitions_v2") }
       each_fixture("schedules") do |fixture|
@@ -514,6 +531,8 @@ module Conformance
         definitions = Array(fixture["application"]).map { |definition| Runner.schedule_definition(definition) }
         with_connection(url) do |connection|
           queue = Stablemates::Workhorse::Queue.new(connection, default_queue: fixture["defaultQueue"])
+          contracts = fixture["contracts"]
+          queue.sync_contracts(Runner.task_contracts(contracts)) if contracts
           client_call { queue.sync_schedules(namespace, definitions, prune: prune) }
         end
         calls = Runner.recorded(setup, "sync_schedule_definitions_v2")
