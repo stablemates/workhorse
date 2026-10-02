@@ -225,31 +225,12 @@ pub(crate) async fn load_contract_version<E: Executor>(
     task_type: &str,
     version: Option<&str>,
 ) -> Result<Option<Arc<PayloadContract>>, Error> {
-    let rows = executor.rows(sql::GET_CONTRACT_DEFINITION_V1, &[&task_type, &version]).await?;
-    let row = match rows.as_slice() {
-        [] => return Ok(None),
-        [row] => row,
-        _ => return Err(invalid_definition()),
-    };
-    let schema: Value = row.try_get("schema").map_err(|_| invalid_definition())?;
-    let validator =
-        schema.get("payload").ok_or_else(invalid_definition).and_then(compile_contract_schema)?;
-    let contract = (|| -> Result<PayloadContract, tokio_postgres::Error> {
-        Ok(PayloadContract {
-            version: row.try_get("version")?,
-            validator,
-            payload_max_bytes: row.try_get("payload_max_bytes")?,
-            result_max_bytes: row.try_get("result_max_bytes")?,
-            payload_redact_keys: row.try_get("payload_redact_keys")?,
-            result_redact_keys: row.try_get("result_redact_keys")?,
-        })
-    })()
-    .map_err(|_| invalid_definition())?;
-    Ok(Some(Arc::new(contract)))
-}
-
-fn invalid_definition() -> Error {
-    Error::invalid("invalid contract definition returned by PostgreSQL")
+    crate::enqueue::load_contract_version(
+        &mut crate::enqueue::TokioTransport(executor),
+        task_type,
+        version,
+    )
+    .await
 }
 
 /// Compiles every schema, then renders the `sync_contract_definitions_v1` document.

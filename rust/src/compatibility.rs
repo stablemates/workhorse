@@ -77,27 +77,7 @@ pub fn check_compatibility(
 pub async fn read_compatibility_state<E: Executor>(
     executor: &E,
 ) -> Result<CompatibilityState, Error> {
-    let rows = match executor.rows(sql::COMPATIBILITY_STATE, &[]).await {
-        Ok(rows) => rows,
-        Err(error) if matches!(error.sqlstate(), Some("42P01" | "3F000")) => {
-            return Ok(CompatibilityState::default());
-        }
-        Err(error) => return Err(error),
-    };
-    let mut schema = Vec::new();
-    let mut state = CompatibilityState::default();
-    for row in rows {
-        let version: i32 = row.try_get("version")?;
-        match row.try_get::<_, &str>("kind")? {
-            "schema" => schema.push(version),
-            "protocol" => state.served_protocol_versions.push(version),
-            _ => {}
-        }
-    }
-    if let [version] = schema[..] {
-        state.installed_schema_version = Some(version);
-    }
-    Ok(state)
+    crate::enqueue::read_compatibility(&mut crate::enqueue::TokioTransport(executor)).await
 }
 
 /// Refuses with [`Error::Compatibility`] unless this client can use the installed schema.

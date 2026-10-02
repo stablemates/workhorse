@@ -196,6 +196,13 @@ pub enum Error {
     ShutdownIncomplete { abandoned: usize },
     #[error("postgres: {0}")]
     Postgres(#[from] tokio_postgres::Error),
+    #[error("database: {source}")]
+    Database {
+        sqlstate: Option<String>,
+        detail: Option<String>,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     #[error("pool: {0}")]
     Pool(#[from] deadpool_postgres::PoolError),
     #[error("json: {0}")]
@@ -208,6 +215,19 @@ pub enum Error {
 }
 
 impl Error {
+    /// Preserves a transport error and its structured server diagnostics, without message parsing.
+    pub fn database(
+        sqlstate: Option<&str>,
+        detail: Option<&str>,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::Database {
+            sqlstate: sqlstate.map(str::to_owned),
+            detail: detail.map(str::to_owned),
+            source: Box::new(source),
+        }
+    }
+
     pub(crate) fn invalid(message: impl Into<String>) -> Self {
         Self::InvalidArgument(message.into())
     }
@@ -253,6 +273,7 @@ impl Error {
     /// The SQLSTATE of a PostgreSQL error, if this is one.
     pub fn sqlstate(&self) -> Option<&str> {
         match self {
+            Self::Database { sqlstate, .. } => sqlstate.as_deref(),
             Self::Postgres(error) => error.code().map(|code| code.code()),
             Self::Pool(deadpool_postgres::PoolError::Backend(error)) => {
                 error.code().map(|code| code.code())
@@ -292,12 +313,20 @@ impl Error {
     }
 
     /// Maps SQLSTATE `P1001`, `P1003`, `P1005` and `P1007` to their structured variants.
-    pub(crate) fn translate_enqueue(error: tokio_postgres::Error) -> Self {
-        let Some(database) = error.as_db_error() else {
-            return error.into();
+    pub(crate) fn translate_enqueue_error(self) -> Self {
+        let diagnostics = match &self {
+            Self::Database { sqlstate: Some(code), detail, .. } => {
+                Some((code.as_str(), detail.as_deref().unwrap_or("{}")))
+            }
+            Self::Postgres(error) => error
+                .as_db_error()
+                .map(|database| (database.code().code(), database.detail().unwrap_or("{}"))),
+            _ => None,
         };
-        let detail = database.detail().unwrap_or("{}");
-        match database.code().code() {
+        let Some((code, detail)) = diagnostics else {
+            return self;
+        };
+        match code {
             "P1001" => Self::EnqueueIdempotencyConflict {
                 details: Box::new(serde_json::from_str(detail).unwrap_or_default()),
             },
@@ -308,7 +337,7 @@ impl Error {
                 details: Box::new(serde_json::from_str(detail).unwrap_or_default()),
             },
             "P1007" => Self::fast_tier(detail),
-            _ => error.into(),
+            _ => self,
         }
     }
 

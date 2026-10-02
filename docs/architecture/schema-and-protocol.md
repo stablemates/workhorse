@@ -1826,6 +1826,28 @@ retries after a driver error.
 | Task dependencies                   | 1 through 100 unique prerequisite task IDs |
 | Signal payload or human-wait result | At most 65,536 bytes of JSON               |
 
+### Enqueue transport foundation
+
+`EnqueueClient::new(default_queue)` is the enqueue-only transport foundation in
+[ADR 0086](../decisions/0086-separate-rust-enqueue-preparation-from-mutable-transports.md).
+It owns compatibility, preparation, validation, contracts, bounded refresh and result ordering.
+`Queue` delegates `assert_compatible`, `enqueue`, `enqueue_many` and `sync_contracts` to that owner.
+`EnqueueTransport::query(&mut self, EnqueueQuery)` returns a `Send` future and requires no `Sync`
+or static transaction ownership. Each query exposes generated SQL, JSONB/nullable-text binds,
+and required named result columns. Results use typed integers, text, text arrays, JSONB and UUIDs;
+SQL null differs from a missing column. The core rejects wrong types, unknown outcomes, invalid
+reasons, missing results and duplicate or out-of-range ordinals. Contract mismatches use a singleton
+row with ordinal zero and a null task ID, and trigger at most one enqueue retry.
+`Error::database(sqlstate, detail, source)` preserves structured driver diagnostics. The core maps
+`P1001`, `P1003`, `P1005` and `P1007` to existing enqueue errors without message parsing.
+Unknown errors retain their diagnostics and original source; the shipped driver retains
+`Error::Postgres`. Clients must keep caches within one logical database and schema.
+Adapters use the exact caller-owned connection, never a fallback pool connection, and expose no
+transaction lifecycle operation. Dropping a future releases its Rust borrow, not necessarily the
+server-side statement. The caller controls driver cancellation and transaction recovery.
+This foundation adds no concrete SQLx, SeaORM or Diesel support. The sealed runtime executor,
+worker driver, crate dependencies and feature names remain unchanged.
+
 ### Admin
 
 `Admin::new(executor)` and `Admin::connect(url)` expose `list_tasks`, `get_task`,
