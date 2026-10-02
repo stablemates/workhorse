@@ -1,17 +1,37 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import assert from "node:assert/strict";
 import { scryptSync } from "node:crypto";
 import { createServer } from "node:net";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createRequire } from "node:module";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { cliNodeArgs } from "./support/cli-process.js";
 
 const repository = path.resolve(import.meta.dirname, "../../..");
-const tsxCli = createRequire(import.meta.url).resolve("tsx/cli");
-const children = new Set<ReturnType<typeof spawn>>();
+const children = new Map<ReturnType<typeof spawn>, Promise<void>>();
 const scratchRoots: string[] = [];
+const dashboardPorts = new Set<number>();
+
+// Check the real CLI processes, rather than only the handles returned by spawn: tsx/cli
+// can exit while the Node process hosting the dashboard is still listening. Scope the
+// check to our listener ports because other files exercise dashboard --help in parallel.
+afterAll(() => {
+  const processes = execFileSync("ps", ["-A", "-o", "args="], { encoding: "utf8" });
+  assert.deepEqual(
+    processes
+      .split("\n")
+      .filter(
+        (command) =>
+          command.includes(path.join(repository, "typescript/core/src/cli/workhorse.ts")) &&
+          /\bworkhorse\.ts dashboard\b/.test(command) &&
+          [...dashboardPorts].some((port) => new RegExp(`--port ${port}(?:\\s|$)`).test(command)),
+      ),
+    [],
+    "No dashboard process started by this file may survive teardown",
+  );
+});
 
 async function availablePort(): Promise<number> {
   const server = createServer();
@@ -48,7 +68,12 @@ async function waitForDashboard(child: ReturnType<typeof spawn>): Promise<string
 }
 
 afterEach(async () => {
-  for (const child of children) child.kill("SIGKILL");
+  await Promise.all(
+    [...children].map(([child, closed]) => {
+      child.kill("SIGKILL");
+      return closed;
+    }),
+  );
   children.clear();
   await Promise.all(
     scratchRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
@@ -62,7 +87,7 @@ describe.skipIf(
     const child = spawn(
       process.execPath,
       [
-        tsxCli,
+        ...cliNodeArgs,
         path.join(repository, "typescript/core/src/cli/workhorse.ts"),
         "dashboard",
         "--database-url",
@@ -83,7 +108,12 @@ describe.skipIf(
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
-    children.add(child);
+    children.set(
+      child,
+      new Promise((resolve) => {
+        child.once("close", () => resolve());
+      }),
+    );
     let output = "";
     child.stdout?.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
     child.stderr?.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
@@ -105,11 +135,12 @@ describe.skipIf(
     await writeFile(usernameFile, "operator\n");
     await writeFile(passwordHashFile, `${passwordHash}\n`);
     const port = await availablePort();
+    dashboardPorts.add(port);
 
     const child = spawn(
       process.execPath,
       [
-        tsxCli,
+        ...cliNodeArgs,
         path.join(repository, "typescript/core/src/cli/workhorse.ts"),
         "dashboard",
         "--database-url",
@@ -129,7 +160,12 @@ describe.skipIf(
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
-    children.add(child);
+    children.set(
+      child,
+      new Promise((resolve) => {
+        child.once("close", () => resolve());
+      }),
+    );
     await waitForDashboard(child);
 
     const protectedResponse = await fetch(`http://127.0.0.1:${port}/tasks`, {
@@ -142,6 +178,6 @@ describe.skipIf(
     expect(loginResponse.status).toBe(200);
     expect(await loginResponse.text()).toContain("Sign in");
 
-    child.kill("SIGTERM");
+    // Leave the listener running so afterEach exercises forced cleanup too.
   });
 });

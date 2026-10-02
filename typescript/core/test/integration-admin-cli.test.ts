@@ -2,20 +2,19 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 import { createIntegrationTestContext } from "./support/integration.js";
+import { cliNodeArgs } from "./support/cli-process.js";
 
 const repository = path.resolve(import.meta.dirname, "../../..");
 const cli = path.join(repository, "typescript/core/src/cli/workhorse.ts");
-const tsxCli = createRequire(import.meta.url).resolve("tsx/cli");
 const { createFailedTask, databaseUrl, pool, queue, admin } = createIntegrationTestContext(
   import.meta.url,
 );
 const databaseName = new URL(databaseUrl).pathname.slice(1);
 
 function runCli(args: readonly string[]) {
-  const result = spawnSync(process.execPath, [tsxCli, cli, ...args], {
+  const result = spawnSync(process.execPath, [...cliNodeArgs, cli, ...args], {
     cwd: repository,
     env: process.env,
     encoding: "utf8",

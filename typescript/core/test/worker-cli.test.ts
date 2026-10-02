@@ -2,13 +2,12 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createRequire } from "node:module";
 import { afterEach, describe, expect, it } from "vitest";
+import { cliNodeArgs } from "./support/cli-process.js";
 
 const repository = path.resolve(import.meta.dirname, "../../..");
-const tsxCli = createRequire(import.meta.url).resolve("tsx/cli");
 const scratchRoots: string[] = [];
-const children = new Set<ReturnType<typeof spawn>>();
+const children = new Map<ReturnType<typeof spawn>, Promise<void>>();
 
 async function scratch(): Promise<string> {
   const root = await mkdtemp(
@@ -36,16 +35,21 @@ async function waitForText(file: string, expected: string): Promise<void> {
 function runCli(args: string[], cwd: string) {
   const child = spawn(
     process.execPath,
-    [tsxCli, path.join(repository, "typescript/core/src/cli/workhorse.ts"), ...args],
+    [...cliNodeArgs, path.join(repository, "typescript/core/src/cli/workhorse.ts"), ...args],
     { cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] },
   );
-  children.add(child);
+  children.set(
+    child,
+    new Promise((resolve) => {
+      child.once("close", () => resolve());
+    }),
+  );
   let stdout = "";
   let stderr = "";
   child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
   child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
   const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-    child.once("exit", (code, signal) => {
+    child.once("close", (code, signal) => {
       children.delete(child);
       resolve({ code, signal });
     });
@@ -54,7 +58,12 @@ function runCli(args: string[], cwd: string) {
 }
 
 afterEach(async () => {
-  for (const child of children) child.kill("SIGKILL");
+  await Promise.all(
+    [...children].map(([child, closed]) => {
+      child.kill("SIGKILL");
+      return closed;
+    }),
+  );
   children.clear();
   await Promise.all(
     scratchRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
