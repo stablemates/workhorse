@@ -33,6 +33,7 @@ Issues = "https://github.com/stablemates/workhorse/issues"
 psycopg = []
 asyncpg = ["asyncpg>=0.31,<1"]
 telemetry = ["opentelemetry-api>=1.44,<2"]
+django = ["django>=6.1.1,<6.2"]
 
 [dependency-groups]
 dev = [

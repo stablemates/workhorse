@@ -3,35 +3,11 @@ from __future__ import annotations
 import argparse
 
 import django
-import psycopg
 from asgiref.sync import sync_to_async
 from django.db import connections, transaction
-from django.db.transaction import TransactionManagementError
 
-from workhorse import EnqueueOptions, EnqueueResult, Json, Queue
-
-
-def enqueue_in_atomic(
-    task_type: str,
-    payload: Json,
-    *,
-    using: str,
-    options: EnqueueOptions | None = None,
-) -> EnqueueResult:
-    """Borrow the selected atomic block's connection for this enqueue only."""
-    database = connections[using]
-    database.validate_thread_sharing()
-    if not database.in_atomic_block or database.get_autocommit():
-        raise TransactionManagementError(
-            "enqueue_in_atomic requires transaction.atomic(using=alias)"
-        )
-    connection = database.connection
-    if not isinstance(connection, psycopg.Connection):
-        raise TypeError("enqueue_in_atomic requires Django's PostgreSQL Psycopg 3 backend")
-    if connection.closed or database.closed_in_transaction:
-        raise TransactionManagementError("Django's atomic connection is closed")
-    database.validate_no_broken_transaction()
-    return Queue(connection).enqueue_with_result(task_type, payload, options)
+from workhorse import EnqueueResult
+from workhorse.django import enqueue_in_atomic
 
 
 def create_order(order_id: int, *, using: str) -> EnqueueResult:

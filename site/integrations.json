@@ -206,6 +206,15 @@
       "verifiedOn": "2026-10-02"
     },
     {
+      "slug": "django-tasks",
+      "name": "Django Tasks",
+      "category": "frameworks",
+      "tier": "documented",
+      "summary": "Preserves decorated task submission through an optional installed Python backend and dedicated workers.",
+      "boundary": "Atomic Psycopg acceptance with allowlisted synchronous tasks; no Django result lookup, context, priority, defer or coroutine handlers.",
+      "verifiedOn": "2026-10-02"
+    },
+    {
       "slug": "pgbouncer",
       "name": "PgBouncer",
       "category": "poolers",
