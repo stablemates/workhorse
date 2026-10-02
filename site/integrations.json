@@ -107,6 +107,15 @@
       "verifiedOn": "2026-10-02"
     },
     {
+      "slug": "sequel",
+      "name": "Sequel",
+      "category": "orms",
+      "tier": "documented",
+      "summary": "Enqueues through the PG connection yielded by a Sequel transaction, with a tested Ruby recipe.",
+      "boundary": "Native pg only; business writes must share the database, execution context and server. Workers run separately.",
+      "verifiedOn": "2026-10-02"
+    },
+    {
       "slug": "serverless",
       "name": "Serverless and edge",
       "category": "runtimes",
