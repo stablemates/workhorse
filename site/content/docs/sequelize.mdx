@@ -1,0 +1,90 @@
+---
+title: Sequelize
+description: Why Sequelize 6.37.8 is not a supported Workhorse transaction executor, with a maintained PostgreSQL regression proof.
+---
+
+**Sequelize 6.37.8 is not a supported Workhorse transaction executor.**
+Workhorse ships no Sequelize adapter or atomic-enqueue recipe.
+This page documents an executed compatibility failure, not a working integration.
+The catalog's **documented** tier does not turn that finding into support.
+
+When application writes and a task must commit together, both must use the application's PostgreSQL transaction.
+A Sequelize `Transaction` is not itself a query executor.
+A candidate bridge must adapt the owning `Sequelize` instance and its explicit `Transaction` together.
+Opening a separate node-postgres pool does not join that transaction.
+Running enqueue in `afterCommit` also loses atomic acceptance.
+
+## The released API fails the lexical gate
+
+The maintained fixture pins the stable `sequelize` release **6.37.8** as a development dependency.
+It compares native node-postgres results with this public execution route:
+`sequelize.query(statement, { bind: [...values], transaction, type: QueryTypes.RAW, raw: true })`.
+Each call uses an explicit managed transaction; the fixture neither interpolates values nor reads a private connection.
+
+PostgreSQL accepts every statement in the lexical fixture.
+Sequelize rejects valid SQL when `$2` appears in a quoted string, escaped string, quoted identifier, line comment, or nested block comment.
+It also rejects tagged and untagged dollar-quoted bodies.
+The tagged form reports a missing `$tag` bind, although that token opens a string, not a parameter.
+The combined lexical fixture from Workhorse's shared adapter conformance fails too.
+
+The failure is not limited to rejected queries.
+With one native parameter, `SELECT $1::text AS value, '$$' AS literal` executes but changes the literal's result from `$$` to `$`.
+The regression checks both returned rows and Sequelize's public SQL log.
+SQL text preservation fails even when the call succeeds.
+
+Repeated and out-of-order binds, JSONB `?`, `?|`, and `?&` operators pass their controls.
+The raw-result control returns a `Date`, JSON objects, and arrays matching node-postgres.
+Those passing controls do not outweigh the lexical failures or establish full transaction conformance.
+
+Run the regression against a checkout-owned disposable PostgreSQL database:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build:runtime:dev
+pnpm exec tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run \
+  typescript/adapter-conformance/test/sequelize-bind-integration.test.ts
+```
+
+A linked worktree must first run `pnpm worktree:setup`.
+The fixture creates and drops its own scratch database, not the checkout's shared test database.
+A green regression run means the pinned release still exhibits the recorded incompatibility.
+It does **not** mean the adapter conformance suite passed for Sequelize.
+
+## What must change before support is possible
+
+Sequelize needs a public, guarded execution path that leaves native PostgreSQL SQL and binds unchanged.
+SQL-aware preprocessing or an explicitly supported native-bind bypass must preserve literals, identifiers, comments, dollar quotes, and JSON operators.
+Adding fake bind values, replacing placeholders with interpolated SQL, or fetching an unguarded private connection is not an acceptable workaround.
+
+A candidate Workhorse bridge must then pass the complete shared adapter conformance suite without relaxing it.
+It must prove physical connection identity, independent-observer invisibility, joint commit and rollback, savepoints, enqueue ordering, and raw timestamp/JSON results.
+It must retain PostgreSQL SQLSTATE and Workhorse's typed conflicts.
+
+Transaction ownership needs a separate guard.
+The released API accepts a transaction from another Sequelize instance; the regression demonstrates that escape.
+The bridge must reject foreign, missing, finished, and aborted handles without falling back to the pool.
+The fixture checks finished-handle rejection and aborted-transaction SQLSTATE, but supplies no supported bridge.
+Explicit transaction scope must override ambient CLS, and a pooled route must explicitly avoid capturing CLS transactions.
+CLS isolation and the remaining full-conformance items stay prerequisites, not verified support claims.
+Sequelize must remain responsible for transaction completion and connection return.
+
+## Stable and future releases are separate gates
+
+This finding covers **6.37.8** only; it is not an executed claim about every v6 release.
+On October 2, 2026, the `sequelize` package's stable npm tag points to 6.37.8.
+The [Sequelize v7 documentation](https://sequelize.org/docs/v7/) identifies v7 as alpha.
+No alpha, future release, alternative driver, or private API is approved by this proof.
+If a stable release adds the required route, pin it and rerun the lexical and full transaction gates before publishing support.
+
+The released-source explanation matches the executed proof:
+the [v6.37.8 PostgreSQL bind formatter](https://github.com/sequelize/sequelize/blob/v6.37.8/src/dialects/postgres/query.js)
+calls the [abstract regex formatter](https://github.com/sequelize/sequelize/blob/v6.37.8/src/dialects/abstract/query.js),
+which interprets dollar tokens without SQL lexical state and unescapes `$$`.
+The [public raw-query API](https://sequelize.org/docs/v6/core-concepts/raw-queries/)
+and [transaction API](https://sequelize.org/docs/v6/other-topics/transactions/) define the candidate route, not a Workhorse compatibility guarantee.
+
+## Next
+
+- [Enqueue in an existing transaction](/docs/enqueue) with a supported executor.
+- [Choose an integration](/docs/integrations) without treating a documented limitation as support.
+- [Keep workers separate](/docs/workers) from application transaction handling.
