@@ -2764,6 +2764,24 @@ Payload, queue, type, priority, scheduling, retry, contract, tag, deadline, time
 
 Production maintenance is worker-owned and split by cadence and failure domain.
 
+```mermaid
+flowchart TB
+  Worker[Every worker] -->|maintenanceIntervalMs,<br/>default 1 s| Tick
+  Worker -.->|same cadence, only with<br/>scheduleNamespaces set| Schedules[Schedule evaluation]
+  Worker -->|maintenanceRoutinePollMs,<br/>default 60 s| Routines
+  subgraph Tick[tick_v1 under the workhorse:tick advisory lock]
+    direction LR
+    Promote[promote: scheduled to ready] --> Recover[recover: expired leases]
+  end
+  subgraph Routines[run_maintenance_v1, in this order]
+    direction LR
+    Rollup[rollup_stats_v1] --> Partitions[prepare_history_partitions_v1]
+    Partitions --> Retain[retain_history_v1]
+    Retain --> Prune[prune_terminal_storage_v1]
+    Prune --> Registry[prune_worker_registry_v1]
+  end
+```
+
 Each worker calls `tick_v1` at most once per configured `maintenanceIntervalMs` (default one second). Under the transaction-scoped `workhorse:tick` advisory lock it records `maintenance_state.last_started_at`, performs bounded promotion and bounded expired-lease recovery, then records `last_completed_at` if both phases avoid an error. Concurrent callers return immediately with `skipped_lock = true` and do not change the state. A skipped tick still spends the caller's interval: the TypeScript and Python workers stamp their last tick time whether or not a phase skipped, and the Go and Rust maintenance loops wait for their next ticker fire. This is intended. The lock holder is promoting and recovering at that moment, so a skip hands the work to it rather than dropping it. A retry that comes due after the holder's promote statement starts waits for the next tick from any worker, which is at most one interval away, the same bound as an uncontended fleet. The same cadence drives in-process schedule evaluation.
 
 A long-running worker registers before its first claim, but it does not wait for its first maintenance pass. The TypeScript `Worker.run()`, the Python `Worker.run()` and `AsyncWorker.run()`, the Go `Worker.Run`, and the Rust `Worker::run` start that pass beside dispatch, so a fresh worker's first claim skips one `tick_v1`, schedule evaluation, and `run_maintenance_v1` round. The Python worker runs that pass, and every later one, on a dedicated maintenance thread. That thread offers `tick_v1` and schedule evaluation on `maintenance_interval_ms` and `run_maintenance_v1` on `maintenance_routine_poll_ms`, each on its own cadence, so full slots, a local or remote pause, and the empty-claim wait never delay a pass. It is the only caller during `run`, so passes never overlap. A failure in any pass stops the run, and `run` reports its error after the claimed tasks drain. [ADR 0078](decisions/0078-start-a-long-running-workers-first-claim-beside-its-startup-maintenance-pass.md) records this order. A single pass (TypeScript `runOnce()`, Go `RunOnce`, Rust `run_once`) runs maintenance before it claims. The Python `run_once()` does so whenever its maintenance interval has elapsed.
@@ -2858,6 +2876,20 @@ They describe eligible shared capacity per queue and must not be summed across q
 
 ADR 0030 reserves **timer wait** for the immutable `task_wait` record. Signal boundaries, human
 decisions, child joins, and dependency gates keep separate meanings despite shared storage.
+
+The three suspensions below share one shape. Each clears ownership without closing the logical
+attempt, and each wake path makes the same attempt claimable under a new fence.
+
+```mermaid
+flowchart LR
+  Active[active<br/>worker + fence N] -->|schedule_wait_v1<br/>future target| Timer[scheduled<br/>wait_name set, no owner]
+  Active -->|wait_for_signal_v1| Signal[scheduled, parked<br/>task_signal_wait pending]
+  Active -->|wait_for_human_v1| Human[scheduled, parked<br/>task_human_wait pending]
+  Timer -->|promote_v1 at run_at| Ready[ready<br/>same attempt]
+  Signal -->|send_signal_v1| Ready
+  Human -->|complete_human_wait_v1| Ready
+  Ready -->|claim, fence N+k| Resumed[active<br/>handler restarts from entry,<br/>named wait replays]
+```
 
 `schedule_wait_v1` accepts either a relative bigint duration or an absolute timestamp, locks the exact active worker/fence generation, and rechecks lease expiry after acquiring the runtime lock. A first future target inserts `task_wait`, changes runtime to wait-marked scheduled state, clears ownership, and emits `wait_scheduled`. A first past-due target is still recorded but leaves runtime active and returns elapsed. Relative replay returns the first stored target even if later configuration supplies another duration; absolute target or mode changes conflict. Reaching an elapsed name emits `wait_replayed`.
 
@@ -3286,6 +3318,31 @@ races remain row-lock ordered and first-committer-wins.
 
 `recover_expired_v1` cooperatively locks expired active rows in bounded batches. A row carrying a cancellation request becomes canceled and does not retry. Other rows perform policy selection and increment-and-requeue or delete-and-outcome transition using the observed fence and expiry as CAS guards. `Queue.recoverExpired(limit)` passes an omitted delay as SQL `NULL`, allowing persisted policy selection; an explicit number remains an override. `lease_expired` details include the policy, selected delay, and source. Old workers cannot later complete because their active generation no longer exists. The deadline, timeout, and lease scans compare against one `v_now` read at entry, so the deadline and timeout scans seek `task_runtime_deadline_idx` and `task_runtime_timeout_idx` to the current time. The lease scan reads every active row through `task_runtime_expired_active_idx`, which has no `expires_at` key. The writes and their per-row compare-and-set guards still read `clock_timestamp()`.
 
+The sequence below shows why a resumed worker cannot overwrite newer work. Recovery replaces the
+generation the old worker held, so its late write matches no row. A worker's lease watchdog
+normally abandons the attempt before that write. If the watchdog does not, Workhorse still rejects
+the stale write. The example retries without delay; a delayed retry waits for promotion first.
+
+```mermaid
+sequenceDiagram
+  participant A as Worker A
+  participant PG as PostgreSQL
+  participant B as Worker B
+  A->>PG: claim_many_v1
+  PG-->>A: task, attempt 1, fence 41
+  A->>PG: heartbeat_many_v1 (fence 41)
+  PG-->>A: accepted, expires_at extended
+  Note over A: A stalls past its lease
+  B->>PG: tick_v1 calls recover_expired_v1
+  Note over PG: lease_expired, attempt 2, ready
+  B->>PG: claim_many_v1
+  PG-->>B: task, attempt 2, fence 42
+  A->>PG: complete_v1 (fence 41)
+  PG-->>A: false, no generation matches
+  B->>PG: complete_v1 (fence 42)
+  PG-->>B: true, runtime deleted, outcome inserted
+```
+
 `recover_expired_v1` also sets transaction-local counts for expired leases and tasks returned to live
 work. `recover_expired_telemetry_v1` returns those counts with total affected rows. `tick_v1` carries
 them on its `recover` phase, so the production worker path and direct `Queue.recoverExpired` calls
@@ -3325,7 +3382,8 @@ pass after a released-only pass makes no progress.
 ## Fast tier
 
 A full-tier task pays for durable execution on every transition. Its claim, completion, and retry
-each write a `task_runtime` change, a `task_event` row, and an `attempt_history` row. A queue whose
+each write a `task_runtime` change and a `task_event` row. Completion and retry also close the
+attempt into an `attempt_history` row. A queue whose
 handlers never use durable execution pays that cost for nothing. The fast tier removes it: a
 fast-tier task lives in one `fast_task_runtime` row, closes into one `fast_task_outcome` row, and
 writes history only when the queue opts in ([ADR 0077](decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md)).
@@ -3335,6 +3393,24 @@ the queue's current tier, so a client calls the same public functions for both t
 For every accepted fast-tier task, exactly one of `fast_task_runtime` and `fast_task_outcome` exists
 after a committed transition, and neither `task_runtime` nor `task_outcome` exists. The stable
 `task` identity row is shared by both tiers.
+
+```mermaid
+flowchart LR
+  Task[(task<br/>stable identity, both tiers)]
+  subgraph Full[Full tier]
+    direction TB
+    FR[(task_runtime)] -->|close| FO[(task_outcome)]
+    FR -.->|every claim, completion, retry| FE[(task_event)]
+    FR -.->|every attempt closure| FH[(attempt_history)]
+  end
+  subgraph Fast[Fast tier]
+    direction TB
+    QR[(fast_task_runtime)] -->|close| QO[(fast_task_outcome)]
+    QR -.->|only with record_attempts<br/>or record_claims| QH[(attempt_history or<br/>claimed task_event)]
+  end
+  Task --> FR
+  Task --> QR
+```
 
 ### Tier and history settings
 

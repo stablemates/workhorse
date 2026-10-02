@@ -129,6 +129,36 @@ configured grace expires. A `preStop` hook consumes the same budget; an overrun 
 one-off two-second extension. Force deletion, node failure, and some eviction or node-shutdown paths
 can still shorten or bypass the normal graceful path.
 
+```mermaid
+stateDiagram-v2
+  [*] --> starting
+  starting --> exited_failure: configuration or probe failure
+  starting --> running: every run loop started, readiness true
+  starting --> draining: first signal, after startup completes
+  running --> draining: first SIGTERM or SIGINT
+  running --> failing: fatal worker-loop failure
+  failing --> exited_failure: siblings settle or deadline missed
+  draining --> exited_ok: handlers settle, resources close cleanly
+  draining --> exited_failure: run loop or close rejects, or deadline missed
+  draining --> exit_130: second SIGINT
+  draining --> exit_143: second SIGTERM
+  exited_ok --> [*]: code 0
+  exited_failure --> [*]: code 1
+  exit_130 --> [*]
+  exit_143 --> [*]
+```
+
+While `draining`, readiness is false and the worker starts no new claim pass. A pass already in
+progress may still send its remaining claim queries. The worker keeps heartbeating each active
+attempt, so its lease normally stays owned until the handler settles. A deadline, an execution
+timeout, or the lease watchdog can still end ownership first.
+
+Signal handling starts when `runWorkerProcess` installs its listeners. That happens after the CLI
+loads the configuration module and before adapter and probe startup. A signal during startup arms
+the shutdown deadline, and draining begins once startup completes. After any first
+signal, a second `SIGINT` exits 130 and a second `SIGTERM` exits 143. That includes a signal during
+startup or during a failure drain.
+
 ### Startup
 
 1. Validate the definition, timeout, and probe configuration.

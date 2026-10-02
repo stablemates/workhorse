@@ -31,6 +31,24 @@ with fence tokens, so a worker that resumes after losing its lease cannot overwr
 Handlers receive at-least-once delivery. Workhorse records durable progress and outcomes, but external
 effects still need stable provider idempotency keys or compensation.
 
+```mermaid
+flowchart LR
+  subgraph App[Your application]
+    Tx[Business writes + enqueue<br/>in one transaction]
+  end
+  subgraph PG[PostgreSQL]
+    Schema[workhorse schema<br/>versioned SQL functions,<br/>runtime, outcomes, history]
+  end
+  subgraph Fleet[Worker processes]
+    W[TypeScript, Python, Go,<br/>Rust, or Ruby Worker]
+  end
+  Tx -->|commit or roll back together| Schema
+  Schema -->|claim: payload + fence token| W
+  W -->|heartbeat, complete, fail<br/>checked against the fence| Schema
+  W -->|at-least-once handler| Effects[External effects]
+  Dash[Dashboard] -->|read models and<br/>operator actions| Schema
+```
+
 ## See it operate
 
 The dashboard exposes task activity, lifecycle events, system health, worker capacity, queues, and
