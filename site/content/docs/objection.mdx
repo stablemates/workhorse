@@ -1,0 +1,99 @@
+---
+title: Objection
+description: Commit an Objection model write and a Workhorse task in one Knex transaction.
+---
+
+Commit an Objection model write and its task together.
+Objection accepts Knex transactions; use the [Knex adapter](/docs/knex), not another package.
+
+## Setup and model write
+
+The tested baseline is Objection 3.1.5, Knex 3.3.0, and pg 8.23.0.
+The Knex package joins the next Workhorse release; use its workspace package until publication.
+
+```bash
+pnpm add @stablemates/workhorse @stablemates/workhorse-knex objection@3.1.5 knex@3.3.0 pg@8.23.0
+```
+
+Migrate application tables separately from Workhorse's schema; qualify their names to stay outside it.
+
+```ts
+import knex from "knex";
+import { Model } from "objection";
+import { createKnexAdapter } from "@stablemates/workhorse-knex";
+
+class Account extends Model {
+  static tableName = "public.account";
+  declare id: number;
+  declare email: string;
+}
+
+const database = knex({ client: "pg", connection: process.env.DATABASE_URL });
+const workhorse = createKnexAdapter(database);
+await database.transaction(async (transaction) => {
+  const account = await Account.query(transaction)
+    .insert({ email: "a@example.com" })
+    .returning("*");
+  await workhorse.forTransaction(transaction).enqueue("account.created", { accountId: account.id });
+});
+await database.destroy();
+```
+
+Pass the callback's exact `transaction` to `Model.query(transaction)` and `forTransaction(transaction)`.
+Captured pool queues escape it. The caller owns completion and Knex shutdown; bare adapter close controls neither.
+
+## Rollback, savepoints, and hooks
+
+Callback or later model-write failures roll back both writes, including returned enqueues.
+Knex nests through savepoints: inner rollback removes its pair; outer rollback also removes released inner writes.
+Independent connections see neither half before commit; IDs remain provisional.
+
+In model hooks, use the context's `transaction`, never a captured pool binding.
+Await enqueue and propagate failures. The fixture's throwing `$afterInsert` rolls back both writes.
+Knex response-transformation hooks are unsupported; the adapter requires native object rows.
+
+The [maintained recipe](https://github.com/stablemates/workhorse/blob/main/typescript/examples/objection.ts)
+runs in a real PostgreSQL fixture in the existing TypeScript database CI lane.
+Objection errors retain their own `nativeError`; adapter failures expose SQLSTATE through `KnexQueryError.code` and preserve `cause`.
+Other versions, drivers, custom parsers, and patched query execution are not certified by this recipe.
+
+## Dedicated workers
+
+Workers need a separate process, compatible node-postgres pool, and core `Queue`, never a request process or Objection/Knex transaction session.
+The application owns models and Knex; workers own their pool and shutdown.
+
+A worker module can use the core adapter without loading Objection or Knex:
+
+```ts
+import { createWorkhorseAdapter, defineWorkerProcess, Pool } from "@stablemates/workhorse";
+
+export default defineWorkerProcess({
+  adapter() {
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 4 });
+    return createWorkhorseAdapter({ database: pool, close: () => pool.end() });
+  },
+  workers: [
+    {
+      configure(worker) {
+        worker.handle<{ accountId: number }>("account.created", async (payload) => ({
+          accountId: payload.accountId,
+        }));
+      },
+    },
+  ],
+});
+```
+
+Use the same installed Workhorse database and application schema with a separately owned pool.
+The fixture's worker cannot claim uncommitted tasks and handles them after commit.
+
+## Next
+
+- [Knex](/docs/knex) — understand native parameters and adapter limits
+- [Enqueue and transactions](/docs/enqueue) — understand commit visibility
+- [Workers](/docs/workers) — configure separately owned worker pools
+
+---
+
+Exact adapter boundary and transaction ownership:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#system-context).

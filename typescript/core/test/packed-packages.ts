@@ -263,6 +263,8 @@ try {
     coreManifest.includes('"@prisma/client"') ||
     coreManifest.includes('"typeorm"') ||
     coreManifest.includes('"kysely"') ||
+    coreManifest.includes('"knex"') ||
+    coreManifest.includes('"objection"') ||
     coreManifest.includes('"hono"') ||
     coreManifest.includes('"@hono/node-server"')
   ) {
@@ -453,7 +455,9 @@ try {
           prisma: "6.19.3",
           typeorm: "0.3.31",
           kysely: "0.29.5",
-          pg: shared.pg,
+          knex: "3.3.0",
+          objection: "3.1.5",
+          pg: await declaredRange("typescript/knex/package.json", "pg"),
           typescript: "5.8.3",
           "@types/node": "24.1.0",
           "@types/pg": shared["@types/pg"],
@@ -508,6 +512,8 @@ try {
 import { createPrismaAdapter } from "@stablemates/workhorse-prisma";
 import { createTypeOrmAdapter } from "@stablemates/workhorse-typeorm";
 import { createKyselyAdapter } from "@stablemates/workhorse-kysely";
+import { createKnexAdapter, knexQueryable } from "@stablemates/workhorse-knex";
+import type { Knex } from "knex";
 import { defineWorkerProcess, Pool } from "@stablemates/workhorse";
 import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
 import type { DashboardClient, DashboardProps } from "@stablemates/workhorse-dashboard";
@@ -536,6 +542,12 @@ const typeOrmAdapter = createTypeOrmAdapter(dataSource);
 declare const kysely: Kysely<Record<string, never>>;
 declare const kyselyTransaction: Transaction<Record<string, never>>;
 const kyselyAdapter = createKyselyAdapter(kysely);
+declare const knexDatabase: Knex;
+declare const knexTransaction: Knex.Transaction;
+const knexAdapter = createKnexAdapter(knexDatabase);
+void knexAdapter.forTransaction(knexTransaction);
+void knexAdapter.adminForTransaction(knexTransaction);
+void knexQueryable(knexTransaction);
 const workerProcess = defineWorkerProcess({
   adapter: () => adapter,
   workers: [{ configure: (worker) => void worker.handle("typed", async () => ({ ok: true })) }],
@@ -588,6 +600,13 @@ datasource db {
     path.join(consumer, "integration.mjs"),
     await readFile(
       path.join(repository, "typescript", "core", "test", "fixtures", "packed-consumer.mjs"),
+      "utf8",
+    ),
+  );
+  await writeFile(
+    path.join(consumer, "knex-integration.mjs"),
+    await readFile(
+      path.join(repository, "typescript/core/test/fixtures/packed-knex-consumer.mjs"),
       "utf8",
     ),
   );
@@ -828,6 +847,9 @@ try {
     throw new Error(`The packed Workhorse CLI omitted commands: ${missingCliCommands.join(", ")}`);
   }
   await run("node", ["integration.mjs"], consumer, {
+    DATABASE_URL_TEST: packedDatabaseUrl,
+  });
+  await run("node", ["knex-integration.mjs"], consumer, {
     DATABASE_URL_TEST: packedDatabaseUrl,
   });
   await run("node", ["otel-smoke.mjs"], consumer);

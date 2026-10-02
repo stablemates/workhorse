@@ -1,5 +1,12 @@
 import { createRequire } from "node:module";
 import {
+  createKnexAdapter,
+  KnexQueryError,
+  knexQueryable,
+  type KnexExecutor,
+} from "@stablemates/workhorse-knex";
+import knex from "knex";
+import {
   createDrizzleAdapter,
   DrizzleQueryError,
   drizzleQueryable,
@@ -92,7 +99,31 @@ function compileDrizzle(query: SQL): { sql: string; params: unknown[] } {
   });
 }
 
+function mockKnex(execute: Execute): KnexExecutor {
+  return {
+    client: { config: { client: "pg" } },
+    raw: () => ({
+      options: async (options: { text: string; values: unknown[] }) =>
+        pgResult(await execute(options.text, options.values)),
+    }),
+  } as unknown as KnexExecutor;
+}
+
 const queryableProviders: QueryableProvider[] = [
+  {
+    name: "Knex",
+    QueryError: KnexQueryError,
+    error: Object.assign(new Error("duplicate secret@example.com"), { code: "23505" }),
+    expectedCode: "23505",
+    queryable: (execute, pool) => knexQueryable(mockKnex(execute), pool),
+    adapter(execute, close) {
+      const executor = mockKnex(execute);
+      const adapter = createKnexAdapter<KnexExecutor>(executor, {
+        close,
+      }) as WorkhorseAdapter<unknown>;
+      return { adapter, transaction: executor };
+    },
+  },
   {
     name: "Drizzle",
     QueryError: DrizzleQueryError,
@@ -310,6 +341,8 @@ const kyselyAdapter = createKyselyAdapter(kyselyDatabase, {
   pool,
   close: () => kyselyDatabase.destroy(),
 });
+const knexDatabase = knex({ client: "pg", connection: databaseUrl, pool: { min: 0, max: 2 } });
+const knexAdapter = createKnexAdapter(knexDatabase, { pool, close: () => knexDatabase.destroy() });
 const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
 const prismaAdapter = createPrismaAdapter(prisma, {
   pool,
@@ -335,6 +368,16 @@ interface IntegrationProvider {
 }
 
 const integrationProviders: IntegrationProvider[] = [
+  {
+    name: "Knex",
+    errorType: KnexQueryError,
+    adapter: knexAdapter as WorkhorseAdapter<unknown>,
+    transaction: (value, run) =>
+      knexDatabase.transaction(async (transaction) => {
+        await transaction("public.adapter_conformance").insert({ provider: "Knex", value });
+        await run(knexAdapter.forTransaction(transaction));
+      }),
+  },
   {
     name: "Drizzle",
     errorType: DrizzleQueryError,

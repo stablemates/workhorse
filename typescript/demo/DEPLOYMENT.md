@@ -26,6 +26,9 @@ A deployment builds two images from this repository and nothing else:
 - `Dockerfile.site` builds the documentation site, whose runtime serves the static bundle through
   the nginx configuration in `site/nginx.conf`.
 
+Both dependency layers copy every workspace manifest, including the optional Knex adapter, before their frozen pnpm install.
+The adapter does not add a runtime service or change which resources the deployment owns.
+
 Both Dockerfiles pin every base image by its multi-platform manifest digest. When updating a base
 image, resolve the new tag to a digest and commit both values together. The tag documents the
 intended release; the digest prevents a registry-side tag change from altering a build.

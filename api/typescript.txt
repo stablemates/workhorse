@@ -754,6 +754,14 @@ class DrizzleQueryError
 function createDrizzleAdapter
 function drizzleQueryable
 
+### @stablemates/workhorse-knex .
+
+interface KnexAdapterOptions
+type KnexExecutor
+class KnexQueryError
+function createKnexAdapter
+function knexQueryable
+
 ### @stablemates/workhorse-kysely .
 
 interface KyselyAdapterOptions
@@ -3227,6 +3235,15 @@ type Json = null | boolean | number | string | Json[] | {
   [key: string]: Json;
 };
 
+interface KnexAdapterOptions extends ProviderAdapterOptions {
+}
+
+type KnexExecutor = Pick<Knex, "raw" | "client">;
+
+class KnexQueryError extends QueryError {
+  constructor(statement: string, cause: unknown);
+}
+
 interface KyselyAdapterOptions extends ProviderAdapterOptions {
 }
 
@@ -5166,6 +5183,8 @@ function createDashboardOperatorControllers(options: DashboardOperatorController
 
 function createDrizzleAdapter<TTransaction extends DrizzleExecutor = DrizzleExecutor>(database: DrizzleExecutor, options?: DrizzleAdapterOptions): WorkhorseAdapter<TTransaction>;
 
+function createKnexAdapter<TTransaction extends KnexExecutor = Knex.Transaction>(database: KnexExecutor, options?: KnexAdapterOptions): WorkhorseAdapter<TTransaction>;
+
 function createKyselyAdapter<TTransaction extends KyselyExecutor = KyselyExecutor>(database: KyselyExecutor, options?: KyselyAdapterOptions): WorkhorseAdapter<TTransaction>;
 
 function createPrismaAdapter<TTransaction extends PrismaExecutor = PrismaExecutor>(database: PrismaExecutor, options?: PrismaAdapterOptions): WorkhorseAdapter<TTransaction>;
@@ -5828,6 +5847,8 @@ function isHumanWaitOverdue(wait: DashboardHumanWaitRow, nowMs: number): boolean
 function isMissingDatabaseRelationError(error: unknown): boolean;
 
 function isTerminalTaskState(state: string): boolean;
+
+function knexQueryable(executor: KnexExecutor, connectionPool?: AdapterConnectionPoolSource): Queryable;
 
 function kyselyQueryable(executor: KyselyExecutor, connectionPool?: AdapterConnectionPoolSource): Queryable;
 

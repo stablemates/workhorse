@@ -1,4 +1,6 @@
 import { createRequire } from "node:module";
+import { createKnexAdapter, KnexQueryError } from "@stablemates/workhorse-knex";
+import knex from "knex";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createDrizzleAdapter, DrizzleQueryError } from "@stablemates/workhorse-drizzle";
 import { createKyselyAdapter, KyselyQueryError } from "@stablemates/workhorse-kysely";
@@ -198,7 +200,32 @@ function createKyselyResources(): LifecycleResources {
   };
 }
 
+function createKnexResources(): LifecycleResources {
+  const knexDatabase = knex({ client: "pg", connection: databaseUrl, pool: { min: 0, max: 1 } });
+  const adapter = createKnexAdapter(knexDatabase, {
+    close: () => knexDatabase.destroy(),
+  }) as WorkhorseAdapter<unknown>;
+  return {
+    adapter,
+    bareAdapter: () => createKnexAdapter(knexDatabase) as WorkhorseAdapter<unknown>,
+    initialize: async () => undefined,
+    transaction: (value, run) =>
+      knexDatabase.transaction(async (transaction) => {
+        await transaction("public.lifecycle_probe").insert({ provider: "Knex", value });
+        await run(adapter.forTransaction(transaction), () =>
+          transaction.raw(missingRelation).then(
+            () => {
+              throw new Error("the aborting statement unexpectedly succeeded");
+            },
+            () => undefined,
+          ),
+        );
+      }),
+  };
+}
+
 const providers: LifecycleProvider[] = [
+  { name: "Knex", errorType: KnexQueryError, create: createKnexResources },
   // The Drizzle adapter discovers the pool through `$client` and may reserve a LISTEN connection
   // for a running worker, so its pool holds one more connection than the strictly single-session
   // providers below.

@@ -335,7 +335,7 @@ name it was not configured for.
 
 ## Packages and versioning
 
-Eleven packages ship from this repository. `@stablemates/workhorse` is the TypeScript durable queue.
+Twelve packages ship from this repository. `@stablemates/workhorse` is the TypeScript durable queue.
 `stablemates-workhorse` names both the Python distribution on PyPI and the Ruby gem on RubyGems. The
 rest are optional TypeScript packages.
 
@@ -346,6 +346,7 @@ rest are optional TypeScript packages.
 | `@stablemates/workhorse-prisma`             | Prisma ORM provider                               | `@stablemates/workhorse`, `@prisma/client` >= 6 and < 7                                                       |
 | `@stablemates/workhorse-typeorm`            | TypeORM provider                                  | `@stablemates/workhorse`, `typeorm` >= 0.3 and < 2                                                            |
 | `@stablemates/workhorse-kysely`             | Kysely provider                                   | `@stablemates/workhorse`, `kysely` >= 0.29 and < 0.30                                                         |
+| `@stablemates/workhorse-knex`               | PostgreSQL Knex provider                          | `@stablemates/workhorse` >= 0.6 and < 0.7, `knex` 3.3.0, `pg` 8.23.0                                          |
 | `@stablemates/workhorse-otel`               | OpenTelemetry adapter                             | `@stablemates/workhorse`, `@opentelemetry/api` >= 1.9 and < 2, `@opentelemetry/api-logs` >= 0.200 and < 0.300 |
 | `@stablemates/workhorse-dashboard`          | Operator dashboard and its framework-neutral host | `@stablemates/workhorse` >= 0.6.0 and < 0.7, React 19                                                         |
 | `@stablemates/workhorse-dashboard-server`   | Authenticated standalone dashboard server         | `@stablemates/workhorse-dashboard-contract`                                                                   |
@@ -353,7 +354,7 @@ rest are optional TypeScript packages.
 | `stablemates-workhorse`                     | Python clients, workers, and WSGI dashboard       | None; includes Psycopg >= 3.3 and < 4; `asyncpg` extra supports >= 0.31 and < 1                               |
 | `stablemates-workhorse` (gem)               | Ruby clients, workers, and Rack dashboard         | None; includes `pg` >= 1.6 and < 2, `connection_pool` >= 2.5 and < 4; Active Job adapter supports >= 8.0      |
 
-The nine TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
+The ten TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional TypeScript package always declares the core version it was released with as a peer range.
 The Python package, the Go module, the Rust crate, and the Ruby gem declare no TypeScript peer range; SQL protocol
 5 and schema version 54 are their compatibility boundary instead. Their version numbers still match the npm
@@ -391,7 +392,7 @@ the decision. The upgrade from 0.5 to 0.6 only adds, so it is an ordinary rollin
 An installation that runs cold export also stops its exporters across migration 0052, as
 [the current schema policy](schema-lifecycle.md#current-policy) describes.
 
-`.github/workflows/release.yml` publishes the nine npm packages with provenance. It then creates the
+`.github/workflows/release.yml` publishes the ten npm packages with provenance. It then creates the
 GitHub release for the tag and attaches `sql/schema.sql`. That artifact is the clean-install schema
 for the version, provided so a Python or Go developer with no Node.js toolchain can create a
 development database with `psql -f schema.sql`. It applies none of the CLI's guards, so deployments
@@ -568,7 +569,7 @@ and changes nothing. The last 0.x minor carries the final schema change before t
 the command anyway is the point: the procedure is the same one every other release uses. See
 `docs/schema-lifecycle.md`.
 
-The nine npm packages, the Python distribution, the Go module, the Rust crate, and the Ruby gem
+The ten npm packages, the Python distribution, the Go module, the Rust crate, and the Ruby gem
 publish 1.0.0 from one source commit as one release train
 ([ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md), [ADR 0084](decisions/0084-govern-the-ruby-api-as-a-ninth-surface.md)). A line that
 cannot clear the parity bar slips the train rather than being left behind. That synchronisation
@@ -712,7 +713,7 @@ after npm, as [Rust crate](#rust-crate) and [Ruby gem](#ruby-gem) describe.
 1. Rehearse. The candidate commit's `main` push run must show a green `CI / required`.
    `.github/workflows/release.yml` and `.github/workflows/release-python.yml` are dispatched
    manually with `dry-run` enabled, and every npm and Python archive is downloaded and inspected.
-   All nine npm tarballs, the Python wheel, and the Python source distribution are installed in
+   All ten npm tarballs, the Python wheel, and the Python source distribution are installed in
    clean consumers. The Python dry run's `attestation-rehearsal` job must pass, which proves that
    the attestation files exist and that the pinned uv uploads them. The Go external consumer, the Rust packaged-crate consumer, and the Ruby
    packaged-gem consumer are built from the same commit.
@@ -758,7 +759,7 @@ substitutes the artifact about to ship for the registry release:
 
 - `--wheel <file>` installs the dry-run wheel. It skips the PyPI provenance check, which only the
   registry can answer. The attestation rehearsal covers that path before the tag.
-- `--tarballs <directory>` installs all nine packed tarballs and checks each installed version.
+- `--tarballs <directory>` installs all ten packed tarballs and checks each installed version.
   It skips `npm view` and `npm audit signatures`, which only the registry can answer.
 - `--crate <directory>` depends on the unpacked `.crate` archive by path and checks its package ID.
 - `--go-proxy <directory>` serves a file module proxy ahead of `proxy.golang.org`. It skips the
@@ -931,11 +932,11 @@ gem.
 
 Each tag prefix publishes a fixed set of packages:
 
-| Tag         | Publishes                                     | Workflow                                |
-| ----------- | --------------------------------------------- | --------------------------------------- |
-| `v*`        | The nine npm packages, the crate, and the gem | `.github/workflows/release.yml`         |
-| `python/v*` | The PyPI distribution                         | `.github/workflows/release-python.yml`  |
-| `go/v*`     | The Go module, through the module proxy       | None; `scripts/release-go.sh` pushes it |
+| Tag         | Publishes                                    | Workflow                                |
+| ----------- | -------------------------------------------- | --------------------------------------- |
+| `v*`        | The ten npm packages, the crate, and the gem | `.github/workflows/release.yml`         |
+| `python/v*` | The PyPI distribution                        | `.github/workflows/release-python.yml`  |
+| `go/v*`     | The Go module, through the module proxy      | None; `scripts/release-go.sh` pushes it |
 
 Two repository tag rulesets cover `refs/tags/v*`, `refs/tags/python/v*`, and `refs/tags/go/v*`.
 
@@ -995,7 +996,7 @@ serves what the public repository already holds.
 
 ### Recovering a partially published release
 
-npm publishes one package at a time. Nine packages cannot be published atomically, so a failure in
+npm publishes one package at a time. Ten packages cannot be published atomically, so a failure in
 the middle leaves some at the new version and the rest at the old one.
 
 npm's immutable unit is the name@version pair. npm refuses a pair that has ever existed, so the

@@ -2115,16 +2115,16 @@ than an adoption step. Their version must equal the SDK the application depends 
 `scripts/install-commands.test.ts` requires each command verbatim on the surfaces that introduce the
 product:
 
-| Surface                                                                                                               | Commands                                                                                             |
-| --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `README.md` and `typescript/core/README.md`                                                                           | `node` and `schema`                                                                                  |
-| The `dashboard`, `dashboard-server`, `drizzle`, `kysely`, `otel`, `prisma`, and `typeorm` READMEs under `typescript/` | `node`                                                                                               |
-| `python/README.md`                                                                                                    | `python` and `schemaPinned`                                                                          |
-| `go/README.md`                                                                                                        | `go` and `schemaPinned`                                                                              |
-| `go/examples/README.md`                                                                                               | `go`                                                                                                 |
-| `rust/README.md`                                                                                                      | `rust` and `schemaPinned`                                                                            |
-| `site/content/docs/installation.mdx`, `quickstart.mdx`, and `for-ai-agents.mdx`                                       | The four language commands and both schema commands; `installation.mdx` also states `schemaDownload` |
-| `site/content/docs/api.mdx`                                                                                           | Both schema commands                                                                                 |
+| Surface                                                                                                                       | Commands                                                                                             |
+| ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `README.md` and `typescript/core/README.md`                                                                                   | `node` and `schema`                                                                                  |
+| The `dashboard`, `dashboard-server`, `drizzle`, `knex`, `kysely`, `otel`, `prisma`, and `typeorm` READMEs under `typescript/` | `node`                                                                                               |
+| `python/README.md`                                                                                                            | `python` and `schemaPinned`                                                                          |
+| `go/README.md`                                                                                                                | `go` and `schemaPinned`                                                                              |
+| `go/examples/README.md`                                                                                                       | `go`                                                                                                 |
+| `rust/README.md`                                                                                                              | `rust` and `schemaPinned`                                                                            |
+| `site/content/docs/installation.mdx`, `quickstart.mdx`, and `for-ai-agents.mdx`                                               | The four language commands and both schema commands; `installation.mdx` also states `schemaDownload` |
+| `site/content/docs/api.mdx`                                                                                                   | Both schema commands                                                                                 |
 
 `typescript/dashboard-contract/README.md` is exempt because it installs a type-only development
 dependency. The test fails when a published package gains a README that is neither governed nor

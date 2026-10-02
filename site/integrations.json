@@ -152,6 +152,26 @@
       "verifiedOn": "2026-10-02"
     },
     {
+      "slug": "knex",
+      "name": "Knex",
+      "category": "orms",
+      "tier": "verified",
+      "summary": "Adapts PostgreSQL Knex databases and caller-owned transactions.",
+      "boundary": "Only the pinned pg route without response transformations is verified; callers own transaction completion.",
+      "package": "@stablemates/workhorse-knex",
+      "peer": "knex",
+      "pinnedBy": "typescript/adapter-conformance"
+    },
+    {
+      "slug": "objection",
+      "name": "Objection",
+      "category": "orms",
+      "tier": "documented",
+      "summary": "Enqueues beside Objection model writes through the same Knex transaction.",
+      "boundary": "A maintained recipe uses the optional Knex adapter; no separate Objection package or request-process worker.",
+      "verifiedOn": "2026-10-02"
+    },
+    {
       "slug": "serverless",
       "name": "Serverless and edge",
       "category": "runtimes",
