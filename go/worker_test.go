@@ -19,7 +19,16 @@ import (
 	"go.uber.org/goleak"
 )
 
+type replayConflictCase struct {
+	ErrorKind          string            `json:"errorKind"`
+	RedactErrorDetails bool              `json:"redactErrorDetails"`
+	ExpectedState      string            `json:"expectedState"`
+	ExpectedAttempt    int               `json:"expectedAttempt"`
+	ExpectedErrorNames map[string]string `json:"expectedErrorNames"`
+}
+
 type workerRuntimeFixture struct {
+	Cases                                []replayConflictCase              `json:"cases"`
 	ID                                   string                            `json:"id"`
 	Kind                                 string                            `json:"kind"`
 	Covers                               []string                          `json:"covers"`

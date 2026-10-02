@@ -1060,3 +1060,15 @@ mod self_tests {
         assert!(single_key(json!({"$ref": "a"}).as_object().unwrap(), "$ref").is_some());
     }
 }
+
+#[tokio::test]
+async fn replay_conflicts_fail_on_first_occurrence() {
+    let fixtures = read_json(&protocol_directory().join("runtime.json"));
+    let fixture = fixtures
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|fixture| fixture["kind"] == "replay-conflict")
+        .unwrap();
+    assert!(matches!(conformance::runtime::run_runtime(fixture).await, Outcome::Passed));
+}

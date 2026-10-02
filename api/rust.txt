@@ -1506,7 +1506,7 @@ pub fn workhorse::HandlerError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> 
 impl core::fmt::Display for workhorse::HandlerError
 pub fn workhorse::HandlerError::fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for workhorse::HandlerError
-impl<E: core::error::Error> core::convert::From<E> for workhorse::HandlerError
+impl<E: core::error::Error + 'static> core::convert::From<E> for workhorse::HandlerError
 pub fn workhorse::HandlerError::from(error: E) -> Self
 impl core::marker::Freeze for workhorse::HandlerError
 impl core::marker::Send for workhorse::HandlerError

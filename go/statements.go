@@ -565,3 +565,10 @@ const (
 	humanWaitConflictErrorFormat        = "human wait %s for task %s was replayed with different context"
 	humanWaitIdempotencyConflictFormat  = "human wait %s for task %s received a different completion for a retained idempotency key"
 )
+
+const (
+	checkpointConflictErrorName = "CheckpointConflictError"
+	waitConflictErrorName       = "WaitConflictError"
+	childConflictErrorName      = "ChildConflictError"
+	humanWaitConflictErrorName  = "HumanWaitConflictError"
+)

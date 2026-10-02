@@ -53,6 +53,7 @@ pub async fn run_runtime(fixture: &Value) -> Outcome {
             #[cfg(feature = "opentelemetry")]
             "trace-propagation" => trace::propagation(database, fixture).await,
             "suspension-replay" => suspension_replay(database, fixture).await,
+            "replay-conflict" => replay_conflict(database, fixture).await,
             "lease-loss" => lease_loss(database, fixture).await,
             "batch" => batch(database, fixture).await,
             "cooperative-cancellation" => cooperative_cancellation(database, fixture).await,
@@ -1663,4 +1664,94 @@ async fn maintenance_phase_error(database: &ScratchDatabase, fixture: &Value) ->
     .await;
     client.batch_execute(&original).await.map_err(sql)?;
     observed
+}
+
+async fn replay_conflict(database: &ScratchDatabase, fixture: &Value) -> Checked {
+    let client = database.connect().await;
+    for entry in fixture["cases"].as_array().unwrap() {
+        let queue_name = format!("{}-{}", queue_name(fixture), text(entry, "errorKind"));
+        let queue = Queue::connect(database.url(), &queue_name).await.map_err(driver)?;
+        let task_type = text(fixture, "taskType");
+        let task = queue
+            .enqueue(
+                task_type,
+                &json!({}),
+                EnqueueOptions {
+                    max_attempts: number(fixture, "maxAttempts") as i32,
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(driver)?
+            .task_id;
+        if entry["redactErrorDetails"] == true {
+            client
+                .execute(
+                    "UPDATE workhorse.task SET payload_redact_keys = ARRAY['secret'] WHERE id=$1",
+                    &[&task],
+                )
+                .await
+                .map_err(sql)?;
+        }
+        let delay_calls = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::clone(&delay_calls);
+        let subject = worker(
+            database,
+            4,
+            WorkerOptions {
+                queues: vec![queue_name],
+                retry_delay: Some(Arc::new(move |_, _| {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Some(Duration::from_secs(60))
+                })),
+                ..options(fixture)
+            },
+        )?;
+        let kind = text(entry, "errorKind").to_owned();
+        subject.handle(task_type, move |_: Value, _| {
+            let kind = kind.clone();
+            async move {
+                let operation = match kind.as_str() {
+                    "checkpoint" => workhorse::Operation::Checkpoint,
+                    "wait" => workhorse::Operation::Sleep,
+                    "child" | "redacted-child" | "child-limit" => workhorse::Operation::RunChild,
+                    "child-set" => workhorse::Operation::RunChildren,
+                    "human" => workhorse::Operation::WaitForHuman,
+                    _ => workhorse::Operation::WaitForSignal,
+                };
+                let error = match kind.as_str() {
+                    "transient" => HandlerError::new("transient"),
+                    "child-limit" => {
+                        Error::LimitExceeded { operation, name: "saved".into() }.into()
+                    }
+                    "signal-wait" => {
+                        Error::AlreadyWaiting { operation, name: "saved".into() }.into()
+                    }
+                    _ => Error::Conflict { operation, name: "saved".into() }.into(),
+                };
+                Err::<Value, _>(error)
+            }
+        });
+        run_once(&subject, true).await?;
+        let actual = task_state(&client, task).await?;
+        let expected = (
+            text(entry, "expectedState").to_owned(),
+            number(entry, "expectedAttempt") as i32,
+            text(&entry["expectedErrorNames"], "rust").to_owned(),
+        );
+        check(actual == expected, || format!("conflict state {actual:?}, want {expected:?}"))?;
+        let terminal = entry["expectedState"] == "failed";
+        check(delay_calls.load(Ordering::SeqCst) == if terminal { 0 } else { 1 }, || {
+            "retry callback called for a terminal conflict".into()
+        })?;
+        let rows = client
+            .query("SELECT outcome FROM workhorse.attempt_history WHERE task_id=$1", &[&task])
+            .await
+            .map_err(sql)?;
+        let outcomes: Vec<String> = rows.iter().map(|row| row.get(0)).collect();
+        check(outcomes == vec![if terminal { "failed" } else { "retry" }], || {
+            format!("attempt outcomes {outcomes:?}")
+        })?;
+    }
+    Ok(())
 }

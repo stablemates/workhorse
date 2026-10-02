@@ -282,5 +282,131 @@
     },
     "expectedPhase": "promote",
     "expectedState": { "state": "succeeded", "attempt": 1 }
+  },
+  {
+    "id": "durable-replay-conflicts-are-terminal",
+    "kind": "replay-conflict",
+    "covers": ["terminal-replay-conflict"],
+    "taskType": "protocol.replay-conflict",
+    "maxAttempts": 5,
+    "cases": [
+      {
+        "errorKind": "checkpoint",
+        "redactErrorDetails": false,
+        "expectedState": "failed",
+        "expectedAttempt": 1,
+        "expectedErrorNames": {
+          "typescript": "CheckpointConflictError",
+          "python": "CheckpointConflictError",
+          "go": "CheckpointConflictError",
+          "rust": "CheckpointConflictError",
+          "ruby": "Stablemates::Workhorse::ConflictError"
+        }
+      },
+      {
+        "errorKind": "wait",
+        "redactErrorDetails": false,
+        "expectedState": "failed",
+        "expectedAttempt": 1,
+        "expectedErrorNames": {
+          "typescript": "WaitConflictError",
+          "python": "WaitConflictError",
+          "go": "WaitConflictError",
+          "rust": "WaitConflictError",
+          "ruby": "Stablemates::Workhorse::ConflictError"
+        }
+      },
+      {
+        "errorKind": "child",
+        "redactErrorDetails": false,
+        "expectedState": "failed",
+        "expectedAttempt": 1,
+        "expectedErrorNames": {
+          "typescript": "ChildConflictError",
+          "python": "ChildConflictError",
+          "go": "ChildConflictError",
+          "rust": "ChildConflictError",
+          "ruby": "Stablemates::Workhorse::ConflictError"
+        }
+      },
+      {
+        "errorKind": "child-set",
+        "redactErrorDetails": false,
+        "expectedState": "failed",
+        "expectedAttempt": 1,
+        "expectedErrorNames": {
+          "typescript": "ChildConflictError",
+          "python": "ChildConflictError",
+          "go": "ChildConflictError",
+          "rust": "ChildConflictError",
+          "ruby": "Stablemates::Workhorse::ConflictError"
+        }
+      },
+      {
+        "errorKind": "human",
+        "redactErrorDetails": false,
+        "expectedState": "failed",
+        "expectedAttempt": 1,
+        "expectedErrorNames": {
+          "typescript": "HumanWaitConflictError",
+          "python": "HumanWaitConflictError",
+          "go": "HumanWaitConflictError",
+          "rust": "HumanWaitConflictError",
+          "ruby": "Stablemates::Workhorse::ConflictError"
+        }
+      },
+      {
+        "errorKind": "child-limit",
+        "redactErrorDetails": false,
+        "expectedState": "scheduled",
+        "expectedAttempt": 2,
+        "expectedErrorNames": {
+          "typescript": "ChildLimitExceededError",
+          "python": "ChildLimitExceededError",
+          "go": "ChildLimitExceededError",
+          "rust": "Error",
+          "ruby": "Stablemates::Workhorse::LimitExceededError"
+        }
+      },
+      {
+        "errorKind": "signal-wait",
+        "redactErrorDetails": false,
+        "expectedState": "scheduled",
+        "expectedAttempt": 2,
+        "expectedErrorNames": {
+          "typescript": "SignalWaitConflictError",
+          "python": "SignalWaitConflictError",
+          "go": "SignalWaitConflictError",
+          "rust": "Error",
+          "ruby": "Stablemates::Workhorse::AlreadyWaitingError"
+        }
+      },
+      {
+        "errorKind": "transient",
+        "redactErrorDetails": false,
+        "expectedState": "scheduled",
+        "expectedAttempt": 2,
+        "expectedErrorNames": {
+          "typescript": "Error",
+          "python": "Exception",
+          "go": "Error",
+          "rust": "Error",
+          "ruby": "StandardError"
+        }
+      },
+      {
+        "errorKind": "redacted-child",
+        "redactErrorDetails": true,
+        "expectedState": "failed",
+        "expectedAttempt": 1,
+        "expectedErrorNames": {
+          "typescript": "RedactedTaskError",
+          "python": "RedactedTaskError",
+          "go": "RedactedTaskError",
+          "rust": "RedactedTaskError",
+          "ruby": "RedactedTaskError"
+        }
+      }
+    ]
   }
 ]

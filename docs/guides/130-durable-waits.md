@@ -73,6 +73,16 @@ pick it up, and the promotion pass runs on an interval.
 Don't build anything that needs precise timing on top of this. It's a durable sleep, not a
 real-time scheduler.
 
+## When a replay conflicts with retained evidence
+
+A changed durable request cannot succeed by retrying the same handler. When a checkpoint value,
+timer target, child request, child set, or human-decision context conflicts with retained evidence,
+Workhorse fails the task on that occurrence. It preserves the current attempt and records the
+conflict class for operator reads. Configured redaction still hides error details.
+
+Transient errors and child-limit refusals still follow the task's retry policy. Lease loss keeps
+its ownership rules. An already-waiting signal refusal keeps its existing behavior.
+
 ## Next
 
 - [030-delivery-guarantees.md](030-delivery-guarantees.md) — checkpoints, which waits depend on

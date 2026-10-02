@@ -283,7 +283,20 @@ export interface MaintenancePhaseErrorRuntimeFixture extends RuntimeFixtureBase 
   expectedState: ExpectedRuntimeState;
 }
 
+export interface ReplayConflictRuntimeFixture extends RuntimeFixtureBase {
+  kind: "replay-conflict";
+  maxAttempts: number;
+  cases: Array<{
+    errorKind: string;
+    redactErrorDetails: boolean;
+    expectedState: string;
+    expectedAttempt: number;
+    expectedErrorNames: Record<string, string>;
+  }>;
+}
+
 export type RuntimeFixture =
+  | ReplayConflictRuntimeFixture
   | BatchRuntimeFixture
   | SuspensionReplayRuntimeFixture
   | CooperativeCancellationRuntimeFixture

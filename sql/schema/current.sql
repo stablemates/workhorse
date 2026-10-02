@@ -8973,7 +8973,7 @@ BEGIN
     RETURN workhorse.fast_expire_owned_v1(p_task_id, p_worker_id, p_fence_token);
   END IF;
   v_error := workhorse.redact_error_details_v1(p_error, v_runtime.redact);
-  IF v_runtime.attempt < v_runtime.max_attempts THEN
+  IF v_runtime.attempt < v_runtime.max_attempts AND p_retry_delay_ms IS DISTINCT FROM -1 THEN
     SELECT * INTO STRICT v_retry FROM workhorse.retry_delay_v1(
       p_task_id, v_runtime.attempt, v_runtime.retry_policy, v_runtime.previous_retry_delay_ms,
       p_retry_delay_ms, 'legacy-handler'
@@ -13180,7 +13180,7 @@ BEGIN
     cardinality(v_task.payload_redact_keys) > 0 OR cardinality(v_task.result_redact_keys) > 0
   );
 
-  IF v_runtime.current_attempt < v_task.max_attempts THEN
+  IF v_runtime.current_attempt < v_task.max_attempts AND p_retry_delay_ms IS DISTINCT FROM -1 THEN
     v_started_at := v_runtime.attempt_started_at;
     v_claimed_at := v_runtime.acquired_at;
     SELECT * INTO STRICT v_retry FROM workhorse.retry_delay_v1(
@@ -19545,10 +19545,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (50, 'sample the clock after the row lock'),
   (51, 'keep cold-export segments one UTC day'),
   (52, 'serialize schedule synchronization with the tick'),
-  (53, 'distinguish a single-child rename from a second child')
+  (53, 'distinguish a single-child rename from a second child'),
+  (54, 'fail durable replay conflicts without retrying')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (53) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (54) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

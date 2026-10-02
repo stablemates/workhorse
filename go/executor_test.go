@@ -24,7 +24,7 @@ var (
 )
 
 func TestPGXAdaptersReturnRowsAndLeaveOwnershipWithCaller(t *testing.T) {
-	databaseURL := testDatabaseURL(t)
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "executor-adapters")
 	ctx := context.Background()
 
 	connection, err := pgx.Connect(ctx, databaseURL)
@@ -60,7 +60,7 @@ func TestPGXAdaptersReturnRowsAndLeaveOwnershipWithCaller(t *testing.T) {
 }
 
 func TestDatabaseSQLAdaptersReturnRowsAndLeaveOwnershipWithCaller(t *testing.T) {
-	databaseURL := testDatabaseURL(t)
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "executor-adapters")
 	ctx := context.Background()
 
 	database, err := sql.Open("pgx", databaseURL)

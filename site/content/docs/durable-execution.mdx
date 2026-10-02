@@ -89,6 +89,16 @@ JSON value and an error. Rust accepts a closure that returns a future of `Result
 Ruby takes a block.
 Replay returns the stored value without invoking the callback again.
 
+## When a replay conflicts with retained evidence
+
+A changed durable request cannot succeed by retrying the same handler. When a checkpoint value,
+timer target, child request, child set, or human-decision context conflicts with retained evidence,
+Workhorse fails the task on that occurrence. It preserves the current attempt and records the
+conflict class for operator reads. Configured redaction still hides error details.
+
+Transient errors and child-limit refusals still follow the task's retry policy. Lease loss keeps
+its ownership rules. An already-waiting signal refusal keeps its existing behavior.
+
 ## Release the worker slot with a durable wait
 
 Some tasks need to pause before a reminder or until a known time. Sleeping inside the handler

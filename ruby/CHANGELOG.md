@@ -5,12 +5,20 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
-Requires **schema v53**. Migrate the schema before starting updated processes.
-The final schema version is **53**, and the SDK compatibility floor is schema version **53**.
+Requires **schema v54**. Migrate the schema before starting updated processes.
+The final schema version is **54**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.
 A second child after joining the retained child in the same handler run still exceeds the child limit (SM-1106).
+
+Migration 0055 (`0055-fail-durable-replay-conflicts-without-retrying.sql`) adds the terminal failure override.
+
+Durable checkpoint, timer, child, child-set, and human-decision replay conflicts now fail the task
+on their first occurrence, preserving its current attempt and recording the conflict class.
+Redaction still hides error details. Transient failures, lease loss, child-limit errors, and
+already-waiting signal errors retain their existing behavior. Conflict settlement bypasses the
+worker's retry-delay callback.
 
 ## 0.6.1 — 2026-10-02
 

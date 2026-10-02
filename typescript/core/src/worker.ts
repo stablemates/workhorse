@@ -9,6 +9,9 @@ import {
   WorkhorseError,
 } from "./errors.js";
 import { Queue } from "./queue.js";
+import { CheckpointConflictError, WaitConflictError } from "./queue/checkpoints-progress-waits.js";
+import { ChildConflictError } from "./queue/child-tasks.js";
+import { HumanWaitConflictError } from "./queue/human-waits.js";
 import { errorForTelemetry, type FailureStatus } from "./queue/claim-lease-fence.js";
 import { jitterDuration } from "./notifications.js";
 import type { TaskNotificationSubscription } from "./notifications.js";
@@ -1479,8 +1482,14 @@ export class Worker {
     }
     span.recordException(errorForTelemetry(error, task.redactErrorDetails));
     span.setStatus("error");
-    const delay =
-      typeof this.options.retryDelayMs === "function"
+    const terminalConflict =
+      error instanceof CheckpointConflictError ||
+      error instanceof WaitConflictError ||
+      error instanceof ChildConflictError ||
+      error instanceof HumanWaitConflictError;
+    const delay = terminalConflict
+      ? -1
+      : typeof this.options.retryDelayMs === "function"
         ? this.options.retryDelayMs(task.attempt, task)
         : this.options.retryDelayMs;
     const failed = await this.queue.fail(task, this.workerId, error, delay);

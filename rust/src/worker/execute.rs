@@ -492,12 +492,24 @@ impl Inner {
                 "stack": error.stack,
             })
         };
-        let delay = self
-            .options
-            .retry_delay
-            .as_ref()
-            .and_then(|delay| delay(task.attempt, task))
-            .map(millis_i32);
+        let terminal_conflict = matches!(
+            error.name.as_deref(),
+            Some(
+                "CheckpointConflictError"
+                    | "WaitConflictError"
+                    | "ChildConflictError"
+                    | "HumanWaitConflictError"
+            )
+        );
+        let delay = if terminal_conflict {
+            Some(-1)
+        } else {
+            self.options
+                .retry_delay
+                .as_ref()
+                .and_then(|delay| delay(task.attempt, task))
+                .map(millis_i32)
+        };
         let rows = fenced_rows(
             &self.pool,
             sql::FAIL_V1,

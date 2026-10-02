@@ -1,3 +1,10 @@
+import {
+  CheckpointConflictError,
+  WaitConflictError,
+} from "../src/queue/checkpoints-progress-waits.js";
+import { ChildConflictError, ChildLimitExceededError } from "../src/queue/child-tasks.js";
+import { HumanWaitConflictError } from "../src/queue/human-waits.js";
+import { SignalWaitConflictError } from "../src/queue/signals.js";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -30,6 +37,7 @@ import {
   readPointer,
 } from "../../../scripts/verify-sql-protocol.js";
 import type {
+  ReplayConflictRuntimeFixture,
   BatchRuntimeFixture,
   BudgetAdmissionRaceRuntimeFixture,
   CooperativeCancellationRuntimeFixture,
@@ -1201,12 +1209,13 @@ describe("SQL protocol conformance fixtures", () => {
         "human-tokens",
         "retention-maintenance",
         "unknown-type-release",
+        "terminal-replay-conflict",
       ]),
     );
     expect(fixtures.compatibility).toContainEqual(
       expect.objectContaining({ id: "current", compatible: true }),
     );
-    expect(fixtures.compatibility.filter((fixture) => !fixture.compatible)).toHaveLength(10);
+    expect(fixtures.compatibility.filter((fixture) => !fixture.compatible)).toHaveLength(11);
   });
 
   // Recreating the compatibility database mid-test waits on the same cluster-wide checkpoint
@@ -1271,6 +1280,29 @@ describe("SQL protocol conformance fixtures", () => {
     }
   });
 
+  it("fails replay conflicts on their first occurrence", async () => {
+    const conflictDatabase = createDatabaseTestHarness(
+      new URL("?replay-conflict", import.meta.url).href,
+    );
+    await conflictDatabase.setup();
+    try {
+      const fixtures = await loadSqlProtocolFixtures(repository);
+      const fixture = fixtures.runtime.find(
+        (candidate): candidate is ReplayConflictRuntimeFixture =>
+          candidate.kind === "replay-conflict",
+      )!;
+      expect(fixture).toBeDefined();
+      await executeReplayConflictRuntimeFixture(
+        runtimeQueue(conflictDatabase.pool),
+        new Admin(conflictDatabase.pool),
+        conflictDatabase.pool,
+        fixture,
+      );
+    } finally {
+      await conflictDatabase.teardown();
+    }
+  });
+
   it("verifies language-runtime behavior through the shared fixtures", async () => {
     await runtimeDatabase.setup();
     try {
@@ -1281,6 +1313,9 @@ describe("SQL protocol conformance fixtures", () => {
       for (const fixture of fixtures.runtime) {
         fixture.covers.forEach((capability) => coverage.add(capability));
         switch (fixture.kind) {
+          case "replay-conflict":
+            await executeReplayConflictRuntimeFixture(queue, admin, runtimeDatabase.pool, fixture);
+            break;
           case "batch":
             await executeBatchRuntimeFixture(queue, admin, fixture);
             break;
@@ -1847,3 +1882,75 @@ describe("SQL protocol conformance fixtures", () => {
     });
   });
 });
+
+async function executeReplayConflictRuntimeFixture(
+  queue: RuntimeQueue,
+  admin: Admin,
+  database: Queryable,
+  fixture: ReplayConflictRuntimeFixture,
+): Promise<void> {
+  for (const entry of fixture.cases) {
+    const queueName = `runtime-${fixture.id}-${entry.errorKind}`;
+    const id = await queue.enqueue(
+      fixture.taskType,
+      {},
+      {
+        queue: queueName,
+        maxAttempts: fixture.maxAttempts,
+      },
+    );
+    if (entry.redactErrorDetails)
+      await database.query(
+        "UPDATE workhorse.task SET payload_redact_keys = ARRAY['secret'] WHERE id=$1",
+        [id],
+      );
+    let delayCalls = 0;
+    const worker = new Worker(queue, {
+      queue: queueName,
+      registryIntervalMs: 0,
+      retryDelayMs: () => {
+        delayCalls++;
+        return 60_000;
+      },
+    }).handle(fixture.taskType, async () => {
+      switch (entry.errorKind) {
+        case "checkpoint":
+          throw new CheckpointConflictError(id, "saved");
+        case "wait":
+          throw new WaitConflictError(id, "saved", {
+            taskId: id,
+            name: "saved",
+            mode: "absolute",
+            durationMs: null,
+            requestedWakeAt: new Date(),
+            wakeAt: new Date(),
+            attempt: 1,
+            fenceToken: 1n,
+            workerId: "fixture",
+            createdAt: new Date(),
+          });
+        case "child":
+        case "redacted-child":
+          throw new ChildConflictError(id, "saved");
+        case "child-set":
+          throw new ChildConflictError(id, "child set");
+        case "human":
+          throw new HumanWaitConflictError(id, "saved");
+        case "child-limit":
+          throw new ChildLimitExceededError(id);
+        case "signal-wait":
+          throw new SignalWaitConflictError(id, "saved");
+        default:
+          throw new Error("transient");
+      }
+    });
+    await expect(worker.runOnce()).resolves.toBe(true);
+    await expect(admin.getTask(id)).resolves.toMatchObject({
+      state: entry.expectedState,
+      currentAttempt: entry.expectedAttempt,
+      error: { name: entry.expectedErrorNames.typescript },
+    });
+    expect(delayCalls).toBe(entry.expectedState === "failed" ? 0 : 1);
+    await expectAttemptOutcome(database, id, entry.expectedState === "failed" ? "failed" : "retry");
+  }
+}

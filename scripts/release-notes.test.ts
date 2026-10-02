@@ -177,3 +177,14 @@ describe("unreleased schema notes", () => {
     });
   });
 });
+
+describe("unreleased migration coverage", () => {
+  it("names every migration added after the published release", () => {
+    const section = entry("CHANGELOG.md", "## Unreleased");
+    const added = readdirSync(join(root, "sql/migrations"))
+      .map((name) => /^(\d{4})-/.exec(name)?.[1])
+      .filter((number): number is string => number !== undefined && Number(number) > 53);
+    expect(added.length).toBeGreaterThan(0);
+    for (const number of added) expect(section, `migration ${number}`).toContain(number);
+  });
+});
