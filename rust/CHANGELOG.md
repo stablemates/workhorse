@@ -12,6 +12,14 @@ adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses 
 
 ### Unreleased
 
+**A handler result holding NUL now fails only its task.** jsonb refuses a NUL character. Such a
+result used to reach the completion statement, whose refusal left the task leased until its lease
+expired, and `Worker::run` returned that error at shutdown. The worker now fails the attempt under
+the task's retry policy with an error named `Error` and the message `<task type> result contains a
+NUL character or an unpaired surrogate, which PostgreSQL jsonb cannot store`. A Rust string cannot
+hold an unpaired surrogate. On the fast tier the other members of a completion batch still
+complete.
+
 **A dropped batch member no longer joins a later batch.** Dropping `Worker::run` or
 `Worker::run_once` while a member waited for its batch's linger left that member in the worker's
 batch coordinator. The next batch on the same worker then passed the abandoned payload to the

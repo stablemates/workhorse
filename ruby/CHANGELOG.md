@@ -5,6 +5,12 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+- A handler result PostgreSQL cannot store now fails only its task. jsonb refuses a NUL character
+  and an unpaired surrogate. Such a result used to reach the completion statement, whose refusal
+  ended `run` and left the task leased. The worker now fails the attempt under the task's retry
+  policy with an `ArgumentError`. Its message names the task type and carries no part of the value.
+  On the fast tier the other members of a completion batch still complete. A database error during
+  completion still ends `run`.
 - Add the `Queue` client: `enqueue` and `enqueue_many` with every client enqueue option,
   cancellation, signal and human wait delivery, queue health, and schedule and contract
   synchronization. `sync_concurrency_policies`, `sync_rate_limit_policies`, and `sync_budgets`

@@ -44,10 +44,15 @@ module Stablemates
       # An exponent follows a digit in every JSON number that has one. A string can match too, which
       # costs only an exact measure.
       EXPONENT_NUMBER = /\d[eE]/
+      # Every \u escape jsonb refuses is \u0000 or a surrogate, and every surrogate escape starts
+      # with \ud or \uD. JSON.generate writes non-ASCII text raw, so ordinary text matches neither.
+      UNSTORABLE_ESCAPE_START = /\\u(?:0000|[dD])/
+      JSON_ESCAPE = /\\(?:u(\h{4})|.)/m
       private_constant :MAX_EMPTY_POLL_MS, :NOTIFICATION_POLL_MS, :NOTIFICATION_CLAIM_DELAY, :UNWIND_WINDOW,
         :THREAD_RETURN_WAIT, :EXPIRATION_RETRY, :REDACTED_NAME, :REDACTED_MESSAGE, :PROTOCOL, :LANGUAGE, :MIN_POOL_SIZE,
         :COMPLETION_BATCH_LIMIT, :TIER_PROBE_INTERVAL,
-        :STATUS_OUTCOMES, :TELEMETRY_OUTCOMES, :SPAN_OUTCOMES, :CANCEL_REASONS, :EXPONENT_NUMBER
+        :STATUS_OUTCOMES, :TELEMETRY_OUTCOMES, :SPAN_OUTCOMES, :CANCEL_REASONS, :EXPONENT_NUMBER,
+        :UNSTORABLE_ESCAPE_START, :JSON_ESCAPE
 
       # One attempt's hold on its lease: the heartbeat membership, the lease watchdog, and the lock
       # that orders settlements. Internal to the SDK.
@@ -1203,6 +1208,7 @@ module Stablemates
           result = invoke(handler, task.payload, context)
           validate_result(task, result)
           encoded = Values.json(result, "task result")
+          check_result_storable(task, encoded)
           check_result_size(task, encoded)
         rescue HandlerContext::Suspension
           return if finish_ownership(task, ownership, arbiter)
@@ -1510,6 +1516,38 @@ module Stablemates
 
         actual = Values.jsonb_text_bytes(encoded)
         raise ValueSizeLimitError.new(task.type, "result", actual, limit) if actual > limit
+      end
+
+      # PostgreSQL refuses a jsonb string or key that holds NUL or a surrogate outside a pair, and
+      # that refusal would end the worker rather than the attempt. JSON.generate writes NUL as
+      # \u0000 and refuses malformed UTF-8, so a surrogate escape can only come from a custom
+      # to_json. A high surrogate is stored only when a low surrogate escape follows it at once. The
+      # error carries no part of the result, so the failure envelope that reports it stays storable.
+      def check_result_storable(task, encoded)
+        return unless unstorable_escape?(encoded)
+
+        raise ArgumentError,
+          "#{task.type} result contains a NUL character or an unpaired surrogate, which PostgreSQL jsonb cannot store"
+      end
+
+      def unstorable_escape?(encoded)
+        return false unless UNSTORABLE_ESCAPE_START.match?(encoded)
+
+        low_expected_at = nil
+        encoded.scan(JSON_ESCAPE) do |(digits)|
+          match = Regexp.last_match
+          unit = digits&.to_i(16)
+          if low_expected_at
+            return true unless match.begin(0) == low_expected_at && unit&.between?(0xDC00, 0xDFFF)
+
+            low_expected_at = nil
+          elsif unit
+            return true if unit.zero? || unit.between?(0xDC00, 0xDFFF)
+
+            low_expected_at = match.end(0) if unit.between?(0xD800, 0xDBFF)
+          end
+        end
+        !low_expected_at.nil?
       end
 
       # A lifecycle write returns exactly one row; anything else means the protocol changed.

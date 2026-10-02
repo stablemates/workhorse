@@ -85,10 +85,10 @@ The TypeScript, Go, Python, and Ruby workers also measure a handler result that 
 its completion. An oversized result fails that attempt and follows the retry path. In Python, a `NaN` or
 infinite number fails the attempt the same way.
 
-PostgreSQL jsonb cannot store a NUL character or an unpaired surrogate. The Go and Python workers
-check a handler result for both before they send its completion. A result that contains either
-fails that attempt and follows the retry path. On the fast tier, the other results in the batch
-still complete. The TypeScript and Ruby workers do not make this check.
+PostgreSQL jsonb cannot store a NUL character or an unpaired surrogate. Every worker checks a
+handler result for both before it sends its completion. A result that contains either fails that
+attempt and follows the retry path. On the fast tier, the other results in the batch still
+complete.
 
 Each of these failures stays local to its task, so the worker keeps running.
 
