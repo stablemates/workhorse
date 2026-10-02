@@ -83,11 +83,13 @@ the subschema keywords, an index of an array keyword, or a name in `$defs`, `dep
 the contract`. Without this rule, a reference into `default` or `examples` would apply a schema
 that holds either keyword, and the profile check would never see it. A pointer token that
 percent-decodes to `/` is also rejected. JSON Schema libraries disagree on whether `%2F` separates
-tokens, so such a reference could resolve to a schema the profile check never saw.
+tokens, so such a reference could resolve to a schema the profile check never saw. The named
+`$anchor` may sit on the root schema, and a reference to it names the whole contract.
 
 `protocol/v1/contracts.json` pins the rejection of each keyword at the root and inside `$defs`,
 `items` and `properties`, behind a reference into `default` or `examples`, and behind a reference
-with an encoded separator. A keyword can return only through the rule in Consequences.
+with an encoded separator. It also pins a reference to an anchor on the root schema as valid. A
+keyword can return only through the rule in Consequences.
 
 ## Consequences
 

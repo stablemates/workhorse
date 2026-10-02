@@ -230,5 +230,33 @@
       { "value": { "z": "a" }, "valid": false },
       { "value": { "self": { "other": 1 } }, "valid": false }
     ]
+  },
+  {
+    "id": "reference-to-root-anchor",
+    "schema": {
+      "$anchor": "tree",
+      "type": "object",
+      "required": ["value"],
+      "properties": {
+        "value": { "type": "integer" },
+        "label": { "$ref": "#label" },
+        "children": { "type": "array", "items": { "$ref": "#tree" } }
+      },
+      "additionalProperties": false,
+      "$defs": { "label": { "$anchor": "label", "type": "string" } }
+    },
+    "instances": [
+      {
+        "value": {
+          "value": 1,
+          "label": "a",
+          "children": [{ "value": 2, "children": [{ "value": 3 }] }]
+        },
+        "valid": true
+      },
+      { "value": { "value": 1, "children": [{ "value": "two" }] }, "valid": false },
+      { "value": { "value": 1, "children": [{ "value": 2, "label": 3 }] }, "valid": false },
+      { "value": { "value": 1, "children": [{}] }, "valid": false }
+    ]
   }
 ]

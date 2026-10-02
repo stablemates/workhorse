@@ -45,7 +45,9 @@ current document.
 Each SDK rejects keywords outside the shared profile before compiling a schema. References can
 target bundled definitions in the same document, while remote references and custom keywords are
 rejected. A reference must point at a subschema, so it cannot reach a schema hidden in `default` or
-`examples`, where the profile check never looks. Formats remain annotations, so an email format does not create a language-specific gate.
+`examples`, where the profile check never looks. An `$anchor` may sit on the root schema, and a
+reference to it names the whole contract, so a recursive contract can refer to itself by name.
+Formats remain annotations, so an email format does not create a language-specific gate.
 
 The profile leaves out `pattern` and `patternProperties`, because the SDKs' regular expression
 engines accept different syntax and match differently. Each SDK rejects either keyword at any depth,

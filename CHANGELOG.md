@@ -41,6 +41,13 @@ an annotation. A `$ref` must also point at a subschema, so it cannot reach a sch
    applies. Each payload was checked at enqueue, so a keyword in the payload schema does not affect
    tasks already queued.
 
+**TypeScript accepts a reference to an anchor on the root schema.** Ajv registers no `$anchor` that
+the root schema declares, so `compileContractSchema` refused a contract such as
+`{"$anchor": "tree", "properties": {"children": {"items": {"$ref": "#tree"}}}}` with
+`MissingRefError`. Python, Go, Ruby and Rust accepted it, so a contract another SDK synced could fail
+to compile in a TypeScript producer or worker. TypeScript now compiles the reference as a reference
+to the root, and every SDK gives the same validity decision.
+
 **The demo deployment contract names schema version 52 as the final version.**
 `typescript/demo/DEPLOYMENT.md` said the build ships version 51 and that migration finishes there.
 Migration 0053 had already made the final version 52. The contract now says 52, and a test compares

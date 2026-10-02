@@ -149,6 +149,34 @@ function visitSchema(schema: Json, path: string, walk: SchemaWalk): void {
   }
 }
 
+// Ajv registers no `$anchor` the root schema declares. A reference to that anchor names the root,
+// so Ajv compiles a copy in which the reference reads `#`.
+function resolveRootAnchor(schema: Json): Json {
+  if (schema === null || Array.isArray(schema) || typeof schema !== "object") return schema;
+  const anchor = schema.$anchor;
+  if (typeof anchor !== "string") return schema;
+  const target = `#${anchor}`;
+  const rewrite = (node: Json): Json => {
+    if (node === null || Array.isArray(node) || typeof node !== "object") return node;
+    const copy: { [key: string]: Json } = { ...node };
+    for (const [keyword, value] of Object.entries(node)) {
+      if (keyword === "$ref" && value === target) {
+        copy[keyword] = "#";
+      } else if (SCHEMA_VALUE_KEYWORDS.has(keyword)) {
+        copy[keyword] = rewrite(value);
+      } else if (SCHEMA_ARRAY_KEYWORDS.has(keyword) && Array.isArray(value)) {
+        copy[keyword] = value.map(rewrite);
+      } else if (SCHEMA_MAP_KEYWORDS.has(keyword) && value !== null && typeof value === "object") {
+        copy[keyword] = Object.fromEntries(
+          Object.entries(value).map(([name, child]) => [name, rewrite(child)]),
+        );
+      }
+    }
+    return copy;
+  };
+  return rewrite(schema);
+}
+
 export function compileContractSchema(schema: Json): ValidateFunction<Json> {
   if (typeof schema === "boolean") {
     const cached = booleanValidators.get(schema);
@@ -165,7 +193,7 @@ export function compileContractSchema(schema: Json): ValidateFunction<Json> {
   const cached = objectValidators.get(schemaObject);
   if (cached !== undefined) return cached;
   assertContractSchema(schema);
-  const validator = ajv.compile<Json>(schema as AnySchema);
+  const validator = ajv.compile<Json>(resolveRootAnchor(schema) as AnySchema);
   objectValidators.set(schemaObject, validator);
   return validator;
 }
