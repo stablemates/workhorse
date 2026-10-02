@@ -12,9 +12,11 @@ import { corePackage, publishedPackages, repositoryRoot } from "./packages.js";
  * `pnpm release:verify <target> <version>` instead of restating commands. Each release check also
  * runs its target against the artifact it is about to publish: the dry-run wheel, the packed npm
  * tarballs, the unpacked `.crate` archive, or a module proxy staged from the commit to tag. A check
- * the artifact cannot satisfy therefore fails before any tag. Provenance review and the
- * enqueue-and-worker smoke stay with the maintainer; `docs/compatibility.md` → Release train lists
- * them.
+ * the artifact cannot satisfy therefore fails before any tag. The PyPI check also requires a PEP 740
+ * attestation from this repository's release workflow on every published file; the dry run proves
+ * the same upload path with `scripts/check-attestation-upload.ts`. The npm, crates.io, and Go
+ * provenance review and the enqueue-and-worker smoke stay with the maintainer;
+ * `docs/compatibility.md` → Release train lists them.
  */
 
 type VerifyTarget = "crate" | "go" | "npm" | "python";
@@ -62,6 +64,8 @@ const artifactFlags: Readonly<Record<ArtifactOption, string>> = {
 };
 
 const pythonDistribution = "stablemates-workhorse";
+// The Trusted Publisher every attestation must name. A file without one reached PyPI some other way.
+const pythonPublisher = { repository: "stablemates/workhorse", workflow: "release-python.yml" };
 const goModule = "github.com/stablemates/workhorse/go";
 // The public proxy only, with no `direct` fallback, so a version the proxy cannot serve fails.
 const goEnvironment = { GOFLAGS: "-mod=mod", GOPROXY: "https://proxy.golang.org", GOWORK: "off" };
@@ -226,6 +230,54 @@ function goSteps(version: string, options: VerificationOptions): VerificationSte
   ];
 }
 
+interface ProvenanceResponse {
+  readonly attestation_bundles?: readonly {
+    readonly publisher?: { readonly repository?: string; readonly workflow?: string };
+    readonly attestations?: readonly unknown[];
+  }[];
+}
+
+/**
+ * Name each file of a PyPI release that lacks a PEP 740 attestation from the release workflow.
+ * `uv publish` before 0.9.12 uploaded 0.6.0 without any and still exited 0 (SM-1098), so only
+ * PyPI's integrity API can say whether the attestations arrived.
+ */
+export async function pythonProvenanceProblems(
+  version: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string[]> {
+  const release = await fetchImpl(`https://pypi.org/pypi/${pythonDistribution}/${version}/json`);
+  if (!release.ok) {
+    return [`PyPI has no ${pythonDistribution} ${version} (HTTP ${String(release.status)})`];
+  }
+  const files = ((await release.json()) as { readonly urls: readonly { filename: string }[] }).urls;
+  if (files.length === 0) return [`PyPI lists no files for ${pythonDistribution} ${version}`];
+  const problems: string[] = [];
+  for (const { filename } of files) {
+    const response = await fetchImpl(
+      `https://pypi.org/integrity/${pythonDistribution}/${version}/${filename}/provenance`,
+      { headers: { Accept: "application/vnd.pypi.integrity.v1+json" } },
+    );
+    if (!response.ok) {
+      problems.push(`${filename} has no PyPI provenance (HTTP ${String(response.status)})`);
+      continue;
+    }
+    const bundles = ((await response.json()) as ProvenanceResponse).attestation_bundles ?? [];
+    const attested = bundles.some(
+      (bundle) =>
+        bundle.publisher?.repository === pythonPublisher.repository &&
+        bundle.publisher.workflow === pythonPublisher.workflow &&
+        (bundle.attestations?.length ?? 0) > 0,
+    );
+    if (!attested) {
+      problems.push(
+        `${filename} has no attestation from ${pythonPublisher.repository} ${pythonPublisher.workflow}`,
+      );
+    }
+  }
+  return problems;
+}
+
 function requireArtifactTarget(target: VerifyTarget, options: VerificationOptions): void {
   for (const [owner, option] of Object.entries(artifactOptions)) {
     if (owner !== target && options[option] !== undefined) {
@@ -311,6 +363,14 @@ export async function verifyRelease(
   const directory = await mkdtemp(path.join(tmpdir(), `workhorse-release-verify-${target}-`));
   try {
     for (const step of steps) await runStep(step, directory);
+    // A local wheel has no PyPI provenance yet; the dry run's attestation rehearsal covers it.
+    if (target === "python" && resolved.wheel === undefined) {
+      process.stdout.write(
+        `$ check PyPI PEP 740 provenance for ${pythonDistribution} ${version}\n`,
+      );
+      const problems = await pythonProvenanceProblems(version);
+      if (problems.length > 0) throw new Error(problems.join("; "));
+    }
     process.stdout.write(`Verified ${target} ${version}\n`);
   } finally {
     await rm(directory, { force: true, recursive: true });

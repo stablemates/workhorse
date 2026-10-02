@@ -85,7 +85,7 @@ jobs:
           go-version-file: go/go.mod
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: 0.8.9 # Pinned to the uv version in mise.toml.
+          version: 0.12.21 # Pinned to the uv version in mise.toml.
       # `sql-catalogues:check` formats the Rust statement catalogue with rustfmt, and `rust:vuln` asks
       # cargo for the dependency graph of the root Cargo.lock.
       - uses: actions-rust-lang/setup-rust-toolchain@c8ff772090ab9d00f7f7bd7b388f3c3032282e3b # v1
@@ -146,7 +146,7 @@ jobs:
           go-version-file: go/go.mod
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: 0.8.9 # Pinned to the uv version in mise.toml.
+          version: 0.12.21 # Pinned to the uv version in mise.toml.
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:runtime:dev
       - run: pnpm test:unit
@@ -257,7 +257,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: 0.8.9 # Pinned to the uv version in mise.toml.
+          version: 0.12.21 # Pinned to the uv version in mise.toml.
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:runtime:dev
       - run: pnpm db:reset:test
@@ -391,7 +391,7 @@ jobs:
           cache: pnpm
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: 0.8.9 # Pinned to the uv version in mise.toml.
+          version: 0.12.21 # Pinned to the uv version in mise.toml.
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:reset:test-packed
       - run: pnpm test:packed
@@ -627,7 +627,7 @@ jobs:
           go-version-file: go/go.mod
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: 0.8.9 # Pinned to the uv version in mise.toml.
+          version: 0.12.21 # Pinned to the uv version in mise.toml.
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:reset:dev-primary
       - run: pnpm build
