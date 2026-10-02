@@ -9,7 +9,11 @@
     "rootDir": "../..",
     "tsBuildInfoFile": "../../.build/typecheck/core-tests.tsbuildinfo"
   },
-  "include": ["test/**/*.ts", "../examples/stripe-invoice-paid.ts"],
+  "include": [
+    "test/**/*.ts",
+    "../examples/stripe-invoice-paid.ts",
+    "../examples/slack-approvals.ts"
+  ],
   "exclude": ["test/runtime-smoke.ts"],
   "references": [
     { "path": "tsconfig.source.json" },
