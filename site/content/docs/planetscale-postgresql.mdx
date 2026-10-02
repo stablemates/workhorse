@@ -1,0 +1,40 @@
+---
+title: Can I use Workhorse with PlanetScale PostgreSQL?
+description: Expected compatibility through standard PostgreSQL drivers, with connection and permission considerations.
+---
+
+**Yes, PlanetScale PostgreSQL should work with Workhorse.**
+PlanetScale provides a PostgreSQL service, and Workhorse uses standard PostgreSQL drivers and SQL.
+Use the existing SDK for your language; no PlanetScale adapter is needed.
+This is expected compatibility, not a claim that Workhorse has been tested against PlanetScale.
+It applies to PlanetScale's regular PostgreSQL service, not MySQL/Vitess or Neki.
+
+## Connection considerations
+
+Follow PlanetScale's [PostgreSQL connection instructions](https://planetscale.com/docs/postgres/connecting) to obtain credentials for the writable primary.
+
+- **Schema setup:** use a direct primary connection on port `5432`.
+  PlanetScale recommends direct connections for DDL and schema changes.
+  Workhorse manages its own schema separately from your application migrations.
+- **Worker:** run a dedicated worker process with a direct primary connection pool.
+  Direct connections preserve the session needed for `LISTEN` wake hints.
+- **Application:** direct connections or PlanetScale's transaction-mode PgBouncer on port `6432` can serve application transactions.
+  When a business write and enqueue must commit together, pass the same transaction connection to Workhorse.
+  Do not depend on `LISTEN` or session-level state through transaction pooling.
+- **TLS and credentials:** verify the server certificate and hostname, and keep credentials in your secret store.
+  PlanetScale requires TLS and documents `sslmode=verify-full` for libpq clients.
+  Use equivalent certificate verification in your driver; do not disable it.
+- **Permissions:** use an authorized schema owner for installation and migrations.
+  Data-read and data-write grants alone do not permit schema creation or DDL.
+  Workers also perform maintenance, so ensure their role has the required permissions.
+
+PlanetScale documents these details in its [PgBouncer guide](https://planetscale.com/docs/postgres/connecting/pgbouncer),
+[connection quickstart](https://planetscale.com/docs/postgres/connecting/quickstart) and
+[role documentation](https://planetscale.com/docs/postgres/connecting/roles).
+Those sources were reviewed on **2026-10-02**; the catalog date records that documentation review, not a provider test.
+
+## Next
+
+- [Install Workhorse](/docs/installation) covers supported PostgreSQL versions and schema setup.
+- [Enqueue in a transaction](/docs/enqueue) explains sharing your business transaction.
+- [Connection poolers](/docs/pgbouncer) describes Workhorse's pooling and polling behavior.
