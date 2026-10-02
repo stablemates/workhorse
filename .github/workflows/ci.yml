@@ -148,8 +148,43 @@ jobs:
         with:
           version: 0.12.21 # Pinned to the uv version in mise.toml.
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build:runtime:dev
-      - run: pnpm test:unit
+      # `pnpm test:unit`, split so each test runs once per change (ADR 0083): the npm-release-scope
+      # lane runs the rest of the TypeScript unit scope.
+      - run: pnpm npm:test:python-toolchain
+      - run: pnpm python:test:unit
+      - run: pnpm go:test:unit
+
+  # The TypeScript unit scope minus the tests that spawn Python tools, which the unit lane runs.
+  # `pnpm npm:release-check` runs this suite in release.yml, whose build job installs no Python
+  # toolchain. A test here that spawned `uv` once passed CI and failed only the release, so this
+  # lane installs what that job installs for the suite. Like that job, it takes Go from the runner
+  # image, which `gofmt` in the suite needs. See SM-1098.
+  npm-release-scope:
+    name: npm release test scope
+    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      # A runner image that ships uv would hide the gap this lane exists to show.
+      - name: Require a runner without uv
+        run: |
+          if command -v uv; then
+            echo "This lane must run without uv, like the release.yml build job" >&2
+            exit 1
+          fi
+      - run: pnpm install --frozen-lockfile
+      # The build the release check runs first. It includes the dashboard bundle, without which
+      # dashboard-cli-auth.test.ts skips here but runs in the release.
+      - run: pnpm build:runtime:check-dashboard-bundle
+      - run: pnpm npm:test:unit
 
   typescript:
     name: TypeScript (node ${{ matrix.node }}, postgres ${{ matrix.postgres }})
@@ -642,6 +677,7 @@ jobs:
         plan,
         static,
         unit,
+        npm-release-scope,
         typescript,
         python,
         go,
@@ -670,6 +706,7 @@ jobs:
         plan,
         static,
         unit,
+        npm-release-scope,
         typescript,
         python,
         go,
