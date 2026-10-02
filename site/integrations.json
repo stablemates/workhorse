@@ -89,6 +89,15 @@
       "verifiedOn": "2026-10-02"
     },
     {
+      "slug": "diesel",
+      "name": "Diesel",
+      "category": "orms",
+      "tier": "documented",
+      "summary": "Unsupported: native Diesel PostgreSQL errors discard the SQLSTATE Workhorse requires.",
+      "boundary": "A maintained native sync/async regression proves transaction behavior and the structured-error gate; no adapter or support claim.",
+      "verifiedOn": "2026-10-02"
+    },
+    {
       "slug": "serverless",
       "name": "Serverless and edge",
       "category": "runtimes",

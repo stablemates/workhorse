@@ -73,6 +73,13 @@ tower-service = { version = "0.3", optional = true }
 
 [dev-dependencies]
 axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
+diesel = { version = "=2.3.13", default-features = false, features = [
+  "postgres",
+  "serde_json",
+  "uuid",
+  "chrono",
+] }
+diesel-async = { version = "=0.9.2", default-features = false, features = ["postgres"] }
 opentelemetry_sdk = { version = "0.32", default-features = false, features = [
   "trace",
   "metrics",

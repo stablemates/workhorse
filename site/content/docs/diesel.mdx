@@ -1,0 +1,137 @@
+---
+title: Diesel
+description: Why native Diesel PostgreSQL errors do not meet Workhorse's enqueue contract.
+---
+
+## Diesel enqueue is unsupported
+
+Workhorse does not provide a Diesel adapter or a Diesel transactional enqueue recipe.
+Native SQL can write tasks on a caller-owned Diesel connection, but successful writes do not establish compatibility.
+Workhorse needs the original PostgreSQL SQLSTATE and structured `DETAIL` to classify enqueue failures.
+The tested Diesel APIs retain `DETAIL` but discard the SQLSTATE required by that contract.
+
+The catalog's **documented** tier records this unsupported boundary, not supported integration behavior.
+Do not use a separate Workhorse connection to enqueue inside a Diesel transaction.
+That connection cannot join the application's transaction, so its task can survive a business rollback.
+
+## Tested versions and execution paths
+
+The maintained proof pins these released drivers in `rust/Cargo.toml` as development dependencies:
+
+| Driver               | Connection                        | Execution                                        | Declared minimum Rust |
+| -------------------- | --------------------------------- | ------------------------------------------------ | --------------------- |
+| Diesel `2.3.13`      | `diesel::PgConnection`            | Synchronous, mutable connection, libpq           | `1.86.0`              |
+| diesel-async `0.9.2` | `diesel_async::AsyncPgConnection` | Asynchronous, mutable connection, tokio-postgres | `1.84.0`              |
+
+The experiment uses Workhorse `0.6.1`, protocol `5`, schema `54`, Rust `1.89.0`, and local PostgreSQL `18.6`.
+The synchronous path links libpq `18.6`; the asynchronous path uses tokio-postgres `0.7.18`.
+No Rust pin, published Workhorse dependency, feature, or public API changes for this proof.
+
+`sql_query` accepts PostgreSQL placeholders and explicit `bind::<Jsonb, _>` values.
+`QueryableByName` decodes the generated `ENQUEUE_MANY_V1` statement's named columns.
+The proof reads `ordinal: i32`, `task_id: Option<Uuid>`, `outcome: String`, and `reason: Option<String>`.
+It exercises ordered `accepted`, `replayed`, `replaced`, and `coalesced` results.
+It also decodes the `contract_mismatch` sentinel: ordinal zero, a null task ID, and JSON in `reason`.
+
+The JSONB document carries `runAt`; the batch statement does not bind a native timestamp separately.
+An auxiliary read verifies `chrono::DateTime<Utc>` timestamp decoding.
+Auxiliary business writes verify UUID, JSONB, and nullable text binds without interpolating payloads.
+Those capabilities do not supply missing Workhorse validation or structured-error translation.
+
+`PgConnection` blocks the calling thread.
+`AsyncPgConnection` executes asynchronous queries, and the cancellation proof checks its query future is `Send`.
+Wrapping a synchronous query in an async function does not make it nonblocking.
+Neither execution shape recovers the discarded SQLSTATE.
+
+## Concrete structured-error incompatibility
+
+Both drivers return `diesel::result::Error::DatabaseError(kind, information)` for server failures.
+The public `DatabaseErrorInformation` trait exposes message, details, hint, table, column, constraint, and statement position.
+It exposes no SQLSTATE method and no supported downcast to the native PostgreSQL diagnostic.
+The tested database errors have no recoverable `std::error::Error::source()`.
+
+Diesel's PostgreSQL result conversion maps a fixed set of server codes to `DatabaseErrorKind`.
+Other codes become `Unknown`.
+diesel-async's conversion does the same before wrapping the native diagnostic in its private `PostgresDbErrorWrapper`.
+Its public `cancel_token()` does not expose query diagnostics.
+Neither wrapping an existing tokio-postgres client nor instrumentation changes the error returned by the native Diesel query path.
+
+The proof executes the current Workhorse SQL functions and dependency triggers, rather than manufacturing their errors.
+A separate tokio-postgres control records each actual SQLSTATE and `DETAIL`.
+
+| Actual failure                                                  | PostgreSQL SQLSTATE | Both native Diesel paths                                    |
+| --------------------------------------------------------------- | ------------------- | ----------------------------------------------------------- |
+| Retained enqueue request conflicts                              | `P1001`             | `Unknown`; complete JSON `DETAIL` retained                  |
+| Self-dependency and graph cycles                                | `P1003`             | `Unknown`; cycle JSON `DETAIL` retained                     |
+| Prerequisite, direct dependent, and transitive dependent bounds | `P1005`             | `Unknown`; limit JSON `DETAIL` retained                     |
+| Fast-tier debounce refusal                                      | `P1007`             | `Unknown`; queue, feature, and ordinal retained in `DETAIL` |
+| Invalid batch                                                   | `P0001`             | `Unknown`                                                   |
+| Invalid prerequisite UUID                                       | `22P02`             | `Unknown`                                                   |
+| Missing relation                                                | `42P01`             | `Unknown`                                                   |
+| Statement in an aborted transaction                             | `25P02`             | `Unknown`                                                   |
+| Statement timeout                                               | `57014`             | `Unknown`                                                   |
+| Business unique violation                                       | `23505`             | `UniqueViolation`, without the raw SQLSTATE                 |
+
+The cycle and prerequisite-bound cases invoke real dependency triggers directly because valid new-task requests cannot express those mutations.
+The direct and transitive dependent limits arise from actual batch enqueue.
+The native async cancel-token case also verifies cancellation leaves transaction recovery to the caller.
+That path likewise returns `Unknown`, not a recoverable cancellation code.
+
+An additional control raises two distinct SQLSTATEs with identical other diagnostic fields.
+Both drivers return identical complete public diagnostics for those failures.
+This demonstrates information loss, not merely a missing convenience accessor.
+Matching human-readable messages or guessing the code from a JSON shape is not typed-error parity.
+Extracting private wrappers, querying a different connection, or copying enqueue preparation is not an accepted workaround.
+
+## Transaction evidence does not remove the gate
+
+Both native paths use one application-owned connection for business writes and the JSONB batch.
+The proof compares `pg_backend_pid()` and `txid_current()` before and after the statements.
+An independent observer sees neither write before commit.
+Caller commit publishes both, and caller rollback removes both.
+
+Rolling back a caller savepoint removes its business write and task while the outer transaction can continue.
+Releasing a savepoint does not publish its writes, and outer rollback still removes them.
+Separate tests execute each driver's native `transaction` callbacks and nested savepoints, including diesel-async's supported async-closure API.
+After each server failure, the transaction remains aborted until the caller recovers it.
+The tests recover through caller-owned savepoints or rollback and reuse the same connection.
+No proof helper owns a pool, commits, rolls back, or closes a borrowed transaction on behalf of enqueue.
+
+The direct protocol calls are not an implementation of Workhorse's client preparation, compatibility cache, contract validation, or refresh behavior.
+The returned contract-mismatch row proves decoding only, not an adapter's refresh behavior.
+The regression does not verify a Diesel integration or worker backend.
+Workhorse workers continue to require their existing dedicated tokio-postgres/deadpool connections.
+
+## Reproduce the regression
+
+From a configured checkout with the pinned toolchain, a loopback PostgreSQL test database, and linkable libpq:
+
+```bash
+WORKHORSE_REQUIRE_DATABASE=1 pnpm exec tsx scripts/with-env.ts \
+  cargo test --locked --package workhorse --test diesel_feasibility -- --nocapture
+```
+
+`rust/tests/diesel_feasibility.rs` creates scratch databases from that checkout's `DATABASE_URL_TEST` and drops them afterward.
+The existing all-feature Rust suite discovers the fixture once; no separate CI suite is added.
+Missing PostgreSQL fails when `WORKHORSE_REQUIRE_DATABASE=1` or `CI` is set.
+The development dependencies do not add Diesel to the published Workhorse runtime.
+
+## Prerequisite for a supported integration
+
+A released, supported native Diesel API must preserve the raw SQLSTATE alongside `DETAIL` on the same connection's query failures.
+The maintained regression must then be deliberately updated and the concrete integration must pass the full transaction and error contract.
+The shared Rust enqueue foundation also needs to be merged or explicitly authorized as a stack before implementation.
+An unmerged foundation and successful raw SQL writes are not authorization to ship an adapter.
+Until both prerequisites are satisfied, use the existing tokio-postgres/deadpool Rust path rather than claiming Diesel transaction compatibility.
+
+## Official API and source references
+
+- [Diesel `sql_query`](https://docs.rs/diesel/2.3.13/diesel/fn.sql_query.html), [typed binds](https://docs.rs/diesel/2.3.13/diesel/query_builder/struct.SqlQuery.html#method.bind), and [named result decoding](https://docs.rs/diesel/2.3.13/diesel/deserialize/trait.QueryableByName.html).
+- [Diesel `DatabaseErrorInformation`](https://docs.rs/diesel/2.3.13/diesel/result/trait.DatabaseErrorInformation.html), [error/source implementation](https://docs.rs/crate/diesel/2.3.13/source/src/result.rs), and [PostgreSQL error conversion](https://docs.rs/crate/diesel/2.3.13/source/src/pg/connection/result.rs).
+- [diesel-async `AsyncPgConnection`](https://docs.rs/diesel-async/0.9.2/diesel_async/struct.AsyncPgConnection.html), [native error conversion](https://docs.rs/crate/diesel-async/0.9.2/source/src/pg/error_helper.rs), and [released dependency metadata](https://docs.rs/crate/diesel-async/0.9.2/source/Cargo.toml).
+
+## Next
+
+- [Enqueue tasks](/docs/enqueue)
+- [Task contracts](/docs/contracts)
+- [Task dependencies](/docs/task-dependencies)

@@ -97,6 +97,28 @@ The crate's library name is `workhorse`, and it follows the Python SDK's surface
 
 The crate never installs or migrates the shared PostgreSQL schema.
 
+### Diesel is unsupported
+
+Native Diesel `2.3.13` and diesel-async `0.9.2` preserve PostgreSQL `DETAIL`, but discard the raw
+SQLSTATE Workhorse needs for typed enqueue errors. There is no Diesel adapter or transactional
+enqueue recipe. Successful raw SQL writes do not establish integration compatibility.
+
+`rust/tests/diesel_feasibility.rs` pins both drivers as development dependencies and proves the
+native error loss against real PostgreSQL. It also checks typed JSONB batches, caller-owned
+identity, observer invisibility, joint commit/rollback, savepoints, and async cancellation.
+The existing Rust suite discovers this regression once. It adds no published feature or runtime
+dependency. Run it with linkable libpq and the checkout's isolated test database:
+
+```bash
+WORKHORSE_REQUIRE_DATABASE=1 pnpm exec tsx scripts/with-env.ts \
+  cargo test --locked --package workhorse --test diesel_feasibility -- --nocapture
+```
+
+The [Diesel boundary](https://workhorse.run/docs/diesel) records the exact API limitation and
+prerequisites. A supported native SQLSTATE route and an authorized shared enqueue foundation are
+both required before implementing an integration. Do not parse messages or open a second connection
+to imitate a caller-owned Diesel transaction.
+
 ## Next
 
 - Follow the [quickstart](https://workhorse.run/docs/quickstart) and deploy
