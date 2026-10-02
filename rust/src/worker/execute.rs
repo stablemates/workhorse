@@ -305,6 +305,14 @@ impl Inner {
                 return self.fail_with_state(task, error).await;
             }
         }
+        if holds_nul(&result) {
+            let message = format!(
+                "{} result contains a NUL character or an unpaired surrogate, which PostgreSQL \
+                 jsonb cannot store",
+                task.task_type
+            );
+            return self.fail_with_state(task, HandlerError::new(message)).await;
+        }
         let accepted = if task.fast_tier {
             self.complete_fast(task, result, slot).await?
         } else {
@@ -532,4 +540,18 @@ impl Inner {
 
 fn accepted(rows: &[tokio_postgres::Row], function: &str) -> Result<bool, Error> {
     Ok(exactly_one(rows, function)?.try_get::<_, Option<bool>>("accepted")?.unwrap_or(false))
+}
+
+/// Reports a string or key holding NUL, which jsonb refuses with SQLSTATE 22P05. A Rust string
+/// cannot hold an unpaired surrogate, so NUL is the one character a result can carry that jsonb
+/// cannot store.
+fn holds_nul(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text.contains('\0'),
+        Value::Array(items) => items.iter().any(holds_nul),
+        Value::Object(entries) => {
+            entries.iter().any(|(key, entry)| key.contains('\0') || holds_nul(entry))
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
 }

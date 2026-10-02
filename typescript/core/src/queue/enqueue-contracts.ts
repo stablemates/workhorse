@@ -437,6 +437,53 @@ function serializeJsonWithinLimit(
 // JSON.stringify writes a number in exponent notation with an explicit exponent sign.
 const EXPONENT_NUMBER = /\de[+-]/;
 
+// PostgreSQL refuses a jsonb string or key that holds NUL or a surrogate outside a pair, and that
+// refusal would stop the worker rather than fail the attempt. The error carries no part of the
+// result, so the failure envelope that reports it stays storable.
+function assertStorableResult(taskType: string, serialized: string): string {
+  if (hasUnstorableEscape(serialized)) {
+    throw new TypeError(
+      `${taskType} result contains a NUL character or an unpaired surrogate, which PostgreSQL jsonb cannot store`,
+    );
+  }
+  return serialized;
+}
+
+const UNSTORABLE_ESCAPE_START = /\\u(?:0000|[dD])/;
+const JSON_ESCAPE = /\\(?:u([0-9a-fA-F]{4})|[^])/g;
+
+/**
+ * Keeps ordinary text off the full scan. Every refused escape is \u0000 or a surrogate, and every
+ * surrogate escape starts with \ud or \uD. JSON.stringify writes non-ASCII text and `<` raw, so
+ * ordinary text matches neither.
+ */
+export function mayHoldUnstorableEscape(serialized: string): boolean {
+  return UNSTORABLE_ESCAPE_START.test(serialized);
+}
+
+/**
+ * Scans valid JSON for a \u escape jsonb refuses. JSON.stringify writes NUL as \u0000 and a lone
+ * surrogate as its escape, and a toJSON can write either. A high surrogate is stored only when a
+ * low surrogate escape follows it at once.
+ */
+export function hasUnstorableEscape(serialized: string): boolean {
+  if (!mayHoldUnstorableEscape(serialized)) return false;
+  let lowExpectedAt = -1;
+  for (const match of serialized.matchAll(JSON_ESCAPE)) {
+    const unit = match[1] === undefined ? undefined : Number.parseInt(match[1], 16);
+    if (lowExpectedAt >= 0) {
+      if (match.index !== lowExpectedAt || unit === undefined || unit < 0xdc00 || unit > 0xdfff) {
+        return true;
+      }
+      lowExpectedAt = -1;
+    } else if (unit !== undefined) {
+      if (unit === 0 || (unit >= 0xdc00 && unit <= 0xdfff)) return true;
+      if (unit >= 0xd800 && unit <= 0xdbff) lowExpectedAt = match.index + match[0].length;
+    }
+  }
+  return lowExpectedAt >= 0;
+}
+
 /**
  * Returns the UTF-8 length of PostgreSQL's jsonb text for a parsed JSON value. That text puts a
  * space after each `:` and `,`, escapes strings as JSON.stringify does, and writes numbers in
@@ -678,16 +725,22 @@ export class EnqueueContractsModule extends QueueModule {
       if (contract === undefined) {
         throw new TaskContractUnavailableError(task.type, task.contractVersion);
       }
-      return validateContractValue(
+      return assertStorableResult(
         task.type,
-        task.contractVersion,
-        "result",
-        result,
-        contract,
-        task.resultMaxBytes,
+        validateContractValue(
+          task.type,
+          task.contractVersion,
+          "result",
+          result,
+          contract,
+          task.resultMaxBytes,
+        ),
       );
     }
-    return serializeJsonWithinLimit(task.type, "result", result, task.resultMaxBytes);
+    return assertStorableResult(
+      task.type,
+      serializeJsonWithinLimit(task.type, "result", result, task.resultMaxBytes),
+    );
   }
 
   async enqueue<TPayload extends Json>(

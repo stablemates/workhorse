@@ -19,6 +19,13 @@ a major line a migration only adds. Migration 0025 is the one exception: a datab
 
 ### Unreleased
 
+**A handler result PostgreSQL cannot store now fails only its task.** jsonb refuses a NUL character
+and an unpaired surrogate. Such a result used to reach the completion statement, whose refusal
+stopped the worker and left the task leased. The worker now fails the attempt under the task's
+retry policy with a `TypeError` and the message `<task type> result contains a NUL character or an
+unpaired surrogate, which PostgreSQL jsonb cannot store`. On the fast tier the other members of a
+completion batch still complete. A database error during completion still stops the worker.
+
 **Breaking: contract schemas can no longer use `pattern` or `patternProperties`.** The SDKs' regular
 expression engines accept different syntax and match differently, so one contract could validate
 differently in each language.

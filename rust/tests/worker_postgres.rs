@@ -18,7 +18,7 @@ use uuid::Uuid;
 use workhorse::contracts::{TaskContractVersion, TaskTypeContracts};
 use workhorse::{
     Admin, AdminAudit, BatchItem, BatchOptions, BatchResult, CancelReason, ChildTaskRequest,
-    Debounce, DebounceSchedule, EnqueueOptions, EnqueueRequest, Error, HandlerContext,
+    ClaimedTask, Debounce, DebounceSchedule, EnqueueOptions, EnqueueRequest, Error, HandlerContext,
     HandlerError, Queue, QueueHistory, QueueTier, ScheduleCatchupPolicy, ScheduleDefinition,
     ScheduledTask, TaskState, Worker, WorkerOptions,
 };
@@ -1889,4 +1889,72 @@ async fn result_schemas_stay_apart_when_type_and_version_join_alike() {
             );
         }
     }
+}
+
+const UNSTORABLE_RESULT: &str =
+    "result contains a NUL character or an unpaired surrogate, which PostgreSQL jsonb cannot store";
+
+/// Runs three results holding NUL and one valid result on `queue`. Each NUL result fails its
+/// attempts through the retry policy, the valid one succeeds, and the worker keeps running.
+async fn run_unstorable_results(harness: &Harness, queue: &str) {
+    let retried = EnqueueOptions { max_attempts: 2, ..on(queue) };
+    let tasks = [
+        harness.enqueue("rust.nul", json!("string"), retried.clone()).await,
+        harness.enqueue("rust.nul", json!("key"), retried.clone()).await,
+        harness.enqueue("rust.nul", json!("nested"), retried).await,
+        harness.enqueue("rust.nul", json!("valid"), on(queue)).await,
+    ];
+    let worker = harness.worker(WorkerOptions {
+        retry_delay: Some(Arc::new(|_: i32, _: &ClaimedTask| Some(Duration::ZERO))),
+        ..serving(queue)
+    });
+    // A payload cannot carry NUL either, so the handler builds each result from a case name.
+    worker.handle("rust.nul", |case: Value, _| async move {
+        Ok(match case.as_str() {
+            Some("string") => json!("a\u{0}b"),
+            Some("key") => json!({"k\u{0}": 1}),
+            Some("nested") => json!(["ok", ["\u{0}"]]),
+            _ => json!({"pair": "\u{1F600}"}),
+        })
+    });
+    let (stop, running) = run(&worker);
+    let mut outcomes = Vec::new();
+    for task in tasks {
+        let snapshot = tokio::time::timeout(WAIT, async {
+            loop {
+                let snapshot = harness.admin.get_task(task).await.unwrap().unwrap();
+                if matches!(snapshot.state, TaskState::Succeeded | TaskState::Failed) {
+                    return snapshot;
+                }
+                assert!(!running.is_finished(), "the worker stopped");
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("task {task} never settled"));
+        outcomes.push((task, snapshot.state, snapshot.current_attempt, snapshot.error));
+    }
+    stop.send(()).unwrap();
+    running.await.unwrap().unwrap();
+    let (valid, rest) = outcomes.split_last().unwrap();
+    assert_eq!((valid.1, valid.2), (TaskState::Succeeded, 1));
+    for (task, state, attempts, error) in rest {
+        assert_eq!((*state, *attempts), (TaskState::Failed, 2), "task {task}");
+        let error = error.as_ref().unwrap();
+        assert_eq!(error["name"], "Error");
+        assert_eq!(error["message"], format!("rust.nul {UNSTORABLE_RESULT}"));
+    }
+}
+
+#[tokio::test]
+async fn a_result_holding_nul_fails_only_its_task() {
+    let Some(harness) = harness("worker_unstorable").await else { return };
+    run_unstorable_results(&harness, "rust-unstorable").await;
+}
+
+#[tokio::test]
+async fn a_fast_result_holding_nul_fails_only_its_task() {
+    let Some(harness) = harness("fast_unstorable").await else { return };
+    harness.make_fast("fast-unstorable").await;
+    run_unstorable_results(&harness, "fast-unstorable").await;
 }
