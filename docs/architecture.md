@@ -43,6 +43,11 @@ first.
 - The [fast task tier](architecture/fast-tier.md#fast-tier): its settings, tables, functions,
   rejected features, and workers
 
+### [LangGraph approval recipe](architecture/langgraph-bridge.md)
+
+- The bounded Python graph's ownership, application tables, driver lock, crash recovery,
+  cancellation, retention, and trust boundaries
+
 ### [Dashboard](architecture/dashboard.md)
 
 - The [`dashboard/v1` wire contract](architecture/dashboard.md#dashboard-wire-contract)
