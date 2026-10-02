@@ -12,6 +12,23 @@ adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses 
 
 ### Unreleased
 
+**Upgrade: migrate the schema before any 0.6 process starts.** The final schema version is **52**.
+The SDK compatibility floor stays at schema version **43**, so a 0.5.0 process keeps working on
+version 52. The migrations only add, so the upgrade is a rolling deployment. The
+[root changelog](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md) lists the SQL fixes. Each takes effect when its
+migration commits, and version 52 includes them all.
+
+**An installation that runs cold export stops its exporters across migration 0052.** That migration
+repairs the export ledger, but it cannot stop an upload already in flight. Upgrade in this order:
+
+1. Stop every cold exporter, and let each finish its object and manifest uploads.
+2. Keep cold export enabled, so retention keeps waiting for the export.
+3. Run `workhorse schema migrate`.
+4. Restart the exporters after the migration commits.
+
+An installation that never enabled cold export needs no extra step. The
+[cold export guide](https://github.com/stablemates/workhorse/blob/main/docs/guides/335-cold-export.md#a-day-is-a-utc-day) explains the repair.
+
 **A handler result holding NUL now fails only its task.** jsonb refuses a NUL character. Such a
 result used to reach the completion statement, whose refusal left the task leased until its lease
 expired, and `Worker::run` returned that error at shutdown. The worker now fails the attempt under
@@ -79,6 +96,26 @@ named `$anchor` stays valid. Upgrade in this order:
 
 **The crate now depends on `jsonschema` 0.58 instead of 0.57.** An application that also depends on
 `jsonschema` directly builds both versions until it moves to 0.58.
+
+Fixes:
+
+- Dropping the `Worker::run` or `run_once` future stops renewing its tasks' leases, so they expire
+  instead. The worker's background loops and reserved heartbeat connection end with it.
+- A batch callback runs inside the execution of the member that filled or lingered out the batch.
+  Callbacks stay inside `concurrency`, and the shutdown drain waits for them.
+- `Worker::run` fixes its shutdown deadline when shutdown starts and bounds every step by it. A
+  stalled claim, registry row, or heartbeat round could hold `run` indefinitely.
+- A worker with a batch handler is freed once its last handle is dropped. Dispatch after that
+  rejects each member with `BatchAbandoned`.
+- A batch callback that panics before returning its future fails each member with `HandlerPanic`
+  and records the batch failure.
+- `run_child`, `run_children`, and `run_children_all` validate each child payload and stamp the
+  child type's current contract on the request.
+- The worker keys its result-schema cache by task type and version. Two pairs whose names contain
+  `|` could share one cached schema.
+- The dashboard shows stored payloads, results, and checkpoints as stored. It used to rewrite any
+  timestamp-like string to UTC.
+- The orchestration example runs its child tasks on the queue its worker serves.
 
 ## 0.5.0 — 2026-09-28
 

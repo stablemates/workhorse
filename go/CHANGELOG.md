@@ -11,6 +11,23 @@ adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses 
 
 ### Unreleased
 
+**Upgrade: migrate the schema before any 0.6 process starts.** The final schema version is **52**.
+The SDK compatibility floor stays at schema version **43**, so a 0.5.0 process keeps working on
+version 52. The migrations only add, so the upgrade is a rolling deployment. The
+[root changelog](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md) lists the SQL fixes. Each takes effect when its
+migration commits, and version 52 includes them all.
+
+**An installation that runs cold export stops its exporters across migration 0052.** That migration
+repairs the export ledger, but it cannot stop an upload already in flight. Upgrade in this order:
+
+1. Stop every cold exporter, and let each finish its object and manifest uploads.
+2. Keep cold export enabled, so retention keeps waiting for the export.
+3. Run `workhorse schema migrate`.
+4. Restart the exporters after the migration commits.
+
+An installation that never enabled cold export needs no extra step. The
+[cold export guide](https://github.com/stablemates/workhorse/blob/main/docs/guides/335-cold-export.md#a-day-is-a-utc-day) explains the repair.
+
 **A handler result PostgreSQL cannot store now fails only its task.** jsonb refuses a NUL character
 and an unpaired surrogate. Such a result used to reach the completion statement, whose refusal
 ended `Worker.Run` and left the task leased. The worker now fails the attempt under the task's retry
@@ -59,6 +76,32 @@ named `$anchor` stays valid. Upgrade in this order:
 3. Let tasks that hold the old version finish before you upgrade workers. A worker checks a task's
    result against the version the task holds, so a removed form in that result schema fails the
    attempt with the profile error, and the task's retry policy applies.
+
+Fixes:
+
+- A handler result over the task's result size limit fails the attempt with
+  `TaskValueSizeLimitError` under the task's retry policy. It used to end `Worker.Run`. On the fast
+  tier, an oversized result never joins a completion batch.
+- The worker keeps renewing a task's lease until the final fenced transition is written. A slow
+  completion could let a peer recover and rerun the task.
+- `ShutdownGracePeriod` starts when `Run` observes its context end, and it bounds the in-flight
+  claim and the draining registration refresh. `Run` could wait forever on a saturated pool.
+- `Queue.SyncSchedules` applies each task type's current contract. A payload the schema rejects
+  returns `TaskContractValidationError` and writes nothing.
+- `RunChild`, `RunChildren`, and `RunChildrenAll` validate each child payload and stamp the child
+  type's current contract on the request.
+- A checkpoint operation that panics releases the duplicates waiting on it with an error. A
+  duplicate also returns once the handler context ends.
+- A `RunOnce` canceled while it waits behind an active invocation no longer releases that
+  invocation's heartbeat connection.
+- Workers on one pool share one notification listener connection.
+- An enqueue whose cached contract rejects the payload reloads the definition once and validates
+  again. Later requests of that type in the same enqueue use the definition it read.
+- The dashboard shows stored payloads, results, and checkpoints as stored. It used to rewrite any
+  timestamp-like string to UTC.
+- Under `NewSQLExecutor`, `signalTask` and `completeHumanWait` return the retained JSON as JSON
+  rather than base64.
+- The transactional enqueue example rolls back when any step fails.
 
 ## 0.5.0 — 2026-09-28
 

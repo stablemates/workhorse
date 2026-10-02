@@ -388,6 +388,8 @@ before 0.5.0 crosses it offline, with the
 [The fast-tier cutover](schema-lifecycle.md#the-fast-tier-cutover) explains why, and
 [ADR 0077](decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) records
 the decision. The upgrade from 0.5 to 0.6 only adds, so it is an ordinary rolling deployment.
+An installation that runs cold export also stops its exporters across migration 0052, as
+[the current schema policy](schema-lifecycle.md#current-policy) describes.
 
 `.github/workflows/release.yml` publishes the nine npm packages with provenance. It then creates the
 GitHub release for the tag and attaches `sql/schema.sql`. That artifact is the clean-install schema

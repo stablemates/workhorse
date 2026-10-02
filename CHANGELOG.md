@@ -19,6 +19,25 @@ a major line a migration only adds. Migration 0025 is the one exception: a datab
 
 ### Unreleased
 
+**Upgrade: migrate the schema before any 0.6 process starts.** Migrations 0045 through 0053 only
+add, so the upgrade is a rolling deployment. Run `workhorse schema migrate`, then roll out the new
+processes. The final schema version is **52**. The SDK compatibility floor stays at schema version
+**43**, so a 0.5.0 process keeps working on version 52. Each migration commits on its own, so
+each SQL fix below takes effect when its migration commits. Version 52 includes them all.
+
+**An installation that runs cold export stops its exporters across migration 0052.** That migration
+repairs the export ledger so each segment covers one UTC day. It cannot stop an upload already in
+flight, and such an upload would overwrite a corrected day's object. Upgrade in this order:
+
+1. Stop every cold exporter, and let each finish its object and manifest uploads.
+2. Keep cold export enabled, so retention keeps waiting for the export.
+3. Run `workhorse schema migrate`.
+4. Restart the exporters after the migration commits.
+
+An installation that never enabled cold export needs no extra step. The
+[cold export guide](docs/guides/335-cold-export.md#a-day-is-a-utc-day) explains the repair and the
+warnings it raises.
+
 **A handler result PostgreSQL cannot store now fails only its task.** jsonb refuses a NUL character
 and an unpaired surrogate. Such a result used to reach the completion statement, whose refusal
 stopped the worker and left the task leased. The worker now fails the attempt under the task's
@@ -73,6 +92,75 @@ named `$anchor` stays valid. Upgrade in this order:
 Migration 0053 had already made the final version 52. The contract now says 52, and a test compares
 it with the generated schema version. The cold-export outage stays at the step to version 51, which
 migration 0052 takes.
+
+SQL fixes, each in its own additive migration:
+
+- Migrations 0045 and 0046: schedule-run retention health follows the daily history pass, and a pass
+  that has not run yet is dated from the oldest expired run.
+- Migration 0047: a NULL limit, lease, or bucket count is rejected before any lock. A NULL limit
+  passed straight to `claim_many_v1` used to lease every claimable task.
+- Migration 0048: `claim_many_v1`, `claim_one_v1`, `claim_policy_batch_v1`, and
+  `complete_many_and_claim_v1` raise SQLSTATE `0A000` under repeatable read or serializable
+  isolation. Under repeatable read, two claims could start more tasks than a budget's `maxActive`
+  allows.
+- Migration 0049: `prune_terminal_tasks_v1` no longer stalls on redrive sources that younger
+  redrive targets pin. A bulk redrive used to stop terminal pruning for good.
+- Migration 0050: `sync_budgets_v1` takes each `workhorse:budget:<name>` lock in name order. A
+  concurrent claim could fail with SQLSTATE `23514` or leave a start uncharged.
+- Migration 0051: `fast_complete_many_v1`, `fast_heartbeat_many_v1`, `heartbeat_v1`, and
+  `heartbeat_many_v1` read the clock after taking the row lock. A fast completion could accept, and
+  a heartbeat could renew, a lease that expired while the function waited for the lock.
+- Migration 0052: the cold-export segment claim and `stat_buckets_v1` step a fixed UTC day whatever
+  the session `TimeZone` is. The migration adds `cold_export_dataset_utc_midnight_check` and
+  `cold_export_segment_utc_day_check` and repairs the ledger, as the upgrade steps above describe.
+- Migration 0053: `sync_schedule_definitions_v2` takes the
+  `workhorse:schedule-namespace:<namespace>` lock, so it no longer deadlocks with
+  `fire_due_schedules_v2`.
+
+`@stablemates/workhorse`:
+
+- `Worker` rejects a non-finite, fractional, or out-of-range timing option at construction. This
+  covers `leaseMs`, `heartbeatMs`, `pollMs`, `maintenanceIntervalMs`, `maintenanceRoutinePollMs`,
+  `registryIntervalMs`, `scheduleCatchupLimit`, and a fixed `retryDelayMs`. `heartbeatMs` must be at
+  least 1 and below `leaseMs`. `registryIntervalMs: 0`, `pollMs: 0`, and `retryDelayMs: 0` stay
+  valid.
+- Contract schemas compile with Ajv's `strict: false` and `strictNumbers: true`. A profile schema
+  that another SDK accepts, such as a union `type`, now loads in TypeScript too.
+- An enqueue whose cached contract rejects the payload reloads the definition once and validates
+  again. An operator's new `currentVersion` or larger payload limit no longer fails locally.
+- External wait names, the `requestedBy` actor, and the admin audit actor and reason are counted in
+  code points, as PostgreSQL counts them.
+- A durable handler call on a fast-tier task that a fallback full-tier claim returned resolves the
+  queue tier, then rejects with `FastTierUnsupportedError`. It touches no durable state and runs no
+  callback.
+- The package exports `connectionPoolOf` and the `ConnectionPool` type, so the dashboard server
+  resolves a database's pool the way a worker does.
+- The documentation states that metrics need `registerOpenTelemetry()`.
+
+`@stablemates/workhorse-drizzle`:
+
+- The adapter binds only the parameters PostgreSQL would bind. It used to treat a `$N` inside a
+  string literal, quoted identifier, comment, or function body as a parameter, which broke
+  `installSchema` and `migrateSchema` through the adapter.
+
+`@stablemates/workhorse-dashboard-server` and `@stablemates/workhorse-dashboard`:
+
+- The host answers every non-POST request under `{basePath}/rpc` with 405 and `Allow: POST`.
+- Every read is bounded, including reads through an ORM adapter and the retention preview. The
+  Drizzle and TypeORM adapters always attach a pool. The Prisma and Kysely adapters attach one only
+  when given their pool option. A database with no pool is still read unbounded.
+- Under `redactErrorStacks`, the host also withholds worker stacks from the error copy in lifecycle
+  event details.
+- System health lists every check with its own state. Rate limits show as Throttling, and
+  concurrency and shared budgets show as Limiting.
+- Every count groups its digits.
+- The dashboard uses Mantine 9.6.3.
+
+Demo:
+
+- An operator mutation holds its slot until its work settles, and the host bounds how long a request
+  is handled.
+- Operator redrives stay within the pending-work budget across both tiers.
 
 ## 0.5.0 — 2026-09-28
 
