@@ -80,8 +80,14 @@ canonical JSON representation before the durable write, so every client gets the
 
 The TypeScript, Go, Python, and Ruby workers also measure a handler result that way before they send
 its completion. An oversized result fails that attempt and follows the retry path. In Python, a `NaN` or
-infinite number fails the attempt the same way. Either failure stays local to its task, so the
-worker keeps running.
+infinite number fails the attempt the same way.
+
+PostgreSQL jsonb cannot store a NUL character or an unpaired surrogate. The Go and Python workers
+check a handler result for both before they send its completion. A result that contains either
+fails that attempt and follows the retry path. On the fast tier, the other results in the batch
+still complete. The TypeScript and Ruby workers do not make this check.
+
+Each of these failures stays local to its task, so the worker keeps running.
 
 `sensitivePayloadKeys` and `sensitiveResultKeys` name top-level object fields. Handlers receive the
 raw payload, but task lookup, listing, dead letters, and dashboard detail remove those fields. If a

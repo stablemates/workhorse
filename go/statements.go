@@ -16,6 +16,7 @@ const (
 	contractValidationErrorFormat         = "%s %s does not satisfy contract version %s"
 	contractUnavailableErrorFormat        = "%s contract version %s is unavailable"
 	valueSizeLimitErrorFormat             = "%s %s exceeds its configured size limit"
+	unstorableValueErrorFormat            = "%s %s contains a NUL character or an unpaired surrogate, which PostgreSQL jsonb cannot store"
 	jsonNullText                          = "null"
 	jsonTrueText                          = "true"
 	jsonFalseText                         = "false"

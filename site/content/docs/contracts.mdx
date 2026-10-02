@@ -141,7 +141,14 @@ so clients cannot disagree about the accepted size — an oversized value throws
 The TypeScript, Go, Python, and Ruby workers measure a handler result the same way before they send
 its completion. An oversized result fails that attempt with `TaskValueSizeLimitError`, or
 `ValueSizeLimitError` in Ruby, and follows the retry path. In Python, a `NaN` or infinite number fails the attempt with `ValueError` the same way.
-Either failure stays local to its task, so the worker keeps claiming other work.
+
+PostgreSQL jsonb cannot store a NUL character or an unpaired surrogate. The Go and Python workers
+check a handler result for both before they send its completion. A result that contains either
+fails that attempt, with `ValueError` in Python, and follows the retry path. The error message
+carries no part of the value. On the fast tier, the other results in the batch still complete.
+The TypeScript and Ruby workers do not make this check.
+
+Each of these failures stays local to its task, so the worker keeps claiming other work.
 
 ## Hide sensitive fields from operators
 

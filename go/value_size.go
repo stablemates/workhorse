@@ -1,6 +1,7 @@
 package workhorse
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -35,6 +36,81 @@ func checkValueSize(taskType string, kind string, encoded []byte, decoded any, m
 		return &TaskValueSizeLimitError{TaskType: taskType, Kind: kind, ActualBytes: actual, MaxBytes: maxBytes}
 	}
 	return nil
+}
+
+// checkStorable refuses a value whose JSON holds a string or key that jsonb cannot store: one with
+// NUL or with a surrogate outside a pair. The error carries no part of the value, so the failure
+// envelope that reports it stays storable.
+func checkStorable(taskType string, kind string, encoded []byte) error {
+	if hasUnstorableEscape(encoded) {
+		return fmt.Errorf(unstorableValueErrorFormat, taskType, kind)
+	}
+	return nil
+}
+
+// hasUnstorableEscape scans valid JSON for a \u escape jsonb refuses. encoding/json writes NUL as
+// \u0000 and replaces invalid UTF-8, so a surrogate escape can only come from a json.RawMessage or
+// a custom MarshalJSON. A high surrogate is stored only when a low surrogate escape follows it at
+// once.
+func hasUnstorableEscape(encoded []byte) bool {
+	if !mayHoldUnstorableEscape(encoded) {
+		return false
+	}
+	lowExpectedAt := -1
+	for index := 0; index < len(encoded); index++ {
+		if encoded[index] != '\\' {
+			continue
+		}
+		if lowExpectedAt >= 0 && index != lowExpectedAt {
+			return true
+		}
+		if index+1 >= len(encoded) || encoded[index+1] != 'u' || index+6 > len(encoded) {
+			if lowExpectedAt >= 0 {
+				return true
+			}
+			index++
+			continue
+		}
+		unit, err := strconv.ParseUint(string(encoded[index+2:index+6]), 16, 16)
+		if err != nil {
+			return false
+		}
+		switch {
+		case lowExpectedAt >= 0:
+			if unit < 0xDC00 || unit > 0xDFFF {
+				return true
+			}
+			lowExpectedAt = -1
+		case unit == 0 || (unit >= 0xDC00 && unit <= 0xDFFF):
+			return true
+		case unit >= 0xD800 && unit <= 0xDBFF:
+			lowExpectedAt = index + 6
+		}
+		index += 5
+	}
+	return lowExpectedAt >= 0
+}
+
+// mayHoldUnstorableEscape keeps ordinary text off the full scan. encoding/json escapes <, > and &,
+// so most results hold some \u escape, but every refused escape is \u0000 or starts with \ud or \uD.
+// One pass over the backslashes looks only at the character each one escapes.
+func mayHoldUnstorableEscape(encoded []byte) bool {
+	for rest := encoded; ; {
+		index := bytes.IndexByte(rest, '\\')
+		if index < 0 || index+3 > len(rest) {
+			return false
+		}
+		escape := rest[index+1:]
+		if escape[0] == 'u' && (escape[1] == 'd' || escape[1] == 'D' || isNulEscapeDigits(escape[1:])) {
+			return true
+		}
+		rest = escape[1:]
+	}
+}
+
+// isNulEscapeDigits reports whether the hex digits of a \u escape start with the four zeros of NUL.
+func isNulEscapeDigits(digits []byte) bool {
+	return len(digits) >= 4 && digits[0] == '0' && digits[1] == '0' && digits[2] == '0' && digits[3] == '0'
 }
 
 // hasExponentNumber reports a digit followed by an exponent marker. A match inside a string only
