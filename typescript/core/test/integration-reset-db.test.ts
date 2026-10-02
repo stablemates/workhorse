@@ -1,17 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDatabaseTestHarness } from "./support/db.js";
+import { cliNodeArgs } from "./support/cli-process.js";
 
 const repository = path.resolve(import.meta.dirname, "../../..");
 const cli = path.join(repository, "typescript/core/src/cli/reset-db.ts");
-const tsxCli = createRequire(import.meta.url).resolve("tsx/cli");
 const harness = createDatabaseTestHarness(import.meta.url, { schemaProvisioning: "install" });
 
 function resetDb(args: readonly string[], environment: NodeJS.ProcessEnv) {
-  const result = spawnSync(process.execPath, [tsxCli, cli, ...args], {
+  const result = spawnSync(process.execPath, [...cliNodeArgs, cli, ...args], {
     cwd: repository,
     env: { ...process.env, WORKHORSE_ALLOW_REMOTE_RESET: undefined, ...environment },
     encoding: "utf8",

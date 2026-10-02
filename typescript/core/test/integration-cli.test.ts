@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 import {
   MINIMUM_SCHEMA_VERSION,
@@ -8,14 +7,14 @@ import {
   WORKHORSE_SCHEMA_VERSION,
 } from "../src/schema.js";
 import { createIntegrationTestContext } from "./support/integration.js";
+import { cliNodeArgs } from "./support/cli-process.js";
 
 const repository = path.resolve(import.meta.dirname, "../../..");
 const cli = path.join(repository, "typescript/core/src/cli/workhorse.ts");
-const tsxCli = createRequire(import.meta.url).resolve("tsx/cli");
 const { databaseUrl, pool } = createIntegrationTestContext(import.meta.url);
 
 function runCli(args: readonly string[]) {
-  const result = spawnSync(process.execPath, [tsxCli, cli, ...args], {
+  const result = spawnSync(process.execPath, [...cliNodeArgs, cli, ...args], {
     cwd: repository,
     env: process.env,
     encoding: "utf8",

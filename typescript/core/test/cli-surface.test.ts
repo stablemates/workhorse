@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -10,6 +9,7 @@ import {
   type CliCommandName,
   type CliJsonPayloads,
 } from "../src/cli/surface.js";
+import { cliNodeArgs } from "./support/cli-process.js";
 
 /**
  * `typescript/core/src/cli/surface.ts` against the CLI it describes.
@@ -27,13 +27,12 @@ import {
 
 const repository = path.resolve(import.meta.dirname, "../../..");
 const cli = path.join(repository, "typescript/core/src/cli/workhorse.ts");
-const tsxCli = createRequire(import.meta.url).resolve("tsx/cli");
 
 /** Stands in for any positional or option value. `--help` returns before one is validated. */
 const sample = "sample";
 
 function runCli(args: readonly string[]) {
-  const result = spawnSync(process.execPath, [tsxCli, cli, ...args], {
+  const result = spawnSync(process.execPath, [...cliNodeArgs, cli, ...args], {
     cwd: repository,
     env: { ...process.env, DATABASE_URL: undefined, WORKHORSE_DATABASE_URL: undefined },
     encoding: "utf8",

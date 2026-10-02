@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createRequire } from "node:module";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   MINIMUM_SCHEMA_VERSION,
@@ -12,14 +11,14 @@ import {
 } from "../src/schema.js";
 import { createSchemaStatusReport, FLEET_EVIDENCE_NOTE } from "../src/cli/schema-status.js";
 import { describeDatabaseFailure } from "../src/cli/database-failure.js";
+import { cliNodeArgs } from "./support/cli-process.js";
 
 const repository = path.resolve(import.meta.dirname, "../../..");
 const cli = path.join(repository, "typescript/core/src/cli/workhorse.ts");
-const tsxCli = createRequire(import.meta.url).resolve("tsx/cli");
 const scratchRoots: string[] = [];
 
 function runCli(args: readonly string[]) {
-  const result = spawnSync(process.execPath, [tsxCli, cli, ...args], {
+  const result = spawnSync(process.execPath, [...cliNodeArgs, cli, ...args], {
     cwd: repository,
     env: {
       ...process.env,
@@ -119,7 +118,7 @@ describe("workhorse CLI parser", () => {
   });
 
   it("uses the usage exit code when no database source is available", () => {
-    const result = spawnSync(process.execPath, [tsxCli, cli, "schema", "status"], {
+    const result = spawnSync(process.execPath, [...cliNodeArgs, cli, "schema", "status"], {
       cwd: repository,
       env: { PATH: process.env.PATH ?? "" },
       encoding: "utf8",
@@ -162,7 +161,7 @@ describe("workhorse CLI parser", () => {
   });
 
   it("prefers WORKHORSE_DATABASE_URL and says so", () => {
-    const result = spawnSync(process.execPath, [tsxCli, cli, "schema", "status"], {
+    const result = spawnSync(process.execPath, [...cliNodeArgs, cli, "schema", "status"], {
       cwd: repository,
       env: {
         ...process.env,
