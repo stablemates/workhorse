@@ -9,7 +9,11 @@ upgrades in place: every release ships ordered migrations, and inside a major li
 adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses it offline, with the
 [0.5.0 upgrade steps](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md#050--2026-09-28). The upgrade from 0.5 to 0.6 only adds.
 
-### Unreleased
+## 0.6.0 — 2026-10-02
+
+The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
+
+Requires **schema v43** and Python **3.12** or newer.
 
 **Upgrade: migrate the schema before any 0.6 process starts.** The final schema version is **52**.
 The SDK compatibility floor stays at schema version **43**, so a 0.5.0 process keeps working on

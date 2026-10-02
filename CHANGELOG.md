@@ -4,9 +4,10 @@ This changelog covers nine published packages on npm. They are versioned in lock
 from one tag:
 `@stablemates/workhorse`, `@stablemates/workhorse-drizzle`, `@stablemates/workhorse-prisma`, `@stablemates/workhorse-typeorm`,
 `@stablemates/workhorse-kysely`, `@stablemates/workhorse-otel`, `@stablemates/workhorse-dashboard`,
-`@stablemates/workhorse-dashboard-server`, and `@stablemates/workhorse-dashboard-contract`. The Python distribution, Go module, and Rust crate
-release from that same commit, so their notes live in [`python/CHANGELOG.md`](python/CHANGELOG.md),
-[`go/CHANGELOG.md`](go/CHANGELOG.md), and [`rust/CHANGELOG.md`](rust/CHANGELOG.md). Each entry states its required schema version and upgrade steps.
+`@stablemates/workhorse-dashboard-server`, and `@stablemates/workhorse-dashboard-contract`. The Python distribution, Go module, Rust crate, and Ruby
+gem release from that same commit, so their notes live in [`python/CHANGELOG.md`](python/CHANGELOG.md),
+[`go/CHANGELOG.md`](go/CHANGELOG.md), [`rust/CHANGELOG.md`](rust/CHANGELOG.md), and
+[`ruby/CHANGELOG.md`](ruby/CHANGELOG.md). Each entry states its required schema version and upgrade steps.
 
 The supported Node.js and PostgreSQL versions, the schema compatibility guarantees, and the release
 process are in [`docs/compatibility.md`](docs/compatibility.md).
@@ -17,7 +18,11 @@ a major line a migration only adds. Migration 0025 is the one exception: a datab
 0.5.0 crosses it offline, with the [0.5.0 upgrade steps](#050--2026-09-28). The upgrade from 0.5 to
 0.6 only adds. Breaking changes are always listed with upgrade steps.
 
-### Unreleased
+## 0.6.0 — 2026-10-02
+
+The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
+
+Requires **schema v43**, Node.js **22** or newer, and PostgreSQL **15** or newer.
 
 **Upgrade: migrate the schema before any 0.6 process starts.** Migrations 0045 through 0053 only
 add, so the upgrade is a rolling deployment. Run `workhorse schema migrate`, then roll out the new

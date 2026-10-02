@@ -46,7 +46,7 @@ A Python, Go, Rust, or Ruby project has no Node.js dependency tree to resolve th
 version instead, which must equal the SDK version the application depends on:
 
 ```bash
-npx --package @stablemates/workhorse@0.5.0 workhorse schema install
+npx --package @stablemates/workhorse@0.6.0 workhorse schema install
 ```
 
 That command needs Node.js on the machine that runs your deployment, and
@@ -62,12 +62,11 @@ npm install @stablemates/workhorse
 pip install stablemates-workhorse
 go get github.com/stablemates/workhorse/go
 cargo add workhorse
-bundle add stablemates-workhorse --git https://github.com/stablemates/workhorse --glob ruby/stablemates-workhorse.gemspec
+bundle add stablemates-workhorse
 bundle add connection_pool
 ```
 
-The Ruby gem is not on RubyGems yet, so until its first release Bundler fetches it from the
-repository. The Ruby SDK also needs the `connection_pool` gem.
+The Ruby SDK also needs the `connection_pool` gem.
 
 **Enqueue inside the transaction that writes your application data.** This is what replaces an
 outbox. Each language hands the transaction over differently: TypeScript passes the transaction
