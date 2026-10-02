@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	workhorse "github.com/stablemates/workhorse/go"
 )
@@ -213,19 +214,49 @@ func TestWorkerWithoutALoggerWritesToTheDefaultLogger(t *testing.T) {
 func TestSlowExpirationDoesNotStallHeartbeatsForOtherTasks(t *testing.T) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-slow-expiry")
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, databaseURL)
+	poolConfig, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keep the fixture valid at pgxpool's minimum default capacity, even on a many-core host:
+	// the listener, heartbeat, blocked expiry, and observer each need one connection.
+	poolConfig.MaxConns = 4
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	// A slow expiry is one PostgreSQL keeps answering not_due after the worker's own timer fired.
-	// The handler below moves the database's timeout out of reach so the worker's timer wins, and
-	// this stub holds the window open for the whole retry budget. The window is then wide enough to
-	// observe rather than a race the test has to win.
+	// Hold expiry behind a test-owned lock until the lease observations finish. A fixed retry
+	// window can end before a loaded host gets enough successful heartbeat rounds to observe.
+	// The lock owner must stay outside that pool or it consumes the observer's connection.
+	gateConnection, err := pgx.Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = gateConnection.Close(ctx) })
+	expiryGate, err := gateConnection.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseExpiry := sync.OnceFunc(func() {
+		if err := expiryGate.Rollback(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+	defer releaseExpiry()
+	const expiryLock = 1103
+	var gatePID int32
+	if err := expiryGate.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&gatePID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := expiryGate.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", expiryLock); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := pool.Exec(ctx, `CREATE OR REPLACE FUNCTION workhorse.expire_owned_v1(
 		p_task_id uuid, p_worker_id text, p_fence_token bigint
 	) RETURNS text LANGUAGE plpgsql AS $$
 	BEGIN
+	  PERFORM pg_advisory_xact_lock(1103);
 	  RETURN 'not_due';
 	END;
 	$$`); err != nil {
@@ -237,7 +268,7 @@ func TestSlowExpirationDoesNotStallHeartbeatsForOtherTasks(t *testing.T) {
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
 	expiringID, err := queue.Enqueue(ctx, "slow-expiry", nil, workhorse.EnqueueOptions{
 		MaxAttempts:        1,
-		ExecutionTimeoutMS: 200,
+		ExecutionTimeoutMS: 1000,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -250,8 +281,8 @@ func TestSlowExpirationDoesNotStallHeartbeatsForOtherTasks(t *testing.T) {
 		Queue:               queueName,
 		WorkerID:            "slow-expiry-worker",
 		Concurrency:         2,
-		LeaseDuration:       2 * time.Second,
-		HeartbeatInterval:   20 * time.Millisecond,
+		LeaseDuration:       10 * time.Second,
+		HeartbeatInterval:   100 * time.Millisecond,
 		PollInterval:        10 * time.Millisecond,
 		MaintenanceInterval: time.Hour,
 		Logger:              slog.New(slog.NewTextHandler(&logs, nil)),
@@ -269,15 +300,14 @@ func TestSlowExpirationDoesNotStallHeartbeatsForOtherTasks(t *testing.T) {
 		// goroutine then reaches its expiration branch while every heartbeat is still accepted.
 		if _, err := pool.Exec(
 			ctx,
-			"UPDATE workhorse.task_runtime SET attempt_timeout_at = attempt_timeout_at + interval '2 seconds' WHERE task_id = $1::uuid",
+			"UPDATE workhorse.task_runtime SET attempt_timeout_at = attempt_timeout_at + interval '1 minute' WHERE task_id = $1::uuid",
 			expiringID,
 		); err != nil {
 			return nil, err
 		}
 		<-handlerContext.Done()
 		close(expiring)
-		// Staying in the handler keeps the supervising goroutine in its expiration branch, which
-		// is where the worker waits out a slow expiry.
+		// Keep the handler active until the test finishes observing the co-runner's lease.
 		<-release
 		return nil, nil
 	})
@@ -296,7 +326,7 @@ func TestSlowExpirationDoesNotStallHeartbeatsForOtherTasks(t *testing.T) {
 	workerResult := make(chan error, 1)
 	go func() { workerResult <- worker.Run(runContext) }()
 
-	// The supervising goroutine is inside the expiry retry loop once the handler's context ends.
+	// The handler's cancellation precedes the SQL call, so also wait for the call to reach the gate.
 	select {
 	case <-expiring:
 	case err := <-workerResult:
@@ -304,16 +334,18 @@ func TestSlowExpirationDoesNotStallHeartbeatsForOtherTasks(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the expiring handler never observed its timeout")
 	}
-	// Every heartbeat round inside the window now reports the expiring task as non-accepted, which
-	// is the shape that used to fill its result channel and block the shared loop.
+	waitForBlockedExpiry(t, ctx, pool, gatePID)
+	// If the expiring member stays registered, every subsequent round reports it as non-accepted,
+	// which is the shape that used to fill its result channel and block the shared loop.
 	requestedBy := "go-test"
 	if _, err := queue.Cancel(ctx, expiringID, workhorse.CancellationRequest{RequestedBy: &requestedBy}); err != nil {
 		t.Fatal(err)
 	}
 	// The co-runner keeps renewing throughout the window. A stalled loop would leave its lease
 	// frozen where the last accepted round left it.
-	assertLeaseKeepsAdvancing(t, ctx, pool, coRunnerID, 800*time.Millisecond)
+	assertLeaseKeepsAdvancing(t, ctx, pool, coRunnerID)
 
+	releaseExpiry()
 	releaseHandlers()
 	select {
 	case cause := <-coRunnerCause:
@@ -347,14 +379,34 @@ func TestSlowExpirationDoesNotStallHeartbeatsForOtherTasks(t *testing.T) {
 	}
 }
 
-// assertLeaseKeepsAdvancing fails unless an accepted heartbeat moves the task's lease forward
-// several times across the window. A worker whose shared heartbeat loop is blocked leaves the
-// lease where the last accepted round left it.
+func waitForBlockedExpiry(t *testing.T, ctx context.Context, pool *pgxpool.Pool, gatePID int32) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var blocked bool
+		if err := pool.QueryRow(ctx, `SELECT EXISTS (
+			SELECT 1 FROM pg_stat_activity
+			WHERE datname = current_database() AND $1 = ANY(pg_blocking_pids(pid))
+		)`, gatePID).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("the expiration call never reached the test's lock")
+}
+
+// Observe progress beyond the two rounds that can renew the co-runner before the old blocking
+// send stalls: one fills the expiring member's result channel, and the next blocks on it. Each
+// observation waits for progress instead of assuming a renewal rate, and expiry stays gated.
 func assertLeaseKeepsAdvancing(
-	t *testing.T, ctx context.Context, pool *pgxpool.Pool, taskID string, window time.Duration,
+	t *testing.T, ctx context.Context, pool *pgxpool.Pool, taskID string,
 ) {
 	t.Helper()
-	const requiredRenewals = 10
 	readExpiry := func() time.Time {
 		t.Helper()
 		var expiresAt time.Time
@@ -368,22 +420,19 @@ func assertLeaseKeepsAdvancing(
 		return expiresAt
 	}
 	previous := readExpiry()
-	renewals := 0
-	deadline := time.Now().Add(window)
-	for time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-		current := readExpiry()
-		if current.After(previous) {
-			renewals++
-			previous = current
+	for observation := 1; observation <= 3; observation++ {
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			time.Sleep(20 * time.Millisecond)
+			current := readExpiry()
+			if current.After(previous) {
+				previous = current
+				break
+			}
+			if !time.Now().Before(deadline) {
+				t.Fatalf("task %s lease stopped advancing during the blocked expiry at observation %d (expires_at=%s)",
+					taskID, observation, previous.Format(time.RFC3339Nano))
+			}
 		}
-	}
-	if renewals < requiredRenewals {
-		t.Fatalf(
-			"task %s was renewed %d times during the slow expiry, expected at least %d",
-			taskID,
-			renewals,
-			requiredRenewals,
-		)
 	}
 }
