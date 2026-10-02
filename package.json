@@ -29,6 +29,7 @@
     "test:database": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run --config vitest.database.config.ts && pnpm python:test:database && pnpm go:test:database",
     "test:database:typescript": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run --config vitest.database.config.ts",
     "test:integration:mikroorm": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run --config vitest.database.config.ts typescript/adapter-conformance/test/mikroorm-integration.test.ts",
+    "test:integration:github": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run --config vitest.database.config.ts typescript/core/test/github-triage-integration.test.ts",
     "test:database:changed": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs related --run --passWithNoTests --config vitest.database.config.ts",
     "test:schema": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run typescript/core/test/schema-limits.test.ts typescript/core/test/schema-installation.test.ts typescript/core/test/schema-migrations.test.ts",
     "test:protocol": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run --config vitest.database.config.ts typescript/core/test/sql-protocol-conformance.test.ts typescript/core/test/schema-migrations.test.ts",

@@ -12,7 +12,8 @@
   "include": [
     "test/**/*.ts",
     "../examples/stripe-invoice-paid.ts",
-    "../examples/slack-approvals.ts"
+    "../examples/slack-approvals.ts",
+    "../examples/github-triage.ts"
   ],
   "exclude": ["test/runtime-smoke.ts"],
   "references": [

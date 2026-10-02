@@ -871,6 +871,7 @@ try {
       "demo-worker",
       "stripe-invoice-paid",
       "slack-approvals",
+      "github-triage",
     ].includes(example.scenario)
       ? ["--verify"]
       : [];

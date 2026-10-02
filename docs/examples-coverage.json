@@ -337,6 +337,31 @@
         }
       }
     },
+    "github-triage": {
+      "typescript": {
+        "file": "typescript/examples/github-triage.ts"
+      },
+      "python": {
+        "exclusion": {
+          "reason": "This GitHub App recipe tests the Node raw-body receiver and TypeScript worker; no Python receiver is maintained."
+        }
+      },
+      "go": {
+        "exclusion": {
+          "reason": "This GitHub App recipe tests the Node raw-body receiver and TypeScript worker; no Go receiver is maintained."
+        }
+      },
+      "rust": {
+        "exclusion": {
+          "reason": "This GitHub App recipe tests the Node raw-body receiver and TypeScript worker; no Rust receiver is maintained."
+        }
+      },
+      "ruby": {
+        "exclusion": {
+          "reason": "This GitHub App recipe tests the Node raw-body receiver and TypeScript worker; no Ruby receiver is maintained."
+        }
+      }
+    },
     "async-worker": {
       "typescript": {
         "exclusion": {
