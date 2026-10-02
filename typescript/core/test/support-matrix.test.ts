@@ -542,6 +542,7 @@ describe("continuous integration", () => {
       "plan",
       "static",
       "unit",
+      "npm-release-scope",
       "typescript",
       "python",
       "go",
@@ -561,7 +562,7 @@ describe("continuous integration", () => {
       workflow.match(
         /if: github\.event_name != 'schedule' \|\| github\.event\.schedule == '17 4 \* \* 0'/g,
       ),
-    ).toHaveLength(9);
+    ).toHaveLength(10);
     expect(workflow).toContain('all(.[]; .result == "success" or .result == "skipped")');
     expect(workflow).toContain(
       "name: demo and site smoke\n    if: github.event_name != 'schedule'",
@@ -693,6 +694,33 @@ describe("continuous integration", () => {
     expect(releaseCheck).toContain('["npm:test:unit"]');
     expect(scripts["npm:test:unit"]).toContain("vitest.npm.config.ts");
     expect(npmTestConfig).toContain('"scripts/sql-catalogue-python-bindings.test.ts"');
+    expect(npmTestConfig).toContain('"scripts/check-attestation-upload.test.ts"');
+    expect(npmTestConfig).toContain("...pythonToolchainTestFiles,");
+    // Main CI runs the same suite without uv, so a test that spawns it fails the pull request
+    // instead of the release. The unit lane runs only the files this scope leaves out, so each
+    // unit test runs once per change (ADR 0083).
+    const ci = await read(".github/workflows/ci.yml");
+    const lane = (name: string) =>
+      new RegExp(`\\n  ${name}:\\n[\\s\\S]*?(?=\\n\\n  \\S)`).exec(ci)?.[0];
+    const releaseScope = lane("npm-release-scope");
+    const unitLane = lane("unit");
+    expect(unitLane).toContain("run: pnpm npm:test:python-toolchain");
+    expect(unitLane).not.toContain("run: pnpm test:unit");
+    expect(unitLane).not.toContain("run: pnpm npm:test:unit");
+    expect(scripts["npm:test:python-toolchain"]).toContain("vitest.python-toolchain.config.ts");
+    expect(await read("vitest.python-toolchain.config.ts")).toContain(
+      "include: pythonToolchainTestFiles",
+    );
+    // `pnpm test:unit` is the union the two lanes split.
+    expect(scripts["test:unit"]).toContain("--config vitest.unit.config.ts");
+    expect(scripts["test:unit"]).toContain("pnpm python:test:unit && pnpm go:test:unit");
+    expect(unitLane).toContain("run: pnpm python:test:unit");
+    expect(unitLane).toContain("run: pnpm go:test:unit");
+    expect(releaseScope).toContain("run: pnpm build:runtime:check-dashboard-bundle");
+    expect(releaseScope).toContain("run: pnpm npm:test:unit");
+    expect(releaseScope).toContain("if command -v uv; then");
+    expect(releaseScope).not.toContain("actions/setup-go");
+    expect(releaseScope).not.toContain("astral-sh/setup-uv");
     expect(releaseCheck).toContain("WORKHORSE_NPM_TARBALLS: stagedTarballs");
     expect(releaseCheck).toContain('"pack",');
     // The packed tree is scanned through the one reader that tells an unreachable advisory service
