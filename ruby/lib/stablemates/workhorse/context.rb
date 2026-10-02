@@ -159,8 +159,8 @@ module Stablemates
       # Returns the payload of the signal +name+, suspending the attempt until one arrives.
       # +timeout+ is a count of seconds.
       def wait_for_signal(name, timeout: nil)
-        durable!("signal waits")
         external_name(name, "signal")
+        durable!("signal waits")
         timeout_ms = external_timeout(timeout, "signal")
         once(:wait_for_signal, name) do
           live!(:wait_for_signal)
@@ -179,8 +179,8 @@ module Stablemates
       # Returns the decision a person recorded for the wait +name+, suspending the attempt until one
       # arrives. +context+ is JSON shown to that person; +timeout+ is a count of seconds.
       def wait_for_human(name, context, timeout: nil)
-        durable!("human waits")
         external_name(name, "human wait")
+        durable!("human waits")
         timeout_ms = external_timeout(timeout, "human wait")
         Values.check_json(context, "human wait context")
         encoded = canonical_json(context)
@@ -206,8 +206,8 @@ module Stablemates
       # succeeds. +enqueue_options+ are the keywords Queue#enqueue takes, less the coalescing and
       # dependency options.
       def run_child(name, task_type, payload, **enqueue_options)
-        durable!("child tasks")
         child_name(name)
+        durable!("child tasks")
         build = lambda do |versions = {}|
           canonical_json(@queue.serialize_child_request(@task, task_type, payload, enqueue_options, {},
             version: versions.fetch(name, :current)))
@@ -301,13 +301,14 @@ module Stablemates
       end
 
       def run_child_set(children, mode)
-        durable!("child tasks")
         raise ArgumentError, "children must be an Array of ChildTaskRequest" unless
           children.is_a?(Array) && children.all?(ChildTaskRequest)
         raise LimitExceededError.new(:run_children, "child set") if children.length > MAX_CHILDREN
 
         children.each { |child| child_name(child.name) }
         raise ArgumentError, "child names must be unique" unless children.map(&:name).uniq.length == children.length
+
+        durable!("child tasks")
 
         build = lambda do |versions = {}|
           contracts = {}
@@ -447,7 +448,7 @@ module Stablemates
       # Refuses a durable write once the attempt is cancelled. An attempt that lost its lease raises
       # LeaseLostError, as its fenced write would.
       # A fast-tier task has no durable execution state (ADR 0077), so each call that would write it
-      # raises before any round trip. Only a checkpoint or wait name is validated first.
+      # raises before any round trip. Only a step name is validated first.
       # A worker that does not know the tier at claim time passes a callable, which the first
       # durable call runs and caches. A failed read raises before any durable write.
       def durable!(feature)
@@ -558,8 +559,8 @@ module Stablemates
 
       def child_name(name) = durable_name(name, "child")
 
-      # PostgreSQL accepts a checkpoint, wait, or child name of 1 to 200 characters. Checking it first
-      # keeps an invalid name from running a block or reaching PostgreSQL.
+      # PostgreSQL accepts a checkpoint, wait, or child name of 1 to 200 characters. Checking it before
+      # the tier check keeps an invalid name from running a block or any statement.
       def durable_name(name, label)
         return if name.is_a?(String) && name.length.between?(1, 200)
 

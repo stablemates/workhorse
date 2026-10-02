@@ -69,7 +69,9 @@ Adding a concurrency or rate-limit policy to a fast-tier queue fails the same wa
 
 A handler on a fast-tier queue gets the same error from its handler context. The context rejects
 the call before it reaches PostgreSQL. That rejection is an ordinary handler failure, so the task's
-retry policy applies.
+retry policy applies. In Ruby, an invalid step name raises `ArgumentError` before the tier check
+runs. That covers checkpoint, wait, signal, human wait, and child names. A child set's type and size
+are checked before its names.
 
 The rule of thumb is simple. If a handler only computes and returns, the fast tier fits. If it
 ever needs to pause and come back, keep the queue full-tier.
@@ -127,6 +129,7 @@ and retention and cold export handle both tables.
 
 - Choose the fast tier for high-volume queues whose handlers never suspend.
 - Expect `FastTierUnsupportedError` wherever code asks a fast-tier queue for a durable feature.
+  In Ruby, an invalid step name raises `ArgumentError` first.
 - Turn history on only for the evidence you need.
 - Drain a queue before you switch its tier.
 

@@ -216,6 +216,28 @@ RSpec.describe W::HandlerContext do
     expect([token.cancelled?, arbiter.outcome]).to eq([false, nil])
   end
 
+  it "rejects an invalid signal, human wait, or child name before the deferred tier read" do
+    executor = FakeExecutor.new
+    ctx = described_class.new(executor: executor, queue: W::Queue.new(executor), task: task, worker_id: "w",
+      cancellation: token, arbiter: arbiter, fast_tier: -> { raise "the tier lookup must not run" })
+    ["", " s", "x" * 201, nil].each do |name|
+      expect { ctx.wait_for_signal(name) }.to raise_error(ArgumentError, /signal name/)
+      expect { ctx.wait_for_human(name, {}) }.to raise_error(ArgumentError, /human wait name/)
+    end
+    ["", "x" * 201, nil, :a].each do |name|
+      expect { ctx.run_child(name, "t", {}) }
+        .to raise_error(ArgumentError, "child name must contain between 1 and 200 characters")
+      child = W::ChildTaskRequest.new(name: name, task_type: "t", payload: {})
+      expect { ctx.run_children([child]) }
+        .to raise_error(ArgumentError, "child name must contain between 1 and 200 characters")
+    end
+    expect { ctx.run_children_all([:not_a_request]) }.to raise_error(ArgumentError, /ChildTaskRequest/)
+    oversized = Array.new(101) { W::ChildTaskRequest.new(name: "", task_type: "t", payload: {}) }
+    expect { ctx.run_children(oversized) }.to raise_error(W::LimitExceededError)
+    expect(executor.statements).to be_empty
+    expect([token.cancelled?, arbiter.outcome]).to eq([false, nil])
+  end
+
   it "suspends the attempt for a created child" do
     executor = FakeExecutor.new { [{"status" => "created"}] }
     expect { context(executor).run_child("c", "t", {}) }.to raise_error(W::HandlerContext::Suspension)
