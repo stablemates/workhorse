@@ -41,6 +41,12 @@ replays the saved value without calling the operation. The behavior is unchanged
 the architecture reference, and the package README now describe it. Treat a cancelled await as
 proof of neither a missing checkpoint nor undone effects on other systems.
 
+**The worker documentation now shows `AsyncWorker` taking a pool.** The worker guide passed a
+connection to `AsyncWorker.from_asyncpg`, and the README and the workers page said a worker runs
+claims on dedicated connections. A worker takes a caller-owned pool. It borrows a pool connection
+for each claim and lifecycle statement, and it reserves its own heartbeat and listener connections
+from that pool. It never closes the pool. The behavior is unchanged.
+
 ## 0.5.0 — 2026-09-28
 
 The npm packages, Python distribution, Go module, and Rust crate release from one source commit.
