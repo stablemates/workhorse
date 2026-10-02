@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { SchemaCompatibilityError } from "@stablemates/workhorse";
+import { SchemaCompatibilityError, WORKHORSE_SCHEMA_VERSION } from "@stablemates/workhorse";
 import { describe, expect, it, vi } from "vitest";
 import {
   awaitWorkerSchema,
@@ -222,5 +222,23 @@ describe("the demo's schema step runs from the pipeline", () => {
     // different version of the schema tool than the one about to serve traffic.
     expect(contract).toContain("started from the exact version being deployed");
     expect(contract).toContain("must fail the deploy before the container swap");
+  });
+
+  // The contract once said the build ships version 51 and that migration finishes there, a release
+  // after migration 0053 had made the generated version 52. Each final-version claim is read
+  // against the generated constant, so the next migration fails here until the contract follows.
+  it("states the build's own final schema version", async () => {
+    const source = await readFile(resolve(repositoryRoot, "typescript/demo/DEPLOYMENT.md"), "utf8");
+    const contract = source.replaceAll(/\s+/g, " ");
+    const version = WORKHORSE_SCHEMA_VERSION;
+
+    expect(contract).toContain(`The current build ships Workhorse schema version ${version};`);
+    expect(contract).toContain(`Versions 26 through ${version} are additive`);
+    expect(contract).toContain(`after 0025 and leaves the database at version ${version}.`);
+    expect(contract).toContain(`Its pre-deploy hook finds version ${version},`);
+    // Migration 0052 took the schema from 50 to 51, so the cold-export outage stays tied to that
+    // step whatever the final version is.
+    expect(contract).toContain("the step to version 51 needs a short exporter outage");
+    expect(contract).toContain("Migration 0052 repairs the export ledger");
   });
 });

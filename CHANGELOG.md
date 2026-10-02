@@ -41,6 +41,12 @@ an annotation. A `$ref` must also point at a subschema, so it cannot reach a sch
    applies. Each payload was checked at enqueue, so a keyword in the payload schema does not affect
    tasks already queued.
 
+**The demo deployment contract names schema version 52 as the final version.**
+`typescript/demo/DEPLOYMENT.md` said the build ships version 51 and that migration finishes there.
+Migration 0053 had already made the final version 52. The contract now says 52, and a test compares
+it with the generated schema version. The cold-export outage stays at the step to version 51, which
+migration 0052 takes.
+
 ## 0.5.0 — 2026-09-28
 
 The npm packages, Python distribution, Go module, and Rust crate release from one source commit.
