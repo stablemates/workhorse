@@ -11,6 +11,16 @@ adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses 
 
 ### Unreleased
 
+**A task's lease now keeps renewing until its final transition is written.** The worker used to
+leave the heartbeat round as soon as the handler returned. A completion or failure that waited past
+the remaining lease let lease recovery take the task, so a peer could repeat finished work and the
+original result was discarded. `Worker` and `AsyncWorker` now keep the heartbeat and the lease
+watchdog through result validation and the fenced write on both tiers, and end them once on every
+path. After the handler returns, a refused renewal only stops renewing, as in the Go worker. When
+PostgreSQL then refuses the completion, the worker settles the cause under the attempt's fence: a
+deadline or attempt timeout that came due during the final write ends as `deadline_exceeded` or
+`attempt_timeout` instead of waiting for lease recovery.
+
 **Breaking: contract schemas can no longer use `pattern` or `patternProperties`.** The SDKs' regular
 expression engines accept different syntax and match differently, so one contract could validate
 differently in each language.

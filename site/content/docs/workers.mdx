@@ -208,7 +208,9 @@ accidentally write as a stale owner after the task moves on.
   [rate limits](/docs/rate-limits).
 - **`leaseMs`** is how long a claim owns a task before the database may recover it. One
   background timer batches every active lease owned by the worker on its configured heartbeat
-  cadence. A shorter lease means faster
+  cadence. A task keeps renewing after its handler returns, through result validation and the
+  fenced completion or failure, so a slow final write cannot hand finished work to recovery.
+  A shorter lease means faster
   recovery after a crash; a longer one tolerates worse network pauses.
 - **`workerId`** identifies the lease owner. Leave it generated unless a process manager
   guarantees uniqueness: two live workers sharing one identity collide over ownership. The

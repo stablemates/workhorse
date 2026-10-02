@@ -17,15 +17,18 @@ The worker now holds a **lease**. It owns the task, but not forever — only unt
 
 ## Keeping the lease
 
-While your handlers run, the worker calls `heartbeat_many_v1` on a background timer. The call
-submits every active lease, and each accepted result pushes that task's `expires_at` forward.
+From the claim until the task's final transition is written, the worker calls
+`heartbeat_many_v1` on a background timer. The call submits every active lease, and each accepted
+result pushes that task's `expires_at` forward.
 
 Workhorse reads the clock only after the call holds the row locks it needs, not when the call
 started. A batch may lock all of its tasks before that reading. A heartbeat or completion that
 waited behind another transaction therefore cannot revive a lease that expired during the wait.
 An accepted heartbeat extends the lease from that clock reading.
 
-You never call this yourself. It happens for you as long as your handler is running.
+You never call this yourself. Renewal does not stop when your handler returns. The worker still
+has to validate the result and write the completion or failure, and either can wait on a busy pool.
+The lease keeps renewing through that final write, so a finished task is not handed to recovery.
 
 ## When a worker dies
 
