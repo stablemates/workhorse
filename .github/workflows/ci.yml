@@ -480,7 +480,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes postgresql-common
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install --yes postgresql-client-${{ matrix.postgres }}
+          sudo apt-get install --yes postgresql-client-${{ matrix.postgres }} libpq-dev
           echo "/usr/lib/postgresql/${{ matrix.postgres }}/bin" >> "$GITHUB_PATH"
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:reset:test
