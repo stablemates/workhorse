@@ -9,6 +9,15 @@ upgrades in place: every release ships ordered migrations, and inside a major li
 adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses it offline, with the
 [0.5.0 upgrade steps](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md#050--2026-09-28). The upgrade from 0.5 to 0.6 only adds.
 
+### Unreleased
+
+**Fixed: the release uploads its PEP 740 attestations again.** 0.6.0 reached PyPI without
+provenance. The release workflow generated an attestation beside each distribution, but the pinned
+uv 0.8.9 predates attestation upload and still exited 0. The workflow now publishes with uv 0.12.21.
+Every Release Python run, dry runs included, rehearses the upload against a local endpoint first.
+`pnpm release:verify python` now fails unless PyPI shows an attestation from this repository's
+release workflow for every file. The 0.6.0 files are unchanged and stay without provenance.
+
 ## 0.6.0 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

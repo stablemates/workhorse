@@ -73,7 +73,7 @@ describe("mise pin matching", () => {
   it("reads every pin this repository declares", async () => {
     const pins = await readPins(repositoryRoot);
 
-    expect(pins.get("uv")).toBe("0.8.9");
+    expect(pins.get("uv")).toBe("0.12.21");
     expect([...pins.keys()]).toEqual(
       expect.arrayContaining(["go", "lefthook", "node", "pnpm", "python", "uv"]),
     );
@@ -390,8 +390,9 @@ describe("the workflow uv pin", () => {
       ).then((found) => found.flat()),
     ]);
 
-    // The release workflow builds what PyPI receives, so it must be among the steps checked.
-    expect(versions.filter((entry) => entry.startsWith("release-python.yml:"))).toHaveLength(2);
+    // The release workflow builds, rehearses, and uploads what PyPI receives, so its build,
+    // attestation rehearsal, and publish steps must all be among the steps checked.
+    expect(versions.filter((entry) => entry.startsWith("release-python.yml:"))).toHaveLength(3);
     expect(versions).toEqual(versions.map((entry) => entry.replace(/ \S+$/, ` ${pins.get("uv")}`)));
   });
 

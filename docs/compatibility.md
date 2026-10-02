@@ -422,6 +422,7 @@ which builds a source distribution and universal wheel with uv, and `pnpm rust:r
 A separate `pypi` environment publishes those artifacts through PyPI trusted publishing with
 `id-token: write`.
 Before publication, the publish task generates a PEP 740 attestation beside each distribution.
+An attestation rehearsal job proves on every run, dry runs included, that the pinned uv uploads them.
 
 The Go module releases from its own `go/vX.Y.Z` tag. `scripts/release-go.sh X.Y.Z` requires
 a clean worktree and a matching `go/CHANGELOG.md` heading. It rehearses the module release, resets
@@ -712,11 +713,12 @@ after npm, as [Rust crate](#rust-crate) and [Ruby gem](#ruby-gem) describe.
    `.github/workflows/release.yml` and `.github/workflows/release-python.yml` are dispatched
    manually with `dry-run` enabled, and every npm and Python archive is downloaded and inspected.
    All nine npm tarballs, the Python wheel, and the Python source distribution are installed in
-   clean consumers. The Go external consumer, the Rust packaged-crate consumer, and the Ruby
+   clean consumers. The Python dry run's `attestation-rehearsal` job must pass, which proves that
+   the attestation files exist and that the pinned uv uploads them. The Go external consumer, the Rust packaged-crate consumer, and the Ruby
    packaged-gem consumer are built from the same commit.
    Test registries are not part of the rehearsal.
 2. Publish Python first. One distribution is the smallest production test of trusted publishing.
-   Its PEP 740 attestations are verified on PyPI before the train continues.
+   `pnpm release:verify python` checks its PEP 740 attestations on PyPI before the train continues.
 3. Publish npm second. Each package goes after the published packages it requires, so
    `@stablemates/workhorse-dashboard-contract` precedes `@stablemates/workhorse`, and the dashboard
    server precedes the dashboard facade.
@@ -739,20 +741,23 @@ directory:
 
 - `python` installs `stablemates-workhorse==X.Y.Z` into a virtual environment on the oldest
   supported Python. It checks both `workhorse.__version__` and the installed distribution metadata.
+  It then reads PyPI's integrity API for every file of the release. Each file needs an attestation
+  bundle whose publisher is `stablemates/workhorse` `release-python.yml`.
 - `npm` checks every published package's version, then installs `@stablemates/workhorse` and runs
   `npm audit signatures` and `workhorse --version`.
 - `crate` resolves `workhorse = "=X.Y.Z"` from crates.io and checks the locked package ID.
 - `go` resolves the module through `proxy.golang.org` with no direct fallback and runs
   `go mod verify`.
 
-The script covers registry visibility, signatures or checksums, and clean installation. The
-maintainer still reviews provenance on each registry page and runs the enqueue-and-worker smoke
-test.
+The script covers registry visibility, signatures or checksums, and clean installation. It also
+covers PyPI provenance. The maintainer still reviews provenance on the npm, crates.io, and RubyGems
+pages and runs the enqueue-and-worker smoke test.
 
 Every release check also runs its target before anything is tagged or published. Each rehearsal
 substitutes the artifact about to ship for the registry release:
 
-- `--wheel <file>` installs the dry-run wheel.
+- `--wheel <file>` installs the dry-run wheel. It skips the PyPI provenance check, which only the
+  registry can answer. The attestation rehearsal covers that path before the tag.
 - `--tarballs <directory>` installs all nine packed tarballs and checks each installed version.
   It skips `npm view` and `npm audit signatures`, which only the registry can answer.
 - `--crate <directory>` depends on the unpacked `.crate` archive by path and checks its package ID.
@@ -815,8 +820,15 @@ pipeline.
    PostgreSQL. It builds the wheel and source distribution once and tests those exact files.
    It then runs `pnpm release:verify python` against that wheel, so a post-publish check the
    package cannot satisfy fails the rehearsal before `python/vX.Y.Z` is tagged.
-4. The `pypi` environment generates PEP 740 attestations for the unchanged artifacts, then
-   publishes both distributions and their attestations through trusted publishing.
+4. The `attestation-rehearsal` job runs on every run, dry runs included, without the `pypi`
+   environment. It generates PEP 740 attestations for the unchanged artifacts with the publish
+   job's action and uv. `scripts/check-attestation-upload.ts` then runs `uv publish` against a
+   loopback endpoint. It fails unless every distribution arrives with its attestation. `uv publish`
+   uploads attestations only from uv 0.9.12, and an older uv still exits 0. That is how 0.6.0
+   reached PyPI without provenance.
+5. After the rehearsal passes, the `pypi` environment generates attestations again and publishes
+   both distributions and their attestations through trusted publishing.
+6. `pnpm release:verify python X.Y.Z` fails unless PyPI shows an attestation for every file.
 
 `workhorse.__version__` is public Python API from the release after 0.4.0, and `api/python.txt`
 records it. The post-publish Python check therefore fails against 0.4.0, which predates the

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { corePackage, publishedPackages } from "./packages.js";
-import { verificationSteps } from "./verify-release.js";
+import { pythonProvenanceProblems, verificationSteps } from "./verify-release.js";
 
 describe("verificationSteps", () => {
   it("checks the public Python version attribute and the distribution metadata", async () => {
@@ -96,5 +96,83 @@ describe("verificationSteps", () => {
     await expect(verificationSteps("npm", "1.2.3", { goProxy: "/tmp/p" })).rejects.toThrow(
       "--go-proxy applies only to the go target",
     );
+  });
+});
+
+describe("pythonProvenanceProblems", () => {
+  const wheel = "stablemates_workhorse-1.2.3-py3-none-any.whl";
+  const sdist = "stablemates_workhorse-1.2.3.tar.gz";
+  const attested = {
+    version: 1,
+    attestation_bundles: [
+      {
+        publisher: {
+          environment: "pypi",
+          kind: "GitHub",
+          repository: "stablemates/workhorse",
+          workflow: "release-python.yml",
+        },
+        attestations: [{ version: 1 }],
+      },
+    ],
+  };
+
+  // Answers the PyPI JSON API with both files and each integrity URL from `provenance`.
+  function pypi(provenance: Readonly<Record<string, unknown>>): typeof fetch {
+    return (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === "https://pypi.org/pypi/stablemates-workhorse/1.2.3/json") {
+        return Response.json({ urls: [{ filename: wheel }, { filename: sdist }] });
+      }
+      const file =
+        /^https:\/\/pypi\.org\/integrity\/stablemates-workhorse\/1\.2\.3\/(.+)\/provenance$/.exec(
+          url,
+        )?.[1];
+      const body = file === undefined ? undefined : provenance[file];
+      return body === undefined
+        ? Response.json({ message: "No provenance available" }, { status: 404 })
+        : Response.json(body);
+    }) as typeof fetch;
+  }
+
+  it("passes when every file carries an attestation from the release workflow", async () => {
+    await expect(
+      pythonProvenanceProblems("1.2.3", pypi({ [wheel]: attested, [sdist]: attested })),
+    ).resolves.toEqual([]);
+  });
+
+  // 0.6.0 reached PyPI this way: both files, and a 404 from the integrity API for each.
+  it("fails for each file PyPI holds no provenance for", async () => {
+    await expect(pythonProvenanceProblems("1.2.3", pypi({}))).resolves.toEqual([
+      `${wheel} has no PyPI provenance (HTTP 404)`,
+      `${sdist} has no PyPI provenance (HTTP 404)`,
+    ]);
+  });
+
+  it("fails for an attestation from another publisher or with no attestations", async () => {
+    const foreign = {
+      attestation_bundles: [
+        {
+          ...attested.attestation_bundles[0],
+          publisher: { repository: "someone/else", workflow: "release-python.yml" },
+        },
+      ],
+    };
+    const empty = {
+      attestation_bundles: [{ ...attested.attestation_bundles[0], attestations: [] }],
+    };
+
+    await expect(
+      pythonProvenanceProblems("1.2.3", pypi({ [wheel]: foreign, [sdist]: empty })),
+    ).resolves.toEqual([
+      `${wheel} has no attestation from stablemates/workhorse release-python.yml`,
+      `${sdist} has no attestation from stablemates/workhorse release-python.yml`,
+    ]);
+  });
+
+  it("fails when PyPI has no such release", async () => {
+    await expect(pythonProvenanceProblems("9.9.9", pypi({}))).resolves.toEqual([
+      "PyPI has no stablemates-workhorse 9.9.9 (HTTP 404)",
+    ]);
   });
 });
