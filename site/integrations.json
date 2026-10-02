@@ -80,6 +80,15 @@
       "landingSnippet": "ormKysely"
     },
     {
+      "slug": "mikroorm",
+      "name": "MikroORM",
+      "category": "orms",
+      "tier": "documented",
+      "summary": "Enqueues through the shipped Kysely adapter inside a MikroORM PostgreSQL transaction.",
+      "boundary": "A tested recipe, not a MikroORM package; only the callback-local EntityManager executor joins its transaction.",
+      "verifiedOn": "2026-10-02"
+    },
+    {
       "slug": "serverless",
       "name": "Serverless and edge",
       "category": "runtimes",

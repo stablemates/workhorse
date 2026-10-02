@@ -374,6 +374,8 @@ client produced by `forTransaction`. ORM integrations use `createDrizzleAdapter`
 from `@stablemates/workhorse-typeorm`, or `createKyselyAdapter` from `@stablemates/workhorse-kysely`.
 The queue does not `close` a connection or transaction supplied by its caller.
 
+[MikroORM PostgreSQL](/docs/mikroorm) uses the shipped Kysely adapter with the callback-local EntityManager executor.
+
 ## Next
 
 - [Idempotency](/docs/idempotency) — make repeated acceptance converge on one task
