@@ -11,6 +11,23 @@ adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses 
 
 ### Unreleased
 
+**Upgrade: migrate the schema before any 0.6 process starts.** The final schema version is **52**.
+The SDK compatibility floor stays at schema version **43**, so a 0.5.0 process keeps working on
+version 52. The migrations only add, so the upgrade is a rolling deployment. The
+[root changelog](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md) lists the SQL fixes. Each takes effect when its
+migration commits, and version 52 includes them all.
+
+**An installation that runs cold export stops its exporters across migration 0052.** That migration
+repairs the export ledger, but it cannot stop an upload already in flight. Upgrade in this order:
+
+1. Stop every cold exporter, and let each finish its object and manifest uploads.
+2. Keep cold export enabled, so retention keeps waiting for the export.
+3. Run `workhorse schema migrate`.
+4. Restart the exporters after the migration commits.
+
+An installation that never enabled cold export needs no extra step. The
+[cold export guide](https://github.com/stablemates/workhorse/blob/main/docs/guides/335-cold-export.md#a-day-is-a-utc-day) explains the repair.
+
 **Schedule sync now applies the current task contract.** `Queue.sync_schedules` and
 `AsyncQueue.sync_schedules` wrote every definition without its contract, so a fired task skipped
 payload validation, used the default size limits, and exposed sensitive payload keys. Both now read
@@ -90,6 +107,32 @@ connection to `AsyncWorker.from_asyncpg`, and the README and the workers page sa
 claims on dedicated connections. A worker takes a caller-owned pool. It borrows a pool connection
 for each claim and lifecycle statement, and it reserves its own heartbeat and listener connections
 from that pool. It never closes the pool. The behavior is unchanged.
+
+Fixes:
+
+- A long-running worker runs maintenance on its own thread. A saturated or paused worker used to
+  stop ticking, so due tasks stayed scheduled and expired leases waited for recovery.
+- The worker measures each handler result before completion and encodes it with `allow_nan=False`.
+  An oversized result raises `TaskValueSizeLimitError` and fails the attempt under the task's retry
+  policy. It used to stop the run loop.
+- `SyncExecutor` and `AsyncPsycopgExecutor` open every cursor with `row_factory=tuple_row`. A
+  connection with `dict_row` or `class_row` no longer breaks the SDK's queries.
+- Cancelling a handler that awaits `AsyncHandlerContext.checkpoint` cancels the operation too. The
+  operation runs in the handler's context, so it sees the handler's context variables and span.
+- `AsyncWorker` keeps draining when its run is cancelled a second time. It used to close its bridge
+  while handlers still ran.
+- `run_child`, `run_children`, and `run_children_all` validate each child payload and stamp the
+  child type's current contract on the request.
+- An enqueue whose cached contract rejects the payload rereads the definition once and validates
+  again. A definition the same enqueue already read is not reread.
+- `Queue` and `AsyncQueue` keep the contract definitions each enqueue used. A concurrent cache
+  replacement no longer fails a later valid request in the same batch. An older in-flight load no
+  longer replaces a newer cache entry, and it no longer refills the cache after `sync_contracts()`
+  clears it.
+- `AsyncWorker` removes its asyncpg notification callback when it stops, and it starts no listener
+  in the synchronous core.
+- The documentation shows workers taking connection pools and states each language's listener and
+  heartbeat connection budget.
 
 ## 0.5.0 — 2026-09-28
 

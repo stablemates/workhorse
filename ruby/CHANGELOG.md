@@ -5,6 +5,22 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+- The gem needs schema version 43 or later. The SDK compatibility floor is schema version **43**,
+  and the final schema version is **52**. The migrations since 0.5.0 only add, so the upgrade is a
+  rolling deployment: run `workhorse schema migrate` before any new process starts. The
+  [root changelog](../CHANGELOG.md) lists the SQL fixes. Each takes effect when its migration commits, and version 52
+  includes them all.
+- An installation that runs cold export stops its exporters across migration 0052. That migration
+  repairs the export ledger, but it cannot stop an upload already in flight. Upgrade in this order:
+
+  1. Stop every cold exporter, and let each finish its object and manifest uploads.
+  2. Keep cold export enabled, so retention keeps waiting for the export.
+  3. Run `workhorse schema migrate`.
+  4. Restart the exporters after the migration commits.
+
+  An installation that never enabled cold export needs no extra step. The
+  [cold export guide](../docs/guides/335-cold-export.md#a-day-is-a-utc-day) explains the repair.
+
 - A handler result PostgreSQL cannot store now fails only its task. jsonb refuses a NUL character
   and an unpaired surrogate. Such a result used to reach the completion statement, whose refusal
   ended `run` and left the task leased. The worker now fails the attempt under the task's retry
