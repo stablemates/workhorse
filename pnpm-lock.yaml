@@ -78,6 +78,9 @@ importers:
       smol-toml:
         specifier: 1.9.0
         version: 1.9.0
+      stripe:
+        specifier: 23.0.0
+        version: 23.0.0(@types/node@26.6.3)
       tsx:
         specifier: ^4.23.15
         version: 4.23.15
@@ -5036,6 +5039,15 @@ packages:
     resolution: {integrity: sha512-1tB5mhVo7U+ETBKNf92xT4hrQa3pm0MZ0PQvuDnWgAAGHDsfp4lPSpiS6psrSiet87wyGPh9ft6wmhOMQ0hDiw==}
     engines: {node: '>=14.16'}
 
+  stripe@23.0.0:
+    resolution: {integrity: sha512-MDE2A5ZVVluYURORaZEVghSmnLJc3w6aHAlZSxDQMsOjOb3V0O6ro/CiaeFlJS4N7uIVmsg98ocRsPmUK6YfyA==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@types/node': '>=20'
+    peerDependenciesMeta:
+      '@types/node':
+        optional: true
+
   style-to-js@1.1.21:
     resolution: {integrity: sha512-RjQetxJrrUJLQPHbLku6U/ocGtzyjbJMP9lCNK7Ag0CNh690nSH8woqWH9u16nMjYBAok+i7JO1NP2pOy8IsPQ==}
 
@@ -8202,21 +8214,21 @@ snapshots:
 
   dotenv@16.6.1: {}
 
-  drizzle-orm@0.45.3(@opentelemetry/api@1.9.1)(@prisma/client@6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3))(@types/pg@8.23.1)(kysely@0.29.6)(pg@8.23.0)(prisma@6.19.3(typescript@5.9.3)):
-    optionalDependencies:
-      '@opentelemetry/api': 1.9.1
-      '@prisma/client': 6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3)
-      '@types/pg': 8.23.1
-      kysely: 0.29.6
-      pg: 8.23.0
-      prisma: 6.19.3(magicast@0.5.5)(typescript@5.9.3)
-
   drizzle-orm@0.45.3(@opentelemetry/api@1.9.1)(@prisma/client@6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3))(@types/pg@8.23.1)(knex@3.3.0(pg@8.23.0))(kysely@0.29.6)(pg@8.23.0)(prisma@6.19.3(typescript@5.9.3)):
     optionalDependencies:
       '@opentelemetry/api': 1.9.1
       '@prisma/client': 6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3)
       '@types/pg': 8.23.1
       knex: 3.3.0(pg@8.23.0)
+      kysely: 0.29.6
+      pg: 8.23.0
+      prisma: 6.19.3(magicast@0.5.5)(typescript@5.9.3)
+
+  drizzle-orm@0.45.3(@opentelemetry/api@1.9.1)(@prisma/client@6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3))(@types/pg@8.23.1)(kysely@0.29.6)(pg@8.23.0)(prisma@6.19.3(typescript@5.9.3)):
+    optionalDependencies:
+      '@opentelemetry/api': 1.9.1
+      '@prisma/client': 6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3)
+      '@types/pg': 8.23.1
       kysely: 0.29.6
       pg: 8.23.0
       prisma: 6.19.3(magicast@0.5.5)(typescript@5.9.3)
@@ -10143,6 +10155,10 @@ snapshots:
       ansi-regex: 6.3.0
 
   strip-json-comments@5.0.3: {}
+
+  stripe@23.0.0(@types/node@26.6.3):
+    optionalDependencies:
+      '@types/node': 26.6.3
 
   style-to-js@1.1.21:
     dependencies:

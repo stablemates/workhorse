@@ -41,6 +41,10 @@ export default defineConfig({
     conditions: ["workhorse-source", ...defaultServerConditions],
     alias: [
       {
+        find: /^@stablemates\/workhorse$/,
+        replacement: fileURLToPath(new URL("./typescript/core/src/index.ts", import.meta.url)),
+      },
+      {
         find: "@stablemates/workhorse/version",
         replacement: fileURLToPath(new URL("./typescript/core/src/version.ts", import.meta.url)),
       },
