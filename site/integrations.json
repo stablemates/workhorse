@@ -116,6 +116,15 @@
       "verifiedOn": "2026-10-02"
     },
     {
+      "slug": "go-bun",
+      "name": "Go Bun ORM",
+      "category": "orms",
+      "tier": "documented",
+      "summary": "Enqueues through Go Bun's embedded database/sql transaction with native PostgreSQL bindings.",
+      "boundary": "A tested pgx stdlib recipe, not a Bun package or JavaScript runtime adapter; Workhorse SQL bypasses Bun formatting and hooks.",
+      "verifiedOn": "2026-10-02"
+    },
+    {
       "slug": "serverless",
       "name": "Serverless and edge",
       "category": "runtimes",
