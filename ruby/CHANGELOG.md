@@ -83,6 +83,10 @@ other SDKs carry, because every tag names one release of all of them.
   A fast-tier task's `HandlerContext` raises `FastTierUnsupportedError` for checkpoints,
   progress writes, durable waits, and child tasks before any durable write. That holds for a
   task claimed through `claim_many_v1` after its queue moved to the fast tier.
+- `HandlerContext#wait_for_signal`, `wait_for_human`, `run_child`, `run_children`, and
+  `run_children_all` validate each step name before the deferred tier read or any write, as
+  `checkpoint` and `sleep` do. An invalid name raises `ArgumentError`. A child set is checked for
+  its type and size before its names.
 - A pooled connection that PostgreSQL dropped is discarded through the pool's
   `discard_current_connection`, so the next statement gets a fresh connection. Before, the pool
   reused the dead connection until the process restarted. An ordinary SQL error keeps the

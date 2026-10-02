@@ -3797,9 +3797,16 @@ the task's queue:
 | `runChild`, `runChildren`, `runChildrenAll` | `child tasks`   |
 
 The Ruby `HandlerContext` rejects its snake_case counterparts with the same feature text, before any
-durable write. Only a checkpoint or wait name is validated first. `get_checkpoint` and `get_progress` stay reads and still answer. A Ruby
-batch member's `BatchHandlerContext` delegates to its `HandlerContext`, so its `checkpoint` and
-`set_progress` raise the same error before any durable write.
+durable write. Only step names, and a child set's type, size, and name uniqueness, are validated
+first. An invalid checkpoint, wait, signal, human wait, or child name raises `ArgumentError` before
+a block runs or any statement reaches PostgreSQL, including the deferred tier read. `run_children`
+and `run_children_all` check the set before its names. A set that is not an Array of
+`ChildTaskRequest` raises `ArgumentError`, and a set of more than 100 children raises
+`LimitExceededError`. Repeated child names raise `ArgumentError`, also before the tier check. Every
+other argument is validated after it, including a checkpoint's block, a sleep's duration or time, a
+wait's timeout, and a human wait's context. `get_checkpoint` and `get_progress` stay reads and still
+answer. A Ruby batch member's `BatchHandlerContext` delegates to its `HandlerContext`, so its
+`checkpoint` and `set_progress` raise the same error before any durable write.
 
 A queue can move to the fast tier while the Ruby worker still claims it through `claim_many_v1`.
 That statement then returns fast-tier tasks with no tier marker. So `Worker#track_full_tier_claim`

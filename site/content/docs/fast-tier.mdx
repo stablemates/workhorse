@@ -60,7 +60,9 @@ other completions and the next claim still commit. On the full tier, an oversize
 A request for a missing feature fails with SQLSTATE `P1007`, and every SDK surfaces it as
 `FastTierUnsupportedError` naming the queue and the feature. Adding a concurrency or rate-limit
 policy to a fast-tier queue fails the same way. A handler's context rejects its calls locally. The
-rejection is an ordinary handler failure, so the task's retry policy applies.
+rejection is an ordinary handler failure, so the task's retry policy applies. In Ruby, an invalid
+step name raises `ArgumentError` before the tier check runs. That covers checkpoint, wait, signal,
+human wait, and child names. A child set's type and size are checked before its names.
 
 If a handler only computes and returns, the fast tier fits. If it ever needs to pause and come back,
 keep its queue full-tier.
