@@ -176,6 +176,52 @@
         }
       }
     },
+    "sqlc": {
+      "typescript": {
+        "exclusion": {
+          "reason": "This scenario tests sqlc's Go pgx/v5 generation; TypeScript's transactional enqueue example remains separate."
+        }
+      },
+      "python": {
+        "exclusion": {
+          "reason": "This scenario tests sqlc's Go pgx/v5 generation; Python's transactional enqueue example remains separate."
+        }
+      },
+      "go": { "file": "go/examples/sqlc/main.go" },
+      "rust": {
+        "exclusion": {
+          "reason": "This scenario tests sqlc's Go pgx/v5 generation, not a Rust query generator."
+        }
+      },
+      "ruby": {
+        "exclusion": {
+          "reason": "This scenario tests sqlc's Go pgx/v5 generation; Ruby's transactional enqueue example remains separate."
+        }
+      }
+    },
+    "sqlx": {
+      "typescript": {
+        "exclusion": {
+          "reason": "github.com/jmoiron/sqlx is a Go library; TypeScript uses its existing transaction example."
+        }
+      },
+      "python": {
+        "exclusion": {
+          "reason": "github.com/jmoiron/sqlx is a Go library; Python uses its existing transaction example."
+        }
+      },
+      "go": { "file": "go/examples/sqlx/main.go" },
+      "rust": {
+        "exclusion": {
+          "reason": "Go sqlx is distinct from Rust SQLx; this scenario makes no Rust SQLx support claim."
+        }
+      },
+      "ruby": {
+        "exclusion": {
+          "reason": "github.com/jmoiron/sqlx is a Go library; Ruby uses its existing transaction example."
+        }
+      }
+    },
     "async-worker": {
       "typescript": {
         "exclusion": {

@@ -107,6 +107,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:runtime:dev
       - run: pnpm sql-catalogues:check
+      - run: pnpm go:sqlc:check
       - run: pnpm dashboard-spec:check
       - run: pnpm dashboard-bundle:check
       - run: pnpm parity:check
