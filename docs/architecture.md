@@ -342,6 +342,15 @@ before `operation` is called or cancels it while the awaitable runs, including a
 that `operation` returned, and waits for its cleanup. If `operation` absorbs the cancellation and
 returns a value, the tracked task raises `asyncio.CancelledError` instead. Either way, `checkpoint`
 stores no row in `workhorse.task_checkpoint`, so a later attempt runs the operation again.
+A cancellation that arrives after the tracked task returns does not stop the save. The synchronous
+core sends `save_checkpoint_v1` once `operation` returns, and `_await_bridge_call` waits for that
+bridge call before it re-raises. Once the save is already under way, the caller receives
+`asyncio.CancelledError` while the row may commit, and a later attempt replays its value without
+calling `operation`. `save_checkpoint_v1` checks the runtime row's worker, fence, lease expiry,
+deadline, attempt timeout, and `cancel_requested_at`; the caller's asyncio cancellation is not one
+of its conditions. A cancelled
+await therefore never proves that no checkpoint exists, and it does not undo the operation's
+effects on other systems.
 `checkpoint` copies the caller's `contextvars` context and the event loop creates the tracked task
 in that copy. Context variables and the current OpenTelemetry span reach `operation`, and its own
 changes stay inside it, as they would in a task the handler created.

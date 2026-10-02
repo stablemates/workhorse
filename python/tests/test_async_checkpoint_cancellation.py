@@ -2,17 +2,33 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import json
+import re
 import threading
 import warnings
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from contextlib import suppress
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import psycopg
 import pytest
 
-from workhorse import AsyncHandlerContext, AsyncWorker, EnqueueOptions, Json, Queue
+from workhorse import (
+    AsyncHandlerContext,
+    AsyncWorker,
+    CancellationToken,
+    ClaimedTask,
+    EnqueueOptions,
+    Json,
+    Queue,
+)
+from workhorse._statements import STATEMENTS, DriverStatement
 from workhorse.async_worker import _AsyncCheckpointAdapter, _BridgeThreads
+from workhorse.worker import _AttemptOutcomeArbiter, _HandlerDurability
+
+REPOSITORY = Path(__file__).parents[2]
 
 
 class SyncCheckpoints:
@@ -246,6 +262,130 @@ def test_a_cancellation_as_the_operation_is_created_still_cancels_it(
             threads.close()
 
     assert run_on_a_fresh_loop(scenario) == []
+
+
+def attempt(number: int) -> ClaimedTask:
+    return ClaimedTask(
+        id="00000000-0000-0000-0000-000000001089",
+        queue="checkpoints",
+        type="charge",
+        priority=0,
+        payload=None,
+        contract_version=None,
+        result_max_bytes=1_048_576,
+        redact_error_details=False,
+        trace_context=None,
+        attempt=number,
+        max_attempts=2,
+        retry_policy=None,
+        deadline_at=None,
+        execution_timeout_ms=None,
+        attempt_timeout_at=None,
+        fence_token=number,
+        lease_expires_at=datetime.fromtimestamp(0, UTC),
+    )
+
+
+class HeldSaves:
+    """Answer the checkpoint statements like PostgreSQL, holding each save until released."""
+
+    dialect = "psycopg"
+
+    def __init__(self) -> None:
+        self.saving = threading.Event()
+        self.release = threading.Event()
+        self.rows_by_name: dict[str, dict[str, Any]] = {}
+
+    def rows(self, statement: DriverStatement, parameters: Sequence[object] = ()) -> list[Any]:
+        if statement is STATEMENTS.list_checkpoints:
+            return list(self.rows_by_name.values())
+        assert statement is STATEMENTS.save_checkpoint
+        task_id, worker_id, fence_token, name, encoded = parameters
+        self.saving.set()
+        assert self.release.wait(5), "the test never released the held save"
+        row = {
+            "task_id": task_id,
+            "checkpoint_name": name,
+            "checkpoint_value": json.loads(str(encoded)),
+            "attempt": fence_token,
+            "fence_token": str(fence_token),
+            "worker_id": worker_id,
+            "created_at": datetime.now(UTC),
+        }
+        self.rows_by_name[str(name)] = row
+        return [{"status": "saved", **row}]
+
+
+def test_a_cancellation_during_the_save_leaves_a_checkpoint_the_next_attempt_replays() -> None:
+    """The operation returned, so the save is under way when the caller is cancelled."""
+    store = HeldSaves()
+    calls: list[int] = []
+
+    def durability(number: int) -> _HandlerDurability:
+        return _HandlerDurability(
+            store,
+            attempt(number),
+            "python-held-save",
+            CancellationToken(),
+            _AttemptOutcomeArbiter(),
+        )
+
+    def operation(number: int) -> Callable[[], Awaitable[Json]]:
+        async def run() -> Json:
+            calls.append(number)
+            return {"completed": True}
+
+        return run
+
+    async def scenario() -> None:
+        threads = _BridgeThreads()
+        loop = asyncio.get_running_loop()
+        first = durability(1)
+        try:
+            caller = asyncio.create_task(
+                _AsyncCheckpointAdapter(first, loop, threads).checkpoint("charge", operation(1))
+            )
+            assert await asyncio.to_thread(store.saving.wait, 5)
+            caller.cancel()
+            await asyncio.sleep(0.05)
+            assert not caller.done(), "the checkpoint returned while its save was running"
+            store.release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await caller
+            assert first._checkpoint_calls == {}, "the bridge call was still inside checkpoint"
+            assert other_tasks() == set()
+
+            assert store.rows_by_name["charge"]["checkpoint_value"] == {"completed": True}
+            replayed = await _AsyncCheckpointAdapter(durability(2), loop, threads).checkpoint(
+                "charge", operation(2)
+            )
+            assert replayed == {"completed": True}
+            assert calls == [1], "the next attempt ran the operation instead of replaying it"
+        finally:
+            store.release.set()
+            threads.close()
+
+    assert run_on_a_fresh_loop(scenario) == []
+
+
+CANCELLATION_DOCUMENTS = (
+    "docs/guides/310-workers.md",
+    "site/content/docs/workers.mdx",
+    "docs/architecture.md",
+    "python/README.md",
+)
+
+
+@pytest.mark.parametrize("document", CANCELLATION_DOCUMENTS)
+def test_the_checkpoint_cancellation_documentation_admits_a_save_already_under_way(
+    document: str,
+) -> None:
+    text = re.sub(r"\s+", " ", (REPOSITORY / document).read_text())
+    assert re.search(r"save (may already be|is already) under way", text), (
+        f"{document} does not say that a save already under way may still commit"
+    )
+    assert "never proves that no checkpoint exists" in text, document
+    assert "does not undo the operation's effects on other systems" in text, document
 
 
 @pytest.mark.asyncio
