@@ -10,6 +10,21 @@ upgrades in place: every release ships ordered migrations, and inside a major li
 adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses it offline, with the
 [0.5.0 upgrade steps](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md#050--2026-09-28). The upgrade from 0.5 to 0.6 only adds.
 
+## 0.6.1 — 2026-10-02
+
+The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
+
+Requires **schema v43**, Rust **1.89** or newer, and PostgreSQL **15** or newer.
+
+The crate has no changes in 0.6.1. It releases at 0.6.1 to keep one version across the
+registries ([ADR 0050](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0050-release-0-1-0-without-a-prerelease-suffix.md)).
+The release exists for the Python distribution, whose 0.6.0 files on PyPI have no PEP 740
+attestations.
+
+**A 0.6.0 database needs no migration.** 0.6.1 adds no migration, so the final schema version is
+**52** and the SDK compatibility floor stays at schema version **43**. An installation on 0.5
+follows the [0.6.0 upgrade steps](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md#060--2026-10-02).
+
 ## 0.6.0 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

@@ -1,6 +1,6 @@
 {
   "name": "@stablemates/workhorse-dashboard-server",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Public beta Node.js backend for the Workhorse operator dashboard",
   "homepage": "https://workhorse.run",
   "bugs": {

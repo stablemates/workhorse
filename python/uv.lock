@@ -1163,7 +1163,7 @@ wheels = [
 
 [[package]]
 name = "stablemates-workhorse"
-version = "0.6.0"
+version = "0.6.1"
 source = { editable = "." }
 dependencies = [
     { name = "jsonschema" },
