@@ -26,6 +26,9 @@ started. A batch may lock all of its tasks before that reading. A heartbeat or c
 waited behind another transaction therefore cannot revive a lease that expired during the wait.
 An accepted heartbeat extends the lease from that clock reading.
 
+The Rust worker matches each heartbeat result to the claim's fence token. If a suspended task
+resumes while an old round is returning, that round cannot renew or cancel the resumed handler.
+
 You never call this yourself. Renewal does not stop when your handler returns. The worker still
 has to validate the result and write the completion or failure, and either can wait on a busy pool.
 The lease keeps renewing through that final write, so a finished task is not handed to recovery.

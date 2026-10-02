@@ -1000,6 +1000,11 @@ attempt's delay and returns `None` to keep the persisted policy. `Worker::new` r
 maximum size is below 3, because heartbeats reserve one connection beside one claim and one
 settlement. `shared_heartbeats` opts out and sends heartbeat rounds through the shared pool.
 
+The Rust worker snapshots each heartbeat member's task ID and fence token before calling
+`heartbeat_many_v1`. `Inner::deliver_heartbeats` in `rust/src/worker/heartbeat.rs` applies a result
+only while the registered member still has that fence token. A parent may suspend and resume under
+a new fence while the old round is in flight. The old result cannot renew or cancel that new claim.
+
 `Worker::handle` registers a typed handler for one task type and replaces any earlier one. A payload
 that fails to decode fails the attempt through the task's retry policy. `Worker::handle_batch` takes
 `BatchOptions`. Its `max_size` accepts 1 through 100 and must not exceed the worker's concurrency.
