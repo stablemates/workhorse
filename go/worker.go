@@ -2578,12 +2578,15 @@ func (worker *Worker) cancellationAccepted(
 	return accepted, nil
 }
 
-// encodeResult serializes a handler result and checks it against what the task accepts: the
-// result schema of its contract version and its result_max_bytes. An error here is a failure of
-// the attempt, never of the worker.
+// encodeResult serializes a handler result and checks it against what the task accepts: a value
+// jsonb can store, the result schema of its contract version, and its result_max_bytes. An error
+// here is a failure of the attempt, never of the worker.
 func (worker *Worker) encodeResult(ctx context.Context, executor Executor, task ClaimedTask, result any) ([]byte, error) {
 	encoded, err := json.Marshal(result)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkStorable(task.Type, contractResultKind, encoded); err != nil {
 		return nil, err
 	}
 	var normalizedResult any

@@ -3340,22 +3340,55 @@ def _expiration_delay(expiration_at: datetime | None, retry_at: float | None) ->
 
 
 _NUMBER_EXPONENT = re.compile(r"\de[+-]")
+_JSON_ESCAPE = re.compile(r"\\(?:u([0-9a-fA-F]{4})|.)", re.DOTALL)
+_UNSTORABLE_ESCAPE_START = re.compile(r"\\u(?:0000|[dD])")
+_UNSTORABLE_RESULT_FORMAT = (
+    "{} result contains a NUL character or an unpaired surrogate,"
+    " which PostgreSQL jsonb cannot store"
+)
 
 
 def _encode_result(task_type: str, result: object, max_bytes: int) -> str:
     """Encode a handler result, or raise before a completion statement can carry it.
 
-    A non-finite number raises ValueError. A result that measures more than max_bytes as
+    A non-finite number raises ValueError. So does a string or key that jsonb refuses: one holding
+    NUL or an unpaired surrogate. A result that measures more than max_bytes as
     octet_length(result::jsonb::text) raises TaskValueSizeLimitError. Compact ASCII JSON at most
     half the limit, with no exponent, cannot exceed it, so only larger results are measured.
     """
     encoded = json.dumps(result, separators=(",", ":"), allow_nan=False)
+    if _has_unstorable_escape(encoded):
+        raise ValueError(_UNSTORABLE_RESULT_FORMAT.format(task_type))
     if len(encoded) * 2 <= max_bytes and _NUMBER_EXPONENT.search(encoded) is None:
         return encoded
     actual_bytes = _jsonb_text_bytes(json.loads(encoded))
     if actual_bytes > max_bytes:
         raise TaskValueSizeLimitError(task_type, "result", actual_bytes, max_bytes)
     return encoded
+
+
+def _has_unstorable_escape(encoded: str) -> bool:
+    """Report a \\u escape in ASCII JSON that jsonb refuses: NUL, or a surrogate outside a pair.
+
+    json.dumps escapes every non-ASCII character, so each string's code units appear as escapes.
+    Ordinary text escapes no NUL and no surrogate, and every surrogate escape starts with \\ud, so
+    only text holding \\u0000, \\ud or \\uD pays for the full scan.
+    """
+    if _UNSTORABLE_ESCAPE_START.search(encoded) is None:
+        return False
+    low_expected_at = -1
+    for match in _JSON_ESCAPE.finditer(encoded):
+        unit = None if match.group(1) is None else int(match.group(1), 16)
+        if low_expected_at >= 0:
+            if match.start() != low_expected_at or unit is None or not 0xDC00 <= unit <= 0xDFFF:
+                return True
+            low_expected_at = -1
+        elif unit is not None:
+            if unit == 0 or 0xDC00 <= unit <= 0xDFFF:
+                return True
+            if 0xD800 <= unit <= 0xDBFF:
+                low_expected_at = match.end()
+    return low_expected_at >= 0
 
 
 def _error_envelope(error: Exception, redact_details: bool) -> Json:
