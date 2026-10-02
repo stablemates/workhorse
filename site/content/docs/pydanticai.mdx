@@ -1,0 +1,170 @@
+---
+title: Can a PydanticAI tool wait for durable approval?
+description: Resume one deferred local tool from retained message history without replacing PydanticAI's execution model.
+---
+
+Yes, for the bounded Python recipe described here. The application saves a deferred tool request,
+then the worker registers a durable human wait. After an authorized decision commits, a new worker
+activation starts a new Agent turn from the retained history.
+
+This is a tested local recipe, not a PydanticAI durable backend or general provider integration.
+PydanticAI does not acquire Workhorse persistence automatically.
+
+## Run the local proof
+
+The repository example uses Python 3.12 or later, `pydantic-ai-slim==2.53.0`, and the Python SDK's
+Psycopg driver. The local proof uses Psycopg 3.3.6, psycopg-pool 3.3.2, and PostgreSQL 18.6.
+PydanticAI is a development dependency, not a dependency of the installed Workhorse SDK.
+
+After configuring the checkout with its pinned tools and local PostgreSQL, run:
+
+```sh
+pnpm example:pydanticai-approval
+```
+
+The command creates a loopback scratch database derived from this checkout's `DATABASE_URL_TEST`.
+It applies the current Workhorse schema and its own application tables, then drops only that scratch
+database. It starts no demo or container. Never point this fixture at production.
+
+The example uses `FunctionModel`, one allowlisted `credit` tool, and a fixed local reviewer.
+It sets `pydantic_ai.models.ALLOW_MODEL_REQUESTS=False`. No provider extras, native model,
+network tool, model credential, or paid request is involved. Its tool credits a local PostgreSQL
+account. A denied request changes no account.
+
+The maintained test file is `python/tests/test_pydanticai_approval.py`. Existing `pnpm python:test`
+discovery runs it once. The tests also use an explicitly restricted `TestModel` tool inventory;
+its default behavior can call every registered tool.
+
+## Keep the two owners separate
+
+The application owns these PostgreSQL tables:
+
+- `pydanticai_conversation` retains the admitted request, serializer version, histories, pending
+  tool identity and arguments, decision, result, stop observation, and conversation request count.
+- `pydanticai_effect` records the operation key and its immutable arguments.
+- `pydanticai_account` records the local business effect in the same transaction as its operation ledger.
+
+Workhorse owns task admission, durable retries, leases, human waits, and fenced context writes.
+The `agent-history-receipt` and `agent-result-receipt` checkpoints contain only the conversation ID.
+They contain no framework snapshot and do not wrap an Agent run or tool effect.
+
+The producer calls the example's `admit` function inside an explicit caller transaction.
+That transaction enqueues the task and inserts its application conversation together.
+An independent observer sees neither row before commit; rollback removes both.
+The handler never reconstructs a missing conversation, even before the first queue receipt exists.
+
+The initial Agent accepts `str` or `DeferredToolRequests` as its output. Its `credit` tool uses
+`requires_approval=True`. A deferred response returns to the caller; it does not keep a live process
+waiting for a reviewer.
+
+`ModelMessagesTypeAdapter` serializes the application's retained history. Resume supplies that
+history and validated `DeferredToolResults` to a **new** `Agent.run` call. The conversation ID stays
+the task ID. The Agent run ID changes; reusing a run ID already present in history is rejected.
+
+## Persist before publishing a receipt
+
+The handler stores the serialized initial history and pending request before saving its queue receipt.
+If that receipt is lost, the next activation loads the saved request instead of making a new draft.
+The pending record contains the tool name, `tool_call_id`, and arguments from the server-owned history.
+The handler validates all three against the immutable admitted request.
+
+The worker registers `credit-approval` with that server-owned context and a 60-second timeout.
+Registration suspends the task and releases the application writer. The example's completion
+function refuses a request until the matching queue wait is committed.
+
+After completion, `wait_for_human` returns the retained decision during a later activation.
+The handler stores that decision before starting the resumed Agent turn. Duplicate equivalent
+decisions return `duplicate`; a conflicting decision under the same key is rejected.
+Concurrent approve/reject requests retain only the first accepted decision.
+
+The application saves the result history and result before the queue result receipt.
+If that receipt is lost, retry returns the stored result without calling the model or tool again.
+The original pending history remains available for approval auditing and duplicate completion.
+
+## Exclude competing and stale writers
+
+Each activation opens a direct, non-pooled Psycopg connection and acquires a session advisory lock
+derived from its task ID. The **same connection** writes histories, decisions, and the local effect ledger.
+It never reconnects. Losing that writer session loses both the lock and every application writer.
+
+Queue concurrency alone does not exclude a stale application driver. Before Agent entry, model
+requests, application writes, and tool effects, the handler makes a fresh public
+`AsyncHandlerContext.set_progress` call. That fenced write rejects an activation whose queue lease
+or cancellation authority has changed. A replayable checkpoint is not a fresh fence check.
+
+All application drivers must follow this lock and fence discipline. Transaction pooling and a
+separate lock-only connection do not satisfy it. A failed or contended driver retries through Workhorse;
+it does not silently replace the lock or reconnect its writer.
+
+## Reconcile uncertain local effects
+
+The deterministic operation key is `(task_id, tool_call_id)`. Its arguments must match both the
+retained approval and any existing ledger entry. The tool inserts that entry and credits the account
+in one PostgreSQL transaction. Either both commit or both roll back.
+
+A process can exit after that transaction commits but before PydanticAI returns a tool result or
+the application saves the result history. Recovery repeats the approved tool from the retained
+initial history. The ledger verifies its arguments and returns without crediting the account again.
+The tests exercise this window with an actual process exit and a new interpreter.
+
+This guarantee covers only this local transactional tool. An HTTP request, payment, email, or other
+external action needs its own provider idempotency or reconciliation contract. No checkpoint or
+message history gives external exactly-once effects. Cancellation cannot undo a committed credit.
+
+## Distinguish model repair from task retry
+
+PydanticAI's `ModelRetry` asks a model to repair a response within its configured retry limit.
+Workhorse task retry restarts a handler and reloads durable application state. They are different budgets.
+The tests execute both bounded successful model repair and retry exhaustion independently of task retry.
+
+The recipe allows one approval only. An approved tool that raises `ModelRetry` can produce a new
+deferred request with changed arguments and even the same tool call ID. The handler rejects that
+output. Supporting another request requires a separately designed approval lifecycle; it must never
+reuse a previous decision just because an ID matches.
+
+The application permits at most four model requests across the conversation, including lost turns.
+It reserves each request in PostgreSQL before model execution and checks that budget **before**
+resumed tool execution. PydanticAI's next-request usage check alone is insufficient: a resumed
+deferred tool can execute before the next model request. The history limit is 32,768 serialized bytes.
+
+## Observe cancellation and deadlines
+
+An active handler relays Workhorse's cooperative cancellation token to PydanticAI's separate
+`CancellationToken`. Native token cancellation raises `RunCancelled`; external asyncio cancellation
+remains `CancelledError`. `RunCancelled.from_cancellation` exposes retained messages for that path.
+Neither path automatically persists interrupted history or rolls back an already committed effect.
+
+A suspended Agent has no live run to cancel. An application observer calls `reconcile_terminal`
+after Workhorse reports `failed` or `canceled`. It holds the same application lock and records a stop
+without deleting the history or approval context. Task deadlines, execution timeout, and human-wait
+timeout remain Workhorse authority. Missing queue authority requires manual reconciliation, not a new run.
+
+## Retain and authorize application state
+
+This example authorizes only the literal `local-reviewer` actor. It is not an authentication system.
+A real application derives the actor from authenticated server state and checks conversation scope
+and reviewer permission before calling the completion surface. Attribution is not authorization.
+
+Clients may send an opaque approval reference and a decision, not message histories, call IDs,
+arguments, or arbitrary tool results. The server reloads all approval context from its own rows.
+Protect those rows from client writes. Encrypt or otherwise protect retained prompts and histories
+according to the application's confidentiality requirements.
+
+Keep conversation history, pending request, decision, operation ledger, and queue receipts long enough
+to reconcile every accepted task and delayed approval. Missing retained state fails closed.
+Deleting an operation ledger can repeat its business effect. Purging queue context is not permission
+to reconstruct an old conversation.
+
+The persisted recipe marker is `local-credit-v1` and the serializer marker is `2.53.0`.
+A mismatch requires an explicit migration; the handler does not guess compatibility.
+Test serialized histories and tool schemas before upgrading the framework. Tool authorization and
+prompt-injection defenses remain application responsibilities, even if a model asked for the action.
+
+No graph, checkpointer replacement, generic durable backend, new core state machine, framework
+package, provider support, or live-model compatibility is established by this recipe.
+
+## Next
+
+- [Human waits](/docs/human-waits) explains registration and completion.
+- [Cancellation](/docs/cancellation) explains queue stop authority.
+- [Dedicated workers](/docs/workers) keeps worker capacity separate from request processes.
