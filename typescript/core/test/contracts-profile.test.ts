@@ -42,6 +42,28 @@ describe("contract schema profile", () => {
     ).toThrow("$.properties.a.$ref must point at a subschema of the contract");
   });
 
+  it("refuses a reference to an inherited root definition the profile walk never checked", () => {
+    const inherited = Object.create({
+      $defs: { a: { type: "string", pattern: "^a$" } },
+    }) as Record<string, Json>;
+    inherited["$ref"] = "#/$defs/a";
+    expect(() => compileContractSchema(inherited)).toThrow(
+      "$.$ref must point at a subschema of the contract",
+    );
+  });
+
+  it("names the anchor and definition forms outside the profile", () => {
+    expect(() => compileContractSchema({ items: { $anchor: "a" } })).toThrow(
+      "$.items.$anchor is outside the Workhorse contract profile",
+    );
+    expect(() => compileContractSchema({ items: { $defs: {} } })).toThrow(
+      "$.items.$defs must appear only on the root schema",
+    );
+    expect(() => compileContractSchema({ $defs: { "a b": true } })).toThrow(
+      "$.$defs.a b must be a definition name matching ^[A-Za-z_][-A-Za-z0-9._]*$",
+    );
+  });
+
   it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
     "rejects the non-finite number %s, which JSON would store as null",
     (value) => {

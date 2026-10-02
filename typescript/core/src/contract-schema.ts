@@ -15,7 +15,6 @@ const SCHEMA_VALUE_KEYWORDS = new Set([
 const SCHEMA_ARRAY_KEYWORDS = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
 const SCHEMA_MAP_KEYWORDS = new Set(["$defs", "dependentSchemas", "properties"]);
 const ANNOTATION_KEYWORDS = new Set([
-  "$anchor",
   "$comment",
   "$schema",
   "default",
@@ -53,69 +52,43 @@ const VALIDATION_KEYWORDS = new Set([
 // unknown keywords, and Ajv still validates each schema against the Draft 2020-12 meta-schema.
 // `strictNumbers` is an instance rule, not a lint rule: it keeps NaN and the infinities out of a
 // number, since JSON.stringify would store them as a contract-invalid null.
+const DEFINITION_NAME = /^[A-Za-z_][-A-Za-z0-9._]*$/;
+const DEFINITION_REFERENCE_PREFIX = "#/$defs/";
 const ajv = new Ajv2020({ strict: false, strictNumbers: true, validateFormats: false });
 const objectValidators = new WeakMap<object, ValidateFunction<Json>>();
 const booleanValidators = new Map<boolean, ValidateFunction<Json>>();
 
-interface SchemaWalk {
-  readonly anchors: Set<string>;
-  readonly references: { path: string; reference: string }[];
+interface SchemaReference {
+  readonly path: string;
+  readonly reference: string;
 }
 
-// Every reference must name a schema position the profile walk checked. A reference into `default`
-// or `examples` would otherwise apply a schema the walk never saw.
+// A reference names the root schema or one root definition. The libraries behind the five SDKs
+// resolve those two forms alike, and both name a schema position the profile walk checked.
 function assertContractSchema(schema: Json): void {
-  const walk: SchemaWalk = { anchors: new Set(), references: [] };
-  visitSchema(schema, "$", walk);
-  for (const { path, reference } of walk.references) {
-    if (!referencesSubschema(schema, reference, walk.anchors)) {
+  const references: SchemaReference[] = [];
+  visitSchema(schema, "$", references);
+  for (const { path, reference } of references) {
+    if (!referencesSubschema(schema, reference)) {
       throw new TypeError(`${path} must point at a subschema of the contract`);
     }
   }
 }
 
-function referencesSubschema(root: Json, reference: string, anchors: Set<string>): boolean {
-  const fragment = reference.slice(1);
-  if (fragment === "") return true;
-  if (!fragment.startsWith("/")) return anchors.has(fragment);
-  let tokens: string[];
-  try {
-    tokens = fragment
-      .split("/")
-      .slice(1)
-      .map((token) => decodeURIComponent(token));
-  } catch {
+function referencesSubschema(root: Json, reference: string): boolean {
+  if (reference === "#") return true;
+  if (!reference.startsWith(DEFINITION_REFERENCE_PREFIX)) return false;
+  if (root === null || typeof root !== "object" || Array.isArray(root)) return false;
+  // The profile walk visits own keys only, so an inherited `$defs` was never checked.
+  if (!Object.hasOwn(root, "$defs")) return false;
+  const definitions = root["$defs"];
+  if (definitions === null || typeof definitions !== "object" || Array.isArray(definitions)) {
     return false;
   }
-  // Libraries disagree on whether `%2F` separates tokens, so the walk could check a different schema.
-  if (tokens.some((token) => token.includes("/"))) return false;
-  tokens = tokens.map((token) => token.replaceAll("~1", "/").replaceAll("~0", "~"));
-  let node: Json | undefined = root;
-  for (let index = 0; index < tokens.length; index += 1) {
-    if (node === null || typeof node !== "object" || Array.isArray(node)) return false;
-    const keyword = tokens[index] as string;
-    const value: Json | undefined = Object.hasOwn(node, keyword) ? node[keyword] : undefined;
-    if (SCHEMA_VALUE_KEYWORDS.has(keyword)) {
-      node = value;
-    } else if (SCHEMA_ARRAY_KEYWORDS.has(keyword) && Array.isArray(value)) {
-      index += 1;
-      const entry = tokens[index];
-      if (entry === undefined || !/^(0|[1-9][0-9]*)$/.test(entry)) return false;
-      node = value[Number(entry)];
-    } else if (SCHEMA_MAP_KEYWORDS.has(keyword) && value !== null && typeof value === "object") {
-      index += 1;
-      const name = tokens[index];
-      if (name === undefined || Array.isArray(value) || !Object.hasOwn(value, name)) return false;
-      node = value[name];
-    } else {
-      return false;
-    }
-    if (node === undefined) return false;
-  }
-  return true;
+  return Object.hasOwn(definitions, reference.slice(DEFINITION_REFERENCE_PREFIX.length));
 }
 
-function visitSchema(schema: Json, path: string, walk: SchemaWalk): void {
+function visitSchema(schema: Json, path: string, references: SchemaReference[]): void {
   if (typeof schema === "boolean") return;
   if (schema === null || Array.isArray(schema) || typeof schema !== "object") {
     throw new TypeError(`${path} must be an object or boolean JSON Schema`);
@@ -126,22 +99,27 @@ function visitSchema(schema: Json, path: string, walk: SchemaWalk): void {
       if (typeof value !== "string" || !value.startsWith("#")) {
         throw new TypeError(`${keywordPath} must be a bundled local reference`);
       }
-      walk.references.push({ path: keywordPath, reference: value });
-    } else if (keyword === "$anchor") {
-      if (typeof value === "string") walk.anchors.add(value);
+      references.push({ path: keywordPath, reference: value });
     } else if (keyword === "$schema") {
       if (value !== DIALECT) throw new TypeError(`${keywordPath} must select Draft 2020-12`);
+    } else if (keyword === "$defs" && path !== "$") {
+      throw new TypeError(`${keywordPath} must appear only on the root schema`);
     } else if (SCHEMA_VALUE_KEYWORDS.has(keyword)) {
-      visitSchema(value, keywordPath, walk);
+      visitSchema(value, keywordPath, references);
     } else if (SCHEMA_ARRAY_KEYWORDS.has(keyword)) {
       if (!Array.isArray(value)) throw new TypeError(`${keywordPath} must be an array`);
-      value.forEach((entry, index) => visitSchema(entry, `${keywordPath}[${index}]`, walk));
+      value.forEach((entry, index) => visitSchema(entry, `${keywordPath}[${index}]`, references));
     } else if (SCHEMA_MAP_KEYWORDS.has(keyword)) {
       if (value === null || Array.isArray(value) || typeof value !== "object") {
         throw new TypeError(`${keywordPath} must be an object`);
       }
       for (const [name, child] of Object.entries(value)) {
-        visitSchema(child, `${keywordPath}.${name}`, walk);
+        if (keyword === "$defs" && !DEFINITION_NAME.test(name)) {
+          throw new TypeError(
+            `${keywordPath}.${name} must be a definition name matching ${DEFINITION_NAME.source}`,
+          );
+        }
+        visitSchema(child, `${keywordPath}.${name}`, references);
       }
     } else if (!ANNOTATION_KEYWORDS.has(keyword) && !VALIDATION_KEYWORDS.has(keyword)) {
       throw new TypeError(`${keywordPath} is outside the Workhorse contract profile`);

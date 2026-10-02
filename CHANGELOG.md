@@ -41,6 +41,26 @@ an annotation. A `$ref` must also point at a subschema, so it cannot reach a sch
    applies. Each payload was checked at enqueue, so a keyword in the payload schema does not affect
    tasks already queued.
 
+**Breaking: a contract `$ref` must be `#` or `#/$defs/<name>`, and `$anchor` is no longer
+accepted.** The SDKs' JSON Schema libraries disagreed on how to decode and resolve other reference
+forms, so a reference could reach a schema the profile check never saw.
+[ADR 0039](docs/decisions/0039-use-a-restricted-json-schema-contract-profile.md) now names two reference forms: `#`, the root schema, and `#/$defs/<name>`, where
+`<name>` is a key of the root `$defs`. Every SDK rejects the schema for any other reference, with
+`<path>.$ref must point at a subschema of the contract`; for `$defs` below the root; for a `$defs`
+name that does not match `^[A-Za-z_][-A-Za-z0-9._]*$`; and for `$anchor` at any depth. A property
+named `$anchor` stays valid. Upgrade in this order:
+
+1. Find each contract version that references anything other than `#` or a root definition, nests
+   `$defs`, uses `$anchor`, or names a definition outside that pattern. A version synced before the
+   upgrade stops compiling once the SDK is upgraded.
+2. Move each referenced or anchored subschema into the root `$defs` and reference it as
+   `#/$defs/<name>`. Rename each definition outside the pattern and update the references to it.
+   Declare a new contract version, because contract rows are immutable, and move `currentVersion` to
+   it.
+3. Let tasks that hold the old version finish before you upgrade workers. A worker checks a task's
+   result against the version the task holds, so a removed form in that result schema fails the
+   attempt with the profile error, and the task's retry policy applies.
+
 **The demo deployment contract names schema version 52 as the final version.**
 `typescript/demo/DEPLOYMENT.md` said the build ships version 51 and that migration finishes there.
 Migration 0053 had already made the final version 52. The contract now says 52, and a test compares

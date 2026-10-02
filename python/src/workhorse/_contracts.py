@@ -4,7 +4,6 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
-from urllib.parse import unquote
 
 from jsonschema import Draft202012Validator
 
@@ -12,7 +11,8 @@ from .errors import TaskContractValidationError
 from .types import Json, TaskTypeContracts
 
 DIALECT = "https://json-schema.org/draft/2020-12/schema"
-_MISSING = object()
+DEFINITION_NAME = re.compile(r"[A-Za-z_][-A-Za-z0-9._]*")
+DEFINITION_REFERENCE_PREFIX = "#/$defs/"
 SCHEMA_VALUES = {
     "additionalProperties",
     "contains",
@@ -26,7 +26,6 @@ SCHEMA_VALUES = {
 SCHEMA_ARRAYS = {"allOf", "anyOf", "oneOf", "prefixItems"}
 SCHEMA_MAPS = {"$defs", "dependentSchemas", "properties"}
 ANNOTATIONS = {
-    "$anchor",
     "$comment",
     "$schema",
     "default",
@@ -62,62 +61,26 @@ VALIDATION = {
 
 
 def check_contract_schema(schema: Json) -> None:
-    # Every reference must name a schema position the profile walk checked. A reference into
-    # `default` or `examples` would otherwise apply a schema the walk never saw.
-    anchors: set[str] = set()
+    # A reference names the root schema or one root definition. The libraries behind the five
+    # SDKs resolve those two forms alike, and both name a schema position the profile walk checked.
     references: list[tuple[str, str]] = []
-    _check_profile(schema, "$", anchors, references)
+    _check_profile(schema, "$", references)
     for path, reference in references:
-        if not _references_subschema(schema, reference, anchors):
+        if not _references_subschema(schema, reference):
             raise TypeError(f"{path} must point at a subschema of the contract")
 
 
-def _references_subschema(root: Json, reference: str, anchors: set[str]) -> bool:
-    fragment = reference[1:]
-    if fragment == "":
+def _references_subschema(root: Json, reference: str) -> bool:
+    if reference == "#":
         return True
-    if not fragment.startswith("/"):
-        return fragment in anchors
-    try:
-        decoded = [unquote(token, errors="strict") for token in fragment.split("/")[1:]]
-    except UnicodeDecodeError:
+    if not reference.startswith(DEFINITION_REFERENCE_PREFIX) or not isinstance(root, dict):
         return False
-    # Libraries disagree on whether `%2F` separates tokens, so the walk could check a
-    # different schema.
-    if any("/" in token for token in decoded):
-        return False
-    tokens = [token.replace("~1", "/").replace("~0", "~") for token in decoded]
-    node: object = root
-    index = 0
-    while index < len(tokens):
-        if not isinstance(node, dict):
-            return False
-        keyword = tokens[index]
-        value = node.get(keyword, _MISSING)
-        if keyword in SCHEMA_VALUES:
-            node = value
-        elif keyword in SCHEMA_ARRAYS and isinstance(value, list):
-            index += 1
-            if index == len(tokens) or not re.fullmatch(r"0|[1-9][0-9]*", tokens[index]):
-                return False
-            position = int(tokens[index])
-            node = value[position] if position < len(value) else _MISSING
-        elif keyword in SCHEMA_MAPS and isinstance(value, dict):
-            index += 1
-            if index == len(tokens):
-                return False
-            node = value.get(tokens[index], _MISSING)
-        else:
-            return False
-        if node is _MISSING:
-            return False
-        index += 1
-    return True
+    definitions = root.get("$defs")
+    name = reference[len(DEFINITION_REFERENCE_PREFIX) :]
+    return isinstance(definitions, dict) and name in definitions
 
 
-def _check_profile(
-    schema: Json, path: str, anchors: set[str], references: list[tuple[str, str]]
-) -> None:
+def _check_profile(schema: Json, path: str, references: list[tuple[str, str]]) -> None:
     if isinstance(schema, bool):
         return
     if not isinstance(schema, dict):
@@ -128,24 +91,28 @@ def _check_profile(
             if not isinstance(value, str) or not value.startswith("#"):
                 raise TypeError(f"{keyword_path} must be a bundled local reference")
             references.append((keyword_path, value))
-        elif keyword == "$anchor":
-            if isinstance(value, str):
-                anchors.add(value)
         elif keyword == "$schema":
             if value != DIALECT:
                 raise TypeError(f"{keyword_path} must select Draft 2020-12")
+        elif keyword == "$defs" and path != "$":
+            raise TypeError(f"{keyword_path} must appear only on the root schema")
         elif keyword in SCHEMA_VALUES:
-            _check_profile(value, keyword_path, anchors, references)
+            _check_profile(value, keyword_path, references)
         elif keyword in SCHEMA_ARRAYS:
             if not isinstance(value, list):
                 raise TypeError(f"{keyword_path} must be an array")
             for index, child in enumerate(value):
-                _check_profile(child, f"{keyword_path}[{index}]", anchors, references)
+                _check_profile(child, f"{keyword_path}[{index}]", references)
         elif keyword in SCHEMA_MAPS:
             if not isinstance(value, dict):
                 raise TypeError(f"{keyword_path} must be an object")
             for name, child in value.items():
-                _check_profile(child, f"{keyword_path}.{name}", anchors, references)
+                if keyword == "$defs" and not DEFINITION_NAME.fullmatch(name):
+                    raise TypeError(
+                        f"{keyword_path}.{name} must be a definition name matching "
+                        f"^{DEFINITION_NAME.pattern}$"
+                    )
+                _check_profile(child, f"{keyword_path}.{name}", references)
         elif keyword not in ANNOTATIONS and keyword not in VALIDATION:
             raise TypeError(f"{keyword_path} is outside the Workhorse contract profile")
 

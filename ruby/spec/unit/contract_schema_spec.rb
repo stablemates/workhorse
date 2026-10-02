@@ -63,7 +63,7 @@ RSpec.describe Stablemates::Workhorse::ContractSchema do
     [
       {"type" => "strnig"}, {"type" => %w[string string]}, {"minimum" => "1"}, {"maxLength" => -1},
       {"maxItems" => 1.5}, {"required" => [1]}, {"enum" => "a"}, {"uniqueItems" => "yes"},
-      {"properties" => []}, {"items" => 1}, {"allOf" => []}, {"$anchor" => "1a"}
+      {"properties" => []}, {"items" => 1}, {"allOf" => []}
     ].each do |document|
       expect { schema(document) }.to raise_error(ArgumentError), document.inspect
     end
@@ -81,11 +81,13 @@ RSpec.describe Stablemates::Workhorse::ContractSchema do
     expect { schema(document) }.to raise_error(ArgumentError, "$.properties.a.$ref must point at a subschema of the contract")
   end
 
-  it "resolves an anchor declared after its reference and refuses a duplicate" do
-    document = {"properties" => {"a" => {"$ref" => "#name"}}, "$defs" => {"name" => {"$anchor" => "name", "type" => "string"}}}
-    expect(schema(document).valid?({"a" => "x"})).to be(true)
-    expect(schema(document).valid?({"a" => 1})).to be(false)
-    duplicate = {"$defs" => {"a" => {"$anchor" => "x"}, "b" => {"$anchor" => "x"}}}
-    expect { schema(duplicate) }.to raise_error(ArgumentError)
+  it "names the anchor and definition forms outside the profile" do
+    {
+      {"items" => {"$anchor" => "a"}} => "$.items.$anchor is outside the Workhorse contract profile",
+      {"items" => {"$defs" => {}}} => "$.items.$defs must appear only on the root schema",
+      {"$defs" => {"a b" => true}} => "$.$defs.a b must be a definition name matching ^[A-Za-z_][-A-Za-z0-9._]*$"
+    }.each do |document, message|
+      expect { schema(document) }.to raise_error(ArgumentError, message)
+    end
   end
 end

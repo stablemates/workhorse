@@ -32,17 +32,16 @@ const (
 	contractObjectErrorFormat             = "%s must be an object"
 	contractProfileErrorFormat            = "%s is outside the Workhorse contract profile"
 	contractSubschemaReferenceErrorFormat = "%s must point at a subschema of the contract"
+	contractRootDefinitionsErrorFormat    = "%s must appear only on the root schema"
+	contractDefinitionNameErrorFormat     = "%s must be a definition name matching %s"
 	invalidContractDefinitionMessage      = "invalid contract definition returned by PostgreSQL"
 	fastTierUnsupportedMessage            = "fast-tier queue does not support the request"
 	contractRootPath                      = "$"
 	contractPathSeparator                 = "."
 	contractArrayPathFormat               = "%s[%d]"
 	contractLocalReferencePrefix          = "#"
-	contractPointerSeparator              = "/"
-	contractPointerEscapedSlash           = "~1"
-	contractPointerEscapedTilde           = "~0"
-	contractPointerTilde                  = "~"
-	contractArrayIndexPattern             = "^(0|[1-9][0-9]*)$"
+	contractDefinitionReferencePrefix     = "#/$defs/"
+	contractDefinitionNamePattern         = "^[A-Za-z_][-A-Za-z0-9._]*$"
 	contractResourceURL                   = "urn:workhorse:contract"
 	contractCacheSeparator                = "\x00"
 	contractPayloadKind                   = "payload"
@@ -62,14 +61,14 @@ const (
 	contractVersionJSONField              = "contractVersion"
 	contractVersionsJSONField             = "versions"
 	contractReferenceKeyword              = "$ref"
-	contractAnchorKeyword                 = "$anchor"
+	contractDefinitionsKeyword            = "$defs"
 	contractDialectKeyword                = "$schema"
 )
 
 var contractSchemaValueKeywords = []string{"additionalProperties", "contains", "else", "if", "items", "not", "propertyNames", "then"}
 var contractSchemaArrayKeywords = []string{"allOf", "anyOf", "oneOf", "prefixItems"}
 var contractSchemaMapKeywords = []string{"$defs", "dependentSchemas", "properties"}
-var contractAnnotationKeywords = []string{"$anchor", "$comment", "$schema", "default", "deprecated", "description", "examples", "format", "readOnly", "title", "writeOnly"}
+var contractAnnotationKeywords = []string{"$comment", "$schema", "default", "deprecated", "description", "examples", "format", "readOnly", "title", "writeOnly"}
 var contractValidationKeywords = []string{"const", "dependentRequired", "enum", "exclusiveMaximum", "exclusiveMinimum", "maxContains", "maximum", "maxItems", "maxLength", "maxProperties", "minContains", "minimum", "minItems", "minLength", "minProperties", "multipleOf", "required", "type", "uniqueItems"}
 
 const (

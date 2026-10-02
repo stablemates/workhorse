@@ -27,7 +27,7 @@ module Stablemates
       SCHEMA_ARRAYS = %w[allOf anyOf oneOf prefixItems].freeze
       SCHEMA_MAPS = %w[$defs dependentSchemas properties].freeze
       PLAIN_KEYWORDS = %w[
-        $anchor $comment $schema default deprecated description examples format readOnly title writeOnly
+        $comment $schema default deprecated description examples format readOnly title writeOnly
         const dependentRequired enum exclusiveMaximum exclusiveMinimum maxContains maximum maxItems
         maxLength maxProperties minContains minimum minItems minLength minProperties multipleOf required
         type uniqueItems
@@ -38,9 +38,11 @@ module Stablemates
       COUNTS = %w[maxContains maxItems maxLength maxProperties minContains minItems minLength minProperties].freeze
       STRINGS = %w[$comment description format title].freeze
       BOOLEANS = %w[deprecated readOnly uniqueItems writeOnly].freeze
-      ANCHOR = /\A[A-Za-z_][-A-Za-z0-9._]*\z/
+      DEFINITION_NAME = /\A[A-Za-z_][-A-Za-z0-9._]*\z/
+      DEFINITION_REFERENCE_PREFIX = "#/$defs/"
       private_constant :DIALECT, :SCHEMA_VALUES, :SCHEMA_ARRAYS, :SCHEMA_MAPS, :PLAIN_KEYWORDS, :MAX_DEPTH, :TYPES,
-        :NUMBERS, :COUNTS, :STRINGS, :BOOLEANS, :ANCHOR
+        :NUMBERS, :COUNTS, :STRINGS, :BOOLEANS, :DEFINITION_NAME,
+        :DEFINITION_REFERENCE_PREFIX
 
       # The profile violation in +schema+, or nil. Internal to the SDK.
       def self.profile_violation(schema, path = "$") # :nodoc:
@@ -48,17 +50,19 @@ module Stablemates
         return "#{path} must be an object or boolean JSON Schema" unless schema.is_a?(Hash)
 
         schema.each do |keyword, value|
-          violation = keyword_violation(keyword, value, "#{path}.#{keyword}")
+          violation = keyword_violation(keyword, value, "#{path}.#{keyword}", root: path == "$")
           return violation if violation
         end
         nil
       end
 
-      def self.keyword_violation(keyword, value, path)
+      def self.keyword_violation(keyword, value, path, root:)
         if keyword == "$ref"
           "#{path} must be a bundled local reference" unless value.is_a?(String) && value.start_with?("#")
         elsif keyword == "$schema"
           "#{path} must select Draft 2020-12" unless value == DIALECT
+        elsif keyword == "$defs" && !root
+          "#{path} must appear only on the root schema"
         elsif SCHEMA_VALUES.include?(keyword)
           profile_violation(value, path)
         elsif SCHEMA_ARRAYS.include?(keyword)
@@ -68,7 +72,7 @@ module Stablemates
         elsif SCHEMA_MAPS.include?(keyword)
           return "#{path} must be an object" unless value.is_a?(Hash)
 
-          value.lazy.filter_map { |name, child| profile_violation(child, "#{path}.#{name}") }.first
+          value.lazy.filter_map { |name, child| member_violation(keyword, name, child, "#{path}.#{name}") }.first
         elsif PLAIN_KEYWORDS.include?(keyword)
           value_violation(keyword, value, path)
         else
@@ -76,6 +80,15 @@ module Stablemates
         end
       end
       private_class_method :keyword_violation
+
+      def self.member_violation(keyword, name, child, path)
+        if keyword == "$defs" && !name.match?(DEFINITION_NAME)
+          return "#{path} must be a definition name matching ^[A-Za-z_][-A-Za-z0-9._]*$"
+        end
+
+        profile_violation(child, path)
+      end
+      private_class_method :member_violation
 
       # The Draft 2020-12 meta-schema's rule for the value of +keyword+, as a violation or nil.
       def self.value_violation(keyword, value, path)
@@ -93,7 +106,6 @@ module Stablemates
           unless value.is_a?(Hash) && value.each_value.all? { |names| names?(names) }
             "#{path} must map each property to an array of unique strings"
           end
-        when "$anchor" then "#{path} must be a plain-name anchor" unless value.is_a?(String) && value.match?(ANCHOR)
         end
       end
       private_class_method :value_violation
@@ -125,34 +137,16 @@ module Stablemates
         raise ArgumentError, violation if violation
 
         @schema = schema
-        @anchors = {}
-        prepare(schema)
+        check_references(schema, "$")
       end
 
       def valid?(instance) = valid_at?(@schema, instance, 0)
 
       private
 
-      # Collects every anchor, then checks every reference, so +valid?+ cannot fail on the schema and
-      # a reference may name an anchor that comes later. A reference must name a schema position the
-      # profile check visited; one into +default+ or +examples+ would apply a schema it never saw.
-      def prepare(schema)
-        collect_anchors(schema)
-        check_references(schema, "$")
-      end
-
-      def collect_anchors(schema)
-        return unless schema.is_a?(Hash)
-
-        if schema.key?("$anchor")
-          anchor = schema["$anchor"]
-          raise ArgumentError, "invalid contract schema: anchor #{anchor} is duplicated" if @anchors.key?(anchor)
-
-          @anchors[anchor] = schema
-        end
-        each_subschema(schema, "$") { |child, _path| collect_anchors(child) }
-      end
-
+      # A reference names the root schema or one root definition. The libraries behind the five SDKs
+      # resolve those two forms alike, and both name a schema position the profile check visited. The
+      # check runs before +valid?+, so +valid?+ cannot fail on the schema.
       def check_references(schema, path)
         return unless schema.is_a?(Hash)
 
@@ -175,44 +169,13 @@ module Stablemates
         end
       end
 
-      # The schema +reference+ names, or nil when it names no schema position.
+      # The schema +reference+ names, or nil when it names neither the root nor a root definition.
       def resolve(reference)
-        fragment = reference.delete_prefix("#")
-        return @schema if fragment.empty?
-        return @anchors[fragment] unless fragment.start_with?("/")
+        return @schema if reference == "#"
+        return nil unless reference.start_with?(DEFINITION_REFERENCE_PREFIX)
 
-        pointer(fragment.split("/", -1).drop(1).map { |token| pointer_token(token) })
-      rescue ArgumentError, Encoding::CompatibilityError
-        nil
-      end
-
-      # Libraries disagree on whether +%2F+ separates tokens, so the walk could check a different schema.
-      def pointer_token(token)
-        decoded = URI.decode_uri_component(token)
-        raise ArgumentError, "encoded separator" if decoded.include?("/")
-
-        decoded.gsub("~1", "/").gsub("~0", "~")
-      end
-
-      def pointer(tokens)
-        node = @schema
-        until tokens.empty?
-          return nil unless node.is_a?(Hash)
-
-          keyword = tokens.shift
-          value = node[keyword]
-          node = if SCHEMA_VALUES.include?(keyword)
-            value
-          elsif SCHEMA_ARRAYS.include?(keyword) && value.is_a?(Array) && tokens.first&.match?(/\A(0|[1-9]\d*)\z/)
-            value[Integer(tokens.shift, 10)]
-          elsif SCHEMA_MAPS.include?(keyword) && value.is_a?(Hash) && !tokens.empty?
-            value.fetch(tokens.shift) { return nil }
-          else
-            return nil
-          end
-          return nil if node.nil?
-        end
-        node
+        definitions = @schema["$defs"]
+        definitions[reference.delete_prefix(DEFINITION_REFERENCE_PREFIX)] if definitions.is_a?(Hash)
       end
 
       def valid_at?(schema, instance, depth)

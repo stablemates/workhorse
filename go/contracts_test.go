@@ -70,6 +70,19 @@ func TestContractSchemaRefusesAReferenceOutsideTheSchemaTree(t *testing.T) {
 	}
 }
 
+func TestContractSchemaNamesTheAnchorAndDefinitionFormsItRefuses(t *testing.T) {
+	for message, schema := range map[string]any{
+		"$.items.$anchor is outside the Workhorse contract profile":                 map[string]any{"items": map[string]any{"$anchor": "a"}},
+		"$.items.$defs must appear only on the root schema":                         map[string]any{"items": map[string]any{"$defs": map[string]any{}}},
+		"$.$defs.a b must be a definition name matching ^[A-Za-z_][-A-Za-z0-9._]*$": map[string]any{"$defs": map[string]any{"a b": true}},
+	} {
+		_, err := compileContractSchema(schema)
+		if err == nil || err.Error() != message {
+			t.Fatalf("expected %q, got %v", message, err)
+		}
+	}
+}
+
 func TestContractJSONNormalizationPreservesLargeIntegers(t *testing.T) {
 	var value any
 	if err := decodeContractJSON([]byte(`{"id":9007199254740993}`), &value); err != nil {
