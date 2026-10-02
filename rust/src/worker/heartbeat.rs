@@ -196,9 +196,24 @@ impl Inner {
             let status: String = row.try_get("status")?;
             statuses.insert(task, OwnershipStatus::parse(Some(&status))?);
         }
+        self.deliver_heartbeats(members, &statuses, sent_at);
+        Ok(())
+    }
+
+    /// Delivers a completed round only to the same claims that sent it.
+    fn deliver_heartbeats(
+        &self,
+        members: &[(Uuid, i64)],
+        statuses: &HashMap<String, OwnershipStatus>,
+        sent_at: Instant,
+    ) {
         let state = self.heartbeats.state();
-        for (task, _) in members {
-            let Some((_, sender)) = state.members.get(task) else { continue };
+        for (task, sent_fence) in members {
+            let Some((current_fence, sender)) = state.members.get(task) else { continue };
+            // A suspension can resume this task while the old round is still in flight.
+            if current_fence != sent_fence {
+                continue;
+            }
             let status = statuses.get(&task.to_string()).copied().unwrap_or(OwnershipStatus::Stale);
             if status == OwnershipStatus::Accepted {
                 let _ = sender.try_send(Beat::Renewed(sent_at));
@@ -218,6 +233,76 @@ impl Inner {
             );
             let _ = sender.try_send(Beat::Rejected(status));
         }
-        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Worker, WorkerOptions};
+
+    fn worker() -> Worker {
+        let manager = deadpool_postgres::Manager::new(
+            "postgresql://localhost/unused".parse().unwrap(),
+            tokio_postgres::NoTls,
+        );
+        let pool = deadpool_postgres::Pool::builder(manager).max_size(3).build().unwrap();
+        Worker::new(
+            pool,
+            WorkerOptions {
+                queues: vec!["unused".into()],
+                polling_only: true,
+                ..WorkerOptions::default()
+            },
+        )
+        .unwrap()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_delayed_round_cannot_reach_a_resumed_claim() {
+        for status in [
+            Some(OwnershipStatus::Accepted),
+            Some(OwnershipStatus::Stale),
+            Some(OwnershipStatus::CancelRequested),
+            Some(OwnershipStatus::DeadlineExceeded),
+            Some(OwnershipStatus::TimeoutExceeded),
+            None,
+        ] {
+            let worker = worker();
+            let task = Uuid::new_v4();
+            let other = Uuid::new_v4();
+            let mut suspended = worker.0.register_heartbeat(task, 1);
+            let mut unchanged = worker.0.register_heartbeat(other, 1);
+            // The round snapshots fence 1, then the parent suspends and resumes at fence 2.
+            let members = [(task, 1), (other, 1)];
+            suspended.leave();
+            let mut resumed = worker.0.register_heartbeat(task, 2);
+            let sent_at = Instant::now();
+            let mut statuses = HashMap::from([(other.to_string(), OwnershipStatus::Accepted)]);
+            if let Some(status) = status {
+                statuses.insert(task.to_string(), status);
+            }
+            worker.0.deliver_heartbeats(&members, &statuses, sent_at);
+            assert!(
+                matches!(resumed.beats.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+                "a response for fence 1 reached fence 2"
+            );
+            assert!(matches!(
+                suspended.beats.try_recv(),
+                Err(mpsc::error::TryRecvError::Disconnected)
+            ));
+            assert!(matches!(unchanged.beats.try_recv(), Ok(Beat::Renewed(at)) if at == sent_at));
+            // Leaving the old execution again must preserve the new membership.
+            drop(suspended);
+            worker.0.deliver_heartbeats(&[(task, 2)], &statuses, sent_at);
+            match status.unwrap_or(OwnershipStatus::Stale) {
+                OwnershipStatus::Accepted => assert!(
+                    matches!(resumed.beats.try_recv(), Ok(Beat::Renewed(at)) if at == sent_at)
+                ),
+                expected => assert!(
+                    matches!(resumed.beats.try_recv(), Ok(Beat::Rejected(actual)) if actual == expected)
+                ),
+            }
+        }
     }
 }

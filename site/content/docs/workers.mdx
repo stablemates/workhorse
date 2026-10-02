@@ -210,6 +210,8 @@ accidentally write as a stale owner after the task moves on.
   background timer batches every active lease owned by the worker on its configured heartbeat
   cadence. A task keeps renewing after its handler returns, through result validation and the
   fenced completion or failure, so a slow final write cannot hand finished work to recovery.
+  The Rust worker matches each heartbeat response to the fence token that sent it. A delayed
+  response from before a durable suspension cannot renew or cancel the resumed handler.
   A shorter lease means faster
   recovery after a crash; a longer one tolerates worse network pauses.
 - **`workerId`** identifies the lease owner. Leave it generated unless a process manager
