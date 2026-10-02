@@ -250,6 +250,21 @@ so every running process version always finds the schema shape it expects:
    ships as a contract step the operator runs deliberately, not as part of `workhorse schema
 migrate`; see [Contract steps and the major boundary](#contract-steps-and-the-major-boundary).
 
+```mermaid
+flowchart LR
+  subgraph R1[Release 1: expand]
+    E[Migration adds the new shape<br/>beside the old one]
+  end
+  subgraph R2[Release 2: migrate]
+    M[Applications move reads,<br/>then writes, to the new shape]
+  end
+  subgraph R3[Release 3: contract]
+    C[Migration removes the old shape]
+  end
+  R1 --> R2 --> R3
+  C -.->|narrows workhorse.protocol_version| K[Contract step:<br/>workhorse schema contract --yes]
+```
+
 Destructive or long-running changes require a separately rehearsed rollout with a documented
 rollback or roll-forward decision before they ship. Dual-write compatibility views remain
 rejected; the migration chain is the single authority.
