@@ -4,7 +4,7 @@
     "../../tsconfig.source-paths.json",
     "../../tsconfig.typecheck-base.json"
   ],
-  "include": ["test/**/*.ts"],
+  "include": ["test/**/*.ts", "examples/**/*.ts"],
   "compilerOptions": {
     "outDir": "../../.build/typecheck/adapter-conformance",
     "rootDir": "../..",

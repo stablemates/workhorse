@@ -1,0 +1,158 @@
+---
+title: MikroORM
+description: Enqueue through the shipped Kysely adapter in the same PostgreSQL transaction as MikroORM entity writes.
+---
+
+When an entity write and its follow-up task must commit together, use the transaction's executor for both.
+MikroORM exposes that executor through the callback-local EntityManager's `getKysely()`.
+The shipped `@stablemates/workhorse-kysely` adapter accepts it without another integration package.
+
+This is a tested PostgreSQL recipe, not a separate MikroORM adapter or a promise about every MikroORM version.
+The catalog's **documented** tier describes recipes; this recipe also has a maintained real-database fixture in TypeScript CI.
+Workhorse owns its schema lifecycle. Keep `workhorse` outside your ORM's entity definitions and migrations.
+
+## Use the tested package set
+
+The fixture pins `@mikro-orm/core` and `@mikro-orm/postgresql` to **7.2.1**.
+The PostgreSQL package brings aligned `@mikro-orm/sql` **7.2.1**, Kysely **0.29.6**, and node-postgres **8.23.0**.
+Use Node.js **22.17.0 or newer**, which those MikroORM packages require, within Workhorse's [supported runtimes](/docs/installation).
+
+```bash
+pnpm add @stablemates/workhorse @stablemates/workhorse-kysely \
+  @mikro-orm/core@7.2.1 @mikro-orm/postgresql@7.2.1 kysely@0.29.6 pg@8.23.0
+```
+
+[MikroORM 7.1 introduced transaction-aware `getKysely()`](https://mikro-orm.io/blog/mikro-orm-7-1-released#getkysely-now-binds-to-the-active-transaction).
+That identifies the necessary seam, not a supported version range.
+This recipe tests 7.2.1 only. Older majors, 7.0, other 7.x releases, and non-PostgreSQL drivers are outside its verified scope.
+Keep all MikroORM packages aligned when upgrading, and rerun the fixture before extending that scope.
+
+## Write and enqueue inside the callback
+
+Initialize MikroORM with your application entities and the same database where Workhorse is installed.
+The runnable example declares `MikroOrder` with an integer primary key and a unique `reference`.
+It uses `public.mikro_order` and sets the PostgreSQL connection's `search_path` explicitly to `public`.
+Workhorse's queries qualify their own schema, so this keeps ORM-generated table names away from `workhorse`.
+
+```ts
+import { createKyselyAdapter } from "@stablemates/workhorse-kysely";
+
+const workhorse = createKyselyAdapter(orm.em.fork().getKysely());
+
+const accepted = await orm.em.fork().transactional(async (transactionalEm) => {
+  const order = transactionalEm.create(MikroOrder, { reference: "order-42" });
+  await transactionalEm.flush();
+  const executor = transactionalEm.getKysely();
+  const taskId = await workhorse.forTransaction(executor).enqueue("order.accepted", {
+    orderId: order.id,
+  });
+  return { orderId: order.id, taskId };
+});
+```
+
+The adapter's initial executor is pooled. Only `forTransaction(executor)` joins the callback's transaction.
+Obtain `executor` from the EntityManager passed to that exact callback, with default `getKysely()` options.
+Never substitute a captured pool executor, the adapter's default queue, or `transactionalEm.fork().getKysely()`.
+Those can enqueue outside the transaction and leave a task behind after the entity rolls back.
+The fixture includes both escape paths as negative controls.
+
+If the task payload needs a generated identifier, flush before enqueueing.
+MikroORM's `transactional()` wrapper flushes remaining entity changes before committing.
+If that final flush fails after enqueue succeeds, the transaction rolls both writes back.
+Let failures escape the callback; do not convert an enqueue failure into a successful business commit.
+Workhorse neither flushes entities nor commits or rolls back the application transaction.
+
+`accepted.orderId` is a number and `accepted.taskId` is a string.
+The enqueue ID is provisional until `transactional()` resolves, and an enclosing transaction can still roll it back.
+An independent connection cannot see either write before the outer commit.
+
+## Nest with savepoints
+
+When nesting `transactional()` calls, use `TransactionPropagation.NESTED` for savepoint behavior.
+Inside each callback, obtain that callback's `getKysely()` and pass it to `forTransaction` again.
+An inner rollback removes its entity and task while the outer transaction can continue.
+Releasing a savepoint does not commit: an outer rollback still removes both inner writes.
+The fixture proves both cases on the same physical PostgreSQL connection.
+
+Do not disable transactions or choose propagation that suspends them for this atomic recipe.
+Do not retain a transaction-bound queue or executor beyond its callback.
+Custom naming, conversion, and hook plugins are outside the fixture's scope; keep `getKysely()` options at their defaults.
+
+## Respect result and resource ownership
+
+The Kysely adapter passes parameterized SQL through unchanged and returns a core `QueryResult`.
+`rows` contains the driver's raw values, and `rowCount` counts returned rows, not affected rows without `RETURNING`.
+The adapter fills `command` with an empty string, `oid` with zero, and `fields` with an empty array.
+It does not supply PostgreSQL field metadata or entity hydration.
+
+With MikroORM's default PostgreSQL parsers, integers are numbers, `bigint` values are strings, and JSONB values are objects.
+Raw `timestamptz` values are strings, not `Date` instances; the fixture verifies their instant by parsing them explicitly.
+Do not annotate these raw timestamps as `Date` or assume they match a directly configured node-postgres pool.
+
+Database failures become `KyselyQueryError`. The original error stays in `cause`, and its SQLSTATE stays in `code`.
+The fixture checks a missing relation (`42P01`) and enqueue in an aborted transaction (`25P02`).
+The ORM's final flush failure remains an ORM error; its unique violation (`23505`) still rolls back the task.
+
+The adapter never destroys borrowed Kysely executors by default.
+Leave its `close` option unset for the request-side recipe. The application owns `orm.close()` after requests drain.
+Do not independently call `destroy()` on MikroORM's pooled or transaction-bound Kysely objects.
+If an application creates a separate Kysely instance, that application owns its destruction too.
+
+## Run workers separately
+
+Use a dedicated worker process with its own node-postgres pool, not a request's EntityManager or transaction.
+That pool supplies the worker's dedicated heartbeat and notification connections.
+Compile this configuration to JavaScript and start it with `workhorse worker --config ./dist/worker.js`.
+
+```ts
+import { createWorkhorseAdapter, defineWorkerProcess, Pool } from "@stablemates/workhorse";
+
+export default defineWorkerProcess({
+  adapter() {
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    return createWorkhorseAdapter({
+      database: pool,
+      adaptTransaction: (transaction) => transaction,
+      close: () => pool.end(),
+    });
+  },
+  workers: [
+    {
+      configure(worker) {
+        worker.handle<{ orderId: number }>("order.accepted", async (payload) => ({
+          orderId: payload.orderId,
+        }));
+      },
+    },
+  ],
+});
+```
+
+## Run the maintained proof
+
+From a configured checkout, run `pnpm test:integration:mikroorm`.
+It creates and drops a scratch database through the repository harness; it never resets an application's database.
+The TypeScript CI lane discovers the fixture in its database suite and runs it once per change.
+The fixture imports and runs the business-write/enqueue function from the runnable example.
+It also runs the example CLI and checks the committed pair after the application closes its ORM.
+
+To run the example's CLI, first build the runtime with `pnpm build:runtime:dev`.
+Use an explicitly disposable database with the Workhorse schema already installed and no `public.mikro_order` table.
+The CLI creates that example table. It is not an application migration command.
+
+```bash
+DATABASE_URL="$DISPOSABLE_DATABASE_URL" pnpm exec tsx scripts/with-env.ts \
+  tsx typescript/adapter-conformance/examples/mikroorm.ts
+```
+
+The fixture covers executor identity, independent visibility, joint commit and rollback, both savepoint outcomes,
+flush failure after enqueue, result shapes and types, structured errors, lifecycle ownership, and pool/fork escape controls.
+This does not certify hosted PostgreSQL providers, custom plugins, or MikroORM versions beyond the pinned baseline.
+
+## Sources and next steps
+
+- [Tagged 7.2.1 executor binding](https://github.com/mikro-orm/mikro-orm/blob/v7.2.1/packages/sql/src/SqlEntityManager.ts)
+  and [transaction lifecycle](https://github.com/mikro-orm/mikro-orm/blob/v7.2.1/packages/core/src/utils/TransactionManager.ts).
+- [Tagged PostgreSQL package dependencies](https://github.com/mikro-orm/mikro-orm/blob/v7.2.1/packages/postgresql/package.json)
+  and [SQL package dependencies](https://github.com/mikro-orm/mikro-orm/blob/v7.2.1/packages/sql/package.json).
+- [Kysely](/docs/kysely), [enqueue and transactions](/docs/enqueue), and [dedicated worker processes](/docs/worker-processes).

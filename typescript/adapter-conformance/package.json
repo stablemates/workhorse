@@ -6,6 +6,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
+    "@mikro-orm/core": "7.2.1",
+    "@mikro-orm/postgresql": "7.2.1",
     "@prisma/client": "6.19.3",
     "@stablemates/workhorse": "workspace:*",
     "@stablemates/workhorse-drizzle": "workspace:*",
