@@ -97,6 +97,28 @@ The crate's library name is `workhorse`, and it follows the Python SDK's surface
 
 The crate never installs or migrates the shared PostgreSQL schema.
 
+## Enqueue transport foundation
+
+`EnqueueClient::new(default_queue)` holds shared enqueue preparation and validation without owning
+a connection. Its `enqueue`, `enqueue_many`, `assert_compatible`, and `sync_contracts` methods
+borrow an `EnqueueTransport` mutably. Reuse a client only within one logical database and schema.
+
+An adapter executes each `EnqueueQuery` using its generated SQL, typed JSONB/text binds, and named
+result columns. Workhorse validates result types, outcomes, ordinals, contracts, and structured
+SQLSTATE errors centrally. Preserve SQLSTATE, DETAIL, and the original source through
+`Error::database`; never parse a driver's human-readable message.
+
+The adapter must use the exact caller-owned connection or transaction. It must not acquire a
+fallback connection, commit, roll back, close, or spawn detached queries. The caller owns
+savepoints and cancellation. Dropping an enqueue future releases its Rust borrow, but does not
+guarantee server-side cancellation or recovery of an aborted transaction.
+
+This is an adapter-author foundation, not shipped SQLx, SeaORM, or Diesel support. The tested
+alternative transport is an external, mutable, non-`Sync` fixture over PostgreSQL. `Queue` retains
+its sealed tokio/deadpool executor, and workers still require a deadpool-postgres pool. No new
+feature or dependency is required. See the [design decision](../docs/decisions/0086-separate-rust-enqueue-preparation-from-mutable-transports.md)
+for the interface and compatibility limits.
+
 ## Next
 
 - Follow the [quickstart](https://workhorse.run/docs/quickstart) and deploy

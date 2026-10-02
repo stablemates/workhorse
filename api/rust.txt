@@ -403,6 +403,41 @@ impl core::marker::Sync for workhorse::DependencyTerminalPolicy
 impl core::marker::Unpin for workhorse::DependencyTerminalPolicy
 impl core::panic::unwind_safe::RefUnwindSafe for workhorse::DependencyTerminalPolicy
 impl core::panic::unwind_safe::UnwindSafe for workhorse::DependencyTerminalPolicy
+pub enum workhorse::EnqueueBind<'a>
+pub workhorse::EnqueueBind::Json(&'a serde_json::value::Value)
+pub workhorse::EnqueueBind::Text(core::option::Option<&'a str>)
+impl<'a> core::clone::Clone for workhorse::EnqueueBind<'a>
+pub fn workhorse::EnqueueBind<'a>::clone(&self) -> workhorse::EnqueueBind<'a>
+impl<'a> core::fmt::Debug for workhorse::EnqueueBind<'a>
+pub fn workhorse::EnqueueBind<'a>::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for workhorse::EnqueueBind<'a>
+impl<'a> core::marker::Freeze for workhorse::EnqueueBind<'a>
+impl<'a> core::marker::Send for workhorse::EnqueueBind<'a>
+impl<'a> core::marker::Sync for workhorse::EnqueueBind<'a>
+impl<'a> core::marker::Unpin for workhorse::EnqueueBind<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for workhorse::EnqueueBind<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for workhorse::EnqueueBind<'a>
+pub enum workhorse::EnqueueColumnType
+pub workhorse::EnqueueColumnType::Int
+pub workhorse::EnqueueColumnType::Json
+pub workhorse::EnqueueColumnType::Text
+pub workhorse::EnqueueColumnType::TextArray
+pub workhorse::EnqueueColumnType::Uuid
+impl core::clone::Clone for workhorse::EnqueueColumnType
+pub fn workhorse::EnqueueColumnType::clone(&self) -> workhorse::EnqueueColumnType
+impl core::cmp::Eq for workhorse::EnqueueColumnType
+impl core::cmp::PartialEq for workhorse::EnqueueColumnType
+pub fn workhorse::EnqueueColumnType::eq(&self, other: &workhorse::EnqueueColumnType) -> bool
+impl core::fmt::Debug for workhorse::EnqueueColumnType
+pub fn workhorse::EnqueueColumnType::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for workhorse::EnqueueColumnType
+impl core::marker::StructuralPartialEq for workhorse::EnqueueColumnType
+impl core::marker::Freeze for workhorse::EnqueueColumnType
+impl core::marker::Send for workhorse::EnqueueColumnType
+impl core::marker::Sync for workhorse::EnqueueColumnType
+impl core::marker::Unpin for workhorse::EnqueueColumnType
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::EnqueueColumnType
+impl core::panic::unwind_safe::UnwindSafe for workhorse::EnqueueColumnType
 pub enum workhorse::EnqueueNonReplaceableReason
 pub workhorse::EnqueueNonReplaceableReason::IncompatibleKeyMode
 pub workhorse::EnqueueNonReplaceableReason::NotPending
@@ -459,6 +494,26 @@ impl core::marker::Sync for workhorse::EnqueueOutcome
 impl core::marker::Unpin for workhorse::EnqueueOutcome
 impl core::panic::unwind_safe::RefUnwindSafe for workhorse::EnqueueOutcome
 impl core::panic::unwind_safe::UnwindSafe for workhorse::EnqueueOutcome
+pub enum workhorse::EnqueueValue
+pub workhorse::EnqueueValue::Int(i32)
+pub workhorse::EnqueueValue::Json(serde_json::value::Value)
+pub workhorse::EnqueueValue::Null
+pub workhorse::EnqueueValue::Text(alloc::string::String)
+pub workhorse::EnqueueValue::TextArray(alloc::vec::Vec<alloc::string::String>)
+pub workhorse::EnqueueValue::Uuid(uuid::Uuid)
+impl core::clone::Clone for workhorse::EnqueueValue
+pub fn workhorse::EnqueueValue::clone(&self) -> workhorse::EnqueueValue
+impl core::cmp::PartialEq for workhorse::EnqueueValue
+pub fn workhorse::EnqueueValue::eq(&self, other: &workhorse::EnqueueValue) -> bool
+impl core::fmt::Debug for workhorse::EnqueueValue
+pub fn workhorse::EnqueueValue::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for workhorse::EnqueueValue
+impl core::marker::Freeze for workhorse::EnqueueValue
+impl core::marker::Send for workhorse::EnqueueValue
+impl core::marker::Sync for workhorse::EnqueueValue
+impl core::marker::Unpin for workhorse::EnqueueValue
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::EnqueueValue
+impl core::panic::unwind_safe::UnwindSafe for workhorse::EnqueueValue
 #[non_exhaustive] pub enum workhorse::Error
 pub workhorse::Error::AlreadyWaiting
 pub workhorse::Error::AlreadyWaiting::name: alloc::string::String
@@ -479,6 +534,10 @@ pub workhorse::Error::ContractUnavailable::version: alloc::string::String
 pub workhorse::Error::ContractValidation
 pub workhorse::Error::ContractValidation::task_type: alloc::string::String
 pub workhorse::Error::ContractValidation::version: alloc::string::String
+pub workhorse::Error::Database
+pub workhorse::Error::Database::detail: core::option::Option<alloc::string::String>
+pub workhorse::Error::Database::source: alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>
+pub workhorse::Error::Database::sqlstate: core::option::Option<alloc::string::String>
 pub workhorse::Error::DependencyCycle
 pub workhorse::Error::DependencyCycle::details: alloc::boxed::Box<workhorse::DependencyCycleDetails>
 pub workhorse::Error::DependencyLimitExceeded
@@ -517,6 +576,7 @@ pub workhorse::Error::UnexpectedStatus
 pub workhorse::Error::UnexpectedStatus::operation: workhorse::Operation
 pub workhorse::Error::UnexpectedStatus::status: alloc::string::String
 impl workhorse::Error
+pub fn workhorse::Error::database(sqlstate: core::option::Option<&str>, detail: core::option::Option<&str>, source: impl core::error::Error + core::marker::Send + core::marker::Sync + 'static) -> Self
 pub fn workhorse::Error::sqlstate(&self) -> core::option::Option<&str>
 impl core::convert::From<deadpool::managed::errors::PoolError<tokio_postgres::error::Error>> for workhorse::Error
 pub fn workhorse::Error::from(source: deadpool_postgres::PoolError) -> Self
@@ -1296,6 +1356,35 @@ impl core::marker::Sync for workhorse::DependencyPolicy
 impl core::marker::Unpin for workhorse::DependencyPolicy
 impl core::panic::unwind_safe::RefUnwindSafe for workhorse::DependencyPolicy
 impl core::panic::unwind_safe::UnwindSafe for workhorse::DependencyPolicy
+pub struct workhorse::EnqueueClient
+impl workhorse::EnqueueClient
+pub async fn workhorse::EnqueueClient::assert_compatible<T: workhorse::EnqueueTransport>(&self, transport: &mut T) -> core::result::Result<(), workhorse::Error>
+pub fn workhorse::EnqueueClient::default_queue(&self) -> &str
+pub async fn workhorse::EnqueueClient::enqueue<T: workhorse::EnqueueTransport, P: serde_core::ser::Serialize + ?core::marker::Sized>(&self, transport: &mut T, task_type: &str, payload: &P, options: workhorse::EnqueueOptions) -> core::result::Result<workhorse::EnqueueResult, workhorse::Error>
+pub async fn workhorse::EnqueueClient::enqueue_many<T: workhorse::EnqueueTransport>(&self, transport: &mut T, requests: alloc::vec::Vec<workhorse::EnqueueRequest>) -> core::result::Result<alloc::vec::Vec<workhorse::EnqueueResult>, workhorse::Error>
+pub fn workhorse::EnqueueClient::new(default_queue: impl core::convert::Into<alloc::string::String>) -> Self
+pub async fn workhorse::EnqueueClient::sync_contracts<T: workhorse::EnqueueTransport>(&self, transport: &mut T, contracts: &alloc::collections::btree::map::BTreeMap<alloc::string::String, workhorse::contracts::TaskTypeContracts>) -> core::result::Result<(), workhorse::Error>
+impl !core::marker::Freeze for workhorse::EnqueueClient
+impl core::marker::Send for workhorse::EnqueueClient
+impl core::marker::Sync for workhorse::EnqueueClient
+impl core::marker::Unpin for workhorse::EnqueueClient
+impl !core::panic::unwind_safe::RefUnwindSafe for workhorse::EnqueueClient
+impl core::panic::unwind_safe::UnwindSafe for workhorse::EnqueueClient
+pub struct workhorse::EnqueueColumn
+pub workhorse::EnqueueColumn::kind: workhorse::EnqueueColumnType
+pub workhorse::EnqueueColumn::name: &'static str
+pub workhorse::EnqueueColumn::nullable: bool
+impl core::clone::Clone for workhorse::EnqueueColumn
+pub fn workhorse::EnqueueColumn::clone(&self) -> workhorse::EnqueueColumn
+impl core::fmt::Debug for workhorse::EnqueueColumn
+pub fn workhorse::EnqueueColumn::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for workhorse::EnqueueColumn
+impl core::marker::Freeze for workhorse::EnqueueColumn
+impl core::marker::Send for workhorse::EnqueueColumn
+impl core::marker::Sync for workhorse::EnqueueColumn
+impl core::marker::Unpin for workhorse::EnqueueColumn
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::EnqueueColumn
+impl core::panic::unwind_safe::UnwindSafe for workhorse::EnqueueColumn
 pub struct workhorse::EnqueueOptions
 pub workhorse::EnqueueOptions::budget: core::option::Option<alloc::string::String>
 pub workhorse::EnqueueOptions::concurrency_key: core::option::Option<alloc::string::String>
@@ -1326,6 +1415,19 @@ impl core::marker::Sync for workhorse::EnqueueOptions
 impl core::marker::Unpin for workhorse::EnqueueOptions
 impl core::panic::unwind_safe::RefUnwindSafe for workhorse::EnqueueOptions
 impl core::panic::unwind_safe::UnwindSafe for workhorse::EnqueueOptions
+pub struct workhorse::EnqueueQuery<'a>
+impl<'a> workhorse::EnqueueQuery<'a>
+pub fn workhorse::EnqueueQuery<'a>::binds(&self) -> &[workhorse::EnqueueBind<'a>]
+pub fn workhorse::EnqueueQuery<'a>::columns(&self) -> &'static [workhorse::EnqueueColumn]
+pub fn workhorse::EnqueueQuery<'a>::statement(&self) -> &'static str
+impl<'a> core::fmt::Debug for workhorse::EnqueueQuery<'a>
+pub fn workhorse::EnqueueQuery<'a>::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Freeze for workhorse::EnqueueQuery<'a>
+impl<'a> core::marker::Send for workhorse::EnqueueQuery<'a>
+impl<'a> core::marker::Sync for workhorse::EnqueueQuery<'a>
+impl<'a> core::marker::Unpin for workhorse::EnqueueQuery<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for workhorse::EnqueueQuery<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for workhorse::EnqueueQuery<'a>
 pub struct workhorse::EnqueueRequest
 pub workhorse::EnqueueRequest::options: workhorse::EnqueueOptions
 pub workhorse::EnqueueRequest::payload: serde_json::value::Value
@@ -2299,6 +2401,8 @@ pub const workhorse::CLIENT_PROTOCOL_VERSION: i32
 pub const workhorse::MAX_ENQUEUE_BATCH_SIZE: usize
 pub const workhorse::MAX_SCHEMA_VERSION: i32
 pub const workhorse::MIN_SCHEMA_VERSION: i32
+pub trait workhorse::EnqueueTransport: core::marker::Send
+pub fn workhorse::EnqueueTransport::query(&mut self, query: workhorse::EnqueueQuery<'_>) -> impl core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<workhorse::EnqueueRow>, workhorse::Error>> + core::marker::Send
 pub trait workhorse::Executor: workhorse::queue::private::Sealed + core::marker::Send + core::marker::Sync
 impl workhorse::Executor for deadpool_postgres::Object
 impl workhorse::Executor for deadpool_postgres::Pool
@@ -2307,6 +2411,7 @@ impl workhorse::Executor for tokio_postgres::client::Client
 impl workhorse::Executor for tokio_postgres::transaction::Transaction<'_>
 impl<T: workhorse::Executor + ?core::marker::Sized> workhorse::Executor for &T
 pub async fn workhorse::run_worker_process(worker: &workhorse::Worker) -> core::result::Result<(), workhorse::Error>
+pub type workhorse::EnqueueRow = alloc::collections::btree::map::BTreeMap<alloc::string::String, workhorse::EnqueueValue>
 pub type workhorse::QueueHealth = serde_json::map::Map<alloc::string::String, serde_json::value::Value>
 pub type workhorse::RegistrationErrorHook = alloc::sync::Arc<(dyn core::ops::function::Fn(&workhorse::Error) + core::marker::Send + core::marker::Sync)>
 pub type workhorse::RetryDelay = alloc::sync::Arc<(dyn core::ops::function::Fn(i32, &workhorse::ClaimedTask) -> core::option::Option<core::time::Duration> + core::marker::Send + core::marker::Sync)>

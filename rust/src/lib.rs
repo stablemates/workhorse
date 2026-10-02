@@ -10,6 +10,7 @@ mod context;
 pub mod contracts;
 #[cfg(feature = "dashboard")]
 pub mod dashboard;
+mod enqueue;
 mod error;
 mod fenced_write;
 pub mod policies;
@@ -24,6 +25,10 @@ pub use admin::*;
 pub use children::{ChildOutcome, ChildTaskRequest, FailureEnvelope};
 pub use context::{BatchHandlerContext, HandlerContext};
 pub use deadpool_postgres;
+pub use enqueue::{
+    EnqueueBind, EnqueueClient, EnqueueColumn, EnqueueColumnType, EnqueueQuery, EnqueueRow,
+    EnqueueTransport, EnqueueValue,
+};
 pub use error::{
     CancelReason, DependencyCycleDetails, DependencyLimitDetails, Error,
     IdempotencyConflictDetails, Operation, PurgeConflictDetails, RedriveConflictDetails,

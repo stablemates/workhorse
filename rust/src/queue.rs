@@ -1,20 +1,17 @@
 //! The client: a sealed executor abstraction and the `Queue` that issues protocol calls.
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
-use tokio::sync::OnceCell;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::{Client, NoTls, Row};
 use uuid::Uuid;
 
-use crate::compatibility::{check_compatibility, read_compatibility_state, CompatibilityCode};
-use crate::contracts::{
-    load_contract, serialize_contracts, ContractCache, PayloadContract, TaskTypeContracts,
-};
+use crate::contracts::{load_contract, PayloadContract, TaskTypeContracts};
+use crate::enqueue::{EnqueueClient, TokioTransport};
 use crate::fenced_write::fenced_rows;
 use crate::policies::{
     self, Budget, BudgetDefinition, ConcurrencyPolicy, ConcurrencyPolicyDefinition,
@@ -107,9 +104,7 @@ impl<T: Executor + ?Sized> Executor for &T {
 /// The Workhorse client. It checks schema compatibility before its first mutation.
 pub struct Queue<E: Executor> {
     executor: E,
-    default_queue: String,
-    compatibility: OnceCell<Result<(), CompatibilityCode>>,
-    contracts: Mutex<ContractCache>,
+    enqueue: EnqueueClient,
 }
 
 impl Queue<Client> {
@@ -124,16 +119,11 @@ impl Queue<Client> {
 impl<E: Executor> Queue<E> {
     /// A client that sends tasks without an explicit queue to `default_queue`.
     pub fn new(executor: E, default_queue: impl Into<String>) -> Self {
-        Self {
-            executor,
-            default_queue: default_queue.into(),
-            compatibility: OnceCell::new(),
-            contracts: Mutex::default(),
-        }
+        Self { executor, enqueue: EnqueueClient::new(default_queue) }
     }
 
     pub fn default_queue(&self) -> &str {
-        &self.default_queue
+        self.enqueue.default_queue()
     }
 
     pub fn executor(&self) -> &E {
@@ -147,18 +137,7 @@ impl<E: Executor> Queue<E> {
 
     /// Runs the startup compatibility check once; a refusal is cached, a driver error is not.
     pub async fn assert_compatible(&self) -> Result<(), Error> {
-        let outcome = self
-            .compatibility
-            .get_or_try_init(|| async {
-                let state = read_compatibility_state(&self.executor).await?;
-                Ok::<_, Error>(check_compatibility(
-                    state.installed_schema_version,
-                    sql::CLIENT_PROTOCOL_VERSION,
-                    &state.served_protocol_versions,
-                ))
-            })
-            .await?;
-        outcome.map_err(|code| Error::Compatibility { code })
+        self.enqueue.assert_compatible(&mut TokioTransport(&self.executor)).await
     }
 
     /// Submits one task.
@@ -168,13 +147,7 @@ impl<E: Executor> Queue<E> {
         payload: &P,
         options: EnqueueOptions,
     ) -> Result<EnqueueResult, Error> {
-        let request = EnqueueRequest {
-            task_type: task_type.into(),
-            payload: serde_json::to_value(payload)?,
-            options,
-        };
-        let mut results = self.enqueue_many(vec![request]).await?;
-        Ok(results.remove(0))
+        self.enqueue.enqueue(&mut TokioTransport(&self.executor), task_type, payload, options).await
     }
 
     /// Submits one atomic batch and returns PostgreSQL's results in request order.
@@ -182,149 +155,7 @@ impl<E: Executor> Queue<E> {
         &self,
         requests: Vec<EnqueueRequest>,
     ) -> Result<Vec<EnqueueResult>, Error> {
-        if requests.is_empty() {
-            return Ok(Vec::new());
-        }
-        if requests.len() > sql::MAX_ENQUEUE_BATCH_SIZE {
-            return Err(Error::invalid("enqueue batch exceeds the shared limit"));
-        }
-        for attempt in 0.. {
-            let rows = self.enqueue_attempt(&requests).await?;
-            let Some(task_types) = contract_mismatch(&rows)? else {
-                return enqueue_results(&rows, requests.len());
-            };
-            for task_type in task_types {
-                let contract = load_contract(&self.executor, &task_type).await?;
-                self.contracts().definitions.insert(task_type, contract);
-            }
-            if attempt > 0 {
-                break;
-            }
-        }
-        Err(Error::ContractPolicyChanged)
-    }
-
-    async fn enqueue_attempt(&self, requests: &[EnqueueRequest]) -> Result<Vec<Row>, Error> {
-        let now = Utc::now();
-        let trace_context = trace_context();
-        let mut inputs = requests
-            .iter()
-            .enumerate()
-            .map(|(index, request)| {
-                self.serialize_request(request, now, trace_context.as_ref()).map_err(|message| {
-                    Error::invalid(format!("enqueue request {}: {message}", index + 1))
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        self.assert_compatible().await?;
-        for (input, request) in inputs.iter_mut().zip(requests) {
-            self.apply_contract(input, request).await?;
-        }
-        let document = Value::Array(inputs.into_iter().map(Value::Object).collect());
-        self.executor.rows(sql::ENQUEUE_MANY_V1, &[&document]).await.map_err(|error| match error {
-            Error::Postgres(error) => Error::translate_enqueue(error),
-            error => error,
-        })
-    }
-
-    fn contracts(&self) -> MutexGuard<'_, ContractCache> {
-        self.contracts.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    fn serialize_request(
-        &self,
-        request: &EnqueueRequest,
-        now: DateTime<Utc>,
-        trace_context: Option<&Value>,
-    ) -> Result<Map<String, Value>, String> {
-        let options = &request.options;
-        validate_options(options)
-            .map_err(|message| format!("invalid enqueue options: {message}"))?;
-        let mut input = task_input(
-            &self.default_queue,
-            &request.task_type,
-            &request.payload,
-            options.queue.as_deref(),
-            options.priority,
-            options.concurrency_key.as_deref(),
-            options.max_attempts,
-            options.retry_policy.as_ref(),
-        );
-        let keyed = options.idempotency.is_some()
-            || options.debounce.is_some()
-            || options.throttle.is_some();
-        if options.run_at.is_some() || !keyed {
-            input.insert("runAt".into(), timestamp(options.run_at.unwrap_or(now)));
-        }
-        input.insert("deadline".into(), options.deadline.map_or(Value::Null, timestamp));
-        input.insert("budget".into(), non_empty(options.budget.as_deref()));
-        input.insert(
-            "executionTimeoutMs".into(),
-            options.execution_timeout_ms.filter(|value| *value != 0).into(),
-        );
-        input.insert("prerequisiteTaskId".into(), Value::Null);
-        let dependencies = options.dependencies.as_ref().map(|dependencies| {
-            let mut sorted = dependencies.clone();
-            sorted.prerequisite_task_ids.sort();
-            sorted
-        });
-        input.insert("dependencies".into(), json!(dependencies));
-        input.insert("tags".into(), json!(options.tags));
-        if let Some(idempotency) = &options.idempotency {
-            let mut idempotency = idempotency.clone();
-            idempotency.scope = default_scope(idempotency.scope);
-            if idempotency.ttl_ms == 0 {
-                idempotency.ttl_ms = 86_400_000;
-            }
-            input.insert("idempotency".into(), json!(idempotency));
-        }
-        if let Some(debounce) = &options.debounce {
-            let mut debounce = debounce.clone();
-            debounce.scope = default_scope(debounce.scope);
-            input.insert("debounce".into(), json!(debounce));
-        }
-        if let Some(throttle) = &options.throttle {
-            let mut throttle = throttle.clone();
-            throttle.scope = default_scope(throttle.scope);
-            input.insert("throttle".into(), json!(throttle));
-        }
-        if let Some(trace_context) = trace_context {
-            input.insert("traceContext".into(), trace_context.clone());
-        }
-        Ok(input)
-    }
-
-    /// Validates a contracted payload and stamps the contract fields PostgreSQL enforces.
-    async fn apply_contract(
-        &self,
-        input: &mut Map<String, Value>,
-        request: &EnqueueRequest,
-    ) -> Result<(), Error> {
-        let task_type = &request.task_type;
-        let (known, enabled) = {
-            let cache = self.contracts();
-            (cache.definitions.get(task_type).cloned(), cache.enabled)
-        };
-        let contract = match known {
-            Some(contract) => contract,
-            None if enabled => {
-                let loaded = load_contract(&self.executor, task_type).await?;
-                self.contracts().definitions.insert(task_type.clone(), loaded.clone());
-                loaded
-            }
-            None => None,
-        };
-        let Some(contract) = contract else {
-            return Ok(());
-        };
-        if !contract.validator.is_valid(&request.payload) {
-            return Err(Error::ContractValidation {
-                task_type: task_type.clone(),
-                version: contract.version.clone(),
-            });
-        }
-        stamp_contract(input, &contract);
-        Ok(())
+        self.enqueue.enqueue_many(&mut TokioTransport(&self.executor), requests).await
     }
 
     /// Requests cancellation; an active task stops at its next PostgreSQL-owned checkpoint.
@@ -463,7 +294,7 @@ impl<E: Executor> Queue<E> {
                 }
                 let task = &definition.task;
                 let mut input = task_input(
-            &self.default_queue,
+            self.enqueue.default_queue(),
                     &task.task_type,
                     &task.payload,
                     task.queue.as_deref(),
@@ -513,13 +344,7 @@ impl<E: Executor> Queue<E> {
         &self,
         contracts: &BTreeMap<String, TaskTypeContracts>,
     ) -> Result<(), Error> {
-        let document = serialize_contracts(contracts)?;
-        self.assert_compatible().await?;
-        self.executor.rows(sql::SYNC_CONTRACT_DEFINITIONS_V1, &[&document]).await?;
-        let mut cache = self.contracts();
-        cache.definitions.clear();
-        cache.enabled = true;
-        Ok(())
+        self.enqueue.sync_contracts(&mut TokioTransport(&self.executor), contracts).await
     }
 
     /// Stores `definitions` for `namespace`. A sync that PostgreSQL aborts as a deadlock victim is
@@ -681,52 +506,6 @@ pub(crate) fn stamp_contract(input: &mut Map<String, Value>, contract: &Arc<Payl
     input.insert("sensitiveResultKeys".into(), json!(contract.result_redact_keys));
 }
 
-/// The task types PostgreSQL named when a batch carried a stale contract.
-fn contract_mismatch(rows: &[Row]) -> Result<Option<Vec<String>>, Error> {
-    for row in rows {
-        if row.try_get::<_, &str>("outcome")? != "contract_mismatch" {
-            continue;
-        }
-        let reason: Option<&str> = row.try_get("reason")?;
-        let detail: Value = reason
-            .and_then(|reason| serde_json::from_str(reason).ok())
-            .ok_or_else(invalid_result)?;
-        let task_types = detail
-            .get("taskTypes")
-            .and_then(|types| serde_json::from_value(types.clone()).ok())
-            .ok_or_else(invalid_result)?;
-        return Ok(Some(task_types));
-    }
-    Ok(None)
-}
-
-fn enqueue_results(rows: &[Row], count: usize) -> Result<Vec<EnqueueResult>, Error> {
-    if rows.len() != count {
-        return Err(invalid_result());
-    }
-    let mut results: Vec<Option<EnqueueResult>> = vec![None; count];
-    for row in rows {
-        let ordinal: i32 = row.try_get("ordinal")?;
-        let slot = usize::try_from(ordinal)
-            .ok()
-            .and_then(|ordinal| ordinal.checked_sub(1))
-            .and_then(|index| results.get_mut(index))
-            .filter(|slot| slot.is_none())
-            .ok_or_else(invalid_result)?;
-        let outcome = EnqueueOutcome::parse(row.try_get("outcome")?).ok_or_else(invalid_result)?;
-        let reason: Option<&str> = row.try_get("reason")?;
-        let reason = match (outcome, reason) {
-            (EnqueueOutcome::NonReplaceable, Some(reason)) => {
-                Some(EnqueueNonReplaceableReason::parse(reason).ok_or_else(invalid_result)?)
-            }
-            (EnqueueOutcome::NonReplaceable, None) | (_, Some(_)) => return Err(invalid_result()),
-            (_, None) => None,
-        };
-        *slot = Some(EnqueueResult { task_id: row.try_get("task_id")?, outcome, reason });
-    }
-    Ok(results.into_iter().flatten().collect())
-}
-
 /// The fields an enqueued, scheduled or child task shares.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn task_input(
@@ -760,10 +539,6 @@ pub(crate) fn task_input(
     input
 }
 
-fn invalid_result() -> Error {
-    Error::invalid("PostgreSQL returned an invalid enqueue result")
-}
-
 pub(crate) fn exactly_one<'a>(rows: &'a [Row], function: &str) -> Result<&'a Row, Error> {
     match rows {
         [row] => Ok(row),
@@ -790,7 +565,7 @@ pub(crate) fn non_empty(value: Option<&str>) -> Value {
     value.filter(|value| !value.is_empty()).map_or(Value::Null, Value::from)
 }
 
-fn default_scope(scope: String) -> String {
+pub(crate) fn default_scope(scope: String) -> String {
     if scope.is_empty() {
         "default".into()
     } else {
@@ -800,7 +575,7 @@ fn default_scope(scope: String) -> String {
 
 /// The current OpenTelemetry span as a W3C carrier, or `None` when it would exceed 1 KiB.
 #[cfg(feature = "opentelemetry")]
-fn trace_context() -> Option<Value> {
+pub(crate) fn trace_context() -> Option<Value> {
     use opentelemetry::trace::TraceContextExt;
     let context = opentelemetry::Context::current();
     let span = context.span();
@@ -828,6 +603,6 @@ fn trace_context() -> Option<Value> {
 }
 
 #[cfg(not(feature = "opentelemetry"))]
-fn trace_context() -> Option<Value> {
+pub(crate) fn trace_context() -> Option<Value> {
     None
 }
