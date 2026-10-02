@@ -89,6 +89,15 @@
       "verifiedOn": "2026-10-02"
     },
     {
+      "slug": "sequelize",
+      "name": "Sequelize",
+      "category": "orms",
+      "tier": "documented",
+      "summary": "Documents why Sequelize 6.37.8 cannot preserve Workhorse native SQL binds.",
+      "boundary": "Unsupported: no Sequelize adapter or atomic-enqueue recipe; a passing regression records incompatibility, not support.",
+      "verifiedOn": "2026-10-02"
+    },
+    {
       "slug": "serverless",
       "name": "Serverless and edge",
       "category": "runtimes",
