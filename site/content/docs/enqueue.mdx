@@ -241,6 +241,13 @@ with engine.begin() as sqlalchemy_connection:
 `driver_connection` is the Psycopg connection already enlisted in this transaction. SQLAlchemy
 still owns the commit, rollback, and pool checkout.
 
+### GORM
+
+Inside `db.Transaction`, Go applications can adapt `tx.Statement.ConnPool` with
+`NewSQLExecutor` and `NewQueue`. Use that same `tx` for business writes and return enqueue errors.
+The [GORM recipe](/docs/gorm) covers the pinned PostgreSQL driver, prepared-statement wrappers,
+savepoints, and transaction ownership. Workers run in a separate process.
+
 One boundary to keep in mind: the transaction covers durable acceptance only. Handlers run later,
 outside your transaction, so their external effects still need their own idempotency.
 

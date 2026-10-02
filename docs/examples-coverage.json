@@ -1,6 +1,29 @@
 {
   "languages": ["typescript", "python", "go", "rust", "ruby"],
   "scenarios": {
+    "gorm": {
+      "typescript": {
+        "exclusion": {
+          "reason": "GORM is a Go ORM; this recipe uses the existing Go SQL executor."
+        }
+      },
+      "python": {
+        "exclusion": {
+          "reason": "GORM is a Go ORM; this recipe uses the existing Go SQL executor."
+        }
+      },
+      "go": { "file": "go/examples/gorm/main.go" },
+      "rust": {
+        "exclusion": {
+          "reason": "GORM is a Go ORM; this recipe uses the existing Go SQL executor."
+        }
+      },
+      "ruby": {
+        "exclusion": {
+          "reason": "GORM is a Go ORM; this recipe uses the existing Go SQL executor."
+        }
+      }
+    },
     "quickstart": {
       "typescript": { "file": "typescript/examples/quickstart.ts" },
       "python": { "file": "python/examples/quickstart.py" },

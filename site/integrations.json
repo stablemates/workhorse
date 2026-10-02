@@ -89,6 +89,15 @@
       "verifiedOn": "2026-10-02"
     },
     {
+      "slug": "gorm",
+      "name": "GORM",
+      "category": "orms",
+      "tier": "documented",
+      "summary": "Enqueues through a caller-owned GORM PostgreSQL transaction using the existing Go SQL executor.",
+      "boundary": "A tested pgx-backed recipe, not an adapter package; GORM owns the transaction and workers run separately.",
+      "verifiedOn": "2026-10-02"
+    },
+    {
       "slug": "serverless",
       "name": "Serverless and edge",
       "category": "runtimes",

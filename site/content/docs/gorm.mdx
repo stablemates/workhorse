@@ -1,0 +1,101 @@
+---
+title: GORM
+description: Accept Workhorse tasks in the PostgreSQL transaction your Go application already owns.
+---
+
+An order and its fulfillment task should either commit together or disappear together.
+Inside GORM's `db.Transaction` callback, pass `tx.Statement.ConnPool` to Workhorse's existing SQL executor.
+No GORM adapter package or second database connection is needed.
+
+## Enqueue with the business write
+
+Install `github.com/stablemates/workhorse/go`, `gorm.io/gorm`, and `gorm.io/driver/postgres` in your application.
+Install the Workhorse schema separately from application migrations.
+The runnable example expects an application table named `orders` with `id text PRIMARY KEY` and `email text NOT NULL`.
+
+```go
+package application
+
+import (
+	"context"
+
+	workhorse "github.com/stablemates/workhorse/go"
+	"gorm.io/gorm"
+)
+
+type Order struct {
+	ID    string `gorm:"primaryKey"`
+	Email string `gorm:"not null"`
+}
+
+func acceptOrder(ctx context.Context, tx *gorm.DB, order Order) (string, error) {
+	if err := tx.WithContext(ctx).Create(&order).Error; err != nil {
+		return "", err
+	}
+	queue := workhorse.NewQueue(workhorse.NewSQLExecutor(tx.Statement.ConnPool), "orders")
+	return queue.Enqueue(ctx, "order.accepted", map[string]any{"orderId": order.ID})
+}
+
+func createOrder(ctx context.Context, db *gorm.DB, order Order) (string, error) {
+	var taskID string
+	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		taskID, err = acceptOrder(ctx, tx, order)
+		return err
+	})
+	if err != nil {
+		return "", err
+	}
+	return taskID, nil
+}
+```
+
+Use `tx`, not the outer `db`, for every business write inside the callback.
+Return enqueue errors, including client-side validation errors, so GORM can roll back the business row.
+Only return the task ID to the caller after the transaction succeeds.
+
+The complete executable and setup commands live in
+[`go/examples/gorm`](https://github.com/stablemates/workhorse/tree/main/go/examples/gorm).
+It opens the PostgreSQL dialector with `PrepareStmt: true` and prints the committed task ID.
+
+## Keep transaction ownership with GORM
+
+GORM owns transaction begin, commit, rollback, savepoints, and connection return.
+Workhorse only sends statements through the callback's connection pool interface.
+Never obtain another connection for enqueue, retain the queue after the callback, or close GORM's pool through an executor.
+Nested `Transaction` callbacks use savepoints unless you enable `DisableNestedTransaction`.
+An enqueue error or cancellation must leave the callback as an error, not a successful commit.
+
+Workhorse calls its PostgreSQL protocol directly with positional parameters.
+Task writes bypass GORM model hooks, associations, and model SQL generation.
+Connection-pool and driver wrappers can still intercept raw statements.
+Business writes still use GORM normally.
+Do not put Workhorse tables into `AutoMigrate` or your application model lifecycle.
+
+## Tested scope
+
+The maintained fixture pins GORM `v1.31.2`, PostgreSQL dialector `v1.6.3`, and pgx `v5.11.0` through `database/sql`.
+It exercises both `*sql.Tx` and GORM's `*gorm.PreparedStmtTX` with `PrepareStmt` enabled.
+Local verification ran against PostgreSQL `18.6`; CI runs the fixture in the repository's Go/PostgreSQL lane.
+These tests do not establish support for another driver, dialect, pooler, or every GORM version.
+
+The fixture proves physical transaction identity, independent pre-commit invisibility, joint commit and rollback, and nested savepoint rollback.
+It also covers cancellation, JSONB bindings, UUID and nullable decoding, ordered batch results, and structured SQLSTATE errors.
+Lifecycle guards prove the executor does not begin, commit, roll back, or close the caller's resources.
+An actual command run verifies the executable, not just a copied snippet.
+
+This is a tested recipe, not a separately published adapter package.
+The catalog therefore uses its documented tier without expanding the existing package-based verified tier.
+
+## Run workers separately
+
+A request transaction accepts a task; it does not execute the handler.
+Run a [dedicated worker process](/docs/worker-processes) with its own pgx pool.
+Never lend a request transaction to a worker or keep a worker in the web request process.
+Handlers run later, so external effects still need their own idempotency.
+
+## Next
+
+- [Enqueue and transactions](/docs/enqueue) covers durable task acceptance.
+- [Workers](/docs/workers) explains handler execution and pool ownership.
+- [GORM transactions](https://gorm.io/docs/transactions.html) documents the callback and savepoint behavior.

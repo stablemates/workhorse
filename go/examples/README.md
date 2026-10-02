@@ -6,6 +6,8 @@ Install the public beta with `go get github.com/stablemates/workhorse/go`, then 
 - `transaction` enqueues a retryable task inside an application-owned pgx transaction. Its
   `createAccount` function is the documented transactional enqueue, and a test shows that a
   failed enqueue rolls back the account row.
+- [`gorm`](gorm/README.md) enqueues through the GORM transaction's `Statement.ConnPool`, using
+  the existing SQL executor. Real PostgreSQL tests cover plain and prepared-statement transactions.
 - `dedicated-worker` runs a supervised worker with checkpoints, a durable timer, bounded concurrency,
   and signal-driven drain.
 - `orchestration` shows child joins, signal waits, and human decisions. Another process supplies
