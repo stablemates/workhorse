@@ -76,4 +76,4 @@ You mostly don't think about it. But it explains two things you will run into:
 ---
 
 Exact semantics of claim, heartbeat, and recovery:
-[`architecture.md`](../architecture.md#claim).
+[`architecture/lifecycle.md`](../architecture/lifecycle.md#claim).

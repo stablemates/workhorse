@@ -64,4 +64,4 @@ returns `stale`. The signal row follows the parent task's safe [retention](330-r
 ---
 
 Exact signal bounds, statuses, and SQL transitions:
-[`architecture.md`](../architecture.md#durable-signal-suspension).
+[`architecture/lifecycle.md`](../architecture/lifecycle.md#durable-signal-suspension).

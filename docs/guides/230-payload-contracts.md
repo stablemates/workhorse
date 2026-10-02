@@ -106,4 +106,4 @@ persistence. Contract errors carry identity and outcome metadata without payload
 ---
 
 Exact fields, limits, and failure behavior:
-[`architecture.md`](../architecture.md#task).
+[`architecture/data-model.md`](../architecture/data-model.md#task).

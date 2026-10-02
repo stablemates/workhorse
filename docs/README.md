@@ -1,8 +1,8 @@
 # Workhorse documentation
 
 Use [`guides/`](guides/) to learn Workhorse one concept at a time. Use
-[`architecture.md`](architecture.md) when you need the exact current behavior, identifiers, and
-limits. The pages under [`site/content/docs/`](../site/content/docs/) adapt those sources for the
+[`architecture.md`](architecture.md) and the per-area pages it indexes when you need the exact
+current behavior, identifiers, and limits. The pages under [`site/content/docs/`](../site/content/docs/) adapt those sources for the
 published site; they do not own product behavior.
 
 ## Choose a starting point

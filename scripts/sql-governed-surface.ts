@@ -98,8 +98,8 @@ const IDENTIFIER = /[a-z_][a-z0-9_]*/g;
 const QUALIFIED = /workhorse\.([a-z_][a-z0-9_]*)/g;
 
 /**
- * The `dashboard_*_v1` views, whose exact columns `docs/architecture.md` publishes under **Dashboard
- * package boundary** as core's relational read contract.
+ * The `dashboard_*_v1` views, whose exact columns `docs/architecture/dashboard.md` publishes under
+ * **Dashboard package boundary** as core's relational read contract.
  *
  * They are governed whether or not this repository's own backends still read them. ADR 0039 moved
  * the dashboard's reads into SQL procedures, which left the views read only from inside the schema,

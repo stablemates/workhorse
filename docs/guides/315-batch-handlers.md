@@ -68,4 +68,4 @@ failure across the members instead of guessing from their individual errors.
 ---
 
 Exact batch-handler limits and lifecycle rules:
-[`architecture.md`](../architecture.md#worker-concurrency-and-lifecycle).
+[`architecture/lifecycle.md`](../architecture/lifecycle.md#worker-concurrency-and-lifecycle).

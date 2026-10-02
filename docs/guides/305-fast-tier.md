@@ -142,4 +142,4 @@ and retention and cold export handle both tables.
 ---
 
 Exact tables, rejections, and recovery rules of the fast tier:
-[`architecture.md`](../architecture.md#fast-tier).
+[`architecture/fast-tier.md`](../architecture/fast-tier.md#fast-tier).

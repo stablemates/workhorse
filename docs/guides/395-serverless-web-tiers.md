@@ -60,4 +60,4 @@ The [worker process guide](310-workers.md) explains handler execution. The
 - [How do I observe production?](350-production-telemetry.md)
 
 Exact process lifecycle and PostgreSQL ownership rules:
-[architecture reference](../architecture.md#worker-process-lifecycle).
+[architecture reference](../architecture/operations.md#worker-process-lifecycle).

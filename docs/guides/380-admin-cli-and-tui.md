@@ -196,4 +196,4 @@ teeth, that is the [dashboard](370-dashboard-authentication.md)'s territory.
 ---
 
 Exact commands, flags, guard mechanics, and exit codes:
-[`architecture.md`](../architecture.md#administrative-cli-and-tui).
+[`architecture/operations.md`](../architecture/operations.md#administrative-cli-and-tui).

@@ -61,4 +61,4 @@ combine history from different Workhorse installations.
 
 ---
 
-Exact columns, constraints, and indexes: [`architecture.md`](../architecture.md#data-model).
+Exact columns, constraints, and indexes: [`architecture/data-model.md`](../architecture/data-model.md#data-model).

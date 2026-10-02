@@ -62,4 +62,4 @@ accepted task, but dependency edges must stay stable after acceptance. Use a reg
 ---
 
 Exact SQL functions, limits, outcomes, and lifecycle events:
-[`architecture.md`](../architecture.md#keyed-debounce).
+[`architecture/lifecycle.md`](../architecture/lifecycle.md#keyed-debounce).

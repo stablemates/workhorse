@@ -159,7 +159,7 @@ every `{ name, url }` pair and `workspace` names the one being served; both are 
 
 Reads behind these procedures go through the versioned `dashboard_*_v1` SQL views and mutations
 go through the shared versioned SQL functions, so a backend implements transport, sessions, and
-delegation — never a second read model. `docs/architecture.md` names the views and functions.
+delegation — never a second read model. `docs/architecture/dashboard.md` names the views and functions.
 
 Responses contain persisted data, measurements, timestamps, and machine-readable codes rather
 than display prose. The shared SPA owns English wording, labels, fabricated maintenance schedule

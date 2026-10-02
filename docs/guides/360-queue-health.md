@@ -93,4 +93,4 @@ if (health.status.level !== "healthy") {
 ---
 
 Exact fields, scan caps, budget defaults, and reason codes:
-[`architecture.md`](../architecture.md#read-models-and-health).
+[`architecture/lifecycle.md`](../architecture/lifecycle.md#read-models-and-health).

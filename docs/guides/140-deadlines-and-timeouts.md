@@ -72,4 +72,4 @@ transition fences any late write from a handler that ignores the signal.
 ---
 
 Exact evidence written on each path:
-[`architecture.md`](../architecture.md#deadlines-and-execution-timeouts).
+[`architecture/lifecycle.md`](../architecture/lifecycle.md#deadlines-and-execution-timeouts).

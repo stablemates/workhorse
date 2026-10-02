@@ -76,4 +76,4 @@ does, nothing bad happens. That's the whole discipline.
 ---
 
 Exact checkpoint limits and semantics:
-[`architecture.md`](../architecture.md#task_checkpoint).
+[`architecture/data-model.md`](../architecture/data-model.md#task_checkpoint).

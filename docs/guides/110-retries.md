@@ -61,4 +61,4 @@ having another go — not a new task.
 ---
 
 Exact policy shapes, bounds, and precedence:
-[`architecture.md`](../architecture.md#task_runtime).
+[`architecture/data-model.md`](../architecture/data-model.md#task_runtime).

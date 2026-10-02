@@ -72,4 +72,4 @@ refilled tokens and how much sampled ready work waits on it, and the same facts 
 - [What happens when a task fails?](110-retries.md)
 - [How do workers claim tasks safely?](020-leases-and-fences.md)
 
-[Architecture reference](../architecture.md#rate_limit_policy-and-rate_limit_bucket).
+[Architecture reference](../architecture/data-model.md#rate_limit_policy-and-rate_limit_bucket).
