@@ -253,6 +253,15 @@
       "verifiedOn": "2026-10-02"
     },
     {
+      "slug": "celery",
+      "name": "Celery migration",
+      "category": "frameworks",
+      "tier": "documented",
+      "summary": "Migrates one JSON task with a shared PostgreSQL business-operation ledger.",
+      "boundary": "A tested local migration recipe, not Celery broker, result, retry API, or Canvas compatibility; external effects remain application-owned.",
+      "verifiedOn": "2026-10-03"
+    },
+    {
       "slug": "pgbouncer",
       "name": "PgBouncer",
       "category": "poolers",
