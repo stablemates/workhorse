@@ -273,6 +273,15 @@
       "pinnedBy": "typescript/dashboard"
     },
     {
+      "slug": "github",
+      "name": "GitHub issue triage",
+      "category": "frameworks",
+      "tier": "documented",
+      "summary": "Accepts signed issue deliveries durably and reconciles a desired triage label.",
+      "boundary": "A PostgreSQL-backed recipe with mocked GitHub APIs, not a live-provider or exactly-once claim; consumers own missed-delivery recovery.",
+      "verifiedOn": "2026-10-02"
+    },
+    {
       "slug": "slack-approvals",
       "name": "Slack approvals",
       "category": "operator-surfaces",
