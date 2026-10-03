@@ -101,6 +101,29 @@
       },
       "ruby": { "file": "ruby/examples/sequel.rb" }
     },
+    "sqlalchemy-async-transaction": {
+      "typescript": {
+        "exclusion": {
+          "reason": "SQLAlchemy is a Python ORM; TypeScript uses its own transactional adapters."
+        }
+      },
+      "python": { "file": "python/examples/sqlalchemy_async_enqueue.py" },
+      "go": {
+        "exclusion": {
+          "reason": "SQLAlchemy is a Python ORM; Go enqueues through its own transaction executor."
+        }
+      },
+      "rust": {
+        "exclusion": {
+          "reason": "SQLAlchemy is a Python ORM; Rust uses its own PostgreSQL transaction."
+        }
+      },
+      "ruby": {
+        "exclusion": {
+          "reason": "SQLAlchemy is a Python ORM; Ruby enqueues through its own driver connection."
+        }
+      }
+    },
     "dedicated-worker": {
       "typescript": { "file": "typescript/examples/dedicated-worker.mjs" },
       "python": { "file": "python/examples/dedicated_worker.py" },

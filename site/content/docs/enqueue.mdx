@@ -246,6 +246,85 @@ with engine.begin() as sqlalchemy_connection:
 `driver_connection` is the Psycopg connection already enlisted in this transaction. SQLAlchemy
 still owns the commit, rollback, and pool checkout.
 
+### Asynchronous SQLAlchemy with Psycopg
+
+To enqueue through SQLAlchemy's async engine, install `SQLAlchemy[asyncio]` and use
+`postgresql+psycopg`. The `asyncio` extra installs the required `greenlet` bridge.
+Workhorse does not install SQLAlchemy or manage its engine.
+
+Inside an `AsyncConnection` transaction, use
+`(await connection.get_raw_connection()).driver_connection` with `AsyncQueue.from_psycopg`.
+An enqueue can be the first statement or follow an application write. Both stay invisible
+to other connections until SQLAlchemy commits. SQLAlchemy also owns savepoints and rollback.
+
+With `AsyncSession`, flush pending ORM writes before obtaining its enlisted connection:
+
+```python
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from workhorse import AsyncQueue
+
+engine = create_async_engine("postgresql+psycopg://localhost/application")
+sessions = async_sessionmaker(engine)
+
+async with sessions.begin() as session:
+    session.add(account)
+    await session.flush()
+    connection = await session.connection()
+    raw = await connection.get_raw_connection()
+    driver = raw.driver_connection
+    await AsyncQueue.from_psycopg(driver).enqueue("account.created", {"accountId": account.id})
+```
+
+Await each ORM and queue operation in sequence. Never share a session or enlisted connection
+between concurrent tasks. If enqueue fails or the task is canceled, let the exception escape
+the transaction context so SQLAlchemy rolls back. Catch a recoverable failure outside
+`connection.begin_nested()` so its savepoint rolls back before continuing the outer transaction.
+
+The queue and driver reference last only as long as that enlisted transaction and checkout.
+Do not retain them after completion. Never commit, roll back, change autocommit, enter a driver
+transaction, or close the driver or raw proxy yourself. Do not use `AsyncEngine.raw_connection()`:
+it can check out another connection instead of joining the application transaction.
+Dispose the engine when the application stops, not while a transaction is running.
+
+The runnable `python/examples/sqlalchemy_async_enqueue.py` creates an example table and commits
+an account with its task. Against an already installed local Workhorse schema, run:
+
+```bash
+pnpm exec tsx scripts/with-env.ts sh -c \
+  'uv run --project python python python/examples/sqlalchemy_async_enqueue.py "$DATABASE_URL_TEST"'
+```
+
+The repository's existing Python CI suite collects `python/tests/test_sqlalchemy_async.py`.
+It proves backend and transaction identity, both statement orders, independent invisibility,
+joint commit and rollback, session flush, savepoints, structured idempotency errors, cancellation,
+and pool reuse. The fixture tests locked SQLAlchemy `2.1.1`, Psycopg `3.3.6`, and greenlet `3.5.6`.
+SQLAlchemy stays a development dependency; applications install their own ORM and driver.
+
+### SQLAlchemy's asyncpg dialect is not supported
+
+The discriminator uses SQLAlchemy `2.1.1` and asyncpg `0.31.0`; it reproduces two distinct boundaries.
+A logical `connection.begin()` does not start asyncpg's physical transaction.
+After unwrapping without an ORM statement, `driver.is_in_transaction()` is false.
+Raw enqueue commits immediately, is visible to an independent observer, and survives the
+application transaction's later rollback.
+
+A public ORM statement starts the physical transaction. The tests then prove shared identity,
+invisibility, and nested savepoint completion. This does not establish general compatibility:
+SQLAlchemy installs JSON and JSONB decoders that return Python values, unlike asyncpg's default text codecs.
+Workhorse's asyncpg reader decodes string-valued JSON again. A `"plain"` payload raises
+`JSONDecodeError` on `AsyncAdmin.get_task`; `"123"` becomes a number, and a quoted string changes value.
+Object, array, numeric, boolean, and null payloads pass the same discriminator.
+A custom `json_deserializer` also changes the payload Workhorse reads.
+
+Do not work around these failures with private `_start_transaction()`, a competing driver
+transaction, or changing codecs on SQLAlchemy's connection. Workhorse publishes no asyncpg
+SQLAlchemy recipe until physical enlistment and codec compatibility both pass executable proof.
+This limit does not withdraw support for independently owned asyncpg connections and pools.
+
+SQLAlchemy documents the [async accessor and session lifecycle](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html#sqlalchemy.ext.asyncio.AsyncConnection.get_raw_connection)
+and its [asyncpg JSON codecs](https://docs.sqlalchemy.org/en/20/dialects/postgresql.html#asyncpg).
+
 ### GORM
 
 Inside `db.Transaction`, Go applications can adapt `tx.Statement.ConnPool` with
