@@ -394,6 +394,9 @@ The queue does not `close` a connection or transaction supplied by its caller.
 
 [MikroORM PostgreSQL](/docs/mikroorm) uses the shipped Kysely adapter with the callback-local EntityManager executor.
 
+For Go's Bun ORM, pass the embedded `tx.Tx`, not the Bun wrapper, to `NewSQLExecutor`.
+The [Go Bun recipe](/docs/go-bun) explains native bindings, savepoints, and the hooks this path bypasses.
+
 ## Next
 
 - [Idempotency](/docs/idempotency) — make repeated acceptance converge on one task

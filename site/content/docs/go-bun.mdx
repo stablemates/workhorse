@@ -1,0 +1,145 @@
+---
+title: Go Bun ORM
+description: Atomically enqueue through Bun's embedded database/sql transaction without rewriting PostgreSQL parameters.
+---
+
+When an application accepts an order, its business row and follow-up task must commit together.
+Go's [Bun ORM](https://bun.uptrace.dev/) already exposes the transaction needed for that guarantee.
+Pass its embedded `tx.Tx` to Workhorse's existing `NewSQLExecutor`.
+
+This page concerns the Go ORM, not the JavaScript Bun runtime.
+It publishes a tested recipe, not another Workhorse package.
+The catalog remains **documented** because its verified tier requires a dedicated integration package.
+The PostgreSQL fixture continuously checks the recipe within the existing Go suite.
+
+## Install and prepare
+
+The tested combination is Bun and `pgdialect` v1.2.18 with pgx's `database/sql` driver v5.11.0.
+The fixture runs against real PostgreSQL; the recorded local server is PostgreSQL 18.6 with Go 1.25.14.
+CI uses the repository's Go/PostgreSQL support matrix, with each language suite running once per change.
+These results do not establish support for every Bun PostgreSQL driver.
+
+Install the Go SDK and the pinned ORM beside your application:
+
+```bash
+go get github.com/stablemates/workhorse/go
+go get github.com/uptrace/bun@v1.2.18 github.com/uptrace/bun/dialect/pgdialect@v1.2.18
+go get github.com/jackc/pgx/v5@v5.11.0 github.com/google/uuid@v1.6.0
+```
+
+Install Workhorse's schema once, outside the application, using the matching schema tool.
+Follow [installation](/docs/installation) and [compatibility](/docs/compatibility) before serving requests.
+Bun owns your business tables; Workhorse owns its schema and versioned SQL functions.
+The runnable example expects this application table, which your application migration should create:
+
+```sql
+CREATE TABLE bun_order (
+  id uuid PRIMARY KEY,
+  customer text NOT NULL,
+  receipt jsonb NOT NULL
+);
+```
+
+## Join the caller's transaction
+
+Create Bun over `sql.Open("pgx", databaseURL)` with `pgdialect.New()`.
+Import `github.com/jackc/pgx/v5/stdlib` for the driver registration.
+At startup, call `AssertSchemaCompatible` using `NewSQLExecutor(database)` on that application-owned `*sql.DB`.
+Keep the queue inside the transaction callback:
+
+```go
+err := db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+	if _, err := tx.NewInsert().Model(accepted).Exec(ctx); err != nil {
+		return err
+	}
+	queue := workhorse.NewQueue(workhorse.NewSQLExecutor(tx.Tx), "orders")
+	_, err := queue.EnqueueWithResult(ctx, "order.accepted", map[string]any{
+		"orderId": accepted.ID, "customer": accepted.Customer, "receipt": accepted.Receipt,
+	}, workhorse.EnqueueOptions{Tags: []string{"orders"}})
+	return err
+})
+```
+
+The complete [runnable example](https://github.com/stablemates/workhorse/blob/main/go/examples/bun/main.go)
+defines the model, opens its application pool, and prints the task UUID only after commit.
+From a configured repository checkout, run it against your disposable development database:
+
+```bash
+WORKHORSE_DATABASE_URL=postgres://user:password@localhost:5432/application \
+  pnpm exec tsx scripts/with-env.ts go -C go run ./examples/bun
+```
+
+Bun owns commit, rollback, and pool return.
+Workhorse borrows the embedded transaction without obtaining a fresh connection or ending the transaction.
+If the callback returns an error, Bun rolls back both writes.
+Do not return, cache, or retain this queue after the callback.
+After commit or rollback, its underlying transaction returns `sql.ErrTxDone`.
+Run workers as [separate processes](/docs/worker-processes), never inside this request callback.
+
+## Preserve native PostgreSQL parameters
+
+Use `NewSQLExecutor(tx.Tx)`, **not** `NewSQLExecutor(tx)`.
+Although `bun.Tx` satisfies the Go interface, its `QueryContext` formats SQL through Bun's formatter.
+It then calls the embedded transaction without forwarding the bind arguments.
+Workhorse statements require native `$1`, `$2`, and later positional arguments.
+Passing the wrapper can therefore fail or rewrite statement text instead of preserving that contract.
+
+The raw path bypasses Bun SQL formatting and Bun query hooks for Workhorse statements.
+It also does not invoke Bun model hooks, since Workhorse SQL uses no Bun model query.
+Business writes through `tx.NewInsert()` still use Bun's normal formatting and hooks.
+If your hooks perform routing, authorization, or mandatory auditing, supply those guarantees separately before adopting this path.
+Do not assume your Bun hook observes Workhorse queries.
+
+With the pinned pgx stdlib driver, the fixture proves these bindings and results:
+
+- JSONB preserves nested objects, Unicode, quotes, arrays, and null through enqueue's JSON batch representation.
+- Direct `$N` bindings accept `[]string` as PostgreSQL `text[]`, `time.Time` as `timestamptz`, and UUID strings as `uuid`.
+- Task tags persist as `text[]`; schedules and deadlines retain the Go SDK's existing millisecond serialization precision.
+- Raw timestamp results retain PostgreSQL microsecond precision; enqueue serialization is a separate boundary.
+- Enqueue returns canonical UUIDs and ordered accepted/replayed results; nullable and empty executor results remain intact.
+- PostgreSQL errors remain discoverable with `errors.As` targeting `*pgconn.PgError`, including SQLSTATE and constraint fields.
+- Workhorse's structured idempotency conflict retains `errors.Is` and `errors.As` behavior.
+
+`database/sql` represents JSONB results as bytes and array results in the driver's SQL representation, not Bun model values.
+The fixture decodes arrays using PostgreSQL `to_jsonb`, rather than promising a Bun slice decoder for raw result rows.
+This recipe does **not** verify Bun's `pgdriver`, `lib/pq`, other dialects, proxy routing, or alternate pgx query modes.
+Use the tested driver configuration or establish equivalent proof for your configuration.
+
+## Nesting, cancellation, and maintained proof
+
+Bun's `tx.RunInTx` creates a savepoint on the same embedded `*sql.Tx`.
+Pass `nested.Tx` within the nested callback.
+A nested error rolls back its business row and task without losing successful outer work.
+Releasing a savepoint does not publish either row to an independent observer.
+An outer rollback still removes work from a successfully released savepoint.
+Nested transaction options do not create another isolation boundary; Bun ignores those options for savepoints.
+
+Pass the request context to business writes and enqueue.
+Return cancellation and deadline errors to Bun; do not catch them and report success.
+The fixture checks pre-cancelled enqueue and cancellation of an in-flight raw statement after both writes.
+Both paths roll back together, and the caller's pool remains usable.
+
+The [maintained fixture](https://github.com/stablemates/workhorse/blob/main/go/examples/bun/transaction_test.go)
+uses scratch databases derived from the checkout's test database and drops them at teardown.
+It limits the Bun pool to one connection and uses a separate observer pool.
+Backend IDs, transaction IDs, and both rows' `xmin` prove physical transaction identity.
+Observer reads prove invisibility before commit and joint commit or rollback afterward.
+Hooks, savepoints, native bindings, errors, cancellation, and the runnable example receive real database coverage.
+
+From a configured checkout, run the focused proof:
+
+```bash
+WORKHORSE_REQUIRE_DATABASE=1 \
+  pnpm exec tsx scripts/with-env.ts go -C go test -count=1 -v ./examples/bun
+```
+
+`pnpm go:test` discovers it without a second CI test step.
+In the Go database CI job, `WORKHORSE_REQUIRE_DATABASE=1` makes a missing database URL a failure, not a skip.
+The intentionally database-free `go:test:unit` lane skips the fixture with `-short`.
+No provider account or hosted database was used for this proof.
+
+## Next
+
+- [Enqueue](/docs/enqueue) — understand transactional acceptance
+- [Worker processes](/docs/worker-processes) — keep workers outside requests
+- [Compatibility](/docs/compatibility) — match schema and SDK versions

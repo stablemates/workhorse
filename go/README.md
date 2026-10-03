@@ -89,6 +89,10 @@ effects; named checkpoints prevent completed application stages from running aft
 
 ## Package boundary
 
+For Go's Bun ORM, use the [transactional enqueue recipe](https://workhorse.run/docs/go-bun).
+It passes Bun's embedded `tx.Tx` to `NewSQLExecutor`, preserving native PostgreSQL parameters
+without Bun formatting or query hooks. This is not the JavaScript Bun runtime.
+
 This module provides transactional enqueue and worker APIs over caller-owned pgx or `database/sql`
 resources. Workers borrow a caller-owned pgx pool for claims and lifecycle calls. The module never
 installs or migrates the shared PostgreSQL schema.

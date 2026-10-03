@@ -24,6 +24,23 @@
         }
       }
     },
+    "bun": {
+      "typescript": {
+        "exclusion": {
+          "reason": "Bun is a Go ORM; the JavaScript Bun runtime is not this integration."
+        }
+      },
+      "python": {
+        "exclusion": { "reason": "Bun is a Go ORM and exposes no Python transaction handle." }
+      },
+      "go": { "file": "go/examples/bun/main.go" },
+      "rust": {
+        "exclusion": { "reason": "Bun is a Go ORM and exposes no Rust transaction handle." }
+      },
+      "ruby": {
+        "exclusion": { "reason": "Bun is a Go ORM and exposes no Ruby transaction handle." }
+      }
+    },
     "quickstart": {
       "typescript": { "file": "typescript/examples/quickstart.ts" },
       "python": { "file": "python/examples/quickstart.py" },
