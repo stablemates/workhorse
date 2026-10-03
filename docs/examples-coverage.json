@@ -61,6 +61,29 @@
         }
       }
     },
+    "sequel-transaction": {
+      "typescript": {
+        "exclusion": {
+          "reason": "Sequel is a Ruby ORM; this native pg transaction recipe does not apply to TypeScript."
+        }
+      },
+      "python": {
+        "exclusion": {
+          "reason": "Sequel is a Ruby ORM; this native pg transaction recipe does not apply to Python."
+        }
+      },
+      "go": {
+        "exclusion": {
+          "reason": "Sequel is a Ruby ORM; this native pg transaction recipe does not apply to Go."
+        }
+      },
+      "rust": {
+        "exclusion": {
+          "reason": "Sequel is a Ruby ORM; this native pg transaction recipe does not apply to Rust."
+        }
+      },
+      "ruby": { "file": "ruby/examples/sequel.rb" }
+    },
     "dedicated-worker": {
       "typescript": { "file": "typescript/examples/dedicated-worker.mjs" },
       "python": { "file": "python/examples/dedicated_worker.py" },

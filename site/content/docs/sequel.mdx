@@ -1,0 +1,119 @@
+---
+title: How do I enqueue inside a Sequel transaction?
+description: A tested Ruby recipe that commits an application write and a task on Sequel's native PostgreSQL connection.
+---
+
+Your application write and its task must either both commit or both disappear.
+Sequel's native PostgreSQL adapter yields a `PG::Connection` from `Database#transaction`.
+Build the existing `Stablemates::Workhorse::Queue` on that connection, inside the block.
+No extra gem or Workhorse executor is needed.
+
+## Setup
+
+Install `stablemates-workhorse`, `sequel`, and `pg` in your application's Gemfile.
+Use Sequel's native `postgres` adapter, not JDBC or an alternate PostgreSQL driver.
+Install the Workhorse schema in the same database before enqueueing; Sequel does not own Workhorse migrations.
+See [installation](/docs/installation) for the schema lifecycle.
+
+This recipe is tested with Sequel **5.109.0**, `pg` **1.6.3**, and Ruby **3.4.11**.
+The local regression run uses PostgreSQL **18.6**.
+The Ruby CI lane runs the pinned gems on the newest `support.json` combination: Ruby **4.0** and PostgreSQL **18**.
+Its full suite discovers the recipe specs and requires PostgreSQL, without a duplicate integration run.
+The weekly matrix also exercises the other declared Ruby and PostgreSQL versions.
+These tests cover local PostgreSQL, not a hosted provider or an alternate adapter.
+
+The catalog calls this a documented recipe because its verified tier describes packaged TypeScript adapters.
+The recipe itself has executable PostgreSQL tests; there is no Sequel integration package.
+
+## Join the transaction
+
+The application's `sequel_orders` table has a text primary key `id` and a non-null text `email` column.
+Here, `database` is your Sequel database, `server` is its selected server, and `queue_name` identifies the queue.
+`order_id` and `email` are the business values to insert.
+
+```ruby
+database.transaction(server: server) do |connection|
+  database[:sequel_orders].server(server).insert(id: order_id, email: email)
+  Stablemates::Workhorse::Queue.new(connection, default_queue: queue_name)
+    .enqueue("order.accepted", {"orderId" => order_id, "email" => email})
+end
+```
+
+Sequel commits or rolls back both writes when the block ends.
+An independent connection cannot see either write before commit.
+Do not use `after_commit` for this enqueue: it would create a second transaction and lose atomicity.
+
+The [standalone example](https://github.com/stablemates/workhorse/blob/main/ruby/examples/sequel.rb) creates the business table and prints the task identifier.
+It expects an existing Workhorse schema, inserts a fresh order, and lets Sequel disconnect after the block.
+From a source checkout, run it against your development database:
+
+```sh
+pnpm ruby:install
+WORKHORSE_DATABASE_URL="$APPLICATION_DATABASE_URL" pnpm exec tsx scripts/with-env.ts \
+  sh -c 'cd ruby && bundle exec ruby -Ilib examples/sequel.rb'
+```
+
+For the isolated regression suite, run `pnpm ruby:test:sequel`.
+It derives scratch databases from the checkout's test database and removes them afterward.
+
+## Connection and transaction ownership
+
+Sequel owns the transaction, savepoints, pool checkout, and connection lifecycle.
+Workhorse sends protocol statements through `exec_params` and clears the `PG::Result` objects it creates.
+It does not begin, commit, roll back, release, reset, or close the yielded connection.
+Workhorse uses per-call string maps without replacing the connection's query or result type maps.
+The specs cover typed enqueue results, nested JSON, Unicode, nulls, and subsequent Sequel dataset operations.
+
+Keep the queue and its borrowed connection inside the transaction block.
+Do not cache that queue, pass it to another thread or fiber, or use it after Sequel returns the connection.
+The SDK does not extend a checkout's lifetime or detect a returned but still-open connection.
+The tests prove that disconnecting Sequel invalidates the borrowed executor; they do not make escaped use safe.
+
+For nesting, Sequel's `savepoint: true` keeps both writes under the same savepoint.
+Rolling back that savepoint removes its business write and task while preserving the outer transaction.
+Releasing it does not commit either write independently of the outer transaction.
+
+## Errors and recovery
+
+A protocol idempotency conflict raises `Stablemates::Workhorse::EnqueueIdempotencyConflictError` with structured `details` from SQLSTATE `P1001`.
+Other PostgreSQL failures raise `Stablemates::Workhorse::DatabaseError`, preserving their `sqlstate` when PostgreSQL provides one.
+Workhorse errors are not Sequel errors; do not rescue only `Sequel::DatabaseError` around enqueue.
+Let an error escape the transaction block so Sequel rolls back.
+If you need to recover inside an outer transaction, let it escape an inner `savepoint: true` block first.
+Rescuing a statement error without rollback leaves PostgreSQL's transaction aborted.
+
+Raw `pg` calls bypass Sequel's query error wrappers.
+Workhorse does not tell Sequel's pool to discard a broken connection and does not replay the failed statement.
+After a confirmed connection loss, unwind the transaction and call `database.disconnect` before reusing the pool.
+That owner-directed action clears failed connections; the Workhorse error alone may not trigger Sequel's automatic discard.
+The specs cover this action and Sequel's separate disconnect detection when its own commit fails.
+A transport failure may lack SQLSTATE and may leave a commit outcome unknown; reconcile before retrying business work.
+
+## Servers, shards, and worker limits
+
+Use the same Sequel database, execution context, and server for the transaction and every business dataset write.
+Select the transaction with `server: :orders` and the dataset with `.server(:orders)` when targeting that configured server.
+The tests use two independent scratch databases to prove that only the selected shard receives the business row and task.
+Install Workhorse's schema on every writable shard you enqueue into.
+Unknown server names, replica writes, cross-server transactions, and distributed atomicity are not supported by this recipe.
+Validate the server name against your configuration; Sequel can fall back to the default server for an unknown name.
+Do not rely on implicit read-replica routing or use a second Sequel database object for the business write.
+JDBC, `postgres-pr`, alternative adapters, and changed thread/fiber pool behavior are unverified.
+
+This recipe only enqueues.
+Run workers in a [dedicated process](/docs/worker-processes), using their own `ConnectionPool` of PostgreSQL connections.
+Do not give a worker this transaction connection or treat Sequel's pool as a Workhorse worker pool.
+Each shard needs workers pointed at its own database; uncommitted tasks remain invisible to those workers.
+
+## Sources and proof
+
+- [Sequel transactions](https://sequel.jeremyevans.net/rdoc/files/doc/transactions_rdoc.html) explains nesting and savepoints.
+- [Sequel sharding](https://sequel.jeremyevans.net/rdoc/files/doc/sharding_rdoc.html) explains matching server selection.
+- [Sequel's native PostgreSQL adapter](https://github.com/jeremyevans/sequel/blob/5.109.0/lib/sequel/adapters/postgres.rb) defines its `PG::Connection` subclass.
+- [The regression specs](https://github.com/stablemates/workhorse/blob/main/ruby/spec/integration/sequel_spec.rb) prove physical identity, visibility, commit, rollback, ownership, errors, and shard selection.
+
+## Next
+
+- [Enqueue tasks](/docs/enqueue) for task options.
+- [Idempotency](/docs/idempotency) for safe reconciliation.
+- [Worker processes](/docs/worker-processes) for separate execution.

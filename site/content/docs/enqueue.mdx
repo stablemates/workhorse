@@ -215,6 +215,8 @@ and `NewSQLExecutor` accepts a `*sql.Tx`. Rust's `Queue::new` accepts a `tokio_p
 `Transaction`, or their `deadpool_postgres` counterparts. Ruby's `Queue.new` accepts a
 `PG::Connection`, a `ConnectionPool` of them, or an `ActiveRecordExecutor` around a model class.
 
+Sequel's native PostgreSQL adapter yields that same `PG::Connection`; use the [tested Sequel transaction recipe](/docs/sequel).
+
 Python's `Worker` takes a Psycopg `ConnectionPool` of autocommit connections, not a single
 connection. `AsyncWorker.from_psycopg` and `AsyncWorker.from_asyncpg` take the matching async pools.
 A worker also [reserves pool connections of its own](/docs/pgbouncer#connection-budgets), so size
