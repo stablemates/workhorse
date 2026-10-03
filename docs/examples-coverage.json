@@ -384,6 +384,29 @@
           "reason": "Ruby Worker runs each slot on its own thread, so there is no separate async-worker example."
         }
       }
+    },
+    "langgraph-approval": {
+      "python": { "file": "python/examples/langgraph_approval.py" },
+      "typescript": {
+        "exclusion": {
+          "reason": "This bounded recipe uses the Python LangGraph PostgreSQL checkpointer, not the JavaScript graph runtime."
+        }
+      },
+      "go": {
+        "exclusion": {
+          "reason": "LangGraph's Python checkpointer is not a Go graph runtime; this recipe does not claim a Go bridge."
+        }
+      },
+      "rust": {
+        "exclusion": {
+          "reason": "LangGraph's Python checkpointer is not a Rust graph runtime; this recipe does not claim a Rust bridge."
+        }
+      },
+      "ruby": {
+        "exclusion": {
+          "reason": "LangGraph's Python checkpointer is not a Ruby graph runtime; this recipe does not claim a Ruby bridge."
+        }
+      }
     }
   }
 }

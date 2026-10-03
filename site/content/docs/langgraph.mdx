@@ -1,0 +1,122 @@
+---
+title: Can a LangGraph approval use a Workhorse human wait?
+description: A tested Python recipe that keeps graph replay in PostgreSQL and coordinates one committed approval without a second graph driver.
+---
+
+Workhorse can admit a task and wait for a reviewer while LangGraph retains its own persistent graph.
+Neither system replaces the other.
+The tested recipe contains one deterministic draft, one approval interrupt, and one local PostgreSQL tool.
+It calls no model provider and performs no external action.
+
+## Run the bounded example
+
+The source is [`python/examples/langgraph_approval.py`](https://github.com/stablemates/workhorse/blob/main/python/examples/langgraph_approval.py).
+It uses released `langgraph==1.2.12` and `langgraph-checkpoint-postgres==3.1.2`.
+They are development dependencies, not dependencies of the Workhorse Python distribution.
+
+In a configured repository checkout, install the pinned tools and run:
+
+```sh
+uv sync --project python --locked
+pnpm example:langgraph-approval
+```
+
+Use a local development database with Workhorse's schema already installed.
+The command uses the checkout's `DATABASE_URL_PRIMARY` through `scripts/with-env.ts`.
+It installs separate application and checkpointer schemas without resetting Workhorse.
+The example runs bounded worker passes, verifies the committed human wait, approves it as a fake reviewer,
+and returns a receipt.
+It is not a request-process worker or a continuously running observer service.
+
+The recipe requires a direct PostgreSQL connection or a session-preserving proxy.
+Do not use a transaction pooler, checkpointer connection pool, or reconnecting driver for its graph session.
+
+## Keep each owner explicit
+
+Workhorse owns admission, leases, retry policy, and the `langgraph-approval` human wait.
+LangGraph's `PostgresSaver` owns graph state, replay, and the actual `Interrupt.id`.
+The application owns graph-driver coordination, receipt storage, reviewer authorization, and tool idempotency.
+
+The stable thread is `workhorse:{task_id}`.
+The bridge retains its interrupt identity, original approval context, decision, and stable resume identity.
+Workhorse checkpoints contain bridge receipts, not a graph snapshot.
+The handler never puts an entire graph invocation inside one `checkpoint` call.
+
+After a crash, the application reads `get_state` before continuing.
+It recovers an existing interrupt rather than starting the thread again.
+If a tool committed before its graph checkpoint, the graph replays that node against a deterministic local ledger.
+An equal effect reuses its receipt; a conflicting effect fails closed.
+This is not exactly-once execution of an arbitrary external action.
+
+## Do not use queue concurrency as graph coordination
+
+A handler can outlive its Workhorse lease.
+A queue concurrency policy alone cannot stop it from becoming a second graph driver.
+
+The recipe holds a session advisory lock for the stable thread.
+The lock, checkpointer, bridge writes, and local tool share the same non-reconnecting Psycopg connection.
+If that session dies, every old graph and tool writer loses its connection with the lock.
+A separate lock connection would leave an unsafe writer behind.
+
+Before graph entry and each node, the handler makes a fresh fenced `set_progress` call.
+It does not substitute a cached checkpoint or an old cancellation token for that authority check.
+Another session receives `DriverBusy` and retries without invoking the graph.
+The handler releases the application lock while the committed human wait is suspended.
+
+## Commit approval before resuming
+
+The graph first saves its interrupt, and the bridge retains its original context.
+Workhorse then commits the human wait.
+Only a committed approval response makes the task runnable and reaches `Command(resume={interrupt_id: decision})`.
+An uncommitted approval cannot authorize a tool.
+
+The application accepts exactly `{"approved": true}` or `{"approved": false}`.
+It rejects extra fields, prompt-selected tools, and conflicting reuse of an approval identity.
+Authenticate and authorize reviewers before calling `Queue.complete_human_wait`.
+`requested_by` records an actor; it does not authenticate that actor.
+
+## Propagate terminal outcomes explicitly
+
+The example waits up to 60,000 milliseconds for approval.
+A Workhorse timeout or cancellation does not automatically cancel a retained LangGraph interrupt.
+After Workhorse records a terminal task, your application's observer must call
+`reconcile_terminal(database_url, task_id)` from the example.
+The recipe provides that function but does not install an observer or scheduler.
+
+Reconciliation uses the same application lock and verifies retained terminal task state.
+It stops the pending approval or tool and retains the review context and original decision.
+It does not undo a committed tool effect or replace a graph's already completed outcome.
+Cancellation remains cooperative; it cannot retroactively revoke an effect after an ownership check.
+
+## Retain history and protect the boundary
+
+Keep graph checkpoints, bridge receipts, tool receipts, and Workhorse history until recovery and audit no longer need them.
+Their cleanup lifecycles are independent; this recipe provides no retention service.
+If a retained bridge loses its graph, the driver refuses to recreate the interrupt.
+If terminal task history is missing, the observer refuses to infer permission.
+
+Test retained threads before changing graph code, interrupt placement, dependency pins, or serializer configuration.
+The bridge's version check fails closed; checkpointer migrations do not migrate the application's definition.
+This proof covers this graph and synchronous saver only, not another framework or provider.
+
+Keep database credentials server-side.
+Treat drafts, prompts, approval input, and tool output as untrusted data, and keep secrets out of approval context.
+Restrict direct table writes so callers cannot bypass authorization, fencing, or the application lock.
+The serializer disables pickle fallback and module reconstruction; the driver disables ambient LangSmith tracing.
+Live tools would need their own retry, idempotency, credential, and cancellation design.
+
+## Verification
+
+`python/tests/test_langgraph_approval.py` tests the real PostgreSQL saver and Workhorse workers in scratch databases.
+It proves graph-save-before-bridge-save, resume-before-Workhorse-checkpoint, local tool replay,
+duplicate/concurrent resume, stale-driver fencing, session loss, timeout, cancellation, and retained context.
+The existing Python CI suite collects these tests once.
+The catalog calls this a documented, tested recipe, not a published adapter or live-provider verification.
+
+## Next
+
+- [Human decisions](/docs/human-waits) explains Workhorse's committed approval boundary.
+- [Worker processes](/docs/worker-processes) explains how a real application runs workers independently.
+- [Agentic flow](/docs/agentic-flow) shows a Workhorse-native composition without another graph runtime.
+
+Reference: [LangGraph bridge architecture](https://github.com/stablemates/workhorse/blob/main/docs/architecture/langgraph-bridge.md).

@@ -244,6 +244,15 @@
       "verifiedOn": "2026-10-02"
     },
     {
+      "slug": "langgraph",
+      "name": "LangGraph",
+      "category": "frameworks",
+      "tier": "documented",
+      "summary": "Bridges one persistent Python graph approval to a committed Workhorse human wait.",
+      "boundary": "A tested local-tool recipe, not a checkpointer replacement; the application owns graph-driver coordination and terminal reconciliation.",
+      "verifiedOn": "2026-10-02"
+    },
+    {
       "slug": "pgbouncer",
       "name": "PgBouncer",
       "category": "poolers",
