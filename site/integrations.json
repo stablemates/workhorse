@@ -271,6 +271,15 @@
       "package": "@stablemates/workhorse-dashboard",
       "peer": "react",
       "pinnedBy": "typescript/dashboard"
+    },
+    {
+      "slug": "slack-approvals",
+      "name": "Slack approvals",
+      "category": "operator-surfaces",
+      "tier": "documented",
+      "summary": "Presents approve and reject buttons for a registered Workhorse human decision.",
+      "boundary": "The local fixture proves signed durable acceptance and recovery, not live Slack delivery or exactly-once prompts.",
+      "verifiedOn": "2026-10-02"
     }
   ]
 }

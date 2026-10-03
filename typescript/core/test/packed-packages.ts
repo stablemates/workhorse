@@ -617,6 +617,12 @@ datasource db {
       path.join(consumer, path.basename(example.file)),
       await readFile(path.join(repository, example.file), "utf8"),
     );
+    if (example.scenario === "slack-approvals") {
+      await writeFile(
+        path.join(consumer, "slack-approvals.sql"),
+        await readFile(path.join(repository, "typescript/examples/slack-approvals.sql"), "utf8"),
+      );
+    }
   }
   await writeFile(
     path.join(consumer, "otel-smoke.mjs"),
@@ -860,14 +866,23 @@ try {
     // Examples are independent published-consumer entry points. Reset between them so a ready task
     // left by one example cannot be claimed by the next example's default-queue worker.
     await run("pnpm", ["db:reset:test-packed"]);
-    const verify = ["dedicated-worker", "demo-worker", "stripe-invoice-paid"].includes(
-      example.scenario,
-    )
+    const verify = [
+      "dedicated-worker",
+      "demo-worker",
+      "stripe-invoice-paid",
+      "slack-approvals",
+    ].includes(example.scenario)
       ? ["--verify"]
       : [];
     const output = await run("node", [path.basename(example.file), ...verify], consumer, {
       DATABASE_URL: packedDatabaseUrl,
     });
+    if (example.scenario === "slack-approvals") {
+      const approval = JSON.parse(output) as { result?: { decision?: string } };
+      if (approval.result?.decision !== "approve") {
+        throw new Error("The packed Slack recipe did not retain its verified approval");
+      }
+    }
     if (example.scenario === "agentic-flow") {
       const agenticFlow = JSON.parse(output) as {
         result?: { status?: string };

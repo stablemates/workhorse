@@ -222,6 +222,29 @@
         }
       }
     },
+    "slack-approvals": {
+      "typescript": { "file": "typescript/examples/slack-approvals.ts" },
+      "python": {
+        "exclusion": {
+          "reason": "The signed Slack approval recipe is a TypeScript application example, not a cross-language SDK surface."
+        }
+      },
+      "go": {
+        "exclusion": {
+          "reason": "The signed Slack approval recipe is a TypeScript application example, not a cross-language SDK surface."
+        }
+      },
+      "rust": {
+        "exclusion": {
+          "reason": "The signed Slack approval recipe is a TypeScript application example, not a cross-language SDK surface."
+        }
+      },
+      "ruby": {
+        "exclusion": {
+          "reason": "The signed Slack approval recipe is a TypeScript application example, not a cross-language SDK surface."
+        }
+      }
+    },
     "django-transaction": {
       "typescript": {
         "exclusion": {

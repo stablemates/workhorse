@@ -63,6 +63,7 @@
     "dashboard-conformance:generate": "tsx scripts/with-env.ts tsx --conditions=workhorse-source typescript/dashboard-server/test/support/generate-conformance.ts",
     "test:changed": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs related --run --passWithNoTests --config vitest.unit.config.ts",
     "test:integration": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run typescript/core/test/integration-*.test.ts",
+    "test:slack-approvals": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run typescript/core/test/integration-slack-approvals.test.ts",
     "test:pooling": "tsx scripts/with-env.ts tsx scripts/pooling-fixture.ts test",
     "pooling:up": "tsx scripts/with-env.ts tsx scripts/pooling-fixture.ts up",
     "pooling:down": "tsx scripts/with-env.ts tsx scripts/pooling-fixture.ts down",

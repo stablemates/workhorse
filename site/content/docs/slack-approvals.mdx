@@ -1,0 +1,110 @@
+---
+title: Can a Slack user approve a Workhorse task?
+description: A signed Slack approval recipe with committed registration, durable acceptance, and separate settlement.
+---
+
+Slack can present approve and reject buttons for a Workhorse human decision.
+Workhorse retains the authoritative result. Slack is not an approval backend or a worker host.
+
+The runnable [TypeScript recipe](https://github.com/stablemates/workhorse/blob/main/typescript/examples/slack-approvals.ts)
+and its [application schema](https://github.com/stablemates/workhorse/blob/main/typescript/examples/slack-approvals.sql)
+use the current SDK, Node's crypto and HTTP primitives, PostgreSQL, and `fetch`.
+There is no Slack SDK dependency or framework wrapper.
+
+## Keep the processes separate
+
+The task handler checkpoints its authorization scope and registers `waitForHuman("approval", context)`.
+A notifier discovers committed records through `Admin.listHumanWaits`, then posts the buttons.
+The receiver verifies a raw signed action and commits the first authorized decision before acknowledging it.
+A separate decision worker reads that durable inbox and calls `completeHumanWait` with the retained key and actor.
+The receiver never starts a worker, posts a message, or waits for the business action to complete.
+
+The handler returns the decision only. Any external action your application adds must be replay-safe independently.
+
+## Configure an app with least privilege
+
+Enable interactivity in an app installed in one workspace.
+Forward its HTTPS request URL to `/slack/actions` on the receiver, which listens locally on `127.0.0.1:3010`.
+Preserve the exact raw request bytes and Slack's signature headers through your ingress.
+Do not deserialize JSON or reconstruct the form body before verification.
+
+Grant the bot only `chat:write`, then invite it to the selected channel.
+The recipe does not require public-channel posting, message history, directory lookup, or impersonation scopes.
+Configure explicit workspace, app, channel, and authorized user IDs rather than using display names.
+Organization-wide installations, ephemeral messages, dialogs, and modals are outside this example.
+
+Use `SLACK_TEAM_ID`, `SLACK_APP_ID`, `SLACK_CHANNEL_ID`, and comma-separated `SLACK_AUTHORIZED_USERS` for those bindings.
+Only the notifier receives `SLACK_BOT_TOKEN`. Only the receiver receives `SLACK_SIGNING_SECRET`.
+Keep secrets in a secret environment, not source control, command arguments, logs, or request captures.
+Install Workhorse normally, then apply `slack-approvals.sql` to the same application database.
+
+Run the credential-free maintained proof in a configured checkout:
+
+```bash
+pnpm build:runtime:dev
+pnpm test:slack-approvals
+```
+
+That proof uses real PostgreSQL transactions and mocked Slack effects. It neither provisions a workspace nor sends live messages.
+For an explicitly authorized evaluation, use the separate `schema`, `enqueue`, `worker`, `notifier`, `receiver`, and `decision-worker` modes:
+
+```bash
+pnpm exec tsx scripts/with-env.ts tsx --tsconfig tsconfig.source-paths.json typescript/examples/slack-approvals.ts schema
+pnpm exec tsx scripts/with-env.ts tsx --tsconfig tsconfig.source-paths.json typescript/examples/slack-approvals.ts enqueue
+```
+
+Run each long-lived mode in its own process. Use the owning checkout's guarded `DATABASE_URL_PRIMARY` configuration.
+Outside the repository, the recipe imports `@stablemates/workhorse`; supply your application's own database environment.
+The [complete setup reference](https://github.com/stablemates/workhorse/blob/main/docs/recipes/slack-approvals.md)
+lists every process, credential boundary, command, storage field, limit, and verification seam.
+
+## Know what an acknowledgment means
+
+Slack requires HTTP 200 within three seconds. The receiver allows 2,500 ms from HTTP arrival for acceptance.
+It bounds the raw body, verifies HMAC-SHA256, and rejects timestamps outside the replay window.
+It binds the random reference to the exact task, wait generation, workspace, app, user, channel, message, and expiry.
+An opaque reference alone does not grant permission. The actor is derived server-side from the authorized workspace and user IDs.
+
+The receiver serializes clicks with a PostgreSQL row lock.
+It returns HTTP 200 only after acceptance commits, or for the same already-committed receipt.
+A competing actor or decision gets a conflict. Invalid signatures and unauthorized or closed boundaries fail without accepting a decision.
+If the budget is exhausted, the receiver returns failure, not an early success.
+Controlled tests prove these boundaries, not the latency of your production network or database.
+
+HTTP 200 confirms a durable receipt, not successful approval or task completion.
+If cancellation, timeout, or another Workhorse operator wins before settlement, Workhorse retains that outcome.
+The decision worker records `completed`, `duplicate`, `already_completed`, or a stale/unavailable status without substituting its own authority.
+It commits Workhorse settlement and its local receipt on the same PostgreSQL connection and transaction.
+
+Keep a synchronized receiver clock. Measure your actual ingress, pool acquisition, commit, and response latency before production use.
+An ambiguous timeout or lost response can leave a committed receipt. Inspect retained state before asking for another click.
+Do not assume interactive actions inherit the Events API's retry guarantees.
+
+## Expect orphan prompts, not exactly-once delivery
+
+If Slack accepts a post before the reference transaction commits, a crash can leave a visible orphan message.
+Recovery can post a new prompt with a new reference. Only the persisted reference can accept a decision.
+A click arriving before the local reference commit can also fail; the person may need to click again.
+The fixture injects this exact failure window rather than promising exactly-once prompt delivery.
+
+The notifier posts at most one message per pass and honors Slack's `Retry-After` on rate limits.
+Multiple notifier processes still need a shared channel-level rate policy.
+Discovery is bounded, and an overdue wait can remain visible until maintenance closes it.
+The receiver checks the real deadline using PostgreSQL's clock, not visibility alone.
+
+Slack's `response_url` can bypass channel posting permissions. Treat it as a bearer credential.
+The recipe neither stores nor follows it. Keep it out of logs, traces, proxy captures, and analytics.
+The recipe also does not use `trigger_id`, reconcile messages automatically, or provide an inbox cleanup daemon.
+Define human-reviewed orphan reconciliation and receipt retention before production use.
+Never delete unsettled decisions to hide a failure.
+
+## Next
+
+- [Human decisions](/docs/human-waits) — let a handler suspend for an attributed choice
+- [Worker processes](/docs/worker-processes) — keep workers outside request lifecycles
+- [Integration catalog](/docs/integrations) — distinguish tested packages from documented recipes
+
+---
+
+Exact setup, application tables, bounds, status handling, and executable proof:
+[Slack recipe reference](https://github.com/stablemates/workhorse/blob/main/docs/recipes/slack-approvals.md).
