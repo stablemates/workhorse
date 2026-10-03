@@ -1,11 +1,15 @@
 {
   "extends": ["../../tsconfig.json", "../../tsconfig.typecheck-base.json"],
   "compilerOptions": {
+    "baseUrl": "../..",
+    "paths": {
+      "@stablemates/workhorse": ["typescript/core/src/index.ts"]
+    },
     "outDir": "../../.build/typecheck/core-tests",
     "rootDir": "../..",
     "tsBuildInfoFile": "../../.build/typecheck/core-tests.tsbuildinfo"
   },
-  "include": ["test/**/*.ts"],
+  "include": ["test/**/*.ts", "../examples/stripe-invoice-paid.ts"],
   "exclude": ["test/runtime-smoke.ts"],
   "references": [
     { "path": "tsconfig.source.json" },

@@ -1,0 +1,206 @@
+---
+title: Stripe webhooks
+description: Durably accept a signed invoice.paid snapshot, then grant a local entitlement in a dedicated worker.
+---
+
+## What this recipe does
+
+Stripe can deliver an invoice event again after your endpoint accepts it.
+The worker can also restart after it commits an entitlement but before Workhorse records completion.
+The application needs a durable identity at each boundary.
+
+[`typescript/examples/stripe-invoice-paid.ts`](https://github.com/stablemates/workhorse/blob/main/typescript/examples/stripe-invoice-paid.ts)
+is an executable recipe, not a Stripe wrapper package.
+It uses the public `@stablemates/workhorse` API and the official `stripe` signing SDK.
+The HTTP process only verifies and accepts events. A separate process runs the worker.
+Neither process calls Stripe's API or mutates a vendor account.
+
+The sample grants one local `paid_invoice_credits` credit per invoice.
+This illustrates a transactional entitlement, not a subscription lifecycle or a financial ledger.
+An `invoice.paid` event can describe an invoice marked paid outside Stripe.
+It does not prove that a card charge collected funds or that a subscription remains active.
+Define your product's eligibility rules before adapting the sample.
+
+## Tested boundary and versions
+
+Local tests use **stripe-node 23.0.0**, released source tag `v23.0.0`, and snapshot API version **`2026-09-30.endive`**.
+The fixture uses that version's invoice `status: "paid"`; it does not invent the removed legacy `paid` property.
+The SDK requires Node 20 or newer. Workhorse's [compatibility matrix](/docs/compatibility) remains the runtime authority.
+The packed consumer runs the same `--verify` entry point against installed Workhorse packages and local PostgreSQL.
+No live endpoint, vendor account, Stripe CLI delivery, or cloud provisioning was tested.
+
+This recipe accepts **Connect snapshot events** for one configured `acct_...` account and one live/test mode.
+The signed event's `account` and `livemode` must match configuration.
+The invoice's `livemode` must also match.
+An event without `account` is rejected, including a direct platform-account event.
+An expanded or missing `customer`, a customer-account-only invoice, another API version, or a thin event is rejected.
+Those variants need their own normalization contract and tests.
+
+Choose this snapshot API version when configuring the endpoint. Subscribe only to `invoice.paid`.
+Changing the Stripe client version does not change the event destination's version or historical event shapes.
+
+## Run it locally
+
+Use an isolated PostgreSQL database with the Workhorse schema already installed.
+The application schema is separate: `setup` creates `stripe_recipe` without changing Workhorse migrations.
+Copy the self-contained example into an application with ESM enabled and these dependencies:
+
+```sh
+npm install @stablemates/workhorse stripe@23.0.0
+export DATABASE_URL='postgres://localhost/your_isolated_database'
+node stripe-invoice-paid.ts setup
+node stripe-invoice-paid.ts --verify
+```
+
+Use Node's TypeScript stripping on a Workhorse-supported Node version that provides it.
+An older supported runtime can compile the file with TypeScript first.
+The file uses no constructor parameter properties or non-strippable TypeScript syntax.
+
+`--verify` generates a fake signed snapshot with the official SDK, accepts it twice, and runs one worker turn.
+It checks the durable task result and replays the local entitlement operation without another grant.
+It uses fake signing credentials and sends no network requests to Stripe.
+It creates retained fixture rows, so run it only against a disposable database, once per fresh schema.
+
+Run the ingress and worker in **different terminals or processes**:
+
+```sh
+export STRIPE_ACCOUNT_ID='acct_yourConnectedAccount'
+export STRIPE_LIVEMODE='false'
+export STRIPE_WEBHOOK_SECRETS='whsec_yourEndpointSigningSecret'
+node stripe-invoice-paid.ts ingress
+```
+
+```sh
+export DATABASE_URL='postgres://localhost/your_isolated_database'
+node stripe-invoice-paid.ts worker
+```
+
+The receiver binds `127.0.0.1:4242` by default; `PORT` changes the port.
+Its only route is `POST /stripe/invoice-paid`.
+A publicly reachable endpoint needs your own HTTPS reverse proxy, TLS, access controls, and request-rate limits.
+The recipe is not a production provisioning or deployment procedure.
+Do not run Workhorse's demo to verify it.
+
+Inside this repository, run `pnpm test:stripe-webhooks` for the isolated database fixture.
+The existing TypeScript database CI lane discovers the fixture once per change.
+Signature tests also run in the existing environment-independent npm lane.
+
+## Verify before accepting
+
+The receiver collects bounded, **untouched request bytes** before calling `stripe.webhooks.constructEvent`.
+Do not put a JSON parser or a body-transforming middleware before this route.
+It requires `application/json`, an uncompressed body, and the `Stripe-Signature` header.
+The official SDK verifies the signature and rejects timestamps older than 300 seconds.
+Synchronize the server clock. Never disable the timestamp tolerance to accommodate redelivery.
+Stripe signs each delivery attempt with a fresh timestamp; event `created` is not signature freshness.
+
+The account and live/test checks run only after signature verification.
+A signed but unauthorized scope receives `403` without an inbox or task.
+Bad signatures, stale signatures, unsupported versions, and malformed references receive `400`.
+Oversized bodies receive `413`. Other routes receive `404`.
+Unrelated authenticated event types receive `200 ignored` without an inbox or task.
+
+`STRIPE_WEBHOOK_SECRETS` accepts one secret, or two comma-separated secrets during rotation.
+These are endpoint signing secrets, not API keys.
+Each endpoint, Connect configuration, and live/test context needs its correct secret.
+Stripe CLI forwarding secrets differ from Dashboard endpoint secrets.
+Keep secrets in an operator-controlled secret store; never commit them, log them, or put them in task payloads.
+The example's fake `sk_test_...` value constructs the signing-only SDK client and is never used for a request.
+
+## Commit the inbox and task together
+
+`acceptInvoiceInTransaction` inserts a unique `(account_id, livemode, event_id)` inbox row.
+It passes the same physical PostgreSQL client to `new Queue(transaction, "stripe-invoices")`.
+The inbox and `stripe.invoice-paid` task commit together, or neither survives.
+`acceptInvoice` owns `BEGIN`, bounded database statements, `COMMIT`, rollback, and client release.
+It enables local synchronous commit before accepting.
+The receiver returns `200 accepted` only after `COMMIT` succeeds.
+A database error or failed commit receives `503`, so Stripe can retry.
+
+The inbox retains event, invoice, customer, account, and mode references, event creation time, and a normalized fingerprint.
+It does not store the raw body, email, name, address, invoice URL, payment details, metadata, or line items.
+The task payload contains only `{ inboxId }`.
+References still identify customers: restrict database access and define an application retention policy.
+
+Concurrent event duplicates return the existing task without enqueueing again.
+Reusing an event ID with changed normalized references receives `409` and needs operator investigation.
+If the connection is lost after commit, a fresh signed redelivery finds the durable inbox row.
+An uncertain commit can therefore be reconciled without trusting the lost HTTP response.
+
+## Keep three deduplication boundaries
+
+| Boundary              | Durable identity                                             | Purpose                                                                     |
+| --------------------- | ------------------------------------------------------------ | --------------------------------------------------------------------------- |
+| Delivery inbox        | Account, live/test mode, event ID                            | Accept one authenticated snapshot event.                                    |
+| Queue acceptance      | Event ID inside `stripe:account:mode`, retained for 24 hours | Converge Workhorse enqueue retries while the key remains live.              |
+| Entitlement operation | Account, live/test mode, invoice ID                          | Grant one local invoice credit across different events and worker restarts. |
+
+The queue key expires. The application inbox and invoice ledger do not expire automatically.
+A redelivery after queue-key expiry still finds the retained inbox and never recreates its task.
+Two event IDs for the same invoice produce two tasks, but only one business grant.
+The invoice ledger insert, entitlement increment, and inbox fulfillment marker share another PostgreSQL transaction.
+If the worker crashes after that transaction commits, the next handler run sees the ledger and does not increment again.
+A changed customer for a retained invoice fails rather than granting another customer a credit.
+
+Never delete pending inbox rows. Deleting an inbox allows a later delivery to enqueue again.
+Deleting the invoice ledger removes protection against another grant, even if Workhorse retains its task history.
+Archive or retain those identities according to your replay and business-retention policy.
+For a failed task, investigate through Workhorse's [dead-letter and redrive tools](/docs/dead-letters).
+Another event ACK is not an automatic redrive of a failed task.
+
+Workhorse provides at-least-once execution, not exactly-once external effects.
+The local PostgreSQL uniqueness constraint protects this local entitlement operation only.
+This recipe deliberately contains **no outbound mutation**.
+Adding an external effect requires a persisted operation identity, provider idempotency where available, and reconciliation after uncertain success.
+
+## Retry, ordering, and resource limits
+
+Stripe does not guarantee event delivery order.
+The handler does not require `invoice.created` or a subscription event before `invoice.paid`.
+Event `created` is stored for audit, never used as a sorting fence or duplicate identity.
+Stripe can deliver the same event again, or create distinct events about one object and operation.
+
+Stripe documents live retries for up to three days, with exponential backoff.
+Sandbox delivery retries occur three times over a few hours.
+Manual resends are available through the Dashboard for 15 days and Stripe CLI for 30 days.
+A successful manual resend does not necessarily stop automatic retries.
+Those windows do not make webhooks a complete permanent event log.
+An operator must reconcile invoice state after outages beyond delivery coverage.
+This recipe does not implement that provider-side reconciliation or expose a mutation route.
+
+| Sample limit                        | Value                                          |
+| ----------------------------------- | ---------------------------------------------- |
+| Raw request body                    | 262,144 bytes, including chunked bodies        |
+| Active ingress requests             | 32; excess receives `503`                      |
+| Open ingress connections            | 64; excess sockets are closed                  |
+| Request and header timeout          | 5 seconds                                      |
+| PostgreSQL pool                     | 8 clients; acquisition timeout 1 second        |
+| PostgreSQL statement / lock timeout | 3 seconds / 1 second per transaction statement |
+| Keep-alive / requests per socket    | 1 second / 100                                 |
+| Header count                        | 32                                             |
+| Identifier suffix                   | 1–200 ASCII letters or digits                  |
+| Entitlement worker concurrency      | 2                                              |
+| Task attempts / retry delay         | 5 / 1 second                                   |
+
+The request deadline can expire while PostgreSQL finishes a transaction.
+The client receives no success response; redelivery resolves whether acceptance committed.
+This is another reason to retain the inbox identity.
+Tune ingress limits and connection capacity together; a reverse proxy must also bound connections and headers.
+
+## Sources and verification
+
+The primary references are Stripe's [webhook contract](https://docs.stripe.com/webhooks),
+[invoice object](https://docs.stripe.com/api/invoices/object),
+and released [stripe-node v23.0.0 signing source](https://github.com/stripe/stripe-node/blob/v23.0.0/src/Webhooks.ts).
+The tag's [API version source](https://github.com/stripe/stripe-node/blob/v23.0.0/src/apiVersion.ts) pins the snapshot version used here.
+These explain the vendor contract; local fixtures are not live-provider proof.
+
+The maintained tests cover raw-byte verification, stale signatures, scope rejection, concurrent duplicates, and changed ordering.
+They also cover observer invisibility, savepoint rollback, enqueue and commit failure, ACK loss, key expiry, and entitlement replay after restart.
+The packed consumer exercises the public SDK import without repository aliases or sidecar files.
+
+## Next
+
+- [Enqueue inside an application transaction](/docs/enqueue).
+- [Run a dedicated worker process](/docs/worker-processes).
+- [Understand enqueue idempotency](/docs/idempotency).

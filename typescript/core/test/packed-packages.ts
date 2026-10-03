@@ -70,6 +70,7 @@ async function declaredRange(manifest: string, dependency: string): Promise<stri
  * `drizzle-orm >=0.45.0 <1`, `react >=19 <20` — admit every range below.
  */
 const shared = {
+  stripe: await declaredRange("package.json", "stripe"),
   "drizzle-orm": await declaredRange("typescript/drizzle/package.json", "drizzle-orm"),
   pg: await declaredRange("typescript/core/package.json", "pg"),
   "@types/pg": await declaredRange("typescript/core/package.json", "@types/pg"),
@@ -458,6 +459,7 @@ try {
           knex: "3.3.0",
           objection: "3.1.5",
           pg: await declaredRange("typescript/knex/package.json", "pg"),
+          stripe: shared.stripe,
           typescript: "5.8.3",
           "@types/node": "24.1.0",
           "@types/pg": shared["@types/pg"],
@@ -858,7 +860,9 @@ try {
     // Examples are independent published-consumer entry points. Reset between them so a ready task
     // left by one example cannot be claimed by the next example's default-queue worker.
     await run("pnpm", ["db:reset:test-packed"]);
-    const verify = ["dedicated-worker", "demo-worker"].includes(example.scenario)
+    const verify = ["dedicated-worker", "demo-worker", "stripe-invoice-paid"].includes(
+      example.scenario,
+    )
       ? ["--verify"]
       : [];
     const output = await run("node", [path.basename(example.file), ...verify], consumer, {

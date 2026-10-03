@@ -64,6 +64,29 @@
         "exclusion": { "reason": "Bun is a Go ORM and exposes no Ruby transaction handle." }
       }
     },
+    "stripe-invoice-paid": {
+      "typescript": { "file": "typescript/examples/stripe-invoice-paid.ts" },
+      "python": {
+        "exclusion": {
+          "reason": "This bounded Stripe signing recipe is TypeScript-only, not a cross-language integration claim."
+        }
+      },
+      "go": {
+        "exclusion": {
+          "reason": "This bounded Stripe signing recipe is TypeScript-only, not a cross-language integration claim."
+        }
+      },
+      "rust": {
+        "exclusion": {
+          "reason": "This bounded Stripe signing recipe is TypeScript-only, not a cross-language integration claim."
+        }
+      },
+      "ruby": {
+        "exclusion": {
+          "reason": "This bounded Stripe signing recipe is TypeScript-only, not a cross-language integration claim."
+        }
+      }
+    },
     "quickstart": {
       "typescript": { "file": "typescript/examples/quickstart.ts" },
       "python": { "file": "python/examples/quickstart.py" },

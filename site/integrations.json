@@ -235,6 +235,15 @@
       "verifiedOn": "2026-10-02"
     },
     {
+      "slug": "stripe",
+      "name": "Stripe webhooks",
+      "category": "frameworks",
+      "tier": "documented",
+      "summary": "Accepts signed invoice.paid snapshots into a PostgreSQL inbox and a dedicated entitlement worker.",
+      "boundary": "A locally tested Connect-account recipe, not a Stripe package or live-provider verification; no outbound billing mutations.",
+      "verifiedOn": "2026-10-02"
+    },
+    {
       "slug": "pgbouncer",
       "name": "PgBouncer",
       "category": "poolers",

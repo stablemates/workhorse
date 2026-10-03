@@ -4,6 +4,7 @@
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
+    "test:stripe-webhooks": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run --config vitest.database.config.ts typescript/core/test/stripe-webhook-integration.test.ts",
     "dev": "tsx scripts/with-env.ts tsx scripts/portless.ts",
     "build": "tsx scripts/with-env.ts tsx scripts/full-build.ts",
     "build:runtime": "tsx scripts/build-runtime.ts",
@@ -208,6 +209,7 @@
     "pg": "^8.23.0",
     "portless": "0.15.6",
     "smol-toml": "1.9.0",
+    "stripe": "23.0.0",
     "tsx": "^4.23.15",
     "typescript": "^5.8.3",
     "vite": "^8.3.1",
