@@ -1,0 +1,120 @@
+---
+title: SQLx
+description: Enqueue through a caller-owned Rust SQLx PostgreSQL transaction without changing Workhorse's worker drivers.
+---
+
+When a business write and its task must commit together, pass the same SQLx transaction to `EnqueueClient`.
+Workhorse's optional `sqlx` feature implements the native enqueue transport inside the Rust crate.
+It opens no tokio-postgres connection, acquires no fallback pool connection, and copies no enqueue preparation.
+Workhorse keeps its schema lifecycle outside SQLx application migrations.
+
+This is a maintained enqueue transport, not a separate framework package or a raw-SQL recipe.
+The catalog uses **documented** because its verified package metadata currently describes npm adapters.
+The Rust all-features CI suite nevertheless runs the native PostgreSQL transaction fixture on every change.
+This does not claim other SQLx versions, databases, worker drivers, or live hosted-provider verification.
+
+## Enable the tested driver
+
+The transport pins released **SQLx 0.8.6** and requires Workhorse's **Rust 1.89** toolchain or newer.
+SQLx 0.9.0 requires Rust 1.94.0 and is outside this transport's verified scope.
+Select a Workhorse release containing the `sqlx` feature; an older published crate cannot enable a feature it lacks.
+The repository example builds the current checkout instead of a registry release.
+
+```toml
+[dependencies]
+workhorse = { version = "0.6", features = ["sqlx"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+Import the matching driver through `workhorse::sqlx`.
+The feature enables SQLx's `postgres`, `json`, `uuid`, and `runtime-tokio` features, with defaults disabled.
+It enables no query macros, `Any` driver, MySQL, SQLite, migrations, or TLS backend.
+If your database requires TLS, add the same SQLx version with your required TLS feature:
+
+```toml
+sqlx = { version = "=0.8.6", default-features = false, features = ["tls-rustls-ring-webpki"] }
+```
+
+Cargo combines that feature with Workhorse's SQLx features.
+Choose certificate roots and connection settings for your deployment; the local fixture uses direct loopback PostgreSQL without TLS.
+[SQLx's released transaction API](https://docs.rs/sqlx/0.8.6/sqlx/struct.Transaction.html) explains the mutable connection borrowing.
+
+## Write and enqueue together
+
+Install Workhorse's schema in the same database before accepting application traffic.
+Create your application table through its own migration.
+Import `Connection` and `PgConnection` from `workhorse::sqlx`, plus `EnqueueClient`, `EnqueueOptions`, and `serde_json::json`.
+The runnable example creates `public.sqlx_example_order` and supplies a UUID `order_id`.
+
+```rust
+let client = EnqueueClient::new("orders");
+let mut transaction = connection.begin().await?;
+sqlx::query("INSERT INTO public.sqlx_example_order (id, reference) VALUES ($1, $2)")
+    .bind(order_id)
+    .bind("order-42")
+    .execute(&mut *transaction)
+    .await?;
+let accepted = client
+    .enqueue(
+        &mut transaction,
+        "order.accepted",
+        &json!({ "orderId": order_id }),
+        EnqueueOptions::default(),
+    )
+    .await?;
+transaction.commit().await?;
+```
+
+Application SQL uses `&mut *transaction`; Workhorse receives `&mut transaction` itself.
+Pass the transaction borrowed from your pool or connection, never a different executor or a newly acquired connection.
+The transport also accepts nested SQLx transactions, which use caller-owned savepoints.
+Releasing a savepoint does not commit the outer transaction; an outer rollback still removes both writes.
+
+`accepted.task_id` is a native UUID and remains provisional until the outer commit succeeds.
+An independent connection sees neither the application row nor the task before that commit.
+Return enqueue errors to the caller instead of committing the business write alone.
+Workhorse never begins, commits, rolls back, or closes your transaction.
+
+Reuse an `EnqueueClient` within one logical database and schema.
+It owns compatibility and contract caches, validation, generated SQL preparation, and ordered result decoding.
+Its `enqueue_many` and `sync_contracts` methods also borrow `&mut transaction`.
+After rolling back contract changes, use a fresh client or synchronize the actual contracts again.
+Timestamps are UTC strings prepared inside JSONB, not native SQLx timestamp parameters.
+
+## Keep cancellation and workers separate
+
+A dropped enqueue future releases its mutable borrow but **does not cancel the PostgreSQL statement**.
+The statement can still accept a task inside the transaction.
+If the outcome is uncertain, roll back that transaction; do not infer non-acceptance from a timeout.
+After server-side cancellation, PostgreSQL refuses further statements until the caller rolls back the transaction or savepoint.
+The fixture verifies both the cancellation error and recovery, not an automatic cancellation API.
+
+SQLx support is **enqueue-only**.
+`Queue`, `Admin`, durable handler contexts, and the embedded dashboard retain their existing driver requirements.
+Dedicated Rust worker processes still require deadpool-postgres and tokio-postgres.
+SQLx does not become a worker driver, and a request process must not host a worker.
+SeaORM and Diesel remain separate integrations; this page does not claim their transaction support.
+
+## Run the example and proof
+
+Use a disposable local development database with the Workhorse schema installed.
+The example creates its application table and commits one order and task.
+It does not run a worker or install the Workhorse schema.
+
+```bash
+WORKHORSE_DATABASE_URL=postgres://user:password@localhost/workhorse_dev pnpm rust:example:sqlx
+pnpm rust:test:sqlx
+```
+
+The test command uses the checkout's `DATABASE_URL_TEST` only to create isolated scratch databases.
+The maintained `rust/tests/sqlx_postgres.rs` fixture proves backend PID and transaction identity,
+observer invisibility, commit/rollback, savepoints, typed results, ordered replay, contracts, structured errors, and cancellation.
+Compile tests require borrowed `Send` futures and reject overlapping use and commit while an enqueue is pending.
+The package check also executes this transport from a clean consumer of the unpacked crate archive.
+
+## Next
+
+- [Enqueue and transactions](/docs/enqueue)
+- [Payload contracts](/docs/contracts)
+- [Dedicated worker processes](/docs/worker-processes)

@@ -28,6 +28,7 @@ include = [
 name = "workhorse"
 
 [features]
+sqlx = ["dep:sqlx"]
 opentelemetry = ["dep:opentelemetry", "dep:tracing-opentelemetry"]
 # The embedded dashboard backend. A build without it compiles no HTTP dependency.
 dashboard = [
@@ -41,6 +42,12 @@ dashboard = [
 ]
 
 [dependencies]
+sqlx = { version = "=0.8.6", optional = true, default-features = false, features = [
+  "postgres",
+  "json",
+  "uuid",
+  "runtime-tokio",
+] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
 tokio-util = "0.7"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
@@ -93,3 +100,11 @@ required-features = ["dashboard"]
 [[test]]
 name = "dashboard_http"
 required-features = ["dashboard"]
+
+[[test]]
+name = "sqlx_postgres"
+required-features = ["sqlx"]
+
+[[example]]
+name = "sqlx_transaction"
+required-features = ["sqlx"]

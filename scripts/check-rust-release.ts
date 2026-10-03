@@ -132,7 +132,11 @@ export function publishedCrate(workspace: CargoMetadata): CargoPackage {
  * The consumer manifest. The dependency key `workhorse` fixes the import path whatever the package
  * or library is named, so an SM-882 rename changes only `rust/Cargo.toml`.
  */
-export function consumerManifest(crate: { name: string; version: string }, unpacked: string) {
+export function consumerManifest(
+  crate: { name: string; version: string },
+  unpacked: string,
+  sqlx = false,
+) {
   const name = JSON.stringify(crate.name);
   return [
     "[package]",
@@ -141,6 +145,7 @@ export function consumerManifest(crate: { name: string; version: string }, unpac
     'edition = "2021"',
     "publish = false",
     "",
+    ...(sqlx ? ["[features]", 'sqlx = ["workhorse/sqlx"]', ""] : []),
     "[[bin]]",
     `name = "${consumerBinary}"`,
     'path = "src/main.rs"',
@@ -187,7 +192,11 @@ function withDatabase(url: string, database: string): string {
   return parsed.toString();
 }
 
-async function runTaskThroughConsumer(binary: string, sourceUrl: string): Promise<void> {
+async function runTaskThroughConsumer(
+  binary: string,
+  sourceUrl: string,
+  transport = "tokio",
+): Promise<void> {
   const source = decodeURIComponent(new URL(sourceUrl).pathname.slice(1));
   if (!source.includes("test")) throw new Error(`${source} is not a test database`);
   const scratch = scratchDatabaseName(source, process.pid);
@@ -206,7 +215,7 @@ async function runTaskThroughConsumer(binary: string, sourceUrl: string): Promis
         await database.query(
           await readFile(path.join(root, "sql", "schema", "current.sql"), "utf8"),
         );
-        const taskId = (await run(binary, [scratchUrl], { capture: true })).trim();
+        const taskId = (await run(binary, [scratchUrl, transport], { capture: true })).trim();
         const { rows } = await database.query<{
           queue_name: string;
           task_type: string;
@@ -227,7 +236,9 @@ async function runTaskThroughConsumer(binary: string, sourceUrl: string): Promis
         if (row.state !== "succeeded" || row.packaged !== true) {
           throw new Error(`The consumer's worker left task ${taskId} in state ${row.state}`);
         }
-        console.log(`The packaged crate enqueued and ran task ${taskId} in ${scratch}`);
+        console.log(
+          `The packaged crate ${transport} transport enqueued and ran task ${taskId} in ${scratch}`,
+        );
       } finally {
         await database.end();
       }
@@ -269,7 +280,8 @@ async function checkRustRelease(argv: readonly string[]): Promise<void> {
 
     const consumer = path.join(temporary, "consumer");
     await mkdir(path.join(consumer, "src"), { recursive: true });
-    await writeFile(path.join(consumer, "Cargo.toml"), consumerManifest(crate, unpacked));
+    const hasSqlx = "sqlx" in crate.features;
+    await writeFile(path.join(consumer, "Cargo.toml"), consumerManifest(crate, unpacked, hasSqlx));
     await copyFile(consumerSource, path.join(consumer, "src", "main.rs"));
     const manifest = path.join(consumer, "Cargo.toml");
 
@@ -293,13 +305,20 @@ async function checkRustRelease(argv: readonly string[]): Promise<void> {
     const target = path.join(workspace.target_directory, "release-consumer");
     const build = ["build", "--manifest-path", manifest, "--target-dir", target];
     const features = Object.keys(crate.features).filter((feature) => feature !== "default");
+    const binary = path.join(target, "debug", consumerBinary);
     await cargo(build);
     if (features.length > 0) {
-      await cargo([...build, "--features", features.map((f) => `workhorse/${f}`).join(",")]);
+      await cargo([
+        ...build,
+        "--features",
+        [...features.map((feature) => `workhorse/${feature}`), ...(hasSqlx ? ["sqlx"] : [])].join(
+          ",",
+        ),
+      ]);
+      if (hasSqlx && url) await runTaskThroughConsumer(binary, url, "sqlx");
       // The all-features build replaced the binary; the database run uses the default build.
       await cargo(build);
     }
-    const binary = path.join(target, "debug", consumerBinary);
     await run(binary, []);
 
     if (url) await runTaskThroughConsumer(binary, url);

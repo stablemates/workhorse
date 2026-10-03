@@ -1845,8 +1845,39 @@ Unknown errors retain their diagnostics and original source; the shipped driver 
 Adapters use the exact caller-owned connection, never a fallback pool connection, and expose no
 transaction lifecycle operation. Dropping a future releases its Rust borrow, not necessarily the
 server-side statement. The caller controls driver cancellation and transaction recovery.
-This foundation adds no concrete SQLx, SeaORM or Diesel support. The sealed runtime executor,
-worker driver, crate dependencies and feature names remain unchanged.
+
+#### SQLx enqueue transport
+
+The optional `sqlx` feature implements `EnqueueTransport` for SQLx `Transaction<'_, Postgres>` in
+`rust/src/sqlx_transport.rs`. It pins released SQLx 0.8.6 and re-exports it as `workhorse::sqlx`.
+The dependency disables defaults and enables only `postgres`, `json`, `uuid` and `runtime-tokio`.
+Applications select TLS features; Workhorse selects no TLS backend.
+SQLx 0.9.0 requires Rust 1.94.0, beyond Workhorse's pinned Rust 1.89 toolchain.
+[ADR 0088](../decisions/0088-borrow-sqlx-transactions-for-rust-enqueue.md) supplements ADR 0074's feature list.
+
+Call `EnqueueClient` methods with `&mut transaction`.
+The implementation binds `EnqueueBind::Json` as JSONB and `EnqueueBind::Text` as nullable text.
+It executes `fetch_all(&mut **self)` on that transaction's exact connection.
+It decodes required columns as native nullable `i32`, `String`, `Vec<String>`, JSON and UUID values.
+SQLx type errors retain their original source; Workhorse validates nullability and result semantics centrally.
+`PgDatabaseError::code()` and `detail()` feed the shared structured error translator.
+No pool, connection acquisition, detached operation or transaction lifecycle method belongs to the transport.
+
+`sqlx_postgres` proves matching backend PID and transaction ID through an enqueue trigger.
+It also proves observer invisibility, joint commit/rollback, nested SQLx savepoints, contract sync/refresh,
+ordered replayed batches, timestamp JSON serialization, native decoding and structured error parity.
+Compile proofs require `Send` borrowed futures and reject overlapping use and commit during enqueue.
+Dropping a SQLx query future releases the borrow but does not cancel the PostgreSQL statement.
+The caller must roll back an uncertain operation.
+After server cancellation, SQLSTATE `57014` leaves the transaction aborted with `25P02` until caller recovery.
+The tests cancel through an independent PostgreSQL observer and recover with a caller-owned savepoint.
+After rolling back contract changes, use a fresh client or synchronize the actual contracts again.
+
+This feature supports enqueue only, not `Queue`, `Admin`, workers, durable contexts or dashboard drivers.
+The sealed runtime executor and deadpool/tokio-postgres worker requirements remain unchanged.
+SeaORM, Diesel, non-PostgreSQL SQLx drivers and other SQLx versions are outside the verified transport scope.
+CI collects `sqlx_postgres` once through the existing all-features Rust suite on main-targeted pull requests.
+The package check builds and runs an SQLx-enabled consumer against the unpacked crate, then tests the default consumer.
 
 ### Admin
 
@@ -2032,6 +2063,7 @@ returns an `Authorization`.
 - `rust/examples/docs.rs` holds the `// docs:start` regions the site embeds.
 - `rust/examples/landing.rs` holds the `landing-*` regions behind the landing page's Rust tabs.
 - `rust/examples/agent_playbook.rs` is the whole-file region behind the agent playbook.
+- `rust/examples/sqlx_transaction.rs` owns the `sqlx-transaction` region and requires the `sqlx` feature.
 
 `pnpm rust:clippy` compiles every example with `--all-targets`.
 

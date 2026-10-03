@@ -16,6 +16,8 @@ mod fenced_write;
 pub mod policies;
 mod queue;
 mod sql_catalogue_generated;
+#[cfg(feature = "sqlx")]
+mod sqlx_transport;
 mod telemetry;
 mod types;
 mod waits;
@@ -38,6 +40,8 @@ pub use sql_catalogue_generated::{
     CLIENT_PROTOCOL_VERSION, MAXIMUM_SCHEMA_VERSION as MAX_SCHEMA_VERSION, MAX_ENQUEUE_BATCH_SIZE,
     MINIMUM_SCHEMA_VERSION as MIN_SCHEMA_VERSION,
 };
+#[cfg(feature = "sqlx")]
+pub use sqlx;
 pub use types::*;
 pub use waits::{HumanOutcome, SignalOutcome};
 pub use worker::{

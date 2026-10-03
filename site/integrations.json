@@ -98,6 +98,15 @@
       "verifiedOn": "2026-10-02"
     },
     {
+      "slug": "sqlx",
+      "name": "SQLx",
+      "category": "orms",
+      "tier": "documented",
+      "summary": "Enqueues through the Rust crate's optional native SQLx PostgreSQL transaction transport.",
+      "boundary": "SQLx 0.8.6 enqueue only; dedicated workers retain tokio-postgres and deadpool-postgres.",
+      "verifiedOn": "2026-10-02"
+    },
+    {
       "slug": "serverless",
       "name": "Serverless and edge",
       "category": "runtimes",

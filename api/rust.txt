@@ -7,6 +7,7 @@
 
 feature dashboard
 feature opentelemetry
+feature sqlx
 
 pub mod workhorse
 pub use workhorse::deadpool_postgres
@@ -2536,3 +2537,7 @@ pub type workhorse::RetryPolicy = serde_json::map::Map<alloc::string::String, se
 #[cfg(feature = "dashboard")] pub fn workhorse::dashboard::ProcedureError::from(error: workhorse::Error) -> Self
 
 #[cfg(feature = "opentelemetry")] adds no public items
+
+#[cfg(feature = "sqlx")] pub use workhorse::sqlx
+#[cfg(feature = "sqlx")] impl workhorse::EnqueueTransport for sqlx_core::transaction::Transaction<'_, sqlx_postgres::database::Postgres>
+#[cfg(feature = "sqlx")] pub async fn sqlx_core::transaction::Transaction<'_, sqlx_postgres::database::Postgres>::query(&mut self, query: workhorse::EnqueueQuery<'_>) -> core::result::Result<alloc::vec::Vec<workhorse::EnqueueRow>, workhorse::Error>
