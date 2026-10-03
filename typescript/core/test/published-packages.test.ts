@@ -46,6 +46,7 @@ describe("the derived package list", () => {
       "@stablemates/workhorse-dashboard-contract",
       "@stablemates/workhorse-dashboard-server",
       "@stablemates/workhorse-drizzle",
+      "@stablemates/workhorse-knex",
       "@stablemates/workhorse-kysely",
       "@stablemates/workhorse-otel",
       "@stablemates/workhorse-prisma",
@@ -64,6 +65,7 @@ describe("the derived package list", () => {
       "@stablemates/workhorse-dashboard-server",
       "@stablemates/workhorse-dashboard",
       "@stablemates/workhorse-drizzle",
+      "@stablemates/workhorse-knex",
       "@stablemates/workhorse-kysely",
       "@stablemates/workhorse-otel",
       "@stablemates/workhorse-prisma",
@@ -314,7 +316,7 @@ describe("published package manifests", () => {
 });
 
 describe("ORM adapter entry points", () => {
-  const adapters = ["drizzle", "prisma", "typeorm", "kysely"];
+  const adapters = ["drizzle", "prisma", "typeorm", "kysely", "knex"];
 
   it.each(adapters)("keeps %s as thin glue over the public core adapter API", async (adapter) => {
     const source = await read(`typescript/${adapter}/src/index.ts`);

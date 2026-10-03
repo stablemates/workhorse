@@ -209,6 +209,8 @@ the transaction in an executor and builds a `Queue` around that. Rust builds a `
   </Tab>
 </Tabs>
 
+For Knex and Objection, use the [Knex adapter](/docs/knex) and [tested Objection recipe](/docs/objection) with the exact model-write transaction.
+
 TypeScript's fourth argument accepts anything with a pg-compatible `query` method, so the ORM
 adapters pass their own transaction handles the same way. Go's `NewPGXExecutor` accepts a `pgx.Tx`
 and `NewSQLExecutor` accepts a `*sql.Tx`. Rust's `Queue::new` accepts a `tokio_postgres` client or

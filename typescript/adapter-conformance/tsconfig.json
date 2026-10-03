@@ -4,7 +4,7 @@
     "../../tsconfig.source-paths.json",
     "../../tsconfig.typecheck-base.json"
   ],
-  "include": ["test/**/*.ts", "examples/**/*.ts"],
+  "include": ["test/**/*.ts", "examples/**/*.ts", "../examples/objection.ts"],
   "compilerOptions": {
     "outDir": "../../.build/typecheck/adapter-conformance",
     "rootDir": "../..",
@@ -15,6 +15,7 @@
     { "path": "../core/tsconfig.typecheck.json" },
     { "path": "../drizzle/tsconfig.typecheck.json" },
     { "path": "../kysely/tsconfig.typecheck.json" },
+    { "path": "../knex/tsconfig.typecheck.json" },
     { "path": "../prisma/tsconfig.typecheck.json" },
     { "path": "../typeorm/tsconfig.typecheck.json" }
   ]

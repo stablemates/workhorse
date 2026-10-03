@@ -40,6 +40,7 @@ COPY typescript/dashboard/package.json typescript/dashboard/
 COPY typescript/demo/package.json typescript/demo/
 COPY typescript/drizzle/package.json typescript/drizzle/
 COPY typescript/kysely/package.json typescript/kysely/
+COPY typescript/knex/package.json typescript/knex/
 COPY typescript/otel/package.json typescript/otel/
 COPY typescript/prisma/package.json typescript/prisma/
 COPY typescript/typeorm/package.json typescript/typeorm/

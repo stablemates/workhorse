@@ -77,6 +77,7 @@ describe("builds that emit shipped declarations", () => {
         "typescript/demo/tsconfig.json",
         "typescript/drizzle/tsconfig.json",
         "typescript/kysely/tsconfig.json",
+        "typescript/knex/tsconfig.json",
         "typescript/otel/tsconfig.json",
         "typescript/prisma/tsconfig.json",
         "typescript/typeorm/tsconfig.json",

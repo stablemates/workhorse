@@ -66,7 +66,7 @@ Web frameworks do not participate in worker lifecycle. See
 ### ORM adapters
 
 `@stablemates/workhorse-drizzle`, `@stablemates/workhorse-prisma`, `@stablemates/workhorse-typeorm`,
-and `@stablemates/workhorse-kysely` convert provider database and transaction objects into
+`@stablemates/workhorse-kysely`, and `@stablemates/workhorse-knex` convert provider database and transaction objects into
 `Queryable`.
 
 Each adapter finds the node-postgres pool differently:
@@ -148,6 +148,23 @@ the same synthetic node-postgres metadata as the Prisma and TypeORM queryables.
 - follows at most 16 nested causes
 - accepts only five-character uppercase alphanumeric codes
 - copies the discovered code to its wrapper
+
+#### Knex queryable and Objection recipe
+
+`knexQueryable` in `@stablemates/workhorse-knex` accepts a Knex database or transaction with `client: "pg"`.
+It sends each statement through `raw(statement).options({ text: statement, values: [...values] })`.
+The released fixture pins Knex 3.3.0, pg 8.23.0, and Objection 3.1.5; other versions are not certified.
+The native `text` option restores SQL after Knex rewrites question marks, including those in literals, comments, dollar quotes, and JSON operators.
+Repeated and out-of-order `$N` parameters retain native PostgreSQL semantics.
+`postProcessResponse` is rejected at adaptation and before every execution. Only one native result with object `rows` is accepted.
+Multi-statement result arrays and transformed rows fail. Custom clients and query-mutating listeners are outside the verified boundary.
+Rows retain pg's native values and order; the shared provider synthesizes the same metadata described above.
+`KnexQueryError` preserves `statement`, original `cause`, and SQLSTATE `code` through the shared `QueryError` implementation.
+The adapter neither extracts connections nor bypasses Knex's completed-transaction guard.
+Callers own transactions, savepoints, and Knex destruction. The adapter does not validate a transaction's database against its base executor.
+Objection's `Model.query(transaction)` uses that same Knex transaction; it needs no additional package.
+Workers use separately configured compatible pg pools. A Knex adapter accepts an explicit `pool` for dedicated heartbeat and listener sessions.
+It never extracts Knex's internal pool. Without `pool`, a worker requires the explicit `sharedHeartbeats` opt-out.
 
 ### What an adapter must guarantee
 

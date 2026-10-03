@@ -130,8 +130,9 @@ availability must be independent from the application database.
   and operator API that most TypeScript applications install.
 - [`@stablemates/workhorse-drizzle`](typescript/drizzle),
   [`@stablemates/workhorse-prisma`](typescript/prisma),
-  [`@stablemates/workhorse-typeorm`](typescript/typeorm), and
-  [`@stablemates/workhorse-kysely`](typescript/kysely) enqueue through ORM-owned transactions.
+  [`@stablemates/workhorse-typeorm`](typescript/typeorm),
+  [`@stablemates/workhorse-kysely`](typescript/kysely), and
+  [`@stablemates/workhorse-knex`](typescript/knex) enqueue through ORM-owned transactions.
 - [`@stablemates/workhorse-dashboard`](typescript/dashboard) is the React operator dashboard and
   compatibility facade. Its server and type contract are also published for package composition.
 - [`@stablemates/workhorse-otel`](typescript/otel) connects core's vendor-neutral telemetry to the

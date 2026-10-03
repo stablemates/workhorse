@@ -1,6 +1,29 @@
 {
   "languages": ["typescript", "python", "go", "rust", "ruby"],
   "scenarios": {
+    "objection-transaction": {
+      "typescript": { "file": "typescript/examples/objection.ts" },
+      "python": {
+        "exclusion": {
+          "reason": "Objection and Knex are JavaScript libraries; Python transactional enqueue uses its own driver or ORM executor."
+        }
+      },
+      "go": {
+        "exclusion": {
+          "reason": "Objection and Knex are JavaScript libraries; Go transactional enqueue uses its own SQL or pgx executor."
+        }
+      },
+      "rust": {
+        "exclusion": {
+          "reason": "Objection and Knex are JavaScript libraries; Rust transactional enqueue uses its PostgreSQL transaction executor."
+        }
+      },
+      "ruby": {
+        "exclusion": {
+          "reason": "Objection and Knex are JavaScript libraries; Ruby transactional enqueue uses its own PostgreSQL or ORM executor."
+        }
+      }
+    },
     "gorm": {
       "typescript": {
         "exclusion": {

@@ -62,6 +62,7 @@ const governedSurfaces: readonly GovernedSurface[] = [
   { file: "typescript/dashboard-server/README.md", commands: ["node"] },
   { file: "typescript/drizzle/README.md", commands: ["node"] },
   { file: "typescript/kysely/README.md", commands: ["node"] },
+  { file: "typescript/knex/README.md", commands: ["node"] },
   { file: "typescript/otel/README.md", commands: ["node"] },
   { file: "typescript/prisma/README.md", commands: ["node"] },
   { file: "typescript/typeorm/README.md", commands: ["node"] },

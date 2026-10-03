@@ -1,9 +1,9 @@
 # Changelog
 
-This changelog covers nine published packages on npm. They are versioned in lockstep and released
+This changelog covers 10 published packages on npm. They are versioned in lockstep and released
 from one tag:
 `@stablemates/workhorse`, `@stablemates/workhorse-drizzle`, `@stablemates/workhorse-prisma`, `@stablemates/workhorse-typeorm`,
-`@stablemates/workhorse-kysely`, `@stablemates/workhorse-otel`, `@stablemates/workhorse-dashboard`,
+`@stablemates/workhorse-kysely`, `@stablemates/workhorse-knex`, `@stablemates/workhorse-otel`, `@stablemates/workhorse-dashboard`,
 `@stablemates/workhorse-dashboard-server`, and `@stablemates/workhorse-dashboard-contract`. The Python distribution, Go module, Rust crate, and Ruby
 gem release from that same commit, so their notes live in [`python/CHANGELOG.md`](python/CHANGELOG.md),
 [`go/CHANGELOG.md`](go/CHANGELOG.md), [`rust/CHANGELOG.md`](rust/CHANGELOG.md), and
@@ -19,6 +19,9 @@ a major line a migration only adds. Migration 0025 is the one exception: a datab
 0.6 only adds. Breaking changes are always listed with upgrade steps.
 
 ## Unreleased
+
+The optional `@stablemates/workhorse-knex` adapter preserves native PostgreSQL statements and parameters on the pinned Knex route.
+The tested Objection recipe shares the model-write transaction with enqueue. Callers retain transaction and resource ownership (SM-1118).
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
 The final schema version is **54**, and the SDK compatibility floor is schema version **54**.
