@@ -7,21 +7,22 @@ When a request changes business data, its task should not survive a rollback or 
 commit. Inside `transaction.atomic(using=alias)`, Workhorse can enqueue through the connection
 Django already enlisted. Django commits or rolls back both writes together.
 
-This is a maintained recipe, not a framework package or Django Tasks backend. Requests enqueue;
+This is a maintained recipe using the optional installed Django seam, not the Django Tasks interface. Requests enqueue;
 [separate worker processes](/docs/worker-processes) execute handlers.
+For decorated tasks, use the bounded [Django Tasks backend](/docs/django-tasks).
 
 ## Set up the selected database
 
 The repository fixture pins Django **6.1.1** and Psycopg **3.3.6**. It runs on Workhorse's supported
 Python and PostgreSQL versions, starting with Python **3.12** and PostgreSQL **15**.
-Django and its typing dependencies are development-only here. Installing ordinary Workhorse does
+Django is optional; typing dependencies remain development-only. Installing ordinary Workhorse does
 not install Django. The recipe requires Django's `django.db.backends.postgresql` backend with
 Psycopg 3. A project using psycopg2 cannot pass its connection to `Queue`.
 
 In your Django environment, install the tested framework and driver:
 
 ```sh
-pip install 'Django==6.1.1' 'psycopg[binary]==3.3.6' stablemates-workhorse
+pip install 'Django==6.1.1' 'psycopg[binary]==3.3.6' 'stablemates-workhorse[django]'
 ```
 
 Configure a database alias, such as `business`, through Django's `DATABASES` setting. Install the
@@ -34,14 +35,14 @@ Opening a second connection to the same database does not join the transaction.
 
 ## Enqueue inside the atomic block
 
-The maintained helper lives in `python/examples/django_enqueue.py`. Copy that recipe into your
-application; it is not an import from the installed `workhorse` package. It requires `using`
+The maintained recipe lives in `python/examples/django_enqueue.py`. Its helper is centralized in
+the optional installed `workhorse.django` module. It requires `using`
 explicitly, checks Django's thread and transaction state, and returns an `EnqueueResult`:
 
 ```python
 from django.db import connections, transaction
 
-from application.django_enqueue import enqueue_in_atomic
+from workhorse.django import enqueue_in_atomic
 
 alias = "business"
 with transaction.atomic(using=alias):

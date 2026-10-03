@@ -70,6 +70,7 @@ def installed_distribution_interpreters(
             (distribution, None),
             (f"{distribution}-psycopg", "psycopg"),
             (f"{distribution}-asyncpg", "asyncpg"),
+            (f"{distribution}-django", "django"),
         )
         for name, extras in environments:
             environment_directory = scratch / f"{name}-environment"

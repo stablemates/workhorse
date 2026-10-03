@@ -115,6 +115,7 @@
     "python:typecheck": "uv run --project python mypy --config-file=python/pyproject.toml python/src/workhorse python/tests/typecheck_usage.py python/examples python/tools",
     "python:test": "tsx scripts/with-env.ts uv run --project python pytest python/tests",
     "python:test:django": "tsx scripts/with-env.ts uv run --project python pytest python/tests/test_django_enqueue.py",
+    "python:test:django-tasks": "tsx scripts/with-env.ts uv run --project python pytest python/tests/test_django_tasks.py",
     "python:test:unit": "tsx scripts/with-env.ts uv run --project python pytest -m 'not integration and not slow' python/tests",
     "python:test:database": "tsx scripts/with-env.ts uv run --project python pytest -m integration python/tests",
     "go:fmt": "tsx scripts/with-env.ts gofmt -w go",

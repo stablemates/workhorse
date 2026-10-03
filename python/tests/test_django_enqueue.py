@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Iterator
+from functools import cache
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -19,7 +20,13 @@ from django.db import connections, models, transaction
 from django.db.transaction import TransactionManagementError
 from django.db.utils import DatabaseError
 
-from workhorse import EnqueueIdempotencyConflictError, EnqueueOptions, Idempotency, Queue
+from workhorse import (
+    EnqueueIdempotencyConflictError,
+    EnqueueOptions,
+    Idempotency,
+    Queue,
+    django as seam,
+)
 
 module_spec = importlib.util.spec_from_file_location(
     "django_enqueue", Path(__file__).parents[1] / "examples" / "django_enqueue.py"
@@ -33,6 +40,7 @@ ALIAS = "business"
 
 
 @pytest.fixture(scope="session")
+@cache
 def business_model() -> type[models.Model]:
     if not settings.configured:
         settings.configure(DATABASES={"default": {}}, INSTALLED_APPS=[], USE_TZ=True)
@@ -101,7 +109,7 @@ def test_same_connection_and_joint_outcome(
         borrowed.append(connection)
         return Queue(connection)
 
-    monkeypatch.setattr(recipe, "Queue", capture_queue)
+    monkeypatch.setattr(seam, "Queue", capture_queue)
     with transaction.atomic(using=django_database):
         raw = database.connection
         if enqueue_first:
@@ -312,7 +320,7 @@ def test_django_thread_ownership_is_checked_before_raw_access(
             failures.append(error)
 
     with transaction.atomic(using=django_database), monkeypatch.context() as guarded:
-        guarded.setattr(recipe, "connections", {django_database: database})
+        guarded.setattr(seam, "connections", {django_database: database})
         thread = threading.Thread(target=foreign_thread_enqueue)
         thread.start()
         thread.join(timeout=5)

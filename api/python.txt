@@ -5494,6 +5494,25 @@ def validate_tasks_input(value: object) -> None
 
 def validate_workers_input(value: object) -> None
 
+## workhorse.django
+
+class WorkhorseTaskBackend(BaseTaskBackend)
+  def __init__(self, alias: str, params: dict[str, Any]) -> None
+  async def aenqueue(self, task, args, kwargs)
+  async def aget_result(self, result_id)
+  def bind_worker(self, worker: Worker) -> None
+  def check(self, **kwargs)
+  def enqueue(self, task: Task[Any, Any], args: Sequence[Any], kwargs: Mapping[str, Any]) -> TaskResult[Any, Any]
+  def get_result(self, result_id)
+  supports_async_task = False
+  supports_defer = False
+  supports_get_result = False
+  supports_priority = False
+  task_class = Task
+  def validate_task(self, task: Task[Any, Any]) -> None
+
+def enqueue_in_atomic(task_type: str, payload: Json, *, using: str, options: EnqueueOptions | None = None) -> EnqueueResult
+
 ## workhorse.errors
 
 class CancellationRequestedError(WorkhorseError)

@@ -199,6 +199,29 @@
         }
       }
     },
+    "django-tasks": {
+      "typescript": {
+        "exclusion": {
+          "reason": "Django Tasks is a Python-only framework interface, not a TypeScript backend."
+        }
+      },
+      "python": { "file": "python/examples/django_tasks.py" },
+      "go": {
+        "exclusion": {
+          "reason": "Django Tasks is a Python-only framework interface, not a Go backend."
+        }
+      },
+      "rust": {
+        "exclusion": {
+          "reason": "Django Tasks is a Python-only framework interface, not a Rust backend."
+        }
+      },
+      "ruby": {
+        "exclusion": {
+          "reason": "Django Tasks is a Python-only framework interface, not an Active Job adapter."
+        }
+      }
+    },
     "sqlc": {
       "typescript": {
         "exclusion": {

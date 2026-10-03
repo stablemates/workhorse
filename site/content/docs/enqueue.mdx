@@ -340,6 +340,7 @@ outside your transaction, so their external effects still need their own idempot
 Inside `transaction.atomic(using=alias)`, Django lends its enlisted Psycopg connection to a
 short-lived `Queue`. Follow the [tested Django recipe](/docs/django) for alias, lifetime, error,
 and async boundaries. `on_commit()` provides ordering, not atomic task acceptance.
+For `@task` and `.enqueue()`, use the bounded [Django Tasks backend](/docs/django-tasks).
 
 ## Enqueue a batch
 

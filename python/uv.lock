@@ -1317,6 +1317,9 @@ dependencies = [
 asyncpg = [
     { name = "asyncpg" },
 ]
+django = [
+    { name = "django" },
+]
 telemetry = [
     { name = "opentelemetry-api" },
 ]
@@ -1342,11 +1345,12 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "asyncpg", marker = "extra == 'asyncpg'", specifier = ">=0.31,<1" },
+    { name = "django", marker = "extra == 'django'", specifier = ">=6.1.1,<6.2" },
     { name = "jsonschema", specifier = ">=4.25,<5" },
     { name = "opentelemetry-api", marker = "extra == 'telemetry'", specifier = ">=1.44,<2" },
     { name = "psycopg", extras = ["pool"], specifier = ">=3.3,<4" },
 ]
-provides-extras = ["psycopg", "asyncpg", "telemetry"]
+provides-extras = ["psycopg", "asyncpg", "telemetry", "django"]
 
 [package.metadata.requires-dev]
 dev = [
