@@ -397,6 +397,9 @@ The queue does not `close` a connection or transaction supplied by its caller.
 For Go's Bun ORM, pass the embedded `tx.Tx`, not the Bun wrapper, to `NewSQLExecutor`.
 The [Go Bun recipe](/docs/go-bun) explains native bindings, savepoints, and the hooks this path bypasses.
 
+[sqlc (Go)](/docs/sqlc) shares a pgx transaction with generated business queries.
+[Go sqlx](/docs/go-sqlx) passes its underlying `*sql.Tx` to the existing Go executor; it is not Rust SQLx.
+
 ## Next
 
 - [Idempotency](/docs/idempotency) — make repeated acceptance converge on one task

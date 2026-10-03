@@ -125,6 +125,24 @@
       "verifiedOn": "2026-10-02"
     },
     {
+      "slug": "sqlc",
+      "name": "sqlc (Go)",
+      "category": "orms",
+      "tier": "documented",
+      "summary": "Shares a pgx transaction between generated business queries and the existing Go executor.",
+      "boundary": "A tested Go recipe, not an adapter package; only pinned pgx/v5 generation is exercised.",
+      "verifiedOn": "2026-10-02"
+    },
+    {
+      "slug": "go-sqlx",
+      "name": "Go sqlx",
+      "category": "orms",
+      "tier": "documented",
+      "summary": "Enqueues through the underlying database/sql transaction of a Go sqlx transaction.",
+      "boundary": "A tested pgx stdlib recipe, not Rust SQLx, a new adapter, or provider compatibility proof.",
+      "verifiedOn": "2026-10-02"
+    },
+    {
       "slug": "serverless",
       "name": "Serverless and edge",
       "category": "runtimes",

@@ -8,6 +8,8 @@ Install the public beta with `go get github.com/stablemates/workhorse/go`, then 
   failed enqueue rolls back the account row.
 - [`gorm`](gorm/README.md) enqueues through the GORM transaction's `Statement.ConnPool`, using
   the existing SQL executor. Real PostgreSQL tests cover plain and prepared-statement transactions.
+- [`sqlc`](sqlc/README.md) uses pinned generated business queries and Workhorse with the same pgx transaction.
+- [`sqlx`](sqlx/README.md) borrows Go sqlx's underlying `*sql.Tx` through pgx stdlib, not Rust SQLx.
 - `dedicated-worker` runs a supervised worker with checkpoints, a durable timer, bounded concurrency,
   and signal-driven drain.
 - `orchestration` shows child joins, signal waits, and human decisions. Another process supplies
