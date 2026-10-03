@@ -122,6 +122,7 @@
     "python:test": "tsx scripts/with-env.ts uv run --project python pytest python/tests",
     "python:test:django": "tsx scripts/with-env.ts uv run --project python pytest python/tests/test_django_enqueue.py",
     "python:test:django-tasks": "tsx scripts/with-env.ts uv run --project python pytest python/tests/test_django_tasks.py",
+    "example:pydanticai-approval": "tsx scripts/with-env.ts uv run --project python python python/examples/pydanticai_approval.py",
     "python:test:unit": "tsx scripts/with-env.ts uv run --project python pytest -m 'not integration and not slow' python/tests",
     "python:test:database": "tsx scripts/with-env.ts uv run --project python pytest -m integration python/tests",
     "go:fmt": "tsx scripts/with-env.ts gofmt -w go",

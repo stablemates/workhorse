@@ -362,6 +362,29 @@
         }
       }
     },
+    "pydanticai-approval": {
+      "typescript": {
+        "exclusion": {
+          "reason": "PydanticAI is a Python agent framework; this recipe uses its Python deferred-tool interface."
+        }
+      },
+      "python": { "file": "python/examples/pydanticai_approval.py" },
+      "go": {
+        "exclusion": {
+          "reason": "PydanticAI is a Python agent framework; this recipe uses its Python deferred-tool interface."
+        }
+      },
+      "rust": {
+        "exclusion": {
+          "reason": "PydanticAI is a Python agent framework; this recipe uses its Python deferred-tool interface."
+        }
+      },
+      "ruby": {
+        "exclusion": {
+          "reason": "PydanticAI is a Python agent framework; this recipe uses its Python deferred-tool interface."
+        }
+      }
+    },
     "async-worker": {
       "typescript": {
         "exclusion": {

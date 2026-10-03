@@ -262,6 +262,15 @@
       "verifiedOn": "2026-10-03"
     },
     {
+      "slug": "pydanticai",
+      "name": "PydanticAI approval",
+      "category": "frameworks",
+      "tier": "documented",
+      "summary": "Resumes one approved local tool from application-owned PydanticAI message history.",
+      "boundary": "A fake-model PostgreSQL recipe, not a durable backend or provider integration; histories, approval authorization, and external effects remain application-owned.",
+      "verifiedOn": "2026-10-02"
+    },
+    {
       "slug": "pgbouncer",
       "name": "PgBouncer",
       "category": "poolers",
