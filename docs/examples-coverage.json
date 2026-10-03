@@ -407,6 +407,29 @@
           "reason": "LangGraph's Python checkpointer is not a Ruby graph runtime; this recipe does not claim a Ruby bridge."
         }
       }
+    },
+    "celery-migration": {
+      "typescript": {
+        "exclusion": {
+          "reason": "Celery is a Python task framework; this migration recipe uses its Python application handlers."
+        }
+      },
+      "python": { "file": "python/examples/celery_migration.py" },
+      "go": {
+        "exclusion": {
+          "reason": "Celery is a Python task framework; this migration recipe uses its Python application handlers."
+        }
+      },
+      "rust": {
+        "exclusion": {
+          "reason": "Celery is a Python task framework; this migration recipe uses its Python application handlers."
+        }
+      },
+      "ruby": {
+        "exclusion": {
+          "reason": "Celery is a Python task framework; this migration recipe uses its Python application handlers."
+        }
+      }
     }
   }
 }
