@@ -28,6 +28,21 @@ const timezones = [
   "Asia/Kathmandu",
 ] as const;
 
+/**
+ * Instants a statistics window ends at. Each fixed one falls shortly after a daylight-saving change
+ * in a zone above, so every window ending there starts before the change. The midnight pair brackets
+ * a UTC day boundary, and `null` reads the live clock.
+ */
+const windowInstants = [
+  "2026-10-04T12:00:00Z", // Australia/Sydney springs forward at 2026-10-03T16:00Z.
+  "2026-04-05T12:00:00Z", // Australia/Sydney falls back at 2026-04-04T16:00Z.
+  "2026-03-08T12:00:00Z", // America/New_York springs forward at 07:00Z.
+  "2026-11-01T12:00:00Z", // America/New_York falls back at 06:00Z.
+  "2026-10-03T23:59:59Z",
+  "2026-10-04T00:00:00Z",
+  null,
+] as const;
+
 const pools: Pool[] = [];
 
 afterAll(async () => {
@@ -55,8 +70,9 @@ async function completeOneTask(type: string): Promise<void> {
 /**
  * Close today into every tier, the way a live installation does over a day.
  *
- * The watermarks start at today's UTC midnight and the pass is given a `now` a day ahead, so the
- * minute rows it writes roll up into complete hours and one complete day.
+ * The watermarks start at today's UTC midnight and the pass is given a `now` 24 hours ahead, so the
+ * minute rows it writes roll up into complete hours and one complete day. The offset is elapsed
+ * time: `interval '1 day'` added in the session zone is 23 hours across a spring-forward change.
  */
 async function rollUpThroughTomorrow(session: Pool): Promise<void> {
   await session.query(
@@ -69,7 +85,7 @@ async function rollUpThroughTomorrow(session: Pool): Promise<void> {
               timestamp '2000-01-01' AT TIME ZONE 'UTC')`,
   );
   const { rows } = await session.query<{ error: unknown }>(
-    `SELECT error FROM workhorse.rollup_stats_v1(true, clock_timestamp() + interval '1 day', $1)`,
+    `SELECT error FROM workhorse.rollup_stats_v1(true, clock_timestamp() + interval '24 hours', $1)`,
     [2 * 24 * 60],
   );
   expect(rows.every((row) => row.error === null)).toBe(true);
@@ -132,23 +148,33 @@ describe("statistics buckets under a non-UTC database timezone", () => {
 
       // stat_window_tier_v1 refuses a lower bound that is not aligned to the tier it selects. A
       // caller that aligns to UTC — which is what statWindowStart and the dashboard procedures do —
-      // must not be refused because the database sits in another timezone.
-      const { rows } = await session.query<{ day: string; hour: string; minute: string }>(
-        `SELECT workhorse.stat_window_tier_v1(
-                  date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-                    - interval '90 days',
-                  clock_timestamp()) AS day,
-                workhorse.stat_window_tier_v1(
-                  date_trunc('hour', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-                    - interval '2 days',
-                  clock_timestamp()) AS hour,
-                workhorse.stat_window_tier_v1(
-                  date_trunc('minute', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-                    - interval '1 hour',
-                  clock_timestamp()) AS minute`,
-      );
+      // must not be refused because the database sits in another timezone. The fixture steps back
+      // on the UTC wall clock: `interval '90 days'` subtracted in the session zone keeps local
+      // time across a daylight-saving change and leaves the bound an hour off UTC midnight.
+      for (const now of windowInstants) {
+        const { rows } = await session.query<{ day: string; hour: string; minute: string }>(
+          `WITH clock AS (
+             SELECT COALESCE($1::timestamptz, clock_timestamp()) AT TIME ZONE 'UTC' AS utc
+           )
+           SELECT workhorse.stat_window_tier_v1(
+                    (date_trunc('day', utc) - interval '90 days') AT TIME ZONE 'UTC',
+                    utc AT TIME ZONE 'UTC') AS day,
+                  workhorse.stat_window_tier_v1(
+                    (date_trunc('hour', utc) - interval '2 days') AT TIME ZONE 'UTC',
+                    utc AT TIME ZONE 'UTC') AS hour,
+                  workhorse.stat_window_tier_v1(
+                    (date_trunc('minute', utc) - interval '1 hour') AT TIME ZONE 'UTC',
+                    utc AT TIME ZONE 'UTC') AS minute
+             FROM clock`,
+          [now],
+        );
 
-      expect(rows[0]).toEqual({ day: "day", hour: "hour", minute: "minute" });
+        expect(rows[0], `now = ${now ?? "clock_timestamp()"}`).toEqual({
+          day: "day",
+          hour: "hour",
+          minute: "minute",
+        });
+      }
     });
   }
 
