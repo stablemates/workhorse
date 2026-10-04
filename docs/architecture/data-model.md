@@ -731,8 +731,10 @@ Propagation advances one dependency level per statement. The synthetic outcomes 
 the last write of their statement. The statement trigger therefore fires for them after that level's
 events exist, and resolves the next level as one set.
 
-- Every event of a level precedes every event of the level below it.
-- Within a level, the events follow dependent identity order.
+- Every event of a level has an `occurred_at` no later than any event of the level below it.
+- Within a level, the resolver writes the events in dependent identity order. No column records
+  that order. `occurred_at` can repeat within a level. Before PostgreSQL 18, `event_id` is random
+  below the millisecond, so it does not break those ties in write order.
 - One outcome transaction can recurse through at most 100 unresolved descendants. A cascade is
   therefore at most 100 levels deep and invokes at most 101 resolver calls.
 - Runtime locks serialize concurrent prerequisite outcomes at the one state transition. Evidence,
@@ -2319,6 +2321,10 @@ therefore cannot remain invisible or make health unbounded.
 1. The function starts with the core `gen_random_uuid()` value.
 2. It writes the low 48 bits of Unix epoch milliseconds into bytes 0 through 5.
 3. It sets version 7 in byte 6 and the RFC 9562 variant in byte 8.
+
+The bits below the millisecond stay random, so two values from one millisecond sort in random
+order. On PostgreSQL 18, installation replaces the body with the native `uuidv7()`. Its values
+increase monotonically within a session.
 
 Each partitioned relation has a composite primary key over its partition key and record identity:
 `(occurred_at, event_id)` or `(occurred_at, attempt_id)`. The UUID remains the portable identity in
