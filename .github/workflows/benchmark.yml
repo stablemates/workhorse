@@ -124,3 +124,34 @@ jobs:
           path: benchmark-report.json
           if-no-files-found: error
           retention-days: 90
+
+  notify:
+    name: report a failed schedule
+    # A scheduled run announces its result to nobody, so the smoke benchmark failed for four weeks
+    # unseen. A scheduled failure opens an issue instead, as CI does. See SM-1141.
+    if: always() && github.event_name == 'schedule' && needs.smoke.result == 'failure'
+    needs: [smoke]
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      TITLE: Scheduled benchmark is failing
+    steps:
+      - name: Open or update the failure issue
+        run: |
+          set -euo pipefail
+          body=$(printf '%s failed at %s.\n\nThe benchmark-smoke artifact holds the report when the run wrote one. Reproduce with `pnpm benchmark -- --suite all --profile smoke` against a fresh bench database.\n' "$RUN_URL" "$GITHUB_SHA")
+          # Matching the title rather than searching keeps one open issue per outage, because the
+          # search index lags a fresh issue by long enough for the next week to open a second one.
+          number=$(gh issue list --state open --limit 100 --json number,title \
+            --jq "[.[] | select(.title == \"$TITLE\")] | .[0].number // empty")
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi
