@@ -364,6 +364,12 @@ module DocsExamples
     # docs:end
   end
 
+  def batch_handlers_enqueue(queue)
+    # docs:start batch-handlers-enqueue
+    queue.enqueue("email.send", {"to" => "person@example.com"})
+    # docs:end
+  end
+
   def durable_checkpoint(context, order)
     # docs:start durable-checkpoint
     charge = context.checkpoint("charge") { Payments.charge(order.fetch("id"), "charge:#{order.fetch("id")}") }

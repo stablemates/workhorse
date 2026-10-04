@@ -1,8 +1,16 @@
 # How do I process several tasks together?
 
-Use `Worker.handleBatch` when one application call can process several tasks of the same type more efficiently.
+Use `Worker.handleBatch` when a downstream system accepts several items in one call, such as a bulk email API or a multi-row insert.
 Go names this method `Worker.HandleBatch`, while Python names it `Worker.handle_batch`.
 Each task keeps its own lease and durable identity while it waits for the shared invocation.
+
+Producers do not change. The application enqueues one ordinary task per unit of work, and the producer cannot tell that a batch handler will run it.
+
+```ts
+await queue.enqueue("email.send", { to: "person@example.com" });
+```
+
+The worker forms each group. It claims each task through the normal claim path, then holds the claimed tasks of one queue and task type in a group inside its own process. A group never spans two worker processes. `Queue.enqueueMany` writes several tasks in one transaction, but it does not decide which tasks share a group.
 
 `BatchHandlerOptions.maxSize` caps the group. `BatchHandlerOptions.lingerMs` lets a partial group wait briefly for peers, then dispatches it even when no notification arrives.
 
@@ -54,6 +62,10 @@ Batch capacity cannot exceed the worker's task concurrency because every member 
 Workhorse admits each task against the queue's policies before it enters the group. Priority, queue limits, keyed limits, and rate limits can therefore leave a partial batch waiting for its linger.
 
 Cancellation, timeouts, lost leases, and shutdown remain per-task decisions. One member can be canceled or lose its fence while peers complete normally.
+
+The saving lives in the handler's downstream call: one bulk request replaces one request per task. The worker still claims, heartbeats, and completes every member separately, so the queue itself does no less work. If the downstream system has no bulk operation, an ordinary `Handler` is simpler and avoids the linger wait.
+
+Batching also has costs. A partial group waits for its linger, so a task can start later when traffic is light. A shared callback failure fails every member. A member cannot suspend, because the shared callback owes every member an outcome.
 
 Workhorse records each shared invocation before the callback starts. The task drawer shows that a
 task ran in a batch and links its peers. If the shared callback fails, the drawer groups that
