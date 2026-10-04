@@ -390,6 +390,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "fail durable replay conflicts without retrying",
     kind: "additive",
   },
+  {
+    fromVersion: 54,
+    toVersion: 55,
+    file: "0056-count-row-retention-lag-from-the-history-pass-that-released-the-row.sql",
+    description: "count row retention lag from the history pass that released the row",
+    kind: "additive",
+  },
 ];
 
 /**

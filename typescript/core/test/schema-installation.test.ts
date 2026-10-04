@@ -530,6 +530,10 @@ describe("schema installation", () => {
       { version: 52, description: "serialize schedule synchronization with the tick" },
       { version: 53, description: "distinguish a single-child rename from a second child" },
       { version: 54, description: "fail durable replay conflicts without retrying" },
+      {
+        version: 55,
+        description: "count row retention lag from the history pass that released the row",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

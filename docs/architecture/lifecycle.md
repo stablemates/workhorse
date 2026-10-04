@@ -1471,6 +1471,21 @@ only rows that `prune_terminal_tasks_v1` could delete now. A row also waits unti
 routine. That cutoff advances once a day, so a row held only by it is not lag. A stalled history
 pass shows up as task event and attempt history lag instead.
 
+One history pass releases a whole day of rows at once, and the bounded prune then needs several
+runs to delete them. Row lag therefore counts from the later of two instants:
+
+- the row passing its row window;
+- the first scheduled pass due to release the row.
+
+A pass at time t sets the cutoff to the start of the current UTC day, minus the longer of
+`task_event_retention_days` and `attempt_history_retention_days`. History through h is therefore
+releasable from the start of the UTC day after h plus that window. The due pass is the first
+`history_retention_local_time` in `maintenance_policy.timezone` at or after that instant. The
+instant is fixed for each row, so a prune that stops still shows growing lag. A pass that runs late
+makes its rows count as late too. Health measures the oldest eligible row only:
+`eligible_task_identity_at` for identity lag and `eligible_terminal_outcome_at` for outcome lag.
+`queue_health_v1` removes those rows' `history_through_at` values from the public document.
+
 History lag is based only on fully droppable partitions or expired default rows. It excludes the
 intentionally retained partial boundary day.
 

@@ -24,7 +24,7 @@ The optional `@stablemates/workhorse-knex` adapter preserves native PostgreSQL s
 The tested Objection recipe shares the model-write transaction with enqueue. Callers retain transaction and resource ownership (SM-1118).
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **54**, and the SDK compatibility floor is schema version **54**.
+The final schema version is **55**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.
@@ -42,6 +42,8 @@ worker's retry-delay callback.
 children after their task type's contract advances. Replay retries a contract conflict with the
 stored versions and rebuilds under those versions when the current contract rejects the payload.
 Changed payloads and child sets still raise `ChildConflictError`. This contract replay fix requires no additional migration.
+
+Migration 0056 (`0056-count-row-retention-lag-from-the-history-pass-that-released-the-row.sql`) changes only `queue_health_v1`. Row retention lag now counts from the scheduled history pass that released the row when that pass came after the row window, so health no longer reports task records and finished results as late after every daily pass (SM-1134).
 
 ## 0.6.1 — 2026-10-02
 
