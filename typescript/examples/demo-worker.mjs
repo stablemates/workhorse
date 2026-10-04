@@ -1,3 +1,8 @@
+// Serves the TypeScript queues of the hosted dashboard demo at https://demo.workhorse.run, plus the
+// queue every demo language shares, so the dashboard has live TypeScript work to show.
+//
+// Documentation: https://workhorse.run/docs/dashboard
+
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";

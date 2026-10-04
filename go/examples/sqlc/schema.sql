@@ -1,3 +1,7 @@
+-- The application table the sqlc recipe writes in the same transaction as its task.
+--
+-- Documentation: https://workhorse.run/docs/sqlc
+
 CREATE TABLE recipe_order (
     id uuid PRIMARY KEY,
     details jsonb NOT NULL,

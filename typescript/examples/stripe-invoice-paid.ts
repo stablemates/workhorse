@@ -1,3 +1,8 @@
+// Durably accepts a signed Stripe invoice.paid snapshot, then grants a local entitlement in a
+// dedicated worker.
+//
+// Documentation: https://workhorse.run/docs/stripe
+
 import { createHash, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import path from "node:path";

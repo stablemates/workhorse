@@ -1,3 +1,9 @@
+"""Moves one JSON credit task from Celery to Workhorse while the application keeps ownership of
+the operation's identity and effects.
+
+Documentation: https://workhorse.run/docs/celery
+"""
+
 from __future__ import annotations
 
 import json

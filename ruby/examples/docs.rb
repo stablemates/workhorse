@@ -8,6 +8,9 @@
 # regions against PostgreSQL. Code outside the regions only supplies the names a snippet uses.
 #
 # A region ends before its method returns, so a snippet can show the name it assigns.
+#
+# Documentation: https://workhorse.run/docs
+#
 # rubocop:disable Style/RedundantAssignment
 
 require "connection_pool"

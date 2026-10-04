@@ -1,3 +1,8 @@
+"""Enqueues one task, runs the worker once, and prints the task's identifier.
+
+Documentation: https://workhorse.run/docs/quickstart
+"""
+
 from __future__ import annotations
 
 import os

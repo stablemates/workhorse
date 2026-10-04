@@ -1,3 +1,9 @@
+"""Walks one order through retry, checkpoint, durable timer, child tasks, a signal wait, and a
+human decision.
+
+Documentation: https://workhorse.run/docs/examples
+"""
+
 from __future__ import annotations
 
 import sys

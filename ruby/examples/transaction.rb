@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 # Enqueues a task inside a caller-owned transaction, so it exists only if the caller commits.
+#
+# Documentation: https://workhorse.run/docs/enqueue
 require "pg"
 require "stablemates/workhorse"
 

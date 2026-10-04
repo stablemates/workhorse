@@ -1,3 +1,8 @@
+// A durable agentic flow in an ordinary handler: a checkpointed plan, child tool tasks, a durable
+// cooldown timer, and an approval signal.
+//
+// Documentation: https://workhorse.run/docs/agentic-flow
+
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import path from "node:path";

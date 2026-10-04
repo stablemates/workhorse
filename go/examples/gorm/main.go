@@ -1,3 +1,7 @@
+// Enqueues through a GORM transaction's Statement.ConnPool with the existing SQL executor, so the
+// application write and the task commit or roll back together.
+//
+// Documentation: https://workhorse.run/docs/gorm
 package main
 
 import (

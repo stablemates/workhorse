@@ -1,3 +1,9 @@
+"""Enqueues inside caller-owned asynchronous transactions through both async drivers: a psycopg
+AsyncConnection and an asyncpg connection.
+
+Documentation: https://workhorse.run/docs/enqueue
+"""
+
 from __future__ import annotations
 
 import asyncio

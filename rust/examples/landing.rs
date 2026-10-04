@@ -3,6 +3,8 @@
 //! Each `docs:start landing-<name>` region is one snippet, wrapped in a module so that it carries
 //! its own `use` lines. `site/scripts/check-language-examples.ts` requires every Rust string in
 //! `site/lib/landing-snippets.ts` to equal a dedented region, and every region to appear there.
+//!
+//! Landing page: https://workhorse.run
 #![allow(dead_code, unused_variables)]
 
 mod landing_hero {

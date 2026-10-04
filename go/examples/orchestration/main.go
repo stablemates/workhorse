@@ -1,3 +1,7 @@
+// Runs an order handler that joins child tasks, then waits for a signal and a human decision.
+// Another process supplies both with Queue.SendSignal and Queue.CompleteHumanWait.
+//
+// Documentation: https://workhorse.run/docs/examples
 package main
 
 import (

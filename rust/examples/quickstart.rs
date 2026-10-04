@@ -1,4 +1,6 @@
 //! Enqueues one task, runs the worker once, and prints the task's outcome.
+//!
+//! Documentation: https://workhorse.run/docs/quickstart
 // docs:start quickstart-program
 use serde_json::{json, Value};
 use workhorse::deadpool_postgres::tokio_postgres::NoTls;

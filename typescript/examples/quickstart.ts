@@ -1,3 +1,7 @@
+// Enqueues one task, runs the worker once, and prints the task's outcome.
+//
+// Documentation: https://workhorse.run/docs/quickstart
+
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 import { Admin, Pool, Queue, Worker } from "@stablemates/workhorse";

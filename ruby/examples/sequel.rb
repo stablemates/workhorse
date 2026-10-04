@@ -1,5 +1,10 @@
 # frozen_string_literal: true
 
+# Commits an application write and a task on Sequel's native PostgreSQL connection, inside one
+# Sequel transaction.
+#
+# Documentation: https://workhorse.run/docs/sequel
+
 require "sequel"
 require "securerandom"
 require "stablemates/workhorse"

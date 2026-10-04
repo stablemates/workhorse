@@ -185,7 +185,9 @@ func TestReadmeExampleMatchesReleaseTestedExample(t *testing.T) {
 	if len(match) != 2 {
 		t.Fatal("go/README.md does not contain one Go example under Run one task")
 	}
-	example := strings.TrimSpace(readRepositoryFile(t, "go", "examples", "quickstart", "main.go"))
+	// The README shows the program without the header comment that links the example to its page.
+	source := readRepositoryFile(t, "go", "examples", "quickstart", "main.go")
+	example := strings.TrimSpace(regexp.MustCompile(`\A(?://[^\n]*\n)+`).ReplaceAllString(source, ""))
 	if match[1] != example {
 		t.Fatal("go/README.md example does not match go/examples/quickstart/main.go")
 	}

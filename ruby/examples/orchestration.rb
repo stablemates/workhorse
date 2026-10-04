@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 # Runs an order handler that fans out two child tasks, then waits for a signal and a human decision.
+#
+# Documentation: https://workhorse.run/docs/examples
 require "connection_pool"
 require "pg"
 require "stablemates/workhorse"

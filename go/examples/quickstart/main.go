@@ -1,3 +1,6 @@
+// Enqueues one task, runs the worker once, and prints the task's outcome.
+//
+// Documentation: https://workhorse.run/docs/quickstart
 package main
 
 import (

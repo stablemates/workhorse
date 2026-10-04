@@ -1,4 +1,6 @@
 //! Enqueues a task inside a caller-owned transaction, so it exists only if the caller commits.
+//!
+//! Documentation: https://workhorse.run/docs/enqueue
 use serde_json::json;
 use tokio_postgres::NoTls;
 use workhorse::{EnqueueOptions, Queue};

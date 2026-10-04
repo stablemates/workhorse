@@ -2,6 +2,8 @@
 
 # The end-to-end integration the agent playbook page shows: a transactional enqueue, a handler
 # whose external send is a checkpoint, and a durable read of the settled task.
+#
+# Documentation: https://workhorse.run/docs/for-ai-agents
 # docs:start agent-playbook
 require "connection_pool"
 require "pg"

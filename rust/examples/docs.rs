@@ -4,6 +4,8 @@
 //! requires every ` ```rust ` fence in the site pages and guides to equal a dedented region, and
 //! every region to appear in at least one fence. Code outside the regions only supplies the names a
 //! snippet uses.
+//!
+//! Documentation: https://workhorse.run/docs
 #![allow(dead_code, unused_variables)]
 
 use std::collections::BTreeMap;

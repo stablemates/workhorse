@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 # Enqueues one task, runs the worker once, and prints the task's outcome.
+#
+# Documentation: https://workhorse.run/docs/quickstart
 # docs:start quickstart-program
 require "connection_pool"
 require "pg"

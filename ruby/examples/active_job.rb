@@ -6,6 +6,8 @@
 # requires every ```ruby fence in the site pages to equal a dedented region, and every region to
 # appear in at least one fence. `spec/integration/active_job_documentation_spec.rb` runs the regions
 # against PostgreSQL. Code outside the regions only supplies the names a snippet uses.
+#
+# Documentation: https://workhorse.run/docs/active-job
 
 require "active_job"
 require "active_record"
