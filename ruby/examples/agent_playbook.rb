@@ -6,6 +6,7 @@
 # Documentation: https://workhorse.run/docs/for-ai-agents
 # docs:start agent-playbook
 require "connection_pool"
+require "json"
 require "pg"
 require "stablemates/workhorse"
 
@@ -32,5 +33,5 @@ end
 worker.run_once # Production workers call Stablemates::Workhorse.run_worker_process(worker).
 
 task = Stablemates::Workhorse::Admin.new(pool).get_task(enqueued.task_id)
-puts "#{task.state} #{task.result}" if task
+puts "#{task.state} #{JSON.generate(task.result)}" if task
 # docs:end

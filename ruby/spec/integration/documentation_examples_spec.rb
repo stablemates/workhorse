@@ -391,16 +391,22 @@ RSpec.describe "Documentation examples against PostgreSQL" do
       text.lines.grep_v(%r{/(?:bundler-[^/]+/lib/bundler|rubygems)/[^:]*\.rb:\d+: warning: }).join
     end
 
+    # A program prints the task state and its result as JSON on one line.
+    def outcome(stdout)
+      state, result = stdout.chomp.split(" ", 2)
+      [state, JSON.parse(result)]
+    end
+
     it "runs the quick start" do
       stdout, stderr, status = run_program("quickstart.rb")
       expect([status.exitstatus, stderr]).to eq([0, ""])
-      expect(stdout).to eq(%(succeeded {"deliveredTo" => "ada@example.com"}\n))
+      expect(outcome(stdout)).to eq(["succeeded", {"deliveredTo" => "ada@example.com"}])
     end
 
     it "runs the agent playbook integration" do
       stdout, stderr, status = run_program("agent_playbook.rb")
       expect([status.exitstatus, stderr]).to eq([0, ""])
-      expect(stdout).to eq(%(succeeded {"receipt" => "receipt-for-order-42", "processedOrderId" => "order-42"}\n))
+      expect(outcome(stdout)).to eq(["succeeded", {"processedOrderId" => "order-42", "receipt" => "receipt-for-order-42"}])
     end
 
     it "enqueues inside a transaction" do

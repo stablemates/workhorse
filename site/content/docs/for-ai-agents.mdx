@@ -360,6 +360,7 @@ and reads the durable result.
   <Tab value="Ruby">
     ```ruby
     require "connection_pool"
+    require "json"
     require "pg"
     require "stablemates/workhorse"
 
@@ -386,7 +387,7 @@ and reads the durable result.
     worker.run_once # Production workers call Stablemates::Workhorse.run_worker_process(worker).
 
     task = Stablemates::Workhorse::Admin.new(pool).get_task(enqueued.task_id)
-    puts "#{task.state} #{task.result}" if task
+    puts "#{task.state} #{JSON.generate(task.result)}" if task
     ```
   </Tab>
 </Tabs>

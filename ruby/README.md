@@ -46,6 +46,7 @@ Requires Ruby 3.3 or newer and PostgreSQL 15 through 18.
 
 ```ruby
 require "connection_pool"
+require "json"
 require "pg"
 require "stablemates/workhorse"
 
@@ -62,7 +63,7 @@ end
 worker.run_once # production uses Stablemates::Workhorse.run_worker_process(worker)
 
 task = Stablemates::Workhorse::Admin.new(pool).get_task(enqueued.task_id)
-puts "#{task.state} #{task.result}" if task
+puts "#{task.state} #{JSON.generate(task.result)}" if task
 ```
 
 Handlers receive at-least-once delivery. Use stable provider idempotency keys around external
