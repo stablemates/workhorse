@@ -6,7 +6,7 @@ other SDKs carry, because every tag names one release of all of them.
 ## Unreleased
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **54**, and the SDK compatibility floor is schema version **54**.
+The final schema version is **55**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.
@@ -19,6 +19,8 @@ on their first occurrence, preserving its current attempt and recording the conf
 Redaction still hides error details. Transient failures, lease loss, child-limit errors, and
 already-waiting signal errors retain their existing behavior. Conflict settlement bypasses the
 worker's retry-delay callback.
+
+Migration 0056 (`0056-count-row-retention-lag-from-the-history-pass-that-released-the-row.sql`) changes only `queue_health_v1`. Row retention lag now counts from the scheduled history pass that released the row when that pass came after the row window, so health no longer reports task records and finished results as late after every daily pass (SM-1134).
 
 ## 0.6.1 — 2026-10-02
 

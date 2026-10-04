@@ -78,6 +78,17 @@ const recordPass = async (
   );
 };
 
+const sinceUtcMidnightMs = async () =>
+  Number(
+    (
+      await pool.query<{ ms: string }>(
+        `SELECT extract(epoch FROM clock_timestamp()
+                  - date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+                  * 1000 AS ms`,
+      )
+    ).rows[0]!.ms,
+  );
+
 describe("retention maintenance", () => {
   it("keeps an operator maintenance-time override until it is reverted", async () => {
     await queue.syncMaintenancePolicy(
@@ -1713,6 +1724,70 @@ describe("retention maintenance", () => {
     expect(released.status.reasons).toContainEqual(
       expect.objectContaining({ code: "retention-lag", category: "taskIdentity" }),
     );
+  });
+
+  it("counts row lag from the history pass that released the row", async () => {
+    // One daily history pass releases a whole day of rows, and the oldest of them passed its row
+    // window about a day earlier. The bounded prune needs several runs to delete them, so lag counts
+    // from the scheduled pass that released the row whenever that pass came later.
+    const id = await queue.enqueue("row-lag-release", {});
+    const task = await queue.claim("retention-health-worker");
+    expect(task?.id).toBe(id);
+    expect(await queue.complete(task!, "retention-health-worker", { done: true })).toBe(true);
+    await queue.syncMaintenancePolicy(
+      { timezone: "UTC", historyRetentionLocalTime: "00:00" },
+      { force: true },
+    );
+    await queue.syncRetentionPolicy({
+      taskIdentityRetentionDays: 5,
+      terminalOutcomeRetentionDays: 5,
+      taskEventRetentionDays: 1,
+      attemptHistoryRetentionDays: 1,
+      scheduleOccurrenceRetentionDays: 1,
+      statisticsRetentionDays: 1,
+    });
+    await queue.retainHistory({ force: true });
+    const age = async (createdAndFinished: string, historyThrough: string) => {
+      await pool.query(
+        `UPDATE workhorse.task SET created_at = ${createdAndFinished} WHERE id = $1`,
+        [id],
+      );
+      await pool.query(
+        `UPDATE workhorse.task_outcome
+            SET finished_at = ${createdAndFinished}, history_through_at = ${historyThrough}
+          WHERE task_id = $1`,
+        [id],
+      );
+    };
+    // The row passed its windows 25 days ago, but its history became releasable at today's UTC
+    // midnight, when the pass scheduled for 00:00 fell due.
+    await age(
+      "clock_timestamp() - interval '30 days'",
+      "date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'" +
+        " - interval '1 day 1 minute'",
+    );
+    const before = await sinceUtcMidnightMs();
+    const released = await queue.health();
+    const after = await sinceUtcMidnightMs();
+    for (const lag of [
+      released.retentionLagMs.taskIdentity,
+      released.retentionLagMs.terminalOutcome,
+    ]) {
+      expect(lag).toBeGreaterThanOrEqual(Math.floor(before) - 1);
+      expect(lag).toBeLessThanOrEqual(Math.ceil(after) + 1);
+    }
+
+    // History released four days ago does not shorten the lag of a row that passed its windows
+    // one day ago.
+    await age("clock_timestamp() - interval '6 days'", "clock_timestamp() - interval '6 days'");
+    const windowed = await queue.health();
+    for (const lag of [
+      windowed.retentionLagMs.taskIdentity,
+      windowed.retentionLagMs.terminalOutcome,
+    ]) {
+      expect(lag).toBeGreaterThan(86_400_000 - 60_000);
+      expect(lag).toBeLessThan(86_400_000 + 60_000);
+    }
   });
 
   describe("schedule-run retention health", () => {

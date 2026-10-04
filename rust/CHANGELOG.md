@@ -13,7 +13,7 @@ adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses 
 ## Unreleased
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **54**, and the SDK compatibility floor is schema version **54**.
+The final schema version is **55**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.
@@ -30,6 +30,8 @@ worker's retry-delay callback.
 Rust now preserves conflict classes when converting errors into `HandlerError`. The generic
 `From<E>` conversion requires `E: 'static` to inspect its source chain. For an error borrowing local
 data, build `HandlerError::new(error.to_string())` explicitly.
+
+Migration 0056 (`0056-count-row-retention-lag-from-the-history-pass-that-released-the-row.sql`) changes only `queue_health_v1`. Row retention lag now counts from the scheduled history pass that released the row when that pass came after the row window, so health no longer reports task records and finished results as late after every daily pass (SM-1134).
 
 ## 0.6.1 — 2026-10-02
 
