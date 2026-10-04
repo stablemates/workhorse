@@ -5,6 +5,8 @@
 # Each `docs:start landing-<name>` region is one snippet. `site/scripts/check-language-examples.ts`
 # requires every Ruby string in `site/lib/landing-snippets.ts` to equal a dedented region, and every
 # region to appear there. `spec/integration/documentation_examples_spec.rb` runs each against PostgreSQL.
+#
+# Landing page: https://workhorse.run
 
 require "connection_pool"
 require "pg"

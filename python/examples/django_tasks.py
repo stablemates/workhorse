@@ -1,3 +1,9 @@
+"""Keeps a decorated Django task while WorkhorseTaskBackend accepts it atomically and a dedicated
+Workhorse worker runs it.
+
+Documentation: https://workhorse.run/docs/django-tasks
+"""
+
 from __future__ import annotations
 
 import argparse

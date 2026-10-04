@@ -1,3 +1,8 @@
+// Enqueues a task inside a caller-owned node-postgres transaction, so the task exists only if the
+// caller commits.
+//
+// Documentation: https://workhorse.run/docs/enqueue
+
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 import { Pool, Queue } from "@stablemates/workhorse";

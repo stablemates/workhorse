@@ -1,3 +1,8 @@
+-- The tables the Slack approval recipe uses to register an approval request before it posts the
+-- message, and to record the signed decision it settles.
+--
+-- Documentation: https://workhorse.run/docs/slack-approvals
+
 CREATE SCHEMA IF NOT EXISTS slack_recipe;
 
 CREATE TABLE IF NOT EXISTS slack_recipe.approval (

@@ -1,4 +1,6 @@
 //! Atomically commit an application row and a task through a caller-owned SQLx transaction.
+//!
+//! Documentation: https://workhorse.run/docs/sqlx
 use serde_json::json;
 use sqlx::{Connection, PgConnection};
 use workhorse::{sqlx, EnqueueClient, EnqueueOptions};

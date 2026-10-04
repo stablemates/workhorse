@@ -1,3 +1,9 @@
+"""Resumes one deferred PydanticAI tool from retained message history after a Workhorse human
+decision, without replacing PydanticAI's execution model.
+
+Documentation: https://workhorse.run/docs/pydanticai
+"""
+
 from __future__ import annotations
 
 import asyncio

@@ -1,3 +1,8 @@
+// Writes a MikroORM entity and enqueues a task in the same PostgreSQL transaction through the
+// shipped Kysely adapter.
+//
+// Documentation: https://workhorse.run/docs/mikroorm
+
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { defineEntity, p } from "@mikro-orm/core";

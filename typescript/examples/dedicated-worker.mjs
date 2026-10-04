@@ -1,3 +1,8 @@
+// Defines a dedicated worker process with defineWorkerProcess and runs it until SIGINT or SIGTERM,
+// then drains its active tasks.
+//
+// Documentation: https://workhorse.run/docs/worker-processes
+
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import path from "node:path";

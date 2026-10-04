@@ -1,3 +1,9 @@
+"""Runs a dedicated worker process with run_worker_process, which drains its active task on
+SIGTERM.
+
+Documentation: https://workhorse.run/docs/worker-processes
+"""
+
 from __future__ import annotations
 
 import os

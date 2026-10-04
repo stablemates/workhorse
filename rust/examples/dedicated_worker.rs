@@ -1,4 +1,6 @@
 //! Runs a dedicated worker process until SIGINT or SIGTERM, then drains its active tasks.
+//!
+//! Documentation: https://workhorse.run/docs/worker-processes
 use std::time::Duration;
 
 use serde_json::{json, Value};

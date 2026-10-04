@@ -1,3 +1,9 @@
+"""Commits a SQLAlchemy async session write and a task in one transaction by enqueuing through the
+session's enlisted psycopg connection.
+
+Documentation: https://workhorse.run/docs/sqlalchemy
+"""
+
 from __future__ import annotations
 
 import asyncio

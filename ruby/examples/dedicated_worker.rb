@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 # Runs a dedicated worker process until SIGINT or SIGTERM, then drains its active tasks.
+#
+# Documentation: https://workhorse.run/docs/worker-processes
 require "connection_pool"
 require "pg"
 require "stablemates/workhorse"

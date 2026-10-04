@@ -1,3 +1,8 @@
+// Commits an Objection model write and a Workhorse task in one Knex transaction through the Knex
+// adapter.
+//
+// Documentation: https://workhorse.run/docs/objection
+
 import { createKnexAdapter } from "@stablemates/workhorse-knex";
 import { pathToFileURL } from "node:url";
 import knex, { type Knex } from "knex";

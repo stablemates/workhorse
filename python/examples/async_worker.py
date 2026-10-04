@@ -1,3 +1,8 @@
+"""Runs an AsyncWorker over a psycopg or asyncpg pool, settles one task, and reads its outcome.
+
+Documentation: https://workhorse.run/docs/workers
+"""
+
 from __future__ import annotations
 
 import asyncio

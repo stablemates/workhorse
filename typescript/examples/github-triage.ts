@@ -1,3 +1,8 @@
+// Accepts signed GitHub issue deliveries durably, applies a desired label in a worker, and
+// recovers missed deliveries explicitly.
+//
+// Documentation: https://workhorse.run/docs/github
+
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import path from "node:path";

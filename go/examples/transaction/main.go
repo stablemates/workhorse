@@ -1,3 +1,7 @@
+// Enqueues a retryable task inside an application-owned pgx transaction, so the task exists only
+// if the caller commits.
+//
+// Documentation: https://workhorse.run/docs/enqueue
 package main
 
 import (

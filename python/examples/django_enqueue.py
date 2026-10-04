@@ -1,3 +1,9 @@
+"""Commits a Django model write and a task through Django's own Psycopg connection with
+enqueue_in_atomic, from synchronous and asynchronous code.
+
+Documentation: https://workhorse.run/docs/django
+"""
+
 from __future__ import annotations
 
 import argparse

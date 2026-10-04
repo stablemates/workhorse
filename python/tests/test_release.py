@@ -33,7 +33,9 @@ def test_readme_example_matches_release_tested_example() -> None:
     readme = _repository_file("python", "README.md")
     match = re.search(r"## Run one task\n\n```python\n(.*?)\n```", readme, re.DOTALL)
     assert match is not None
-    assert match.group(1) == _repository_file("python", "examples", "quickstart.py").strip()
+    # The README shows the program without the docstring that links the example to its page.
+    example = _repository_file("python", "examples", "quickstart.py")
+    assert match.group(1) == re.sub(r'\A""".*?"""\n', "", example, flags=re.DOTALL).strip()
 
 
 def test_sdk_version_constant_matches_the_release_manifest() -> None:

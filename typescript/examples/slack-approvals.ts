@@ -1,3 +1,8 @@
+// A signed Slack approval recipe over Workhorse human waits: committed registration, durable
+// acceptance of the interaction, and separate settlement.
+//
+// Documentation: https://workhorse.run/docs/slack-approvals
+
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";

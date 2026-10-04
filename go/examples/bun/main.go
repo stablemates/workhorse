@@ -1,3 +1,7 @@
+// Commits an application row and a task in one Bun transaction. Workhorse enqueues through the
+// database/sql transaction Bun embeds, so PostgreSQL parameters need no rewriting.
+//
+// Documentation: https://workhorse.run/docs/go-bun
 package main
 
 import (

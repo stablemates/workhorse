@@ -1,3 +1,7 @@
+// Runs a supervised worker process with checkpoints, a durable timer, and bounded concurrency,
+// then drains its active tasks on SIGINT or SIGTERM.
+//
+// Documentation: https://workhorse.run/docs/worker-processes
 package main
 
 import (

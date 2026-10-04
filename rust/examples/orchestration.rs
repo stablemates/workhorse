@@ -1,4 +1,6 @@
 //! Runs an order handler that fans out two child tasks, then waits for a signal and a human decision.
+//!
+//! Documentation: https://workhorse.run/docs/examples
 use serde_json::{json, Value};
 use workhorse::deadpool_postgres::tokio_postgres::NoTls;
 use workhorse::deadpool_postgres::{Manager, Pool};

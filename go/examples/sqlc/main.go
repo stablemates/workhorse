@@ -1,3 +1,7 @@
+// Runs sqlc-generated application queries and a Workhorse enqueue in one caller-owned pgx
+// transaction, so the order row and its task commit together.
+//
+// Documentation: https://workhorse.run/docs/sqlc
 package main
 
 import (

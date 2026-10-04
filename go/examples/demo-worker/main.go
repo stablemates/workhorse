@@ -1,3 +1,7 @@
+// Serves the Go queues of the hosted dashboard demo at https://demo.workhorse.run, plus the queue
+// every demo language shares, so the dashboard has live Go work to show.
+//
+// Documentation: https://workhorse.run/docs/dashboard
 package main
 
 import (

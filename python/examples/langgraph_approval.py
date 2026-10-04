@@ -1,3 +1,9 @@
+"""Keeps LangGraph replay in PostgreSQL and coordinates one committed human approval through a
+Workhorse wait, without a second graph driver.
+
+Documentation: https://workhorse.run/docs/langgraph
+"""
+
 from __future__ import annotations
 
 import hashlib

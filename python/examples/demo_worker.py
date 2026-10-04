@@ -1,3 +1,9 @@
+"""Serves the Python queues of the hosted dashboard demo at https://demo.workhorse.run, plus the
+queue every demo language shares, so the dashboard has live Python work to show.
+
+Documentation: https://workhorse.run/docs/dashboard
+"""
+
 from __future__ import annotations
 
 import os

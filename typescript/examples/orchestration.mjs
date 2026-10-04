@@ -1,3 +1,8 @@
+// Runs an order handler that fans out two child tasks and joins their results without holding a
+// worker slot.
+//
+// Documentation: https://workhorse.run/docs/examples
+
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import path from "node:path";

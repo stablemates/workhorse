@@ -1,3 +1,7 @@
+// Enqueues through the *sql.Tx under a Go sqlx transaction, opened with pgx stdlib, so the
+// application write and the task commit together. This is Go sqlx, not Rust SQLx.
+//
+// Documentation: https://workhorse.run/docs/go-sqlx
 package main
 
 import (

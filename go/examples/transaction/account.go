@@ -1,3 +1,8 @@
+// The transactional enqueue the documentation shows: an account row and its task commit or roll
+// back together.
+//
+// Documentation: https://workhorse.run/docs/enqueue
+
 package main
 
 import (
