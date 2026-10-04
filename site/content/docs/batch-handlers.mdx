@@ -4,7 +4,8 @@ description: Process several tasks of one type through a shared application call
 ---
 
 Use TypeScript's `Worker.handleBatch`, Go's `Worker.HandleBatch`, Python's `Worker.handle_batch`,
-Rust's `Worker::handle_batch`, or Ruby's `Worker#handle_batch` when one application call can process several tasks more efficiently.
+Rust's `Worker::handle_batch`, or Ruby's `Worker#handle_batch` when a downstream system accepts
+several items in one call, such as a bulk email API or a multi-row insert.
 Each member keeps its own durable identity, lease, fence, retry budget, checkpoints, progress, and
 cancellation.
 
@@ -104,6 +105,61 @@ those boundaries.
 TypeScript configures grouping with `BatchHandlerOptions.maxSize` and
 `BatchHandlerOptions.lingerMs`; each option changes assembly of the batch without changing an
 individual task's lifecycle.
+
+## Producers enqueue ordinary tasks
+
+Nothing changes where tasks are created. The application enqueues one task per unit of work, and
+the producer cannot tell that a batch handler will run it.
+
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+  <Tab value="TypeScript">
+    ```ts
+    await queue.enqueue("email.send", { to: "person@example.com" });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    queue.enqueue("email.send", {"to": "person@example.com"})
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    _, err := queue.Enqueue(ctx, "email.send", map[string]any{
+    	"to": "person@example.com",
+    }, workhorse.EnqueueOptions{})
+    ```
+  </Tab>
+  <Tab value="Rust">
+    ```rust
+    queue
+        .enqueue("email.send", &json!({ "to": "person@example.com" }), EnqueueOptions::default())
+        .await?;
+    ```
+  </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    queue.enqueue("email.send", {"to" => "person@example.com"})
+    ```
+  </Tab>
+</Tabs>
+
+The worker forms each group. It claims each task through the normal claim path, then holds the
+claimed tasks of one queue and task type in a group inside its own process. A group never spans two
+worker processes. [`Queue.enqueueMany`](/docs/enqueue#enqueue-a-batch) writes several tasks in one
+transaction, but it does not decide which tasks share a group.
+
+## When batching pays off
+
+The saving lives in the handler's downstream call: one bulk request replaces one request per task.
+The worker still claims, heartbeats, and completes every member separately, so the queue itself does
+no less work. If the downstream system has no bulk operation, an ordinary handler is simpler and
+avoids the linger wait.
+
+Batching costs three things:
+
+- A partial group waits for its linger, so a task can start later when traffic is light.
+- A shared callback failure fails every member of the group.
+- A member cannot suspend, so batch contexts omit timers, signals, human waits, and child joins.
 
 ## Next
 

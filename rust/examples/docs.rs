@@ -721,6 +721,15 @@ fn batch_handlers(worker: &Worker) {
     // docs:end
 }
 
+async fn batch_handlers_enqueue(queue: &Queue<Client>) -> Result {
+    // docs:start batch-handlers-enqueue
+    queue
+        .enqueue("email.send", &json!({ "to": "person@example.com" }), EnqueueOptions::default())
+        .await?;
+    // docs:end
+    Ok(())
+}
+
 async fn durable_checkpoints(
     context: HandlerContext,
     order: Order,

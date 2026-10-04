@@ -82,6 +82,7 @@ RSpec.describe "Documentation examples against PostgreSQL" do
       later = Time.now + 3600
       expect(DocsExamples.enqueue_basic(queue, id("inv"), later).outcome).to eq(:accepted)
       expect(DocsExamples.enqueue_options(queue, later).outcome).to eq(:accepted)
+      expect(DocsExamples.batch_handlers_enqueue(queue).outcome).to eq(:accepted)
       expect(DocsExamples.priority(queue, id("inv")).outcome).to eq(:accepted)
       expect(DocsExamples.retries(queue, id("acct")).outcome).to eq(:accepted)
       expect(DocsExamples.deadlines(queue, id("quote"), later, id("report"), 30, 3).outcome).to eq(:accepted)
