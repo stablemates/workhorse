@@ -161,7 +161,9 @@ and terminal lease health. Its 10 ms scenario poll interval models continuous re
 seeded backlog is exhausted while handlers remain active, the fallback may issue one serial null claim per
 elapsed polling window. The hard claim bound is successful tasks plus `ceil(durationMs / pollMs)` plus two
 calls of endpoint/scheduling slack. It does not multiply polling pressure by configured concurrency. The
-scenario also verifies that claim calls remain serial and only occur with a free slot. Separate invariant
+scenario also verifies that claim calls only occur with a free slot. Since ADR 0076 a worker keeps
+overlapping claims in flight, so the scenario bounds them by `ceil(concurrency / refill batch)`
+instead of requiring one at a time. Separate invariant
 runs prove that one fill pass stops after its first null claim, pause issues no claims, and stop issues no
 later claims while active handlers drain. The query counters are client-side pressure proxies, not PostgreSQL
 connection-pool occupancy. No throughput, scaling, connection, or efficiency claim is supported until a live
@@ -353,6 +355,17 @@ The task is capped at 30 minutes and the benchmark step at 20, so a scenario tha
 Two things follow every run. A step summary renders each comparative group's mean throughput and per-run claim p95 with their 95% confidence intervals, plus every lifecycle scenario's duration and assertion verdict. The full canonical report is uploaded as the `benchmark-smoke-<run number>` artifact, retained for 90 days, and uploaded even when the run fails — a failing report is the evidence needed to diagnose the failure.
 
 Before uploading, the workflow asserts the report is `schemaVersion: 3`, carries a source commit under `provenance`, contains comparative summaries and lifecycle scenarios, and that every lifecycle assertion passed. A run that produces a half-written report fails rather than publishing it as evidence.
+
+When a scheduled run fails, the workflow opens a repository issue titled "Scheduled benchmark is failing", or comments on the open one. Nobody waits on a scheduled run, so that issue is the only signal that the smoke run has stopped passing.
+
+The smoke run does not run on pull requests. A change to worker dispatch, claims, heartbeats, telemetry attributes, or the SQL schema can stop a scenario from starting or make an assertion stale. Before opening such a pull request, run the smoke profile against the checkout's bench database:
+
+```bash
+pnpm db:reset:bench
+pnpm benchmark -- --suite all --profile smoke --output benchmark-report.json
+```
+
+A manual dispatch of the workflow on the pull request branch runs the same check in CI.
 
 ### Reading the trend
 

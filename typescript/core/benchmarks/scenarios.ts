@@ -35,8 +35,9 @@ import {
   Worker,
 } from "../src/index.js";
 import type { ClaimedTask, Queryable, QueueHealth, QueueOptions } from "../src/index.js";
-// The crash harness is worker test support, not published API, so it comes from the source module.
-import { InjectedCrashError, type Failpoint } from "../src/worker.js";
+// The crash harness and the refill batch are worker internals, not published API, so they come from
+// the source module.
+import { dispatchRefillBatch, InjectedCrashError, type Failpoint } from "../src/worker.js";
 
 registerOpenTelemetry();
 
@@ -543,7 +544,7 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "Exercise bounded concurrent worker slots and equal-capacity worker topologies while recording throughput, start latency, and database-pressure proxies without excluding claim work from timing.",
     invariants: [
       "concurrency levels preserve the configured slot bound and expose accurate runtime state",
-      "claims remain serial, never exceed free slots, and are all included in timed execution",
+      "claims in flight stay within the ADR 0076 refill bound, never exceed free slots, and are all included in timed execution",
       "after backlog exhaustion, serial null-claim pressure is bounded by elapsed polling windows rather than configured concurrency",
       "single, balanced, and distributed worker topologies preserve the same total handler-capacity bound",
       "immediate and I/O-like topology profiles complete every task without leaving active or expired leases",
@@ -840,6 +841,14 @@ interface QueryPressureSnapshot {
   successfulClaimTimes: readonly number[];
 }
 
+/**
+ * Counts the statements a worker sends, including its claims and heartbeats.
+ *
+ * The probe has no `connect()`, so it cannot lend a dedicated heartbeat connection. A worker over it
+ * sets `sharedHeartbeats`, which sends heartbeats through `query()` where the probe counts them.
+ * Lending a pool instead would hide those heartbeats and give the worker a notification listener,
+ * which would change the polling path these scenarios measure.
+ */
 class QueryPressureProbe implements Queryable {
   private activeQueries = 0;
   private activeClaims = 0;
@@ -3983,6 +3992,8 @@ async function workerConcurrency(
       workerId: `benchmark-concurrency-${concurrency}`,
       leaseMs,
       heartbeatMs,
+      // The probe counts heartbeats; see QueryPressureProbe.
+      sharedHeartbeats: true,
       pollMs,
       maintenanceIntervalMs: 100,
       maintenanceRoutinePollMs: 100,
@@ -4090,7 +4101,14 @@ async function workerConcurrency(
       concurrency,
       (actual, expected) => Number(actual) <= Number(expected) && Number(actual) >= 1,
     );
-    recordInvariant(assertions, `${prefix} claims are serial`, afterTiming.maxConcurrentClaims, 1);
+    // ADR 0076 keeps overlapping claims in flight. Each one reserves at least a refill batch.
+    recordInvariant(
+      assertions,
+      `${prefix} claims in flight stay within the refill bound`,
+      afterTiming.maxConcurrentClaims,
+      Math.ceil(concurrency / dispatchRefillBatch(concurrency)),
+      (actual, expected) => Number(actual) >= 1 && Number(actual) <= Number(expected),
+    );
     recordInvariant(
       assertions,
       `${prefix} claims only use free slots`,
@@ -4191,6 +4209,8 @@ async function workerConcurrency(
           workerId: `benchmark-topology-${profile.name}-${shape.name}-${workerIndex + 1}`,
           leaseMs,
           heartbeatMs,
+          // The probe counts heartbeats; see QueryPressureProbe.
+          sharedHeartbeats: true,
           pollMs,
           maintenanceIntervalMs: 60_000,
           maintenanceRoutinePollMs: 60_000,
@@ -4276,6 +4296,8 @@ async function workerConcurrency(
     workerId: "benchmark-first-null",
     leaseMs,
     heartbeatMs,
+    // The probe counts heartbeats; see QueryPressureProbe.
+    sharedHeartbeats: true,
     pollMs: 1,
     maintenanceIntervalMs: 100,
     maintenanceRoutinePollMs: 100,
@@ -4311,6 +4333,8 @@ async function workerConcurrency(
     workerId: "benchmark-pause",
     leaseMs,
     heartbeatMs,
+    // The probe counts heartbeats; see QueryPressureProbe.
+    sharedHeartbeats: true,
     pollMs: 1,
     maintenanceIntervalMs: 100,
     maintenanceRoutinePollMs: 100,
@@ -4345,6 +4369,8 @@ async function workerConcurrency(
     workerId: "benchmark-shutdown",
     leaseMs,
     heartbeatMs,
+    // The probe counts heartbeats; see QueryPressureProbe.
+    sharedHeartbeats: true,
     pollMs: 1,
     maintenanceIntervalMs: 100,
     maintenanceRoutinePollMs: 100,
@@ -4452,6 +4478,8 @@ async function batchDispatch(
       workerId: `benchmark-batch-${mode}`,
       leaseMs,
       heartbeatMs,
+      // The probe counts heartbeats; see QueryPressureProbe.
+      sharedHeartbeats: true,
       pollMs: 10,
       registryIntervalMs: 0,
     });
@@ -4563,9 +4591,10 @@ async function batchDispatch(
     );
     recordInvariant(
       assertions,
-      `${name} cohort claim execution remains serial`,
+      `${name} cohort claims in flight stay within the refill bound`,
       cohort.maxConcurrentClaims,
-      1,
+      Math.ceil(batchMaxSize / dispatchRefillBatch(batchMaxSize)),
+      (actual, expected) => Number(actual) >= 1 && Number(actual) <= Number(expected),
     );
     recordInvariant(
       assertions,
@@ -4867,10 +4896,11 @@ async function batchDispatch(
   const batchLingerPoints =
     exportedMetrics.find((metric) => metric.descriptor.name === "workhorse.handler.batch.linger")
       ?.dataPoints ?? [];
+  // Sorted, because the check sorts each point's attribute names before comparing.
   const expectedBatchAttributeNames = [
     "workhorse.handler.batch.full",
-    "workhorse.task.type",
     "workhorse.queue.name",
+    "workhorse.task.type",
   ];
   const boundedBatchAttributes = batchSizePoints.every((point) =>
     // oxlint-disable-next-line unicorn/no-array-sort -- Object.keys returns a fresh array.
@@ -5042,6 +5072,9 @@ async function notificationDispatch(
       workerId: `benchmark-notification-${notifications ? "assisted" : "polling"}`,
       pollMs: notifications ? notificationFallbackMs : pollingFallbackMs,
       registryIntervalMs: 0,
+      // The polling cohort's query-only database cannot lend a heartbeat connection. Both cohorts
+      // heartbeat through the probe, so they differ only in notification support.
+      sharedHeartbeats: true,
     }).handle("notification-dispatch", () => {
       handled = true;
       return null;

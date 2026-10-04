@@ -1,6 +1,7 @@
 # ADR 0043: Run latest-version CI continuously and compatibility checks on schedules
 
 - **Status:** Accepted; amended by [ADR 0083](0083-run-each-language-suite-once-per-change.md)
+  and by SM-1141 (a failed scheduled benchmark opens an issue)
 - **Date:** 2026-08-25
 - **Related:** Plane WH-438
 
@@ -43,6 +44,11 @@ signal that a scheduled lane has stopped reporting.
 `.github/workflows/benchmark.yml` runs smoke benchmarks weekly and on manual dispatch. It is
 informational and is not a required check because timing on shared hardware is not comparable. The
 benchmark selects workspace source exports so the adapter and core share one telemetry provider.
+
+_Amended by SM-1141._ A failed scheduled benchmark opens a repository issue, as a failed scheduled CI
+run does. Four weekly benchmark failures went unnoticed before it did. The benchmark still does not
+run on pull requests: a run on every change to its code would cost about a runner-minute each, and
+an informational check that can flake on shared hardware teaches people to ignore it.
 
 npm and Python publication run only from matching version tags. Separate `npm` and `pypi`
 environments require an explicit review, disallow administrator bypass, and accept only their
