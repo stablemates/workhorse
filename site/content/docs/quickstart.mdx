@@ -255,6 +255,7 @@ file so you can watch the whole lifecycle.
   <Tab value="Ruby">
     ```ruby
     require "connection_pool"
+    require "json"
     require "pg"
     require "stablemates/workhorse"
 
@@ -271,7 +272,7 @@ file so you can watch the whole lifecycle.
     worker.run_once # production uses Stablemates::Workhorse.run_worker_process(worker)
 
     task = Stablemates::Workhorse::Admin.new(pool).get_task(enqueued.task_id)
-    puts "#{task.state} #{task.result}" if task
+    puts "#{task.state} #{JSON.generate(task.result)}" if task
     ```
   </Tab>
 </Tabs>
