@@ -21,5 +21,6 @@ Gem::Specification.new do |spec|
 
   spec.add_dependency "concurrent-ruby", ">= 1.3.1", "< 2"
   spec.add_dependency "connection_pool", ">= 2.5", "< 4"
+  spec.add_dependency "logger", ">= 1.6", "< 2"
   spec.add_dependency "pg", ">= 1.6", "< 2"
 end

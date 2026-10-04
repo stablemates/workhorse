@@ -540,8 +540,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:reset:test
       - run: pnpm ruby:gates
+      # Unlike the Go and Rust package checks, this runs on every change (ADR 0083, amended by
+      # SM-1138). It takes seconds. The release job checks the gem only on the pinned Ruby, so this
+      # step is what loads it on the newest supported Ruby outside the development bundle.
       - run: pnpm ruby:package-check
-        if: github.event.schedule == '17 4 * * 0'
 
   ruby-rails:
     name: Ruby Active Job on Rails 8.0

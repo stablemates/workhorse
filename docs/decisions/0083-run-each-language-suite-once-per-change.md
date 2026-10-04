@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-28
+- **Amended by:** [SM-1138](https://linear.app/stablemates/issue/SM-1138)
+  (Ruby's package check runs on every change)
 - **Related:** [ADR 0043](0043-public-ci-and-release-policy.md),
   [ADR 0079](0079-govern-the-rust-api-as-an-eighth-surface.md),
   [SM-970](https://linear.app/stablemates/issue/SM-970)
@@ -42,6 +44,14 @@ and installs each in a clean environment, once bare and once per driver extra. T
 its only optional feature: none of those installs has OpenTelemetry, so the examples run on the
 no-op telemetry path. Go and TypeScript make OpenTelemetry a required dependency, so they have no
 variation without it.
+
+_Amended by [SM-1138](https://linear.app/stablemates/issue/SM-1138)._ Ruby's package check,
+`pnpm ruby:package-check`, runs on every change as well as weekly. It builds the gem and loads it
+from a clean gem home within seconds, so it never sets the wait for a pull request. The development
+bundle can supply a gem that the gemspec omits. The weekly run on 2026-10-04 found that the
+published gem could not load on Ruby 4.0, because `logger` had left the default gems. The release
+job checks the gem only on the Ruby that `mise.toml` pins. So without this step, no check before
+publication loaded the gem on the newest supported Ruby.
 
 `pnpm rust:test` runs the whole Rust workspace once with `--all-features`. It replaces the pair of
 runs that `rust:test` and `rust:integration` made in CI. `pnpm rust:integration` stays as a focused

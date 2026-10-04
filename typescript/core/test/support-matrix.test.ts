@@ -581,7 +581,8 @@ describe("continuous integration", () => {
     expect(workflow).toContain(`- run: pnpm rust:test:no-features${weekly}`);
     expect(workflow).toContain(`- run: pnpm go:package-check${weekly}`);
     expect(workflow).toContain(`- run: pnpm rust:package-check${weekly}`);
-    expect(workflow).toContain(`- run: pnpm ruby:package-check${weekly}`);
+    // SM-1138: the Ruby package check takes seconds, so every change runs it on the newest Ruby.
+    expect(workflow).toMatch(/\n {6}- run: pnpm ruby:package-check\n\n/);
     expect(workflow).not.toContain("pnpm rust:integration");
     expect(workflow).toContain("matrix: ${{ fromJSON(needs.plan.outputs.rust) }}");
     expect(workflow).toContain("matrix: ${{ fromJSON(needs.plan.outputs.ruby) }}");

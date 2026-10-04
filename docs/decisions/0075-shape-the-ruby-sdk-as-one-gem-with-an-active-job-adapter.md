@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-23
+- **Amended by:** [SM-1138](https://linear.app/stablemates/issue/SM-1138)
+  (the gem declares `logger`, which Ruby 4.0 no longer ships as a default gem)
 - **Related:** [ADR 0018](0018-framework-neutral-dashboard-host.md),
   [ADR 0021](0021-no-framework-integration-packages.md),
   [ADR 0023](0023-language-sdks-and-http-boundaries.md),
@@ -83,7 +85,7 @@ The repository publishes one gem, rooted at `ruby/` under ADR 0028. It contains 
 worker, `Admin`, the embedded dashboard backend, and the Active Job adapter. Python ships one
 distribution and Rust ships one crate, and each extra gem would add a release lane and version skew.
 
-The gem has three runtime dependencies.
+The gem has four runtime dependencies.
 
 - **`pg`, at least 1.6 and below 2.** Every statement runs through a `PG::Connection`.
 - **`connection_pool`, at least 2.5 and below 4.** The worker takes a pool under ADR 0071, and
@@ -93,6 +95,12 @@ The gem has three runtime dependencies.
   cancellation token, and its wakeups from it, as the Concurrency section describes. Active Support
   requires the same range, and Solid Queue and GoodJob build on it. So a Rails application again
   gains no new gem.
+- **`logger`, at least 1.6 and below 2.** _Amended by
+  [SM-1138](https://linear.app/stablemates/issue/SM-1138)._ Telemetry writes through the caller's
+  `Logger` and maps its levels to `Logger` constants. Ruby 3.3 and 3.4 ship `logger` as a default
+  gem, which every gem home can load. Ruby 4.0 moved it to the bundled gems, which load only when
+  the bundle or gem home installs them. The gemspec therefore names it. The default gem in Ruby 3.3
+  already meets the floor, and Active Support depends on `logger` too.
 
 Everything else loads only when the caller has it.
 
