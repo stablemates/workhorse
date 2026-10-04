@@ -1,4 +1,5 @@
 import {
+  ArrowDataTransferHorizontalIcon,
   Book02Icon,
   Database01Icon,
   GaugeIcon,
@@ -54,6 +55,7 @@ const groupIcons = {
   workflow: ShieldEnergyIcon,
   activity: GaugeIcon,
   plug: PlugSocketIcon,
+  migrate: ArrowDataTransferHorizontalIcon,
   database: Database01Icon,
   book: Book02Icon,
   code: SourceCodeIcon,

@@ -58,7 +58,7 @@ export function IntegrationCatalog() {
         const entries = catalog.integrations.filter((entry) => entry.category === category.id);
         if (entries.length === 0) return null;
         return (
-          <section key={category.id}>
+          <section key={category.id} id={category.id} className="scroll-mt-24">
             <h2 className="text-[19px] font-semibold tracking-tight">{category.title}</h2>
             <p className="mt-1 text-[14.5px] leading-relaxed text-fd-muted-foreground">
               {category.question}

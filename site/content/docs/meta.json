@@ -39,6 +39,8 @@
     "queue-health",
     "multi-tenancy",
     "---Integrations---",
+    "---Migrate to Workhorse---",
+    "migrate",
     "---Reference---",
     "examples",
     "agentic-flow",

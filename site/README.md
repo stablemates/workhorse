@@ -73,7 +73,32 @@ different set than the others.
 - The tier decides what a page proves. `verified` means continuous integration
   exercises the package on every change, so the entry carries no date.
   `documented` means a person checked it, so the entry must carry `verifiedOn`.
+- Each category in the catalog becomes a nested sidebar folder under
+  Integrations, in category order. Put an entry in the category that answers
+  the reader's question: an ORM page under `orms`, a complete example such as a
+  webhook handler under `recipes`. The overview names each category by its
+  title, so update that list when you rename or add a category.
 - `typescript/core/test/site-integrations-catalog.test.ts` enforces all of it.
+
+### Integration page template
+
+Integration pages follow the writing rules in the root `CLAUDE.md` and the
+ASD-STE100 writing rules, with technical terms allowed: short sentences, active
+voice, one instruction per step, and the condition first.
+
+- Title: the tool name first, then what the reader gets, for example
+  `"Prisma: enqueue background tasks in the same transaction"`. Quote a title
+  that contains a colon.
+- Description: one sentence that names the tool and Workhorse and says what the
+  page lets the reader do.
+- Sections, in this order: an introduction that says what the reader gets and
+  why, `## Requirements`, the setup steps, the main example, `## Run the worker`
+  when the page owns one, `## Limits`, `## How this integration is tested` (or
+  `recipe`), and `## Next`.
+- State limits as a short list after the reader can use the integration. Do not
+  open a page with what it does not do.
+- Put test evidence last. Name the tier, the test command, and what the tests
+  cover. Leave exact tested versions to the catalog when it resolves them.
 
 ## The blog
 

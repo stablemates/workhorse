@@ -1,0 +1,164 @@
+---
+title: Migrate to Workhorse from another task queue
+description: Move background jobs to Workhorse one task type at a time, from a Redis queue, a PostgreSQL queue, or a workflow platform, without lost or duplicate work.
+---
+
+This page tells you how to move background work from another system to Workhorse. The method is the
+same for each type of system: move one task type at a time, and keep the old system running until
+its queue is empty. You do not need a big switch on one day.
+
+## What you get from the move
+
+Most task queues publish a task after your database commit. If the process stops between the commit
+and the publish, the task is lost. No error shows this.
+
+Workhorse keeps its queue in your PostgreSQL database. You enqueue the task in the same transaction
+as your data. The data and the task commit together, or neither commits.
+
+Before, the task is published after the commit:
+
+```ts
+await db.transaction(async (tx) => {
+  await tx.insert(orders).values(order);
+});
+// If the process stops here, the order exists but the task does not.
+await jobs.publish("order.confirm", { orderId: order.id });
+```
+
+After, the task is part of the transaction:
+
+```ts
+await db.transaction(async (tx) => {
+  await tx.insert(orders).values(order);
+  await workhorse.forTransaction(tx).enqueue("order.confirm", { orderId: order.id });
+});
+```
+
+This example uses Drizzle. Each page under Databases and ORMs in [Integrations](/docs/integrations) shows the
+same pattern for its tool and language.
+
+## Before you start
+
+1. Make a list of your task types.
+2. For each task type, record if it is idempotent. A task is idempotent when a second run has no
+   additional effect.
+3. Install the Workhorse schema. Follow [Installation](/docs/installation).
+4. Find the page for your ORM or database driver in [Integrations](/docs/integrations).
+
+## Map the concepts
+
+Most task queues have the same parts. This table shows where each part is in Workhorse.
+
+| What you have now                             | In Workhorse                             | Read more                                        |
+| --------------------------------------------- | ---------------------------------------- | ------------------------------------------------ |
+| A job class, task function, or processor      | A handler that `worker.handle` registers | [Workers](/docs/workers)                         |
+| A call that publishes a job                   | `queue.enqueue`, inside your transaction | [Enqueue a task](/docs/enqueue)                  |
+| A delay, a countdown, or a run time           | The `runAt` option                       | [Enqueue a task](/docs/enqueue)                  |
+| Retry count and backoff settings              | `maxAttempts` and `retryPolicy`          | [Retries](/docs/retries)                         |
+| Unique jobs                                   | The `idempotency` option                 | [Avoid duplicates](/docs/idempotency)            |
+| A periodic scheduler                          | `queue.syncSchedules`                    | [Schedules](/docs/schedules)                     |
+| A job that waits for other jobs               | The `dependencies` option                | [Wait for other tasks](/docs/task-dependencies)  |
+| A job that starts sub-jobs and waits for them | `context.runChild`                       | [Child tasks](/docs/child-tasks)                 |
+| Workflow steps that must not run again        | `context.checkpoint`                     | [Checkpoints](/docs/durable-execution)           |
+| A status lookup or a result store             | `admin.getTask`                          | [Query tasks](/docs/queries)                     |
+| Queue priority                                | The `priority` option                    | [Run order](/docs/priority)                      |
+| Concurrency and rate limits                   | Concurrency policies and rate limits     | [Limit how many run](/docs/concurrency-policies) |
+| A worker command                              | `workhorse worker`                       | [Worker processes](/docs/worker-processes)       |
+| A web UI for operators                        | The Workhorse dashboard                  | [Dashboard](/docs/dashboard)                     |
+
+## Move one task type at a time
+
+Do these steps for each task type. Start with a task type that is idempotent and has a low volume.
+
+1. Write a Workhorse handler for the task type. Keep the same payload shape, so that one function can
+   do the work for both systems.
+2. Deploy a Workhorse worker process that handles the task type. The worker waits until tasks
+   arrive.
+3. Change the producers. Each producer calls `enqueue` inside the transaction that writes its data.
+4. Keep the old worker running. It must finish the tasks that are already in the old queue.
+5. Drain the old queue. The next section tells you what to check.
+6. Remove the old task code and the old producer code.
+
+A rolling deploy runs old and new producer code at the same time. During that period, each request
+goes to one system only. Both workers run, so both queues continue to empty.
+
+## Drain the old system
+
+An old queue can hold work that you cannot see in its list of waiting jobs. Before you remove the
+old worker, check each of these:
+
+- Jobs that wait to run.
+- Jobs that wait for a retry.
+- Jobs with a delay or a run time in the future. These can wait for hours or days.
+- Periodic schedules. Move each schedule to `queue.syncSchedules`. Also add its namespace to
+  `scheduleNamespaces` on a running worker, because a worker fires only the namespaces it lists.
+  Confirm that the new schedule fires, then remove the old schedule. If both schedules exist, the
+  work runs twice. If neither runs, the work does not happen.
+  [Schedules](/docs/schedules#let-workers-offer-schedule-namespaces) tells you how.
+- Workflows that are in progress. Let them finish in the old system.
+
+Use the tools of the old system to check each item. When all are empty, stop the old worker.
+
+## Prevent the same work running twice
+
+Most task queues run a task at least once, and Workhorse also does. A handler must therefore expect
+a second run. The move adds one more risk: work that is submitted again during the switch. For
+example, a client retries a request, or a script sends failed old jobs again.
+
+If a task is idempotent, a second run is safe. You do not have to do more.
+
+If a task is not idempotent, make it idempotent before you move it:
+
+- **The effect is in your database.** Write a receipt row with a unique business key, such as the
+  payment ID. Write the receipt and the effect in the same transaction. A second run finds the
+  receipt and does nothing.
+- **The effect is in another system.** Send a stable business key to that system as its
+  idempotency key, if the system accepts one.
+- **The same request can arrive twice.** Use the `idempotency` option on `enqueue`. While Workhorse
+  keeps the key, it accepts only one task for that key.
+
+[Avoid duplicates](/docs/idempotency) tells you more about each method.
+
+## Roll back the switch
+
+If the new path fails, change the producers back to the old system. Do not delete the Workhorse
+tasks. They can still run, so keep both workers running until both queues are empty.
+
+## What does not move
+
+- **Job IDs.** Workhorse gives each task a new ID. If your code stores old job IDs, store a business
+  key instead.
+- **Stored results.** Results in the old result store stay there. Read them from the old system
+  until they expire.
+- **Library APIs.** Workhorse does not copy the decorators, classes, or method names of another
+  library. Change the code for each task type.
+- **Workflows in progress.** Workhorse cannot continue a workflow that another system started.
+
+## Notes for each type of system
+
+**A queue on Redis or a message broker.** The queue is a separate system from your data, so the
+move gives you transactional enqueue. When no task type uses the broker, you can remove it.
+
+**A queue in PostgreSQL.** Both queues can be in the same database. Workhorse keeps its tables in
+its own `workhorse` schema. If the old queue also enqueues in your transaction, you can switch one
+task type in one deploy.
+
+**A durable execution or workflow platform.** A workflow becomes a Workhorse handler. A step becomes
+`context.checkpoint`, a durable sleep becomes `context.sleep`, and a wait for an event becomes
+`context.waitForSignal`. A child workflow becomes `context.runChild`. When a handler runs again,
+Workhorse runs it from the start and returns the saved result of each completed checkpoint. Read
+[Checkpoints](/docs/durable-execution) before you move a workflow.
+
+**A Rails application on Active Job.** Change the Active Job adapter. Your job classes do not change.
+[Active Job](/docs/active-job) tells you how.
+
+## Next
+
+- [Enqueue a task](/docs/enqueue) — enqueue in the same transaction as your data
+- [Avoid duplicates](/docs/idempotency) — make a task safe to run twice
+- [Worker processes](/docs/worker-processes) — run the worker in its own process
+
+---
+
+Exact transaction and delivery guarantees:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#system-context).
