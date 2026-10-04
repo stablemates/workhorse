@@ -914,24 +914,34 @@ describe("task dependencies", () => {
 
     await expect(queue.cancel(rootId)).resolves.toMatchObject({ status: "canceled" });
 
+    // No column records the write order within a level: occurred_at can repeat, and before
+    // PostgreSQL 18 event_id is random below the millisecond. Compare each level's membership.
     const events = await pool.query<{ task_id: string; prerequisite_task_id: string }>(
       `SELECT task_id, details->>'prerequisite_task_id' AS prerequisite_task_id
          FROM workhorse.task_event
         WHERE task_id = ANY($1::uuid[]) AND event_type = 'dependency_canceled'
-        ORDER BY event_id`,
+        ORDER BY task_id`,
       [[...middleIds, ...leafIds]],
     );
-    // Each level settles in dependent id order, and every middle event precedes every leaf event.
-    const middleEvents = middleIds.map((taskId) => ({
-      task_id: taskId,
-      prerequisite_task_id: rootId,
-    }));
-    const leafEvents = leafIds.map((taskId, index) => ({
-      task_id: taskId,
-      prerequisite_task_id: middleIds[index],
-    }));
-    // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
-    expect(events.rows).toEqual([...middleEvents.sort(byTaskId), ...leafEvents.sort(byTaskId)]);
+    expect(events.rows).toEqual(
+      [
+        ...middleIds.map((taskId) => ({ task_id: taskId, prerequisite_task_id: rootId })),
+        ...leafIds.map((taskId, index) => ({
+          task_id: taskId,
+          prerequisite_task_id: middleIds[index],
+        })),
+      ].toSorted(byTaskId),
+    );
+    // The leaf level settles in a later statement, so no leaf event is older than a middle event.
+    await expect(
+      pool.query<{ ordered: boolean }>(
+        `SELECT max(occurred_at) FILTER (WHERE task_id = ANY($1::uuid[]))
+                  <= min(occurred_at) FILTER (WHERE task_id = ANY($2::uuid[])) AS ordered
+           FROM workhorse.task_event
+          WHERE task_id = ANY($1::uuid[] || $2::uuid[]) AND event_type = 'dependency_canceled'`,
+        [middleIds, leafIds],
+      ),
+    ).resolves.toMatchObject({ rows: [{ ordered: true }] });
   });
 
   it("resolves overlapping fan-in without deadlock while dependents are canceled and extended", async () => {
