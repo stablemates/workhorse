@@ -74,6 +74,27 @@ updates:
       - dependency-name: "@prisma/client"
         update-types:
           - version-update:semver-major
+      # The packages below exist only so a recipe runs against the version its published page
+      # certifies: Objection in objection.mdx and packed-packages.ts, stripe-node in stripe.mdx, and
+      # MikroORM in mikroorm.mdx and its integration test. No product package depends on them. A bump
+      # either fails the fixture or leaves the page naming a version nobody tested, so moving one
+      # re-certifies the recipe and its page in the same change. Alerts still arrive, and
+      # `pnpm tooling:vuln` still fails CI on an advisory in any of them.
+      - dependency-name: objection
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
+      - dependency-name: stripe
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
+      - dependency-name: "@mikro-orm/*"
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
 
   # `uv`, not `pip`: the Python half locks with uv.lock, and the pip ecosystem would edit
   # pyproject.toml without updating that lockfile. CI runs under UV_LOCKED, so such a pull request
@@ -88,6 +109,64 @@ updates:
       python:
         patterns: ["*"]
         update-types: [minor, patch]
+    # The same holds for the recipe pins in the dev group. celery.mdx names Celery with the Kombu,
+    # Billiard and Vine it resolves to. langgraph.mdx and langgraph-bridge.md name both LangGraph
+    # packages, and langgraph-bridge.md also names the langgraph-checkpoint they resolve. enqueue.mdx
+    # names the SQLAlchemy and greenlet the async fixture tests. pydanticai_approval.py refuses to
+    # run on any PydanticAI but the one pydanticai.mdx names. Django stays open: the `django` extra
+    # is a product claim, not a recipe.
+    # `pnpm tooling:vuln` still fails CI on an advisory in any of them.
+    ignore:
+      - dependency-name: celery
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
+      - dependency-name: kombu
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
+      - dependency-name: billiard
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
+      - dependency-name: vine
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
+      - dependency-name: langgraph
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
+      - dependency-name: langgraph-checkpoint-postgres
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
+      - dependency-name: pydantic-ai-slim
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
+      - dependency-name: sqlalchemy
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
+      - dependency-name: greenlet
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
+      - dependency-name: langgraph-checkpoint
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
 
   - package-ecosystem: gomod
     directory: /go
@@ -99,6 +178,41 @@ updates:
       go:
         patterns: ["*"]
         update-types: [minor, patch]
+    # Only the sqlx, Bun and GORM examples import these modules, and go-sqlx.mdx, go-bun.mdx and
+    # gorm.mdx certify the versions go.mod pins. go-bun.mdx also installs the google/uuid those
+    # examples use. pgx stays open: the published module depends on it.
+    # `pnpm go:vuln` scans ./..., examples included, so it still fails CI on a reachable advisory.
+    ignore:
+      - dependency-name: github.com/jmoiron/sqlx
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
+      - dependency-name: github.com/uptrace/bun
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
+      - dependency-name: github.com/uptrace/bun/dialect/pgdialect
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
+      - dependency-name: gorm.io/gorm
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
+      - dependency-name: github.com/google/uuid
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
+      - dependency-name: gorm.io/driver/postgres
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
 
   # The Ruby gem's Gemfile.lock. Dependabot reads only the Gemfile in this directory, so it does not
   # update ruby/gemfiles/rails_8_0.gemfile.lock; `pnpm ruby:vuln` audits that lockfile as well, and
@@ -113,6 +227,14 @@ updates:
       ruby:
         patterns: ["*"]
         update-types: [minor, patch]
+    # sequel.mdx certifies the Sequel the Gemfile pins, and the gemspec does not depend on it. pg
+    # stays open: the published gem depends on it. `pnpm ruby:vuln` still audits Gemfile.lock.
+    ignore:
+      - dependency-name: sequel
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
 
   # The base images in Dockerfile, Dockerfile.dashboard and Dockerfile.site. The published image is
   # built from these, so a base image that stops receiving patches is a deployment concern.
