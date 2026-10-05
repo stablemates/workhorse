@@ -76,7 +76,7 @@ try {
       ["TypeScript", "Python", "Go", "checkpoint", "`Accept: text/markdown`"],
     ],
     ["/docs/integrations", ["Verified", "Documented", "Tested against drizzle-orm"]],
-    ["/docs/integrations.md", ["ORMs and query builders", "Tested against drizzle-orm"]],
+    ["/docs/integrations.md", ["Databases and ORMs", "Tested against drizzle-orm"]],
     ["/docs/quickstart", ["quickstart", "worker"]],
     ["/docs/releases", ["TypeScript", "Python", "Go", "current line"]],
     // The twin expands every language tab inline, so an agent that fetches it

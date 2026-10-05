@@ -32,8 +32,8 @@ import { loadSitePages } from "./site-pages.js";
 
 interface Group {
   readonly title: string;
-  /** Key in the icon map in `src/routes/docs.tsx`. */
-  readonly icon: string;
+  /** Key in the icon map in `src/routes/docs.tsx`. Nested catalog groups carry none. */
+  readonly icon?: string;
   readonly defaultOpen?: boolean;
   readonly pages?: string[];
   readonly groups?: readonly Group[];
@@ -49,6 +49,7 @@ interface Group {
  */
 const sidebarLabels: Readonly<Record<string, string>> = {
   integrations: "Overview",
+  migrate: "From another task queue",
   enqueue: "Enqueue a task",
   contracts: "Validate payloads",
   idempotency: "Avoid duplicates",
@@ -246,25 +247,24 @@ const groupIcons: Readonly<Record<string, string>> = {
   "Executing work": "play",
   Operating: "activity",
   Integrations: "plug",
+  "Migrate to Workhorse": "migrate",
   Reference: "code",
 };
 
 /**
  * The one sidebar group the catalog owns. `meta.json` may not list a page under
  * it, because adding an integration must stay one MDX file and one catalog
- * entry. The group stays flat and takes its order from the catalog: category
- * order decides which pages sit together, and the index page presents the
- * categories under their headings, where a reader browsing a catalog reads them.
+ * entry. The overview sits first, and each category becomes a nested folder
+ * that holds its entries in catalog order, so a reader scanning the sidebar
+ * finds their tool under what it is, not in one long list.
  */
 const catalogGroup = "Integrations";
-const catalogPages = [
-  "integrations",
-  ...catalog.categories.flatMap((category) =>
-    publishedIntegrations
-      .filter((entry) => entry.category === category.id)
-      .map((entry) => entry.slug),
-  ),
-];
+const catalogSubgroups: readonly Group[] = catalog.categories.map((category) => ({
+  title: category.title,
+  pages: publishedIntegrations
+    .filter((entry) => entry.category === category.id)
+    .map((entry) => entry.slug),
+}));
 
 const structure: Group[] = [];
 for (const entry of docsMeta.pages) {
@@ -276,7 +276,9 @@ for (const entry of docsMeta.pages) {
       title: separator[1],
       icon,
       defaultOpen: structure.length === 0,
-      pages: separator[1] === catalogGroup ? [...catalogPages] : [],
+      ...(separator[1] === catalogGroup
+        ? { pages: ["integrations"], groups: catalogSubgroups }
+        : { pages: [] }),
     });
     continue;
   }
@@ -431,7 +433,7 @@ const pageNode = (slug: string) => {
 const folderNode = (group: Group): unknown => ({
   type: "folder" as const,
   name: group.title,
-  icon: group.icon,
+  ...(group.icon ? { icon: group.icon } : {}),
   defaultOpen: group.defaultOpen ?? false,
   children: [...(group.pages ?? []).map(pageNode), ...(group.groups ?? []).map(folderNode)],
 });
