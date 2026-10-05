@@ -11,11 +11,11 @@ The exception is migration 0025, crossed offline when upgrading from before 0.5.
 ## Install
 
 ```bash
-npm install @stablemates/workhorse @stablemates/workhorse-knex knex@3.3.0 pg@8.23.0
+npm install @stablemates/workhorse @stablemates/workhorse-knex knex@3.3.0 pg@8.23.1
 ```
 
 This package is part of the next Workhorse release train. A source checkout can use its workspace package.
-The verified baseline is Knex 3.3.0 and pg 8.23.0, with Objection 3.1.5 for the recipe.
+The verified baseline is Knex 3.3.0 and pg 8.23.1, with Objection 3.1.5 for the recipe.
 Only PostgreSQL with `client: "pg"` is supported. Other versions and drivers are not certified.
 
 ## Enqueue in a transaction

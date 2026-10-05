@@ -153,7 +153,7 @@ the same synthetic node-postgres metadata as the Prisma and TypeORM queryables.
 
 `knexQueryable` in `@stablemates/workhorse-knex` accepts a Knex database or transaction with `client: "pg"`.
 It sends each statement through `raw(statement).options({ text: statement, values: [...values] })`.
-The released fixture pins Knex 3.3.0, pg 8.23.0, and Objection 3.1.5; other versions are not certified.
+The released fixture pins Knex 3.3.0, pg 8.23.1, and Objection 3.1.5; other versions are not certified.
 The native `text` option restores SQL after Knex rewrites question marks, including those in literals, comments, dollar quotes, and JSON operators.
 Repeated and out-of-order `$N` parameters retain native PostgreSQL semantics.
 `postProcessResponse` is rejected at adaptation and before every execution. Only one native result with object `rows` is accepted.

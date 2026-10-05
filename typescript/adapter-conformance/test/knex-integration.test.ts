@@ -51,8 +51,8 @@ describe("released Knex native route and Objection recipe", () => {
   it("pins the released fixture and the pg driver actually resolved by Knex", () => {
     expect(require("knex/package.json").version).toBe("3.3.0");
     expect(require("objection/package.json").version).toBe("3.1.5");
-    expect(require("pg/package.json").version).toBe("8.23.0");
-    expect(createRequire(require.resolve("knex"))("pg/package.json").version).toBe("8.23.0");
+    expect(require("pg/package.json").version).toBe("8.23.1");
+    expect(createRequire(require.resolve("knex"))("pg/package.json").version).toBe("8.23.1");
   });
 
   it("executes original native text and values despite Knex question-mark rewriting", async () => {

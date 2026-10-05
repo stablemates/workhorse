@@ -39,12 +39,12 @@
     "@stablemates/workhorse": "workspace:*",
     "@types/pg": "^8.23.1",
     "knex": "3.3.0",
-    "pg": "8.23.0"
+    "pg": "8.23.1"
   },
   "peerDependencies": {
     "@stablemates/workhorse": ">=0.6.0 <0.7.0",
     "knex": "3.3.0",
-    "pg": "8.23.0"
+    "pg": "8.23.1"
   },
   "engines": {
     "node": ">=22"
