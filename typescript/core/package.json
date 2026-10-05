@@ -48,7 +48,7 @@
     "@stablemates/workhorse-dashboard-contract": "workspace:*",
     "@types/pg": "^8.23.1",
     "ajv": "8.20.0",
-    "pg": "^8.23.0"
+    "pg": "^8.23.1"
   },
   "devDependencies": {
     "@opentelemetry/api": "1.9.1",

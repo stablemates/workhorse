@@ -20,7 +20,7 @@
     "kysely": "0.29.6",
     "magicast": "0.5.5",
     "objection": "3.1.5",
-    "pg": "8.23.0",
+    "pg": "8.23.1",
     "typeorm": "1.1.1",
     "typescript": "^5.8.3",
     "vitest": "^4.1.11"
