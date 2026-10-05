@@ -24,19 +24,19 @@
   "devDependencies": {
     "@fontsource-variable/geist": "^5.3.0",
     "@fontsource-variable/geist-mono": "^5.3.0",
-    "@shikijs/transformers": "4.4.3",
+    "@shikijs/transformers": "4.5.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/mdx": "^2.0.13",
-    "@types/node": "^26.6.3",
+    "@types/node": "^26.6.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
-    "fumadocs-mdx": "15.4.5",
+    "fumadocs-mdx": "15.4.6",
     "parse5": "8.0.1",
     "tailwindcss": "^4.1.18",
     "tsx": "^4.23.15",
     "typescript": "^5.8.3",
-    "vite": "^8.3.1"
+    "vite": "^8.3.2"
   },
   "engines": {
     "node": ">=22"
