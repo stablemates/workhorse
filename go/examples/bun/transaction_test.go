@@ -129,12 +129,12 @@ func bunFixture(t *testing.T) (*bun.DB, *sql.DB, *queryRecorder, string) {
 	observer.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = observer.Close() })
 	recorder := &queryRecorder{}
-	db.AddQueryHook(recorder)
+	db = db.WithQueryHook(recorder)
 	var version string
 	if err := observer.QueryRowContext(ctx, "SHOW server_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("Bun v1.2.18 / pgdialect v1.2.18 / pgx stdlib v5.11.0 / PostgreSQL %s", version)
+	t.Logf("Bun v1.3.0 / pgdialect v1.3.0 / pgx stdlib v5.11.0 / PostgreSQL %s", version)
 	return db, observer, recorder, databaseURL
 }
 

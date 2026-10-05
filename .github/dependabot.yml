@@ -99,6 +99,11 @@ updates:
       go:
         patterns: ["*"]
         update-types: [minor, patch]
+    # OpenTelemetry 1.47 requires Go 1.26; support.json still promises Go 1.25.
+    # Lift this limit when that support floor moves. Compatible 1.46 patches stay eligible.
+    ignore:
+      - dependency-name: "go.opentelemetry.io/otel*"
+        versions: [">=1.47.0"]
 
   # The Ruby gem's Gemfile.lock. Dependabot reads only the Gemfile in this directory, so it does not
   # update ruby/gemfiles/rails_8_0.gemfile.lock; `pnpm ruby:vuln` audits that lockfile as well, and
