@@ -81,7 +81,7 @@
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "typescript": "^5.8.3",
-    "vite": "^8.3.1"
+    "vite": "^8.3.2"
   },
   "peerDependencies": {
     "@stablemates/workhorse": ">=0.6.0 <0.7.0",
