@@ -94,7 +94,7 @@ jobs:
           components: rustfmt
           cache: false
           rustflags: ""
-      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-deny@0.20.2 # Pinned to the cargo-deny version in mise.toml.
       # `pnpm lint` runs RuboCop over the Ruby gem, `ruby-api:check` loads it to read its API, and
