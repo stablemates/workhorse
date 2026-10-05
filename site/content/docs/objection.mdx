@@ -8,11 +8,11 @@ Objection accepts Knex transactions; use the [Knex adapter](/docs/knex), not ano
 
 ## Setup and model write
 
-The tested baseline is Objection 3.1.5, Knex 3.3.0, and pg 8.23.0.
+The tested baseline is Objection 3.1.5, Knex 3.3.0, and pg 8.23.1.
 The Knex package joins the next Workhorse release; use its workspace package until publication.
 
 ```bash
-pnpm add @stablemates/workhorse @stablemates/workhorse-knex objection@3.1.5 knex@3.3.0 pg@8.23.0
+pnpm add @stablemates/workhorse @stablemates/workhorse-knex objection@3.1.5 knex@3.3.0 pg@8.23.1
 ```
 
 Migrate application tables separately from Workhorse's schema; qualify their names to stay outside it.
