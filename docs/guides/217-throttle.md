@@ -6,7 +6,7 @@ Some work should happen at most once per period, however many times something as
 throttle accepts the first request for a key and folds every equivalent request into that task until
 the window closes.
 
-## One account, five triggers, two digests
+## One account, four triggers, two digests
 
 Your app sends each account a digest email of recent activity. Every activity event asks for a
 digest, but the account should get at most one digest per ten minutes. So every event sends the

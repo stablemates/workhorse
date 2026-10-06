@@ -3,45 +3,86 @@ title: Dashboard
 description: Mount the operator interface behind application authorization, or run it standalone with a built-in administrator login.
 ---
 
-Workhorse gives your operators one shared interface — tasks, attempts, checkpoints, schedules,
-queues, workers, failures, health — without you building an admin page. TypeScript, Python, Go, Rust,
-and Ruby can each embed the same packaged React application in their native HTTP server. Every backend
-reads PostgreSQL through the versioned `dashboard/v1` contract, so the interface can observe workers
-on machines it has never met.
+Workhorse gives your operators one shared interface without you building an admin page. It shows
+tasks, attempts, checkpoints, schedules, queues, workers, failures, and health. TypeScript, Python,
+Go, Rust, and Ruby can each embed the same packaged React application in their native HTTP server.
+Every backend reads PostgreSQL through the versioned `dashboard/v1` contract. So the interface can
+observe workers on machines it has never met.
+
+The dashboard can change queue state, so only operators should reach it. An embedded dashboard keeps
+using the application's existing session through `authorize`. The standalone dashboard can own one
+administrator login.
 
 ## What it shows
 
-Every view comes from the same read models as [Queries and timelines](/docs/queries): payload-free
-task listings, per-task timelines with redacted payloads, dead letters, the worker registry, and the
-health verdict with its reasons. With host-authorized controllers wired in, it can also cancel tasks,
-run schedules now, pause queues and workers, and edit maintenance and retention policy.
+An operator filters the task listing to failed tasks and pages forward twice.
 
-Task browsing uses Previous and Next controls, so opening a page does not require counting every
-matching historical task. Sidebar task links start a fresh page; browser Back restores the saved
-position. Filters and navigation cursors remain in the URL for sharing and browser history. Older links with a page number still work. Tasks can move between pages as their state changes.
+1. **Each page** loads through Previous and Next controls. Opening a page does not count every
+   matching historical task.
+2. **The URL** carries the filters and the navigation cursor. The operator shares it with a
+   colleague, who sees the same position.
+3. **The operator opens a task, then presses Back.** The browser restores the saved position. A
+   sidebar task link instead starts a fresh page.
+4. **Meanwhile a task changes state.** It can move between pages, because browsing holds no
+   snapshot across requests.
 
-When a page refresh is still loading, automatic refresh waits rather than starting the same read
-again. After an operator action, the dashboard fetches its committed result.
+Older links with a page number still work.
 
-Tasks show tags in a separate column and keep actions beside the left edge of the table.
-Task details offers the same actions, including their confirmation steps.
-Status indicators reveal the full state, waits, blockers, and timing on hover, focus, or touch.
+Every view comes from the same read models as [Queries and timelines](/docs/queries). These are
+payload-free task listings, per-task timelines with redacted payloads, dead letters, the worker
+registry, and the health verdict with its reasons. With host-authorized controllers wired in, the
+dashboard can also cancel tasks, run schedules now, pause queues and workers, and edit maintenance
+and retention policy.
 
-Task listings distinguish Idempotency, Debounce, and Throttle, with a tooltip explaining how each handles repeated requests.
-Older hosts still show the generic “Keyed” marker.
-The enqueue menu groups all three modes under Enqueue behavior.
-Task details shows one section for the accepted mode, with its scope, key digest, and window or retention settings.
-Rejected debounce proposals appear in Task history without changing the displayed mode.
+Tasks show tags in a separate column and keep actions beside the left edge of the table. Task
+details offers the same actions, including their confirmation steps. Status indicators reveal the
+full state, waits, blockers, and timing on hover, focus, or touch.
 
-Events supports worker and text filters across the selected time window.
-A successful execution can produce a task lifecycle record and an attempt record.
-Their status tooltips distinguish the two sources, and event details lets you copy the task ID.
+Task listings distinguish Idempotency, Debounce, and Throttle. A tooltip explains how each handles
+repeated requests. Older hosts still show the generic “Keyed” marker. The enqueue menu groups all
+three modes under Enqueue behavior. Task details shows one section for the accepted mode, with its
+scope, key digest, and window or retention settings. Rejected debounce proposals appear in Task
+history without changing the displayed mode.
+
+Events supports worker and text filters across the selected time window. A successful execution can
+produce a task lifecycle record and an attempt record. Their status tooltips distinguish the two
+sources, and event details lets you copy the task ID.
+
+The settings page edits maintenance and retention policy through `DashboardSettingsController`. It
+previews destructive retention changes before applying them. It shows process-owned worker values
+read-only, because changing those requires a deployment.
+
+<details>
+<summary>Reference: task browsing</summary>
+
+- The task listing uses cursor navigation, with Previous and Next controls.
+- A page does not count the full matching selection by default.
+- The URL carries the filters and the navigation cursor. Browser Back restores the saved position.
+- A sidebar task link starts a fresh page.
+- A legacy page-number link still resolves. The dashboard walks forward from the first page to
+  the requested page or the last available page.
+- Concurrent state changes can move tasks between pages.
+
+More detail: [Dashboard: Cursor task listing](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#cursor-task-listing).
+
+</details>
 
 ## Mount it in your server
 
+Your application already has an admin login. You mount the dashboard at `/workhorse` inside it.
+
+1. **On each request,** the dashboard calls your `authorize` callback before it serves anything.
+2. **Your callback** reads the application's own session. It returns a principal that names the
+   operator, or refuses the request.
+3. **After authorization,** the host checks schema compatibility. It never installs or migrates the
+   schema.
+4. **For a mutation,** the dashboard records the principal's actor as the operator who asked.
+
 Choose the host for your application's language. Each host serves the browser bundle and the same
-dashboard procedures under `/workhorse`, checks schema compatibility after authorization, and
-never installs or migrates the schema.
+dashboard procedures under `/workhorse`. TypeScript returns a `DashboardPrincipal` from
+`createDashboardHost`. Go returns a `dashboard.Principal` from a standard `net/http` handler. Rust
+returns a `Principal` from a `tower::Service` behind the crate's `dashboard` feature. Python returns
+a `DashboardPrincipal` from its WSGI host. Ruby returns a `Principal` from a Rack application.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -189,12 +230,48 @@ app.use(dashboardNodeMiddleware(host));
 The middleware passes unowned requests to `next()` untouched, so the dashboard never captures
 unrelated routes.
 
+All five hosts serve the same browser bundle and versioned dashboard procedures. The language
+changes the HTTP adapter, while PostgreSQL keeps the operator behavior consistent.
+
+<details>
+<summary>Reference: embedded hosts</summary>
+
+| Language   | Host                                       | `authorize` returns                                                |
+| ---------- | ------------------------------------------ | ------------------------------------------------------------------ |
+| TypeScript | `createDashboardHost`                      | A `DashboardPrincipal`, `true`, `false`, or a `Response`.          |
+| Python     | `workhorse.dashboard.DashboardHost` (WSGI) | A `DashboardPrincipal`, `True`, `False`, or a `DashboardResponse`. |
+| Go         | `dashboard.NewHandler` (`net/http`)        | A `dashboard.Authorization` with `Principal` or `Response`.        |
+| Rust       | `dashboard::handler` (`tower::Service`)    | `Authorization::Principal`, `Unauthenticated`, or `Response`.      |
+| Ruby       | `Stablemates::Workhorse::Dashboard` (Rack) | A `Principal`, `true`, `false`, or a Rack response.                |
+
+- `createDashboardHost` accepts exactly one of `authorize` and `singleAdmin`. It rejects both or
+  neither.
+- The Python host rejects a connection without `autocommit=True`.
+- A non-empty `allowedHosts` list answers `421` for any other host, before `authorize` runs.
+- The middleware from `dashboardNodeMiddleware` passes unowned requests to `next()`.
+
+More detail: [Dashboard: Python backend](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#python-backend)
+and [Dashboard: Allowed hosts](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#allowed-hosts).
+
+</details>
+
 ## Serve several databases as workspaces
 
+A team runs a production database and a staging database. It wants one dashboard for both.
+
+1. **The team configures** the TypeScript host with `workspaces` instead of `database`. Each entry
+   owns its connection.
+2. **An operator opens** `/workhorse/staging`. The host resolves the `staging` workspace and passes
+   that name to `authorize`.
+3. **The callback** grants this operator staging but not production. A request under
+   `/workhorse/production` is refused.
+4. **In a second browser tab,** another operator watches `/workhorse/production`. Deep links into
+   each workspace stay shareable.
+
 The TypeScript embedded host and standalone CLI can serve several Workhorse databases as named
-workspaces. Python, Go, Rust, and Ruby embedded hosts currently mount one database per host. In
-TypeScript, configure `workspaces` instead of `database`; each entry owns its connection and may
-override `environment`, `operator`, and the controllers:
+workspaces. Python, Go, Rust, and Ruby embedded hosts currently mount one database per host. Each
+workspace entry may override `environment`, `operator`, and the controllers. The host still never
+owns pool sizing, shutdown, or credentials for any of the connections.
 
 ```ts
 const host = createDashboardHost({
@@ -208,41 +285,89 @@ const host = createDashboardHost({
 });
 ```
 
-Each workspace lives under its own path — `/workhorse/production`, `/workhorse/staging` — so
-links deep into one workspace stay shareable and two browser tabs can watch two workspaces. The
-`authorize` callback receives the resolved workspace name, letting the application grant access
-per workspace. The host still never owns pool sizing, shutdown, or credentials for any of the
-connections.
-
-The standalone CLI serves workspaces too: repeat `--workspace name=url`, or point `--config` at a
-JSON file whose entries name a `url` directly or a `urlEnv` environment variable that keeps
+The standalone CLI serves workspaces too. Repeat `--workspace name=url`, or point `--config` at a
+JSON file. Each file entry names a `url` directly, or a `urlEnv` environment variable that keeps
 credentials out of the file.
+
+<details>
+<summary>Reference: workspace routing</summary>
+
+- `createDashboardHost` accepts exactly one of `database` and `workspaces`.
+- A workspace mounts at `{path}/{name}`, such as `/workhorse/production` and `/workhorse/staging`.
+- `defaultWorkspace` names the workspace the mount path opens.
+- `authorize(request, workspace)` receives the resolved workspace name. It receives null in
+  single-workspace mode and outside every workspace.
+- Each workspace entry may override `environment`, `operator`, and the controllers.
+- The standalone CLI takes repeated `--workspace name=url`, or `--config` with entries that name
+  `url` or `urlEnv`.
+
+More detail: [Overview: Workspace routing](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#workspace-routing).
+
+</details>
 
 ## Choose the authentication boundary
 
+An operator cancels a task from the dashboard. The browser sends actor text as part of the dashboard
+wire contract, but the server discards it for mutations.
+
+1. **With the built-in login,** the server records the configured username.
+2. **In an embedded host,** the server records the actor from the principal that `authorize`
+   returned.
+3. **If `authorize` returned only `true`,** the server records its configured audit actor instead.
+
 An embedded dashboard uses your application's authentication through its authorization callback.
-The callback runs before the interface, assets, compatibility check, and every RPC method. Return
-a verified principal using the language-specific type shown above. An unauthenticated result denies
-the request, while TypeScript, Go, Rust, and Ruby can also return a custom response. In TypeScript and Ruby, a
-callback that returns `true` authorizes the request without naming a principal, so the host records
-its configured audit actor. Python's callback returns `True` for the same case.
+The callback runs before the interface, assets, compatibility check, and every RPC method. Return a
+verified principal using the language-specific type shown above. An unauthenticated result denies
+the request. TypeScript, Go, Rust, and Ruby can also return a custom response. In TypeScript and
+Ruby, a callback that returns `true` authorizes the request without naming a principal. Python's
+callback returns `True` for the same case.
 
-Every backend replaces actor text from the browser before a mutation. The TypeScript host records
-the verified principal, and uses its configured `auditActor` only for a `true` result. Python, Go,
-Rust, and Ruby hosts record a configured audit actor, when one is set, in place of the
-principal's actor.
-The resulting `auditActor` and `requestedBy` fields record who acted, but never decide who may.
-TypeScript controller options and Python, Go, Rust, or Ruby procedure extensions can route selected
-mutations through application-owned services.
+Each host lets you configure that audit actor. The TypeScript host records the verified principal,
+and uses its configured `auditActor` only for a `true` result. The Python, Go, Rust, and Ruby hosts
+use a configured audit actor, when one is set, in place of the principal's actor. The resulting
+`auditActor` and `requestedBy` fields record who acted, but never decide who may. TypeScript
+controller options and Python, Go, Rust, or Ruby procedure extensions can route selected mutations
+through application-owned services.
 
-The settings page edits maintenance and retention policy through `DashboardSettingsController`,
-previews destructive retention changes before applying them, and shows process-owned worker
-values read-only, because changing those requires a deployment.
+Mutation RPCs also require their `Origin` to match the dashboard request origin. A valid session
+cookie alone cannot authorize a cross-site form or script to change queue state.
+
+Do not configure built-in credentials beside `authorize`. The dashboard rejects that ambiguous
+boundary instead of guessing which identity system owns the request.
+
+<details>
+<summary>Reference: mutations and attribution</summary>
+
+| Source                 | Recorded actor                                                        |
+| ---------------------- | --------------------------------------------------------------------- |
+| Single-admin session   | The configured username, as `DashboardRpcContext.authenticatedActor`. |
+| TypeScript principal   | The principal's `actor`.                                              |
+| TypeScript `true`      | `auditActor`, default `dashboard`.                                    |
+| Python, Go, Rust, Ruby | The configured audit actor if set, else the principal's actor.        |
+
+- `auditWithOccurredAt` replaces the browser's `audit.actor` before any operator controller runs.
+- `rejectCrossOriginMutation` requires an `Origin` header whose origin exactly matches the request
+  URL origin. The Python, Go, Rust, and Ruby hosts make the same check.
+- `BoundaryTimeline` shows `details.requested_by` beside each operator event's reason.
+
+More detail: [Dashboard: Mutations and attribution](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#mutations-and-attribution).
+
+</details>
 
 ## The standalone CLI
 
+A developer wants a quick look at a local database and has no web server to mount the dashboard in.
+
+1. **First try.** The developer runs `workhorse dashboard` in a project that has only the core
+   package. The command names the missing dashboard package and exits before it opens a listener.
+2. **After installing the package.** The command starts. It listens on loopback, port 3000, and
+   serves read-only.
+3. **Asking for a remote address.** The developer restarts it on a public interface without
+   credentials. The command refuses, because an unauthenticated listener may only use loopback or
+   a Unix socket.
+
 For a quick local console, skip the mounting entirely. The command serves the same packaged
-application, so it needs the dashboard package installed next to the core package — a worker-only
+application. So it needs the dashboard package installed next to the core package. A worker-only
 installation deliberately carries neither React nor the browser bundle:
 
 ```bash
@@ -255,35 +380,325 @@ Without that package the command names it and exits before it opens a listener.
 It binds `127.0.0.1` and serves read-only by default. Without credentials, that loopback listener
 is an explicit development bypass and cannot bind to a remotely reachable address.
 
-Set `WORKHORSE_DASHBOARD_USERNAME` and `WORKHORSE_DASHBOARD_PASSWORD_HASH` to enable the built-in
-administrator login. The standalone server owns session expiry, logout, password rotation, origin
-checks, and login throttling. A remote listener also requires an HTTPS public origin. Installations
-that need multiple users, roles, SSO, or tenant isolation should use an embedded host and its
-`authorize` callback.
+The standalone server owns session expiry, logout, password rotation, origin checks, and login
+throttling. The sections below walk through each. Installations that need multiple users, roles,
+SSO, or tenant isolation should use an embedded host and its `authorize` callback.
 
-Because the standalone listener owns its whole origin, it also sends a content security policy and
-the other browser protections on every response. An embedded host shares the origin with the
-application's own pages, so the application owns those headers instead; the
-`@stablemates/workhorse-dashboard-server` README states the policy to copy.
+<details>
+<summary>Reference: standalone CLI defaults</summary>
 
-The login page follows the browser's color scheme. The dashboard header shows the authenticated
-administrator and provides sign-out; if the session expires while the page is open, the next
-private request returns the browser to login.
+| Option              | Default         | Rule                                              |
+| ------------------- | --------------- | ------------------------------------------------- |
+| `--port`            | `3000`          | A positive integer.                               |
+| `--host`            | `127.0.0.1`     | Cannot be combined with `--socket`.               |
+| `--socket`          | none            | Listens on a Unix socket instead of TCP.          |
+| `--public-origin`   | none            | HTTPS origin for a remote authenticated listener. |
+| `--allow-mutations` | off             | Enables queue, task, and worker mutations.        |
+| `--actor`           | `workhorse-cli` | The actor recorded for mutations.                 |
+
+- Without `WORKHORSE_DASHBOARD_USERNAME` and `WORKHORSE_DASHBOARD_PASSWORD_HASH`, the listener is
+  limited to loopback or a Unix socket.
+- A remote authenticated listener requires `WORKHORSE_DASHBOARD_PUBLIC_ORIGIN` with HTTPS.
+- With `--allow-mutations`, the command warns that attribution is not authorization.
+
+More detail: [Dashboard: Standalone server](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#standalone-server).
+
+</details>
+
+## Turn on the built-in login
+
+An operator, Dana, runs `workhorse dashboard` on a host behind `https://ops.example.com`.
+
+1. **Before starting,** Dana sets `WORKHORSE_DASHBOARD_USERNAME` to `dana` and
+   `WORKHORSE_DASHBOARD_PASSWORD_HASH` to a versioned password hash. In a container, Dana mounts
+   each value as a secret file and sets the matching `_FILE` variable instead.
+2. **At startup,** the server reads the hash. It never sees the plaintext password in its
+   configuration.
+3. **At login,** Dana types the password into the login form. The browser sends it to the
+   TLS-protected server. The server compares it against the hash without storing the plaintext
+   value.
+
+The login page follows the browser's light or dark color scheme. After login, the dashboard header
+shows the authenticated administrator and provides a sign-out action.
+
+<details>
+<summary>Reference: credentials</summary>
+
+| Variable                            | Rule                                             |
+| ----------------------------------- | ------------------------------------------------ |
+| `WORKHORSE_DASHBOARD_USERNAME`      | 1 to 256 characters.                             |
+| `WORKHORSE_DASHBOARD_PASSWORD_HASH` | `scrypt-v1$<base64url-salt>$<base64url-digest>`. |
+
+- Each value can come from its `_FILE` variant instead, with one trailing line ending removed.
+- A direct value and its file variant are mutually exclusive.
+- The username and hash must be configured together.
+
+| Hash setting       | Value                   |
+| ------------------ | ----------------------- |
+| scrypt (version 1) | `N=16384`, `r=8`, `p=1` |
+| salt               | at least 16 bytes       |
+| digest             | exactly 32 bytes        |
+
+The server compares the derived digest with `timingSafeEqual`. A password longer than 1,024
+characters never matches.
+
+More detail: [Dashboard: Credentials](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#credentials).
+
+</details>
+
+## What a login creates
+
+Dana logs in at 09:00.
+
+1. **At login,** the server creates a random token and keeps it, with an expiry, in its own memory.
+   The browser receives the token in a cookie. The cookie is opaque, so it cannot reveal the
+   password.
+2. **During the day,** every request carries the cookie. The server checks the token against its
+   record.
+3. **At 17:00,** Dana leaves the dashboard tab open, and the session expires. Dana's next private
+   request fails, and the dashboard returns the browser to the login page.
+
+An expired session cannot read dashboard HTML, browser assets, or private RPC responses. To end a
+session early, send a `POST` request to `/logout`. Deleting the server record ends the session even
+if a browser retains the cookie.
+
+<details>
+<summary>Reference: sessions</summary>
+
+| Setting          | Value                                                                   |
+| ---------------- | ----------------------------------------------------------------------- |
+| Cookie           | `__Host-workhorse-dashboard-session`                                    |
+| Cookie flags     | `Path=/`, `Max-Age`, `Secure`, `HttpOnly`, `SameSite=Strict`            |
+| Token            | 32 random bytes                                                         |
+| Session lifetime | Default 28,800 seconds (8 hours). An integer from 60 through 86,400 s.  |
+| Sessions kept    | At most 16 per process. Login evicts the oldest record past that bound. |
+
+**Requests without a valid session**
+
+| Request                         | Answer                  |
+| ------------------------------- | ----------------------- |
+| `GET` for a page                | `302` to `{path}/login` |
+| RPC, asset, or any other method | `401`                   |
+
+**Login and logout.** A successful login answers `303` to the mount path. `POST /logout` deletes the
+server record, expires the cookie, and answers `303` to the login page. Another method on
+`/logout` answers `405`. After a `401`, `createDashboardClient()` calls
+`window.location.replace(loginUrl)` once.
+
+More detail: [Dashboard: Sessions](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#sessions).
+
+</details>
+
+## One process owns the sessions
+
+Dana's dashboard runs as one process. At 11:00 a deploy restarts it.
+
+1. **Before the restart,** Dana's session lives only in that process's memory.
+2. **After the restart,** the new process has no session records. Dana's cookie no longer matches
+   anything, so Dana logs in again.
+
+Built-in authentication keeps session state inside the standalone server process. Restarting that
+process ends every session. A second replica would not know the first replica's sessions either. So
+replicated deployments should use shared host-owned authentication.
+
+<details>
+<summary>Reference: process boundary</summary>
+
+- Built-in authentication supports one standalone server replica.
+- A restart revokes every session.
+- Replicated deployments use host-owned authorization, or an identity-aware proxy with its own
+  shared session boundary.
+- [ADR 0032](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0032-keep-single-admin-authentication-process-local.md)
+  records this boundary.
+
+More detail: [Dashboard: Process boundary](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#process-boundary).
+
+</details>
+
+## Repeated failures pause login
+
+Someone tries to guess Dana's password.
+
+1. **Within a minute,** they submit several wrong passwords. Each gets the generic invalid-login
+   page.
+2. **On the next attempt,** the server stops processing logins. It answers that the client should
+   retry later, and it does not check the password.
+3. **When the oldest attempt leaves the window,** the server processes logins again.
+
+Repeated failures temporarily pause login processing. The server owns this limit. It counts all
+login attempts in the process together, because it does not trust proxy headers to decide who
+shares the limit. A successful login clears the count.
+
+<details>
+<summary>Reference: login rate limit</summary>
+
+1. The server keeps at most five login reservations in a rolling 60-second window.
+2. Each form submission reserves capacity before scrypt begins. Concurrent requests therefore cannot
+   bypass the bound.
+3. An invalid submission keeps its reservation and returns the generic `401` page.
+4. Further submissions return `429` with `Retry-After` until the oldest reservation leaves the
+   window.
+5. A successful login clears the reservations.
+
+The limit is process-wide. It does not trust `Forwarded` or `X-Forwarded-*` as client identity.
+
+**Login body.** The login body may be at most `MAX_LOGIN_BODY_BYTES` (4,096 bytes). A larger or
+malformed declared length gets `413` before the form is read. The body must be
+`application/x-www-form-urlencoded`, or the server answers `415`.
+
+More detail: [Dashboard: Login rate limit](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#login-rate-limit).
+
+</details>
+
+## Rotate the password
+
+Dana changes the password on Monday. Two other operators still use the old one, so Dana gives them
+until Friday 18:00 UTC.
+
+1. **On Monday,** Dana configures the new hash as current. Dana also configures the old hash as
+   previous, with an absolute cutoff of Friday 18:00 UTC.
+2. **Until the cutoff,** either password logs in. A session from the old password expires at the
+   cutoff at the latest, even if its normal lifetime runs longer.
+3. **At Friday 18:00 UTC,** the old password stops working. Every session it created stops working
+   at the same moment.
+
+<details>
+<summary>Reference: password rotation</summary>
+
+| Variable                                                | Meaning                            |
+| ------------------------------------------------------- | ---------------------------------- |
+| `WORKHORSE_DASHBOARD_PREVIOUS_PASSWORD_HASH`            | The old hash, in the same format.  |
+| `WORKHORSE_DASHBOARD_PREVIOUS_PASSWORD_HASH_EXPIRES_AT` | The cutoff, an ISO 8601 timestamp. |
+
+- Both variables must be configured together. Each has a `_FILE` variant.
+- They map to `previousPasswordHash` and `previousPasswordHashExpiresAt`.
+- Before the cutoff, either hash authenticates.
+- A previous-hash session expires at the earlier of the session lifetime and the cutoff.
+- At and after the cutoff, the previous hash and every session it created fail authentication.
+
+More detail: [Dashboard: Password rotation](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#password-rotation).
+
+</details>
+
+## Behind a proxy or on a remote listener
+
+Dana's server sits behind a proxy that terminates TLS. The proxy talks plain HTTP to the server.
+
+1. **Without configuration,** the server sees an HTTP request. It ignores forwarded protocol
+   headers, so the proxy cannot change its cookie or same-origin decisions.
+2. **So Dana configures** the browser-visible public origin, `https://ops.example.com`. The server
+   then uses that origin for those decisions.
+
+Without credentials, the standalone development bypass binds only to loopback or a Unix socket. A
+remote listener requires authentication and an HTTPS public origin.
+
+<details>
+<summary>Reference: listener exposure</summary>
+
+- The CLI maps `--public-origin` and `WORKHORSE_DASHBOARD_PUBLIC_ORIGIN` to `publicOrigin`, and
+  `--socket` to `socketPath`.
+- The unauthenticated bypass accepts only `127.0.0.0/8`, `::1`, or a Unix socket.
+- A remote TCP listener without authentication fails before `listen`.
+- An unauthenticated local listener rejects a non-loopback `publicOrigin`.
+- An authenticated remote TCP listener requires an HTTPS `publicOrigin`.
+- `dashboardNodeMiddleware` ignores `Forwarded` and `X-Forwarded-*`.
+
+More detail: [Dashboard: Listener exposure](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#listener-exposure).
+
+</details>
+
+## Browser security headers
+
+Dana runs the standalone dashboard on its own origin. Another team embeds the dashboard under
+`/admin` on their application's origin.
+
+1. **Standalone.** Every response from Dana's dashboard carries a content security policy and the
+   other browser protections. Nothing else serves pages on that origin, so the dashboard owns them.
+2. **Embedded.** The application's own pages already send a content security policy. If the
+   dashboard added a second one, the browser would apply both, and each would narrow the other. So
+   the embedded host sends none, and the team copies the documented policy into their own headers.
+
+The standalone listener owns its whole origin, so it states those headers on every response. An
+embedded host shares its origin with the application's own pages. The application therefore owns
+those headers, and the `@stablemates/workhorse-dashboard-server` README states the policy to copy.
+
+<details>
+<summary>Reference: standalone headers</summary>
+
+`startDashboardServer` sets these headers on every response:
+
+- `content-security-policy`
+- `x-content-type-options: nosniff`
+- `referrer-policy: strict-origin-when-cross-origin`
+- `x-frame-options: DENY`
+- `x-robots-tag: noindex, nofollow, noarchive`
+
+`createDashboardHost` sets none of them. `typescript/dashboard-server/README.md` states the policy
+an embedder copies.
+
+More detail: [Dashboard: Browser security headers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#browser-security-headers).
+
+</details>
 
 ## Customize without forking
 
+A team embeds the dashboard in its own admin app and runs two worker processes, `mailer` and
+`billing`.
+
+1. **Before either worker starts,** the host passes `configuredWorkers` naming both. The Workers page
+   already lists them as expected processes.
+2. **A task saves checkpoints.** The host's `projectDurability` callback turns the stored checkpoint
+   evidence into the team's own step names. The stored queue data does not change.
+3. **The team renders the components itself.** It wraps `Dashboard` in `WorkhorseThemeProvider` and
+   imports the packaged stylesheet, so operator results stay visible in its React tree.
+
 Hosts that want the components inside their own React tree can render `Dashboard` and
-`WorkhorseThemeProvider` directly, connected through `createDashboardClient`, importing the
-packaged stylesheet for tokens and layout. `configuredWorkers` describes expected worker
-processes before they first register, and `projectDurability` translates checkpoint evidence
-into domain-specific step names without touching stored queue data.
+`WorkhorseThemeProvider` directly. They connect through `createDashboardClient` and import the
+packaged stylesheet for tokens and layout. `configuredWorkers` describes expected worker processes
+before they first register. `projectDurability` translates checkpoint evidence into domain-specific
+step names without touching stored queue data.
+
+<details>
+<summary>Reference: customization points</summary>
+
+| Name                                          | Where                                     | Purpose                                          |
+| --------------------------------------------- | ----------------------------------------- | ------------------------------------------------ |
+| `configuredWorkers`                           | `createDashboardHost` options             | Worker names expected before they register.      |
+| `projectDurability`                           | `createDashboardHost` options             | A `DashboardDurabilityProjector` for step names. |
+| `createDashboardClient`                       | `@stablemates/workhorse-dashboard/client` | The browser client for the dashboard RPC.        |
+| `Dashboard`, `WorkhorseThemeProvider`         | `@stablemates/workhorse-dashboard`        | The React components.                            |
+| `@stablemates/workhorse-dashboard/styles.css` | Stylesheet                                | Required when rendering the components directly. |
+
+More detail: [Dashboard: Public subpaths](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#public-subpaths).
+
+</details>
 
 ## Refresh model
 
-The browser polls only the active page at the selected cadence, so task volume never multiplies
-browser requests; manual refresh covers the rest. Remember what you are looking at: an operator
-view, not a transactional snapshot. PostgreSQL statistics and worker registry rows can lag the
-processes behind them by design.
+An operator keeps the task listing open at its selected refresh cadence.
+
+1. **On each tick,** the browser polls only the active page. Task volume never multiplies browser
+   requests.
+2. **If a refresh is still loading,** automatic refresh waits rather than starting the same read
+   again.
+3. **The operator cancels a task.** After the action, the dashboard fetches its committed result.
+4. **Another page is out of date.** Manual refresh covers it.
+
+Remember what you are looking at: an operator view, not a transactional snapshot. PostgreSQL
+statistics and worker registry rows can lag the processes behind them by design.
+
+<details>
+<summary>Reference: refresh behavior</summary>
+
+- The browser polls only the active page, at the selected cadence.
+- An automatic refresh does not start while the same read is still loading.
+- After an operator action, the dashboard fetches the committed result.
+- Manual refresh covers every other page.
+- PostgreSQL statistics and worker registry rows can lag their processes.
+
+More detail: [Task lifecycle: Read models and health](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#read-models-and-health).
+
+</details>
 
 ## Next
 

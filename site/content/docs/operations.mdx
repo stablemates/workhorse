@@ -1,11 +1,12 @@
 ---
 title: Operations
-description: A map of Workhorse's operational surface — which page owns each concern, and the fleet controls that live nowhere else.
+description: Run Workhorse in production — rolling statistics, OpenTelemetry signals, fleet controls, and the terminal operator surface, with a map to the pages that own the rest.
 ---
 
 Running Workhorse in production splits into a few distinct concerns: supervising processes,
-maintaining the database, controlling the fleet, and watching health. Each has its own page. This
-page is the map, plus the fleet controls that belong to no single sibling.
+maintaining the database, controlling the fleet, and watching health. Several have their own page.
+This page is the map, plus the concerns that belong to no single sibling: rolling statistics,
+telemetry, fleet controls, and the terminal tools.
 
 ## Process supervision
 
@@ -28,63 +29,819 @@ work automatically; the page explains how to observe and tune it.
 
 ## Rolling statistics
 
-The dashboard reads time-window statistics from minute, hour, or day summaries chosen for the
-requested horizon. Queue-wait percentiles merge a logarithmic sketch across those summaries, so
-long-window reads stay bounded without keeping every sample. Worker and tag breakdowns remain live
-queries because their data-controlled cardinality would make aggregate storage unbounded.
+The dashboard needs to answer questions like "how many tasks failed in the last hour?" Workhorse
+answers them at a bounded cost, without rescanning all history.
 
-The summaries include full-tier and fast-tier queues.
-Fast-tier counts come from compact runtime and outcome records, including when optional history is off.
+### Why counting raw history fails
 
-Every summary boundary is a UTC boundary, whatever timezone the database is set to, so a day
-summary covers a UTC day and names the same day for every operator reading the chart. The session
-`TimeZone` setting cannot move a boundary.
+An operator keeps the dashboard open, and it refreshes the hourly failure count every few seconds.
 
-A background rollup summarises fully elapsed periods and records how far it got as a watermark.
-Window reads combine pre-computed rows below the watermark with live computation above it, so a
-window is correct the instant a task runs; a lagging rollup means a longer live section and a
-slower query, never a wrong answer. Retention never deletes history the rollup has not summarised
-yet, so a stuck rollup surfaces as growing lag on the health page, not as a hole in your numbers.
+1. **On day one** the event log holds a few thousand rows. Counting them is quick.
+2. **On day thirty** the log holds millions of rows. Each refresh counts far more rows, and the
+   query slows down.
+3. **During an incident** traffic spikes, the log grows faster, and more people open the dashboard.
+   The count is most expensive exactly when the operator needs it most.
+
+Counting the raw event log on every request gets slower every day, because the log only grows. A
+dashboard that refreshes on its own would cost more the busier the system is.
+
+### Summaries per minute, hour, and day
+
+So Workhorse keeps running summaries per queue and task type. Take one `invoice.send` task on the
+queue `billing`.
+
+1. **At 10:01:10** the app enqueues it.
+2. **At 10:01:12** attempt 1 fails. **At 10:01:45** attempt 2 fails.
+3. **At 10:03:20** attempt 3 succeeds.
+
+The summaries count this as one task that succeeded. They also count three closed attempts: two
+failed and one succeeded. Both numbers are kept, separately and on purpose:
+
+- **Tasks.** A task that retried several times and then succeeded counts as one success.
+- **Attempts.** Each recorded or retained closed attempt counts separately.
+
+Mixing the two is how a failure rate can exceed the number of tasks that ran.
+
+The dashboard reads minute, hour, or day summaries, chosen for the requested horizon. Recent rows
+cover one minute each, older rows cover hours, and the oldest rows cover days. Each row also holds
+the last error seen, so a dashboard can name a likely cause without touching history.
+
+The summaries include full-tier and fast-tier queues. Fast-tier counts come from the compact runtime
+and outcome records, even when the queue's optional history is off.
+
+<details>
+<summary>Reference: tiers and measures</summary>
+
+| Table                   | Grain                                                   |
+| ----------------------- | ------------------------------------------------------- |
+| `task_stat_bucket`      | One row per closed minute per `(queue_name, task_type)` |
+| `task_stat_bucket_hour` | Complete hours derived from minute rows                 |
+| `task_stat_bucket_day`  | Complete days derived from hour rows                    |
+
+**Measures**
+
+- `enqueued` and the `task_*` columns count tasks.
+- The `attempt_*` columns count closed attempts.
+- Each row carries the latest attempt error and a `wait_sketch`.
+
+**Fast tier.** Inputs come from `fast_task_runtime` and `fast_task_outcome`. When `record_attempts`
+is enabled, recorded `attempt_history` rows replace the compact error entries, and the final attempt
+is not counted twice. If the compact error list overflows, older unrecorded attempts can be absent
+from a raw recomputation.
+
+More detail: [Data model: Tiers and measures](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#tiers-and-measures).
+
+</details>
+
+### The watermark keeps every window current
+
+1. **At 10:05:00** minute 10:04 closes.
+2. **At 10:05:02** the rollup runs. The rollup is a background pass that summarizes periods that
+   have fully elapsed. It summarizes 10:04 and records how far it got, 10:05. That marker is the
+   **watermark**.
+3. **At 10:05:40** an operator asks for the last hour. Workhorse reads summary rows below the
+   watermark. It computes the part from 10:05 onward live from raw history.
+
+A window is therefore correct the instant a task runs. You never wait for a rollup to see your own
+work. If the rollup falls behind, you get a longer live section and a slower query, not a wrong
+answer.
+
+<details>
+<summary>Reference: rollup and window reads</summary>
+
+**Rollup.** `rollup_stats_v1` runs these steps:
+
+1. It materializes complete minutes through `aggregate_stats_v1(from, to)`, the single definition of
+   a minute bucket.
+2. It derives complete hours, then complete days.
+3. It advances `rolled_up_through`, `hourly_rolled_up_through`, and `daily_rolled_up_through` in
+   `task_stat_state`.
+
+**Window reads.** `stat_buckets_v1(from, to)` selects a tier for complete periods. It then uses finer
+rows and `aggregate_stats_v1` for the newest part.
+
+| Window length     | Tier   | Lower bound must be |
+| ----------------- | ------ | ------------------- |
+| Under 2 days      | Minute | Minute-aligned      |
+| 2 days to 90 days | Hour   | Hour-aligned        |
+| At least 90 days  | Day    | Day-aligned         |
+
+`stat_window_tier_v1(from, to)` chooses the tier and rejects a misaligned lower bound.
+
+More detail: [Data model: Window reads](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#window-reads).
+
+</details>
+
+### Late commits and repeated passes
+
+A summary must not miss a row that commits late, and it must not count a row twice.
+
+1. **At 10:04:59** a task fails, and its transaction writes the attempt row with that time.
+2. **At 10:05:02** the rollup summarizes 10:04. The transaction has not committed yet, so the rollup
+   cannot see the row.
+3. **At 10:05:03** the transaction commits.
+4. **At 10:06:02** the next pass summarizes 10:05. It also rewrites the last few closed minutes,
+   including 10:04. This time it sees the row.
+
+Each pass rebuilds a minute from the raw history in that minute. It replaces the row instead of
+adding to it. Running the pass twice therefore produces the same numbers rather than double counting.
+
+Hour summaries come only from complete minute summaries. Day summaries come only from complete hour
+summaries. A long window starts on the matching tier boundary and uses coarse complete rows. It then
+fills its newest part from finer rows and raw history.
+
+<details>
+<summary>Reference: rewrites and cadence</summary>
+
+**Maintenance policy** (`maintenance_policy`)
+
+| Column                          | Accepted values           | Default   |
+| ------------------------------- | ------------------------- | --------- |
+| `statistics_rollup_interval_ms` | 0, or 1,000 to 86,400,000 | 60,000 ms |
+| `statistics_recompute_buckets`  | 0 to 1,440                | 2 minutes |
+
+- Each pass rewrites the last `statistics_recompute_buckets` closed minutes.
+- A bucket is a pure function of the raw history in its minute.
+- Workers offer `run_maintenance_v1` on their slow maintenance cadence. It runs `rollup_stats_v1`
+  before retention.
+- `rollup_stats_v1` returns without work until the interval has elapsed.
+- Passes serialize on a transaction-scoped advisory lock, so every worker may offer it.
+
+More detail: [Data model: Rewrites and cardinality](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#rewrites-and-cardinality).
+
+</details>
+
+### Every boundary is a UTC boundary
+
+Two operators open the throughput chart. One works in Tokyo and one in New York. The database runs
+with `TimeZone` set to `America/Chicago`.
+
+1. **At 23:59 UTC** an `invoice.send` task succeeds on the queue `billing`. In Tokyo it is already
+   the next morning. In New York and Chicago it is still the evening before.
+2. **Later** the rollup builds the day summary for that UTC day. The task counts in it.
+3. **Both operators** look at the chart. The task falls in the same day bar on both screens.
+
+Both charts split days at the same instants, because every summary boundary is a UTC boundary. A day
+summary covers a UTC day, whatever timezone the database is set to. The session `TimeZone` setting
+cannot move a boundary, and a daylight-saving change does not shift one. A day summary also lines up
+with the day of history it came from, because the history partitions are UTC days too.
+
+<details>
+<summary>Reference: bin origin</summary>
+
+Every bin anchors on `timestamp '2000-01-01' AT TIME ZONE 'UTC'`, a fixed instant. Bucket
+boundaries are therefore UTC boundaries on every database, whatever its `TimeZone`. Each window step
+is a fixed number of hours, so the session `TimeZone` cannot move a boundary.
+
+The history day partitions also pin UTC. The day tier therefore agrees with them.
+
+More detail: [Data model: UTC bin origin](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#utc-bin-origin).
+
+</details>
+
+### Wait percentiles
+
+An operator asks for the 95th percentile of queue wait over the last 30 days. Wait here means the
+time from enqueue to the first claim.
+
+1. **Workhorse reads the summary rows** for the window: hour rows for most of it, and finer rows for
+   its newest part. Each row holds a sketch of its waits.
+2. **For the last few minutes**, which the rollup has not summarized yet, it builds the same kind of
+   sketch from the raw `enqueued` and `claimed` events.
+3. **It merges the sketches** by adding the counts of matching bins.
+4. **It reads the 95th percentile** from the merged sketch.
+
+Workhorse does not keep a list of every wait sample. Each summary row holds a logarithmic sketch: a
+count of waits per bin, where each bin covers a slightly wider range than the one before. Sketches
+merge by adding the counts of matching bins. So a long window reads raw events only for the short
+tail after the rollup watermark, and never needs the samples.
+
+<details>
+<summary>Reference: wait sketch</summary>
+
+`wait_sketch` is a JSON object from bin index to count.
+
+| Function                               | Behavior                                                |
+| -------------------------------------- | ------------------------------------------------------- |
+| `stat_sketch_index_v1(value_ms)`       | `floor(ln(1 + value_ms) / ln(1.02))`                    |
+| `stat_sketch_merge_v1(sketches)`       | Adds matching counts                                    |
+| `stat_sketch_percentile_v1(sketch, q)` | Returns `1.02^(bin + 0.5) - 1` for the nearest-rank bin |
+
+The estimate has roughly one percent relative error. Zero and sub-millisecond waits stay
+representable.
+
+For full-tier tasks, the wait is attributed to the minute of the first `claimed` event.
+
+More detail: [Data model: Wait sketch](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#wait-sketch).
+
+</details>
+
+### Why the watermark protects history
+
+The rollup can rebuild a summary row only by re-reading the raw history it came from. If that
+history is deleted first, those numbers are gone for good.
+
+Suppose events are kept for 14 days.
+
+1. **On day 1 at 02:00** the rollup stops, for example because its pass keeps failing. The
+   watermark stays at day 1, 02:00.
+2. **On day 16 at 03:00** the daily [retention](/docs/maintenance) pass runs. Its 14-day window
+   would delete events up to the start of day 2.
+3. **The pass stops at the watermark.** It deletes nothing from day 1, 02:00 onward, because the
+   rollup has not summarized it.
+4. **Health reports the gap.** Statistics lag and retention lag grow on the health page until the
+   rollup runs again.
+
+Retention never deletes history the rollup has not summarized yet. A stuck rollup therefore makes
+history pile up rather than making data disappear. It surfaces as growing lag on the health page,
+not as a hole in your numbers.
+
+<details>
+<summary>Reference: retention interlock</summary>
+
+- `task_event_retention_days` and `attempt_history_retention_days` default to 14 days.
+- `retain_history_v1` clamps its event and attempt cutoffs to `rolled_up_through`.
+- A stalled rollup surfaces as growing retention lag and a rising `QueueHealth.statistics.lagMs`.
+- While cold export is enabled, `retain_history_v1` also clamps each dataset to
+  `cold_export_dataset.exported_through`.
+
+More detail: [Data model: Retention interlock](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#retention-interlock).
+
+</details>
+
+### Generated task types
+
+The queue `exports` runs one task type per customer: `export.customer-0001`, `export.customer-0002`,
+and so on. In one busy minute, 500 of those types run.
+
+Without a bound, that minute would need 500 summary rows, and the next busy minute another 500. So
+each minute keeps its own rows only for the busiest pairs up to a limit. Workhorse folds the rest
+into a catch-all type within their own queue. You lose the per-type breakdown for the long tail. You
+keep the totals, and the table stays bounded.
+
+Worker identities and tags stay out of the summaries, because deployment data controls how many
+there are. Unstable worker names or tenant tags would multiply every row. Worker and tag breakdowns
+therefore remain bounded live queries.
+
+<details>
+<summary>Reference: group limit</summary>
+
+| Column                   | Accepted values | Default    |
+| ------------------------ | --------------- | ---------- |
+| `statistics_group_limit` | 1 to 10,000     | 200 groups |
+
+- The limit applies per minute bucket.
+- `aggregate_stats_v1` ranks `(queue_name, task_type)` pairs by activity: `enqueued` plus every
+  `attempt_*` count, highest first. Ties go by queue name, then task type.
+- Pairs ranked beyond the limit are folded into the task type `__other__` within their own queue.
+- Worker and tag dimensions are never rolled up.
+
+More detail: [Data model: Rewrites and cardinality](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#rewrites-and-cardinality).
+
+</details>
+
+### Turning the rollup off
+
+A team runs one worker against a small database and wants every window computed from raw history.
+
+1. They disable the rollup in maintenance policy. The whole fleet stops rolling up, because the
+   setting lives in the database, not in each worker.
+2. A dashboard window now reads raw history each time. It stays correct, but it gets slower as
+   history grows.
+3. History retention stops advancing at the last watermark. The settings page warns about that.
+
+Disable the rollup, and every window is computed live from raw history. Windows stay correct but get
+slower, and history retention stops advancing. The interval is maintenance policy stored beside the
+other cleanup cadences, so the whole fleet opts out together. This suits only a small deployment.
+
+<details>
+<summary>Reference: opting out</summary>
+
+- Set `maintenance_policy.statistics_rollup_interval_ms` to `0`.
+- Windows stay fully derived from raw history.
+- History retention holds at the current watermark.
+
+More detail: [Data model: Rollup cadence](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#rollup-cadence).
+
+</details>
 
 ## OpenTelemetry
 
-TypeScript, Python, Go, Rust, and Ruby queues store the active W3C trace context when they enqueue a task.
-Every worker restores that context before creating its handler span, so one trace can cross
-processes and languages. The workers also emit the same span and metric names, so one set of
-dashboards can cover a mixed-language fleet.
+Workhorse emits OpenTelemetry traces, logs, and metrics through the standard language APIs. Your
+application chooses the SDK, log handler, and backend, so telemetry does not affect queue
+correctness. TypeScript, Python, Go, Rust, and Ruby workers emit the same span and metric names, so
+one set of dashboards can cover a mixed-language fleet.
 
-The Python package exposes telemetry through its optional `telemetry` extra. Applications supply
-OpenTelemetry providers and exporters, while Go applications also pass an application-owned
-`log/slog` logger through `WorkerOptions.Logger`. Without a configured provider, telemetry stays
-inert and worker behavior is unchanged. The Rust crate always emits `tracing` spans, and its
-`opentelemetry` feature adds metrics and trace propagation. The Ruby gem does not depend on
-OpenTelemetry. It emits spans and propagates trace context when the application loads
-`opentelemetry-api`, and it records metrics when the application also loads `opentelemetry-metrics-api`.
+### Register a telemetry provider
 
-TypeScript applications install `@stablemates/workhorse-otel` and compatible OpenTelemetry API
-peers. Configure the global SDK providers first, then call `registerOpenTelemetry()` once during
-process startup. Importing core or the adapter has no registration side effect, and Workhorse
-rejects a competing active provider. Keep the returned cleanup as `unregisterTelemetry`, then call
-`unregisterTelemetry()` after workers and observers stop.
+A TypeScript worker process starts, runs tasks, and shuts down.
 
-Worker metrics use queue, task type, and a closed outcome vocabulary, such as `succeeded`. Task IDs
-remain on sampled spans and structured events, while payloads, results, and error messages never
-enter telemetry. A handler failure, for example, writes the structured log record
-`workhorse.task.failure_processed` with the task ID but without the error text.
+1. **At startup, before registration.** The process imports core and creates a worker. No provider
+   is registered, so core discards every span, log, and metric. The worker runs tasks as usual.
+2. **At startup, registration.** The process configures the global OpenTelemetry SDK, then calls
+   `registerOpenTelemetry()`. From now on, core sends its records to that SDK.
+3. **During the run, a second registration.** Another library tries to register its own provider.
+   Workhorse rejects it, so the first registration keeps receiving telemetry.
+4. **At shutdown.** The process stops its workers and metric observers, then calls the cleanup that
+   registration returned. Core goes back to discarding records.
 
-Worker metrics cover only what each process does. Database-wide state — queue depth, the age of
-ready work, expired leases, paused queues, and fleet capacity — needs a dedicated collector.
-Run `WorkhorseMetricsObserver` against a pool, or `registerQueueMetrics` through a `Queue` when
-you also want policy and orchestration gauges, in one long-lived service per database and
-telemetry resource. Do not start a collector in every worker replica: each one reads the same
-rows, so replicas would export duplicate gauges and add unnecessary queries. The collector's
-`workhorse.worker.capacity` gauge reports worker slots by queue and worker state, and a worker that
-has stopped heartbeating shows as `offline`.
+Without a configured provider, telemetry stays inert and worker behavior is unchanged. Each language
+connects to OpenTelemetry in its own way:
+
+- **TypeScript** keeps OpenTelemetry outside core. Install `@stablemates/workhorse-otel` with
+  compatible OpenTelemetry API peers. Configure the global SDK providers first, then call
+  `registerOpenTelemetry()` once during process startup. Importing core or the adapter has no
+  registration side effect, and core stays silent when no provider is registered.
+- **Python** exposes telemetry through the optional `telemetry` package extra.
+- **Go** applications install their own providers; the library adds no SDK or exporter. They pass an
+  application-owned `log/slog` logger through `WorkerOptions.Logger`.
+- **Rust.** The crate always emits `tracing` spans. Its `opentelemetry` feature adds metrics and
+  trace propagation.
+- **Ruby.** The gem does not depend on OpenTelemetry. It emits spans and propagates trace context
+  when the application loads `opentelemetry-api`. It records metrics when the application also loads
+  `opentelemetry-metrics-api`.
+
+In TypeScript, keep the returned cleanup as `unregisterTelemetry`. Stop workers and metric observers,
+then call `unregisterTelemetry()` during shutdown. Workhorse rejects a second active provider, so two
+libraries cannot silently replace each other's telemetry.
+
+<details>
+<summary>Reference: TypeScript provider registration</summary>
+
+`@stablemates/workhorse-otel` declares these peer dependencies:
+
+- `@opentelemetry/api >=1.9.0 <2`
+- `@opentelemetry/api-logs >=0.200.0 <0.300.0`
+- `@stablemates/workhorse >=0.6.0 <0.7.0`
+
+`registerOpenTelemetry()` calls `registerTelemetryProvider(provider)` and returns its cleanup
+function.
+
+- Until a provider registers, core's permanent no-op provider discards every record.
+- Registration rejects another active provider.
+- The cleanup function is idempotent and restores the no-op provider.
+- Core re-creates its instruments when the provider changes, so registration may happen after
+  import.
+
+More detail: [Telemetry: Telemetry provider contract](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#telemetry-provider-contract).
+
+</details>
+
+### Follow a task from enqueue to execution
+
+A web request signs up a user. The handler enqueues task `welcome-email` with a run time ten minutes
+later. A worker in another process runs it.
+
+1. **At 0 min — the enqueue.** The request is inside an HTTP server span. The TypeScript queue
+   creates an enqueue span under it. PostgreSQL stores that span's W3C trace context beside the
+   payload. The payload your handler will receive does not change.
+2. **At 10 min — the claim.** A worker claims the task. The claim returns the stored context.
+3. **The handler.** Before it creates the handler span, the worker restores the stored context as
+   the parent. The handler span joins the original trace.
+
+In your backend, one trace now shows the HTTP request, the enqueue, and the handler run ten minutes
+later in another process.
+
+The TypeScript queue creates an enqueue span and stores its context. Python, Go, Rust, and Ruby
+queues store the active caller context. Every worker restores either form before creating its
+handler span and uses the same span names. One trace can therefore cross processes and languages.
+
+Suppose the web request also carried baggage, such as the user's email address. Workhorse does not
+persist baggage. Baggage often contains user-controlled or sensitive values, and durable storage
+would make those values difficult to bound and redact.
+
+<details>
+<summary>Reference: trace context and spans</summary>
+
+**Stored context.** `task.trace_context` holds `traceparent` and an optional `tracestate`.
+
+- Each language enforces 1,024 bytes before enqueue: TypeScript `MAX_TRACE_CONTEXT_BYTES`, Python
+  `_telemetry.MAX_TRACE_CONTEXT_BYTES`, and Go `maxTraceContextBytes`.
+- The column is separate from `task.payload` and excluded from operator projections.
+- An idempotent replay keeps the first accepted context.
+- Baggage is never persisted.
+- A child task prefers its parent task's stored context over the ambient handler context.
+
+**TypeScript spans:** `workhorse.enqueue`, `workhorse.claim`, `workhorse.handler`,
+`workhorse.heartbeat`, `workhorse.retry`, `workhorse.complete`, `workhorse.recovery`,
+`workhorse.maintenance`, and `workhorse.schedule.synchronize`.
+
+`workhorse.handler` is a consumer span. Span attributes may include `workhorse.task.id`,
+`workhorse.task.type`, `workhorse.task.attempt`, and `workhorse.queue.name`. Workhorse emits at most
+eight attributes on one span and exports `TRACE_ATTRIBUTE_COUNT_LIMIT = 8`.
+
+More detail: [Telemetry: Trace context propagation](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#trace-context-propagation).
+
+</details>
+
+### Read lifecycle logs without exposing task data
+
+Task `invoice-88` fails on its last attempt. At info severity, the worker writes
+`workhorse.task.failure_processed`. The record names the task ID, task type, attempt outcome, and
+worker ID. It does not contain the error message or the invoice payload. To read the error, you
+open the task by its ID. At the same moment, the maintenance loop of another worker finds nothing
+to recover. It writes no log at all.
+
+Info logs describe operator-relevant state changes, including worker lifecycle, execution outcomes,
+cancellation, recovery, maintenance, and schedule changes. Debug logs describe high-volume details,
+including claims, heartbeats, handler boundaries, checkpoints, and progress.
+
+Routine maintenance that finds nothing to change stays in metrics instead of logs. This includes
+expected lock contention between workers. A maintenance log therefore points to changed rows or a
+failed phase rather than an idle poll.
+
+Logs carry stable event names and structured task, queue, worker, and schedule identifiers. They do
+not carry payloads, results, error messages, idempotency keys, or saved durable values. A shared
+backend therefore does not receive another copy of the application data with every record.
+
+Go applications pass an `*slog.Logger` through `WorkerOptions.Logger`. Handler boundaries, claims,
+settlements, rejected heartbeats, recovery, and batch dispatch then use the same event and attribute
+vocabulary as the JavaScript worker.
+
+<details>
+<summary>Reference: log severities and content</summary>
+
+| Severity | Records cover                                                                                                                                                                          |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Debug    | Enqueue acceptance and replay, claims, accepted heartbeats, handler registration and execution boundaries, checkpoints, progress, schedule replay, and worker deregistration.          |
+| Info     | Queue and worker lifecycle, final execution outcomes, rejected heartbeats, completion and failure, cancellation, durable waits, promotion and recovery, schedule changes, and redrive. |
+| Warning  | `workhorse.handler.signal_swallowed` and `workhorse.worker.polling_only`.                                                                                                              |
+
+`workhorse.maintenance.completed` is info, and only when the phase changes rows or returns an error.
+Successful no-ops and skipped advisory locks emit no log. Maintenance counters and duration
+histograms still record them.
+
+**Never logged:** payloads, results, error messages, cancellation reasons, idempotency keys, and
+progress and checkpoint values.
+
+**Go.** A nil `WorkerOptions.Logger` uses a disabled handler, so routine records do not reach the
+process default logger.
+
+More detail: [Telemetry: Structured logs](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#structured-logs).
+
+</details>
+
+#### Dashboard requests
+
+An operator pauses queue `payments` from the dashboard and types a reason. The request takes a
+second and a half. After the procedure returns, the dashboard host writes one warning record. It
+names the procedure, the HTTP status, and the duration. It does not contain the reason or the queue
+name the operator sent.
+
+The dashboard host emits one structured log after each matched oRPC procedure returns. Successful
+requests use debug severity, slow requests use warning, and failed requests use error. Routine
+polling therefore stays available without crowding higher-severity views.
+
+Each request record omits inputs, outputs, error details, headers, and query values. An operator
+action stays traceable without copying application data into the logging backend. Assets and
+application pages do not produce these records.
+
+<details>
+<summary>Reference: dashboard RPC logs</summary>
+
+| Event                               | Severity and condition                              |
+| ----------------------------------- | --------------------------------------------------- |
+| `workhorse.dashboard.rpc_completed` | Debug below 1,000 ms. Warning at or above 1,000 ms. |
+| `workhorse.dashboard.rpc_failed`    | Error for an HTTP status of 400 or greater.         |
+
+Both set `rpc.system = "orpc"`, `rpc.method`, `http.response.status_code`, and
+`workhorse.dashboard.rpc.duration_ms`. In workspaces mode they add `workhorse.dashboard.workspace`.
+
+Assets, application pages, authorization failures, and schema compatibility failures produce no
+RPC record.
+
+More detail: [Telemetry: RPC logs](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#rpc-logs).
+
+</details>
+
+#### Demo log files
+
+A developer runs the demo in plain mode, and a demo worker fails a task.
+
+1. The worker writes its structured failure record to its own local log file. The demo server
+   writes to a separate file.
+2. The developer reads the record locally. Nothing is exported.
+3. The developer restarts the demo in telemetry mode. The same records now also go to the OTLP
+   backend, in the same format.
+
+The demo writes the same structured records to separate rotating files for its server and worker.
+Plain demo mode keeps those local files without exporting traces or metrics. The telemetry demo
+adds OTLP export to the same pipeline. Comparing a local record with its backend copy therefore
+does not need two logging formats.
+
+<details>
+<summary>Reference: demo log files</summary>
+
+- Path: `logs/<environment>/<service>.ndjson` under the repository root.
+- `WORKHORSE_DEMO_ENV` sets `<environment>`. The default is `development`.
+- A file rotates before it would pass 10,485,760 bytes. Five numbered archives are kept.
+- `WORKHORSE_DEMO_LOG_DIRECTORY`, `WORKHORSE_DEMO_LOG_MAX_BYTES`, and `WORKHORSE_DEMO_LOG_ARCHIVES`
+  override the root, the byte limit, and the archive count.
+- `WORKHORSE_DEMO_TELEMETRY = "true"` adds one OTLP log processor plus trace and metric
+  instrumentation.
+
+More detail: [Telemetry: Demo log files](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#demo-log-files).
+
+</details>
+
+### Runtime metrics happen automatically
+
+A TypeScript service registers telemetry at startup and runs a worker for queue `exports`.
+
+1. **The enqueue.** The app enqueues a `pdf.render` task. Workhorse adds one to
+   `workhorse.tasks.enqueued` for queue `exports` and type `pdf.render`.
+2. **The claim.** A worker claims it. Workhorse adds one to `workhorse.tasks.claimed` and records
+   how long the claim statement took.
+3. **The run.** The handler succeeds. Workhorse records one handler activation with outcome
+   `succeeded`, its duration, and one `workhorse.tasks.completed`.
+
+No metric names the task. Your backend sees counts and timings per queue and task type.
+
+Once the application registers telemetry, Workhorse records metrics when it enqueues, claims,
+executes, cancels, recovers, or performs redrive operations. It also records schedule firing and
+maintenance. Until then, TypeScript core records nothing.
+
+The Python worker records the worker-side metrics: claims, settlements, handler outcomes and timing,
+batch delivery, and rejected heartbeats. It also records lease recovery, schedule firing, and
+maintenance. It does not record enqueue, cancellation, or redrive metrics. The Go worker emits the
+worker-owned subset through the OpenTelemetry Go API. Claims, settlements, handler outcomes and
+timing, batch delivery, rejected heartbeats, and lease recovery use the same instrument names,
+units, and bounded attributes as the JavaScript runtime.
+
+Worker metrics cover only what each process does. Execution metrics use queue, task type, and a
+closed outcome vocabulary as attributes. They never use a task ID, payload, worker ID, or error
+message. Those values grow without a stable bound. Putting them in metric attributes would make the
+monitoring backend create an ever-growing set of time series. Task IDs stay on sampled spans and
+structured events instead.
+
+<details>
+<summary>Reference: runtime instruments by runtime</summary>
+
+| Instrument                                                     | TypeScript | Python | Go  |
+| -------------------------------------------------------------- | ---------- | ------ | --- |
+| `workhorse.tasks.enqueued`, `workhorse.tasks.enqueue.outcomes` | Yes        | No     | No  |
+| `workhorse.tasks.claimed`, `.completed`, `.failed`, `.retried` | Yes        | Yes    | Yes |
+| `workhorse.tasks.cancellation`, `workhorse.tasks.redrive`      | Yes        | No     | No  |
+| `workhorse.claim.duration`                                     | Yes        | Yes    | Yes |
+| `workhorse.handler.*` (five instruments)                       | Yes        | Yes    | Yes |
+| `workhorse.worker.heartbeat.failure`                           | Yes        | Yes    | Yes |
+| `workhorse.leases.expired`                                     | Yes        | Yes    | Yes |
+| `workhorse.schedule.fired`, `workhorse.schedule.lag`           | Yes        | Yes    | No  |
+| `workhorse.maintenance.runs`, `.rows`, `.duration`, `.errors`  | Yes        | Yes    | No  |
+| `workhorse.maintenance.drift`                                  | Yes        | No     | No  |
+
+The five handler instruments are `workhorse.handler.executions`, `workhorse.handler.duration`,
+`workhorse.handler.runtime`, `workhorse.handler.batch.size`, and `workhorse.handler.batch.linger`.
+
+Stable metrics include `workhorse.tasks.enqueued`, `workhorse.tasks.claimed`,
+`workhorse.queue.paused`, `workhorse.tasks.enqueue.outcomes`, `workhorse.handler.executions`,
+`workhorse.handler.duration`, `workhorse.tasks.completed`, `workhorse.tasks.failed`, and
+`workhorse.tasks.retried`.
+
+Go recovery cannot see the queue and type of a recovered task. Its retry count uses `unknown` for
+both, as the TypeScript fallback does.
+
+More detail: [Telemetry: Synchronous instruments](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#synchronous-instruments).
+
+</details>
+
+### Database metrics need a dedicated collector
+
+Your deployment runs ten worker replicas. Someone adds the metrics observer to the worker's startup
+code. Now ten observers query the same queues on every interval. Each exports the same queue depth,
+so the dashboard shows ten copies of every gauge.
+
+Queue depth, the age of ready work, expired leases, paused queues, deadline pressure, and fleet
+capacity are current database state. Process metrics cannot reconstruct that shared state.
+`WorkhorseMetricsObserver` reads it and records gauges. Construct it over a PostgreSQL pool with an
+`onError` callback, call `start()` in a long-lived service, and call `stop()` during that service's
+shutdown.
+
+Do not start the observer in every worker replica. Each observer reads the same queues and fleet
+rows, so multiple observers would export duplicate gauges and add unnecessary queries. Run one
+collector per database and telemetry resource.
+
+The collector's `workhorse.worker.capacity` gauge reports worker slots by queue and worker state. A
+worker that has stopped heartbeating shows as `offline`.
+
+<details>
+<summary>Reference: WorkhorseMetricsObserver</summary>
+
+| Member       | Behavior                                                     |
+| ------------ | ------------------------------------------------------------ |
+| `intervalMs` | Default 10,000. A safe integer of at least 1,000.            |
+| `start()`    | Collects immediately, then repeats on an unreferenced timer. |
+| `stop()`     | Clears the timer.                                            |
+| `collect()`  | One serialized collection.                                   |
+| `onError`    | Receives interval failures.                                  |
+
+Each collection runs two read-only queries at once.
+
+**Queue gauges:** `workhorse.tasks.count` by queue and state, `workhorse.queue.oldest_ready.age`,
+`workhorse.queue.paused`, `workhorse.lease.expired`, `workhorse.deadline.overdue`, and
+`workhorse.execution_timeout.overdue`.
+
+**Worker gauges:** `workhorse.worker.count`, `workhorse.worker.capacity`, and
+`workhorse.worker.active`, by queue and worker state. The states are `running`, `paused`,
+`draining`, and `offline`. A worker is `offline` when its last heartbeat is at least 30 seconds old.
+A multi-queue worker appears under every queue it serves, so do not sum across queues.
+
+More detail: [Telemetry: Metrics observer](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#metrics-observer).
+
+</details>
+
+`registerQueueMetrics` reads through a `Queue` instead. It adds policy and orchestration gauges for
+concurrency, dependencies, child tasks, and rate limits alongside queue depth and age. It returns a
+cleanup function to call during service shutdown.
+
+The two collectors use distinct instrument names, but both report queue depth and age. Choose the
+instrument set your dashboards consume. Register each collector only once for a database and
+telemetry resource.
+
+<details>
+<summary>Reference: registerQueueMetrics</summary>
+
+`registerQueueMetrics(queue)` adds observable gauges that the meter reads at collection time:
+
+- `workhorse.queue.depth` by queue and state (`ready`, `scheduled`, `active`)
+- `workhorse.queue.oldest_ready_age` in milliseconds, by queue
+- `workhorse.queue.concurrency.*`: `limit`, `active`, `blocked_ready`
+- `workhorse.queue.dependencies.*`: `blocked`, `pending_edges`, `failed_resolutions`, `capped`
+- `workhorse.queue.children.*`: `waiting_parents`, `pending`, `unjoined_results`, `failed_parents`,
+  `canceled_parents`, `capped`
+- `workhorse.queue.rate_limit.*`: `configured`, `available_tokens`, `throttled_ready`,
+  `next_eligible_delay`
+
+It returns a cleanup function. Registered before a telemetry provider, it activates when one
+registers. Provider cleanup detaches it, and a later provider attaches it again.
+
+`workhorse.queue.depth` and the observer's `workhorse.tasks.count` measure the same live work.
+
+More detail: [Telemetry: Baseline queue metrics](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#baseline-queue-metrics).
+
+</details>
+
+### Reading the signals together
+
+On queue `exports`, `workhorse.tasks.enqueued` keeps rising, but `workhorse.tasks.claimed` drops to
+zero.
+
+1. **Is the queue paused?** `workhorse.queue.paused` is 0, so no.
+2. **Are workers there?** `workhorse.worker.capacity` for `exports` is 0 under `running`. The only
+   workers that served `exports` now show as `offline`.
+3. **Is work waiting?** The age of the oldest ready task climbs steadily.
+
+The workers stopped. Ready work piles up behind them.
+
+Use `workhorse.tasks.enqueued` and `workhorse.tasks.claimed` to see whether work enters and leaves
+the ready queue. If enqueue continues while claim stops, compare `workhorse.queue.paused`, worker
+capacity, and the age of the oldest ready task.
+
+Use `workhorse.tasks.enqueue.outcomes` to compare `accepted`, `replayed`, `replaced`,
+`non_replaceable`, and `coalesced` requests by queue. These labels stay the same across runtimes.
+The `non_replaceable` outcome distinguishes a rejected keyed replacement from a transport failure.
+The metric omits keyed-request material, so coalescing rates remain visible without exposing or
+multiplying time series by keys.
+
+Use `workhorse.handler.executions` for outcomes and `workhorse.handler.duration` for handler
+latency. Both carry the same bounded outcome attribute. A rising retry or lease-loss rate points to
+different problems than terminal failures. That attribute keeps those paths separate without
+identifying individual tasks.
+
+An activation and a durable result are different events, and each reaches one instrument. To count
+activations that ended a given way, count `workhorse.handler.executions`. To count the durable
+result the queue wrote, use `workhorse.tasks.completed`, `workhorse.tasks.failed`, and
+`workhorse.tasks.retried`. The two differ when an attempt suspends on a durable wait. That closes an
+activation without ending the attempt.
+
+`workhorse.tasks.failed` counts every failure the worker submits, including one that leads to a
+retry. Its attempt outcome attribute says which. Filter it to `failed` to count tasks that failed
+for good. A failure that retries also counts once in `workhorse.tasks.retried`.
+
+Use the maintenance, schedule-lag, expired-lease, overdue-deadline, and overdue-timeout metrics to
+detect work that should have advanced but did not. PostgreSQL remains authoritative. The metrics
+describe its transitions and current state rather than reconstructing queue truth in memory.
+
+<details>
+<summary>Reference: outcome attributes and suggested alerts</summary>
+
+**`workhorse.handler.outcome`:** `succeeded`, `retry`, `failed`, `canceled`, `deadline_exceeded`,
+`timeout`, `lease_lost`, `suspended`, and `released`. `released` means the worker handed the claim
+back with its attempt intact, for example for a task type it has no handler for. An activation that
+ends without a recorded outcome reports `unknown` on the duration histogram.
+
+**`workhorse.attempt.outcome`** on `workhorse.tasks.failed` is the state `fail_v1` returns: `ready`,
+`scheduled`, `failed`, `cancel_requested`, `deadline_exceeded`, `timeout_exceeded`, or `stale`.
+`ready` and `scheduled` also add one to `workhorse.tasks.retried`.
+
+**Suggested alerts**
+
+| Condition                                                                  | Alert                     | Critical                     |
+| -------------------------------------------------------------------------- | ------------------------- | ---------------------------- |
+| Ready depth stays above zero while claiming and completion rates stay zero | for 5 minutes             | for 15 minutes               |
+| Maintenance drift, for three consecutive observations                      | exceeds twice the cadence | above five times the cadence |
+| Expired leases as a share of tasks workers claim, over 10 minutes          | exceeds 1%                | —                            |
+| Failures as a share of handler settlements, over 10 minutes                | exceeds 5%                | above 20%                    |
+
+Replace age and latency thresholds with your own queue-delay and handler-duration objectives.
+
+More detail: [Telemetry: Dashboards and alerts](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#dashboards-and-alerts).
+
+</details>
+
+### Ask business questions by task type and queue
+
+Your team asks which job got slower after Tuesday's release. You group the handler duration
+histogram by task type and see that `pdf.render` doubled its runtime. Then you group failures by
+queue and see they all come from `exports`.
+
+Lifecycle counters and handler timing metrics attach the task type and queue name. SigNoz can group
+throughput, failures, retries, and runtime by either value. The enqueue outcome metric shows
+coalescing rates by queue.
+
+Keep both values as stable application identifiers. Unbounded values stay out of metric attributes,
+as [runtime metrics](#runtime-metrics-happen-automatically) explains. Traces retain per-task
+identity instead.
+
+<details>
+<summary>Reference: metric attributes and cardinality</summary>
+
+| Instruments                                                     | Attributes                                                   |
+| --------------------------------------------------------------- | ------------------------------------------------------------ |
+| Lifecycle counters and handler instruments                      | `workhorse.queue.name` and `workhorse.task.type`             |
+| `workhorse.tasks.enqueue.outcomes`                              | Queue and bounded `workhorse.enqueue.outcome`                |
+| `workhorse.handler.executions` and `workhorse.handler.duration` | Add the bounded `workhorse.handler.outcome`                  |
+| `workhorse.schedule.fired` and `workhorse.schedule.lag`         | `workhorse.schedule.namespace` and `workhorse.schedule.name` |
+
+Task IDs, worker IDs, tags, payload values, and error messages are forbidden metric attributes.
+Schedule namespace and name appear only on the two schedule instruments.
+
+Workhorse exports `METRIC_ATTRIBUTE_CARDINALITY_LIMIT = 2,000` for explicit SDK reader limits.
+
+More detail: [Telemetry: Metric attributes](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#metric-attributes).
+
+</details>
+
+### Filter every signal by its deployment
+
+Your staging and production deployments both run `payments` workers, and both send telemetry to one
+SigNoz.
+
+1. **At startup** each host application sets its environment and service name on its OpenTelemetry
+   resource.
+2. **While it runs** the SDK attaches both values to every log, metric, and trace the process emits.
+3. **During an incident** an operator opens the Workhorse tasks dashboard in SigNoz and selects
+   production. Every panel now shows only production.
+
+Set `deployment.environment.name` and `service.name` as OpenTelemetry resource attributes in the
+host application. The SDK attaches them to logs, metrics, and traces, so Workhorse does not repeat
+them at every recording site. Producer calls such as `Queue.enqueue` are attributed the same way. Go
+accepts a `*slog.Logger` for the same runtime context.
+
+`pnpm demo:otel` reconciles the Workhorse tasks dashboard into SigNoz. Run
+`pnpm signoz:dashboards` to apply dashboard changes without restarting SigNoz. Its variables filter
+by environment, service, queue, and task type. Its panels cover throughput, terminal failures,
+runtime percentiles, worker slots, queue pressure, success rate, and estimated drain time.
+
+The slow-task table ranks task types from handler spans. Trace sampling can change that ranking, so
+use the handler histogram when you need unsampled percentiles for one task type.
+
+<details>
+<summary>Reference: SigNoz dashboard</summary>
+
+The import artifact is `docs/signoz/workhorse-business-metrics-v1.json`, dashboard
+`workhorse-tasks`.
+
+| Variable    | Attribute                     |
+| ----------- | ----------------------------- |
+| Environment | `deployment.environment.name` |
+| Service     | `service.name`                |
+| Queue       | `workhorse.queue.name`        |
+| Task type   | `workhorse.task.type`         |
+
+Panels: Enqueued tasks, Started tasks, Running and waiting tasks, Completed tasks, Execution
+outcomes, Handler runtime percentiles, 10 slowest task types, Worker slots, Queue depth, Oldest
+ready task, Estimated queue drain time, Terminal success rate, and 10 slowest task executions.
+
+More detail: [Telemetry: Dashboards and alerts](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#dashboards-and-alerts).
+
+</details>
 
 ## Fleet controls
 
 Every worker registers itself in PostgreSQL on its configured cadence. That registry is how you
-see and steer a fleet you do not host:
+see and steer a fleet you do not host.
+
+Worker `billing-worker-1` keeps timing out against a slow payment provider. An operator wants it to
+stop taking work while they investigate.
+
+1. **The operator lists the fleet** and finds `billing-worker-1` in the registry.
+2. **They pause it** with their identity, a reason, and an incident request id. Workhorse records
+   the pause in the registry.
+3. **On its next registry refresh** the worker notices the pause and stops asking for tasks. Its
+   in-flight handler runs to completion.
+4. **A deploy restarts the process.** The new process registers under a new instance, and the worker
+   comes back running.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -139,12 +896,24 @@ see and steer a fleet you do not host:
   </Tab>
 </Tabs>
 
-Pause is cooperative: the worker notices on its next registry refresh, stops asking for tasks, and
-any in-flight handler runs to completion. The pause is scoped to the running process — a
-restarted worker comes back running, so a forgotten pause can never idle a future deployment. Use
-queue pause when work must stop durably.
+Pause is cooperative and scoped to the running process. The worker notices it on its next registry
+refresh, and in-flight handlers run to completion. A restarted worker comes back running, so a
+forgotten pause can never idle a future deployment. Use queue pause when work must stop durably.
 
 Use `AsyncAdmin.from_psycopg` or `AsyncAdmin.from_asyncpg` when the operator process is async.
+
+<details>
+<summary>Reference: worker pause</summary>
+
+- `Admin.setWorkerPaused` writes `workhorse.worker_registry.paused`.
+- The result is `WorkerPauseResult`: `workerId`, `paused`, `pausedBy`, `reason`, `pausedAt`, and
+  `lastHeartbeatAt`.
+- A worker reads the pause on its next `register_worker_v1` call. That call clears the pause when a
+  different `instance_id` claims the worker id.
+
+More detail: [Operations and CLI: Worker pause](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#worker-pause).
+
+</details>
 
 ## Task controls
 
@@ -161,59 +930,313 @@ built-in administrator login.
 
 ## Terminal operations
 
-The packaged CLI carries the same operator surface into a shell. `workhorse admin` inspects
-tasks, queues, schedules, failures, workers, and maintenance state — as aligned tables for
-humans, or with `--json` as the exact objects the TypeScript operator API returns:
+The dashboard is not always where you are. Sometimes you are in a shell on a bastion host, or
+writing a runbook script, and you still need to see what a queue is doing, or stop it.
+
+The packaged CLI carries the operator surface into a shell. `workhorse admin` is for scripts and
+one-off commands, and `workhorse tui` is a live terminal view. Both are the same client underneath,
+with the same safety checks.
+
+### Looking around is always safe
+
+At 02:00 an on-call engineer is paged: payments on queue `billing` are failing. They open a shell on
+the bastion host.
+
+1. They run `admin failures --queue billing` and get an aligned table of the newest failures.
+2. They want the task ids for a script, so they add `--json`. The output is the same object the
+   TypeScript operator API returns.
+3. Nothing they ran changed the queue, so they did not need to name the database or confirm anything.
+
+`workhorse admin` inspects tasks, queues, schedules, failures, workers, and maintenance state. The
+inspection commands are `admin tasks`, `admin task`, `admin timeline`, `admin checkpoints`,
+`admin waits`, `admin external-waits`, `admin failures`, `admin queues`, `admin schedules`,
+`admin workers`, and `admin maintenance`. They only read. You can run them against production
+without ceremony, the same way you would run `queue.health` from code.
+
+Each command answers in two registers. By default you get an aligned table for a human reading a
+terminal. With `--json` you get the exact objects the TypeScript operator API returns. A script that
+parses it reads the documented shape, not a private CLI format.
 
 ```sh
 workhorse admin queues
 workhorse admin failures --queue billing --json | jq '.items[].taskId'
 ```
 
-A stalled durable handler is inspectable from the terminal too. `admin checkpoints <task-id>` and
-`admin waits <task-id>` list one task's restart boundaries and durable timer waits, and `--name`
-narrows either to one record. `admin external-waits` is the fleet-wide read: it lists every
-pending human decision and signal wait, oldest first, and pages each list with the same
-`nextCursor` object the dashboard uses through `--human-cursor` and `--signal-cursor`. These
-commands only read. To answer a wait, use `admin signal <task-id>` or
-`admin complete-human <task-id>` with `--name`, an explicit `--request-id`, and `--actor`.
-Supply exactly one of `--payload-json` or `--payload-file`. Repeating the same identity, actor,
-and payload returns a successful duplicate; a conflicting answer or unavailable wait fails.
+<details>
+<summary>Reference: inspection commands</summary>
 
-The CLI takes its database from `--database-url`, then `WORKHORSE_DATABASE_URL`, then `DATABASE_URL`.
-A stale value in any of them can point a command at the wrong database.
-Guarded commands — `admin cancel`, `admin redrive`, `admin pause`, `admin resume`, `admin purge`,
-`admin set-tier`, `admin set-history`, `admin pause-worker`, `admin resume-worker`,
-`admin redrive-many`, `admin repair-dependencies`, `admin signal`, and `admin complete-human` — refuse to run until the target database is named
-explicitly with `--env`, verified against `current_database()` on the live connection, and the
-operation is confirmed interactively or with `--yes`. Attribution, redrive idempotency, and purge
-idempotency follow the same contracts as the programmatic APIs. `admin purge` deletes one queue's
-waiting tasks, leaves running ones alone, and reports the deleted count as `deletedCount` under
-`--json`. `admin pause-worker` and `admin resume-worker` write the durable `worker_registry` pause
-through `Admin.setWorkerPaused`, take a worker id from `admin workers`, and emit the stored row
-under `--json`. `admin queues` shows each queue's tier and recorded history, which is `none` for a fast-tier queue
-with every history switch off. `admin set-tier --tier`
-and `admin set-history --record-attempts/--record-claims` wrap `Admin.setQueueTier` and
-`Admin.setQueueHistory`, with the same refusals. `admin set-history` takes no reason, because
-Workhorse records no audit for it. It notes when the queue is on the full tier, where the switches
-have no effect yet, and warns when the queue name matches no known queue.
+| Command                       | Reads                                                           |
+| ----------------------------- | --------------------------------------------------------------- |
+| `admin tasks`                 | `Admin.listTasks`                                               |
+| `admin task <id>`             | `Admin.getTask`                                                 |
+| `admin timeline <id>`         | `Admin.getTaskTimeline`                                         |
+| `admin checkpoints <task-id>` | `Admin.listCheckpoints`, or `Admin.getCheckpoint` with `--name` |
+| `admin waits <task-id>`       | `Admin.listWaits`, or `Admin.getWait` with `--name`             |
+| `admin external-waits`        | `Admin.listHumanWaits` and `Admin.listSignalWaits`              |
+| `admin failures`              | `Admin.listDeadLetters`                                         |
+| `admin queues`                | `Admin.queueMetricSnapshot` and `workhorse.queue_control`       |
+| `admin schedules`             | `Admin.schedules`                                               |
+| `admin workers`               | `Admin.listWorkers`                                             |
+| `admin maintenance`           | `Admin.getMaintenancePolicy` and `Admin.getRetentionPolicy`     |
 
-To continue `admin tasks`, `admin timeline`, or `admin failures`, pass the returned `nextCursor`
-object through `--cursor` with the same filters. Tasks accept `--created-after` and `--created-before`;
-failures accept `--finished-after`, `--finished-before`, repeated `--tag`, and `--error-name`.
-Time filters require a timezone and include the lower bound while excluding the upper bound.
+- Listing filters: `--queue`, `--type`, `--state` (repeatable or comma-separated), `--limit`, and
+  `--namespace` for schedules.
+- `--json` emits the underlying API result. Bigint fence tokens and schedule revisions serialize as
+  strings.
+- Both front ends use `WorkhorseAdminClient` in `typescript/core/src/cli/admin-client.ts`.
 
-`admin redrive-many` recovers a bounded, oldest-first page using those failure filters.
-Preview with `--dry-run --reason "provider restored"` without environment confirmation or writes.
-Execute with an explicit `--request-id`, `--env`, and confirmation. Reuse the request identity on retries
-and continue with recovery's own `nextCursor`; failure-list cursors have the opposite ordering.
-A preview does not reserve its candidates.
+More detail: [Operations and CLI: Inspection commands](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#inspection-commands).
 
-`admin repair-dependencies` wraps `Admin.repairDependencyDrift` and repairs blocked dependents whose
-dependency counters drifted from their edges. `--dry-run` wraps `Admin.listDependencyDrift` and
-needs neither a reason nor confirmation. The repair requires `--reason`, `--env`, and confirmation
-of the target `dependencies`, and records the attribution in each `dependency_counter_repaired`
-event. Its request id correlates the repair but is not an idempotency key.
+</details>
+
+### Paging and narrowing
+
+The `billing` failure list is longer than one page.
+
+1. The first answer ends with a `nextCursor` object. Text output prints that continuation too.
+2. They pass that object back through `--cursor`, with the same `--queue billing` filter, and get
+   the next page.
+3. To see only the incident window, they add `--finished-after` and `--finished-before`, both with a
+   timezone.
+
+To continue `admin tasks`, `admin timeline`, or `admin failures`, pass the previous answer's
+`nextCursor` object through `--cursor`. Keep the same filters when continuing. PostgreSQL rejects a
+task-list cursor used with different filters.
+
+To narrow an incident window, use `--created-after` and `--created-before` on tasks. Failure
+listings accept `--finished-after`, `--finished-before`, repeated `--tag`, and `--error-name`.
+Timestamp filters require a timezone. They include the lower bound and exclude the upper bound.
+
+<details>
+<summary>Reference: cursors and range filters</summary>
+
+| Command          | Required cursor fields                     |
+| ---------------- | ------------------------------------------ |
+| `admin tasks`    | `createdAt`, `taskId`, `signature`         |
+| `admin failures` | `finishedAt`, `taskId`                     |
+| `admin timeline` | `taskId`, `occurredAt`, `kind`, `recordId` |
+
+- A timeline cursor's `kind` is `event` or `attempt`, and its task must match.
+- PostgreSQL verifies task-list signatures against the normalized filters.
+- Pages are weakly consistent. Continuation adds no snapshot guarantee.
+- Repeated `--tag` values must all match.
+- `--limit` defaults to 100 and is capped at 1,000 for tasks, timelines, failures, and bulk
+  recovery.
+- A malformed cursor, a bad range, or an inapplicable flag exits 64.
+
+More detail: [Operations and CLI: Pagination and range filters](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#pagination-and-range-filters).
+
+</details>
+
+### Finding out what a stalled task is waiting on
+
+Task `order-88` has not finished in an hour. Three reads tell you why.
+
+1. `admin checkpoints order-88` shows the restart boundaries the handler already got past. It got
+   past `reserve-stock`, so the handler did run.
+2. `admin waits order-88` shows its durable timer waits and when each one wakes. It has none.
+3. `admin external-waits` lists every task waiting on someone. `order-88` appears with a pending
+   human decision named `approval`.
+
+A durable handler can stop for a good reason. It saved a checkpoint and is between steps, or it is
+sleeping on a timer, or it is waiting for a person or an outside system to answer. From the outside
+all four look the same: a task that is not finishing.
+
+`admin checkpoints <task-id>` and `admin waits <task-id>` list one task's restart boundaries and
+durable timer waits. Both take `--name` when you already know which record you want.
+
+`admin external-waits` asks the fleet-wide question: which tasks are waiting on someone. It lists
+pending human decisions and pending signal waits together, oldest first. The oldest boundary is
+usually the one closest to running out of time. A human decision carries the context its handler
+recorded, which is what the person deciding was meant to read.
+
+Long lists page. Each `--json` answer carries the `nextCursor` object for its own list. Hand it back
+through `--human-cursor` or `--signal-cursor` on the next call. The dashboard pages the same way, so
+both surfaces walk a busy queue's waits alike. These commands only read.
+
+<details>
+<summary>Reference: checkpoints, waits, and external waits</summary>
+
+- `admin checkpoints <task-id>` and `admin waits <task-id>` accept `--name <name>`. A name the task
+  never recorded prints to stderr and exits 1.
+- `admin waits` reads `workhorse.task_wait`.
+- `admin external-waits --json` emits
+  `{"human": {"items", "nextCursor"}, "signal": {"items", "nextCursor"}}`.
+- The table merges both lists oldest-first with a `KIND` column. Only a human decision has
+  `CONTEXT`.
+- `--limit` applies to both lists. It is capped at `MAX_EXTERNAL_WAIT_LIST_SIZE` (1,000).
+- `--human-cursor` and `--signal-cursor` each take the exact `nextCursor` object of their list. A
+  value without string `createdAt`, `taskId`, and `name` fields exits 64.
+
+More detail: [Operations and CLI: External waits](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#external-waits).
+
+</details>
+
+### Changing things requires naming the target twice
+
+The most common way to hurt yourself with an operator CLI is not a typo in the command. It is
+running the right command against the wrong database. A shell still carries the environment of
+whatever you were doing an hour ago.
+
+An engineer tested a fix on staging an hour ago. Their shell still has `DATABASE_URL` pointing at
+`workhorse_staging`. Now they want to redrive a failed task in production.
+
+1. They run `admin redrive` with `--env workhorse_production`.
+2. The client asks the database it reached for its name. The answer is `workhorse_staging`.
+3. The names disagree, so nothing happens. The command reports what it refused and why.
+4. They fix the URL and run the command again. The names match, and they pass `--yes`, so the
+   redrive goes through.
+
+The CLI takes its database from `--database-url`, then `WORKHORSE_DATABASE_URL`, then
+`DATABASE_URL`. A stale value in any of them can point a command at the wrong database.
+
+The guarded commands are `admin cancel`, `admin redrive`, `admin pause`, `admin resume`,
+`admin purge`, `admin set-tier`, `admin set-history`, `admin pause-worker`, `admin resume-worker`,
+`admin redrive-many`, `admin repair-dependencies`, `admin signal`, and `admin complete-human`. They
+mutate a live system.
+
+So a guarded command demands that you name the target explicitly. `--env` must state the database's
+own name, and the client checks that claim against `current_database()` on the connection it
+actually reached. There is no flag that skips this check.
+
+Confirmation is the second, separate gate. Interactively, you retype the task id, queue name, or
+worker id you are about to affect. In a script, you pass `--yes`. The script author, not a default,
+decides the command may proceed unattended.
+
+A redrive records who asked and why, and carries an idempotency identity. Supply the same
+`--request-id` when retrying a runbook step, so it returns the original target. Attribution, redrive
+idempotency, and purge idempotency follow the same contracts as [redrive](/docs/dead-letters)
+through the public `Admin` client. The CLI adds no separate semantics. Queue pause and resume also
+require a reason and retain the request's audit identity.
+
+<details>
+<summary>Reference: safety checks and audit fields</summary>
+
+**Database URL.** The CLI takes `--database-url` first, then `WORKHORSE_DATABASE_URL`, then
+`DATABASE_URL`. An empty `WORKHORSE_DATABASE_URL` still wins, and then fails.
+
+**Safety checks.** Two independent checks gate every mutation:
+
+1. **Environment.** `--env <database>` is required. `WorkhorseAdminClient.confirmEnvironment`
+   compares it with `current_database()` on the live connection. A mismatch throws
+   `AdminSafetyError`. The CLI prints `Refused:` and exits 1. Every mutation method on the client
+   requires the returned `ConfirmedEnvironment` token.
+2. **Confirmation.** Without `--yes`, an interactive session must retype the exact target at a
+   prompt on stderr. A mismatched answer changes nothing and exits 1. A non-interactive session
+   without `--yes` is a usage error.
+
+**Audit fields**
+
+- Every guarded command except `admin cancel`, `admin signal`, `admin complete-human`, and
+  `admin set-history` requires `--reason`.
+- `--actor` defaults to `workhorse-admin`.
+- `--request-id` defaults to a random UUID. Bulk recovery execution and external-wait delivery
+  require it explicitly.
+- Redrive and purge use the request identity for idempotency.
+- Queue and worker pause keep a request preview, digest, and length with the actor and reason.
+
+**Exit codes.** A non-mutating outcome (`not_found`, `already_terminal`, `not_failed`) exits 1.
+Malformed usage exits 64.
+
+More detail: [Operations and CLI: Safety checks](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#safety-checks).
+
+</details>
+
+### Emptying a queue
+
+A bad deploy filled queue `emails` with tasks whose payloads crash every handler. Draining them by
+hand is not worth the incident.
+
+1. The engineer runs `admin purge emails` with a reason, `--env`, and confirmation.
+2. Workhorse deletes the waiting tasks in `emails`. Tasks a worker is already running stay.
+3. The command reports how many tasks it removed.
+4. Their runbook step times out and retries with the same request identity. The retry re-reports the
+   first purge instead of deleting a second time.
+
+`admin purge` empties a queue, and it deletes rather than cancels. It leaves running tasks alone.
+Under `--json` it reports the deleted count as `deletedCount`. Reach for it when a backlog is
+poison. Reusing the request identity with different audit fields is refused.
+
+<details>
+<summary>Reference: purge</summary>
+
+- `purge_queue_v1` deletes runtimes in `blocked`, `ready`, and `scheduled`, with their identities and
+  history. It leaves `active` tasks. On the fast tier it deletes `ready` rows.
+- The command prints the deleted row count. Under `--json` it emits `deletedCount` beside `queue`.
+- A reused request identity with different audit fields raises `PurgeIdempotencyConflictError`. The
+  CLI prints `Refused:` and exits 1.
+
+More detail: [Operations and CLI: Purge](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#purge).
+
+</details>
+
+### Changing a queue's tier
+
+`admin queues` shows each queue's tier and the history it records. A full-tier queue records
+everything. A fast-tier queue lists the history an operator turned back on, or `none` when every
+history switch is off.
+
+Queue `emails` has handlers that never suspend, so the team moves it to the fast tier.
+
+1. The engineer runs `admin set-tier emails --tier fast` while tasks are still live. Workhorse
+   refuses, and the command changes nothing.
+2. After the queue drains, they run it again. Workhorse moves the queue.
+3. They turn `--record-attempts` on with `admin set-history`. The claims setting stays as it was.
+
+`admin set-tier` carries the same guards as `Admin.setQueueTier`, because it is that call. Workhorse
+refuses the switch while the queue holds live tasks. It refuses the fast tier while a policy names
+the queue.
+
+`admin set-history` wraps `Admin.setQueueHistory` and turns `--record-attempts` or `--record-claims`
+on or off. A flag you omit keeps its setting. Workhorse records no audit for this change, so the
+command takes no reason. A full-tier queue already records everything, so the command notes that the
+switches wait for a move to the fast tier. Workhorse also accepts a queue name it has never seen, so
+the command warns when the name matches no known queue. [The fast tier](/docs/fast-tier) explains
+what each switch writes.
+
+<details>
+<summary>Reference: tier and history commands</summary>
+
+**`admin set-tier <queue> --tier <fast|full>`**
+
+- Calls `Admin.setQueueTier` with `--actor` and `--reason`. `--json` emits `{queue, tier}`.
+- Rejects `--request-id` with exit 64.
+- A `P1007` refusal prints `Refused:` and exits 1.
+
+**`admin set-history <queue>`**
+
+- Takes `--record-attempts <on|off>`, `--record-claims <on|off>`, or both. Calls
+  `Admin.setQueueHistory`.
+- `--json` emits `{queue, tier, recordAttempts, recordClaims}`.
+- Rejects `--actor`, `--reason`, and `--request-id` with exit 64.
+- Writes a `Note:` for a full-tier queue and a `Warning:` for an unknown queue to stderr. Neither
+  changes the exit code.
+
+**`admin queues`.** A queue without a `queue_control` row reports `full` with both switches off. The
+`HISTORY` column is `all` on the full tier, else `none` or the enabled switches.
+
+More detail: [Operations and CLI: Queue tier](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#queue-tier).
+
+</details>
+
+### Recovering a failed backlog
+
+The payment provider is back after an outage. Queue `billing` holds hundreds of failures with error
+name `ProviderError`.
+
+1. The engineer runs `admin redrive-many` with the same filters as `admin failures`, plus
+   `--dry-run`. They see which sources are eligible. Nothing is created and no audit is written.
+2. They remove `--dry-run` and add `--env`, confirmation, and an explicit `--request-id`. The
+   command recovers one bounded page, oldest first.
+3. They pass the returned `nextCursor` through `--cursor`, with the same filters and request
+   identity, until no cursor comes back.
+
+A preview requires a reason but needs no environment confirmation. Recovery proceeds oldest-first,
+so its cursor belongs to recovery rather than the newest-first failure list. Each call processes its
+own page. A preview does not reserve the candidate set.
+
+The first command below is such a preview. The second answers a human wait, which the next section
+explains.
 
 ```sh
 workhorse admin redrive-many --queue billing --error-name ProviderError \
@@ -222,17 +1245,198 @@ workhorse admin complete-human "$TASK_ID" --name approval --payload-file decisio
   --request-id "$DELIVERY_ID" --actor oncall --env workhorse_production --yes
 ```
 
-`workhorse tui` renders the same views as a live, self-refreshing terminal application. It is
-read-only unless launched with a verified `--env`, which enables pausing and resuming the
-selected queue behind an explicit confirmation.
+<details>
+<summary>Reference: bulk redrive</summary>
 
-Telemetry attributes producer calls such as `Queue.enqueue` to `deployment.environment.name` and
-`service.name`; Go accepts a `*slog.Logger` for the same runtime context. Stable metrics include
-`workhorse.tasks.enqueued`, `workhorse.tasks.claimed`, `workhorse.queue.paused`,
-`workhorse.tasks.enqueue.outcomes`, `workhorse.handler.executions`, `workhorse.handler.duration`,
-`workhorse.tasks.completed`, `workhorse.tasks.failed`, and `workhorse.tasks.retried`. The
-`non_replaceable` outcome distinguishes a rejected keyed replacement from a transport failure.
-Enqueue outcome labels remain `accepted`, `replayed`, `replaced`, and `coalesced` across runtimes.
+| Mode                  | Behavior                                                                                                     |
+| --------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Preview (`--dry-run`) | Passes `dryRun: true` and writes nothing. Requires `--reason`. Default request ID `workhorse-admin-preview`. |
+| Execution             | Requires an explicit `--request-id`, `--env`, and confirmation.                                              |
+
+- Each call runs `Admin.redriveMany` once. `--json` emits `BulkRedrivePage`.
+- Without a queue filter, interactive confirmation requires typing `all queues`.
+- `--limit` defaults to 100 and is capped at `MAX_REDRIVE_BATCH_SIZE` (1,000).
+- Preserving the request identity and audit fields replays each source's original target.
+
+More detail: [Operations and CLI: Bulk redrive](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#bulk-redrive).
+
+</details>
+
+### Answering a wait
+
+`order-88` waits for the decision `approval`. The approver's answer is in `decision.json`.
+
+1. The engineer runs `admin complete-human` with the task, `--name approval`, and
+   `--payload-file decision.json`. They identify the delivery with `--request-id` and `--actor`.
+2. The network drops before they see the result. They do not know whether the answer arrived.
+3. They run the same command again, with the same request identity, actor, and payload. The first
+   delivery had arrived, so this one succeeds as a duplicate. The decision is not answered twice.
+
+When you have the answer, `admin signal <task-id>` delivers a signal and
+`admin complete-human <task-id>` completes a [human decision](/docs/human-waits). Both select a
+task and its wait with `--name`. Supply exactly one of `--payload-json` or `--payload-file`. The
+second command in the previous section shows a complete call.
+
+Reuse the request identity, actor, and payload after an uncertain delivery. An exact duplicate
+succeeds without answering again. A conflicting answer or an unavailable wait fails.
+
+<details>
+<summary>Reference: signal and human-wait delivery</summary>
+
+Both commands require `--name`, `--request-id`, and exactly one of `--payload-json` or
+`--payload-file`. The file holds UTF-8 JSON. Any JSON value is accepted, including `null`.
+
+The CLI passes `--actor` as `requestedBy` and `--request-id` as `idempotencyKey` to
+`Queue.sendSignal` or `Queue.completeHumanWait`. These commands record no reason.
+
+| Outcome                                                                       | Exit    |
+| ----------------------------------------------------------------------------- | ------- |
+| `delivered`, `completed`, `duplicate`                                         | Success |
+| `not_found`, `not_waiting`, `already_delivered`, `already_completed`, `stale` | 1       |
+
+A conflict also fails, without replacing the accepted answer.
+
+More detail: [Operations and CLI: Signal and human-wait delivery](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#signal-and-human-wait-delivery).
+
+</details>
+
+### Repairing dependency counters
+
+Workhorse keeps a counter of unresolved prerequisites on each blocked dependent. If that counter
+drifts from the edges, the dependent can wait forever.
+
+A dependent task has waited all day, though its prerequisites finished in the morning.
+
+1. The engineer runs `admin repair-dependencies --dry-run`. It lists the drifted dependent and what a
+   repair would do to it. It writes nothing and needs no confirmation.
+2. They run it again without `--dry-run`, with a reason and `--env`. Interactively, they retype
+   `dependencies`.
+3. The command prints what it did to each dependent. Each repair event records who asked and why.
+
+`admin repair-dependencies` wraps `Admin.repairDependencyDrift`, and `--dry-run` wraps
+`Admin.listDependencyDrift`. The repair records its attribution in each `dependency_counter_repaired`
+event. Its request id correlates the repair but is not an idempotency key. A rerun is safe, because
+it finds only dependents that drifted again. [Task dependencies](/docs/task-dependencies) explains
+the counter.
+
+<details>
+<summary>Reference: dependency repair</summary>
+
+- `--dry-run` calls `Admin.listDependencyDrift`. It needs no reason, `--env`, or confirmation.
+- Without `--dry-run`, it calls `Admin.repairDependencyDrift`. It requires `--reason`, `--env`, and
+  confirmation of the target `dependencies`. `--request-id` defaults to a random UUID.
+- `--limit` defaults to 1,000 and is capped at `MAX_DEPENDENCY_DRIFT_LIMIT` (100,000).
+- Each row's `action` is `recounted`, `released`, or `rejected`. The repair recounts under lock, so
+  its action can differ from the preview.
+- Each repair appends a `dependency_counter_repaired` event with `requested_by` and
+  `request_reason`.
+- The request id correlates the repair. It is not an idempotency key.
+
+More detail: [Data model: Governed drift repair (schema version 40)](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#governed-drift-repair-schema-version-40).
+
+</details>
+
+### Taking one worker out of rotation
+
+Sometimes the queue is fine and one worker is not: a bad host, a leaking process, or a deploy that
+reached one box first.
+
+Worker `w-7` runs on a host with a failing disk.
+
+1. The engineer reads its id from `admin workers` and runs `admin pause-worker w-7` with a reason.
+2. Workhorse records the pause in the fleet registry. Anyone reading `admin workers` sees it at
+   once, including who paused it.
+3. `w-7` stops claiming when it next registers. The command does not send a message to the
+   process.
+4. After the disk is replaced, `admin resume-worker w-7` lets it claim again.
+
+`admin pause-worker` and `admin resume-worker` write the durable `worker_registry` pause through
+`Admin.setWorkerPaused`, the call [fleet controls](#fleet-controls) describes. Under `--json` they
+emit the stored row. The command does not reach a running process directly, so a worker finds out on
+its next registration. [Workers](/docs/workers) explains what an operator pause survives and what it
+does not.
+
+<details>
+<summary>Reference: worker pause commands</summary>
+
+- Both commands write `workhorse.worker_registry.paused` through `Admin.setWorkerPaused`. Both
+  require `--reason`.
+- `--json` emits `WorkerPauseResult`: `workerId`, `paused`, `pausedBy`, `reason`, `pausedAt`, and
+  `lastHeartbeatAt`.
+- An unregistered worker id exits 1 with `is not registered`.
+- A worker reads the pause on its next `register_worker_v1` call. That call clears the pause when a
+  different `instance_id` claims the worker id.
+
+More detail: [Operations and CLI: Worker pause](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#worker-pause).
+
+</details>
+
+### The TUI is the same client with a refresh loop
+
+During the `billing` incident, the engineer launches `workhorse tui` to watch the queue.
+
+1. Without `--env`, the title bar says the session is read-only. They can switch views and refresh,
+   but cannot change anything.
+2. They relaunch with `--env workhorse_production`. The TUI runs the same target check as the CLI.
+3. In the queues view they select `billing` and ask to pause it. The TUI applies the pause only
+   after they press the confirmation key.
+
+`workhorse tui` renders tasks, queues, schedules, failures, workers, and health as live views that
+refresh themselves. It is the "what is happening right now" tool: watch a backlog drain, watch
+workers come back after a deploy, see a failure count stop growing. It is read-only unless launched
+with a verified `--env`, which enables pausing and resuming the selected queue behind an explicit
+confirmation.
+
+Pausing a queue is durable, in contrast to pausing a worker. [Workers](/docs/workers) explains that
+difference.
+
+<details>
+<summary>Reference: TUI</summary>
+
+| Key     | Action       |
+| ------- | ------------ |
+| `1`–`6` | Switch views |
+| `r`     | Refresh      |
+| `q`     | Quit         |
+
+- The current view re-fetches every `TUI_REFRESH_INTERVAL_MS` (5,000 ms).
+- List views fetch `TUI_PAGE_SIZE` (50) rows.
+- `--env <database>` runs `confirmEnvironment` at startup. Only then can the queues view stage a
+  pause or resume, applied after an explicit `y`.
+- Launching without an interactive stdin and stdout exits 1.
+
+More detail: [Operations and CLI: TUI](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#tui).
+
+</details>
+
+### What the terminal does not check
+
+Go back to the poisoned `emails` queue. Someone outside the on-call rotation has a copy of the
+production database URL.
+
+1. **They run `admin purge emails`** with `--actor` set to the on-call engineer's name, a reason,
+   `--env`, and `--yes`.
+2. **Both safety checks pass.** The database name matches, and `--yes` confirms the command.
+3. **Workhorse purges the queue** and records the on-call engineer as the actor. Nothing checks who
+   actually ran the command.
+
+The terminal surface deliberately stays inside the operator APIs. It adds no authorization.
+Workhorse records attribution and never checks it, exactly as everywhere else. So access to a
+guarded command is access to the database URL. The [dashboard](/docs/dashboard) supplies
+authentication and records a trusted actor for each mutation. Workhorse has no roles.
+
+<details>
+<summary>Reference: attribution in the terminal</summary>
+
+- `workhorse admin` and `workhorse tui` call the public `Admin` and `Queue` operations through
+  `WorkhorseAdminClient`.
+- Any `--actor` value within its length limit is recorded as given. It defaults to
+  `workhorse-admin`.
+- The only gates on a guarded command are the `--env` check and the confirmation.
+
+More detail: [Operations and CLI: Audit fields and request identity](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#audit-fields-and-request-identity).
+
+</details>
 
 ## Next
 
