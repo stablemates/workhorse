@@ -52,7 +52,7 @@ into the canceled task as released, with resolution `release`.
 | `already_terminal` | The task already succeeded or failed.     |
 | `not_found`        | No task has this id.                      |
 
-More detail: [Task lifecycle: Inactive work](../architecture/lifecycle.md#inactive-work).
+More detail: [Task lifecycle: Inactive work](../architecture/lifecycle.md#inactive-work) and [Task lifecycle: Cancellation](../architecture/lifecycle.md#cancellation).
 
 </details>
 
@@ -104,7 +104,7 @@ code decides how quickly.
 | `leaseMs`            | 30,000 ms                         |
 | `heartbeatMs`        | `max(100, floor(leaseMs / 3))` ms |
 
-More detail: [Task lifecycle: Active work](../architecture/lifecycle.md#active-work).
+More detail: [Task lifecycle: Active work](../architecture/lifecycle.md#active-work) and [Task lifecycle: Worker options](../architecture/lifecycle.md#worker-options).
 
 </details>
 
@@ -176,7 +176,7 @@ allowed to cancel the task. Check permissions in your application before you cal
 - `requestedBy` is audit attribution only. `cancel_v1` performs no authorization check.
   Authorization belongs to the calling application or operator layer.
 
-More detail: [Task lifecycle: Active work](../architecture/lifecycle.md#active-work).
+More detail: [Task lifecycle: Active work](../architecture/lifecycle.md#active-work) and [Task lifecycle: Cancellation](../architecture/lifecycle.md#cancellation).
 
 </details>
 

@@ -445,11 +445,11 @@ The primary key `(idempotency_scope, idempotency_key_hash)` serializes competing
 scoped unique owner. The hash is the full SHA-256 of the scope/key ownership input. Raw keys are
 never persisted.
 
-| Setting | Default   | Range                                       |
-| ------- | --------- | ------------------------------------------- |
-| Scope   | `default` | 1 through 256 UTF-8 bytes                   |
-| Key     | None      | 1 through 512 UTF-8 bytes                   |
-| TTL     | 24 hours  | Integer from 1 millisecond through 365 days |
+| Setting | Default                  | Range                                               |
+| ------- | ------------------------ | --------------------------------------------------- |
+| Scope   | `default`                | 1 through 256 UTF-8 bytes                           |
+| Key     | None                     | 1 through 512 UTF-8 bytes                           |
+| TTL     | 86,400,000 ms (24 hours) | Integer from 1 through 31,536,000,000 ms (365 days) |
 
 #### Indexes
 
@@ -476,6 +476,9 @@ timestamp.
 - Exact replay returns the bound task ID before task, dependency, event, runtime, FIFO-sequence, or
   notification side effects.
 - A mismatch raises a structured conflict and aborts the whole statement or caller transaction.
+  The conflict raises SQLSTATE `P1001`. Its details carry `scope`, `keyPreview`, the 12-hex
+  `keyDigest`, `keyLength`, `existingTaskId`, the request's 1-based batch `ordinal`, the sorted
+  `conflictingFields`, and both request digests.
 - Requests without `options.idempotency` bypass this relation and retain the prior always-create
   behavior.
 
@@ -485,6 +488,9 @@ The ownership relation stores scope and full key hash, never the raw key.
 
 - The initial `enqueued` event, UI projections, and errors expose only a bounded key preview plus
   12-hex key digest.
+- The preview of a key of 1 to 4 characters is one `•` per character. A key of 5 to 8 characters
+  shows its first 2 characters, `…`, and its last 2. A key of 9 or more shows its first 8, `…`, and
+  its last 4.
 - Exact replay appends no event.
 - Structured conflicts additionally carry full SHA-256 stored and rejected request digests.
 
@@ -856,9 +862,14 @@ statement. The trigger therefore validates the batch's fan-in and fan-out once.
 - `blockedReason`
 
 `Admin.getDependencyLineage(taskId, limit)` returns at most 1,000 edges where the identity is either
-the prerequisite or dependent. Each identity can own at most 100 edges in either direction. The
-default read therefore returns its complete one-hop lineage and needs no continuation cursor. A
-caller-selected lower limit can still set `truncated`.
+the prerequisite or dependent. `limit` defaults to `MAX_TASK_QUERY_PAGE_SIZE`, 1,000. `truncated` is
+true when more edges exist. A task gains prerequisite edges only from its own enqueue request, at
+most 100, and from its children. One task creates at most one child through `create_child_v2`,
+or one non-empty set of at most 100 children through `create_children_v1`. An empty set records
+nothing. Once a task has a child or a non-empty set, a request for another child or another set
+creates no task. A prerequisite retains at most 100 dependent edges. One identity therefore holds at most 300 edges, and the default read returns its complete
+one-hop lineage without a continuation cursor. A caller-selected lower limit can still set
+`truncated`.
 
 Each `DependencyLineageRecord` contains both identities, all three terminal policies, `createdAt`,
 nullable `releasedAt`, and nullable `resolution`.
@@ -1027,7 +1038,8 @@ compatible without letting it consume a child-set replay.
 #### `runChild` lifecycle
 
 `HandlerContext.runChild(name, type, payload, options)` calls the fenced transition. It suspends the
-handler without consuming its logical attempt.
+handler without consuming its logical attempt. `create_child_v2` rejects a child name outside 1 to
+200 characters, and `task_child.child_name` enforces the same bound.
 
 1. Child success releases the parent through the dependency resolver.
 2. The next claim has a new fence and restarts the handler from entry.
@@ -1058,8 +1070,8 @@ join mode therefore remains a `ChildConflictError`.
 
 #### Creating a child set
 
-`create_children_v1(parent_task_id, worker_id, fence_token, children, mode)` accepts zero through
-100 unique named requests and mode `settled` or `all_success`.
+`create_children_v1(parent_task_id, worker_id, fence_token, children, mode)` accepts 0 through 100
+unique named requests and mode `settled` or `all_success`.
 
 1. A non-empty first call creates every child and dependency edge.
 2. It then moves the parent to blocked and sets its `pending_prerequisites` to its pending edges.
@@ -1069,7 +1081,8 @@ join mode therefore remains a `ChildConflictError`.
 Replay requires the exact names, normalized requests, and mode. It returns only after every child
 reaches a terminal state.
 
-- The joined object may not exceed the parent task's `result_max_bytes`. An oversized join returns
+- The joined object may not exceed the parent task's `result_max_bytes`, which defaults to
+  1,048,576 bytes. An oversized join returns
   `result_too_large` without copying the object to the client.
 - `children_created` and `children_joined` each append once per set.
 
@@ -1276,6 +1289,9 @@ drifted again.
 index. Pending debounce replaces both values in one transaction. Retry, recovery, durable waits, and
 promotion preserve the value while moving the same row between live states.
 
+- `max_attempts` is an integer from 1 through 100. `enqueue_batch_v1` defaults it to 25.
+- A failure or recovery retries only while the failed attempt number is below `max_attempts`.
+  Otherwise the task fails.
 - Retry and recovery increment `current_attempt` while moving the same row back to ready or
   scheduled.
 - Named durable timer suspension preserves `current_attempt`, because waiting is successful control
@@ -1290,24 +1306,22 @@ PostgreSQL validates policy shape and numeric bounds, selects the delay, perform
 transition, and writes provenance. Explicit persisted policies apply consistently to handler failure
 and expired-lease recovery.
 
-When policy is omitted, compatibility remains path-specific:
+`retry_delay_v1` selects the delay in this order:
 
-- Handler failure uses the legacy Sidekiq-inspired random delay
-  `(count ** 4) + 15 + floor(random() * 10) * (count + 1)` seconds.
-- Lease recovery is immediate.
+1. An override, including 0: a numeric `Queue.fail` delay, a numeric or callback-derived
+   `WorkerOptions.retryDelayMs`, or an explicit `Queue.recoverExpired` delay.
+2. The persisted retry policy.
+3. Without a policy, compatibility remains path-specific:
+   - Handler failure uses the legacy Sidekiq-inspired random delay
+     `(count ** 4) + 15 + floor(random() * 10) * (count + 1)` seconds.
+   - Lease recovery and execution timeout use a delay of 0.
 
-These overrides take precedence, including zero:
-
-- numeric `Queue.fail` delays
-- numeric or callback-derived `WorkerOptions.retryDelayMs`
-- explicit `Queue.recoverExpired` delays
-
-A worker callback may return `undefined` to omit the override and defer to PostgreSQL. Retry-budget
+A worker callback may return `undefined` to omit the override, so step 2 or 3 applies. Retry-budget
 enforcement remains in SQL regardless of delay source.
 
 Policy bounds:
 
-- All delay fields are integers from zero through 31,536,000,000 milliseconds (365 days).
+- All delay fields are integers from 0 through 31,536,000,000 milliseconds (365 days).
 - Exponential `multiplier` is an integer from 1 through 100.
 - `maxDelayMs` must be at least `initialDelayMs` or `baseDelayMs`.
 
@@ -1375,7 +1389,7 @@ climb rather than settle has the statement above as the lever.
 
 #### Concurrency key
 
-`concurrency_key` is null or a non-empty UTF-8 string through 256 bytes. `task` retains the accepted
+`concurrency_key` is null or a UTF-8 string of 1 through 256 bytes. `task` retains the accepted
 value. `task_runtime` duplicates it for admission without joining lifetime identity. The key is
 queue-scoped. Keyless tasks consume only queue capacity.
 
@@ -1425,8 +1439,9 @@ history rows remain.
 #### Dead-letter index
 
 Failed outcomes additionally have one cold partial index ordered by immutable completion time and
-identity. `list_dead_letters_v1` uses it for bounded cursor pages. It joins the frozen accepted
-`task` definition only after selecting terminal candidates. This index is not a dispatch path, and
+identity. `list_dead_letters_v1` uses it for bounded cursor pages. A page holds 1 through 1,000
+rows (`MAX_REDRIVE_BATCH_SIZE`) and defaults to 100. It joins the frozen accepted `task` definition
+only after selecting terminal candidates. This index is not a dispatch path, and
 claim never reads it.
 
 ### `task_query`
@@ -1474,9 +1489,18 @@ Insert-only source-to-target lineage and operator audit.
 - The row retains safe request preview/digest/length, actor, reason, canonical request fingerprint,
   source and initial target states, and request time.
 
+| Input                    | Range                      |
+| ------------------------ | -------------------------- |
+| Actor (`p_requested_by`) | 1 through 200 characters   |
+| Reason                   | 1 through 2,000 characters |
+| Request ID               | 1 through 512 UTF-8 bytes  |
+
+`redrive_v1` and `redrive_many_v1` both enforce these ranges.
+
 #### `redrive_v1`
 
-`redrive_v1` accepts only a retained failed source. It creates a fresh ready task.
+`redrive_v1` accepts only a retained failed source. It creates a fresh ready task with `run_at`
+now and `current_attempt` 1.
 
 - It copies queue, type, priority, payload, accepted contract version, size limits, redaction keys,
   tags, attempt budget, retry policy, and execution timeout.
@@ -1504,7 +1528,7 @@ Target deletion cascades its inbound edge. Ancestors can then become eligible la
 retention windows.
 
 `Admin.getRedriveLineage` traverses the retained connected graph with an explicit bound and
-truncation flag.
+truncation flag. The bound is 1 through 1,000 records and defaults to 1,000.
 
 ### `task_checkpoint`
 
@@ -1514,6 +1538,7 @@ Insert-only named JSON results at explicit handler restart boundaries.
 
 - The primary key `(task_id, checkpoint_name)` makes each name immutable for the stable task
   identity, so retries can reuse completed steps.
+- `checkpoint_name` holds 1 to 200 characters.
 - `save_checkpoint_v1` locks and verifies the exact active, unexpired worker/fence generation before
   inserting. That serializes the write against completion, failure, and lease recovery.
 - Attempt, fence, worker, and creation time preserve ownership provenance.
@@ -1537,8 +1562,8 @@ system commits but before the checkpoint transaction commits.
 
 #### Size and lifetime
 
-Values are limited to 1 MiB of PostgreSQL's canonical JSONB text representation. That gives every
-language client one authoritative definition.
+Values are limited to 1 MiB (1,048,576 bytes) of PostgreSQL's canonical JSONB text representation.
+That gives every language client one authoritative definition.
 
 Checkpoints intentionally have no independent retirement path. Deleting a completed name while
 retaining a retryable task could repeat that step. They cascade only when the stable parent task
@@ -1631,15 +1656,16 @@ actor.
 | Bound                                     | Limit                                          |
 | ----------------------------------------- | ---------------------------------------------- |
 | `MAX_EXTERNAL_WAIT_VALUE_BYTES`           | Payloads: 65,536 bytes of canonical JSONB text |
-| `MAX_EXTERNAL_WAIT_IDEMPOTENCY_KEY_BYTES` | Keys: 512 UTF-8 bytes                          |
-| `MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS`      | Actors: 200 characters                         |
+| `MAX_EXTERNAL_WAIT_IDEMPOTENCY_KEY_BYTES` | Keys: 1 through 512 UTF-8 bytes                |
+| `MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS`      | Actors: 1 through 200 characters               |
 
 The TypeScript client counts name and actor characters in Unicode code points, as PostgreSQL
 `char_length` does.
 
 The function serializes delivery with declaration. It stores only a SHA-256 key hash and request
-fingerprint. The same transaction makes the waiting runtime ready. The first accepted payload is
-retained.
+fingerprint. `signal_received` and `signal_rejected` events record the first 12 hexadecimal
+characters of that hash as `idempotency_key_digest`. The same transaction makes the waiting runtime
+ready. The first accepted payload is retained.
 
 | Request                        | Result                                   |
 | ------------------------------ | ---------------------------------------- |
@@ -1663,8 +1689,8 @@ payload.
 
 #### Timeout and deadline
 
-`MAX_EXTERNAL_WAIT_TIMEOUT_MS` is 604,800,000. `timeoutMs` accepts an integer from 1 through that
-bound.
+`MAX_EXTERNAL_WAIT_TIMEOUT_MS` is 604,800,000 (7 days). `timeoutMs` accepts an integer from 1
+through that bound.
 
 - A declaration which omits `timeoutMs` uses that same bound as its default. PostgreSQL then gives
   the undelivered signal a seven-day `timeout_at`, so an unanswered boundary closes 604,800,000
@@ -1705,7 +1731,7 @@ bounded status, retained payload, delivery time, and actor. A changed retained k
 `Admin.listSignalWaits({ limit, cursor })` returns a `SignalWaitPage` in ascending `createdAt`,
 `taskId`, and `name` order.
 
-- The default page size is 100, and `MAX_EXTERNAL_WAIT_LIST_SIZE` is 1,000.
+- `limit` is an integer from 1 through `MAX_EXTERNAL_WAIT_LIST_SIZE`, 1,000. The default is 100.
 - Each `SignalWait` contains `taskId`, `queue`, `taskType`, `name`, `attempt`, `createdAt`, and
   `deadlineAt`.
 - `nextCursor` contains the exact PostgreSQL `created_at` text, task identity, and name when another
@@ -1760,8 +1786,10 @@ Declaration errors expose the name as `waitName`:
 #### Completing a human wait
 
 `complete_human_wait_v1` accepts the task identity, token name, result, idempotency key, and trusted
-actor. Keys are limited to 512 UTF-8 bytes and actors to 200 characters. The function retains only
-the SHA-256 key hash, request fingerprint, first result, actor, and completion time.
+actor. Results are limited to 65,536 bytes of canonical JSONB text
+(`MAX_EXTERNAL_WAIT_VALUE_BYTES`). Keys hold 1 through 512 UTF-8 bytes, and actors hold 1 through
+200 characters. The function retains only the SHA-256 key hash, request fingerprint, first result,
+actor, and completion time.
 
 | Request                  | Result                                     |
 | ------------------------ | ------------------------------------------ |
@@ -1855,7 +1883,17 @@ Its effective typed columns contain explicit nullable minimum windows for these 
 - schedule occurrences
 - statistics
 
-The row also holds five bounded work limits.
+Each window is null or an integer from 1 through 36,500 days.
+
+The row also holds five bounded work limits:
+
+| Column                            | Accepted values     | Clean install |
+| --------------------------------- | ------------------- | ------------- |
+| `terminal_task_prune_limit`       | 1 through 100,000   | 1,000         |
+| `history_partitions_per_pass`     | 1 through 52        | 4             |
+| `default_partition_rows_per_pass` | 1 through 1,000,000 | 10,000        |
+| `occurrence_rows_per_pass`        | 1 through 1,000,000 | 10,000        |
+| `statistics_rows_per_pass`        | 1 through 1,000,000 | 10,000        |
 
 - Matching `application_*` columns retain the latest deployment defaults.
 - `operator_overrides` contains only the names whose effective values an operator owns.
@@ -2485,9 +2523,9 @@ Minute bins are unaffected by any timezone in any case. Every offset PostgreSQL 
 
 `stat_window_tier_v1(from, to)` requires a lower bound aligned to the tier:
 
-- a minute-aligned lower bound
-- an hour-aligned lower bound at two days
-- a day-aligned lower bound at ninety days
+- a minute-aligned lower bound for a window under 2 days
+- an hour-aligned lower bound for a window of at least 2 days
+- a day-aligned lower bound for a window of at least 90 days
 
 `stat_buckets_v1(from, to)` selects that tier for complete periods. It then uses finer rows and
 `aggregate_stats_v1` for the recent right edge. Every boundary bins on a fixed UTC origin and steps
@@ -2556,7 +2594,7 @@ default, matching the bucket width.
 - `rollup_stats_v1` reads it, along with `statistics_group_limit` and
   `statistics_recompute_buckets`. It returns without work until the interval elapses.
 - Passes serialize on a transaction-scoped advisory lock, so every worker may run it.
-- Setting the interval to zero opts the whole fleet out. Windows stay fully derived, and history
+- Setting the interval to 0 opts the whole fleet out. Windows stay fully derived, and history
   retention holds at the current watermark.
 - `Queue.rollupStatistics({ force: true })` bypasses the cadence gate for an explicit operator pass,
   including while opted out.
@@ -2827,12 +2865,13 @@ PostgreSQL-owned `paused` flag:
 
 | SDK        | Refresh interval option            | Opt-out                           |
 | ---------- | ---------------------------------- | --------------------------------- |
-| TypeScript | `WorkerOptions.registryIntervalMs` | Zero                              |
-| Python     | `registry_interval_ms`             | Zero                              |
+| TypeScript | `WorkerOptions.registryIntervalMs` | `0`                               |
+| Python     | `registry_interval_ms`             | `0`                               |
 | Go         | `WorkerOptions.RegistryInterval`   | `WorkerOptions.DisableRegistry`   |
 | Rust       | `WorkerOptions::registry_interval` | `WorkerOptions::disable_registry` |
+| Ruby       | `registry_interval:`               | `disable_registry: true`          |
 
-Each interval defaults to five seconds. The dashboard shows the reported process values read-only,
+Each interval defaults to 5 seconds. The dashboard shows the reported process values read-only,
 because changing them requires a deployment.
 
 #### Client identity
@@ -2842,8 +2881,8 @@ because changing them requires a deployment.
 - All three are nullable. The SQL protocol is callable directly, and a client that reports nothing
   is a fact to record rather than a caller to reject.
 - Each SDK stamps its own values, and no caller supplies them. TypeScript reports `typescript`,
-  Python reports `python`, Go reports `go`, and Rust reports `rust`, each with its published package
-  version.
+  Python reports `python`, Go reports `go`, Rust reports `rust`, and Ruby reports `ruby`, each with
+  its published package version.
 - `sdk_language` holds 1 through 40 characters, and `sdk_version` holds 1 through 64.
 - `client_protocol_version` is 1 or greater.
 - A refresh overwrites all three rather than merging. A downgraded worker therefore stops claiming a
@@ -2915,15 +2954,15 @@ an operational indicator rather than a synchronous cross-process read.
 
 The singleton maintenance policy stores these values:
 
-| Column                              | Accepted values                   | Clean install         |
-| ----------------------------------- | --------------------------------- | --------------------- |
-| `timezone`                          | One validated IANA time zone      | UTC                   |
-| `partition_preparation_interval_ms` | 60,000 through 604,800,000        | six hours             |
-| `terminal_cleanup_interval_ms`      | 1,000 through 86,400,000          | five minutes          |
-| `history_retention_local_time`      | Second precision                  | 03:00                 |
-| `statistics_rollup_interval_ms`     | Zero, or 1,000 through 86,400,000 | one minute            |
-| `statistics_group_limit`            | 1 through 10,000                  | 200 groups            |
-| `statistics_recompute_buckets`      | 0 through 1,440                   | two recompute buckets |
+| Column                              | Accepted values                | Clean install          |
+| ----------------------------------- | ------------------------------ | ---------------------- |
+| `timezone`                          | One validated IANA time zone   | UTC                    |
+| `partition_preparation_interval_ms` | 60,000 through 604,800,000     | six hours              |
+| `terminal_cleanup_interval_ms`      | 1,000 through 86,400,000       | five minutes           |
+| `history_retention_local_time`      | Second precision               | 03:00                  |
+| `statistics_rollup_interval_ms`     | 0, or 1,000 through 86,400,000 | 60,000 ms (one minute) |
+| `statistics_group_limit`            | 1 through 10,000               | 200 groups             |
+| `statistics_recompute_buckets`      | 0 through 1,440                | 2 recompute buckets    |
 
 Matching `application_*` columns and `operator_overrides` use the same ownership model as retention
 policy.
@@ -3004,6 +3043,9 @@ retain their prior position.
 `sync_schedule_definitions_internal_v1`.
 
 - It validates and stores `catchup_policy`.
+- It validates each task definition: `priority` is an integer from 0 through 100 and defaults to 0,
+  `maxAttempts` is 1 through 100 and defaults to 25, and `concurrencyKey` is 1 through 256 UTF-8
+  bytes.
 - It updates `last_evaluated_at` when an evaluation boundary changes.
 - Any definition change increments the schedule revision once.
 

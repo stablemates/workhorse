@@ -161,7 +161,7 @@ Event and attempt retention are independent phases inside `retain_history_v1`. E
 
 A default partition catches rows when no day partition exists for them.
 
-More detail: [Data model: Retention](../architecture/data-model.md#retention-2).
+More detail: [Data model: Retention](../architecture/data-model.md#retention-2) and [Data model: `retention_policy`](../architecture/data-model.md#retention_policy).
 
 </details>
 
@@ -241,7 +241,7 @@ new task, `invoice-7b`, linked to `invoice-7` as its descendant.
   normal windows.
 - `terminal_task_prune_limit` bounds each terminal pass: 1 to 100,000 tasks, default 1,000.
 
-More detail: [Data model: Lineage retention](../architecture/data-model.md#lineage-retention).
+More detail: [Data model: Lineage retention](../architecture/data-model.md#lineage-retention) and [Data model: `retention_policy`](../architecture/data-model.md#retention_policy).
 
 </details>
 
@@ -308,7 +308,7 @@ tasks.
 - Each table deletes at most `statistics_rows_per_pass` rows per pass: 1 to 1,000,000, default
   10,000.
 
-More detail: [Data model: Bucket retention](../architecture/data-model.md#bucket-retention).
+More detail: [Data model: Bucket retention](../architecture/data-model.md#bucket-retention) and [Data model: `retention_policy`](../architecture/data-model.md#retention_policy).
 
 </details>
 
@@ -355,7 +355,7 @@ Lag differs by category:
 | ---------------------------- | ---------------- |
 | `row_retention_lag_ms`       | 21,600,000 (6 h) |
 
-More detail: [Task lifecycle: Retention health](../architecture/lifecycle.md#retention-health).
+More detail: [Task lifecycle: Retention health](../architecture/lifecycle.md#retention-health) and [Task lifecycle: Health policy](../architecture/lifecycle.md#health-policy).
 
 </details>
 

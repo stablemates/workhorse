@@ -50,7 +50,7 @@ covers the whole database, not one task or queue. So a later claim always has a 
 **Recovery cadence.** Each worker calls `tick_v1` once per `maintenanceIntervalMs` (TypeScript
 default 1,000 ms). Each tick recovers a bounded batch of expired rows.
 
-More detail: [Task lifecycle: Claim](../architecture/lifecycle.md#claim).
+More detail: [Task lifecycle: Claim](../architecture/lifecycle.md#claim) and [Task lifecycle: Worker options](../architecture/lifecycle.md#worker-options).
 
 </details>
 

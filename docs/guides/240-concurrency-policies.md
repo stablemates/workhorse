@@ -95,7 +95,7 @@ namespace atomically.
 - An empty or omitted list filter returns every policy, ordered by `queue_name`.
 - `Queue.concurrencyPolicies` is a deprecated TypeScript alias, removed in `1.0.0`.
 
-More detail: [Data model: Synchronization](../architecture/data-model.md#synchronization).
+More detail: [Data model: Synchronization](../architecture/data-model.md#synchronization), [Data model: Columns](../architecture/data-model.md#columns-2), [Data model: Concurrency key](../architecture/data-model.md#concurrency-key), and [Data model: Listing](../architecture/data-model.md#listing-1).
 
 </details>
 

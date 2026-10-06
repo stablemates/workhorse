@@ -121,7 +121,7 @@ A callback that returns `undefined` gives no override, so step 2 or 3 applies.
 `fail_v1` reserves a delay of `-1` for a terminal failure: the task fails with no retry, even with
 attempts left. The worker sends it for a durable replay conflict.
 
-More detail: [Data model: Retry delay selection](../architecture/data-model.md#retry-delay-selection).
+More detail: [Data model: Retry delay selection](../architecture/data-model.md#retry-delay-selection) and [Schema and SQL protocol: Durable replay conflicts](../architecture/schema-and-protocol.md#durable-replay-conflicts).
 
 </details>
 

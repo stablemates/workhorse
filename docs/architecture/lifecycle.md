@@ -128,7 +128,7 @@ Their shared ownership table, hash, and lock ordering do not collapse `replayed`
 | ---------- | --------------------------------------------------------------- |
 | `key`      | At most 512 UTF-8 bytes, the idempotency key limit.             |
 | `scope`    | Optional. At most 256 UTF-8 bytes, the idempotency scope limit. |
-| `windowMs` | An integer from 1 through 31,536,000,000.                       |
+| `windowMs` | An integer from 1 through 31,536,000,000 (365 days).            |
 | `schedule` | `reset` or `preserve`.                                          |
 
 A request with `debounce` cannot also supply `idempotency`, `runAt`, `prerequisiteTaskId`, or
@@ -155,8 +155,8 @@ definition and runtime atomically. The stable task ID and current attempt remain
 - `reset` derives a new run time and key expiry from the statement clock.
 - `preserve` retains both.
 
-A `debounced` event records the safe key preview and digest, schedule policy, window, expiry, prior
-request digest, and replacement request digest.
+A `debounced` event records the safe key preview, the first 12 hexadecimal key-digest characters,
+the schedule policy, window, expiry, prior request digest, and replacement request digest.
 
 ##### Rejection
 
@@ -197,7 +197,7 @@ lag from creating two pending tasks for one elapsed key.
 | ---------- | --------------------------------------------------------------- |
 | `key`      | At most 512 UTF-8 bytes, the idempotency key limit.             |
 | `scope`    | Optional. At most 256 UTF-8 bytes, the idempotency scope limit. |
-| `windowMs` | An integer from 1 through 31,536,000,000.                       |
+| `windowMs` | An integer from 1 through 31,536,000,000 (365 days).            |
 
 A request cannot combine `throttle` with `idempotency`, `debounce`, `prerequisiteTaskId`, or
 `dependencies`. `Queue.enqueueManyWithResults` and `enqueue_throttle_v1` enforce the dependency
@@ -278,8 +278,8 @@ flowchart TB
   end
 ```
 
-Each worker calls `tick_v1` at most once per configured `maintenanceIntervalMs` (default one
-second). The same cadence drives in-process schedule evaluation. Under the transaction-scoped
+Each worker calls `tick_v1` at most once per configured `maintenanceIntervalMs` (default
+1,000 ms). The same cadence drives in-process schedule evaluation. Under the transaction-scoped
 `workhorse:tick` advisory lock, `tick_v1`:
 
 1. Records `maintenance_state.last_started_at`.
@@ -431,6 +431,11 @@ flowchart LR
 `schedule_wait_v1` accepts either a relative bigint duration or an absolute timestamp. It locks the
 exact active worker/fence generation and rechecks lease expiry after acquiring the runtime lock.
 
+- The wait name holds 1 to 200 characters.
+- A relative duration is 1 through 31,536,000,000 ms (365 days), `MAX_WAIT_DURATION_MS`.
+- An absolute target must be finite. The TypeScript and Python SDKs also reject a first target more
+  than `MAX_WAIT_DURATION_MS` ahead.
+
 | Case                           | Behavior                                                                                                           |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
 | First future target            | Inserts `task_wait`, changes runtime to wait-marked scheduled state, clears ownership, and emits `wait_scheduled`. |
@@ -483,7 +488,8 @@ workers.
 
 `QueueHealth.externalWaits` reports `pendingSignals`, `pendingHumanDecisions`, `overdue`,
 `oldestPendingAgeMs`, `rejectedDeliveries`, and `capped`. `rejectedDeliveries` counts rejection
-events from the trailing 24 hours.
+events since `p_rejected_since`. The SDKs pass `EXTERNAL_WAIT_REJECTION_WINDOW_MS` (86,400,000 ms,
+24 hours) before now. The SQL default is also one day.
 
 Separate scans inspect at most 10,001 rows each of:
 
@@ -712,6 +718,9 @@ and fractions throw before any queue operation.
 | `maintenanceRoutinePollMs` | At least 100.                                       |
 | `registryIntervalMs`       | 0, which opts out of registration, or at least 100. |
 | `scheduleCatchupLimit`     | 1 through 10,000.                                   |
+
+`leaseMs` defaults to 30,000 ms, and `heartbeatMs` to `max(100, floor(leaseMs / 3))` ms.
+`maintenanceIntervalMs` defaults to 1,000 ms.
 
 #### Queue set
 
@@ -966,7 +975,7 @@ The function returns `accepted`, `cancel_requested`, `deadline_exceeded`, `timeo
 
 #### Batched renewal
 
-`heartbeat_many_v1(p_worker_id, p_leases jsonb)` accepts one through 100
+`heartbeat_many_v1(p_worker_id, p_leases jsonb)` accepts 1 through 100
 `{ taskId, fenceToken, leaseMs }` entries.
 
 1. On the full tier it locks the worker's named rows in `task_id` order.
@@ -1089,6 +1098,9 @@ that round and discards the connection. Their heartbeat connections work as foll
 `cancel_v1` locks the sole runtime row. This serializes cancellation with completion, failure,
 checkpoint, wait, heartbeat, and recovery.
 
+`cancel_v1` raises before the lock when a supplied `p_requested_by` falls outside 1 to 200
+characters, or a supplied `p_reason` outside 1 to 2,000 characters. Both are optional.
+
 #### Inactive work
 
 Ready, future-scheduled, and durable-wait continuations delete runtime and insert one immutable
@@ -1135,7 +1147,7 @@ prevent the next occurrence from enqueueing independently.
 | Enqueue deadline  | The stable task identity. An absolute wall-clock boundary that keeps advancing while work is ready, scheduled, waiting, retrying, or active. | PostgreSQL prevents the expired task from entering a new claim and materializes one immutable failed outcome with deadline-specific evidence. A deadline never creates another attempt.             |
 | Execution timeout | One logical attempt. Active execution consumes the budget; a named durable wait releases the lease and pauses that accounting.               | PostgreSQL closes the attempt with timeout-specific history. It schedules the next attempt through the persisted retry policy, or materializes terminal failure when the retry budget is exhausted. |
 
-Both boundaries are optional.
+Both boundaries are optional. `execution_timeout_ms` is an integer from 1 through 31,536,000,000.
 
 Ordinary handlers should complete within 110 seconds so rolling deployments retain practical drain
 headroom. Longer operations should use durable execution boundaries: idempotent stages, named
@@ -1393,13 +1405,13 @@ Degraded codes cost storage or throughput: `rollup-stalled`, `retention-lag`,
 
 `queue_health_policy` uses `singleton` as its primary key. It owns these thresholds:
 
-| Column                        | Default                  | Application default column                |
-| ----------------------------- | ------------------------ | ----------------------------------------- |
-| `promotion_lag_ms`            | 10,000 milliseconds      | `application_promotion_lag_ms`            |
-| `rollup_stalled_lag_ms`       | 1,800,000 milliseconds   | `application_rollup_stalled_lag_ms`       |
-| `row_retention_lag_ms`        | 21,600,000 milliseconds  | `application_row_retention_lag_ms`        |
-| `partition_retention_lag_ms`  | 172,800,000 milliseconds | `application_partition_retention_lag_ms`  |
-| `eligible_history_partitions` | 2 partitions             | `application_eligible_history_partitions` |
+| Column                        | Default                       | Application default column                |
+| ----------------------------- | ----------------------------- | ----------------------------------------- |
+| `promotion_lag_ms`            | 10,000 milliseconds           | `application_promotion_lag_ms`            |
+| `rollup_stalled_lag_ms`       | 1,800,000 milliseconds        | `application_rollup_stalled_lag_ms`       |
+| `row_retention_lag_ms`        | 21,600,000 milliseconds (6 h) | `application_row_retention_lag_ms`        |
+| `partition_retention_lag_ms`  | 172,800,000 milliseconds      | `application_partition_retention_lag_ms`  |
+| `eligible_history_partitions` | 2 partitions                  | `application_eligible_history_partitions` |
 
 `operator_overrides` records provenance, and `updated_at` records the last policy change.
 

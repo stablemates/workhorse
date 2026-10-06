@@ -79,7 +79,7 @@ A rollback removes the child, the link, the dependency, the events, and the susp
 **Events.** `child_created` on the parent, `parent_linked` on the child, and the first
 `child_joined` on the parent.
 
-More detail: [Data model: runChild lifecycle](../architecture/data-model.md#runchild-lifecycle).
+More detail: [Data model: runChild lifecycle](../architecture/data-model.md#runchild-lifecycle) and [Data model: Columns and constraints](../architecture/data-model.md#columns-and-constraints).
 
 </details>
 
@@ -211,7 +211,7 @@ to 1,048,576 bytes. An oversized join returns `result_too_large` and raises
 
 **Events.** `children_created` and `children_joined` each append once per set.
 
-More detail: [Data model: Join modes](../architecture/data-model.md#join-modes).
+More detail: [Data model: Join modes](../architecture/data-model.md#join-modes), [Data model: Creating a child set](../architecture/data-model.md#creating-a-child-set), and [Data model: Columns and constraints](../architecture/data-model.md#columns-and-constraints).
 
 </details>
 

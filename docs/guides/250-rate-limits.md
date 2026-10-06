@@ -77,7 +77,7 @@ A start needs one whole token.
 - Completion, failure, cancellation, durable suspension, and lease expiry never refund a token.
 - A queue without a `rate_limit_policy` row has no start limit.
 
-More detail: [Data model: Consumption and cleanup](../architecture/data-model.md#consumption-and-cleanup).
+More detail: [Data model: Consumption and cleanup](../architecture/data-model.md#consumption-and-cleanup), [Data model: Policy columns](../architecture/data-model.md#policy-columns), and [Data model: Bucket state](../architecture/data-model.md#bucket-state).
 
 </details>
 
@@ -125,7 +125,7 @@ key limit when the queue has one. The key stays part of the accepted task.
 - Each claim inspects the oldest 100 key buckets of its queue. It removes those that have fully
   refilled.
 
-More detail: [Task lifecycle: Key limits and the policy window](../architecture/lifecycle.md#key-limits-and-the-policy-window).
+More detail: [Task lifecycle: Key limits and the policy window](../architecture/lifecycle.md#key-limits-and-the-policy-window) and [Data model: Concurrency key](../architecture/data-model.md#concurrency-key).
 
 </details>
 
@@ -158,7 +158,7 @@ its claims take turns.
 - A shard refills at `rate_limit * share / (rate_interval_ms * rate_burst)` tokens per ms.
 - Since schema version 43, a `rate_limit_bucket` row with `bucket_scope` `queue` is inert.
 
-More detail: [Data model: Shard count](../architecture/data-model.md#shard-count).
+More detail: [Data model: Shard count](../architecture/data-model.md#shard-count) and [Data model: Bucket state](../architecture/data-model.md#bucket-state).
 
 </details>
 
@@ -288,7 +288,7 @@ it. The same facts appear in `Queue.health()`.
   `availableTokens`, null without a rate, and `blockedReady`, zero unless the budget is saturated.
 - `QueueHealth.budgetPolicies` carries the same rows.
 
-More detail: [Data model: Counting and charging](../architecture/data-model.md#counting-and-charging).
+More detail: [Data model: Counting and charging](../architecture/data-model.md#counting-and-charging), [Data model: Naming a budget on a task](../architecture/data-model.md#naming-a-budget-on-a-task), and [Data model: Status and telemetry](../architecture/data-model.md#status-and-telemetry-1).
 
 </details>
 

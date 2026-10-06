@@ -86,9 +86,9 @@ An operator who asks why the notification has not run gets an answer. `Admin.get
 
 `Admin.getDependencyLineage(taskId)` reads both directions. It returns the edges where the task is a
 prerequisite or a dependent, with each policy, resolution, and release time. The result says when
-more edges exist beyond a caller-selected response limit. Each task accepts a bounded number of
-prerequisites and dependents, so the default response covers its complete direct lineage without a
-continuation cursor.
+more edges exist than the response limit returns. Each task accepts a bounded number of
+prerequisites, children, and dependents, so the default response covers its complete direct
+lineage.
 
 <details>
 <summary>Reference: blocked state and lineage</summary>
@@ -98,11 +98,13 @@ continuation cursor.
 - Task records from `Admin.getTask` and `Admin.listTasks` carry `prerequisiteTaskIds`,
   `dependencyPolicy`, and `blockedReason`.
 - `Admin.getDependencyLineage(taskId, limit)` returns `{ records, truncated }`. `limit` defaults to
-  1,000 (`MAX_TASK_QUERY_PAGE_SIZE`), above the 200 direct edges one task can hold.
+  1,000 (`MAX_TASK_QUERY_PAGE_SIZE`). `truncated` is true when more edges exist.
+- One task holds at most 300 direct edges: 100 prerequisites from its enqueue request, 100
+  children, and 100 dependents. The default `limit` therefore returns them all.
 - Each record has `dependentTaskId`, `prerequisiteTaskId`, `onSuccess`, `onFailure`,
   `onCancellation`, `createdAt`, `releasedAt`, and `resolution`.
 
-More detail: [Data model: Columns and bounds](../architecture/data-model.md#columns-and-bounds).
+More detail: [Data model: Columns and bounds](../architecture/data-model.md#columns-and-bounds) and [Data model: Admin reads](../architecture/data-model.md#admin-reads).
 
 </details>
 
@@ -367,7 +369,7 @@ queue.
   has a terminal outcome.
 - Released-edge compaction runs before terminal-task pruning in the same pass.
 
-More detail: [Data model: Dependency health](../architecture/data-model.md#dependency-health).
+More detail: [Data model: Dependency health](../architecture/data-model.md#dependency-health) and [Data model: Pruning released edges](../architecture/data-model.md#pruning-released-edges).
 
 </details>
 

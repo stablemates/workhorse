@@ -64,7 +64,7 @@ A rollup turned off holds export as well as retention.
 **Object.** One gzipped JSON-lines object per day. Each line is the `to_jsonb` of one source row. A
 day with no rows completes with a null object key and a manifest only.
 
-More detail: [Data model: Export gate](../architecture/data-model.md#export-gate).
+More detail: [Data model: Export gate](../architecture/data-model.md#export-gate), [Data model: Tables](../architecture/data-model.md#tables), and [Data model: UTC bin origin](../architecture/data-model.md#utc-bin-origin).
 
 </details>
 
@@ -114,7 +114,7 @@ With export off, the clamp is skipped and every other retention rule is unchange
 **Health.** Queue health computes retention lag from the retention windows, not the clamp. Held
 history therefore raises the degraded reasons `retention-lag` and `eligible-history-partitions`.
 
-More detail: [Data model: Retention clamp](../architecture/data-model.md#retention-clamp).
+More detail: [Data model: Retention clamp](../architecture/data-model.md#retention-clamp) and [Data model: Tables](../architecture/data-model.md#tables).
 
 </details>
 
@@ -168,7 +168,7 @@ contiguous complete day, and returns the new watermark.
 **`fail_cold_export_segment_v1(p_dataset, p_segment_start, p_attempts, p_error)`** clears the lease
 and stores `last_error` under the same fence.
 
-More detail: [Data model: Segment functions](../architecture/data-model.md#segment-functions).
+More detail: [Data model: Segment functions](../architecture/data-model.md#segment-functions) and [Data model: Tables](../architecture/data-model.md#tables).
 
 </details>
 
@@ -263,7 +263,7 @@ seconds long. For each damaged dataset:
 
 Any other watermark is rounded down to its UTC midnight.
 
-More detail: [Data model: Migration 0052 repair](../architecture/data-model.md#migration-0052-repair).
+More detail: [Data model: Migration 0052 repair](../architecture/data-model.md#migration-0052-repair) and [Data model: Segment functions](../architecture/data-model.md#segment-functions).
 
 </details>
 
@@ -428,7 +428,7 @@ by the column names it had when it was exported.
   loading an export into the live `workhorse` schema unsupported, because retention would delete it
   again and statistics would count it twice.
 
-More detail: [Data model: Segment functions](../architecture/data-model.md#segment-functions).
+More detail: [Data model: Segment functions](../architecture/data-model.md#segment-functions) and [ADR 0068: Export cold history behind the rollup watermark](../decisions/0068-export-cold-history-behind-the-rollup-watermark.md).
 
 </details>
 

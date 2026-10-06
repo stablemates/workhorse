@@ -43,7 +43,7 @@ transaction in its own way.
 - No Workhorse client commits, rolls back, or closes a transaction, connection, or pool it was
   given.
 
-More detail: [Task lifecycle: Batch write order](../architecture/lifecycle.md#batch-write-order).
+More detail: [Task lifecycle: Batch write order](../architecture/lifecycle.md#batch-write-order) and [Task lifecycle: Batch validation](../architecture/lifecycle.md#batch-validation).
 
 </details>
 

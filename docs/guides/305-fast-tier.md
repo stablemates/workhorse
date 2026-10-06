@@ -214,7 +214,7 @@ before its names.
 that is not an Array of `ChildTaskRequest` raises `ArgumentError`. A set of more than 100 children
 raises `LimitExceededError`.
 
-More detail: [Fast tier: Rejected features and P1007](../architecture/fast-tier.md#rejected-features-and-p1007).
+More detail: [Fast tier: Rejected features and P1007](../architecture/fast-tier.md#rejected-features-and-p1007), [Fast tier: Handler context rejections](../architecture/fast-tier.md#handler-context-rejections), and [Fast tier: Ruby argument validation order](../architecture/fast-tier.md#ruby-argument-validation-order).
 
 </details>
 
@@ -293,7 +293,7 @@ connections give a concurrency-64 worker 1, 2, 4, and 8 cohorts.
 
 An explicit count is never capped.
 
-More detail: [Fast tier: Workers on a fast-tier queue](../architecture/fast-tier.md#workers-on-a-fast-tier-queue).
+More detail: [Fast tier: Workers on a fast-tier queue](../architecture/fast-tier.md#workers-on-a-fast-tier-queue) and [Fast tier: `complete_many_and_claim_v1`](../architecture/fast-tier.md#complete_many_and_claim_v1).
 
 </details>
 

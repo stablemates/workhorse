@@ -61,7 +61,7 @@ flight.
 **Heartbeats.** One round per worker sends every active lease through `heartbeat_many_v1`. Rounds
 never overlap.
 
-More detail: [Task lifecycle: Dispatch loop](../architecture/lifecycle.md#dispatch-loop).
+More detail: [Task lifecycle: Dispatch loop](../architecture/lifecycle.md#dispatch-loop) and [Task lifecycle: Worker options](../architecture/lifecycle.md#worker-options).
 
 </details>
 
@@ -211,7 +211,7 @@ Python or Rust worker holds its own.
 - A pool with a capacity of 1 stays polling-only. Go `WorkerOptions.PollingOnly` turns the listener
   off for a transaction-mode pooler.
 
-More detail: [Operations and CLI: Polling cadence](../architecture/operations.md#polling-cadence).
+More detail: [Operations and CLI: Polling cadence](../architecture/operations.md#polling-cadence) and [Operations and CLI: Task notifications](../architecture/operations.md#task-notifications).
 
 </details>
 
@@ -393,7 +393,7 @@ Python's second signal calls `force_exit` with 128 plus the signal number: 130 f
 The first signal marks readiness false and calls `stop()` on every worker. Active handlers and their
 heartbeat batch continue. Process termination never writes a durable task cancellation.
 
-More detail: [Operations and CLI: Shutdown deadline and failure](../architecture/operations.md#shutdown-deadline-and-failure).
+More detail: [Operations and CLI: Shutdown deadline and failure](../architecture/operations.md#shutdown-deadline-and-failure) and [Schema and SQL protocol: Python worker processes](../architecture/schema-and-protocol.md#python-worker-processes).
 
 </details>
 
@@ -451,7 +451,7 @@ More detail: [Schema and SQL protocol: Shutdown grace period](../architecture/sc
 - The cleanup window covers stopping the registry loop and listener, `deregister_worker_v1`, and the
   heartbeat connection release. It ends 1 s after the later of the deadline and the end of the drain.
 
-More detail: [Schema and SQL protocol: Shutdown](../architecture/schema-and-protocol.md#shutdown).
+More detail: [Schema and SQL protocol: Shutdown](../architecture/schema-and-protocol.md#shutdown) and [Schema and SQL protocol: Cleanup window](../architecture/schema-and-protocol.md#cleanup-window).
 
 </details>
 
@@ -547,7 +547,7 @@ completion. If you need work to stop _durably_, pause the queue, not the worker.
   that instance keeps refreshing. A new instance of the same worker id clears it.
 - A worker may not write `paused`, and an operator may not write the runtime columns.
 
-More detail: [Data model: Pause scope](../architecture/data-model.md#pause-scope).
+More detail: [Data model: Pause scope](../architecture/data-model.md#pause-scope), [Data model: Pause ownership](../architecture/data-model.md#pause-ownership), and [Operations and CLI: Worker pause](../architecture/operations.md#worker-pause).
 
 </details>
 

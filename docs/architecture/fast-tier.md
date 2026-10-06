@@ -260,6 +260,10 @@ Two rejections differ from that shape:
   queue is the prerequisite's.
 - The `batched completion` message is `queue <name> is not a fast-tier queue`.
 
+The full tier has no fused completion call.
+[ADR 0077](../decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md#5-the-research-builds-implicit-path-is-not-ported)
+measured fused completion only on the fast tier.
+
 #### SDK errors
 
 Every SDK maps `P1007` to one error:

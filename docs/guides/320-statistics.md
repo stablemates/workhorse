@@ -139,7 +139,7 @@ fills its newest part from finer rows and raw history.
 - `rollup_stats_v1` returns without work until the interval has elapsed.
 - Passes serialize on a transaction-scoped advisory lock, so every worker may offer it.
 
-More detail: [Data model: Rewrites and cardinality](../architecture/data-model.md#rewrites-and-cardinality).
+More detail: [Data model: Rewrites and cardinality](../architecture/data-model.md#rewrites-and-cardinality) and [Data model: Policy columns](../architecture/data-model.md#policy-columns-1).
 
 </details>
 
@@ -236,7 +236,7 @@ fixable. The alternative would be a silent hole in your numbers, which is not.
 - While cold export is enabled, `retain_history_v1` also clamps each dataset to
   `cold_export_dataset.exported_through`.
 
-More detail: [Data model: Retention interlock](../architecture/data-model.md#retention-interlock).
+More detail: [Data model: Retention interlock](../architecture/data-model.md#retention-interlock) and [Data model: `retention_policy`](../architecture/data-model.md#retention_policy).
 
 </details>
 
@@ -267,7 +267,7 @@ dimensions therefore keep using bounded live queries.
 - Pairs ranked beyond the limit are folded into the task type `__other__` within their own queue.
 - Worker and tag dimensions are never rolled up.
 
-More detail: [Data model: Rewrites and cardinality](../architecture/data-model.md#rewrites-and-cardinality).
+More detail: [Data model: Rewrites and cardinality](../architecture/data-model.md#rewrites-and-cardinality) and [Data model: Policy columns](../architecture/data-model.md#policy-columns-1).
 
 </details>
 

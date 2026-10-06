@@ -119,7 +119,7 @@ checks the pool's shape, not its pooling mode, so it still reports the capabilit
 **Fallback poll.** A notification-capable `Worker.run()` polls every 5,000 ms by default, with ±10%
 jitter. An explicit `pollMs` replaces that base.
 
-More detail: [Operations and CLI: Polling-only cases](../architecture/operations.md#polling-only-cases).
+More detail: [Operations and CLI: Polling-only cases](../architecture/operations.md#polling-only-cases) and [Operations and CLI: Polling cadence](../architecture/operations.md#polling-cadence).
 
 </details>
 
@@ -263,7 +263,7 @@ In TypeScript, pools of 3, 4, 6, and 10 connections give a concurrency-64 worker
 cohorts. A TypeScript database with an attached pool, such as a Prisma or Kysely adapter, runs
 statements outside that pool, so its default is not capped.
 
-More detail: [Fast tier: Dispatch cohorts](../architecture/fast-tier.md#dispatch-cohorts).
+More detail: [Fast tier: Dispatch cohorts](../architecture/fast-tier.md#dispatch-cohorts) and [Fast tier: TypeScript worker](../architecture/fast-tier.md#typescript-worker).
 
 </details>
 

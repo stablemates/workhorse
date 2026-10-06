@@ -251,7 +251,7 @@ result fails the attempt through `fail_v1` with this message:
 
 `<task type> result contains a NUL character or an unpaired surrogate, which PostgreSQL jsonb cannot store`
 
-More detail: [Data model: Results jsonb cannot store](../architecture/data-model.md#results-jsonb-cannot-store).
+More detail: [Data model: Results jsonb cannot store](../architecture/data-model.md#results-jsonb-cannot-store) and [Data model: Value size limits](../architecture/data-model.md#value-size-limits).
 
 </details>
 
