@@ -146,8 +146,6 @@ pub struct DashboardOptions<E> {
     pub path: String,
     /// Shown by the dashboard; `development` by default.
     pub environment: String,
-    /// When not empty, attributes every mutation to this actor instead of the principal's.
-    pub audit_actor: String,
     /// Refuses every mutation with 403 Forbidden.
     pub read_only: bool,
     /// Script URLs the application shell loads as modules.
@@ -176,7 +174,6 @@ impl<E> DashboardOptions<E> {
             authorize,
             path: "/workhorse".into(),
             environment: "development".into(),
-            audit_actor: String::new(),
             read_only: false,
             browser_modules: Vec::new(),
             configured_workers: Vec::new(),
@@ -226,7 +223,6 @@ pub fn handler<E: Executor>(options: DashboardOptions<E>) -> Result<DashboardSer
         base_path: normalize_path(&options.path),
         allowed_hosts,
         authorize: options.authorize,
-        audit_actor: options.audit_actor,
         read_only: options.read_only,
         https: options.https,
         browser_modules: options.browser_modules,
@@ -287,7 +283,6 @@ struct Host<E: Executor> {
     base_path: String,
     allowed_hosts: HashSet<String>,
     authorize: Authorize,
-    audit_actor: String,
     read_only: bool,
     https: bool,
     browser_modules: Vec<String>,
@@ -322,15 +317,13 @@ impl<E: Executor> Host<E> {
         {
             return json_response(421, &json!({ "error": "Misdirected Request" }));
         }
-        let principal = match (self.authorize)(&parts).await {
-            Authorization::Principal(principal) => principal,
+        let actor = match (self.authorize)(&parts).await {
+            Authorization::Principal(principal) => principal.actor,
             Authorization::Unauthenticated => {
                 return json_response(401, &json!({ "error": "Unauthorized" }))
             }
             Authorization::Response(response) => return response,
         };
-        let actor =
-            if self.audit_actor.is_empty() { principal.actor } else { self.audit_actor.clone() };
         if let Err(error) = self.assert_compatible().await {
             return json_response(503, &json!({ "error": error.to_string() }));
         }

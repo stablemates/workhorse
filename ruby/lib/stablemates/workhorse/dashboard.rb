@@ -122,8 +122,8 @@ module Stablemates
         return authorization if authorization.is_a?(Array)
         return json(401, {"error" => "Unauthorized"}) if authorization == false
 
-        principal = (authorization == true) ? Principal.new(@audit_actor || "dashboard") : authorization
-        actor = @audit_actor || principal.actor
+        # A verified principal names the actor; the audit actor stands in only for a bare true.
+        actor = (authorization == true) ? (@audit_actor || "dashboard") : authorization.actor
         begin
           assert_compatible
         rescue Error => e

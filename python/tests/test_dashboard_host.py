@@ -59,11 +59,13 @@ def _host(
     authorize: Callable[[dict[str, object]], DashboardPrincipal | bool] = lambda _: (
         DashboardPrincipal("operator@example.test")
     ),
+    audit_actor: str | None = None,
 ) -> DashboardHost:
     return DashboardHost(
         cast(object, _Connection()),
         authorize=authorize,
         environment="test",
+        audit_actor=audit_actor,
         _procedures={"meta": lambda _input, actor: {"environment": "test", "actor": actor}},
         _skip_compatibility_check=True,
     )
@@ -195,6 +197,18 @@ def test_dashboard_host_assigns_the_authenticated_actor() -> None:
     )
     assert status == "200 OK"
     assert json.loads(body) == {"json": {"environment": "test", "actor": "operator@example.test"}}
+
+
+def test_dashboard_host_uses_the_audit_actor_only_without_a_principal() -> None:
+    def actor(host: DashboardHost) -> object:
+        _, _, body = _request(
+            host, "/workhorse/rpc/dashboard/meta", method="POST", body={"json": None}
+        )
+        return json.loads(body)["json"]["actor"]
+
+    assert actor(_host(audit_actor="service-account")) == "operator@example.test"
+    assert actor(_host(lambda _: True, audit_actor="service-account")) == "service-account"
+    assert actor(_host(lambda _: True)) == "dashboard"
 
 
 def test_dashboard_host_forbids_an_unavailable_optional_mutation() -> None:

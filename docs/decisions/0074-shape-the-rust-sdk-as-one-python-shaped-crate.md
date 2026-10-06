@@ -12,6 +12,8 @@
   [ADR 0072](0072-converge-the-worker-runtime-defaults.md)
 - **Amended:** 2026-09-30 (SM-1059): Each Rust worker takes its own heartbeat connection and opens
   its listener connection outside the pool. The connection model section records the change.
+- **Amended:** 2026-10-06 (SM-1152): `DashboardOptions` no longer has `audit_actor`. The dashboard
+  section records the change.
 
 ## Context
 
@@ -368,7 +370,6 @@ pub mod dashboard {
         pub authorize: Authorize,
         pub path: String,
         pub environment: String,
-        pub audit_actor: String,
         pub read_only: bool,
         pub configured_workers: Vec<String>,
     }
@@ -378,6 +379,10 @@ pub mod dashboard {
     // DashboardService<E> implements tower::Service<http::Request<B>>.
 }
 ```
+
+The 2026-10-06 amendment removes `audit_actor` from this sketch. It replaced a verified principal's
+actor on every mutation, but the `dashboard/v1` protocol assigns attribution from the authenticated
+principal. A Rust `authorize` callback must return a principal, so the option had no remaining case.
 
 The backend is a `tower::Service`, as Go's `NewHandler` returns an `http.Handler`. axum mounts it
 with `Router::nest_service`, and hyper and tonic accept it directly. So Rust needs no framework

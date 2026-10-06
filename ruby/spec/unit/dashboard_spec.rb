@@ -15,8 +15,8 @@ RSpec.describe W::Dashboard do
 
   let(:audit) { {"actor" => "browser", "reason" => "Maintenance window", "requestId" => "req-1"} }
 
-  def dashboard(executor = FakeExecutor.new, **options)
-    described_class.new(executor, authorize: ->(_env) { W::Dashboard::Principal.new("operator") }, **options)
+  def dashboard(executor = FakeExecutor.new, authorize: ->(_env) { W::Dashboard::Principal.new("operator") }, **options)
+    described_class.new(executor, authorize: authorize, **options)
   end
 
   def env_for(path, method: "GET", body: nil, origin: :same, host: "dashboard.test")
@@ -77,7 +77,8 @@ RSpec.describe W::Dashboard do
 
   describe "the runtime configuration" do
     it "cannot close its inline script and escapes browser module sources" do
-      app = dashboard(audit_actor: "</script><b>", browser_modules: [%(/ext.js?a=1&b="2")])
+      app = dashboard(authorize: ->(_env) { true }, audit_actor: "</script><b>",
+        browser_modules: [%(/ext.js?a=1&b="2")])
       html = app.call(env_for("/workhorse/tasks"))[2].join
 
       expect(html).not_to include("</script><b>")
@@ -138,6 +139,19 @@ RSpec.describe W::Dashboard do
       expect([status, body]).to eq([200, {"json" => {"paused" => true}}])
       expect(received).to eq([{"queue" => "mail", "paused" => true, "audit" => audit.merge("actor" => "operator")},
         "operator"])
+    end
+
+    it "uses the audit actor only when authorization names no principal" do
+      actor = ->(**options) {
+        received = nil
+        app = dashboard(procedures: {setQueuePaused: ->(_input, given) { received = given }}, **options)
+        rpc(app, "setQueuePaused", {"queue" => "mail", "paused" => true, "audit" => audit})
+        received
+      }
+
+      expect(actor.call(audit_actor: "service-account")).to eq("operator")
+      expect(actor.call(authorize: ->(_env) { true }, audit_actor: "service-account")).to eq("service-account")
+      expect(actor.call(authorize: ->(_env) { true })).to eq("dashboard")
     end
 
     it "refuses a mutation without a same-origin request" do

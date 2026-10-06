@@ -286,13 +286,13 @@ async fn an_unconfigured_optional_procedure_is_forbidden() {
 }
 
 #[tokio::test]
-async fn the_audit_actor_comes_from_the_host_never_the_browser() {
+async fn the_audit_actor_comes_from_the_principal_never_the_browser() {
     let Some(database) = support::scratch_database("dashboard_http_audit").await else {
         return;
     };
     let uri = "https://example.test/workhorse/rpc/dashboard/meta";
 
-    // A blank audit actor option attributes requests to the authenticated principal.
+    // The authenticated principal names the actor.
     let mut principal_options = options(pool(database.url()), "operator@example.test");
     reporting_meta(&mut principal_options);
     let dashboard = dashboard::handler(principal_options).unwrap();
@@ -303,15 +303,9 @@ async fn the_audit_actor_comes_from_the_host_never_the_browser() {
         send(dashboard, request("GET", "https://example.test/workhorse/tasks", Value::Null)).await;
     assert!(page.contains(r#""auditActor":"operator@example.test""#), "{page}");
 
-    // A configured audit actor replaces the principal's.
-    let mut configured = options(pool(database.url()), "operator@example.test");
-    configured.audit_actor = "service-account".into();
-    reporting_meta(&mut configured);
-    let dashboard = dashboard::handler(configured).unwrap();
-    let (_, body) = send_json(dashboard.clone(), request("POST", uri, json!({}))).await;
-    assert_eq!(body["json"]["actor"], "service-account");
-
-    // The service overwrites the actor a browser sends with the host's attribution.
+    // The service overwrites the actor a browser sends with the principal's.
+    let dashboard =
+        dashboard::handler(options(pool(database.url()), "operator@example.test")).unwrap();
     let queue = Queue::new(pool(database.url()), "audited");
     queue.enqueue("audit.probe", &json!({}), EnqueueOptions::default()).await.unwrap();
     let purge = "https://example.test/workhorse/rpc/dashboard/setQueuePaused";
@@ -328,7 +322,7 @@ async fn the_audit_actor_comes_from_the_host_never_the_browser() {
         .await
         .unwrap()
         .get(0);
-    assert_eq!(actor, "service-account");
+    assert_eq!(actor, "operator@example.test");
 
     // A principal without an actor cannot attribute a control action, so it is refused.
     let dashboard = dashboard::handler(options(pool(database.url()), "")).unwrap();

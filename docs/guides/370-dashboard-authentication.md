@@ -323,9 +323,9 @@ wire contract, but the server discards it for mutations.
    returned.
 3. **If `authorize` returned only `true`,** the server records its configured audit actor instead.
 
-Each host lets you configure that audit actor. The TypeScript host uses it only for a `true`
-result. The Python, Go, Rust, and Ruby hosts use a configured audit actor in place of the
-principal's actor.
+A principal always wins over the audit actor. The TypeScript, Python, and Ruby hosts accept a `true`
+result, so they let you configure the audit actor. The Go and Rust callbacks must return a
+principal, so those hosts have no audit actor option.
 
 Mutation RPCs also require their `Origin` to match the dashboard request origin. A valid session
 cookie alone cannot authorize a cross-site form or script to change queue state.
@@ -333,12 +333,12 @@ cookie alone cannot authorize a cross-site form or script to change queue state.
 <details>
 <summary>Reference: mutations and attribution</summary>
 
-| Source                 | Recorded actor                                                        |
-| ---------------------- | --------------------------------------------------------------------- |
-| Single-admin session   | The configured username, as `DashboardRpcContext.authenticatedActor`. |
-| TypeScript principal   | The principal's `actor`.                                              |
-| TypeScript `true`      | `auditActor`, default `dashboard`.                                    |
-| Python, Go, Rust, Ruby | The configured audit actor if set, else the principal's actor.        |
+| Source                       | Recorded actor                                                        |
+| ---------------------------- | --------------------------------------------------------------------- |
+| Single-admin session         | The configured username, as `DashboardRpcContext.authenticatedActor`. |
+| Principal, every host        | The principal's `actor`.                                              |
+| TypeScript `true`            | `auditActor`, default `dashboard`.                                    |
+| Python `True` or Ruby `true` | `audit_actor`, default `dashboard`.                                   |
 
 - `auditWithOccurredAt` replaces the browser's `audit.actor` before any operator controller runs.
 - `rejectCrossOriginMutation` requires an `Origin` header whose origin exactly matches the request

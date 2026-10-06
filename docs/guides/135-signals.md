@@ -143,8 +143,8 @@ the task for `ord-381`, marked as waiting for `approval`. In the task drawer, th
 
 The dashboard counts pending external waits on its system page. Its delivery uses the same queue
 operation as `Queue.sendSignal`. But its server replaces any browser-supplied attribution with the
-host's audit actor. That is the signed-in operator, unless a Python, Go, Rust, or Ruby host
-configures its own audit actor. [370-dashboard-authentication.md](370-dashboard-authentication.md)
+host's audit actor. That is the signed-in operator whenever the host names one.
+[370-dashboard-authentication.md](370-dashboard-authentication.md)
 explains which actor each host records.
 
 `requestedBy` is attribution only, not authorization. An application that calls `Queue.sendSignal`
@@ -156,8 +156,8 @@ must establish authorization before it calls the core API.
 - `/tasks?filter=waiting` marks open signal and human-decision waits.
 - Task rows expose `signalWait` as `{ name, deadlineAt }`. Task detail returns `canSignal`.
 - The task drawer calls the `dashboard.signalTask` procedure. It derives `requestedBy` from the
-  host's audit actor: the authenticated principal, or a configured audit actor in Python, Go, Rust,
-  and Ruby.
+  host's audit actor: the authenticated principal, or the configured audit actor when the host
+  authorized without one.
 - `dashboard.humanWaits` returns the first default page of signal waits and human waits, plus the
   `QueueHealth.externalWaits` diagnostics.
 

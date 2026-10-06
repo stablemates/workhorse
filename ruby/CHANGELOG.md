@@ -22,6 +22,11 @@ worker's retry-delay callback.
 
 Migration 0056 (`0056-count-row-retention-lag-from-the-history-pass-that-released-the-row.sql`) changes only `queue_health_v1`. Row retention lag now counts from the scheduled history pass that released the row when that pass came after the row window, so health no longer reports task records and finished results as late after every daily pass (SM-1134).
 
+**Behavior change:** `Dashboard.new(audit_actor: ...)` no longer replaces the actor of a `Principal`
+that `authorize` returns. The dashboard records the principal's actor, as the `dashboard/v1`
+protocol requires. `audit_actor` still names the actor when `authorize` returns `true`, and
+defaults to `dashboard` there (SM-1152).
+
 The gemspec now declares `logger` at least 1.6 and below 2. Ruby 4.0 no longer ships `logger` as a
 default gem. On Ruby 4.0, 0.6.1 raises `LoadError` at `require "stablemates/workhorse"` unless the
 application already installs `logger` (SM-1138). The dashboard requires `cgi/escape` instead of

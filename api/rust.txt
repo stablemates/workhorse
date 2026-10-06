@@ -2451,7 +2451,6 @@ pub type workhorse::RetryPolicy = serde_json::map::Map<alloc::string::String, se
 #[cfg(feature = "dashboard")] impl !core::panic::unwind_safe::UnwindSafe for workhorse::dashboard::ProcedureError
 #[cfg(feature = "dashboard")] pub struct workhorse::dashboard::DashboardOptions<E>
 #[cfg(feature = "dashboard")] pub workhorse::dashboard::DashboardOptions::allowed_hosts: alloc::vec::Vec<alloc::string::String>
-#[cfg(feature = "dashboard")] pub workhorse::dashboard::DashboardOptions::audit_actor: alloc::string::String
 #[cfg(feature = "dashboard")] pub workhorse::dashboard::DashboardOptions::authorize: workhorse::dashboard::Authorize
 #[cfg(feature = "dashboard")] pub workhorse::dashboard::DashboardOptions::browser_modules: alloc::vec::Vec<alloc::string::String>
 #[cfg(feature = "dashboard")] pub workhorse::dashboard::DashboardOptions::configured_workers: alloc::vec::Vec<alloc::string::String>

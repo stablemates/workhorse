@@ -17,8 +17,8 @@ The schema has no tenant object. It has four fields that applications already us
 - `task.concurrency_key` is a queue-scoped admission key. A concurrency policy caps active tasks
   per key, and a rate policy gives each key its own token bucket.
 - `task.tags` holds at most 20 strings. A GIN index serves the `&&` and `@>` filters that
-  `Admin.listTasks`, dead-letter listing, redrive filters, and the dashboard task list accept. The
-  documentation already shows `tenant:acme` as the example tag.
+  dead-letter listing, redrive filters, and the dashboard task list accept. `Admin.listTasks` has
+  no tag filter. The documentation already shows `tenant:acme` as the example tag.
 - `task.budget_name` names one budget (ADR 0067). A budget caps active tasks or start rate across
   every queue, so it is the only mechanism that can cap one tenant's total work.
 - `namespace` on schedules, policies, and budgets records which deployment owns a row. It is not a
@@ -89,7 +89,7 @@ tenancy. Per-tenant retention in a shared database would need the tenant on ever
 on the pruning routines, and the column decision above rules that out for now.
 
 **Cross-tenant reads and operator actions are not prevented in shared tenancy.** Tag filters on
-`Admin.listTasks` and the dashboard are conveniences: an administrator sees every tenant, and an
+dead-letter listing and the dashboard are conveniences: an administrator sees every tenant, and an
 authorized `cancel`, `redrive`, `purgeQueue`, or `runTaskNow` acts on any task. Enforcing a
 tenant scope needs the authenticated principal SM-10 introduces, so that work is recorded as a
 follow-up that SM-10 blocks, and the limitations page states the gap.

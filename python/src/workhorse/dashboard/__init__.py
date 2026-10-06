@@ -191,11 +191,8 @@ class DashboardHost:
             return authorization
         if authorization is False:
             return self._json(401, {"error": "Unauthorized"})
-        if authorization is True:
-            principal = DashboardPrincipal(self._audit_actor or "dashboard")
-        else:
-            principal = authorization
-        actor = self._audit_actor or principal.actor
+        # A verified principal names the actor; the audit actor stands in only for a bare True.
+        actor = (self._audit_actor or "dashboard") if authorization is True else authorization.actor
         try:
             self._assert_compatible()
         except Exception as error:

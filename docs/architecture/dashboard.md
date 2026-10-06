@@ -132,7 +132,8 @@ The connection must have `autocommit=True`. The host rejects transactional conne
 request cannot leave locks or an idle transaction behind.
 
 `DashboardPrincipal.actor` is the authenticated identity. `DashboardResponse` lets the authorization
-hook return a complete denial or redirect response.
+hook return a complete denial or redirect response. `audit_actor` names the actor only when
+`authorize` returns `True`, and defaults to `dashboard`.
 
 The host handles a request in this order:
 
@@ -180,7 +181,7 @@ in-process callback rather than database state.
 `dashboard.NewHandler` is the Go `net/http` backend. `HandlerOptions` takes a caller-owned
 `workhorse.Executor` plus these options:
 
-- `Authorize`, `Path`, `Environment`, `AuditActor`, `ReadOnly`;
+- `Authorize`, `Path`, `Environment`, `ReadOnly`;
 - `BrowserModules`, `ConfiguredWorkers`, `MaintenanceLoops`, `AllowedHosts`;
 - optional `Procedures` extensions.
 
@@ -1153,6 +1154,10 @@ The authenticated actor comes from one of these sources:
 - An embedded `authorize` callback may return a `DashboardPrincipal` with an `actor`.
 - A compatible boolean `true` result uses the server-owned `auditActor`, which defaults to
   `dashboard`.
+
+A principal always wins over the configured audit actor. The Python and Ruby hosts follow the same
+rule with `audit_actor`. The Go `Authorize` and Rust `authorize` callbacks cannot return `true`, so
+the returned principal's actor is their only attribution.
 
 `auditWithOccurredAt` replaces the parsed browser `audit.actor` with that authenticated actor
 before any operator controller runs.

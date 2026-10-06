@@ -239,7 +239,8 @@ and throttle modes before expiry.
 
 - After expiry, a new request accepts a new stable identity even if the prior identity remains
   retained.
-- Queue purge removes a pending task's binding and also permits a new acceptance.
+- Queue purge removes the binding of a `blocked`, `ready`, or `scheduled` task and also permits a
+  new acceptance.
 
 ### Promotion
 
