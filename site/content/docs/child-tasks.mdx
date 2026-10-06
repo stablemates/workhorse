@@ -71,7 +71,8 @@ values. Every
 set method retains the declared names. Use `runChildrenAll`, `run_children_all`, or `RunChildrenAll`
 when a child failure or cancellation must propagate to the parent.
 
-Go represents the three tags as `ChildSucceeded`, `ChildFailed`, and `ChildCanceled`. Rust
+Go's `RunChildren` returns named `ChildResult` values in request order, and represents the three
+tags as `ChildSucceeded`, `ChildFailed`, and `ChildCanceled`. Rust
 represents them as the `ChildOutcome` variants `Succeeded`, `Failed`, and `Canceled`. Ruby returns a
 `ChildOutcome` whose `status` is `:succeeded`, `:failed`, or `:canceled`.
 

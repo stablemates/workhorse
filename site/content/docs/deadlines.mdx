@@ -54,7 +54,7 @@ the result becomes useless at a known time, even if attempts remain.
   </Tab>
 </Tabs>
 
-After the deadline passes, PostgreSQL refuses new claims for the task. If a handler is active,
+After the deadline passes, PostgreSQL refuses new claims for the task. A task that is `scheduled` for a retry when its deadline passes ends without that retry. If a handler is active,
 the next heartbeat returns `deadline_exceeded` and the worker aborts `ctx.signal` with
 `DeadlineExceededError`. Either way the task ends terminally — a deadline never schedules
 another retry, because retrying expired work only delays admitting it failed.

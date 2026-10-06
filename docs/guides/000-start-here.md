@@ -8,10 +8,13 @@ The immediate benefit: you can enqueue a task in the same transaction as your bu
 Insert the order and enqueue "send confirmation email" together, and if the order rolls back
 the task goes with it. There's no window where one committed and the other didn't.
 
-These guides explain how the system works and why it's built this way. They don't list exact
-limits, function signatures, or column definitions — those live in
-[`architecture.md`](../architecture.md), which is the precise reference. Read a guide to
-understand something; read the reference when you're changing code.
+These guides explain how the system works and why it's built this way. Each section opens with
+one concrete case, told step by step, and then states the general rule.
+
+Exact limits, defaults, and identifiers sit in collapsed **Reference** blocks under each section.
+Each block links the section of [`architecture.md`](../architecture.md) that owns those facts.
+That reference stays the precise source. Read a guide to understand something; read the reference
+when you're changing code.
 
 ## Foundations
 

@@ -37,7 +37,8 @@ The summaries include full-tier and fast-tier queues.
 Fast-tier counts come from compact runtime and outcome records, including when optional history is off.
 
 Every summary boundary is a UTC boundary, whatever timezone the database is set to, so a day
-summary covers a UTC day and names the same day for every operator reading the chart.
+summary covers a UTC day and names the same day for every operator reading the chart. The session
+`TimeZone` setting cannot move a boundary.
 
 A background rollup summarises fully elapsed periods and records how far it got as a watermark.
 Window reads combine pre-computed rows below the watermark with live computation above it, so a
@@ -66,15 +67,19 @@ process startup. Importing core or the adapter has no registration side effect, 
 rejects a competing active provider. Keep the returned cleanup as `unregisterTelemetry`, then call
 `unregisterTelemetry()` after workers and observers stop.
 
-Worker metrics use queue, task type, and a closed outcome vocabulary. Task IDs remain on sampled
-spans and structured events, while payloads, results, and error messages never enter telemetry.
+Worker metrics use queue, task type, and a closed outcome vocabulary, such as `succeeded`. Task IDs
+remain on sampled spans and structured events, while payloads, results, and error messages never
+enter telemetry. A handler failure, for example, writes the structured log record
+`workhorse.task.failure_processed` with the task ID but without the error text.
 
 Worker metrics cover only what each process does. Database-wide state — queue depth, the age of
 ready work, expired leases, paused queues, and fleet capacity — needs a dedicated collector.
 Run `WorkhorseMetricsObserver` against a pool, or `registerQueueMetrics` through a `Queue` when
 you also want policy and orchestration gauges, in one long-lived service per database and
 telemetry resource. Do not start a collector in every worker replica: each one reads the same
-rows, so replicas would export duplicate gauges and add unnecessary queries.
+rows, so replicas would export duplicate gauges and add unnecessary queries. The collector's
+`workhorse.worker.capacity` gauge reports worker slots by queue and worker state, and a worker that
+has stopped heartbeating shows as `offline`.
 
 ## Fleet controls
 
@@ -175,6 +180,8 @@ commands only read. To answer a wait, use `admin signal <task-id>` or
 Supply exactly one of `--payload-json` or `--payload-file`. Repeating the same identity, actor,
 and payload returns a successful duplicate; a conflicting answer or unavailable wait fails.
 
+The CLI takes its database from `--database-url`, then `WORKHORSE_DATABASE_URL`, then `DATABASE_URL`.
+A stale value in any of them can point a command at the wrong database.
 Guarded commands — `admin cancel`, `admin redrive`, `admin pause`, `admin resume`, `admin purge`,
 `admin set-tier`, `admin set-history`, `admin pause-worker`, `admin resume-worker`,
 `admin redrive-many`, `admin repair-dependencies`, `admin signal`, and `admin complete-human` — refuse to run until the target database is named

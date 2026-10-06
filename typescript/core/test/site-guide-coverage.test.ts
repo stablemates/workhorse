@@ -13,8 +13,15 @@ type GuideCoverage = {
 const readCoverage = async () =>
   JSON.parse(await readFile(path.join(root, "site/guide-coverage.json"), "utf8")) as GuideCoverage;
 
+/**
+ * Identifiers a guide's explanation names. A collapsed `Reference:` block mirrors its architecture
+ * page rather than the site page, so its identifiers are not held to site parity. Any other
+ * `<details>` block is explanation and stays in scope.
+ */
 function inlineIdentifiers(markdown: string): string[] {
-  const withoutCodeBlocks = markdown.replace(/```[\s\S]*?```/g, "");
+  const withoutCodeBlocks = markdown
+    .replace(/^<details>\n<summary>Reference:[\s\S]*?^<\/details>$/gm, "")
+    .replace(/```[\s\S]*?```/g, "");
   const literals = new Set(["DELETE", "Origin", "POST", "_FILE"]);
   return [...withoutCodeBlocks.matchAll(/`([^`\n]+)`/g)]
     .map((match) => match[1]!)
@@ -27,9 +34,44 @@ function inlineIdentifiers(markdown: string): string[] {
         /^[A-Z_][A-Z0-9_]*$/.test(name) ||
         /^[A-Z][A-Za-z0-9]*$/.test(name) ||
         /^[a-z]+(?:[A-Z][A-Za-z0-9]*)+$/.test(name) ||
-        /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/.test(name)
+        /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/.test(name) ||
+        /^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/.test(name)
       );
     });
+}
+
+/**
+ * Names a guide invents for its examples: queues, tenants, task types, and application functions.
+ * The guide lists them in a `<!-- scenario-names: … -->` comment. Every other identifier its
+ * explanation names is a product identifier that its mapped site page must carry.
+ */
+function scenarioNames(markdown: string): Set<string> {
+  const declaration = /<!-- scenario-names: (.*?) -->/.exec(markdown);
+  return new Set(declaration?.[1]!.split(",").map((name) => name.trim()) ?? []);
+}
+
+/** The identifier without call arguments, which a guide's example may fill in. */
+function identifierName(identifier: string): string {
+  return identifier.replace(/\(.*\)$/, "").replace(/^\*/, "");
+}
+
+/**
+ * Whether a page names an identifier as a whole token. `registerOpenTelemetry` does not match inside
+ * `registerOpenTelemetryProvider`, and `Queue.sync_budgets` does not match inside
+ * `AsyncQueue.sync_budgets`.
+ */
+function namesIdentifier(pageContents: string, name: string): boolean {
+  const escaped = name.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\w$-])${escaped}(?![\\w$-])`).test(pageContents);
+}
+
+/** Product identifiers that a guide's explanation names and its mapped site page lacks. */
+function missingIdentifiers(guideContents: string, pageContents: string): string[] {
+  const invented = scenarioNames(guideContents);
+  return [...new Set(inlineIdentifiers(guideContents))].filter((identifier) => {
+    const name = identifierName(identifier);
+    return !invented.has(name) && !namesIdentifier(pageContents, name);
+  });
 }
 
 describe("documentation site guide coverage", () => {
@@ -64,6 +106,71 @@ describe("documentation site guide coverage", () => {
     }
   });
 
+  it("holds every identifier to site parity unless the guide declares it invented", () => {
+    const guide = [
+      "# A guide",
+      "",
+      "<!-- scenario-names: acme, pdf.render, reportProgress, doc-42 -->",
+      "",
+      "Queue `acme` runs `pdf.render` and calls `reportProgress(context, 1)`.",
+      "Set `dashboard.quickAction`, `service.name`, and `task_runtime.state`, then call",
+      "`registerOpenTelemetry()` and `AsyncQueue.sync_budgets`. The status is `succeeded`.",
+      "Queue `doc-42` reports `rate-limit-throttled`.",
+      "",
+      "<details>",
+      "<summary>Reference: limits</summary>",
+      "",
+      "`MAX_WAIT_DURATION_MS` bounds the wait.",
+      "",
+      "</details>",
+    ].join("\n");
+
+    expect(missingIdentifiers(guide, "The page names nothing.")).toEqual([
+      "dashboard.quickAction",
+      "service.name",
+      "task_runtime.state",
+      "registerOpenTelemetry()",
+      "AsyncQueue.sync_budgets",
+      "succeeded",
+      "rate-limit-throttled",
+    ]);
+    expect(
+      missingIdentifiers(
+        guide,
+        "`dashboard.quickAction` `service.name` `task_runtime.state` `registerOpenTelemetry()` " +
+          "`AsyncQueue.sync_budgets` `succeeded` `rate-limit-throttled`",
+      ),
+    ).toEqual([]);
+    expect(
+      missingIdentifiers(
+        "Call `registerOpenTelemetry()` and `Queue.sync_budgets`.",
+        "Call `registerOpenTelemetryProvider()` and `AsyncQueue.sync_budgets`.",
+      ),
+    ).toEqual(["registerOpenTelemetry()", "Queue.sync_budgets"]);
+    expect(
+      missingIdentifiers(
+        "<details>\n<summary>How to cancel</summary>\n\nCall `queue.cancel(taskId)`.\n\n</details>",
+        "The page names nothing.",
+      ),
+    ).toEqual(["queue.cancel(taskId)"]);
+    expect(
+      missingIdentifiers("Call `queue.cancel(taskId)`.", "Call `queue.cancel(id, options)`."),
+    ).toEqual([]);
+  });
+
+  it("lists only scenario names that each guide still uses", async () => {
+    const manifest = await readCoverage();
+    const staleByGuide: Record<string, string[]> = {};
+
+    for (const guide of Object.keys(manifest.pages)) {
+      const contents = await readFile(path.join(root, "docs/guides", `${guide}.md`), "utf8");
+      const used = new Set(inlineIdentifiers(contents).map(identifierName));
+      const stale = [...scenarioNames(contents)].filter((name) => !used.has(name));
+      if (stale.length > 0) staleByGuide[guide] = stale;
+    }
+    expect(staleByGuide).toEqual({});
+  });
+
   it("keeps each guide's identifiers in its mapped site page", async () => {
     const manifest = await readCoverage();
     const missingByGuide: Record<string, string[]> = {};
@@ -73,9 +180,7 @@ describe("documentation site guide coverage", () => {
         readFile(path.join(root, "docs/guides", `${guide}.md`), "utf8"),
         readFile(path.join(root, "site/content/docs", `${page}.mdx`), "utf8"),
       ]);
-      const missing = [...new Set(inlineIdentifiers(guideContents))].filter(
-        (identifier) => !pageContents.includes(identifier),
-      );
+      const missing = missingIdentifiers(guideContents, pageContents);
       if (missing.length > 0) missingByGuide[`${guide} -> ${page}.mdx`] = missing;
     }
     expect(missingByGuide).toEqual({});

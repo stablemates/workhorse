@@ -4,7 +4,9 @@ description: Accept one equivalent task during a busy window and coalesce later 
 ---
 
 Throttle keeps an acceptance window in PostgreSQL. The first request creates a task; an equivalent
-request before the window closes returns the same identity with a `coalesced` outcome.
+request before the window closes returns the same identity with a `coalesced` outcome. Every
+coalesced result carries the first request's `taskId`. A throttled request may set `runAt`, and a
+repeat must ask for the same run time.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">

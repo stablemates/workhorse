@@ -223,9 +223,14 @@ credentials out of the file.
 An embedded dashboard uses your application's authentication through its authorization callback.
 The callback runs before the interface, assets, compatibility check, and every RPC method. Return
 a verified principal using the language-specific type shown above. An unauthenticated result denies
-the request, while TypeScript, Go, Rust, and Ruby can also return a custom response.
+the request, while TypeScript, Go, Rust, and Ruby can also return a custom response. In TypeScript and Ruby, a
+callback that returns `true` authorizes the request without naming a principal, so the host records
+its configured audit actor. Python's callback returns `True` for the same case.
 
-Every backend replaces actor text from the browser with the verified principal before a mutation.
+Every backend replaces actor text from the browser before a mutation. The TypeScript host records
+the verified principal, and uses its configured `auditActor` only for a `true` result. Python, Go,
+Rust, and Ruby hosts record a configured audit actor, when one is set, in place of the
+principal's actor.
 The resulting `auditActor` and `requestedBy` fields record who acted, but never decide who may.
 TypeScript controller options and Python, Go, Rust, or Ruby procedure extensions can route selected
 mutations through application-owned services.

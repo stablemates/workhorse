@@ -1,10 +1,24 @@
 # How do I keep bad or sensitive data out of tasks?
 
+<!-- scenario-names: mail-v2, recipient, mail-current, mail.send -->
+
 A producer can enqueue malformed data, and an operator screen can expose fields that handlers need
 but people should not see. Payload contracts reject the malformed value and carry a redaction policy
 with every accepted task.
 
-## Define contracts where you create the queue
+## Rejecting a malformed payload
+
+The task type `mail.send` needs a `recipient` string. A producer has a bug and sends
+`{ "recipient": 42 }`.
+
+1. **At startup** the application calls `queue.syncContracts()`. PostgreSQL stores the contract
+   version `mail-current` and selects it for new `mail.send` tasks.
+2. **At enqueue** the queue validates `{ "recipient": 42 }` against `mail-current`. The value is
+   not a string, so the queue throws. Nothing is written: no task, no event.
+3. **Later** a correct payload is accepted. The task records `mail-current` as its contract version.
+4. **At completion** the handler returns a string instead of an object. The worker validates the
+   result before it records completion. The result is invalid, so the attempt fails and follows the
+   normal [retry](110-retries.md) path.
 
 `QueueOptions.contracts` groups JSON Schema documents under each task type. New tasks receive
 `currentVersion`, while PostgreSQL retains older documents for tasks accepted by an earlier deploy.
@@ -32,15 +46,90 @@ const queue = new Queue(pool, "default", {
 ```
 
 Call `queue.syncContracts()` during application startup. Python exposes `sync_contracts`, and Go
-exposes `SyncContracts`. PostgreSQL inserts each version once and keeps the current version in a
+exposes `SyncContracts`. PostgreSQL inserts each version once. It keeps the current version in a
 separate policy row, so an operator override survives the next deploy.
 
+The queue validates a payload before enqueue writes anything. The worker validates a result before
+completion removes the active lease. If a handler returns an invalid result, the worker follows the
+normal failure and retry path instead of recording a successful outcome.
+
+<details>
+<summary>Reference: contract definitions and policy</summary>
+
+**`QueueOptions`**
+
+| Field                    | Rule                                       |
+| ------------------------ | ------------------------------------------ |
+| `contracts`              | Maps a task type to a `TaskTypeContracts`. |
+| `defaultMaxPayloadBytes` | Queue-wide payload size ceiling.           |
+| `defaultMaxResultBytes`  | Queue-wide result size ceiling.            |
+
+**`TaskTypeContracts`** has `currentVersion` and a `versions` record of `TaskContractVersion`.
+
+**`TaskContractVersion`**
+
+| Field                  | Rule                                                |
+| ---------------------- | --------------------------------------------------- |
+| `payloadSchema`        | Optional. A JSON Schema Draft 2020-12 document.     |
+| `resultSchema`         | Optional. A JSON Schema Draft 2020-12 document.     |
+| `maxPayloadBytes`      | Optional. Overrides the queue's payload ceiling.    |
+| `maxResultBytes`       | Optional. Overrides the queue's result ceiling.     |
+| `sensitivePayloadKeys` | Optional. Top-level payload keys hidden from reads. |
+| `sensitiveResultKeys`  | Optional. Top-level result keys hidden from reads.  |
+
+**Synchronization**
+
+- `sync_contract_definitions_v1` inserts immutable `(task_type, version)` rows into
+  `contract_definition`. Different values for an existing key raise
+  `contract documents are immutable; publish a new version`.
+- `contract_policy` stores `current_version`, `application_current_version`, and
+  `operator_override` separately.
+- Application sync updates `application_current_version`. It changes `current_version` only when
+  `operator_override` is false.
+
+More detail: [Data model: Contract definitions and policy](../architecture/data-model.md#contract-definitions-and-policy).
+
+</details>
+
+## When an operator changes the selected version
+
+An operator selects `mail-v2` for `mail.send`. An app server still caches `mail-current`, which it
+read at startup.
+
+- **The cached document accepts the payload.** The request reaches PostgreSQL, which reports that
+  the selection changed. The client reloads the current document and validates the request again.
+- **The cached document rejects the payload.** The request never reaches PostgreSQL. So the client
+  reloads the selection once before it reports the rejection. If `mail-v2` accepts the payload, the
+  enqueue goes ahead.
+
 After synchronization, the TypeScript, Python, and Go clients cache the selected document for each
-task type. If an operator changes the selected version, the cached document can go stale in two
-ways. A payload the cached document accepts reaches PostgreSQL, which reports the stale selection. A
-payload the cached document rejects never reaches PostgreSQL, so the client reloads the selection
-once before it reports the rejection. Either way, the client validates the enqueue again against the
-current document.
+task type. If an operator changes the selected version, the cached document can go stale in those
+two ways. Either way, the client validates the enqueue again against the current document.
+
+<details>
+<summary>Reference: stale contract cache</summary>
+
+The client caches each current definition by `task_type`.
+
+1. **Version mismatch.** A cached `contractVersion` differs from `contract_policy.current_version`.
+   `enqueue_many_v1` returns one internal row with outcome `contract_mismatch` and the affected
+   `taskTypes`. The client reloads those definitions, revalidates the batch, and retries once.
+2. **Cached rejection.** A cached definition raises `TaskContractValidationError` or
+   `TaskValueSizeLimitError`. The client reloads that task type's definition once through the same
+   database handle and validates again. The second result stands.
+
+Child-task creation and `syncSchedules` use the same path.
+
+More detail: [Data model: Contract validation at enqueue and completion](../architecture/data-model.md#contract-validation-at-enqueue-and-completion).
+
+</details>
+
+## Which schemas every SDK accepts
+
+A team adds `pattern: "^[^@]+@[^@]+$"` to the `recipient` property. At startup the SDK refuses the
+schema before it compiles it. The SDKs' regular expression engines accept different syntax and match
+differently, so a contract cannot depend on one engine. Check a string's shape in handler code
+instead.
 
 Each SDK rejects keywords outside the shared profile before compiling a schema. Remote references
 and custom keywords are rejected. Formats remain annotations, so an email format does not create a
@@ -50,52 +139,150 @@ A reference names the whole schema as `#`, or an entry of the root `$defs` as `#
 The SDKs' JSON Schema libraries resolve other forms and `$anchor` differently, so each SDK rejects
 them. To reuse a subschema, move it into the root `$defs` and reference it by name.
 
-The profile leaves out `pattern` and `patternProperties`, because the SDKs' regular expression
-engines accept different syntax and match differently. Each SDK rejects either keyword at any depth,
-so a contract cannot depend on one engine. Check a string's shape in handler code instead.
+The profile leaves out `pattern` and `patternProperties`. Each SDK rejects either keyword at any
+depth.
 
 Every SDK compiles each schema the profile allows. TypeScript does not add Ajv's stricter lint
 rules, so a union type, `properties` without an object type, or an open `prefixItems` array compiles
 there as it does in the other SDKs. Ajv still rejects a schema that is not valid JSON Schema.
 
-The queue validates a payload before enqueue writes anything. The worker validates a result before
-completion removes the active lease. If a handler returns an invalid result, the worker follows the
-normal failure and retry path instead of recording a successful outcome.
+<details>
+<summary>Reference: contract schema profile</summary>
+
+**Accepted.** Draft 2020-12 core, applicator, validation, and metadata keywords. `format` produces
+annotations and never rejects an instance.
+
+**References.**
+
+- `$ref` must be `#` or `#/$defs/<name>`, where `<name>` is an own key of the root `$defs`.
+- `$defs` may appear only on the root schema.
+- Each `$defs` key must match `^[A-Za-z_][-A-Za-z0-9._]*$`.
+- `$anchor` is rejected at any depth. A property named `$anchor` stays valid.
+
+**Rejected keywords.** Remote references, custom keywords and vocabularies, `$dynamicRef`,
+`$dynamicAnchor`, `unevaluatedProperties`, `unevaluatedItems`, `pattern`, and `patternProperties`.
+A property named `pattern` stays valid.
+
+**Compilers.** TypeScript uses Ajv with `strict: false` and `strictNumbers: true`. Python uses
+`Draft202012Validator`. Go uses `santhosh-tekuri/jsonschema`. `strictNumbers` rejects NaN and the
+infinities in an instance.
+
+More detail: [Data model: Contract schema profile](../architecture/data-model.md#contract-schema-profile).
+
+</details>
 
 ## Keep old versions while old tasks can run
 
-Each task stores the version selected when PostgreSQL accepted it. When a worker claims the task,
-PostgreSQL returns that version. The worker loads that immutable document and caches it by task type
-and version, so a new deployment validates its result against the old contract.
+A `mail.send` task is accepted under `mail-current` at 10:00. At 10:05 a deploy adds `mail-v2` and
+moves `currentVersion` to it. At 10:06 a new worker claims the old task. PostgreSQL returns
+`mail-current` with the claim. The worker loads that document and validates the result against it,
+not against `mail-v2`.
+
+Each task stores the version selected when PostgreSQL accepted it. The worker caches each immutable
+document by task type and version, so a new deployment validates an old task's result against the
+old contract.
 
 When the shape changes, add a new entry and move `currentVersion`. Once a version has been synced,
-PostgreSQL retains its immutable document, so tasks accepted under it keep validating even after you
+PostgreSQL retains its immutable document. Tasks accepted under it keep validating even after you
 drop that entry from application config. A worker that can find a task's version neither in
 PostgreSQL nor in its own config fails safely with `TaskContractUnavailableError`.
 
 Operator reads do not run validators. Historical JSON remains readable even if the application no
 longer accepts that shape for new tasks.
 
-## Bound storage and hide sensitive fields
+<details>
+<summary>Reference: validation at completion</summary>
+
+- `claim_v1` returns the persisted `contractVersion`, `resultMaxBytes`, and `redactErrorDetails`.
+- Completion caches the document by `(task_type, contract_version)`. It does not consult
+  `current_version`.
+- A validation mismatch becomes `TaskContractValidationError`. The error keeps neither the value
+  nor the library diagnostic.
+- A missing retained version becomes `TaskContractUnavailableError`.
+- `Worker` handles either error through the ordinary fenced failure and retry path.
+
+More detail: [Data model: Contract validation at enqueue and completion](../architecture/data-model.md#contract-validation-at-enqueue-and-completion).
+
+</details>
+
+## Bound storage
+
+A `mail.send` handler returns the provider's full delivery report, and the report is larger than
+the result ceiling. The worker measures the result before it sends its completion. The result is too
+large, so that attempt fails and follows the retry path. The worker keeps running and claims other
+work.
 
 Queue defaults set size ceilings. A `TaskContractVersion` can override them. PostgreSQL checks its
 canonical JSON representation before the durable write, so every client gets the same decision.
 
 The TypeScript, Go, Python, and Ruby workers also measure a handler result that way before they send
-its completion. An oversized result fails that attempt and follows the retry path. In Python, a `NaN` or
-infinite number fails the attempt the same way.
+its completion. An oversized result fails that attempt and follows the retry path. In Python, a
+`NaN` or infinite number fails the attempt the same way.
 
 PostgreSQL jsonb cannot store a NUL character or an unpaired surrogate. Every worker checks a
-handler result for both before it sends its completion. A result that contains either fails that
-attempt and follows the retry path. On the fast tier, the other results in the batch still
-complete.
+handler result for what jsonb refuses before it sends its completion. A result that contains it
+fails that attempt and follows the retry path. On the fast tier, the other results in the batch
+still complete.
 
 Each of these failures stays local to its task, so the worker keeps running.
+
+<details>
+<summary>Reference: size limits and storable results</summary>
+
+**Limits.** `payload_max_bytes` and `result_max_bytes` default to 1,048,576 bytes. A configured
+value can be up to 16,777,216 bytes.
+
+**Measurement.** PostgreSQL measures `octet_length(value::text)` after jsonb canonicalization. That
+text puts a space after each `:` and `,` and writes numbers without an exponent. The SDKs measure
+the same text.
+
+**Enforcement.**
+
+- `enqueue_batch_v1` rejects an oversized payload before it inserts any task, history, idempotency,
+  or notification row.
+- `complete_v1` checks the persisted result limit before it deletes the active runtime.
+- An oversized result raises `TaskValueSizeLimitError` in the TypeScript, Go, and Python workers,
+  and `ValueSizeLimitError` in the Ruby worker. The retry policy applies.
+
+**Unstorable results.** jsonb refuses `\u0000` (SQLSTATE `22P05`) and an unpaired UTF-16 surrogate
+escape (SQLSTATE `22P02`). The Go, Python, TypeScript, and Ruby workers check for both. The Rust
+worker checks for NUL only, because a Rust `String` cannot hold an unpaired surrogate. A refused
+result fails the attempt through `fail_v1` with this message:
+
+`<task type> result contains a NUL character or an unpaired surrogate, which PostgreSQL jsonb cannot store`
+
+More detail: [Data model: Results jsonb cannot store](../architecture/data-model.md#results-jsonb-cannot-store).
+
+</details>
+
+## Hide sensitive fields
+
+`mail.send` carries an `accessToken` in its payload. The handler needs the token to call the mail
+provider. An operator opens the task in the dashboard and sees every payload field except
+`accessToken`. Later the handler throws an error whose message quotes the token. Workhorse replaces
+the error details before it traces or stores them, so the token appears nowhere.
 
 `sensitivePayloadKeys` and `sensitiveResultKeys` name top-level object fields. Handlers receive the
 raw payload, but task lookup, listing, dead letters, and dashboard detail remove those fields. If a
 contract names sensitive fields, Workhorse also replaces handler error details before tracing or
 persistence. Contract errors carry identity and outcome metadata without payload or result values.
+
+<details>
+<summary>Reference: redaction keys</summary>
+
+- Each key list holds at most 50 unique top-level object keys of 1 to 200 characters.
+- `claim_v1` returns the raw payload to the handler.
+- `workhorse.redact_top_level_keys_v1` removes the keys for `Admin.getTask`, `Admin.listTasks`,
+  dead-letter listing, and dashboard task detail.
+- Scalar and array values pass through, because top-level key redaction applies only to objects.
+- If either key list is non-empty, `workhorse.redact_error_details_v1` substitutes the name
+  `RedactedTaskError` and the message `Task handler failed; details redacted`. It does so before
+  `fail_v1` writes any error. `Worker` applies the same rule before it records the exception in
+  OpenTelemetry.
+
+More detail: [Data model: Redaction keys](../architecture/data-model.md#redaction-keys).
+
+</details>
 
 ## Next
 

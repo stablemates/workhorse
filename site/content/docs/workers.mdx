@@ -97,7 +97,8 @@ pool, so size the pool for them. Your code creates the pool and closes it after 
 worker never closes it. `AsyncWorker` handler context methods are awaitable.
 Each awaitable method runs on a
 bridge thread, so a cancelled handler waits for that call to return before the cancellation reaches
-it. A cancelled `checkpoint` also cancels its operation and waits for the operation's cleanup.
+it. A cancelled `context.checkpoint` call also cancels its operation and waits for the operation's
+cleanup.
 Cancellation before the operation returns stops the save, even when the operation catches the
 cancellation and returns a value, so a later attempt runs the operation again. Once the operation
 returns, its save may already be under way. The worker waits for that save instead of undoing it,
@@ -208,8 +209,9 @@ accidentally write as a stale owner after the task moves on.
   [rate limits](/docs/rate-limits).
 - **`leaseMs`** is how long a claim owns a task before the database may recover it. One
   background timer batches every active lease owned by the worker on its configured heartbeat
-  cadence. A task keeps renewing after its handler returns, through result validation and the
-  fenced completion or failure, so a slow final write cannot hand finished work to recovery.
+  cadence. In TypeScript, Python, and Go, a task keeps renewing after its handler returns, through
+  result validation and the fenced completion or failure, so a slow final write cannot hand finished
+  work to recovery. A Rust task leaves the heartbeat batch when its handler returns.
   The Rust worker matches each heartbeat response to the fence token that sent it. A delayed
   response from before a durable suspension cannot renew or cancel the resumed handler.
   A shorter lease means faster

@@ -54,6 +54,9 @@ those boundaries while your application continues to own model calls, tool code,
   </Tab>
 </Tabs>
 
+`runChildrenAll` propagates a rejected tool outcome to the parent. Use `runChildren` when the model
+should inspect every settled outcome instead.
+
 Python, Rust, and Ruby handlers use `set_progress` and `get_progress`; Go handlers use
 `SetProgress` and `GetProgress`. Every surface write the same fenced projection, so the dashboard sees one
 language-independent progress value.
@@ -75,7 +78,10 @@ prints the final result and progress.
 The example combines `HandlerContext.setProgress`, `HandlerContext.runChildrenAll`,
 `Queue.syncRateLimitPolicies`, a per-tenant `concurrencyKey`, `HandlerContext.sleep`, and
 `HandlerContext.waitForSignal`. Python names progress updates `HandlerContext.set_progress`, while
-Go uses `HandlerContext.SetProgress`; the repository example reads `DATABASE_URL_TEST_PACKED`.
+Go uses `HandlerContext.SetProgress`. A replayed handler reads its stored stage with
+`HandlerContext.getProgress`, `HandlerContext.get_progress` in Python, or
+`HandlerContext.GetProgress` in Go. The repository example reads `DATABASE_URL`, and falls back to
+`DATABASE_URL_TEST_PACKED` when it is unset.
 
 ## Next
 

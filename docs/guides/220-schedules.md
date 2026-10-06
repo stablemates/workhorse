@@ -1,14 +1,26 @@
-# Recurring tasks on a cron schedule
+# How do I run a task on a recurring schedule?
 
-Some work runs on a clock: a nightly report, an hourly sync, a weekly cleanup. Workhorse
-runs these from cron definitions stored and evaluated in PostgreSQL. Workers offer the cadence.
+<!-- scenario-names: nightly-invoice-run, weekly-cleanup, early-sync, billing -->
 
-There is no separate scheduler process to deploy or keep alive.
+Some work runs on a clock: a nightly report, an hourly sync, a weekly cleanup. Workhorse stores
+cron definitions in PostgreSQL and evaluates them there. Workers only offer the cadence, so there is
+no separate scheduler process to deploy or keep alive.
 
 ## Declaring schedules
 
-You don't create schedules one at a time. You declare the full set you want and Workhorse
-makes the database match:
+The billing service runs two schedules in the namespace `billing`: `nightly-invoice-run` and
+`weekly-cleanup`. Here is what three deploys do to them.
+
+1. **Deploy 1** lists both definitions. Workhorse creates both, and each waits for its next
+   occurrence after the deploy.
+2. **Deploy 2** lists only `nightly-invoice-run`. Workhorse leaves it unchanged and disables
+   `weekly-cleanup`. The row stays, so the tasks it fired in the past still point at a definition.
+3. **Deploy 3** lists both again, with a new cron expression for `nightly-invoice-run`. Workhorse
+   enables `weekly-cleanup` again and updates the nightly definition. Each changed definition gets
+   a new revision.
+
+You do not create schedules one at a time. You declare the full set you want, and Workhorse makes
+the database match:
 
 ```ts
 await queue.syncSchedules(
@@ -26,40 +38,141 @@ await queue.syncSchedules(
 );
 ```
 
-This is a desired-state call, like a database migration. Run it on deploy. Definitions you
-list are created or updated; definitions you've dropped from the list get disabled.
+This is a desired-state call. Run it on deploy. Workhorse creates or
+updates the definitions you list. It disables the definitions you dropped from the list. It does not
+delete them.
 
-Note _disabled_, not deleted. The old definition stays so the tasks it fired in the past
-still have something to point at.
+The **namespace** keeps one deployment's schedules apart from another's. Two services that share a
+database therefore do not prune each other's definitions.
 
-The **namespace** keeps one deployment's schedules separate from another's, so two services
-sharing a database don't prune each other's definitions.
+<details>
+<summary>Reference: definitions and synchronization</summary>
+
+**`Queue.syncSchedules(namespace, definitions, options)`**
+
+| Field                 | Rule                                                     |
+| --------------------- | -------------------------------------------------------- |
+| `name`                | Required. Unique within the namespace.                   |
+| `schedule`            | Required. A cron expression in the Workhorse dialect.    |
+| `timezone`            | Optional. A valid IANA name. Default `"UTC"`.            |
+| `catchupPolicy`       | Optional. `skip`, `latest`, or `all`. Default `skip`.    |
+| `enabled`             | Optional. Default `true`.                                |
+| `task.type`           | Required.                                                |
+| `task.payload`        | Required.                                                |
+| `task.queue`          | Optional. Default: the `Queue` instance's default queue. |
+| `task.priority`       | Optional. An integer from 0 to 100. Default 0.           |
+| `task.concurrencyKey` | Optional. 1 to 256 UTF-8 bytes.                          |
+| `task.maxAttempts`    | Optional. An integer from 1 to 100. Default 25.          |
+| `task.retryPolicy`    | Optional. Normalized like an enqueue retry policy.       |
+| `options.prune`       | Optional. Default `true`.                                |
+
+Python exposes `sync_schedules`, and Go exposes `SyncSchedules`.
+
+**Synchronization.** The SDK first validates each payload against its task type's current payload
+contract. `sync_schedule_definitions_v2` then validates every definition before it writes any row.
+The definition stores that contract version and its size and redaction settings. A fire copies them
+into the task, so a later deploy cannot reinterpret an existing definition.
+
+- Any change to a definition increments its `revision` once.
+- Pruning sets `configured_enabled = false` and increments the revision. It never deletes the row.
+- A new definition starts its position at the synchronization time. So does a definition whose
+  cron expression, timezone, or catch-up policy changed. A `skip` definition that a deploy enables
+  again starts there too.
+
+More detail: [Data model: Synchronization](../architecture/data-model.md#synchronization-3).
+
+</details>
+
+## Pausing a schedule from the dashboard
+
+An operator pauses `nightly-invoice-run` from the dashboard at 01:00 during an incident. At 01:30 a
+deploy updates the definition. The schedule stays paused, because the deploy does not touch the
+pause. At 06:00 the operator resumes it.
 
 The `enabled` field belongs to deployment configuration. The dashboard's Pause action creates a
-separate operator override, so later synchronization cannot resume the schedule. A paused schedule
-stays paused when a deployment updates, removes, or re-adds its definition. Resume it explicitly
-from the dashboard.
+separate operator override, so a later synchronization cannot resume the schedule. A paused
+schedule stays paused when a deployment updates, removes, or re-adds its definition. Resume it
+explicitly from the dashboard.
+
+On resume, the catch-up policy decides what happens to the 02:00 occurrence the pause covered. A
+`skip` schedule moves its position to the resume time, so it does not fire 02:00. A `latest` or
+`all` schedule keeps its old position and catches up, as the next section describes.
+
+<details>
+<summary>Reference: pause override</summary>
+
+`set_schedule_paused_v1(namespace, schedule_name, paused, requested_by, reason, occurred_at)` sets
+these columns on `schedule_definition`:
+
+- `paused`, `paused_by`, `paused_reason`, and `paused_at`. A resume clears the attribution.
+- `last_evaluated_at`. A resume of a `skip` definition sets it to the resume time.
+- `revision`, which every pause or resume increments.
+
+Synchronization updates `configured_enabled` and never changes the pause columns. A definition
+fires only when `configured_enabled` is true and `paused` is false.
+
+More detail: [Data model: schedule_definition](../architecture/data-model.md#schedule_definition).
+
+</details>
 
 ## Choosing what happens after a gap
 
-Workhorse skips missed occurrences by default. A worker evaluates the current maintenance window,
-then waits for the next occurrence. This prevents a schedule pause or worker outage from creating
+An hourly sync runs at minute 0. Every worker that offers its namespace stops at 09:30 and comes
+back at 12:40. The occurrences at 10:00, 11:00, and 12:00 had no worker to fire them.
+
+- **`skip`.** Workhorse fires none of them. The next task is the 13:00 occurrence.
+- **`latest`.** Workhorse fires one task, for the 12:00 occurrence.
+- **`all`.** Workhorse fires three tasks, one per missed occurrence.
+
+Workhorse skips missed occurrences by default. A worker evaluates only the current maintenance
+window, then waits for the next occurrence. So a schedule pause or a worker outage does not create
 a task backlog.
 
 Set `catchupPolicy` to `latest` when one current task can replace the missed work. Set it to `all`
 when every occurrence must create a task. The worker's catch-up limit bounds each `all` pass, and
 later passes continue until the schedule catches up.
 
+<details>
+<summary>Reference: catch-up policies</summary>
+
+| Policy   | Occurrences one pass fires                                                   |
+| -------- | ---------------------------------------------------------------------------- |
+| `skip`   | Those newer than both the durable position and `now - evaluation_window_ms`. |
+| `latest` | The newest occurrence after the durable position.                            |
+| `all`    | Those after the durable position, in order, up to the catch-up limit.        |
+
+The evaluation window is the worker's maintenance interval. An `all` pass that reaches the limit
+advances the position only to its last occurrence.
+
+| SDK        | Catch-up policy                     | Catch-up limit                       |
+| ---------- | ----------------------------------- | ------------------------------------ |
+| TypeScript | `ScheduleDefinition.catchupPolicy`  | `scheduleCatchupLimit`               |
+| Python     | `ScheduleDefinition.catchup_policy` | `schedule_catchup_limit`             |
+| Go         | `ScheduleDefinition.CatchupPolicy`  | `WorkerOptions.ScheduleCatchupLimit` |
+
+The policy defaults to `skip`. The limit accepts 1 to 10,000 and defaults to 100.
+
+More detail: [Data model: Firing due schedules](../architecture/data-model.md#firing-due-schedules).
+
+</details>
+
 ## Why it can't fire twice
 
-Several workers are running. They all offer the same namespace when the schedule may be due.
+Three workers offer the namespace `billing`. At 02:00 the nightly occurrence is due, and all three
+reach their maintenance tick within the same second.
 
-Only one task is created. Each firing writes a durable key built from the namespace, the
-schedule name, and the planned occurrence. The first worker to get there claims the key; the
-others find it taken and receive no task id, because they didn't create the task.
+1. **Worker A** takes the namespace first. It reserves the 02:00 occurrence and creates the task.
+2. **Worker B** finds the namespace busy. It skips `billing` on this tick and evaluates nothing.
+3. **Worker C** evaluates after A committed. The 02:00 occurrence already exists, so C has nothing
+   to fire.
 
-You don't have to elect a leader or run exactly one scheduler. Any number of workers can
-race and the outcome is one task.
+Only one task is created. Each fire writes a durable key built from the namespace, the schedule
+name, and the planned occurrence. Whoever reserves the key first creates the task. A later attempt
+on the same key, such as a manual `fireSchedule` call, receives no task id, because it created no
+task.
+
+You do not have to elect a leader or run exactly one scheduler. Any number of workers can race, and
+the outcome is one task.
 
 TypeScript workers select definitions with `scheduleNamespaces`. Python workers use
 `schedule_namespaces`, and Go workers use `WorkerOptions.ScheduleNamespaces`. Each worker asks
@@ -67,48 +180,177 @@ TypeScript workers select definitions with `scheduleNamespaces`. Python workers 
 namespace, so different namespace sets can make progress independently.
 
 Workers offer namespaces, not private copies of schedule definitions. PostgreSQL stores the current
-definitions, so workers that offer the same namespace always evaluate the same desired state. The
-dashboard shows how many live workers can evaluate each namespace.
-Open an application schedule's run count to view tasks of that type in a new browser tab.
+definitions, so workers that offer the same namespace always evaluate the same desired state.
 
-The dashboard also lists Workhorse maintenance beside application schedules. Maintenance runs
-directly in PostgreSQL instead of creating a task. Its last-run value records that direct execution.
-Expand a maintenance row to inspect recent outcomes, durations, affected rows, phase timings, and
-errors. The row reports the retained total while the expanded history identifies its recent subset.
-It also states that Workhorse samples successful task-changing ticks and records tick errors
-immediately. Workhorse records every eligible slow-routine execution.
+<details>
+<summary>Reference: occurrence keys and namespace locks</summary>
+
+**Occurrence key.** `schedule_occurrence` holds one row per `(namespace, schedule_name,
+occurrence_at)`, at one-second precision. `fire_schedule_v1` inserts that row and enqueues the task
+in one transaction. The task is ready at once.
+
+**Repeated fire.** `fire_schedule_v1` returns null for an occurrence already fired. Only the call
+that creates the task reports a fire.
+
+**Namespace lock.** `fire_due_schedules_v2` tries one transaction advisory lock per namespace. A
+caller that finds the lock held skips that namespace and does not wait.
+
+**Worker options.** A worker offers no namespace by default, so it fires no schedule.
+
+| SDK        | Option                             |
+| ---------- | ---------------------------------- |
+| TypeScript | `scheduleNamespaces`               |
+| Python     | `schedule_namespaces`              |
+| Go         | `WorkerOptions.ScheduleNamespaces` |
+
+Every runtime calls `fire_due_schedules_v2` on its maintenance cadence, with a null `now`.
+
+More detail: [Data model: Namespace locking](../architecture/data-model.md#namespace-locking).
+
+</details>
 
 ## Deploys don't cause duplicates either
 
-A deployment's synchronization and a worker's evaluation of one namespace never interleave. If a
-synchronization is still open, the worker skips that namespace and evaluates the new definitions
-on its next tick. If an evaluation is running, the synchronization waits for it to finish.
+Worker A starts evaluating `billing` at 02:00:00. A deploy calls `syncSchedules` for `billing` at
+the same moment.
 
-Every definition also carries a revision that increments when you change it. A fire names the
-revision it read, and PostgreSQL requires that revision when it reserves the occurrence. If a
-deployment changed or disabled the definition since then, the fire becomes a no-op. This covers a
-direct `fireSchedule` call made against an older definition.
+1. The synchronization waits until worker A's evaluation commits.
+2. The synchronization then writes the new definitions and increments the revision of each changed
+   one.
+3. Worker B's tick arrives while the synchronization is still open. B skips `billing` and evaluates
+   the new definitions on its next tick.
 
-## Things to know
+A deployment's synchronization and a worker's evaluation of one namespace never interleave.
 
-- **Schedules only fire while a worker is running** with a matching namespace. When workers
-  return, the definition's catch-up policy decides whether Workhorse skips, coalesces, or replays
-  missed occurrences.
-- **Firing waits for the next maintenance tick.** This is not a real-time scheduler.
-- **PostgreSQL decides what time it is.** Worker clocks drift apart, so Workhorse asks the database
-  for the evaluation instant. A worker running ahead fires nothing early, and a worker running
-  behind moves no schedule backwards.
-- **An occurrence another transaction holds is deferred, not skipped.** Workhorse leaves that
-  occurrence and everything after it to the next tick. So a manual fire that rolls back loses
-  nothing: the next tick creates the task the abandoned one didn't.
-- **Store the intended IANA timezone** on each definition. UTC avoids clock changes. If local clocks
-  skip a scheduled time, Workhorse fires after the clock advances. If clocks repeat a time,
-  Workhorse fires its first occurrence only. If several fields land on one instant, Workhorse
-  creates one occurrence.
-- **Hashed fields stay stable across worker languages.** An `H` field spreads schedules to a
-  repeatable offset, so workers in every language agree on the same occurrence.
-- **Cancelling one fired task doesn't disable the schedule.** The definition and the tasks it
-  creates have separate lifecycles — tomorrow's occurrence still runs.
+Every definition carries a revision that increments when you change it. A fire names the revision it
+read, and PostgreSQL requires that revision when it reserves the occurrence. If a deployment changed
+or disabled the definition since then, the fire becomes a no-op. This also covers a direct
+`fireSchedule` call made against an older definition.
+
+<details>
+<summary>Reference: synchronization lock and revision fence</summary>
+
+- `sync_schedule_definitions_v2` takes `pg_advisory_xact_lock` on
+  `workhorse:schedule-namespace:<namespace>` before it reads or writes a definition row.
+- A tick only tries that lock. A synchronization waits for it.
+- Two synchronizations of one namespace run one after the other.
+- `fire_schedule_v1(namespace, schedule_name, expected_revision, occurrence_at)` locks the
+  definition row. It returns null unless the row is enabled, not paused, and still at
+  `expected_revision`.
+- A pause or resume also increments the revision.
+
+A caller that locks definition rows in its own transaction before it synchronizes can still
+deadlock with a tick.
+
+More detail: [Data model: Namespace locking](../architecture/data-model.md#namespace-locking).
+
+</details>
+
+## When a fire happens
+
+The nightly schedule is due at 02:00:00. Its fire waits for the next maintenance tick of a worker
+that offers `billing`. So the task appears shortly after 02:00:00, not exactly at it. This is not a
+real-time scheduler.
+
+Schedules only fire while a worker with a matching namespace is running. When workers return, the
+definition's catch-up policy decides whether Workhorse skips, coalesces, or replays missed
+occurrences.
+
+PostgreSQL decides what time it is. Worker clocks drift apart, so Workhorse asks the database for
+the evaluation instant. A worker running ahead fires nothing early, and a worker running behind
+moves no schedule backwards.
+
+An occurrence that another transaction holds is deferred, not skipped. Suppose an operator fires
+02:00 manually inside a transaction that has not committed. A tick at that moment leaves 02:00 and
+everything after it to the next tick. If the manual transaction rolls back, nothing is lost: the
+next tick creates the task the abandoned one did not.
+
+Cancelling one fired task does not disable the schedule. The definition and the tasks it creates
+have separate lifecycles, so tomorrow's occurrence still runs.
+
+<details>
+<summary>Reference: clock and busy occurrences</summary>
+
+- A null `now` means `clock_timestamp()`. Every SDK passes null.
+- `fire_due_schedules_v2` takes the advisory lock of each occurrence before it fires it.
+- A busy occurrence lock ends the pass for that definition. The pass reports no row for it,
+  evaluates nothing after it, and leaves `last_evaluated_at` at the last occurrence it evaluated.
+- A pass that defers before its first occurrence writes no row.
+
+More detail: [Data model: Busy occurrences](../architecture/data-model.md#busy-occurrences).
+
+</details>
+
+## Timezones and clock changes
+
+`nightly-invoice-run` uses `30 2 * * *` in `America/New_York`. On the spring change, local clocks
+jump from 02:00 to 03:00, so 02:30 does not exist that night. Workhorse fires at 03:30 local time
+instead. On the autumn change, clocks fall back from 02:00 to 01:00, so 02:30 happens once and
+Workhorse fires it normally.
+
+`early-sync` uses `30 1 * * *` in the same timezone. On the autumn change, 01:30 happens twice, and
+Workhorse fires only the first one.
+
+Store the intended IANA timezone on each definition. UTC avoids clock changes. If local clocks skip
+a scheduled time, Workhorse fires after the clock advances. If clocks repeat a time, Workhorse fires
+its first occurrence only. If several fields land on one instant, Workhorse creates one occurrence.
+
+Hashed fields stay stable across worker languages. An `H` field spreads schedules to a repeatable
+offset. PostgreSQL computes it, so workers in every language agree on the same occurrence.
+
+<details>
+<summary>Reference: cron dialect</summary>
+
+`cron_occurrences_v1(expression, last_occurrence_at, now, limit, timezone)` evaluates every
+expression. It accepts five fields, or six with seconds first, and supports:
+
+- lists, ranges, steps, and names;
+- `?`, `L`, `<DOW>L`, and `<DOW>#<ordinal>`;
+- `@yearly`, `@annually`, `@monthly`, `@weekly`, `@daily`, `@midnight`, and `@hourly`;
+- `H` and `H(lower-upper)`, which hash `${expression}:${fieldIndex}:${tokenIndex}` with SHA-256.
+
+A nonexistent wall time advances across the gap. A repeated wall time selects its first instant.
+Occurrences have one-second precision. The search horizon is 128 years.
+
+More detail: [Data model: Cron evaluation](../architecture/data-model.md#cron-evaluation).
+
+</details>
+
+## Seeing schedules in the dashboard
+
+The Schedules page lists `nightly-invoice-run` with its queue, its evaluator count, and a Pause
+action. The evaluator count is the number of live workers that can evaluate its namespace. Open its
+run count to view tasks of that type, in that queue, in a new browser tab.
+
+The page also lists Workhorse maintenance beside application schedules. Maintenance runs directly
+in PostgreSQL instead of creating a task. Its last-run value records that direct execution. Expand a
+maintenance row to inspect recent outcomes, durations, affected rows, phase timings, and errors.
+
+The row reports the retained total, while the expanded history identifies its recent subset. It
+also states that Workhorse samples successful task-changing ticks and records tick errors
+immediately. Workhorse records every eligible slow-routine execution.
+
+<details>
+<summary>Reference: Schedules page</summary>
+
+**Application schedules.** `dashboard_cron_v1` returns at most 50 definitions.
+
+- `evaluatorCount` counts worker registrations whose `schedule_namespaces` contain the namespace and
+  whose `last_heartbeat_at` is at most 30 seconds old.
+- The run count links to `/tasks?queue=<queue>&type=<task type>`. The task listing has no schedule
+  filter.
+- A deployment-disabled definition shows `Config off`.
+
+**Maintenance routines.** The page lists `tick`, `history_partitions`, `history_retention`, and
+`terminal_storage`. Each shows its retained run total and its five newest `maintenance_run` rows.
+
+`maintenance_run` keeps the newest 50 executions per routine. `tick_v1` records only executions
+that return a phase error or affect at least one task. It records errors immediately and samples
+successful task-changing executions at most once per minute.
+
+More detail: [Dashboard: Schedules page](../architecture/dashboard.md#schedules-page).
+
+</details>
 
 ## Next
 

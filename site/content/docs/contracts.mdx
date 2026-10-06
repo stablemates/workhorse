@@ -145,7 +145,8 @@ its completion. An oversized result fails that attempt with `TaskValueSizeLimitE
 `ValueSizeLimitError` in Ruby, and follows the retry path. In Python, a `NaN` or infinite number fails the attempt with `ValueError` the same way.
 
 PostgreSQL jsonb cannot store a NUL character or an unpaired surrogate. Every worker checks a
-handler result for both before it sends its completion. A result that contains either fails that
+handler result for both before it sends its completion. The Rust worker checks for NUL only,
+because a Rust `String` cannot hold an unpaired surrogate. A result that contains either fails that
 attempt and follows the retry path. The error is a `TypeError` in TypeScript, a `ValueError` in
 Python, and an `ArgumentError` in Ruby. Its message carries no part of the value. On the fast
 tier, the other results in the batch still complete.

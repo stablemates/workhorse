@@ -71,11 +71,19 @@ winner without resuming the handler again.
 If another transition has already closed the boundary, the delivery returns `stale` and leaves the
 retained outcome unchanged.
 
+The delivery status names what happened. An equivalent retry returns `duplicate` with the stored
+payload. A second delivery under a different key returns `already_delivered` with the first payload.
+A delivery that arrives before the handler declares the wait returns `not_waiting`, and the caller
+may retry later. `requestedBy` records the trusted actor; it is attribution, not authorization.
+
 Workhorse rejects a delivery before the wait exists rather than buffering it. A timeout, task
 deadline, or cancellation closes the boundary, so replay cannot continue with an invented payload.
 
 `Admin.listSignalWaits` provides the actionable operator projection. The dashboard uses the same
-public method, but its server replaces browser-supplied attribution with the authenticated actor.
+public method, but its server replaces browser-supplied attribution with the host's audit actor: the
+authenticated principal, or a configured audit actor in Python, Go, Rust, and Ruby hosts.
+An operator finds waiting tasks in the dashboard's `Waiting` task list and can deliver a payload from
+the task drawer.
 
 Go applications deliver through `Queue.SendSignal` with `ExternalWaitDelivery`. The returned
 `SignalDeliveryResult` contains the database status and retained payload.

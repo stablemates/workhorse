@@ -34,9 +34,9 @@ options that Workhorse already enforces:
   and [rate limits](/docs/rate-limits).
 - `budget` caps one tenant's work across every queue. Synchronize one budget per tenant with
   `Queue.syncBudgets`, and each task names its tenant's budget.
-- A `tenant:` tag makes the tenant filterable. `Admin.listTasks`, dead-letter listing, redrive
-  filters, and the dashboard task list accept a tag filter, so an operator can see one tenant's work
-  at a glance.
+- A `tenant:` tag makes the tenant filterable. Dead-letter listing, redrive filters, and the
+  dashboard task list accept a tag filter, so an operator can see one tenant's work at a glance.
+  `Admin.listTasks` has no tag filter.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -163,8 +163,8 @@ needs its own windows needs its own database.
 
 Operator access is not tenant-scoped. An administrator sees every tenant's tasks, and an authorized
 cancel, redrive, or purge acts on any task. A tag filter narrows a view; it does not enforce a
-boundary. Workhorse will scope operator actions to a tenant once it has an authenticated principal
-to scope them to. The [limitations](/docs/limitations) page tracks that gap.
+boundary. Workhorse does not yet scope operator access to a tenant. The
+[limitations](/docs/limitations) page tracks that gap.
 
 Metrics never carry the tenant. Queue and task type bound the cardinality of every counter and
 histogram, and a tag or key would let tenant count multiply the series. A handler that wants the
