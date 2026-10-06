@@ -106,6 +106,16 @@ here.
 If a change affects the public deployment contract, runtime configuration, image publishing, host
 prerequisites, or deployment procedure, update `typescript/demo/DEPLOYMENT.md` in the same commit.
 
+## Keep benchmark comparisons private
+
+Until a maintainer decides to publish benchmarks, never name a benchmark competitor in this
+repository. That covers code, documentation, decision records, commit messages, and pull request
+titles and bodies. Say "the baseline" instead. Comparative results live only in the private
+operations repository and in Linear.
+
+Perf-lab and other research branches carry those names in their history. Never push them. Rebuild
+the finished change on a fresh branch from `main` before opening a pull request.
+
 ## Run commands from the checkout they belong to
 
 `pnpm worktree:setup` provisions a dedicated set of five databases for each linked worktree:
@@ -148,6 +158,20 @@ variable turns either refusal off. `pnpm toolchain:verify` reports the state of 
 `pnpm test` does not build the dashboard browser bundle. Anything that serves
 `typescript/dashboard-server/dist/app`, including `test:demo-smoke` and `test:packed`, needs a full
 `pnpm build` first. `pnpm build:runtime:dev` compiles only the library half.
+
+`pnpm typescript-api:check` compares `api/typescript.txt` with the built declarations in
+`typescript/core/dist`, not with the source. A stale `dist` lets the check pass locally and fail in
+CI. After changing an exported signature, run `pnpm build:runtime:dev`, then
+`pnpm typescript-api:generate`. The snapshot also records the value of every exported constant, so
+changing one changes the public surface.
+
+To reproduce the CI `format, generated files, lint, security, types` job locally, run its steps in
+the order `.github/workflows/ci.yml` lists them, starting from the build.
+
+Before pushing, run the whole `pnpm lint`. Running oxlint alone skips the knip dead-code check and
+the Python, Go and Ruby linters. knip fails on any export that no module imports by name. A
+test-support module exports only the names test files import; helpers that callers reach through a
+factory's return value stay unexported.
 
 ## Writing documentation
 
