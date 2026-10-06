@@ -19,7 +19,7 @@ group :development do
   gem "rake", "~> 13.2"
   gem "rspec", "~> 3.13"
   gem "sequel", "5.109.0"
-  gem "rubocop", "~> 1.88", require: false
+  gem "rubocop", "~> 1.91", require: false
   gem "standard", "~> 1.56", require: false
   # Sitrox's unrelated gem, which defines a top-level Workhorse beside this SDK.
   gem "workhorse", "~> 1.5", require: false
