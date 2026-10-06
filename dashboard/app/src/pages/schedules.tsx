@@ -30,6 +30,9 @@ export const resumeScheduleWarnings = {
   all: "Workhorse may enqueue missed occurrences in bounded batches as soon as a worker evaluates this schedule. It will continue until the schedule catches up. Tasks already enqueued are unchanged.",
 } as const;
 
+export const pauseScheduleWarning =
+  "Workhorse will stop enqueuing occurrences of this schedule until an operator resumes it. The pause survives deploys. Tasks already enqueued are unchanged.";
+
 export function MaintenanceRunHistory({
   runs,
 }: {
@@ -96,38 +99,43 @@ export function CronPage({
 }) {
   const schedules = presentSchedules(data);
   const [expandedMaintenance, setExpandedMaintenance] = useState<string | null>(null);
-  const [confirmingResume, setConfirmingResume] = useState<{
+  const [confirming, setConfirming] = useState<{
+    pause: boolean;
     namespace: string;
     name: string;
     catchupPolicy: "skip" | "latest" | "all";
   } | null>(null);
-  useConfirmationActivity(confirmingResume !== null);
+  useConfirmationActivity(confirming !== null);
   return (
     <Stack gap="xl">
       <Modal
-        opened={confirmingResume !== null}
-        onClose={() => setConfirmingResume(null)}
-        title="Resume schedule?"
+        opened={confirming !== null}
+        onClose={() => setConfirming(null)}
+        title={confirming?.pause ? "Pause schedule?" : "Resume schedule?"}
         centered
       >
-        <Text size="sm">{resumeScheduleWarnings[confirmingResume?.catchupPolicy ?? "skip"]}</Text>
-        {confirmingResume ? (
+        <Text size="sm">
+          {confirming?.pause
+            ? pauseScheduleWarning
+            : resumeScheduleWarnings[confirming?.catchupPolicy ?? "skip"]}
+        </Text>
+        {confirming ? (
           <Code block mt="sm">
-            {confirmingResume.namespace}/{confirmingResume.name}
+            {confirming.namespace}/{confirming.name}
           </Code>
         ) : null}
         <Group justify="flex-end" mt="lg">
-          <Button variant="default" onClick={() => setConfirmingResume(null)}>
+          <Button variant="default" onClick={() => setConfirming(null)}>
             Cancel
           </Button>
           <Button
             onClick={() => {
-              if (!confirmingResume) return;
-              setSchedulePaused(confirmingResume.namespace, confirmingResume.name, false);
-              setConfirmingResume(null);
+              if (!confirming) return;
+              setSchedulePaused(confirming.namespace, confirming.name, confirming.pause);
+              setConfirming(null);
             }}
           >
-            Resume schedule
+            {confirming?.pause ? "Pause schedule" : "Resume schedule"}
           </Button>
         </Group>
       </Modal>
@@ -313,17 +321,14 @@ export function CronPage({
                                   color={schedule.paused ? "yellow" : "gray"}
                                   loading={togglingSchedule === scheduleKey}
                                   aria-label={`${schedule.paused ? "Resume" : "Pause"} ${schedule.name}`}
-                                  onClick={() => {
-                                    if (schedule.paused) {
-                                      setConfirmingResume({
-                                        namespace: schedule.namespace,
-                                        name: schedule.name,
-                                        catchupPolicy: schedule.catchupPolicy,
-                                      });
-                                    } else {
-                                      setSchedulePaused(schedule.namespace, schedule.name, true);
-                                    }
-                                  }}
+                                  onClick={() =>
+                                    setConfirming({
+                                      pause: !schedule.paused,
+                                      namespace: schedule.namespace,
+                                      name: schedule.name,
+                                      catchupPolicy: schedule.catchupPolicy,
+                                    })
+                                  }
                                 >
                                   {schedule.paused ? "Resume" : "Pause"}
                                 </Button>

@@ -76,7 +76,7 @@ const page: DashboardCronPage = {
 
 describe("schedules page", () => {
   it("explains that a maintenance destination is not a queue", async () => {
-    const { CronPage, MaintenanceRunHistory, resumeScheduleWarnings } =
+    const { CronPage, MaintenanceRunHistory, pauseScheduleWarning, resumeScheduleWarnings } =
       await import("./pages/schedules.js");
     const { presentSchedules } = await import("./presentation-policy.js");
     const { formatExact } = await import("./preferences.js");
@@ -112,6 +112,7 @@ describe("schedules page", () => {
     );
     expect(html).toContain('target="_blank"');
     expect(html).not.toContain(">system<");
+    expect(pauseScheduleWarning).toContain("stop enqueuing occurrences");
     expect(resumeScheduleWarnings.skip).toContain("skip occurrences missed");
     expect(resumeScheduleWarnings.latest).toContain("most recent missed occurrence");
     expect(resumeScheduleWarnings.all).toContain("continue until the schedule catches up");
