@@ -99,7 +99,7 @@ property that makes claims safe makes throttling exact.
 
 The queue bucket is split across the queue's
 [admission shards](/docs/concurrency-policies#many-workers-one-cap), so claims of one queue do not
-wait on one another. Each shard refills its own share, and the shares add up to the rate and the
+wait on one another. A policy with a per-key limit keeps one shard instead. Each shard refills its own share, and the shares add up to the rate and the
 burst. A claim spends only the tokens of the shards it holds, so the bucket never overspends.
 
 Tokens are never refunded. The budget measures starts: a task that succeeds, fails, waits, or loses
@@ -116,7 +116,9 @@ const statuses = await queue.rateLimitStatuses();
 Each status reports available queue tokens, bounded throttled-ready depth, the count of throttled
 keys, and the earliest sampled eligibility time — enough to tell "waiting for a token" apart from
 "nothing to run". `queue.health()` includes the same summary, and OpenTelemetry exports
-queue-level configured rate, tokens, throttle depth, and eligibility delay.
+queue-level configured rate, tokens, throttle depth, and eligibility delay. Queue health reports
+throttled ready work as the degraded reason `rate-limit-throttled`. The dashboard presents it as a
+neutral `Throttling` check rather than a failure.
 
 The dashboard's Queues page keeps concurrency and start rate in separate columns, so an
 active-work cap stays visually distinct from a ready task waiting for its next token.

@@ -10,13 +10,16 @@ a defined set of features in return.
 ## Why a queue would switch
 
 A task on an ordinary, **full-tier** queue can checkpoint, sleep, wait for a signal, or spawn
-children. Workhorse makes that possible by recording every step. Each claim, completion, and retry
-updates the runtime row, appends a `task_event` row, and writes an `attempt_history` row.
+children. Workhorse makes that possible by recording every step. A claim updates the runtime row and
+appends a `claimed` event. A retry updates the runtime row, appends an event, and writes an
+`attempt_history` row that closes the attempt. A completion deletes the runtime row, writes a
+`task_outcome` row, appends an event, and writes the closing `attempt_history` row.
 
 Most handlers never suspend, so on their queues those writes buy nothing. A **fast-tier** queue
 drops them. A live task lives in one `fast_task_runtime` row. When it closes, Workhorse deletes that
-row and writes one `fast_task_outcome` row. It writes no events and no attempt rows unless the queue
-opts in.
+row and writes one `fast_task_outcome` row. It writes no claim events and no attempt rows unless the
+queue opts in, so an enqueue records no `enqueued` event. Two audit paths still write `task_event`
+rows: batch evidence (`batch_dispatched`) and redrive (`redriven` and `redrive_created`).
 
 ## What a fast-tier task keeps
 
@@ -59,7 +62,8 @@ other completions and the next claim still commit. On the full tier, an oversize
 
 A request for a missing feature fails with SQLSTATE `P1007`, and every SDK surfaces it as
 `FastTierUnsupportedError` naming the queue and the feature. Adding a concurrency or rate-limit
-policy to a fast-tier queue fails the same way. A handler's context rejects its calls locally. The
+policy to a fast-tier queue fails the same way. A handler's context rejects its calls locally:
+`ctx.checkpoint`, for example, fails with the feature `checkpoints` before it reaches PostgreSQL. The
 rejection is an ordinary handler failure, so the task's retry policy applies. In Ruby, an invalid
 step name raises `ArgumentError` before the tier check runs. That covers checkpoint, wait, signal,
 human wait, and child names. A child set's type and size are checked before its names.

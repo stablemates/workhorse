@@ -99,8 +99,8 @@ return its verified operator from `authorize`.
 Workhorse enforces a tenant boundary only between databases. Inside one database, a task carries
 its tenant as a concurrency key, a budget name, and a tag, which give fair share, a per-tenant cap,
 and filterable reads. Nothing checks that those three agree, retention windows apply to every
-tenant alike, and an administrator sees and acts on every tenant's tasks. Tenant-scoped operator
-access waits on the authenticated principal that roles would introduce.
+tenant alike, and an administrator sees and acts on every tenant's tasks. Workhorse does not yet
+scope operator access to a tenant, and has no roles to scope it with.
 
 Workaround: give a tenant that needs data separation or its own retention windows its own
 database, and follow the [multi-tenancy](/docs/multi-tenancy) page for the shared-database

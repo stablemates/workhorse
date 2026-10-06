@@ -99,7 +99,7 @@ batch size and links the other members. If the shared callback fails, the drawer
 failure across the group instead of guessing from the individual task errors.
 
 Batch contexts omit timers, signals, human waits, and child joins because one member cannot suspend
-and replay independently inside a shared invocation. Register an ordinary handler when a task needs
+and replay independently inside a shared invocation. Register an ordinary `Handler` when a task needs
 those boundaries.
 
 TypeScript configures grouping with `BatchHandlerOptions.maxSize` and

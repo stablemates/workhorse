@@ -1,71 +1,155 @@
-# Who owns a task right now: leases and fence tokens
+# Who owns a task right now, and how do fence tokens prove it?
 
 Only the current owner may commit a task transition. This guide explains the mechanism that
 guarantees it, because almost every other rule in Workhorse depends on it.
 
-## Claiming a task
+## One task, a frozen worker, and a late write
 
-When a worker has free slots, it calls `claim_many_v1`. Workhorse admits the ready tasks that the
-queue's order and policies allow. It stamps each admitted task's `task_runtime` row with three things:
+Worker A runs an invoice task. Partway through, A's machine freezes. Later it comes back and tries
+to mark the task complete. This is what happens.
 
-- **the worker's id** — who owns it
-- **`expires_at`** — until when
-- **a fence token** — a number that goes up every single time a task is claimed, anywhere in
-  the database
+1. **At 0 s — the claim.** Worker A has a free slot and asks for work. Workhorse gives it the
+   invoice task and stamps three things on the task's runtime row: A's worker id, an expiry at 30 s,
+   and fence token 41. Worker A now holds a **lease**: it owns the task until 30 s.
+2. **At 10 s and 20 s — heartbeats.** While the handler runs, worker A tells PostgreSQL on a timer
+   that it is still working. Each accepted heartbeat moves the expiry later. After the heartbeat at
+   20 s, the lease runs until 50 s.
+3. **At 25 s — the freeze.** Worker A's machine stops responding. The handler stops, and so do the
+   heartbeats. Nothing tells the database. It only notices, later, that the expiry has passed.
+4. **At 50 s — the lease expires.** Shortly after, a background pass called recovery finds the
+   abandoned row and puts the task back in the queue for another attempt.
+5. **At about 52 s — a new owner.** Worker B claims the task. The new claim gets a **new, higher
+   fence token**: 57, because other claims happened in between.
+6. **At 90 s — the late write.** Worker A's machine recovers. Its handler finishes and tries to mark
+   the task complete. The write carries fence token 41. The row now says 57, so PostgreSQL refuses
+   the write. Worker A cannot touch the attempt that replaced it.
 
-The worker now holds a **lease**. It owns the task, but not forever — only until `expires_at`.
+Without step 6 there would be chaos: a task marked succeeded while a second copy still runs it.
+
+<details>
+<summary>Reference: claim, lease, and recovery</summary>
+
+| Step    | Function             | Effect on `task_runtime`                                          |
+| ------- | -------------------- | ----------------------------------------------------------------- |
+| Claim   | `claim_many_v1`      | Sets `worker_id`, `expires_at`, and a new `fence_token`.          |
+| Renew   | `heartbeat_many_v1`  | Moves `expires_at` for each accepted lease.                       |
+| Recover | `recover_expired_v1` | Returns expired rows to `ready` or `scheduled`. Clears the owner. |
+
+**Fence tokens.** Every claim takes the next value of the sequence `fence_token_seq`. The sequence
+covers the whole database, not one task or queue. So a later claim always has a higher token.
+
+**Defaults (TypeScript)**
+
+| Option        | Default                           |
+| ------------- | --------------------------------- |
+| `leaseMs`     | 30,000 ms                         |
+| `heartbeatMs` | `max(100, floor(leaseMs / 3))` ms |
+
+`heartbeatMs` must be shorter than `leaseMs`.
+
+**Recovery cadence.** Each worker calls `tick_v1` once per `maintenanceIntervalMs` (TypeScript
+default 1,000 ms). Each tick recovers a bounded batch of expired rows.
+
+More detail: [Task lifecycle: Claim](../architecture/lifecycle.md#claim).
+
+</details>
 
 ## Keeping the lease
 
-From the claim until the task's final transition is written, the worker calls
-`heartbeat_many_v1` on a background timer. The call submits every active lease, and each accepted
-result pushes that task's `expires_at` forward.
+Go back to worker A and the invoice task, before the freeze.
 
-Workhorse reads the clock only after the call holds the row locks it needs, not when the call
-started. A batch may lock all of its tasks before that reading. A heartbeat or completion that
-waited behind another transaction therefore cannot revive a lease that expired during the wait.
-An accepted heartbeat extends the lease from that clock reading.
+1. **At 10 s** worker A's background timer sends a heartbeat round. The round covers every lease A
+   holds, so it renews the invoice task and every other task A runs. You never call heartbeat
+   yourself.
+2. **At 20 s** suppose the round fails on a network error. Every task keeps running, and the next
+   round tries again.
+3. **At 20 s** suppose instead the heartbeat waits behind another transaction until 45 s. The
+   heartbeat at 10 s had moved the expiry to 40 s, so the lease expired during the wait. When the
+   heartbeat finally holds the row lock, PostgreSQL reads the clock, sees the expired lease, and
+   does not renew it.
+4. **At 24 s** suppose the invoice handler returns instead of freezing. The worker still has to
+   check the result and write the completion, and that write waits for a busy connection pool. In
+   TypeScript, Python, and Go the lease keeps renewing through that final write, so a finished task
+   is not handed to recovery. A Rust task leaves the heartbeat round when its handler returns.
 
-The Rust worker matches each heartbeat result to the claim's fence token. If a suspended task
+So a heartbeat renews only a lease that is still live when PostgreSQL checks it. A late heartbeat
+cannot bring a lease back, and one failed round says nothing about ownership.
+
+<details>
+<summary>Reference: heartbeat functions and results</summary>
+
+**`heartbeat_many_v1(p_worker_id, p_leases jsonb)`**
+
+- `p_leases` holds 1 to 100 entries of `{ taskId, fenceToken, leaseMs }`.
+- On the full tier, the function locks the worker's rows in `task_id` order.
+- The function reads `clock_timestamp()` after those locks.
+- One `UPDATE ... FROM` renews every matching row.
+- The function returns `(ordinal, task_id, status)` in input order.
+
+**Statuses** (`heartbeat_v1` and `heartbeat_many_v1`)
+
+| Status              | Effect                                                      |
+| ------------------- | ----------------------------------------------------------- |
+| `accepted`          | Updates the heartbeat time, `expires_at`, and `updated_at`. |
+| `cancel_requested`  | No change.                                                  |
+| `deadline_exceeded` | No change.                                                  |
+| `timeout_exceeded`  | No change.                                                  |
+| `stale`             | No change. The worker no longer owns this fence.            |
+
+**Lease watchdog.** Each attempt also keeps a local countdown. It starts when the claim request
+leaves. Every `accepted` heartbeat restarts it from the moment that round's request left. Both
+moments come before the database renews, so the local countdown never ends after the stored
+`expires_at`.
+
+| SDK        | Watchdog                                                             |
+| ---------- | -------------------------------------------------------------------- |
+| TypeScript | `TaskAttempt`                                                        |
+| Python     | The expiration thread of the attempt                                 |
+| Go         | The watchdog timer of the attempt                                    |
+| Rust       | The `watchdog` timer in `Inner::execute` (`CancelReason::LeaseLost`) |
+
+The Rust worker matches each heartbeat result to the fence token of the claim. If a suspended task
 resumes while an old round is returning, that round cannot renew or cancel the resumed handler.
 
-You never call this yourself. Renewal does not stop when your handler returns. The worker still
-has to validate the result and write the completion or failure, and either can wait on a busy pool.
-The lease keeps renewing through that final write, so a finished task is not handed to recovery.
+More detail: [Task lifecycle: Heartbeat](../architecture/lifecycle.md#heartbeat).
 
-## When a worker dies
+</details>
 
-If the process crashes, or its network drops, or someone pulls the plug on the machine, the
-heartbeats simply stop. Nothing notifies the database — it just notices, eventually, that
-`expires_at` has passed.
+## Why the fence check works
 
-A background pass called `recover_expired_v1` finds those abandoned rows and puts the tasks
-back in the queue for another attempt. The new claim gets a **new, higher fence token**.
+In the story, worker A was not dead. It was frozen, and it woke up well after its lease had
+expired. A slow network call or a long pause can cause the same thing.
 
-## The clever part
+Every write that changes a task carries the worker id and the fence token from the claim. Every SQL
+function checks both against the row before it writes. If they do not match, the function refuses.
+That is why the architecture reference keeps saying "locks the exact active worker and fence
+generation". The phrase means: this write only lands if you still own the task.
 
-Now imagine the original worker wasn't really dead. Its machine was frozen, or it was stuck
-on a slow network call, and it wakes up well after its lease expired and tries to mark the
-task complete.
+<details>
+<summary>Reference: fenced writes</summary>
 
-By now another worker is running that task. If the first worker's write went through, you'd
-have chaos: a task marked succeeded while a second copy is still running it.
+These functions lock the exact active `task_id`, `worker_id`, and `fence_token` row before they
+write:
 
-It doesn't go through. The old worker's write carries the _old_ fence token. Every SQL
-function checks the token before it writes anything, sees it doesn't match what's on the
-row, and refuses. The zombie can't touch the task that replaced it.
+- `heartbeat_v1` and `heartbeat_many_v1`;
+- `complete_v1` and `fail_v1`;
+- `schedule_wait_v1`, `wait_for_signal_v1`, and `wait_for_human_v1`;
+- `update_progress_v1` and `save_checkpoint_v1`.
 
-This is why the reference keeps saying things like "locks the exact active worker and fence
-generation". That phrase means: this write only lands if you are still genuinely the owner.
+A mismatch writes nothing. A heartbeat reports it as `stale`.
+
+More detail: [Task lifecycle: Terminal transitions](../architecture/lifecycle.md#terminal-transitions).
+
+</details>
 
 ## What this means for you
 
-You mostly don't think about it. But it explains two things you will run into:
+You mostly do not think about it. But it explains two things you will run into:
 
-- A handler that hangs for a long time without finishing may find its task has already been
-  retried elsewhere. Workhorse rejects its final write, silently and correctly.
-- "Still running" and "still owns the task" are different questions. Heartbeats answer the
-  second one.
+- A handler that hangs for a long time without finishing may find that its task was already retried
+  elsewhere. Workhorse rejects its final write, silently and correctly.
+- "Still running" and "still owns the task" are different questions. Heartbeats answer the second
+  one.
 
 ## Next
 

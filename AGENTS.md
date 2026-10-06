@@ -182,14 +182,24 @@ The product documentation has two source layers for different readers. Keep both
   it links every page and states what each one owns. A new page needs a row there.
 - `docs/guides/` explains one concept per file for a reader new to the system. Explain the problem
   before naming the mechanism, keep every identifier, and match the register of
-  `020-leases-and-fences.md`.
+  `020-leases-and-fences.md`. A guide assumes general programming, PostgreSQL basics, and the three
+  foundation guides (010 to 030). Define any other Workhorse term in one clause where it first
+  appears, and link the guide that owns it.
 
 Rules that keep the two layers from drifting:
 
-- A guide states no numbers. Describe bounded behavior in the guide and keep the exact value on
-  its architecture page.
-- Link once per guide, in the footer, to the architecture page that owns the concept, and never
-  inline.
+- A guide states exact values only inside its reference blocks. The main text describes bounded
+  behavior. The architecture page stays the source of truth: when a value changes, update that page
+  and every reference block that states the value.
+- Each reference block ends with a link to the architecture section that owns its facts. When no
+  architecture page covers them, link the decision record, `docs/compatibility.md`, or
+  `docs/features.md` section that does. The main text links sibling guides, not architecture pages. The footer keeps one link to
+  the architecture page that owns the concept.
+- Site pages mirror a guide's explanation, not its reference blocks.
+  `typescript/core/test/site-guide-coverage.test.ts` holds every identifier outside the blocks to
+  the mapped site page. List the names a scenario invents, such as its queues, tenants, task types,
+  and application functions, in a `<!-- scenario-names: … -->` comment under the title. The test
+  exempts only those names and rejects a listed name the guide no longer uses.
 - Give each concept one guide owner. Other guides should use one clause and a link.
 - Never renumber a guide because its number appears in links. Insert new guides into existing gaps.
 - Verify examples against the source before writing them. `HandlerContext` is in
@@ -202,7 +212,28 @@ change behavior described by a mapped guide, update its site page in the same co
 
 Every guide uses the same shape: a title phrased as the reader's question, a short statement of what
 and why, the explanation, a verified example when useful, a `## Next` block with two or three sibling
-links, and the single reference link.
+links, and the single reference link. `000-start-here.md` is an index and keeps its own shape.
+
+Write the explanation scenario-first:
+
+- Open each section that explains behavior with one concrete case told in time order. Name the
+  queue, key, or task, and walk through what happens step by step. State the general rule after the
+  case.
+- Use plain words and no analogies. An analogy gives a term a second meaning.
+- Treat scenario numbers as illustration. Use relative times such as "at 2 s" when the gaps matter,
+  and a clock time only when a fixed moment matters. When a scenario uses a real default, its
+  reference block states that default.
+- Check every general claim inside a scenario against the source. A scenario reads easily, so a
+  loose sentence in it is easy to miss.
+- Close a behavior section with a collapsed reference block. Its summary starts with `Reference:`.
+  It holds exact identifiers, limits, defaults, outcomes, and events as tables or numbered
+  conditions. It ends with a `More detail:` link to the owning architecture section.
+- Leave a blank line after `</summary>` and before `</details>`, or GitHub renders the block's
+  Markdown as plain text.
+- The main text may not state a fact that its reference blocks or the architecture page lack.
+- A section that only summarizes consequences or limits that earlier sections explain, such as
+  "What this means for you" or "What this does not do", needs neither a scenario nor a reference
+  block. It may state no behavior that the guide does not explain elsewhere.
 
 For either documentation layer:
 

@@ -41,7 +41,8 @@ session-mode PgBouncer:
 - The Prisma and Kysely adapters take a `pool` for exactly this. Give it a session-pooled PgBouncer
   or direct pool.
 - A `Queue` built on a queryable without `connect()` has no listener, so its worker polls and logs
-  one warning when it starts.
+  one warning when it starts. It also cannot reserve a heartbeat connection, so its worker refuses to
+  start unless `sharedHeartbeats` is set.
 
 ## Connection budgets
 

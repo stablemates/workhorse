@@ -64,14 +64,14 @@ observation and an exact count disagree, the exact count wins.
 
 Live-state counts are exact. Unbounded terminal history and statistics buckets stop at explicit
 caps and mark the result as a lower bound, so health polling does not become more expensive as a
-database ages.
+database ages. A capped terminal count sets `terminalCountsCapped`.
 
-Critical reasons mean work is stopping now, such as an expired lease, overdue external wait, or
-stalled promotion. Degraded reasons mean the queue still runs while maintenance or admission falls
+Critical reasons mean work is stopping now, such as an expired lease (`expired-leases`), an overdue
+external wait, or stalled promotion (`stalled-promotion`). Degraded reasons mean the queue still runs while maintenance or admission falls
 behind. The reason codes are stable, so alerts can branch on them without parsing prose.
 
 PostgreSQL owns the budgets and returns the applied values under `budgets`. Application sync seeds
-defaults without replacing operator overrides, so TypeScript, Go, Python, Rust, Ruby, the dashboard, and
+defaults without replacing operator overrides of a budget such as `promotion_lag_ms`, so TypeScript, Go, Python, Rust, Ruby, the dashboard, and
 `workhorse health --json` all use the same evaluation.
 
 Every client decodes the database response into its language's `QueueHealth` type, preserving the

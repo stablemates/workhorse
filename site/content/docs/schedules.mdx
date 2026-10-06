@@ -139,7 +139,7 @@ synchronize, or its schedules sit idle.
 Workers offer namespaces rather than private schedule copies. PostgreSQL stores the current
 definitions, so workers that offer the same namespace evaluate the same desired state. The
 Schedules page reports how many live workers offer each namespace.
-Open an application schedule's run count to view tasks of that type in a new browser tab.
+Open an application schedule's run count to view tasks of that queue and type in a new browser tab.
 
 The page also lists Workhorse maintenance beside application schedules. Maintenance runs directly
 in PostgreSQL instead of creating a task, and its last-run value records that direct execution.

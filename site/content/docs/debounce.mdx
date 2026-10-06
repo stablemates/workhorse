@@ -64,9 +64,10 @@ replacements, so every caller observes one stable task identity.
 Choose `reset` to start a fresh quiet period after every replacement. Choose `preserve` when the
 first request fixes the run time and later requests should update only the payload.
 
-`result.outcome` is `accepted` for a new task and `replaced` for a pending update. Once a worker owns
-the task, it becomes terminal, or its window elapses, PostgreSQL returns `non_replaceable` and keeps
-the accepted payload unchanged.
+`result.outcome` is `accepted` for a new task and `replaced` for a pending update. A task that can no
+longer be replaced returns `non_replaceable`, and PostgreSQL keeps the accepted payload unchanged.
+The window ends at the run time, so a request that arrives while the task runs finds the window
+over and creates a new task.
 
 Only `scheduled` or `ready` tasks that have never started can be replaced. A task that waits durably
 or backs off before a retry is also `scheduled`, and it is refused. A refused replacement includes a

@@ -1,13 +1,28 @@
 # How do I limit duplicate work during a busy window?
 
-A digest sender may receive many equivalent triggers close together. It needs one accepted task for
-that period, while later triggers should reuse the same durable identity.
+<!-- scenario-names: acct-7 -->
 
-Keyed throttle keeps the acceptance window in PostgreSQL. The first request creates the task. An
-equivalent request before the window closes returns that task with a `coalesced` outcome.
+Some work should happen at most once per period, however many times something asks for it. Keyed
+throttle accepts the first request for a key and folds every equivalent request into that task until
+the window closes.
 
-The dashboard records safe throttle evidence on the surviving task. Its detail view shows the
-scope, a key digest, the window, and how many requests were absorbed without exposing the raw key.
+## One account, five triggers, two digests
+
+Your app sends each account a digest email of recent activity. Every activity event asks for a
+digest, but the account should get at most one digest per ten minutes. So every event sends the
+same request: send a digest for `acct-7`, with key `acct-7` and a ten-minute window.
+
+1. **At 0 min** the first event arrives. Workhorse creates a task, and the window for `acct-7`
+   runs until 10 min. The result is `accepted`, with a new `taskId`. The task is ready at once.
+2. **At 2 min** a second event arrives. The window is open, so Workhorse creates nothing. It returns
+   the same `taskId` with the outcome `coalesced`.
+3. **At 3 min** a worker sends the digest, and the task succeeds.
+4. **At 7 min** a third event arrives. The task has already finished, but the window is still open,
+   so this request is also `coalesced`. A finished task does not reopen the window.
+5. **At 12 min** a fourth event arrives. The window closed at 10 min, so Workhorse creates a new
+   task with a new `taskId`. Its window runs until 22 min.
+
+Four requests produced two digests, one per window.
 
 ```ts
 const result = await queue.enqueueWithResult(
@@ -23,19 +38,124 @@ const result = await queue.enqueueWithResult(
 );
 ```
 
-The retained task may be waiting, active, or finished. Throttle controls whether PostgreSQL accepts
-another identity, so execution state does not reopen the window.
+Compare this with [debounce](215-debounce.md). Debounce waits for requests to stop and runs the
+latest one. Throttle accepts the first request and coalesces equivalent repeats. The requested run
+time still decides when the task can start.
 
-The repeated request must remain equivalent. A changed payload, queue, priority, schedule, retry
-policy, or window is a conflict because silently dropping changed work would hide caller intent.
+The dashboard records safe evidence of this on the task that was kept. Its detail view shows the
+scope, a key digest, the window, and how many requests were absorbed. It never shows the raw key.
 
-After the window closes, the same key can accept a new task. Purging pending work also releases its
-key. One request cannot combine throttle with
-[enqueue idempotency](210-enqueue-idempotency.md) or [debounce](215-debounce.md), because each mode
-gives a repeated key a different meaning.
+<details>
+<summary>Reference: options and results</summary>
+
+**`EnqueueOptions.throttle`**
+
+| Field      | Rule                                                        |
+| ---------- | ----------------------------------------------------------- |
+| `key`      | Required. 1 to 512 UTF-8 bytes.                             |
+| `scope`    | Optional. 1 to 256 UTF-8 bytes. The default is `"default"`. |
+| `windowMs` | Required. An integer from 1 to 31,536,000,000 (365 days).   |
+
+**Window.** PostgreSQL sets the window end to `clock_timestamp() + windowMs` at acceptance.
+
+**Results.** `enqueueWithResult` returns `{ taskId, outcome }`.
+
+| `outcome`   | When                                                                  |
+| ----------- | --------------------------------------------------------------------- |
+| `accepted`  | The key has no open window. Workhorse creates a task and opens one.   |
+| `coalesced` | The window is open and the request is equivalent. No task is created. |
+
+A `coalesced` request:
+
+- creates no task, runtime row, ready sequence, or notification;
+- appends one `throttled` event to the kept task;
+- emits a `workhorse.task.throttled` debug log;
+- increments `workhorse.tasks.enqueue.outcomes`.
+
+**Concurrency.** `enqueue_throttle_v1` takes a transaction advisory lock on the scope and key.
+Concurrent requests for one key run one at a time.
+
+**Storage.** PostgreSQL stores a hash of the key, never the raw key. Events record the scope, the
+first 12 hexadecimal characters of the key digest, the key length, the window, and its end.
+
+More detail: [Task lifecycle: Keyed throttle](../architecture/lifecycle.md#keyed-throttle).
+
+</details>
+
+## Repeats must ask for the same thing
+
+Suppose the event at 2 min asked for the digest at a higher priority. Workhorse cannot fold that
+into the task from 0 min without silently dropping what the caller asked for. So it refuses the request with
+an error instead of returning `coalesced`.
+
+A repeat must be equivalent: the same payload, queue, type, priority, schedule, retry policy, and
+window. A throttled request may set `runAt`, and the run time is part of that comparison.
+
+<details>
+<summary>Reference: equivalence</summary>
+
+A change to any of these before the window closes raises `EnqueueIdempotencyConflictError`:
+
+- payload, queue, or type;
+- priority;
+- scheduling (`runAt`);
+- retry policy or attempt budget;
+- contract version or tags;
+- deadline or execution timeout;
+- concurrency key or budget;
+- payload and result size limits, or sensitive keys;
+- `windowMs`.
+
+The task state does not matter. A request is `coalesced` while the kept task is `ready`,
+`scheduled`, `active`, or finished. Throttle controls acceptance, not execution.
+
+More detail: [Task lifecycle: Repeat before expiry](../architecture/lifecycle.md#repeat-before-expiry).
+
+</details>
+
+## When a key accepts new work
+
+Go back to `acct-7`. This time an operator purges the queue before any worker sends the digest.
+
+1. **At 0 min** the first event is `accepted`. The window for `acct-7` runs until 10 min.
+2. **At 1 min** an operator purges the queue. The purge deletes the pending digest task and its key
+   binding.
+3. **At 2 min** the next event arrives. No binding holds the key, so Workhorse creates a new task
+   with a new `taskId`.
+
+The window closing is the normal way. Purging the queue's pending work also releases its key, so
+the next request creates a new task.
+
+One request cannot combine throttle with [enqueue idempotency](210-enqueue-idempotency.md) or
+debounce, because each mode gives a repeated key a different meaning. For the same reason, a key
+that one mode holds cannot switch to another mode before its window ends.
 
 A throttled task cannot declare the deprecated `prerequisiteTaskId` or `dependencies`. Use a regular
 [dependent task](160-task-dependencies.md) when dispatch must wait for other work.
+
+<details>
+<summary>Reference: fresh acceptance and exclusions</summary>
+
+**Fresh acceptance**
+
+- After the window ends, a request is `accepted` as a new task, even if the old key record is still
+  stored.
+- A queue purge removes the binding of a pending task. The next request is `accepted`.
+
+**Exclusions.** A request with `throttle` cannot also set:
+
+- `idempotency`;
+- `debounce`;
+- `prerequisiteTaskId`;
+- `dependencies`.
+
+The SDK and `enqueue_throttle_v1` reject these combinations. A key that idempotency or debounce
+holds, with an open window, makes `enqueue_throttle_v1` raise an error. A fast-tier queue rejects
+throttle.
+
+More detail: [Task lifecycle: Fresh acceptance after expiry](../architecture/lifecycle.md#fresh-acceptance-after-expiry).
+
+</details>
 
 ## Next
 

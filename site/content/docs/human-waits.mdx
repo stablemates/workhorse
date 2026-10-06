@@ -82,7 +82,8 @@ operators can meet.
 ## Complete a decision
 
 The dashboard marks pending decisions in the `Waiting` task list. Its server replaces browser
-attribution with the authenticated principal before calling the queue mutation.
+attribution with the host's audit actor before calling the queue mutation: the authenticated
+principal, or a configured audit actor in Python, Go, Rust, and Ruby hosts.
 
 The `Waiting` task filter includes open signal and human-decision waits. Dependency and child-join
 work stays under `Blocked`, because operator input cannot resume it.
@@ -95,6 +96,8 @@ Applications can call `Queue.completeHumanWait` after enforcing their
 own authorization. The request records its trusted actor as `requestedBy`. The first accepted result
 resumes the task. An equivalent retry returns the retained result, while a competing completion
 cannot overwrite the accepted audit evidence.
+An equivalent retry reports `duplicate`, and a competing completion under another key reports
+`already_completed` with the accepted result.
 The queue response exposes that accepted decision as `payload`, matching signal delivery.
 
 Go applications complete decisions through `Queue.CompleteHumanWait` with
