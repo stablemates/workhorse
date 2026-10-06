@@ -35,7 +35,9 @@ function inlineIdentifiers(markdown: string): string[] {
         /^[A-Z][A-Za-z0-9]*$/.test(name) ||
         /^[a-z]+(?:[A-Z][A-Za-z0-9]*)+$/.test(name) ||
         /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/.test(name) ||
-        /^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/.test(name)
+        /^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/.test(name) ||
+        /^[A-Za-z_][\w]*(?:::[A-Za-z_][\w]*)+$/.test(name) ||
+        /^[A-Z][\w:]*#[a-z_][\w]*[?!]?$/.test(name)
       );
     });
 }
@@ -147,6 +149,9 @@ describe("documentation site guide coverage", () => {
         "Call `registerOpenTelemetryProvider()` and `AsyncQueue.sync_budgets`.",
       ),
     ).toEqual(["registerOpenTelemetry()", "Queue.sync_budgets"]);
+    expect(
+      missingIdentifiers("Call `Queue::new`, then `Admin#get_task`.", "The page names nothing."),
+    ).toEqual(["Queue::new", "Admin#get_task"]);
     expect(
       missingIdentifiers(
         "<details>\n<summary>How to cancel</summary>\n\nCall `queue.cancel(taskId)`.\n\n</details>",
