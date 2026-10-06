@@ -1,22 +1,37 @@
 ---
 title: Enqueue and transactions
-description: Accept immediate, delayed, batched, or transactional tasks without separating them from application state.
+description: Accept immediate, delayed, batched, or transactional tasks that commit or roll back with your application data.
 ---
 
-The classic queue bug is a task that disagrees with your data: the order row committed but the
-fulfillment task was lost, or the task exists and the row does not. Workhorse removes that gap by
-living in the same PostgreSQL database as your data — an enqueue is a row your transaction can
-carry. This page covers everything an enqueue can do: run now, run later, join a transaction,
-batch, and target a named queue.
+Your code inserts an account, then enqueues "send a welcome email". If the insert and the enqueue
+commit separately, one of them will eventually happen without the other: an account with no email,
+or an email for an account that rolled back.
+
+Workhorse closes that gap because a task is a row in your own PostgreSQL database. Enqueue inside
+your open transaction, and PostgreSQL commits the account and the task together, or rolls both back
+together. There is no outbox table to build and no window where only one exists. This page covers
+what an enqueue can do: run now, run later, join a transaction, batch, and choose a queue and
+priority.
 
 Rust SQLx applications can use the optional [SQLx enqueue transport](/docs/sqlx) with their exact mutable PostgreSQL transaction.
 Rust worker drivers remain unchanged.
 
 ## Enqueue immediate or delayed work
 
+An app server handles one request that needs two tasks.
+
+1. **At 0 s** it enqueues `email.send` without a run time. Workhorse places the task in `ready`,
+   and a worker can claim it at once.
+2. **Also at 0 s** it enqueues `invoice.remind` on the `billing` queue, with `runAt` set three days
+   ahead. Workhorse places that task in `scheduled`.
+3. **Three days later** the run time passes. Promotion, a regular background pass, moves the task
+   to `ready`.
+4. **At that moment** an operator has paused `billing`. The task stays ready until the queue
+   resumes, and a worker claims it then.
+
 `queue.enqueue(type, payload, options?)` turns a type and JSON payload into a durable task and
-returns its ID. Without `runAt`, PostgreSQL places the task in `ready` and a worker can claim it
-immediately. A future `runAt` places it in `scheduled` until promotion moves it to `ready`.
+returns its ID. `runAt` is a not-before boundary, not an appointment. If someone pauses the queue,
+or workers become unavailable, a worker claims the task later than the boundary, never earlier.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -72,9 +87,6 @@ immediately. A future `runAt` places it in `scheduled` until promotion moves it 
     ```
   </Tab>
 </Tabs>
-
-`runAt` is a not-before boundary, not an appointment. If someone pauses the queue, or workers
-become unavailable, a worker claims the task later than the boundary — never earlier.
 
 `EnqueueOptions` carries everything else a task can be born with:
 
@@ -138,19 +150,53 @@ become unavailable, a worker claims the task later than the boundary — never e
   </Tab>
 </Tabs>
 
-Each option is owned by its own page — [retries](/docs/retries), [deadlines](/docs/deadlines),
-[idempotency](/docs/idempotency) — and the architecture reference owns exact bounds and defaults.
+Each option is owned by its own page: [retries](/docs/retries), [deadlines](/docs/deadlines),
+[idempotency](/docs/idempotency), and [priority](/docs/priority). The architecture reference owns
+exact bounds and defaults.
+
+<details>
+<summary>Reference: immediate and delayed acceptance</summary>
+
+| Request               | State after acceptance | Next step                                        |
+| --------------------- | ---------------------- | ------------------------------------------------ |
+| No `runAt`            | `ready`                | A worker can claim it.                           |
+| `runAt` in the future | `scheduled`            | `promote_v1` moves it to `ready` once it is due. |
+
+- `enqueue` returns the task ID. `enqueueWithResult` also returns the `outcome`.
+- `promote_v1` selects runtime rows with `run_at <= clock_timestamp()`. It preserves priority and
+  assigns new FIFO sequences.
+- A due task is never claimed before its `runAt`. A paused queue or an unavailable worker can delay
+  the claim.
+
+More detail: [Task lifecycle: Promotion](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#promotion).
+
+</details>
 
 ## Join an application transaction
 
-This is the option that replaces an outbox. Hand the queue the transaction you already opened and
-PostgreSQL commits the task and your business write together — or rolls both back together. There is
-no window where one exists without the other.
+This is the option that replaces an outbox. A signup request creates account `acc-7` and asks for
+an `account.created` task.
 
-Each language hands it over differently. TypeScript passes the transaction client as the fourth
-argument to `enqueue`. Python builds a `Queue` on the connection whose transaction is open. Go wraps
-the transaction in an executor and builds a `Queue` around that. Rust builds a `Queue` on the open
-`tokio_postgres` transaction. Ruby builds a `Queue` on the connection that `transaction` yields.
+1. **The transaction opens.** The app server begins a transaction and inserts the `acc-7` row.
+2. **The enqueue.** The app server enqueues `account.created` through the same transaction.
+   Workhorse writes the task's rows in that transaction. No worker can see them yet, because they
+   are not committed.
+3. **The commit.** The app server commits. The account row and the task become visible at the same
+   moment. PostgreSQL delivers the wake-up notification to listening workers only now, and a worker
+   claims the task.
+
+Now take the same request, but a later statement fails after step 2. The app server rolls back.
+PostgreSQL discards the account row and the task together. No worker ever sees the task, so no email
+goes out for an account that does not exist.
+
+Compare two separate commits. The app server commits `acc-7`, then its process dies before the
+enqueue. The account exists, and nothing will ever send its email.
+
+The rule: pass the open transaction to the enqueue call, and commit once. Each language hands it
+over differently. TypeScript passes the transaction client as the fourth argument to `enqueue`.
+Python builds a `Queue` on the connection whose transaction is open. Go wraps the transaction in an
+executor and builds a `Queue` around that. Rust builds a `Queue` on the open `tokio_postgres`
+transaction. Ruby builds a `Queue` on the connection that `transaction` yields.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -209,22 +255,170 @@ the transaction in an executor and builds a `Queue` around that. Rust builds a `
   </Tab>
 </Tabs>
 
-For Knex and Objection, use the [Knex adapter](/docs/knex) and [tested Objection recipe](/docs/objection) with the exact model-write transaction.
+In TypeScript, `Queue.enqueue` accepts your open transaction client as its final argument.
+Anything with a pg-compatible `query` method works, such as a `pg` `PoolClient` inside an explicit
+transaction. `Queue.enqueueMany` takes the same transaction argument, so a fan-out created by one
+request commits or rolls back as a unit with the row that caused it.
 
-TypeScript's fourth argument accepts anything with a pg-compatible `query` method, such as a `pg`
-`PoolClient`, so the ORM
-adapters pass their own transaction handles the same way. Go's `NewPGXExecutor` accepts a `pgx.Tx`
-and `NewSQLExecutor` accepts a `*sql.Tx`. Rust's `Queue::new` accepts a `tokio_postgres` client or
-`Transaction`, or their `deadpool_postgres` counterparts. Ruby's `Queue.new` accepts a
-`PG::Connection`, a `ConnectionPool` of them, or an `ActiveRecordExecutor` around a model class.
-
-Sequel's native PostgreSQL adapter yields that same `PG::Connection`; use the [tested Sequel transaction recipe](/docs/sequel).
+Python has no transaction argument. `Queue` binds the connection you give it, and the transaction
+belongs to that connection. Open `connection.transaction()`, enqueue through `Queue(connection)`,
+and the two writes share it. If the block raises, Psycopg rolls back, and the task goes with your
+row.
 
 Python's `Worker` takes a Psycopg `ConnectionPool` of autocommit connections, not a single
 connection. `AsyncWorker.from_psycopg` and `AsyncWorker.from_asyncpg` take the matching async pools.
 A worker also [reserves pool connections of its own](/docs/pgbouncer#connection-budgets), so size
 the pool for them. Your enqueue code can borrow a connection
-from that pool and open its transaction there.
+from that pool and open its transaction there. Autocommit and an explicit transaction are not in
+conflict: `connection.transaction()` opens a real transaction block on an autocommit connection.
+
+Go has no transaction argument either. An executor wraps whatever you already hold.
+`NewPGXExecutor` accepts a `pgx.Tx` as readily as a pool, and `NewSQLExecutor` accepts a
+`*sql.Tx`. When any step fails, the function returns before `Commit`. The deferred `Rollback` then
+discards the account row, and no task exists without it.
+
+Rust's `Queue::new` accepts a `tokio_postgres` client or `Transaction`, or their
+`deadpool_postgres` counterparts. If an error returns before `commit`, dropping the transaction
+rolls it back, and the task goes with your row.
+
+Ruby's `Queue.new` accepts a `PG::Connection`, a `ConnectionPool` of them, or the connection inside
+`transaction`. If the block raises, the `pg` gem rolls the transaction back. A Rails application
+can pass an `ActiveRecordExecutor` around a model class instead, and the queue joins the open
+Active Record transaction.
+
+<details>
+<summary>Reference: what one enqueue writes</summary>
+
+- One `enqueue_batch_v1` call writes `task`, optional `task_dependency` edges, `task_runtime` or a
+  policy-selected terminal outcome, and acceptance events in the caller's transaction.
+- `NOTIFY workhorse_tasks` is delivered at commit. It is coalesced to one notification per distinct
+  queue that gained ready work.
+- A batch holds at most 1,000 requests. Any invalid member rolls back the entire batch.
+- No Workhorse client commits, rolls back, or closes a transaction, connection, or pool it was
+  given.
+
+More detail: [Task lifecycle: Batch write order](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#batch-write-order).
+
+</details>
+
+<details>
+<summary>Reference: transaction handles by SDK</summary>
+
+**TypeScript**
+
+| Method                                                   | Last argument                                                                 |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `enqueue(type, payload, options, transaction)`           | `transaction: Queryable`; defaults to the database the `Queue` was built with |
+| `enqueueWithResult(type, payload, options, transaction)` | Same                                                                          |
+| `enqueueMany(requests, transaction)`                     | Same                                                                          |
+| `enqueueManyWithResults(requests, transaction)`          | Same                                                                          |
+
+`Queryable` is the structural contract that `pg` `Pool` and `PoolClient` share: one
+`query(text, values)` method.
+
+**Python**
+
+| Class                      | Takes                                                              |
+| -------------------------- | ------------------------------------------------------------------ |
+| `Queue`                    | A caller-owned Psycopg connection                                  |
+| `AsyncQueue`               | A Psycopg `AsyncConnection` or an asyncpg `Connection`             |
+| `Worker`                   | A Psycopg `ConnectionPool` whose connections use `autocommit=True` |
+| `AsyncWorker.from_psycopg` | A Psycopg `AsyncConnectionPool`                                    |
+| `AsyncWorker.from_asyncpg` | An asyncpg `Pool`                                                  |
+
+- The clients never call `commit`, `rollback`, or `close`.
+- Unless `shared_heartbeats` is set, a worker reserves one pool connection for heartbeat rounds.
+- The listener holds another pool connection while it listens.
+- If a Psycopg heartbeat or listener connection lacks `autocommit=True`, the worker raises
+  `ValueError`.
+
+**Go**
+
+| Constructor      | Accepts                                |
+| ---------------- | -------------------------------------- |
+| `NewPGXExecutor` | `pgx.Tx`, `*pgx.Conn`, `*pgxpool.Pool` |
+| `NewSQLExecutor` | `*sql.Tx`, `*sql.Conn`, `*sql.DB`      |
+
+Both close the result rows they open. They never commit, roll back, or close a caller-owned
+transaction, connection, pool, or database.
+
+**Rust.** The sealed `Executor` trait covers:
+
+- `tokio_postgres::Client` and `tokio_postgres::Transaction`;
+- `deadpool_postgres::Pool`, `deadpool_postgres::Object`, and `deadpool_postgres::Transaction`;
+- a reference to any of them.
+
+A transaction executor makes every call part of the caller's transaction.
+
+**Ruby**
+
+- `Queue.new(executor, default_queue: "default")` accepts a `PG::Connection`, a `ConnectionPool` of
+  them, or any object whose `with` yields a `PG::Connection`.
+- `ActiveRecordExecutor.new(model)` runs statements on the connection the model holds. Inside a
+  `transaction`, that is the connection holding the transaction.
+- The Active Job adapter uses `ActiveRecordExecutor.new(ActiveRecord::Base)` when it receives no
+  executor. Its enqueue joins the caller's transaction when `enqueue_after_transaction_commit` is
+  false.
+
+More detail: [Overview: Connections and clients](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#connections-and-clients),
+[Schema and SQL protocol: Pool connections](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#pool-connections).
+
+</details>
+
+### ORM adapters and recipes
+
+If your TypeScript application talks to PostgreSQL through an ORM, use that ORM's Workhorse package
+instead of managing a raw client next to it. Each provider wraps the database object you already
+own and exposes `forTransaction`. That method returns a `Queue` bound to your open transaction.
+The TypeScript `Queue.enqueue` and `Queue.enqueueMany` methods accept a `PoolClient` directly or a
+client produced by `forTransaction`. If the ORM transaction callback throws, the ORM rolls back, and
+the task disappears with your data.
+
+The ORM integrations are `createDrizzleAdapter` from `@stablemates/workhorse-drizzle`,
+`createPrismaAdapter` from `@stablemates/workhorse-prisma`, `createTypeOrmAdapter` from
+`@stablemates/workhorse-typeorm`, and `createKyselyAdapter` from `@stablemates/workhorse-kysely`.
+For Knex and Objection, use the [Knex adapter](/docs/knex) and [tested Objection recipe](/docs/objection) with the exact model-write transaction.
+[MikroORM PostgreSQL](/docs/mikroorm) uses the shipped Kysely adapter with the callback-local EntityManager executor.
+
+The queue does not `close` a connection or transaction supplied by its caller. An adapter closes
+nothing it did not create. Your database, pool, or client stays open until you close it yourself.
+You can also hand the adapter a `close` callback and call `close` on the adapter.
+
+Other languages pass their own connection or transaction, as the examples above show. Sequel's
+native PostgreSQL adapter yields that same `PG::Connection`; use the [tested Sequel transaction recipe](/docs/sequel).
+For Go's Bun ORM, pass the embedded `tx.Tx`, not the Bun wrapper, to `NewSQLExecutor`.
+The [Go Bun recipe](/docs/go-bun) explains native bindings, savepoints, and the hooks this path bypasses.
+[sqlc (Go)](/docs/sqlc) shares a pgx transaction with generated business queries.
+[Go sqlx](/docs/go-sqlx) passes its underlying `*sql.Tx` to the existing Go executor; it is not Rust SQLx.
+
+<details>
+<summary>Reference: ORM adapters</summary>
+
+| Package                          | Factory                |
+| -------------------------------- | ---------------------- |
+| `@stablemates/workhorse-drizzle` | `createDrizzleAdapter` |
+| `@stablemates/workhorse-prisma`  | `createPrismaAdapter`  |
+| `@stablemates/workhorse-typeorm` | `createTypeOrmAdapter` |
+| `@stablemates/workhorse-kysely`  | `createKyselyAdapter`  |
+| `@stablemates/workhorse-knex`    | `createKnexAdapter`    |
+
+Each adapter exposes `queue` and `admin`.
+
+- `forTransaction(transaction)` returns a `Queue` bound to the caller's transaction.
+- `adminForTransaction(transaction)` returns the matching `Admin`.
+- Neither commits, rolls back, disconnects, or destroys the transaction.
+- A failed statement throws an error that extends `QueryError`. It keeps `statement`, the original
+  `cause`, and the SQLSTATE in `code`. Core uses that code to raise typed errors such as
+  `EnqueueIdempotencyConflictError`.
+- An adapter closes nothing it did not create.
+- `WorkhorseAdapter.close()` invokes the configured `close` callback at most once, however many
+  times it is called. Without a `close` callback, `close()` does nothing.
+
+More detail: [Overview: What an adapter must guarantee](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#what-an-adapter-must-guarantee).
+
+</details>
+
+### Synchronous SQLAlchemy with Psycopg
 
 SQLAlchemy applications using its Psycopg dialect can reach that same driver connection through
 `sqlalchemy_connection.connection.driver_connection`. Build the queue inside SQLAlchemy's own
@@ -335,9 +529,6 @@ Inside `db.Transaction`, Go applications can adapt `tx.Statement.ConnPool` with
 The [GORM recipe](/docs/gorm) covers the pinned PostgreSQL driver, prepared-statement wrappers,
 savepoints, and transaction ownership. Workers run in a separate process.
 
-One boundary to keep in mind: the transaction covers durable acceptance only. Handlers run later,
-outside your transaction, so their external effects still need their own idempotency.
-
 ### Django
 
 Inside `transaction.atomic(using=alias)`, Django lends its enlisted Psycopg connection to a
@@ -345,11 +536,28 @@ short-lived `Queue`. Follow the [tested Django recipe](/docs/django) for alias, 
 and async boundaries. `on_commit()` provides ordering, not atomic task acceptance.
 For `@task` and `.enqueue()`, use the bounded [Django Tasks backend](/docs/django-tasks).
 
+### What the transaction covers
+
+In the signup example, the commit made the `account.created` task durable together with `acc-7`.
+It did not send the email. A worker sends it later, outside any application transaction. If that
+worker crashes after sending and before completing, another worker sends it again. So the handler's
+external effects still need their own idempotency, which [delivery guarantees](/docs/concepts)
+describe. The transaction covers durable acceptance only.
+
 ## Enqueue a batch
 
-If a single operation produces many tasks — a fan-out to every subscriber, an import — use
-`queue.enqueueMany`. It validates and writes the whole group in one statement, and it also accepts
-a transaction as its second argument.
+A newsletter goes out to every subscriber of the `mail` queue.
+
+1. **At 0 s** the app server builds one `email.digest` request per recipient and passes the list
+   to `queue.enqueueMany`.
+2. **In one statement** Workhorse validates every request and writes the whole group.
+3. **One request is invalid.** Workhorse rejects the whole call, and no task from the group exists.
+   With every request valid, the group commits together, and the returned IDs follow input order.
+
+If a single operation produces many tasks, such as a fan-out or an import, use `queue.enqueueMany`.
+It also accepts a transaction as its second argument. Split very large input into several bounded
+calls. If a caller may repeat part of the batch, give each request an idempotency key so the repeat
+converges instead of duplicating.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -404,16 +612,31 @@ a transaction as its second argument.
   </Tab>
 </Tabs>
 
-Returned IDs preserve input order, and the whole group commits or rolls back together. One call
-accepts at most 1,000 requests; split larger input into several bounded calls. If a caller may
-repeat part of the batch, give each request an idempotency key so the repeat converges instead of
-duplicating.
+<details>
+<summary>Reference: batch limits</summary>
+
+- A batch holds at most 1,000 requests.
+- `enqueue_batch_v1` validates every request against one timestamp.
+- Any invalid member rolls back the entire batch.
+- Returned IDs preserve input order. Input ordinality also controls ready sequence allocation.
+- `Queue.enqueueManyWithResults` returns one result per request. `Queue.enqueueMany` returns only
+  the task IDs.
+
+More detail: [Task lifecycle: Batch validation](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#batch-validation).
+
+</details>
 
 ## Prioritize work within a queue
 
+Queue `billing` holds a backlog of ordinary reminders, all ready. Its workers are busy.
+
+1. **At 0 s** your app enqueues one urgent `invoice.remind` with a higher `options.priority`.
+2. **At 1 s** a worker slot frees up. The worker claims the urgent reminder first.
+3. **After that** the ordinary reminders run in the order they became ready.
+
 `new Queue(pool, "billing")` sets the client default queue; `options.queue` overrides one task. A
-`Worker` claims only from its configured queue set, rotating across those queues under one
-identity and one concurrency budget.
+`Worker` claims only from its configured queue set, rotating across those queues under one identity
+and one concurrency budget.
 
 Set `options.priority` when urgent ready work should run before ordinary work in the same queue.
 Workhorse dispatches higher-priority tasks first, and it keeps FIFO order among tasks with the same
@@ -466,22 +689,28 @@ Whole-queue controls belong to `Admin`, and every mutation carries audit identit
 </Tabs>
 
 Use `options.concurrencyKey` when a synchronized policy should also limit one application-defined
-group — one tenant, one destination host. Keys are scoped to their queue and remain part of
-idempotent enqueue identity.
+group, such as one tenant or one destination host. Keys are scoped to their queue and remain part
+of idempotent enqueue identity.
 
-The TypeScript `Queue.enqueue` and `Queue.enqueueMany` methods accept a `PoolClient` directly or a
-client produced by `forTransaction`. ORM integrations use `createDrizzleAdapter` from
-`@stablemates/workhorse-drizzle`, `createPrismaAdapter` from `@stablemates/workhorse-prisma`, `createTypeOrmAdapter`
-from `@stablemates/workhorse-typeorm`, or `createKyselyAdapter` from `@stablemates/workhorse-kysely`.
-The queue does not `close` a connection or transaction supplied by its caller.
+<details>
+<summary>Reference: priority values and claim order</summary>
 
-[MikroORM PostgreSQL](/docs/mikroorm) uses the shipped Kysely adapter with the callback-local EntityManager executor.
+| Option                    | Rule                                                       |
+| ------------------------- | ---------------------------------------------------------- |
+| `EnqueueOptions.priority` | An integer from 0 to 100 (`MAX_TASK_PRIORITY`). Default 0. |
 
-For Go's Bun ORM, pass the embedded `tx.Tx`, not the Bun wrapper, to `NewSQLExecutor`.
-The [Go Bun recipe](/docs/go-bun) explains native bindings, savepoints, and the hooks this path bypasses.
+Claim orders ready rows by:
 
-[sqlc (Go)](/docs/sqlc) shares a pgx transaction with generated business queries.
-[Go sqlx](/docs/go-sqlx) passes its underlying `*sql.Tx` to the existing Go executor; it is not Rust SQLx.
+1. `priority`, descending;
+2. `sequence`, the FIFO ready sequence, ascending;
+3. `task_id`.
+
+Priority dispatch has no aging or fair-share control. `pauseQueue` and `resumeQueue` write the
+queue's pause state through the audited `set_queue_paused_v1`.
+
+More detail: [Data model: Priority, payload reads, and retry policy](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#priority-payload-reads-and-retry-policy).
+
+</details>
 
 ## Next
 

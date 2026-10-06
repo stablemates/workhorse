@@ -29,8 +29,15 @@ application.
 
 ## The core promise
 
-`Queue.enqueue` accepts your open transaction as its last argument. If the transaction commits, the
-task exists; if it rolls back, PostgreSQL removes the business write and the task together.
+An application takes an order and wants it fulfilled in the background. It inserts the order row and
+enqueues an `order.fulfill` task in one transaction.
+
+1. **The transaction opens.** The application inserts the order row.
+2. **It calls `Queue.enqueue`** and passes its open transaction as the last argument.
+3. **If the transaction commits**, the order and the task both exist.
+4. **If it rolls back instead**, PostgreSQL removes the business write and the task together.
+
+So no window exists where one committed and the other did not.
 
 ```ts
 import { Pool, Queue } from "@stablemates/workhorse";
@@ -52,15 +59,21 @@ try {
 }
 ```
 
-A `Worker` claims the task and runs the handler you registered with `Worker.handle`. Each claim
-grants a temporary lease and a fence token. If the worker dies, the lease expires, another worker
-recovers the task, and the fence token blocks the dead worker from writing stale results.
+Now a worker runs that task, and its process dies partway through.
+
+1. **The claim.** A `Worker` claims the task and runs the handler you registered with
+   `Worker.handle`. The claim grants a temporary lease and a fence token.
+2. **The charge.** The handler charges the card, and `ctx.checkpoint` saves that stage's result.
+3. **The crash.** The process dies while it prints the label.
+4. **Recovery.** The lease expires, and another worker recovers the task. The fence token blocks the
+   dead worker from writing stale results.
+5. **The rerun.** The handler restarts from the top. `ctx.checkpoint` replays the stored charge
+   result instead of charging again, and the label stage runs.
 
 Handlers run outside database transactions, so delivery is at least once: a handler can run twice
-after a crash. If a handler restarts, `ctx.checkpoint` replays each completed stage's stored result
-instead of running it again. A checkpoint cannot atomically commit an external service's response.
-If the process dies after the service succeeds but before the checkpoint is saved, the call can repeat.
-Use a stable provider idempotency key for effects such as charging a card.
+after a crash. A checkpoint cannot atomically commit an external service's response. If the process
+dies after the service succeeds but before the checkpoint is saved, the call can repeat. Use a stable
+provider idempotency key for effects such as charging a card.
 
 ```ts
 import { Worker } from "@stablemates/workhorse";
@@ -80,6 +93,24 @@ await worker.run();
 Beyond checkpoints, tasks get retries with configurable backoff, durable sleeps that release the
 worker slot, cron-style schedules, idempotent enqueue, dead letters with redrive, and immutable
 history you can query with `Admin.getTask` and `Admin.getTaskTimeline`.
+
+<details>
+<summary>Reference: the core promise</summary>
+
+| Boundary                                        | Owner                                                     |
+| ----------------------------------------------- | --------------------------------------------------------- |
+| `Queue.enqueue(type, payload, options, client)` | Your transaction. The task commits or rolls back with it. |
+| `Worker.handle(type, handler)`                  | The worker. It claims under a lease and a fence token.    |
+| `ctx.checkpoint(name, operation)`               | The task. A saved stage replays on a later attempt.       |
+| `Admin.getTask` and `Admin.getTaskTimeline`     | The immutable record of what happened.                    |
+
+| Setting (TypeScript) | Default   | Effect                                      |
+| -------------------- | --------- | ------------------------------------------- |
+| `leaseMs`            | 30,000 ms | How long a claim lasts without a heartbeat. |
+
+More detail: [Overview: Design objective](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#design-objective).
+
+</details>
 
 ## When to use it
 

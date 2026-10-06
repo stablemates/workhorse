@@ -1,21 +1,29 @@
 ---
 title: Idempotent enqueue
-description: Use scoped enqueue keys so repeated acceptance returns the original durable task.
+description: Use a scoped enqueue key so a repeated request returns the original task instead of creating a second one.
 ---
 
-A user double-clicks "Place order". Your API handler runs twice, two tasks get enqueued, and the
-customer gets two confirmation emails. Or a webhook provider redelivers, or a retrying client
-repeats a request that already succeeded. Enqueue idempotency stops the second task from being
-created at all: the repeated request returns the original task's ID and writes nothing.
+A user double-clicks "Pay invoice". Your API handler runs twice. Two capture tasks get enqueued,
+and the customer is charged twice. Or a webhook provider redelivers, or a retrying client repeats a
+request that already succeeded. Enqueue idempotency stops the second task from being created at
+all.
 
-This solves duplicate acceptance. Handler delivery remains at least once — the other half of the
+This solves duplicate acceptance. Handler execution remains at least once, the other half of the
 problem, covered at the end of this page.
 
-## Choose a stable key
+## One invoice, two clicks, one task
 
-Build the key from the business operation that should happen once: an order ID, an invoice number,
-a webhook delivery ID. A timestamp or random value cannot identify a replay, so it defeats the
-mechanism.
+Invoice `7781` is ready to capture. Your API handler enqueues `invoice.capture` with the
+idempotency key `capture:7781` in the scope `invoice-capture`. The user double-clicks, so the
+handler runs twice.
+
+1. **At 0 ms** the first request arrives. No task holds the key, so Workhorse creates a task and
+   binds the key to it. The result is `accepted`, with a new `taskId`.
+2. **At 40 ms** the second request arrives with the same key and the same content. Workhorse finds
+   the binding and returns the same `taskId`. The outcome is `replayed`.
+
+The second request created nothing: no task, no event, no queue placement, no notification. It only
+reported which task already owns the key.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -74,17 +82,72 @@ mechanism.
   </Tab>
 </Tabs>
 
-If the same scope and key still exist, an equivalent request returns the original task ID.
-PostgreSQL adds no second task, no event, no queue placement, no notification — the call just tells
-you which task already owns the key.
+PostgreSQL decides which request wins. Suppose two app servers send the request at the same moment.
+PostgreSQL lets one of them bind the key, and the other waits for it. The waiting request then finds
+the binding and replays it.
 
-Scopes keep unrelated features apart. Two features might both want the key `order-123`; separate
-scopes make them separate registrations. An omitted scope uses the shared `"default"` scope, which
-works well when every key already carries a feature prefix.
+The key is yours to choose. Build it from the business operation that should happen once: an order
+ID, an invoice number, a webhook delivery ID. A timestamp or a random value makes every request
+unique, so it catches no duplicate.
 
-## Read what PostgreSQL did
+<details>
+<summary>Reference: options and replay</summary>
 
-Use `enqueueWithResult` when application behavior or diagnostics need more than the stable task ID:
+**`EnqueueOptions.idempotency`**
+
+| Field   | Rule                                                                    |
+| ------- | ----------------------------------------------------------------------- |
+| `key`   | Required. 1 to 512 UTF-8 bytes.                                         |
+| `scope` | Optional. 1 to 256 UTF-8 bytes. The default is `"default"`.             |
+| `ttlMs` | Optional. An integer from 1 to 31,536,000,000 (365 days). Default 24 h. |
+
+A request with `idempotency` cannot also set `debounce` or `throttle`.
+
+**Binding.** The relation `enqueue_idempotency` has the primary key
+`(idempotency_scope, idempotency_key_hash)`. Concurrent requests for one scope and key therefore
+run one at a time.
+
+**Replay.** An exact replay returns the bound task ID before any task, dependency, event, runtime,
+FIFO-sequence, or notification side effect. It appends no event.
+
+**No key.** A request without `idempotency` skips the relation and always creates a task.
+
+More detail: [Data model: Fingerprint and replay](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#fingerprint-and-replay).
+
+</details>
+
+## Scopes keep keys apart
+
+Two features each build the key `order-123`. One sends the confirmation email, and the other
+updates the warehouse. Neither passes a scope.
+
+1. **At 0 ms** the email feature enqueues with the key `order-123`. No task holds the key, so the
+   result is `accepted`.
+2. **At 5 ms** the warehouse feature enqueues with the same key, but a different task type and
+   payload. Both requests share the default scope. Workhorse finds the binding, sees a different
+   request, and raises a conflict error. The warehouse feature gets no task.
+
+Pass a `scope`, as the invoice example does, to keep features in separate namespaces. A key is
+unique within its scope. If you omit the scope, the request uses a shared default scope. That suits
+keys that already carry their own feature prefix.
+
+<details>
+<summary>Reference: scope and key hash</summary>
+
+- The default scope is `"default"`.
+- `idempotency_key_hash` is the full SHA-256 of the scope and key ownership input.
+- Debounce and throttle keys share the same relation and the same scopes. A key in use by one mode
+  is not free for another. The keyed modes are mutually exclusive on one request.
+
+More detail: [Data model: Key and limits](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#key-and-limits).
+
+</details>
+
+## Read the enqueue outcome
+
+In the invoice example, both clicks got the same `taskId`. Only the outcome told them apart:
+`accepted` for the first click and `replayed` for the second. Log the outcome when you want to count
+duplicates.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -139,71 +202,175 @@ Use `enqueueWithResult` when application behavior or diagnostics need more than 
   </Tab>
 </Tabs>
 
-`result.outcome` is an `EnqueueOutcome`: `accepted` for a new task, `replayed` for an equivalent
-idempotency request, `replaced` or `non_replaceable` for [debounce](/docs/debounce), and `coalesced`
-for [throttle](/docs/throttle). `enqueue` returns the same `taskId` while hiding that explanation.
+`Queue.enqueueWithResult` returns an `EnqueueResult`. Its `taskId` identifies the task that
+Workhorse kept. Its `outcome` explains what PostgreSQL did with this request. Three of the outcomes
+belong to other keyed modes: [debounce](/docs/debounce) and [throttle](/docs/throttle).
 
-## What counts as the same request?
+Use `Queue.enqueue` when the task ID is enough. It returns the same `taskId` and hides the outcome.
+Use `Queue.enqueueWithResult` when logs, metrics, or application behavior need the reason.
 
-Returning the existing task is only safe when the repeat really is the same request. PostgreSQL
-fingerprints what was accepted: the queue, type, payload, concurrency key, sorted tags, attempt
-budget, retry policy, deadline, execution timeout, key retention, and an explicit `runAt` value.
+<details>
+<summary>Reference: enqueue outcomes</summary>
 
-If those fields match, the call is a replay and converges. If they differ, the same key is being
-reused for materially different work — a mistake, not a duplicate — so `queue.enqueue` throws
-`EnqueueIdempotencyConflictError` and rolls back the statement rather than letting either request
-silently win.
+`enqueueWithResult` returns an `EnqueueResult`: `{ taskId, outcome }`, where `outcome` is an
+`EnqueueOutcome`. A `non_replaceable` result also has a `reason`.
 
-Every SDK raises a typed idempotency conflict: `EnqueueIdempotencyConflictError` in TypeScript and
-Python, `EnqueueIdempotencyConflictError` through `errors.As` in Go, and
-`Error::EnqueueIdempotencyConflict` in Rust, and `EnqueueIdempotencyConflictError` in Ruby. The error
-names the existing task and conflicting fields without accepting the changed request.
+| `outcome`         | Mode        | Meaning                                                 |
+| ----------------- | ----------- | ------------------------------------------------------- |
+| `accepted`        | Any         | PostgreSQL created a new task.                          |
+| `replayed`        | Idempotency | The key found an equivalent retained request.           |
+| `replaced`        | Debounce    | PostgreSQL updated a pending task.                      |
+| `non_replaceable` | Debounce    | PostgreSQL kept a task that could not accept an update. |
+| `coalesced`       | Throttle    | PostgreSQL reused the task for its active window.       |
 
-An omitted `runAt` remains omitted in the fingerprint. A later replay of an immediate task
-therefore does not conflict with the original acceptance time.
-
-## Read the enqueue decision
-
-Use `queue.enqueueWithResult` when the caller needs to distinguish a new acceptance from a replay,
-debounce replacement, debounce refusal, or throttled request. It returns the retained `taskId` and
-an `outcome` describing PostgreSQL's decision.
-
-If debounce returns `non_replaceable`, the result also carries a `reason`. That reason tells the
-caller whether the key belongs to an incompatible mode, the retained task is no longer pending, or
-the pending window elapsed. Other outcomes omit `reason`, so TypeScript narrows the result from its
+A `non_replaceable` result's `reason` is `incompatible_key_mode`, `not_pending`, or
+`window_elapsed_pending`. Other outcomes omit `reason`, so TypeScript narrows the result from its
 `outcome`.
+
+`Queue.enqueueManyWithResults` returns one result per request. `Queue.enqueue` and
+`Queue.enqueueMany` return only the task IDs.
+
+More detail: [Task lifecycle: Enqueue results](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#enqueue-results).
+
+</details>
 
 ## Keys expire
 
-Each binding lives for a retention window — 24 hours by default, configurable per request through
-`ttlMs`. After expiry, the same key can own a new task. That makes enqueue idempotency a replay
-window rather than a permanent business registry: it catches the double-click and the redelivery,
-not a repeat a year later. Size `ttlMs` to your longest realistic replay — a webhook provider's
-maximum redelivery horizon, for example.
+The invoice key used the default retention window. Here is what happens to it over a day.
 
-Purging a ready or scheduled task releases its binding immediately, and maintenance removes expired
-bindings on its own cadence.
+1. **At 0 h** the first request is `accepted`. The binding expires at 24 h.
+2. **At 1 min** a worker captures the invoice, and the task succeeds.
+3. **At 3 h** a client retries the request. The task has finished, but the binding is still alive,
+   so the request is `replayed` with the original `taskId`.
+4. **At 25 h** the same request arrives again. The binding has expired, so Workhorse creates a new
+   task and binds the key to it.
+
+A replay does not extend the window. The expiry is fixed when the key is first bound. Keys catch
+accidental duplicates within a bounded period, such as a double-click or a redelivery. They do not
+reserve a name forever. Size `ttlMs` to your longest realistic replay, for example a webhook
+provider's maximum redelivery horizon.
+
+<details>
+<summary>Reference: expiry and release</summary>
+
+- The default `ttlMs` is 86,400,000 ms (24 hours).
+- At acceptance, PostgreSQL sets `expires_at` to `clock_timestamp() + ttlMs`. A replay leaves it
+  unchanged.
+- The next request for an expired key deletes the old binding and creates a new task.
+- Maintenance runs `prune_enqueue_idempotency_v1` to delete expired bindings in bounded batches.
+- Housekeeping keeps a finished task's identity while a binding still points at it.
+- A queue purge deletes the bindings of the `blocked`, `ready`, and `scheduled` tasks it removes.
+
+More detail: [Data model: Key exposure and expiry](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#key-exposure-and-expiry).
+
+</details>
+
+## Sending different data under the same key
+
+Go back to invoice `7781`.
+
+1. **At 0 ms** the first request is `accepted`. Workhorse records a fingerprint of that request.
+2. **At 2 s** a client sends the request again, but a bug changed the payload. The key is the same,
+   the content is not.
+3. **Right after** Workhorse compares the request with the stored fingerprint. The payload differs,
+   so Workhorse raises a conflict error. The task from 0 ms keeps its payload, and no second task
+   exists.
+
+That is not a duplicate; it is a mistake. So Workhorse raises a conflict error, and neither request
+silently wins.
+
+Workhorse records a fingerprint of the accepted request: the queue, the type, the payload, the tags,
+the attempt budget, the retry policy, and more. A later request with the same key must match it. An
+identical request is the normal replay case and returns the existing `taskId`. An omitted `runAt`
+stays omitted, so a later replay of an immediate task does not conflict with the original
+acceptance time.
+
+The conflict aborts the whole statement. If you enqueue inside your own transaction, the transaction
+fails too. The error names the existing task and lists which fields differ.
+
+<details>
+<summary>Reference: fingerprint and conflict</summary>
+
+**Fingerprint fields.** These are also the values of `conflictingFields`:
+
+`queue`, `type`, `payload`, `priority`, `concurrencyKey`, `budget`, `contractVersion`,
+`payloadMaxBytes`, `resultMaxBytes`, `sensitivePayloadKeys`, `sensitiveResultKeys`, `tags`, `runAt`,
+`deadline`, `executionTimeoutMs`, `maxAttempts`, `retryPolicy`, `prerequisiteTaskId`,
+`dependencies`, `ttlMs`.
+
+- Tags are deduplicated and sorted, so their order does not matter.
+- The retry policy and dependencies are normalized before comparison.
+- An omitted `runAt` stays omitted. It does not capture the time of the request.
+
+**Conflict.** PostgreSQL raises SQLSTATE `P1001`. The TypeScript client throws
+`EnqueueIdempotencyConflictError` with these details:
+
+| Field                   | Content                                          |
+| ----------------------- | ------------------------------------------------ |
+| `scope`                 | The scope.                                       |
+| `keyPreview`            | A short preview of the key.                      |
+| `keyDigest`             | The first 12 hexadecimal characters of the hash. |
+| `keyLength`             | The key length in characters.                    |
+| `existingTaskId`        | The task the key is bound to.                    |
+| `ordinal`               | The request's position in its batch, from 1.     |
+| `conflictingFields`     | The fingerprint fields that differ.              |
+| `storedRequestDigest`   | SHA-256 of the stored fingerprint.               |
+| `rejectedRequestDigest` | SHA-256 of the rejected fingerprint.             |
+
+**Error per SDK**
+
+| SDK        | Conflict error                                         |
+| ---------- | ------------------------------------------------------ |
+| TypeScript | `EnqueueIdempotencyConflictError`                      |
+| Python     | `EnqueueIdempotencyConflictError`                      |
+| Go         | `EnqueueIdempotencyConflictError`, through `errors.As` |
+| Rust       | `Error::EnqueueIdempotencyConflict`                    |
+| Ruby       | `EnqueueIdempotencyConflictError`                      |
+
+More detail: [Data model: Fingerprint and replay](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#fingerprint-and-replay).
+
+</details>
 
 ## Your raw key is never stored
 
-PostgreSQL stores the scope and a cryptographic hash of the key. Events, conflict errors, and
-operator views show only a bounded preview and a digest. You can safely build keys out of internal
-identifiers without them appearing on an operator's screen or in audit data.
+Go back to invoice `7781`.
+
+1. **At 0 ms** Workhorse binds the key `capture:7781`. It stores a hash of the key, not the key
+   itself.
+2. **Later** an operator opens the task in the dashboard. Its `enqueued` event shows a short preview
+   of the key and a digest.
+
+Workhorse stores only a hash of the key. Errors, events, and the dashboard show a short preview and
+a digest, not the key itself. So you can build keys from internal identifiers without exposing them
+on an operator's screen or in audit data.
+
+<details>
+<summary>Reference: key preview and digest</summary>
+
+| Key length      | Preview                          |
+| --------------- | -------------------------------- |
+| 1 to 4 chars    | One `•` per character.           |
+| 5 to 8 chars    | First 2 characters, `…`, last 2. |
+| 9 chars or more | First 8 characters, `…`, last 4. |
+
+The digest is the first 12 hexadecimal characters of `idempotency_key_hash`. The initial `enqueued`
+event, UI projections, and errors expose only the preview and the digest.
+
+More detail: [Data model: Key exposure and expiry](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#key-exposure-and-expiry).
+
+</details>
 
 ## Why do handlers still need idempotency?
 
-One accepted task can run again: a worker dies mid-attempt, the lease expires, and another worker
-claims the same task. Enqueue idempotency never sees that — it deduplicates acceptance, not
-execution.
+Idempotency stops duplicate _tasks_. It does not make your handler run exactly once. Execution is
+still [at-least-once](/docs/concepts), so one task can run twice after a crash. A worker can die
+mid-attempt, and once its lease expires another worker claims the same task. Enqueue idempotency
+never sees that, because it deduplicates acceptance, not execution.
 
 When repeating an external effect would be harmful, pass the task ID or a domain ID as the
-provider's own idempotency key. `HandlerContext.checkpoint` can reuse a completed stage, but a
-crash can still land after the effect and before the checkpoint commit — only the system
-performing the effect can close that final gap.
-
-Use a stable domain value such as `orderId` as the key. TypeScript can call
-`Queue.enqueueWithResult` and read `result.taskId` from its `EnqueueResult`; `Queue.enqueue` returns
-only the accepted task identifier when the outcome details are unnecessary.
+provider's own idempotency key. `HandlerContext.checkpoint` can reuse a completed stage. A crash can
+still land after the effect and before the checkpoint commit. Only the system that performs the
+effect can close that final gap.
 
 ## Next
 

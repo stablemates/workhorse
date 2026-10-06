@@ -364,6 +364,44 @@ body {
   letter-spacing: 0.04em;
 }
 
+/* ---------- Reference blocks ----------
+ *
+ * A behavior section closes with a collapsed `<details>` block whose summary
+ * starts with "Reference:". It holds exact identifiers, limits, and defaults,
+ * so the main text can stay a scenario. A native element needs no hydration,
+ * and the Markdown twin passes it through unchanged.
+ */
+.wh-docs-body details {
+  margin-block: 1.75rem;
+  border: 1px solid var(--wh-docs-code-border);
+  border-radius: 0.75rem;
+  background-color: color-mix(in oklab, var(--wh-docs-code-surface) 55%, transparent);
+}
+
+.wh-docs-body details > summary {
+  cursor: pointer;
+  padding: 0.75rem 1rem;
+  color: var(--color-fd-foreground);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.wh-docs-body details > summary::marker {
+  color: var(--wh-accent);
+}
+
+.wh-docs-body details[open] > summary {
+  border-bottom: 1px solid var(--wh-docs-code-border);
+}
+
+.wh-docs-body details > :not(summary) {
+  margin-inline: 1rem;
+}
+
+.wh-docs-body details > :last-child {
+  margin-bottom: 1rem;
+}
+
 /* ---------- CSS-only tab group ----------
  *
  * The panels are server-highlighted markup, so the switcher must not require
