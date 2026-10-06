@@ -67,11 +67,10 @@ More detail: [Data model: Tiers and measures](../architecture/data-model.md#tier
 
 ## The watermark keeps every window current
 
-A background pass, the rollup, summarizes periods that have fully elapsed. It records how far it got.
-That marker is the **watermark**.
-
 1. **At 10:05:00** minute 10:04 closes.
-2. **At 10:05:02** the rollup runs. It summarizes 10:04 and moves the watermark to 10:05.
+2. **At 10:05:02** the rollup runs. The rollup is a background pass that summarizes periods that
+   have fully elapsed. It summarizes 10:04 and records how far it got, 10:05. That marker is the
+   **watermark**.
 3. **At 10:05:40** an operator asks for the last hour. Workhorse reads summary rows below the
    watermark. It computes the part from 10:05 onward live from raw history.
 

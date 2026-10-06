@@ -217,16 +217,6 @@ More detail: [Operations and CLI: Polling cadence](../architecture/operations.md
 
 ## Python workers and their pool
 
-Python supplies the same core loop through the synchronous `Worker` and the asynchronous
-`AsyncWorker`. Both rotate across queues, bound concurrent slots, and drain active work after `stop`.
-Each claimed task renews its lease and delivers ownership signals through its context's cancellation
-token. Both workers can listen for notifications and offer recurring namespaces for PostgreSQL to
-evaluate. Python's `handle_batch` follows the grouping contract in
-[315-batch-handlers.md](315-batch-handlers.md).
-
-`AsyncWorker.from_psycopg` takes a Psycopg `AsyncConnectionPool`, and `AsyncWorker.from_asyncpg`
-takes an asyncpg `Pool`. Its handlers and durable context methods are awaitable.
-
 In the example, the app opens `worker_pool` and hands it to the worker.
 
 1. **During the run**, the worker borrows a pool connection for each claim and lifecycle statement
@@ -238,6 +228,16 @@ In the example, the app opens `worker_pool` and hands it to the worker.
 
 Your code creates the pool and owns it. Close it only after `run` returns, because the worker never
 closes the pool it was given.
+
+Python supplies the same core loop through the synchronous `Worker` and the asynchronous
+`AsyncWorker`. Both rotate across queues, bound concurrent slots, and drain active work after `stop`.
+Each claimed task renews its lease and delivers ownership signals through its context's cancellation
+token. Both workers can listen for notifications and offer recurring namespaces for PostgreSQL to
+evaluate. Python's `handle_batch` follows the grouping contract in
+[315-batch-handlers.md](315-batch-handlers.md).
+
+`AsyncWorker.from_psycopg` takes a Psycopg `AsyncConnectionPool`, and `AsyncWorker.from_asyncpg`
+takes an asyncpg `Pool`. Its handlers and durable context methods are awaitable.
 
 <details>
 <summary>Reference: async worker pool</summary>

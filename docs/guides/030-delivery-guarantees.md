@@ -71,8 +71,8 @@ This is the strongest option, because the guarantee lives in the system that per
 
 ### Checkpoints
 
-A **checkpoint** saves the result of one handler step under a name. On a later attempt, the step
-returns the saved result instead of running again.
+An invoice handler charges a card, renders an invoice, and emails it. It wraps the first two steps
+in a **checkpoint**, which saves a step's result under a name:
 
 ```ts
 const handler = async (payload, ctx) => {
@@ -92,6 +92,9 @@ This is what happens when invoice rendering fails once:
    value and returns it. The card is not charged again.
 4. **Still attempt 2.** `renderInvoice` runs and succeeds, and its result is saved under `invoice`.
    The handler sends the email.
+
+So a checkpointed step runs until its result is saved. On every later attempt, it returns the saved
+result instead of running again.
 
 The `sendEmail` call has no checkpoint. It can repeat if a later step fails, so it needs its own
 protection, such as a provider idempotency key.
