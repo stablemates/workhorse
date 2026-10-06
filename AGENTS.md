@@ -191,10 +191,16 @@ Rules that keep the two layers from drifting:
 - A guide states exact values only inside its reference blocks. The main text describes bounded
   behavior. The architecture page stays the source of truth: when a value changes, update that page
   and every reference block that states the value.
-- Each reference block ends with a link to the architecture section that owns its facts. When no
-  architecture page covers them, link the decision record, `docs/compatibility.md`, or
-  `docs/features.md` section that does. The main text links sibling guides, not architecture pages. The footer keeps one link to
-  the architecture page that owns the concept.
+- Each reference block ends with a `More detail:` line that links the architecture section that owns
+  its facts. When the facts have several owners, link each one. When no architecture page covers
+  them, link the decision record, `docs/compatibility.md`, or `docs/features.md` section that does.
+  The main text links sibling guides, not architecture pages. The footer keeps one link to the
+  architecture page that owns the concept.
+- `scripts/guide-reference-values.test.ts` fails when a reference block states a number that no
+  section on its `More detail:` line states. Fix a failure in the owning section first: add the value
+  there after verifying it against the source, or link the section that already states it. [ADR
+  0089](docs/decisions/0089-verify-guide-reference-values-against-their-owning-sections.md) records
+  the rules.
 - Site pages mirror a guide's explanation, not its reference blocks.
   `typescript/core/test/site-guide-coverage.test.ts` holds every identifier outside the blocks to
   the mapped site page. List the names a scenario invents, such as its queues, tenants, task types,
@@ -227,7 +233,7 @@ Write the explanation scenario-first:
   loose sentence in it is easy to miss.
 - Close a behavior section with a collapsed reference block. Its summary starts with `Reference:`.
   It holds exact identifiers, limits, defaults, outcomes, and events as tables or numbered
-  conditions. It ends with a `More detail:` link to the owning architecture section.
+  conditions. It ends with a `More detail:` line that links each owning section.
 - Leave a blank line after `</summary>` and before `</details>`, or GitHub renders the block's
   Markdown as plain text.
 - The main text may not state a fact that its reference blocks or the architecture page lack.

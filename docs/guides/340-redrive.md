@@ -52,7 +52,7 @@ p_cursor_task_id)`.
 - `task_outcome_failed_finished_idx` is a partial index on `(finished_at DESC, task_id DESC)` where
   `state = 'failed'`. It is not a dispatch path.
 
-More detail: [Data model: Dead-letter index](../architecture/data-model.md#dead-letter-index).
+More detail: [Data model: Dead-letter index](../architecture/data-model.md#dead-letter-index) and [Schema and SQL protocol: Durable replay conflicts](../architecture/schema-and-protocol.md#durable-replay-conflicts).
 
 </details>
 

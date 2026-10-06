@@ -114,7 +114,7 @@ A capped value is a lower bound that is exact until the cap.
 `EXTERNAL_WAIT_REJECTION_WINDOW_MS` (86,400,000 ms, 24 hours) before now. The SQL default is also
 one day. The partial index `task_event_rejected_delivery_idx` covers only those two event types.
 
-More detail: [Task lifecycle: Snapshot cost](../architecture/lifecycle.md#snapshot-cost).
+More detail: [Task lifecycle: Snapshot cost](../architecture/lifecycle.md#snapshot-cost), [Task lifecycle: External wait health](../architecture/lifecycle.md#external-wait-health), and [Task lifecycle: Retention health](../architecture/lifecycle.md#retention-health).
 
 </details>
 
@@ -263,7 +263,7 @@ the latest snapshot. Changing the range also refreshes that snapshot.
 - Health checks carry a `Now` label. External-wait rejected deliveries keep their trailing-day
   scope whatever the window.
 
-More detail: [Task lifecycle: System page](../architecture/lifecycle.md#system-page).
+More detail: [Task lifecycle: System page](../architecture/lifecycle.md#system-page) and [Dashboard: System page](../architecture/dashboard.md#system-page).
 
 </details>
 

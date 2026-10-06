@@ -88,7 +88,7 @@ Both options are required. The group size cannot exceed the worker's `concurrenc
 4. A partial group dispatches once its first member has waited `lingerMs`.
 5. The coordinator orders members by priority, highest first, then by arrival order.
 
-More detail: [Task lifecycle: Batch handlers](../architecture/lifecycle.md#batch-handlers).
+More detail: [Task lifecycle: Batch handlers](../architecture/lifecycle.md#batch-handlers) and [Schema and SQL protocol: Go batch handlers](../architecture/schema-and-protocol.md#go-batch-handlers).
 
 </details>
 

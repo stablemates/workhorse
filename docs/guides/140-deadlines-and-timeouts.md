@@ -111,7 +111,7 @@ The timeout is optional.
 When the deadline and the timeout have both passed, the earlier one settles the attempt. On a tie,
 the deadline wins.
 
-More detail: [Task lifecycle: Deadlines and execution timeouts](../architecture/lifecycle.md#deadlines-and-execution-timeouts).
+More detail: [Task lifecycle: Deadlines and execution timeouts](../architecture/lifecycle.md#deadlines-and-execution-timeouts) and [Data model: Retry delay selection](../architecture/data-model.md#retry-delay-selection).
 
 </details>
 
@@ -163,7 +163,7 @@ its own.
 - Hard termination leaves active leases for ordinary expiry recovery.
 - Set execution timeouts deliberately rather than relying on an unbounded handler.
 
-More detail: [Task lifecycle: Deadlines and execution timeouts](../architecture/lifecycle.md#deadlines-and-execution-timeouts).
+More detail: [Task lifecycle: Deadlines and execution timeouts](../architecture/lifecycle.md#deadlines-and-execution-timeouts) and [Operations and CLI: Shutdown deadline and failure](../architecture/operations.md#shutdown-deadline-and-failure).
 
 </details>
 

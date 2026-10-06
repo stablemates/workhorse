@@ -80,7 +80,8 @@ Process termination does not synthesize durable task cancellation or abort a han
 ### Shutdown deadline and failure
 
 A configurable deadline, 25 seconds by default, prevents an uncooperative handler from blocking
-termination forever.
+termination forever. `shutdownTimeoutMs` sets it: a safe integer from 1 through 3,600,000, with a
+default of 25,000 ms.
 
 | Event                          | Exit                                                                     |
 | ------------------------------ | ------------------------------------------------------------------------ |
@@ -345,6 +346,9 @@ A reused request identity carrying different audit fields raises
 `admin redrive-many` calls `Admin.redriveMany` once per invocation and emits `BulkRedrivePage`
 under `--json`. It selects sources oldest-first through PostgreSQL, with the same filters as
 failure listing.
+
+`Admin.redriveMany` accepts a `limit` from 1 through 1,000 (`MAX_REDRIVE_BATCH_SIZE`) and defaults
+it to 100. `redrive_many_v1` rejects any other limit.
 
 Preview and execution differ:
 

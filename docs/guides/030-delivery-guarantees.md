@@ -46,7 +46,7 @@ Workhorse provides durable at-least-once execution. A process can die at either 
   task can still run more than once after a worker crash.
 - For a non-idempotent effect, use provider idempotency keys or a transactional outbox or inbox.
 
-More detail: [Task lifecycle: Delivery semantics](../architecture/lifecycle.md#delivery-semantics).
+More detail: [Task lifecycle: Delivery semantics](../architecture/lifecycle.md#delivery-semantics) and [Task lifecycle: Worker options](../architecture/lifecycle.md#worker-options).
 
 </details>
 
@@ -131,7 +131,7 @@ operation again.
   Overlapping calls for one name in one handler share the first call's result or error.
 - A checkpoint has no separate retirement path. It is deleted only with its task.
 
-More detail: [Data model: Key and write rules](../architecture/data-model.md#key-and-write-rules).
+More detail: [Data model: Key and write rules](../architecture/data-model.md#key-and-write-rules) and [Data model: Size and lifetime](../architecture/data-model.md#size-and-lifetime).
 
 </details>
 

@@ -207,7 +207,7 @@ beside each task and the stored value in task details.
   `DashboardSystemQueueRow.priorityBacklog` entry returns `priority`, `ready`, and `oldestReadyMs`,
   ordered by priority descending.
 
-More detail: [Task lifecycle: System page](../architecture/lifecycle.md#system-page).
+More detail: [Task lifecycle: System page](../architecture/lifecycle.md#system-page) and [Dashboard: Task listing](../architecture/dashboard.md#task-listing).
 
 </details>
 

@@ -147,7 +147,7 @@ need an answer.
 `dashboard_human_wait_v1` owns the SQL projection. It lists a decision only while it has no
 completion and its task still waits on it.
 
-More detail: [Data model: Listing and events](../architecture/data-model.md#listing-and-events).
+More detail: [Data model: Listing and events](../architecture/data-model.md#listing-and-events) and [Data model: Listing signal waits](../architecture/data-model.md#listing-signal-waits).
 
 </details>
 
@@ -245,7 +245,7 @@ The decision row follows the parent task's safe [retention](330-retention.md).
   the stored decision or the terminal outcome.
 - Decision rows have no retention window of their own. They are removed only with the parent `task`.
 
-More detail: [Data model: Timeout, cancellation, and retention](../architecture/data-model.md#timeout-cancellation-and-retention).
+More detail: [Data model: Timeout, cancellation, and retention](../architecture/data-model.md#timeout-cancellation-and-retention) and [Data model: Timeout and deadline](../architecture/data-model.md#timeout-and-deadline).
 
 </details>
 

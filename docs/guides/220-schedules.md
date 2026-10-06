@@ -152,7 +152,7 @@ advances the position only to its last occurrence.
 
 The policy defaults to `skip`. The limit accepts 1 to 10,000 and defaults to 100.
 
-More detail: [Data model: Firing due schedules](../architecture/data-model.md#firing-due-schedules).
+More detail: [Data model: Firing due schedules](../architecture/data-model.md#firing-due-schedules) and [Data model: SDK options](../architecture/data-model.md#sdk-options).
 
 </details>
 

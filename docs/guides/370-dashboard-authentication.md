@@ -85,7 +85,7 @@ server record, expires the cookie, and answers `303` to the login page. Another 
 `/logout` answers `405`. After a `401`, `createDashboardClient()` calls
 `window.location.replace(loginUrl)` once.
 
-More detail: [Dashboard: Sessions](../architecture/dashboard.md#sessions).
+More detail: [Dashboard: Sessions](../architecture/dashboard.md#sessions) and [Dashboard: Credentials](../architecture/dashboard.md#credentials).
 
 </details>
 
@@ -145,7 +145,7 @@ The limit is process-wide. It does not trust `Forwarded` or `X-Forwarded-*` as c
 malformed declared length gets `413` before the form is read. The body must be
 `application/x-www-form-urlencoded`, or the server answers `415`.
 
-More detail: [Dashboard: Login rate limit](../architecture/dashboard.md#login-rate-limit).
+More detail: [Dashboard: Login rate limit](../architecture/dashboard.md#login-rate-limit) and [Dashboard: Login body limit](../architecture/dashboard.md#login-body-limit).
 
 </details>
 
@@ -309,9 +309,7 @@ boundary instead of guessing which identity system owns the request.
 - The Python host rejects a connection without `autocommit=True`.
 - A non-empty `allowedHosts` list answers `421` for any other host, before `authorize` runs.
 
-More detail: [Overview: Workspace routing](../architecture/overview.md#workspace-routing),
-[Dashboard: Python backend](../architecture/dashboard.md#python-backend), and
-[Dashboard: Allowed hosts](../architecture/dashboard.md#allowed-hosts).
+More detail: [Overview: Workspace routing](../architecture/overview.md#workspace-routing), [Dashboard: Python backend](../architecture/dashboard.md#python-backend), and [Dashboard: Allowed hosts](../architecture/dashboard.md#allowed-hosts).
 
 </details>
 

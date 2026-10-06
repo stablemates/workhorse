@@ -141,7 +141,7 @@ busy queue's waits the same way.
 - `--human-cursor` and `--signal-cursor` each take the exact `nextCursor` object of their list. A
   value without string `createdAt`, `taskId`, and `name` fields exits 64.
 
-More detail: [Operations and CLI: External waits](../architecture/operations.md#external-waits).
+More detail: [Operations and CLI: External waits](../architecture/operations.md#external-waits) and [Operations and CLI: Checkpoints and waits](../architecture/operations.md#checkpoints-and-waits).
 
 </details>
 
@@ -253,7 +253,7 @@ semantics. Queue pause and resume also require a reason and retain the request's
 **Exit codes.** A non-mutating outcome (`not_found`, `already_terminal`, `not_failed`) exits 1.
 Malformed usage exits 64.
 
-More detail: [Operations and CLI: Safety checks](../architecture/operations.md#safety-checks).
+More detail: [Operations and CLI: Safety checks](../architecture/operations.md#safety-checks), [Operations and CLI: Audit fields and request identity](../architecture/operations.md#audit-fields-and-request-identity), and [Operations and CLI: Non-mutating outcomes](../architecture/operations.md#non-mutating-outcomes).
 
 </details>
 

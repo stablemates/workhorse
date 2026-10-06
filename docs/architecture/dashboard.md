@@ -295,12 +295,14 @@ task-page JSON document: `filter`, `queue`, `worker`, `taskType`, `priority`, `t
 
 Before the backend calls the function, the wire validator applies these limits:
 
-| Input                        | Limit                  |
-| ---------------------------- | ---------------------- |
-| `pageSize`                   | 25, 50, or 100         |
-| `page`                       | at most 100            |
-| selected tags                | at most 20 values      |
-| each search or string filter | at most 200 characters |
+| Input                        | Limit                             |
+| ---------------------------- | --------------------------------- |
+| `pageSize`                   | 25, 50, or 100                    |
+| `page`                       | at most 100                       |
+| selected tags                | at most 20 values                 |
+| each search or string filter | at most 200 characters            |
+| `priority`                   | null, or 0 through 100            |
+| `sort`                       | `updated` (default) or `priority` |
 
 #### Total and `hasMore`
 
@@ -1043,16 +1045,19 @@ The backend entry owns `Queue`, `createDashboardOperatorControllers`, `createDas
 
 The authentication options contain:
 
-- a username;
+- a username of 1 through 256 characters;
 - a `scrypt-v1$<base64url-salt>$<base64url-digest>` password hash;
 - an optional session lifetime.
 
-| Setting            | Value                                                                    |
-| ------------------ | ------------------------------------------------------------------------ |
-| scrypt (version 1) | `N=16384`, `r=8`, `p=1`                                                  |
-| salt               | at least 16 bytes                                                        |
-| digest             | exactly 32 bytes                                                         |
-| session lifetime   | default 28,800 seconds; integer lifetimes from 60 through 86,400 seconds |
+| Setting            | Value                                                                              |
+| ------------------ | ---------------------------------------------------------------------------------- |
+| scrypt (version 1) | `N=16384`, `r=8`, `p=1`                                                            |
+| salt               | at least 16 bytes                                                                  |
+| digest             | exactly 32 bytes                                                                   |
+| session lifetime   | default 28,800 seconds (8 hours); integer lifetimes from 60 through 86,400 seconds |
+
+The server compares the derived digest with `timingSafeEqual`. A password longer than 1,024
+characters never matches.
 
 #### Password rotation
 
@@ -1073,7 +1078,10 @@ The server stores only a random 32-byte session token and its expiry. The browse
 token in `__Host-workhorse-dashboard-session` with `Path=/`, `Max-Age`, `Secure`, `HttpOnly`, and
 `SameSite=Strict`.
 
-- `POST /logout` deletes the server record and expires the cookie.
+- A request without a valid session gets `302` to `{basePath}/login` when it is a `GET` outside
+  `rpc` and `assets/`. Any other request gets `401` with `{ "error": "Unauthorized" }`.
+- `POST /logout` deletes the server record, expires the cookie, and answers `303` to the login path.
+  Another method on the logout path answers `405` with `Allow: POST`.
 - An expired server record never authorizes a request, even if a client retains its cookie.
 - A successful login answers `303` to the mount path. The mount path is the login path without its
   trailing `/login`, or `/` for a root mount.
@@ -1182,6 +1190,7 @@ options.
 - If the header is absent, `readLoginBody` treats the length as unknown and counts the request
   stream. It retains at most 4,096 bytes, cancels the stream as soon as it crosses the bound, and
   returns `413`.
+- A `content-type` that does not start with `application/x-www-form-urlencoded` receives `415`.
 
 ### Allowed hosts
 

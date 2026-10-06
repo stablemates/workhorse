@@ -57,7 +57,7 @@ FIFO-sequence, or notification side effect. It appends no event.
 
 **No key.** A request without `idempotency` skips the relation and always creates a task.
 
-More detail: [Data model: Fingerprint and replay](../architecture/data-model.md#fingerprint-and-replay).
+More detail: [Data model: Fingerprint and replay](../architecture/data-model.md#fingerprint-and-replay) and [Data model: Key and limits](../architecture/data-model.md#key-and-limits).
 
 </details>
 
@@ -154,7 +154,7 @@ accidental duplicates within a bounded period. They do not reserve a name foreve
 - Housekeeping keeps a finished task's identity while a binding still points at it.
 - A queue purge deletes the bindings of the `blocked`, `ready`, and `scheduled` tasks it removes.
 
-More detail: [Data model: Key exposure and expiry](../architecture/data-model.md#key-exposure-and-expiry).
+More detail: [Data model: Key exposure and expiry](../architecture/data-model.md#key-exposure-and-expiry) and [Data model: Key and limits](../architecture/data-model.md#key-and-limits).
 
 </details>
 

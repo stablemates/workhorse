@@ -39,7 +39,7 @@ function.
 - Core re-creates its instruments when the provider changes, so registration may happen after
   import.
 
-More detail: [Telemetry: Telemetry provider contract](../architecture/telemetry.md#telemetry-provider-contract).
+More detail: [Telemetry: Telemetry provider contract](../architecture/telemetry.md#telemetry-provider-contract) and [Telemetry: OpenTelemetry adapter](../architecture/telemetry.md#opentelemetry-adapter).
 
 </details>
 
@@ -87,7 +87,7 @@ would make those values difficult to bound and redact.
 `workhorse.task.type`, `workhorse.task.attempt`, and `workhorse.queue.name`. Workhorse emits at most
 eight attributes on one span and exports `TRACE_ATTRIBUTE_COUNT_LIMIT = 8`.
 
-More detail: [Telemetry: Trace context propagation](../architecture/telemetry.md#trace-context-propagation).
+More detail: [Telemetry: Trace context propagation](../architecture/telemetry.md#trace-context-propagation) and [Telemetry: TypeScript spans](../architecture/telemetry.md#typescript-spans).
 
 </details>
 
@@ -238,7 +238,7 @@ Schedule namespace and name appear only on the two schedule instruments.
 
 Workhorse exports `METRIC_ATTRIBUTE_CARDINALITY_LIMIT = 2,000` for explicit SDK reader limits.
 
-More detail: [Telemetry: Metric attributes](../architecture/telemetry.md#metric-attributes).
+More detail: [Telemetry: Metric attributes](../architecture/telemetry.md#metric-attributes) and [Telemetry: Cardinality](../architecture/telemetry.md#cardinality).
 
 </details>
 

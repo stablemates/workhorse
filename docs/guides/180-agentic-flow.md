@@ -74,7 +74,7 @@ cannot take the whole tool rate, as [per-key traffic control](250-rate-limits.md
 - In the example, each tool request sets `queue` and `concurrencyKey` in its `options`.
 - A keyed rate-limit policy gives each non-null concurrency key its own bucket within the queue.
 
-More detail: [Task lifecycle: Durable timer suspension](../architecture/lifecycle.md#durable-timer-suspension).
+More detail: [Task lifecycle: Durable timer suspension](../architecture/lifecycle.md#durable-timer-suspension) and [Data model: Timeout and deadline](../architecture/data-model.md#timeout-and-deadline).
 
 </details>
 
