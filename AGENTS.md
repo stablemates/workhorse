@@ -71,6 +71,30 @@ the branch, ask a maintainer before rewriting it.
 Amending discards the intermediate commits. Record verification evidence in Linear and in pull
 request comments instead.
 
+## Write commit messages and pull request descriptions as documentation
+
+Commit messages and pull request descriptions follow the sentence rules under "For either
+documentation layer". They use the terms `CONTEXT.md` defines and follow "Keep benchmark comparisons
+private".
+
+A commit message has no Markdown headings, because the squash merge copies it into `git log` on
+`main`. The subject is the `SM-*` identifier and an imperative summary, about 72 characters long.
+The body wraps at 72 columns and states why first, as a short scenario when behavior changes. Then
+it states what changes. Verification and review stay out of the message, in Linear and in pull
+request comments. The trailers follow the body.
+
+A pull request description uses these headings in order, as `.github/pull_request_template.md`
+lays out:
+
+1. `Why`: the problem, as a short scenario in time order when behavior changes.
+2. `What changes`: the change as a whole.
+3. `Verification`: the exact commands and results, and what was not run and why.
+4. `Review`: each review round and its outcome.
+5. `Follow-ups`: the work this change leaves for later issues.
+
+An agent's attribution line comes last. When a follow-up change amends the commit, update the
+description so it describes the whole change.
+
 ## Do not run the demo server
 
 Do not start the demo. Not `pnpm demo`, not `pnpm demo:app`, and not a variant in the background.
