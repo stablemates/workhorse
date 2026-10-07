@@ -195,6 +195,7 @@ export type {
   CompletionClaim,
   CompletionClaimResult,
   ChildTask,
+  ChildTaskOptions,
   ChildTaskRequest,
   ChildOutcome,
   ChildOutcomes,

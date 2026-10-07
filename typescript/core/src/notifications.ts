@@ -5,6 +5,9 @@ import { connectionPoolOf, type ConnectionPool } from "./connection-pool.js";
 const CHANNEL = "workhorse_tasks";
 const RECONNECT_INITIAL_MS = 100;
 const RECONNECT_MAX_MS = 5_000;
+// UNLISTEN only tidies a connection about to return to the pool, so a peer that stops answering
+// must not hold shutdown. Past this bound the connection is destroyed instead.
+const UNLISTEN_TIMEOUT_MS = 1_000;
 
 export function jitterDuration(durationMs: number): number {
   return Math.max(1, Math.round(durationMs * (0.9 + Math.random() * 0.2)));
@@ -93,6 +96,24 @@ async function listenUntilAbort(client: NotificationClient, signal: AbortSignal)
   const listening = (await raceAbort(pending, signal)) !== ABORTED;
   if (!listening) void pending.catch(() => undefined);
   return listening;
+}
+
+async function unlistenWithin(client: NotificationClient, timeoutMs: number): Promise<void> {
+  const pending = client.query(`UNLISTEN ${CHANNEL}`);
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`PostgreSQL UNLISTEN did not finish within ${timeoutMs} ms`)),
+      timeoutMs,
+    );
+    timer.unref();
+  });
+  try {
+    await Promise.race([pending, timedOut]);
+  } finally {
+    clearTimeout(timer);
+    void pending.catch(() => undefined);
+  }
 }
 
 class TaskNotificationHub {
@@ -207,7 +228,7 @@ class TaskNotificationHub {
           // The error listener stays until release: an unobserved client error event throws.
           if (!connectionError) {
             try {
-              await client.query(`UNLISTEN ${CHANNEL}`);
+              await unlistenWithin(client, UNLISTEN_TIMEOUT_MS);
             } catch (error) {
               connectionError = error instanceof Error ? error : new Error(String(error));
               this.report(error);

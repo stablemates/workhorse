@@ -709,16 +709,16 @@ not durable liveness or membership state.
 The constructor requires a safe integer for every timing and limit option, so `NaN`, the infinities,
 and fractions throw before any queue operation.
 
-| Option                     | Accepted range                                      |
-| -------------------------- | --------------------------------------------------- |
-| `leaseMs`                  | At least 1.                                         |
-| `heartbeatMs`              | At least 1 and less than `leaseMs`.                 |
-| `pollMs`                   | At least 0.                                         |
-| fixed `retryDelayMs`       | At least 0.                                         |
-| `maintenanceIntervalMs`    | At least 100.                                       |
-| `maintenanceRoutinePollMs` | At least 100.                                       |
-| `registryIntervalMs`       | 0, which opts out of registration, or at least 100. |
-| `scheduleCatchupLimit`     | 1 through 10,000.                                   |
+| Option                     | Accepted range                                                   |
+| -------------------------- | ---------------------------------------------------------------- |
+| `leaseMs`                  | At least 1.                                                      |
+| `heartbeatMs`              | 1 through 2,147,483,647, and less than `leaseMs`.                |
+| `pollMs`                   | 0 through 2,147,483,647.                                         |
+| fixed `retryDelayMs`       | At least 0.                                                      |
+| `maintenanceIntervalMs`    | 100 through 2,147,483,647.                                       |
+| `maintenanceRoutinePollMs` | 100 through 2,147,483,647.                                       |
+| `registryIntervalMs`       | 0, which opts out of registration, or 100 through 2,147,483,647. |
+| `scheduleCatchupLimit`     | 1 through 10,000.                                                |
 
 `leaseMs` defaults to 30,000 ms, and `heartbeatMs` to `max(100, floor(leaseMs / 3))` ms.
 `maintenanceIntervalMs` defaults to 1,000 ms.
@@ -1064,7 +1064,8 @@ Reservation requirements:
   transport.
 
 Every worker on one pool shares the reservation, keyed like the listener by the pool object. The
-last holder to close it returns the client to the pool.
+last holder to close it returns the client to the pool. Closing does not wait for a connect still
+pending behind an exhausted pool; a client that arrives later is released.
 
 - `Worker.run()` takes a hold before its first maintenance pass and keeps it until the run ends.
 - `runOnce()` takes one when the first attempt registers its lease, before the handler starts, and

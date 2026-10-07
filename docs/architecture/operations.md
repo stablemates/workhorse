@@ -621,7 +621,8 @@ therefore gets an immediate claim.
 
 The final subscriber issues `UNLISTEN`, releases the shared connection, and lets normal worker
 drain finish. That subscriber still observes an `UNLISTEN` failure. The listener keeps its `error`
-handler until release.
+handler until release. `UNLISTEN` has 1,000 ms to finish. Past that deadline the listener reports a
+failure and releases the client with the error, which destroys the connection.
 
 ### Polling cadence
 

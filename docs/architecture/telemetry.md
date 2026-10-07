@@ -91,7 +91,8 @@ both bounded dimensions, matching the TypeScript fallback.
 
 `WorkhorseMetricsObserver` lives in `typescript/core/src/metrics-observer.ts`. It records its gauges
 through the same lazy lifecycle. It performs two concurrent read-only queries every `intervalMs`.
-`intervalMs` defaults to 10,000 and must be a safe integer of at least 1,000.
+`intervalMs` defaults to 10,000 and must be a safe integer from 1,000 through 2,147,483,647. Node
+runs a longer timer delay every millisecond.
 
 | Member      | Behavior                                                     |
 | ----------- | ------------------------------------------------------------ |

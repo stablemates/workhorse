@@ -627,6 +627,21 @@ describe("Workhorse OpenTelemetry metrics", () => {
     vi.useRealTimers();
   });
 
+  it("rejects an observer interval Node's timer would run every millisecond", async () => {
+    const database: Queryable = {
+      query: async <R extends QueryResultRow>() => queryResult([] as R[]),
+    };
+    const { WorkhorseMetricsObserver } = await import("../src/metrics-observer.js");
+    const { MAX_TIMER_DELAY_MS } = await import("../src/timers.js");
+
+    expect(
+      () => new WorkhorseMetricsObserver(database, { intervalMs: MAX_TIMER_DELAY_MS + 1 }),
+    ).toThrow(RangeError);
+    expect(
+      () => new WorkhorseMetricsObserver(database, { intervalMs: MAX_TIMER_DELAY_MS }),
+    ).not.toThrow();
+  });
+
   it("records SQL-owned maintenance work and duration", async () => {
     const { Worker } = await import("../src/worker.js");
     const queue = workerQueue({

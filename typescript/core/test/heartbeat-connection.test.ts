@@ -112,6 +112,30 @@ describe("reserved heartbeat connection", () => {
     expect(late.query).not.toHaveBeenCalled();
   });
 
+  it("closes without waiting for a reservation stuck behind an exhausted pool", async () => {
+    let lend!: (client: ReturnType<typeof fakeClient>) => void;
+    const late = fakeClient();
+    const pool = {
+      options: { max: 10 },
+      query: vi.fn<Queryable["query"]>(async () => emptyResult),
+      connect: vi.fn<() => Promise<ReturnType<typeof fakeClient>>>(
+        () =>
+          new Promise<ReturnType<typeof fakeClient>>((resolve) => {
+            lend = resolve;
+          }),
+      ),
+    };
+    const connection = new ReservedConnection(asDatabase(pool));
+    connection.reserve();
+
+    await connection.close();
+    expect(late.release).not.toHaveBeenCalled();
+    lend(late);
+
+    await vi.waitFor(() => expect(late.release).toHaveBeenCalledExactlyOnceWith());
+    expect(late.query).not.toHaveBeenCalled();
+  });
+
   it("destroys a client whose statement failed", async () => {
     const { pool, clients } = fakePool();
     const connection = new ReservedConnection(asDatabase(pool));

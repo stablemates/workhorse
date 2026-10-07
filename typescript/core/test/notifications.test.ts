@@ -117,6 +117,39 @@ describe("task notification hub", () => {
     expect(client.released).toEqual([socketError]);
   });
 
+  it("destroys the client when UNLISTEN does not answer within its deadline", async () => {
+    const client = new FakeClient(async (_self, text) => {
+      if (!text.startsWith("UNLISTEN")) return { rows: [] };
+      return new Promise<never>(() => {
+        // A peer that stops answering without an error never settles the statement.
+      });
+    });
+    const database = fakeDatabase(async () => client);
+    const errors: unknown[] = [];
+    const subscription = await subscribeToTaskNotifications(database, {
+      queueName: "default",
+      wake: () => undefined,
+      error: (error) => errors.push(error),
+    });
+    await vi.waitFor(() => expect(subscription!.isListening?.()).toBe(true));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let closed = false;
+      const closing = subscription!.close().then(() => {
+        closed = true;
+      });
+      await vi.advanceTimersByTimeAsync(999);
+      expect(closed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await closing;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(errors).toEqual([new Error("PostgreSQL UNLISTEN did not finish within 1000 ms")]);
+    expect(client.released).toEqual([errors[0]]);
+  });
+
   it("keeps running when a subscriber's error callback throws", async () => {
     let connects = 0;
     const database = fakeDatabase(async () => {

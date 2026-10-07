@@ -74,6 +74,14 @@ The dashboard workspace switcher lists only the workspaces `authorize(request, w
 request, and an unexpected schema-compatibility failure emits `workhorse.dashboard.compatibility_check_failed`
 (SM-1168).
 
+**Pending release — fixed:** A TypeScript worker no longer waits without limit while shutting down.
+Closing the reserved heartbeat connection no longer waits for a connect stuck behind an exhausted
+pool, and it releases a client that arrives later. `UNLISTEN` gets 1,000 ms before the listener
+destroys its connection. Checkpoint and progress writes reject `NaN` and the infinities at any
+depth with a `TypeError`, because JSON would store them as `null`. Worker intervals and the metrics
+observer's `intervalMs` reject values above 2,147,483,647 ms, which Node's timers would run every
+millisecond. `ChildTaskOptions` is now exported from the package root (SM-1169).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

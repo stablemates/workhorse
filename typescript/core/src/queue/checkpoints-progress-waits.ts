@@ -177,6 +177,23 @@ export class WaitLimitExceededError extends WorkhorseError {
   }
 }
 
+/**
+ * Encode a checkpoint or progress value, rejecting one that would not read back as written.
+ *
+ * JSON.stringify writes NaN and the infinities as null, so a value typed as a number would read
+ * back as null. The replacer sees every nested value, after any toJSON conversion.
+ */
+function encodeFiniteJson(value: Json, label: string): string {
+  const encoded = JSON.stringify(value, (_key, nested: unknown) => {
+    if (typeof nested === "number" && !Number.isFinite(nested)) {
+      throw new TypeError(`${label} value must contain only finite numbers`);
+    }
+    return nested;
+  });
+  if (encoded === undefined) throw new TypeError(`${label} value must be JSON serializable`);
+  return encoded;
+}
+
 /** Owns checkpoint, progress, and durable-wait operations behind the Queue facade. */
 export class CheckpointsProgressWaitsModule extends QueueModule {
   async getCheckpoint<TValue extends Json = Json>(
@@ -207,10 +224,7 @@ export class CheckpointsProgressWaitsModule extends QueueModule {
     name: string,
     value: TValue,
   ): Promise<TaskCheckpoint<TValue>> {
-    const encodedValue = JSON.stringify(value);
-    if (encodedValue === undefined) {
-      throw new TypeError("Checkpoint value must be JSON serializable");
-    }
+    const encodedValue = encodeFiniteJson(value, "Checkpoint");
     const result = await queryFencedWrite<SaveCheckpointRow>(
       this.context.database,
       SQL_STATEMENTS["save_checkpoint_v1"],
@@ -246,10 +260,7 @@ export class CheckpointsProgressWaitsModule extends QueueModule {
     workerId: string,
     value: TValue,
   ): Promise<TaskProgress<TValue>> {
-    const encodedValue = JSON.stringify(value);
-    if (encodedValue === undefined) {
-      throw new TypeError("Progress value must be JSON serializable");
-    }
+    const encodedValue = encodeFiniteJson(value, "Progress");
     const result = await queryFencedWrite<UpdateProgressRow>(
       this.context.database,
       SQL_STATEMENTS["update_progress_v1"],
