@@ -1,5 +1,9 @@
 # LangGraph approval bridge
 
+This page is the precise reference for [`langgraph_approval.py`](langgraph_approval.py).
+It sits next to that example because a defect in the recipe is not a Workhorse defect.
+The [LangGraph page](https://workhorse.run/docs/langgraph) explains the recipe for a new reader.
+
 The Python example coordinates one persistent draft, approval, and local tool action.
 Workhorse owns admission, leases, retries, and the committed human wait.
 LangGraph owns graph state, node replay, and the interrupt.
@@ -7,7 +11,7 @@ This is an application recipe, not a Workhorse checkpointer or an SDK adapter.
 
 ## Verified interface
 
-`python/examples/langgraph_approval.py` uses these released development dependencies:
+[`python/examples/langgraph_approval.py`](langgraph_approval.py) uses these released development dependencies:
 
 - `langgraph==1.2.12`, upstream tag `1.2.12` at `49cce0ca852be4cfb567a1cbe0e511ff325a1682`.
 - `langgraph-checkpoint-postgres==3.1.2`, tag `checkpointpostgres==3.1.2` at
@@ -155,7 +159,7 @@ The driver disables LangSmith tracing rather than exporting approval context thr
 
 ## Evidence
 
-`python/tests/test_langgraph_approval.py` uses the existing `database_url` scratch-database fixture.
+[`python/tests/test_langgraph_approval.py`](../tests/test_langgraph_approval.py) uses the existing `database_url` scratch-database fixture.
 Each database test creates and drops its own local PostgreSQL database.
 The tests exercise the real saver, real Workhorse worker, committed waits, crash boundaries,
 stale fences, session loss, cancellation, timeout, schema mismatch, and retained-context recovery.

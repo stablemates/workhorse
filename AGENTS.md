@@ -210,6 +210,10 @@ The product documentation has two source layers for different readers. Keep both
   foundation guides (010 to 030). Define any other Workhorse term in one clause where it first
   appears, and link the guide that owns it.
 
+An example keeps its precise documentation next to its code, as
+`python/examples/langgraph_approval.md` does, not in `docs/architecture/`. A defect in an example is
+not a Workhorse defect.
+
 Rules that keep the two layers from drifting:
 
 - A guide states exact values only inside its reference blocks. The main text describes bounded
