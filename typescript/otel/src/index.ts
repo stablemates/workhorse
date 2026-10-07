@@ -1,4 +1,5 @@
 import {
+  ROOT_CONTEXT,
   SpanKind,
   SpanStatusCode,
   context,
@@ -185,11 +186,13 @@ function createOpenTelemetryProvider(): WorkhorseTelemetryProvider {
           }
         : null;
     },
+    // A task's spans descend only from the trace its enqueue persisted. Whatever span is active
+    // where the worker runs, such as a caller's span or a fused completion, is unrelated to it.
     extractTraceContext(traceContext) {
       return traceContext === null
-        ? context.active()
+        ? ROOT_CONTEXT
         : propagation.extract(
-            context.active(),
+            ROOT_CONTEXT,
             traceContext as Record<string, string | undefined>,
             carrierGetter,
           );

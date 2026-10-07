@@ -590,7 +590,6 @@ export class EnqueueContractsModule extends QueueModule {
     for (const [taskType, definition] of currentContracts) {
       this.state.currentDatabaseContracts.set(taskType, definition);
     }
-    this.state.contractsSynchronized = true;
   }
 
   private async loadContract(
@@ -640,15 +639,14 @@ export class EnqueueContractsModule extends QueueModule {
   // An operator can change the selected version or its limits after syncContracts(). A payload the
   // cached definition rejects may be valid under the current one, so the client reloads the
   // definition once through the enqueue's queryable and validates again before it reports the
-  // rejection.
+  // rejection. A producer that never synchronized has a cached definition only after a contract
+  // mismatch fetched it, and that fetched definition is what PostgreSQL will accept on the retry.
   private async serializedTaskAcceptance(
     taskType: string,
     payload: Json,
     database: Queryable = this.context.database,
   ): Promise<SerializedTaskAcceptance> {
-    const databaseContract = !this.state.contractsSynchronized
-      ? undefined
-      : this.state.currentDatabaseContracts.get(taskType);
+    const databaseContract = this.state.currentDatabaseContracts.get(taskType);
     try {
       return this.serializedTaskAcceptanceUnder(taskType, payload, databaseContract);
     } catch (error) {

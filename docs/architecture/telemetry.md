@@ -188,7 +188,8 @@ The `task.trace_context` column has these rules:
 
 `claim_v1` returns the stored value. Each worker extracts it before creating the `workhorse.handler`
 consumer span. The Go worker performs the same extraction and creates the same consumer span. A
-stored enqueue or caller context can therefore parent any language's handler span.
+stored enqueue or caller context can therefore parent any language's handler span. In TypeScript, a
+handler span for a task without a stored context starts a new trace from `ROOT_CONTEXT`.
 
 Child tasks prefer the parent task's stored context over the ambient handler context. Replay
 therefore preserves the original trace chain.

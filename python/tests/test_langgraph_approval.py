@@ -428,6 +428,44 @@ def test_cancel_after_graph_save_before_bridge_save_recovers_retained_approval(
     assert harness.effects() == 0
 
 
+def test_cancel_after_bridge_save_before_first_checkpoint_stops_empty_graph(
+    harness: Harness,
+) -> None:
+    harness.crash_at = "bridge_saved"
+    harness.step()
+    assert harness.row()["phase"] == "preparing"
+    assert not harness.snapshot().values
+    harness.queue.cancel(
+        harness.task_id, requested_by="reviewer", reason="cancel before first checkpoint"
+    )
+    result = bridge.reconcile_terminal(harness.database_url, harness.task_id)
+    assert result["outcome"] == "cancelled"
+    assert result["interrupt_id"] is None
+    assert harness.row()["phase"] == "finished"
+    assert harness.row()["stop_reason"] == "cancelled"
+    assert harness.effects() == 0
+    assert not harness.snapshot().next
+    assert bridge.reconcile_terminal(harness.database_url, harness.task_id) == result
+
+
+def test_terminal_reconciliation_fails_closed_when_retained_graph_is_missing(
+    harness: Harness,
+) -> None:
+    harness.step()
+    original = harness.row()
+    harness.connection.execute(
+        "DELETE FROM langgraph_example_graph.checkpoints WHERE thread_id = %s",
+        (original["thread_id"],),
+    )
+    harness.queue.cancel(harness.task_id, requested_by="reviewer", reason="cancel lost graph")
+    with pytest.raises(RuntimeError, match="restore it"):
+        bridge.reconcile_terminal(harness.database_url, harness.task_id)
+    assert not harness.snapshot().values
+    assert harness.row()["interrupt_id"] == original["interrupt_id"]
+    assert harness.row()["phase"] == "interrupted"
+    assert harness.effects() == 0
+
+
 @pytest.mark.parametrize("value", [{"approved": "yes"}, {"approved": True, "tool": "shell"}, {}])
 def test_untrusted_approval_cannot_choose_tools(value: Json) -> None:
     with pytest.raises(ValueError):

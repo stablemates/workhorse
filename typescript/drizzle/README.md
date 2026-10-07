@@ -33,6 +33,21 @@ await db.transaction(async (tx) => {
 });
 ```
 
+## Use a transaction queue only inside its transaction
+
+Create the queue from `forTransaction(tx)` inside the callback and drop it when the callback
+returns. Drizzle gives the adapter no signal when a transaction ends, so the adapter cannot
+invalidate a queue that outlives it. Knex differs: its adapter rejects a completed transaction.
+
+Suppose a callback stores `workhorse.forTransaction(tx)` in a variable, and Drizzle commits and
+releases the connection. A later enqueue through that variable runs on the released connection:
+
+- When the connection sits idle in the pool, the enqueue commits on its own.
+- When another `db.transaction` has borrowed the connection, the enqueue joins that transaction and
+  follows its commit or rollback.
+
+Neither outcome belongs to the original transaction, and Workhorse reports no error for either.
+
 ## Package boundary
 
 The adapter never closes caller-owned database resources unless `close` is configured.
