@@ -1,8 +1,13 @@
 package workhorse_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"sync"
@@ -433,6 +438,189 @@ func TestExpiredFastClaimRerunsOnceAndRejectsTheStaleCompletion(t *testing.T) {
 	if len(accepted) != 0 || count != 1 {
 		t.Fatalf("stale completion accepted=%v outcomes=%d", accepted, count)
 	}
+}
+
+// fastCrashChild is the application_name of the killed worker's sessions, so the test can find the
+// sessions its process left open in PostgreSQL.
+const fastCrashChild = "go-fast-crash-child"
+
+// TestKilledFastWorkerLosesNoBufferedCompletion kills a real worker process while its completions
+// and refill claims are in flight. A trigger holds every outcome insert of the queue on an advisory
+// lock the test owns, so the worker's first completion statement waits inside PostgreSQL. Later
+// completions wait in the worker's memory behind it. The worker is then killed, its sessions
+// end, and a second worker recovers every task.
+func TestKilledFastWorkerLosesNoBufferedCompletion(t *testing.T) {
+	ctx := context.Background()
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "fast-kill")
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	const queueName, concurrency, total = "go-fast-kill", 4, 12
+	makeFastQueue(t, pool, queueName)
+	requests := fastRequests(queueName, "effect", total)
+	for index := range requests {
+		requests[index].Options.MaxAttempts = 3
+	}
+	taskIDs, err := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName).EnqueueMany(ctx, requests)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		CREATE TABLE fast_crash_invocation (task_id uuid NOT NULL, attempt integer NOT NULL, worker text NOT NULL);
+		CREATE FUNCTION hold_fast_outcome() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN PERFORM pg_advisory_xact_lock(1172); RETURN NEW; END; $$;
+		CREATE TRIGGER hold_fast_outcome AFTER INSERT ON workhorse.fast_task_outcome
+		  FOR EACH ROW WHEN (NEW.queue_name = 'go-fast-kill') EXECUTE FUNCTION hold_fast_outcome()`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	holder, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Release()
+	var holderPID int
+	if err := holder.QueryRow(ctx, "SELECT pg_backend_pid() FROM (SELECT pg_advisory_lock(1172)) held").Scan(&holderPID); err != nil {
+		t.Fatal(err)
+	}
+
+	childURL, err := url.Parse(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := childURL.Query()
+	query.Set("application_name", fastCrashChild)
+	childURL.RawQuery = query.Encode()
+	binary := filepath.Join(t.TempDir(), "fast-crash-worker")
+	build := exec.Command("go", "build", "-o", binary, "./testdata/fast-crash-worker")
+	build.Env = append(os.Environ(), "GOWORK=off")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build fast crash worker: %v\n%s", err, output)
+	}
+	process, done, output := startProcessWorker(t, binary, childURL.String(), queueName, strconv.Itoa(concurrency))
+
+	// Every slot's handler has run, and a completion statement waits on the test's lock.
+	waitForFastCrash(t, func() bool {
+		var invoked, blocked int
+		if err := pool.QueryRow(ctx, `SELECT
+			  (SELECT count(DISTINCT task_id) FROM fast_crash_invocation),
+			  (SELECT count(*) FROM pg_stat_activity WHERE $1::integer = ANY(pg_blocking_pids(pid)))`,
+			holderPID,
+		).Scan(&invoked, &blocked); err != nil {
+			t.Fatal(err)
+		}
+		return invoked >= concurrency && blocked > 0
+	}, output)
+	if err := process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = waitForProcessExit(t, done, output)
+	// The kernel closes the dead process's sockets, but a session waiting on a lock does not notice
+	// until it next talks to the client. Ending the sessions rolls their statements back now.
+	waitForFastCrash(t, func() bool {
+		var remaining int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity, pg_terminate_backend(pid)
+			  WHERE application_name = $1`, fastCrashChild,
+		).Scan(&remaining); err != nil {
+			t.Fatal(err)
+		}
+		return remaining == 0
+	}, output)
+	if _, err := holder.Exec(ctx, "SELECT pg_advisory_unlock(1172); DROP TRIGGER hold_fast_outcome ON workhorse.fast_task_outcome"); err != nil {
+		t.Fatal(err)
+	}
+
+	// No completion committed, and every task the killed worker ran still holds its lease.
+	if outcomes := fastOutcomes(t, pool, taskIDs); len(outcomes) != 0 {
+		t.Fatalf("the killed worker committed outcomes %#v", outcomes)
+	}
+	active := fastCrashTaskSet(t, pool, "SELECT task_id::text FROM workhorse.fast_task_runtime WHERE queue_name = $1 AND state = 'active' AND attempt = 1", queueName)
+	ran := fastCrashTaskSet(t, pool, "SELECT task_id::text FROM fast_crash_invocation WHERE worker = 'crashed' AND attempt = 1")
+	var crashedRuns int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM fast_crash_invocation").Scan(&crashedRuns); err != nil {
+		t.Fatal(err)
+	}
+	if len(ran) < concurrency || crashedRuns != len(ran) {
+		t.Fatalf("the killed worker ran %d tasks in %d invocations", len(ran), crashedRuns)
+	}
+	for taskID := range ran {
+		if !active[taskID] {
+			t.Fatalf("task %s ran in the killed worker but holds no lease", taskID)
+		}
+	}
+
+	if _, err := pool.Exec(ctx, `UPDATE workhorse.fast_task_runtime SET expires_at = clock_timestamp() - interval '1 millisecond'
+		  WHERE queue_name = $1 AND state = 'active'`, queueName); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "SELECT * FROM workhorse.recover_expired_telemetry_v1(100, 0)"); err != nil {
+		t.Fatal(err)
+	}
+	survivor, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-fast-survivor", Concurrency: concurrency,
+		LeaseDuration: 30 * time.Second, PollInterval: 5 * time.Millisecond, PollingOnly: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	survivor.Handle("effect", func(handlerContext context.Context, _ any, handler *workhorse.HandlerContext) (any, error) {
+		_, err := pool.Exec(handlerContext,
+			"INSERT INTO fast_crash_invocation(task_id, attempt, worker) VALUES ($1::uuid, $2, 'survivor')",
+			handler.Task.ID, handler.Task.Attempt)
+		return map[string]any{"ok": true}, err
+	})
+	runFastWorkerUntil(t, pool, survivor, taskIDs)
+
+	// A task the killed worker held runs again as attempt 2. Every other task runs once.
+	for _, outcome := range fastOutcomes(t, pool, taskIDs) {
+		expected := 1
+		if active[outcome.TaskID] {
+			expected = 2
+		}
+		var survivorRuns, survivorAttempt int
+		if err := pool.QueryRow(ctx, `SELECT count(*), coalesce(max(attempt), 0) FROM fast_crash_invocation
+			  WHERE task_id = $1::uuid AND worker = 'survivor'`, outcome.TaskID,
+		).Scan(&survivorRuns, &survivorAttempt); err != nil {
+			t.Fatal(err)
+		}
+		if outcome.State != "succeeded" || outcome.Attempt != expected || survivorRuns != 1 || survivorAttempt != expected {
+			t.Fatalf("task %s: outcome %#v, %d survivor runs at attempt %d, want attempt %d",
+				outcome.TaskID, outcome, survivorRuns, survivorAttempt, expected)
+		}
+	}
+	if outcomes := fastOutcomes(t, pool, taskIDs); len(outcomes) != total {
+		t.Fatalf("recorded %d outcomes for %d tasks", len(outcomes), total)
+	}
+}
+
+func waitForFastCrash(t *testing.T, condition func() bool, output *bytes.Buffer) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for !condition() {
+		if time.Now().After(deadline) {
+			t.Fatalf("the fast crash scenario did not reach its next step\n%s", output.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func fastCrashTaskSet(t *testing.T, pool *pgxpool.Pool, statement string, arguments ...any) map[string]bool {
+	t.Helper()
+	rows, err := pool.Query(context.Background(), statement, arguments...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskIDs, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := make(map[string]bool, len(taskIDs))
+	for _, taskID := range taskIDs {
+		set[taskID] = true
+	}
+	return set
 }
 
 // crashingTracer makes every statement of one pool fail before it reaches PostgreSQL once crashed

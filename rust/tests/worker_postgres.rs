@@ -1733,6 +1733,233 @@ async fn a_crashed_fast_worker_loses_no_task_and_records_one_outcome_each() {
     assert_eq!(accepted, Some(Vec::new()));
 }
 
+/// The environment variable that turns `fast_crash_child_process` into the killed worker.
+const FAST_CRASH_CHILD_URL: &str = "WORKHORSE_FAST_CRASH_CHILD_URL";
+/// The killed worker's sessions carry this name, so the test can find what its process left open.
+const FAST_CRASH_CHILD: &str = "rust-fast-crash-child";
+const FAST_CRASH_QUEUE: &str = "rust-fast-kill";
+const FAST_CRASH_CONCURRENCY: usize = 4;
+
+/// Records one handler run of `task` in the crash test's invocation table.
+async fn record_fast_crash_run(
+    pool: &deadpool_postgres::Pool,
+    task: &ClaimedTask,
+    worker: &str,
+) -> Result<Value, HandlerError> {
+    let client = pool.get().await.map_err(|error| HandlerError::new(error.to_string()))?;
+    client
+        .execute(
+            "INSERT INTO fast_crash_invocation(task_id, attempt, worker) VALUES ($1, $2, $3)",
+            &[&task.id, &task.attempt, &worker],
+        )
+        .await
+        .map_err(|error| HandlerError::new(error.to_string()))?;
+    Ok(json!({"ok": true}))
+}
+
+/// Kills and reaps the child process when dropped, so a failing test leaves no worker behind.
+struct KilledOnDrop(std::process::Child);
+
+impl Drop for KilledOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// The worker `a_killed_fast_worker_loses_no_buffered_completion` kills. The test runs this test
+/// binary again with only this test selected, and the test serves the queue until it is killed.
+/// Without the environment variable it does nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn fast_crash_child_process() {
+    let Ok(url) = std::env::var(FAST_CRASH_CHILD_URL) else { return };
+    let manager = deadpool_postgres::Manager::new(url.parse().unwrap(), NoTls);
+    let pool = deadpool_postgres::Pool::builder(manager).max_size(10).build().unwrap();
+    let worker = Worker::new(
+        pool.clone(),
+        WorkerOptions {
+            queues: vec![FAST_CRASH_QUEUE.into()],
+            worker_id: Some("rust-fast-crashed".into()),
+            concurrency: FAST_CRASH_CONCURRENCY,
+            polling_only: true,
+            poll_interval: Some(Duration::from_millis(5)),
+            ..WorkerOptions::default()
+        },
+    )
+    .unwrap();
+    worker.handle("effect", move |_: Value, context: HandlerContext| {
+        let pool = pool.clone();
+        async move { record_fast_crash_run(&pool, context.task(), "crashed").await }
+    });
+    worker.run(std::future::pending::<()>()).await.unwrap();
+}
+
+/// Kills a real worker process while its completions and refill claims are in flight. A trigger
+/// holds every outcome insert of the queue on an advisory lock the test owns, so the worker's
+/// completion statements wait inside PostgreSQL. The worker is then killed, its sessions end, and
+/// a second worker recovers every task.
+#[tokio::test]
+async fn a_killed_fast_worker_loses_no_buffered_completion() {
+    let Some(harness) = harness("fast_kill").await else { return };
+    harness.make_fast(FAST_CRASH_QUEUE).await;
+    let mut ids = Vec::new();
+    for sequence in 0..12 {
+        let options = EnqueueOptions { max_attempts: 3, ..on(FAST_CRASH_QUEUE) };
+        ids.push(harness.enqueue("effect", json!({ "sequence": sequence }), options).await);
+    }
+    let holder = harness.database.connect().await;
+    holder
+        .batch_execute(&format!(
+            "CREATE TABLE fast_crash_invocation
+               (task_id uuid NOT NULL, attempt integer NOT NULL, worker text NOT NULL);
+             CREATE FUNCTION hold_fast_outcome() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN PERFORM pg_advisory_xact_lock(1172); RETURN NEW; END; $$;
+             CREATE TRIGGER hold_fast_outcome AFTER INSERT ON workhorse.fast_task_outcome
+               FOR EACH ROW WHEN (NEW.queue_name = '{FAST_CRASH_QUEUE}')
+               EXECUTE FUNCTION hold_fast_outcome();"
+        ))
+        .await
+        .unwrap();
+    let holder_pid: i32 = holder
+        .query_one("SELECT pg_backend_pid() FROM (SELECT pg_advisory_lock(1172)) held", &[])
+        .await
+        .unwrap()
+        .get(0);
+
+    let separator = if harness.database.url().contains('?') { '&' } else { '?' };
+    let mut child = KilledOnDrop(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["fast_crash_child_process", "--exact", "--nocapture"])
+            .env(
+                FAST_CRASH_CHILD_URL,
+                format!("{}{separator}application_name={FAST_CRASH_CHILD}", harness.database.url()),
+            )
+            .spawn()
+            .unwrap(),
+    );
+    // Every slot's handler has run, and a completion statement waits on the test's lock.
+    let held = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let row = holder
+                .query_one(
+                    "SELECT (SELECT count(DISTINCT task_id) FROM fast_crash_invocation),
+                            (SELECT count(*) FROM pg_stat_activity
+                              WHERE $1::integer = ANY(pg_blocking_pids(pid)))",
+                    &[&holder_pid],
+                )
+                .await
+                .unwrap();
+            let (ran, blocked): (i64, i64) = (row.get(0), row.get(1));
+            if ran >= FAST_CRASH_CONCURRENCY as i64 && blocked > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    child.0.kill().unwrap();
+    child.0.wait().unwrap();
+    held.expect("the killed worker ran every slot and blocked a completion");
+    // The kernel closes the dead process's sockets, but a session waiting on a lock does not
+    // notice until it next talks to the client. Ending the sessions rolls their statements back.
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let remaining: i64 = holder
+                .query_one(
+                    "SELECT count(*) FROM pg_stat_activity, pg_terminate_backend(pid)
+                      WHERE application_name = $1",
+                    &[&FAST_CRASH_CHILD],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            if remaining == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the killed worker's sessions end");
+    holder
+        .batch_execute(
+            "SELECT pg_advisory_unlock(1172);
+             DROP TRIGGER hold_fast_outcome ON workhorse.fast_task_outcome;",
+        )
+        .await
+        .unwrap();
+
+    // No completion committed, and every task the killed worker ran still holds its lease.
+    assert_eq!(harness.fast_outcomes(&ids).await, Vec::new());
+    let active: std::collections::HashSet<Uuid> = holder
+        .query(
+            "SELECT task_id FROM workhorse.fast_task_runtime
+              WHERE queue_name = $1 AND state = 'active' AND attempt = 1",
+            &[&FAST_CRASH_QUEUE],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    let crashed_runs: Vec<(Uuid, i32)> = holder
+        .query("SELECT task_id, attempt FROM fast_crash_invocation", &[])
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    let ran: std::collections::HashSet<Uuid> = crashed_runs.iter().map(|run| run.0).collect();
+    assert!(ran.len() >= FAST_CRASH_CONCURRENCY, "{crashed_runs:?}");
+    assert_eq!(crashed_runs.len(), ran.len(), "each task ran once in the killed worker");
+    assert!(crashed_runs.iter().all(|run| run.1 == 1), "{crashed_runs:?}");
+    assert!(ran.is_subset(&active), "ran {ran:?}, active {active:?}");
+
+    holder
+        .execute(
+            "UPDATE workhorse.fast_task_runtime
+                SET expires_at = clock_timestamp() - interval '1 millisecond'
+              WHERE queue_name = $1 AND state = 'active'",
+            &[&FAST_CRASH_QUEUE],
+        )
+        .await
+        .unwrap();
+    holder
+        .query("SELECT * FROM workhorse.recover_expired_telemetry_v1(100, 0)", &[])
+        .await
+        .unwrap();
+    let survivor = harness
+        .worker(WorkerOptions { concurrency: FAST_CRASH_CONCURRENCY, ..serving(FAST_CRASH_QUEUE) });
+    let pool = harness.pool();
+    survivor.handle("effect", move |_: Value, context: HandlerContext| {
+        let pool = pool.clone();
+        async move { record_fast_crash_run(&pool, context.task(), "survivor").await }
+    });
+    let (stop, run) = run(&survivor);
+    harness.wait_for_outcomes(&ids).await;
+    stop.send(()).unwrap();
+    run.await.unwrap().unwrap();
+
+    // A task the killed worker held runs again as attempt 2. Every other task runs once.
+    let mut survivor_runs: Vec<(Uuid, i32)> = holder
+        .query("SELECT task_id, attempt FROM fast_crash_invocation WHERE worker = 'survivor'", &[])
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    let mut expected: Vec<(Uuid, i32)> =
+        ids.iter().map(|id| (*id, if active.contains(id) { 2 } else { 1 })).collect();
+    survivor_runs.sort();
+    expected.sort();
+    assert_eq!(survivor_runs, expected);
+    let mut outcomes = harness.fast_outcomes(&ids).await;
+    outcomes.sort();
+    let expected: Vec<(Uuid, String, i32)> =
+        expected.into_iter().map(|(id, attempt)| (id, "succeeded".into(), attempt)).collect();
+    assert_eq!(outcomes, expected);
+}
+
 #[tokio::test]
 async fn a_worker_serving_both_tiers_completes_each_task_in_its_own_tier() {
     let Some(harness) = harness("fast_mixed").await else { return };
