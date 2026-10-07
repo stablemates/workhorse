@@ -1197,15 +1197,17 @@ describe("retention maintenance", () => {
     });
     expect(await queue.retainHistory({ force: true })).toHaveLength(3);
 
+    // One batch of one deletes the oldest eligible identity first.
     expect(
-      (await queue.pruneTerminalStorage({ force: true })).find(
-        ({ phase }) => phase === "terminal_tasks",
-      ),
-    ).toMatchObject({
-      phase: "terminal_tasks",
-      rowsAffected: 1,
-      error: null,
-    });
+      (
+        await pool.query<{ pruned: number }>(
+          `SELECT workhorse.prune_terminal_tasks_v1(
+                    clock_timestamp() - interval '30 days', clock_timestamp() - interval '30 days',
+                    history_retained_before, 1) AS pruned
+             FROM workhorse.maintenance_state WHERE routine_name = 'history_retention'`,
+        )
+      ).rows[0]?.pruned,
+    ).toBe(1);
     expect(await admin.getTask(deletable)).toBeNull();
     expect(
       (

@@ -577,8 +577,10 @@ expired" }`.
 
 #### Retention
 
-`prune_terminal_tasks_v1(p_identity_before, p_outcome_before, p_history_before, p_limit)` runs a
-fast-tier pass with whatever budget the full-tier pass leaves. A fast outcome is deletable when:
+`prune_terminal_tasks_v1(p_identity_before, p_outcome_before, p_history_before, p_limit)` splits
+`p_limit` between the full and fast tiers. The tier that goes first gets half of it, rounded up, and
+alternates on every call. A share that one tier cannot use goes to the other tier, so neither tier's
+backlog starves the other. A fast outcome is deletable when:
 
 - `finished_at` is earlier than `p_outcome_before`;
 - `finished_at` is earlier than the fast history cutoff, which is `p_history_before`, clamped to

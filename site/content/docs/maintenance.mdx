@@ -299,7 +299,7 @@ that releases it.
   from reaching younger eligible tasks.
 - Deleting the target cascades its inbound edge. The source can then become eligible under the
   normal windows.
-- `terminal_task_prune_limit` bounds each terminal pass: 1 to 100,000 tasks, default 1,000.
+- `terminal_task_prune_limit` bounds each terminal batch: 1 to 100,000 tasks, default 1,000.
 
 More detail: [Data model: Lineage retention](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#lineage-retention).
 
@@ -334,8 +334,9 @@ history window have passed, and once the task identity window has too.
 5. No `task_redrive` row names the task as its source. A redrive that targets the task does not
    block pruning: deleting the target cascades that edge.
 
-The fast-tier pass uses whatever budget the full-tier pass leaves. It deletes the `task` identity,
-which cascades to the outcome.
+The full and fast tiers share each batch. The tier that goes first gets half the limit, rounded up,
+and the first tier alternates on every call. A share that one tier cannot use goes to the other
+tier. Cleanup deletes the `task` identity, which cascades to the outcome.
 
 More detail: [Fast tier: Retention](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#retention).
 
@@ -448,17 +449,25 @@ More detail: [Data model: `maintenance_policy` and `maintenance_state`](https://
 
 ## Detect lag before it hurts
 
-A queue finishes far more tasks each day than the terminal cleanup can delete in its bounded passes.
+A queue finishes about two million tasks a day. At 03:00 the daily history pass releases a whole day
+of them, so two million tasks become eligible for cleanup at once.
 
-1. **Each pass deletes its limit** and stops, even though more rows have expired.
-2. **The backlog of expired rows grows** from day to day, and so do the tables.
-3. **Queue health reports retention lag** for that category, once the oldest eligible row has waited
-   too long.
+1. **At 03:01** a terminal cleanup pass runs. Every batch fills, so the pass repeats batches until its
+   time budget runs out. Eligible tasks remain, so it records that a backlog began.
+2. **At the next offer** the follow-up pass runs. While a backlog is recorded, the next pass is due
+   seconds after the last one rather than after the full cleanup interval.
+3. **When a pass ends with a batch that is not full**, cleanup has caught up. It clears the backlog
+   record, and the configured interval applies again.
+4. **If completions outrun even that pace**, the backlog record stays set from pass to pass. The
+   oldest eligible task keeps aging. Once it has waited too long, queue health reports retention lag.
+
+Full-tier and fast-tier tasks share every batch. A backlog in one tier therefore cannot keep the
+other tier's tasks from being deleted.
 
 Cleanup that silently stalls becomes a full disk weeks later. Cleanup is bounded on purpose: a
 limited number of tasks, partitions, and rows per pass. If the incoming rate outruns it, tables
-grow. This shows up as retention lag in queue health rather than as a stall. The fix is usually a
-shorter window rather than a bigger batch.
+grow. This shows up in queue health rather than as a stall: first as the backlog record, then as
+retention lag. The fix is usually a shorter window rather than a bigger batch.
 
 `queue.health` budgets exactly this. A stalled statistics rollup, late retention, or a missing
 history partition each produces a `status.reasons` entry with a stable code. Health also reports
@@ -507,7 +516,19 @@ Lag differs by category:
 | Rows in default partitions | `default-history-rows`        | Degraded |
 | Missing history partition  | `missing-history-partitions`  | Critical |
 
-More detail: [Task lifecycle: Retention health](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#retention-health).
+**Terminal cleanup pace**
+
+- `terminal_task_prune_limit` bounds each batch. The `terminal_tasks` phase repeats batches while
+  each one fills, for at most one second per pass.
+- A pass whose last batch filled sets `maintenance_state.terminal_cleanup_backlog_since`, or keeps
+  its earlier value. The next pass is then due five seconds after the last completion, or after
+  `terminal_cleanup_interval_ms` when that is shorter.
+- A successful pass that ends without a full batch clears the column.
+- The `queue_health_v1` document reports the column as `terminal_cleanup_backlog_since`. Go,
+  Python, Rust, and Ruby return that key. TypeScript `Queue.health()` does not map it yet.
+- Each `terminal_storage` row in `maintenance_run` records the rows its pass deleted.
+
+More detail: [Task lifecycle: Retention health](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#retention-health) and [Task lifecycle: Background routines](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#background-routines).
 
 </details>
 

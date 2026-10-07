@@ -1913,6 +1913,10 @@ CREATE TABLE IF NOT EXISTS workhorse.maintenance_state (
   history_retained_before timestamptz,
   terminal_prune_dependency_starved boolean NOT NULL DEFAULT false,
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  -- Terminal cleanup alternates which tier goes first in each batch, and records when its passes
+  -- started ending with a full batch.
+  terminal_prune_fast_first boolean NOT NULL DEFAULT false,
+  terminal_cleanup_backlog_since timestamptz,
   CHECK (
     (routine_name = 'history_retention')
     OR (last_completed_local_date IS NULL AND history_retained_before IS NULL)
@@ -3461,7 +3465,10 @@ BEGIN
                (SELECT COALESCE(jsonb_agg(to_jsonb(b.*) ORDER BY b.budget_name), '[]'::jsonb)
                   FROM budget_policies b) AS budget_policies,
                (SELECT jsonb_agg(to_jsonb(p.*) ORDER BY p.starts_at)
-                  FROM partition_days p) AS history_partition_days
+                  FROM partition_days p) AS history_partition_days,
+               -- Set while terminal cleanup ends its passes with a full batch, so it is behind.
+               (SELECT terminal_cleanup_backlog_since FROM workhorse.maintenance_state
+                 WHERE routine_name = 'terminal_storage') AS terminal_cleanup_backlog_since
           FROM installed
           CROSS JOIN depth
           CROSS JOIN terminal
@@ -13805,24 +13812,21 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.prune_terminal_tasks_v1(
+-- One full-tier batch of terminal cleanup. It reports whether it deleted nothing while its locked
+-- candidate window held a prerequisite that a dependency edge protects.
+CREATE OR REPLACE FUNCTION workhorse.prune_full_terminal_tasks_internal_v1(
   p_identity_before timestamptz, p_outcome_before timestamptz,
   p_history_before timestamptz, p_limit integer
-) RETURNS integer
+) RETURNS TABLE (pruned integer, dependency_starved boolean)
 LANGUAGE plpgsql
 AS $$
-DECLARE
-  v_count integer;
-  v_fast_count integer;
-  v_fast_before timestamptz := p_history_before;
 BEGIN
-  IF p_identity_before IS NULL OR p_outcome_before IS NULL OR p_history_before IS NULL
-     OR NOT isfinite(p_identity_before) OR NOT isfinite(p_outcome_before)
-     OR NOT isfinite(p_history_before) THEN
-    RAISE EXCEPTION 'identity, outcome, and history cutoffs are required';
+  IF p_limit < 1 THEN
+    pruned := 0;
+    dependency_starved := NULL;
+    RETURN NEXT;
+    RETURN;
   END IF;
-  IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 100000 THEN RAISE EXCEPTION 'terminal task limit must be between 1 and 100000'; END IF;
-
   WITH candidate_window AS MATERIALIZED (
     SELECT task.id, outcome.finished_at
       FROM workhorse.task task
@@ -13886,19 +13890,87 @@ BEGIN
                  ON dependency.prerequisite_task_id = candidate.id
            ) AS dependency_starved
       FROM deleted
-  ), recorded AS (
-    UPDATE workhorse.maintenance_state state
-       SET terminal_prune_dependency_starved = result.dependency_starved,
-           updated_at = clock_timestamp()
-      FROM result
-     WHERE state.routine_name = 'terminal_storage'
-    RETURNING result.pruned
   )
-  SELECT pruned INTO STRICT v_count FROM recorded;
+  SELECT result.pruned, result.dependency_starved INTO STRICT pruned, dependency_starved
+    FROM result;
+  RETURN NEXT;
+END;
+$$;
 
-  -- Fast-tier outcomes share the batch. No fast task is a prerequisite or a child, and its history
-  -- rows exist only when the queue opted in, so their absence stands in for history_through_at.
-  -- The outcome row is the task's archived history, so while cold export is on it also waits for
+-- One fast-tier batch of terminal cleanup. No fast task is a prerequisite or a child, and its history
+-- rows exist only when the queue opted in, so their absence stands in for history_through_at.
+CREATE OR REPLACE FUNCTION workhorse.prune_fast_terminal_tasks_internal_v1(
+  p_identity_before timestamptz, p_outcome_before timestamptz,
+  p_fast_before timestamptz, p_limit integer
+) RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE v_count integer;
+BEGIN
+  IF p_limit < 1 THEN RETURN 0; END IF;
+  WITH candidates AS MATERIALIZED (
+    SELECT task.id
+      FROM workhorse.fast_task_outcome outcome
+      JOIN workhorse.task task ON task.id = outcome.task_id
+     WHERE outcome.finished_at < p_outcome_before
+       AND outcome.finished_at < p_fast_before
+       AND task.created_at < p_identity_before
+       AND NOT EXISTS (SELECT 1 FROM workhorse.task_event event WHERE event.task_id = task.id)
+       AND NOT EXISTS (
+             SELECT 1 FROM workhorse.attempt_history attempt WHERE attempt.task_id = task.id
+           )
+       AND NOT EXISTS (
+             SELECT 1 FROM workhorse.schedule_occurrence occurrence
+              WHERE occurrence.task_id = task.id
+           )
+       AND NOT EXISTS (
+             SELECT 1 FROM workhorse.enqueue_idempotency idempotency
+              WHERE idempotency.task_id = task.id
+           )
+       AND NOT EXISTS (
+             SELECT 1 FROM workhorse.task_redrive redrive
+              WHERE redrive.source_task_id = task.id
+           )
+     ORDER BY outcome.finished_at, outcome.task_id
+     FOR UPDATE OF task SKIP LOCKED
+     LIMIT p_limit
+  )
+  DELETE FROM workhorse.task task USING candidates WHERE task.id = candidates.id;
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$$;
+
+-- The full and fast tiers share each batch. The tier that goes first gets half the limit, rounded
+-- up, and the other tier gets the rest. A share one tier cannot use goes to the other tier, so a
+-- batch fills whenever either tier has enough eligible rows. The first tier alternates on every
+-- call, so even a limit of 1 serves both tiers and neither tier's backlog can starve the other.
+CREATE OR REPLACE FUNCTION workhorse.prune_terminal_tasks_v1(
+  p_identity_before timestamptz, p_outcome_before timestamptz,
+  p_history_before timestamptz, p_limit integer
+) RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_fast_first boolean;
+  v_first_share integer := (p_limit + 1) / 2;
+  v_full integer := 0;
+  v_fast integer := 0;
+  v_pruned integer;
+  v_starved boolean;
+  v_fast_before timestamptz := p_history_before;
+BEGIN
+  IF p_identity_before IS NULL OR p_outcome_before IS NULL OR p_history_before IS NULL
+     OR NOT isfinite(p_identity_before) OR NOT isfinite(p_outcome_before)
+     OR NOT isfinite(p_history_before) THEN
+    RAISE EXCEPTION 'identity, outcome, and history cutoffs are required';
+  END IF;
+  IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 100000 THEN RAISE EXCEPTION 'terminal task limit must be between 1 and 100000'; END IF;
+
+  SELECT terminal_prune_fast_first INTO STRICT v_fast_first
+    FROM workhorse.maintenance_state WHERE routine_name = 'terminal_storage' FOR UPDATE;
+
+  -- The outcome row is a fast task's archived history, so while cold export is on it also waits for
   -- the fast_task_outcome export to pass its close time.
   IF EXISTS (SELECT 1 FROM workhorse.cold_export_policy policy WHERE policy.singleton AND policy.enabled) THEN
     SELECT LEAST(v_fast_before, COALESCE(
@@ -13907,39 +13979,44 @@ BEGIN
              timestamp '2000-01-01' AT TIME ZONE 'UTC'))
       INTO v_fast_before;
   END IF;
-  IF v_count < p_limit THEN
-    WITH candidates AS MATERIALIZED (
-      SELECT task.id
-        FROM workhorse.fast_task_outcome outcome
-        JOIN workhorse.task task ON task.id = outcome.task_id
-       WHERE outcome.finished_at < p_outcome_before
-         AND outcome.finished_at < v_fast_before
-         AND task.created_at < p_identity_before
-         AND NOT EXISTS (SELECT 1 FROM workhorse.task_event event WHERE event.task_id = task.id)
-         AND NOT EXISTS (
-               SELECT 1 FROM workhorse.attempt_history attempt WHERE attempt.task_id = task.id
-             )
-         AND NOT EXISTS (
-               SELECT 1 FROM workhorse.schedule_occurrence occurrence
-                WHERE occurrence.task_id = task.id
-             )
-         AND NOT EXISTS (
-               SELECT 1 FROM workhorse.enqueue_idempotency idempotency
-                WHERE idempotency.task_id = task.id
-             )
-         AND NOT EXISTS (
-               SELECT 1 FROM workhorse.task_redrive redrive
-                WHERE redrive.source_task_id = task.id
-             )
-       ORDER BY outcome.finished_at, outcome.task_id
-       FOR UPDATE OF task SKIP LOCKED
-       LIMIT p_limit - v_count
-    )
-    DELETE FROM workhorse.task task USING candidates WHERE task.id = candidates.id;
-    GET DIAGNOSTICS v_fast_count = ROW_COUNT;
-    v_count := v_count + v_fast_count;
+
+  IF v_fast_first THEN
+    v_fast := workhorse.prune_fast_terminal_tasks_internal_v1(
+      p_identity_before, p_outcome_before, v_fast_before, v_first_share
+    );
+    SELECT pruned, dependency_starved INTO STRICT v_full, v_starved
+      FROM workhorse.prune_full_terminal_tasks_internal_v1(
+        p_identity_before, p_outcome_before, p_history_before, p_limit - v_fast
+      );
+    IF v_fast = v_first_share AND v_fast + v_full < p_limit THEN
+      v_fast := v_fast + workhorse.prune_fast_terminal_tasks_internal_v1(
+        p_identity_before, p_outcome_before, v_fast_before, p_limit - v_fast - v_full
+      );
+    END IF;
+  ELSE
+    SELECT pruned, dependency_starved INTO STRICT v_full, v_starved
+      FROM workhorse.prune_full_terminal_tasks_internal_v1(
+        p_identity_before, p_outcome_before, p_history_before, v_first_share
+      );
+    v_fast := workhorse.prune_fast_terminal_tasks_internal_v1(
+      p_identity_before, p_outcome_before, v_fast_before, p_limit - v_full
+    );
+    IF v_full = v_first_share AND v_full + v_fast < p_limit THEN
+      SELECT pruned INTO STRICT v_pruned
+        FROM workhorse.prune_full_terminal_tasks_internal_v1(
+          p_identity_before, p_outcome_before, p_history_before, p_limit - v_full - v_fast
+        );
+      v_full := v_full + v_pruned;
+    END IF;
   END IF;
-  RETURN v_count;
+
+  -- A full tier that got no share this call did not look at its window, so the flag keeps its value.
+  UPDATE workhorse.maintenance_state
+     SET terminal_prune_fast_first = NOT v_fast_first,
+         terminal_prune_dependency_starved = COALESCE(v_starved, terminal_prune_dependency_starved),
+         updated_at = clock_timestamp()
+   WHERE routine_name = 'terminal_storage';
+  RETURN v_full + v_fast;
 END;
 $$;
 
@@ -15063,6 +15140,8 @@ DECLARE v_run_started_at timestamptz;
 DECLARE v_run_completed_at timestamptz;
 DECLARE v_rows_affected integer := 0;
 DECLARE v_phases jsonb := '[]'::jsonb;
+DECLARE v_batch integer;
+DECLARE v_backlog boolean := false;
 BEGIN
   IF p_now IS NULL OR NOT isfinite(p_now) THEN RAISE EXCEPTION 'maintenance time is required'; END IF;
   IF NOT pg_try_advisory_xact_lock(
@@ -15078,9 +15157,13 @@ BEGIN
   SELECT * INTO STRICT v_maintenance FROM workhorse.maintenance_policy WHERE singleton;
   SELECT * INTO STRICT v_state FROM workhorse.maintenance_state
    WHERE routine_name = 'terminal_storage' FOR UPDATE;
+  -- A pass that ended with a full batch left eligible rows behind. The follow-up pass is due five
+  -- seconds later, or after the configured interval when that is shorter, instead of a full interval.
   IF NOT p_force AND v_state.last_completed_at IS NOT NULL
      AND v_state.last_completed_at > p_now - make_interval(
-       secs => v_maintenance.terminal_cleanup_interval_ms / 1000.0
+       secs => CASE WHEN v_state.terminal_cleanup_backlog_since IS NULL
+         THEN v_maintenance.terminal_cleanup_interval_ms
+         ELSE LEAST(v_maintenance.terminal_cleanup_interval_ms, 5000) END / 1000.0
      ) THEN
     RETURN;
   END IF;
@@ -15099,6 +15182,7 @@ BEGIN
     rows_affected := workhorse.prune_enqueue_idempotency_v1(
       p_now, v_policy.terminal_task_prune_limit
     );
+    v_backlog := v_backlog OR rows_affected >= v_policy.terminal_task_prune_limit;
   EXCEPTION WHEN OTHERS THEN
     error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
     v_success := false;
@@ -15121,6 +15205,7 @@ BEGIN
     rows_affected := workhorse.prune_released_dependencies_v1(
       v_policy.terminal_task_prune_limit
     );
+    v_backlog := v_backlog OR rows_affected >= v_policy.terminal_task_prune_limit;
   EXCEPTION WHEN OTHERS THEN
     error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
     v_success := false;
@@ -15143,12 +15228,20 @@ BEGIN
     IF v_policy.task_identity_retention_days IS NOT NULL AND v_history_before IS NOT NULL THEN
       v_identity_before := p_now - make_interval(days => v_policy.task_identity_retention_days);
       v_outcome_before := p_now - make_interval(days => v_policy.terminal_outcome_retention_days);
-      rows_affected := workhorse.prune_terminal_tasks_v1(
-        v_identity_before,
-        v_outcome_before,
-        v_history_before,
-        v_policy.terminal_task_prune_limit
-      );
+      -- Batches repeat while each one fills, until the phase has run for one second. The time
+      -- budget bounds how long one pass holds its transaction, whatever the batch limit.
+      LOOP
+        v_batch := workhorse.prune_terminal_tasks_v1(
+          v_identity_before,
+          v_outcome_before,
+          v_history_before,
+          v_policy.terminal_task_prune_limit
+        );
+        rows_affected := rows_affected + v_batch;
+        EXIT WHEN v_batch < v_policy.terminal_task_prune_limit
+          OR clock_timestamp() - v_started_at >= interval '1 second';
+      END LOOP;
+      v_backlog := v_backlog OR v_batch >= v_policy.terminal_task_prune_limit;
     ELSE
       UPDATE workhorse.maintenance_state
          SET terminal_prune_dependency_starved = false,
@@ -15156,6 +15249,8 @@ BEGIN
        WHERE routine_name = 'terminal_storage';
     END IF;
   EXCEPTION WHEN OTHERS THEN
+    -- The subtransaction rolled back every batch of this phase.
+    rows_affected := 0;
     error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
     v_success := false;
   END;
@@ -15167,6 +15262,16 @@ BEGIN
     'phase', phase, 'rowsAffected', rows_affected, 'durationMs', duration_ms,
     'error', error
   ));
+  -- The backlog start survives follow-up passes that still fill a batch. A phase that reached its
+  -- limit shows a backlog even when another phase failed. Only a pass whose every phase succeeded
+  -- can show that cleanup caught up, so only such a pass clears the start.
+  UPDATE workhorse.maintenance_state
+     SET terminal_cleanup_backlog_since = CASE
+           WHEN v_backlog THEN COALESCE(terminal_cleanup_backlog_since, p_now)
+           WHEN v_success THEN NULL
+           ELSE terminal_cleanup_backlog_since END,
+         updated_at = clock_timestamp()
+   WHERE routine_name = 'terminal_storage';
   v_run_completed_at := clock_timestamp();
   IF v_success THEN
     UPDATE workhorse.maintenance_state
@@ -19606,10 +19711,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (53, 'distinguish a single-child rename from a second child'),
   (54, 'fail durable replay conflicts without retrying'),
   (55, 'count row retention lag from the history pass that released the row'),
-  (56, 'close a released task without attributing its unrun attempt')
+  (56, 'close a released task without attributing its unrun attempt'),
+  (57, 'let terminal cleanup keep pace and share its budget across tiers')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (56) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (57) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

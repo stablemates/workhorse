@@ -6,7 +6,7 @@ other SDKs carry, because every tag names one release of all of them.
 ## Unreleased
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **56**, and the SDK compatibility floor is schema version **54**.
+The final schema version is **57**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.
@@ -37,6 +37,8 @@ Migration 0057 (`0057-close-a-released-task-without-attributing-its-unrun-attemp
 `Dashboard` refuses an RPC body over 2 MiB, or a malformed declared length, with `413` before parsing.
 An unexpected schema-compatibility failure, such as a connection error, now answers a generic `503` and is
 written to `rack.errors` instead of escaping the Rack app (SM-1168).
+
+Migration 0058 (`0058-let-terminal-cleanup-keep-pace-and-share-its-budget-across-tiers.sql`) changes `prune_terminal_tasks_v1`, `prune_terminal_storage_v1`, and `queue_health_v1`, and adds two `maintenance_state` columns. Terminal cleanup repeats its batch while each one fills, for up to one second per pass, and a pass that still ends with a full batch makes its follow-up due five seconds later instead of after the five-minute interval. Full-tier and fast-tier tasks share every batch, so neither tier starves the other. The health document reports `terminal_cleanup_backlog_since` while cleanup is behind (SM-1160).
 
 ## 0.6.1 — 2026-10-02
 

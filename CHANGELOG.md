@@ -24,7 +24,7 @@ The optional `@stablemates/workhorse-knex` adapter preserves native PostgreSQL s
 The tested Objection recipe shares the model-write transaction with enqueue. Callers retain transaction and resource ownership (SM-1118).
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **56**, and the SDK compatibility floor is schema version **54**.
+The final schema version is **57**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.
@@ -81,6 +81,8 @@ destroys its connection. Checkpoint and progress writes reject `NaN` and the inf
 depth with a `TypeError`, because JSON would store them as `null`. Worker intervals and the metrics
 observer's `intervalMs` reject values above 2,147,483,647 ms, which Node's timers would run every
 millisecond. `ChildTaskOptions` is now exported from the package root (SM-1169).
+
+Migration 0058 (`0058-let-terminal-cleanup-keep-pace-and-share-its-budget-across-tiers.sql`) changes `prune_terminal_tasks_v1`, `prune_terminal_storage_v1`, and `queue_health_v1`, and adds two `maintenance_state` columns. Terminal cleanup repeats its batch while each one fills, for up to one second per pass, and a pass that still ends with a full batch makes its follow-up due five seconds later instead of after the five-minute interval. Full-tier and fast-tier tasks share every batch, so neither tier starves the other. The health document reports `terminal_cleanup_backlog_since` while cleanup is behind (SM-1160).
 
 ## 0.6.1 — 2026-10-02
 

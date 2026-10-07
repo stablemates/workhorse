@@ -404,6 +404,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "close a released task without attributing its unrun attempt",
     kind: "additive",
   },
+  {
+    fromVersion: 56,
+    toVersion: 57,
+    file: "0058-let-terminal-cleanup-keep-pace-and-share-its-budget-across-tiers.sql",
+    description: "let terminal cleanup keep pace and share its budget across tiers",
+    kind: "additive",
+  },
 ];
 
 /**
