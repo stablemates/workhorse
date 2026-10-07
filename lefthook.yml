@@ -64,6 +64,15 @@ pre-commit:
                 - name: check typeorm types
                   glob: "typescript/typeorm/**"
                   run: mise exec -- pnpm --filter @stablemates/workhorse-typeorm typecheck
+                - name: check knex types
+                  glob: "typescript/knex/**"
+                  run: mise exec -- pnpm --filter @stablemates/workhorse-knex typecheck
+                - name: check otel types
+                  glob: "typescript/otel/**"
+                  run: mise exec -- pnpm --filter @stablemates/workhorse-otel typecheck
+                - name: check dashboard app types
+                  glob: "dashboard/app/**"
+                  run: mise exec -- pnpm --filter @stablemates/workhorse-dashboard-app typecheck
           - name: check dashboard contract types
             glob: "typescript/dashboard-contract/**"
             run: mise exec -- pnpm --filter @stablemates/workhorse-dashboard-contract typecheck
