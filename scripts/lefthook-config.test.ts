@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmod, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -11,7 +11,11 @@ interface Job {
   readonly name?: string;
   readonly glob?: string;
   readonly run?: string;
-  readonly group?: { readonly parallel?: boolean; readonly jobs: readonly Job[] };
+  readonly group?: {
+    readonly parallel?: boolean;
+    readonly piped?: boolean;
+    readonly jobs: readonly Job[];
+  };
 }
 interface Hook {
   readonly piped?: boolean;
@@ -66,6 +70,48 @@ describe("lefthook pre-commit ordering", () => {
     expect(apiCheck).toBeDefined();
     expect(build?.glob).toBe(apiCheck?.glob);
     expect(checks?.group?.jobs.some((job) => job.run?.includes("build:runtime"))).toBe(false);
+  });
+});
+
+// Package name to `typecheck` script, for every workspace package under `typescript/`.
+const packageTypecheckScripts = new Map<string, string | undefined>();
+for (const entry of await readdir(path.resolve(import.meta.dirname, "../typescript"), {
+  withFileTypes: true,
+})) {
+  if (!entry.isDirectory()) continue;
+  const manifest = path.resolve(import.meta.dirname, "../typescript", entry.name, "package.json");
+  const contents = await readFile(manifest, "utf8").catch(() => undefined);
+  if (contents === undefined) continue;
+  const { name, scripts } = JSON.parse(contents) as {
+    name: string;
+    scripts?: Record<string, string>;
+  };
+  packageTypecheckScripts.set(name, scripts?.typecheck);
+}
+
+// The `typecheck` script a job runs through `pnpm --filter <package> typecheck`.
+function typecheckScript(job: Job): string | undefined {
+  const name = /^mise exec -- pnpm --filter (\S+) typecheck$/.exec(job.run ?? "")?.[1];
+  return name === undefined ? undefined : packageTypecheckScripts.get(name);
+}
+
+describe("lefthook package type checks", () => {
+  const checks = hooks["pre-commit"]!.jobs[1]!.group!;
+  const packageGroup = checks.jobs.find((job) => job.name === "check TypeScript package types");
+
+  it("builds referenced projects, so a worktree without .build/ passes", () => {
+    const jobs = packageGroup?.group?.jobs ?? [];
+    expect(jobs.length).toBeGreaterThan(0);
+    // `tsc -p` reads the outputs of referenced projects but never builds them.
+    expect(jobs.filter((job) => !typecheckScript(job)?.startsWith("tsc -b "))).toEqual([]);
+  });
+
+  it("runs every `tsc -b` package check one at a time", () => {
+    // The builds share referenced projects in .build/typecheck, so parallel runs would write the
+    // same declaration files together.
+    expect(packageGroup?.group?.parallel).toBeUndefined();
+    expect(packageGroup?.group?.piped).toBeUndefined();
+    expect(checks.jobs.filter((job) => typecheckScript(job)?.startsWith("tsc -b "))).toEqual([]);
   });
 });
 
