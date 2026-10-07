@@ -50,6 +50,7 @@ import type {
   LeaseLossRuntimeFixture,
   MaintenancePhaseErrorRuntimeFixture,
   MissingHandlerRuntimeFixture,
+  OversizedResultRuntimeFixture,
   PollCadenceRuntimeFixture,
   SlotRefillRuntimeFixture,
   RuntimeFunctionInjection,
@@ -878,6 +879,47 @@ async function executeJsonRoundTripRuntimeFixture(
   await expectAttemptOutcome(database, id, fixture.expectedAttemptOutcome);
 }
 
+async function executeOversizedResultRuntimeFixture(
+  queue: Queue,
+  admin: Admin,
+  fixture: OversizedResultRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  if (fixture.tier === "fast") {
+    await admin.setQueueTier(queueName, "fast", {
+      actor: "runtime-fixture",
+      reason: fixture.id,
+      requestId: fixture.id,
+    });
+  }
+  const id = await queue.enqueue(fixture.taskType, fixture.oversizedZeros, {
+    queue: queueName,
+    maxAttempts: fixture.maxAttempts,
+    retryPolicy: { type: "fixed", delayMs: 0 },
+  });
+  const worker = new Worker(queue, {
+    workerId: `runtime-${fixture.id}`,
+    queue: queueName,
+    registryIntervalMs: 0,
+  }).handle(fixture.taskType, async (zeros) => Array.from({ length: zeros as number }, () => 0));
+
+  for (let pass = 0; pass < fixture.maxAttempts; pass += 1) {
+    if ((await admin.getTask(id))?.state === fixture.expectedSettled.state) break;
+    await expect(worker.runOnce()).resolves.toBe(true);
+  }
+  await expect(admin.getTask(id)).resolves.toMatchObject({
+    state: fixture.expectedSettled.state,
+    currentAttempt: fixture.expectedSettled.attempt,
+    error: { name: fixture.expectedErrorNames.typescript },
+  });
+  const fitting = await queue.enqueue(fixture.taskType, fixture.fittingZeros, { queue: queueName });
+  await expect(worker.runOnce()).resolves.toBe(true);
+  await expect(admin.getTask(fitting)).resolves.toMatchObject({
+    state: fixture.expectedFitting.state,
+    currentAttempt: fixture.expectedFitting.attempt,
+  });
+}
+
 /**
  * Replaces one installed function with a raising body for the duration of `observe`, and restores
  * the definition the database reports afterwards, whatever `observe` does.
@@ -1364,6 +1406,9 @@ describe("SQL protocol conformance fixtures", () => {
             break;
           case "json-round-trip":
             await executeJsonRoundTripRuntimeFixture(queue, admin, runtimeDatabase.pool, fixture);
+            break;
+          case "oversized-result":
+            await executeOversizedResultRuntimeFixture(queue, admin, fixture);
             break;
           case "heartbeat-failure":
             await executeHeartbeatFailureRuntimeFixture(

@@ -83,7 +83,8 @@
     "json-value-round-trip",
     "heartbeat-failure-tolerance",
     "maintenance-phase-resilience",
-    "terminal-replay-conflict"
+    "terminal-replay-conflict",
+    "result-size-limit"
   ],
   "functions": [
     {

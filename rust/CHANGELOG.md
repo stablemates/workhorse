@@ -42,6 +42,13 @@ options; to record a fixed actor, return a `Principal` with that `actor` from `a
 
 Migration 0057 (`0057-close-a-released-task-without-attributing-its-unrun-attempt.sql`) changes only `cancel_v1` and `terminalize_deadline_v1`. A full-tier task that a worker without a handler returned through `release_owned_v1` can now be canceled, and deadline recovery terminalizes it instead of rolling back the whole recovery pass. Both close it like never-started work, with no attempt history row (SM-1158).
 
+The worker now measures a handler result as PostgreSQL measures it, `octet_length` of its jsonb
+text, before it sends the completion. A result over the task's `result_max_bytes` fails its attempt
+with `TaskValueSizeLimitError` on both tiers, and the task's retry policy and the worker's
+`retry_delay` apply. Before, `complete_v1` raised, which left a full-tier task active until lease
+recovery. The fast tier's batched completion failed the attempt in PostgreSQL, which skipped
+`retry_delay` (SM-1159).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

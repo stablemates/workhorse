@@ -10,6 +10,7 @@ mod handler;
 mod heartbeat;
 mod notifications;
 mod process;
+mod value_size;
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;

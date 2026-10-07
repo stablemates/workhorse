@@ -12,6 +12,7 @@ use tracing::Instrument;
 
 use super::handler::{ErasedHandler, HandlerResult};
 use super::heartbeat::Beat;
+use super::value_size::jsonb_text_bytes;
 use super::{exactly_one, lock, millis_i32, sql, ActiveSlot, Inner, OwnershipStatus};
 use crate::fenced_write::fenced_rows;
 use crate::telemetry::{self, Attribute, Counter, Histogram};
@@ -312,6 +313,16 @@ impl Inner {
                 task.task_type
             );
             return self.fail_with_state(task, HandlerError::new(message)).await;
+        }
+        if let Some(limit) = task.result_max_bytes {
+            // PostgreSQL would refuse the completion, which ends the settlement rather than the
+            // attempt and leaves the task active until lease recovery.
+            if jsonb_text_bytes(&result) > usize::try_from(limit).unwrap_or(0) {
+                let message =
+                    format!("{} result exceeds its configured size limit", task.task_type);
+                let error = HandlerError::named("TaskValueSizeLimitError", message);
+                return self.fail_with_state(task, error).await;
+            }
         }
         let accepted = if task.fast_tier {
             self.complete_fast(task, result, slot).await?

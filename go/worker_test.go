@@ -97,6 +97,12 @@ type workerRuntimeFixture struct {
 	ExpectedClaimLimits                  []int                             `json:"expectedClaimLimits"`
 	ExpectedOverlappingClaims            int                               `json:"expectedOverlappingClaims"`
 	ExpectedMaximumClaimsPerTask         float64                           `json:"expectedMaximumClaimsPerTask"`
+	Tier                                 string                            `json:"tier"`
+	OversizedZeros                       int                               `json:"oversizedZeros"`
+	FittingZeros                         int                               `json:"fittingZeros"`
+	ExpectedSettled                      workerFixtureTaskState            `json:"expectedSettled"`
+	ExpectedErrorNames                   map[string]string                 `json:"expectedErrorNames"`
+	ExpectedFitting                      workerFixtureTaskState            `json:"expectedFitting"`
 }
 
 // workerFixtureInjection replaces one installed function with a raising body, so a fixture can

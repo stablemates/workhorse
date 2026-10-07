@@ -73,6 +73,7 @@ module Conformance
       when "budget-admission-race" then budget_race(fixture)
       when "missing-handler" then missing_handler(fixture)
       when "json-round-trip" then json_round_trip(fixture)
+      when "oversized-result" then oversized_result(fixture)
       when "heartbeat-failure" then heartbeat_failure(fixture)
       when "maintenance-phase-error" then maintenance_phase_error(fixture)
       when "suspension-replay" then suspension_replay(fixture)
@@ -653,6 +654,38 @@ module Conformance
       check(result == payload, "the stored result is #{Matcher.render(result)}")
       expect_state(task_id, fixture["expectedState"])
       expect_outcomes(task_id, [fixture["expectedAttemptOutcome"]])
+    end
+
+    # The handler returns an array of zeros, whose jsonb text is longer than its compact JSON. One
+    # pass may also run the immediate retry, so the runner passes until the task settles.
+    def oversized_result(fixture)
+      name = queue_name(fixture)
+      if fixture["tier"] == "fast"
+        value(W::SqlCatalogue::SET_QUEUE_TIER_V1, name, "fast", "runtime-fixture", fixture["id"])
+      end
+      admin = W::Admin.new(@connection)
+      task_id = queue.enqueue(fixture["taskType"], fixture["oversizedZeros"], queue: name,
+        max_attempts: fixture["maxAttempts"], retry_policy: {"type" => "fixed", "delayMs" => 0}).task_id
+      settled = fixture.fetch("expectedSettled")
+      error_name = fixture.dig("expectedErrorNames", "ruby")
+      with_pool do |pool|
+        subject = worker(pool, fixture).handle(fixture["taskType"]) { |zeros| Array.new(zeros, 0) }
+        fixture["maxAttempts"].times do
+          break if admin.get_task(task_id).state.to_s == settled["state"]
+          check(subject.run_once == true, "the worker did not run the oversized task")
+        end
+        task = admin.get_task(task_id)
+        check(task.state.to_s == settled["state"] && task.current_attempt == settled["attempt"] &&
+          task.error&.fetch("name", nil) == error_name,
+          "the oversized task is #{task.state}/#{task.current_attempt} with error #{Matcher.render(task.error)}, " \
+          "want #{settled["state"]}/#{settled["attempt"]} with #{error_name}")
+        fitting_id = queue.enqueue(fixture["taskType"], fixture["fittingZeros"], queue: name).task_id
+        check(subject.run_once == true, "the worker did not run the fitting task")
+        fitting = admin.get_task(fitting_id)
+        expected = fixture.fetch("expectedFitting")
+        check(fitting.state.to_s == expected["state"] && fitting.current_attempt == expected["attempt"],
+          "the fitting task is #{fitting.state}/#{fitting.current_attempt}: #{Matcher.render(fitting.error)}")
+      end
     end
 
     def heartbeat_failure(fixture)

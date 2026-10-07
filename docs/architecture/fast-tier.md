@@ -415,9 +415,8 @@ The blast radius therefore differs by tier:
 - `fast_complete_v1` keeps the full tier's behavior: it raises for one oversized result before it
   calls `fast_complete_many_v1`.
 
-The TypeScript, Go, Python, and Ruby workers measure results before they call, so they reach this
-path only through a bug. The Rust worker does not measure results, so for it this path is the
-enforcement.
+The TypeScript, Go, Python, Ruby, and Rust workers measure results before they call, so they reach
+this path only through a bug.
 
 #### Lock order
 

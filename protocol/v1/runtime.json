@@ -408,5 +408,43 @@
         }
       }
     ]
+  },
+  {
+    "id": "oversized-full-tier-result-fails-through-the-retry-policy",
+    "kind": "oversized-result",
+    "covers": ["result-size-limit"],
+    "taskType": "protocol.oversized-result",
+    "tier": "full",
+    "maxAttempts": 2,
+    "oversizedZeros": 349526,
+    "fittingZeros": 349525,
+    "expectedSettled": { "state": "failed", "attempt": 2 },
+    "expectedErrorNames": {
+      "typescript": "TaskValueSizeLimitError",
+      "python": "TaskValueSizeLimitError",
+      "go": "TaskValueSizeLimitError",
+      "rust": "TaskValueSizeLimitError",
+      "ruby": "Stablemates::Workhorse::ValueSizeLimitError"
+    },
+    "expectedFitting": { "state": "succeeded", "attempt": 1 }
+  },
+  {
+    "id": "oversized-fast-tier-result-fails-through-the-retry-policy",
+    "kind": "oversized-result",
+    "covers": ["result-size-limit"],
+    "taskType": "protocol.oversized-result",
+    "tier": "fast",
+    "maxAttempts": 2,
+    "oversizedZeros": 349526,
+    "fittingZeros": 349525,
+    "expectedSettled": { "state": "failed", "attempt": 2 },
+    "expectedErrorNames": {
+      "typescript": "TaskValueSizeLimitError",
+      "python": "TaskValueSizeLimitError",
+      "go": "TaskValueSizeLimitError",
+      "rust": "TaskValueSizeLimitError",
+      "ruby": "Stablemates::Workhorse::ValueSizeLimitError"
+    },
+    "expectedFitting": { "state": "succeeded", "attempt": 1 }
   }
 ]

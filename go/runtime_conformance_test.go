@@ -78,6 +78,7 @@ func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 		"budget-admission-race":    executeBudgetAdmissionRaceFixture,
 		"missing-handler":          executeWorkerMissingHandlerFixture,
 		"json-round-trip":          executeWorkerJSONRoundTripFixture,
+		"oversized-result":         executeWorkerOversizedResultFixture,
 		"heartbeat-failure":        executeWorkerHeartbeatFailureFixture,
 		"maintenance-phase-error":  executeWorkerMaintenancePhaseErrorFixture,
 	}
@@ -802,6 +803,79 @@ func executeWorkerMissingHandlerFixture(t *testing.T, fixture workerRuntimeFixtu
 		t.Fatalf("unexpected payload %#v", received)
 	}
 	assertWorkerFixtureTaskState(t, ctx, pool, taskID, fixture.ExpectedAfterHandled)
+}
+
+// executeWorkerOversizedResultFixture returns an array of zeros, whose jsonb text is longer than its
+// compact JSON. One pass may also run the immediate retry, so the runner passes until the task
+// settles.
+func executeWorkerOversizedResultFixture(t *testing.T, fixture workerRuntimeFixture) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-oversized-"+fixture.Tier)
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "runtime-" + fixture.ID
+	executor := workhorse.NewPGXExecutor(pool)
+	admin := workhorse.NewAdmin(executor)
+	if fixture.Tier == "fast" {
+		audit := workhorse.AdminAudit{Actor: "runtime-fixture", Reason: fixture.ID, RequestID: fixture.ID}
+		if _, err := admin.SetQueueTier(ctx, queueName, workhorse.QueueTierFast, audit); err != nil {
+			t.Fatal(err)
+		}
+	}
+	queue := workhorse.NewQueue(executor, queueName)
+	taskID, err := queue.Enqueue(ctx, fixture.TaskType, fixture.OversizedZeros, workhorse.EnqueueOptions{
+		MaxAttempts: fixture.MaxAttempts,
+		RetryPolicy: map[string]any{"type": "fixed", "delayMs": 0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-" + fixture.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.Handle(fixture.TaskType, func(_ context.Context, payload any, _ *workhorse.HandlerContext) (any, error) {
+		return make([]int, int(payload.(float64))), nil
+	})
+	snapshot := func(id string) *workhorse.TaskSnapshot {
+		task, err := admin.GetTask(ctx, id)
+		if err != nil || task == nil {
+			t.Fatalf("read task %s: task=%v err=%v", id, task, err)
+		}
+		return task
+	}
+	settled := fixture.ExpectedSettled
+	for pass := 0; pass < fixture.MaxAttempts && string(snapshot(taskID).State) != settled.State; pass++ {
+		if processed, err := worker.RunOnce(ctx); err != nil || !processed {
+			t.Fatalf("pass %d did not process the oversized task: processed=%t err=%v", pass, processed, err)
+		}
+	}
+	task := snapshot(taskID)
+	failure, _ := task.Error.(map[string]any)
+	if string(task.State) != settled.State || task.CurrentAttempt != settled.Attempt ||
+		failure["name"] != fixture.ExpectedErrorNames["go"] {
+		t.Fatalf("the oversized task is %s/%d with error %v, expected %s/%d with %s",
+			task.State, task.CurrentAttempt, task.Error, settled.State, settled.Attempt, fixture.ExpectedErrorNames["go"])
+	}
+
+	fittingID, err := queue.Enqueue(ctx, fixture.TaskType, fixture.FittingZeros)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed, err := worker.RunOnce(ctx); err != nil || !processed {
+		t.Fatalf("the worker did not process the fitting task: processed=%t err=%v", processed, err)
+	}
+	if fitting := snapshot(fittingID); string(fitting.State) != fixture.ExpectedFitting.State ||
+		fitting.CurrentAttempt != fixture.ExpectedFitting.Attempt {
+		t.Fatalf("the fitting task is %s/%d with error %v, expected %s/%d",
+			fitting.State, fitting.CurrentAttempt, fitting.Error, fixture.ExpectedFitting.State, fixture.ExpectedFitting.Attempt)
+	}
 }
 
 func executeWorkerJSONRoundTripFixture(t *testing.T, fixture workerRuntimeFixture) {

@@ -15,8 +15,8 @@ use tokio_postgres::{Client, NoTls};
 use uuid::Uuid;
 use workhorse::policies::{BudgetDefinition, RateLimit, RateLimitPolicyDefinition};
 use workhorse::{
-    BatchItem, BatchOptions, BatchResult, CancelReason, CancelStatus, EnqueueOptions, Error,
-    HandlerContext, HandlerError, Queue, Worker, WorkerOptions,
+    Admin, AdminAudit, BatchItem, BatchOptions, BatchResult, CancelReason, CancelStatus,
+    EnqueueOptions, Error, HandlerContext, HandlerError, Queue, QueueTier, Worker, WorkerOptions,
 };
 
 use super::database::describe;
@@ -65,6 +65,7 @@ pub async fn run_runtime(fixture: &Value) -> Outcome {
             "budget-admission-race" => budget_admission_race(database, fixture).await,
             "missing-handler" => missing_handler(database, fixture).await,
             "json-round-trip" => json_round_trip(database, fixture).await,
+            "oversized-result" => oversized_result(database, fixture).await,
             "heartbeat-failure" => heartbeat_failure(database, fixture).await,
             "maintenance-phase-error" => maintenance_phase_error(database, fixture).await,
             other => Err(format!("the Rust runner does not know runtime kind {other}")),
@@ -1308,6 +1309,63 @@ async fn json_round_trip(database: &ScratchDatabase, fixture: &Value) -> Checked
     })?;
     assert_state(&client, task, &fixture["expectedState"]).await?;
     assert_outcomes(&client, task, &[text(fixture, "expectedAttemptOutcome")]).await
+}
+
+/// A result over the task's size limit fails its attempt through the retry policy. The handler
+/// returns an array of zeros, whose jsonb text is longer than its compact JSON.
+async fn oversized_result(database: &ScratchDatabase, fixture: &Value) -> Checked {
+    let admin = Admin::connect(database.url()).await.map_err(driver)?;
+    if text(fixture, "tier") == "fast" {
+        let audit = AdminAudit {
+            actor: "runtime-fixture".into(),
+            reason: text(fixture, "id").into(),
+            request_id: text(fixture, "id").into(),
+        };
+        admin
+            .set_queue_tier(&queue_name(fixture), QueueTier::Fast, &audit)
+            .await
+            .map_err(driver)?;
+    }
+    let queue = queue(database, fixture).await?;
+    let task_type = text(fixture, "taskType");
+    let retried = EnqueueOptions {
+        max_attempts: i32::try_from(number(fixture, "maxAttempts")).map_err(|e| e.to_string())?,
+        retry_policy: json!({ "type": "fixed", "delayMs": 0 }).as_object().cloned(),
+        ..Default::default()
+    };
+    let oversized = &fixture["oversizedZeros"];
+    let task = queue.enqueue(task_type, oversized, retried).await.map_err(driver)?.task_id;
+    let worker = worker(database, 4, options(fixture))?;
+    worker.handle(task_type, |zeros: usize, _| async move { Ok(json!(vec![0; zeros])) });
+    let settled = &fixture["expectedSettled"];
+    let (want_state, want_attempt) = (text(settled, "state"), number(settled, "attempt"));
+    // One pass may also run the immediate retry, so the runner passes until the task settles.
+    for _ in 0..number(fixture, "maxAttempts") {
+        let snapshot = admin.get_task(task).await.map_err(driver)?.ok_or("the task is gone")?;
+        if snapshot.state.as_str() == want_state {
+            break;
+        }
+        run_once(&worker, true).await?;
+    }
+    let snapshot = admin.get_task(task).await.map_err(driver)?.ok_or("the task is gone")?;
+    let (state, attempt) = (snapshot.state.as_str(), i64::from(snapshot.current_attempt));
+    let name = snapshot.error.as_ref().and_then(|error| error["name"].as_str());
+    let error_name = text(&fixture["expectedErrorNames"], "rust");
+    check(state == want_state && attempt == want_attempt && name == Some(error_name), || {
+        format!(
+            "task {task} is {state}/{attempt} with error {name:?}, \
+             want {want_state}/{want_attempt} with {error_name:?}"
+        )
+    })?;
+    let fitting = &fixture["fittingZeros"];
+    let task = queue.enqueue(task_type, fitting, Default::default()).await.map_err(driver)?.task_id;
+    run_once(&worker, true).await?;
+    let snapshot = admin.get_task(task).await.map_err(driver)?.ok_or("the task is gone")?;
+    let expected = &fixture["expectedFitting"];
+    let (state, attempt) = (snapshot.state.as_str(), i64::from(snapshot.current_attempt));
+    check(state == text(expected, "state") && attempt == number(expected, "attempt"), || {
+        format!("the fitting result left task {task} {state}/{attempt}: {:?}", snapshot.error)
+    })
 }
 
 /// Replaces one installed function with a raising body; the returned definition restores it.

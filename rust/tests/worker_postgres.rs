@@ -1958,3 +1958,50 @@ async fn a_fast_result_holding_nul_fails_only_its_task() {
     harness.make_fast("fast-unstorable").await;
     run_unstorable_results(&harness, "fast-unstorable").await;
 }
+
+/// The default `result_max_bytes`. A result of `n` zeros prints as `3n` bytes of jsonb text but
+/// only `2n + 1` bytes of compact JSON, so these cases also pin which text the worker measures.
+const RESULT_MAX_BYTES: usize = 1_048_576;
+
+/// Runs an oversized result twice and a result exactly at the limit once on `queue`. The oversized
+/// result fails each attempt through the retry policy, and then terminally. The lease outlasts the
+/// test, so only the worker's own settlement can move the task.
+async fn run_oversized_results(harness: &Harness, queue: &str) {
+    let fits = RESULT_MAX_BYTES / 3;
+    let oversized = harness
+        .enqueue("rust.oversized", json!(fits + 1), EnqueueOptions { max_attempts: 2, ..on(queue) })
+        .await;
+    let worker = harness.worker(WorkerOptions {
+        lease_duration: Duration::from_secs(300),
+        retry_delay: Some(Arc::new(|_: i32, _: &ClaimedTask| Some(Duration::ZERO))),
+        ..serving(queue)
+    });
+    worker.handle("rust.oversized", |zeros: usize, _| async move {
+        Ok(Value::Array(vec![json!(0); zeros]))
+    });
+    for (state, attempt) in [(TaskState::Ready, 2), (TaskState::Failed, 2)] {
+        assert!(worker.run_once().await.unwrap());
+        let snapshot = harness.admin.get_task(oversized).await.unwrap().unwrap();
+        assert_eq!((snapshot.state, snapshot.current_attempt), (state, attempt));
+        let error = snapshot.error.expect("the attempt recorded its error");
+        assert_eq!(error["name"], "TaskValueSizeLimitError");
+        assert_eq!(error["message"], "rust.oversized result exceeds its configured size limit");
+    }
+    let at_limit = harness.enqueue("rust.oversized", json!(fits), on(queue)).await;
+    assert!(worker.run_once().await.unwrap());
+    let snapshot = harness.admin.get_task(at_limit).await.unwrap().unwrap();
+    assert_eq!((snapshot.state, snapshot.current_attempt), (TaskState::Succeeded, 1));
+}
+
+#[tokio::test]
+async fn an_oversized_result_fails_its_attempt_through_the_retry_policy() {
+    let Some(harness) = harness("worker_oversized").await else { return };
+    run_oversized_results(&harness, "rust-oversized").await;
+}
+
+#[tokio::test]
+async fn a_fast_oversized_result_fails_its_attempt_through_the_retry_policy() {
+    let Some(harness) = harness("fast_oversized").await else { return };
+    harness.make_fast("fast-oversized").await;
+    run_oversized_results(&harness, "fast-oversized").await;
+}
