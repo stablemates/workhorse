@@ -423,6 +423,101 @@ func TestGoWorkerContinuesTypeScriptTraceAndEmitsStructuredLogs(t *testing.T) {
 	}
 }
 
+type workerContextKey struct{}
+
+func TestGoHandlerSpanDescendsOnlyFromTheTaskTraceContext(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	previousProvider := otel.GetTracerProvider()
+	previousPropagator := otel.GetTextMapPropagator()
+	otel.SetTracerProvider(provider)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previousProvider)
+		otel.SetTextMapPropagator(previousPropagator)
+		_ = provider.Shutdown(context.Background())
+	})
+
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "go-handler-trace-parent")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	queueName := "go-handler-trace-parent"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	untracedID, err := queue.Enqueue(ctx, "trace-parent", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueueContext, enqueueSpan := provider.Tracer("producer").Start(ctx, "producer")
+	tracedID, err := queue.Enqueue(enqueueContext, "trace-parent", nil)
+	enqueueSpan.End()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-trace-parent-worker", LeaseDuration: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerContext, cancel := context.WithCancel(context.WithValue(ctx, workerContextKey{}, "worker value"))
+	defer cancel()
+	workerContext, unrelated := provider.Tracer("unrelated").Start(workerContext, "unrelated")
+	defer unrelated.End()
+	worker.Handle("trace-parent", func(handlerContext context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
+		if got := handlerContext.Value(workerContextKey{}); got != "worker value" {
+			return nil, fmt.Errorf("handler context value is %v", got)
+		}
+		if handlerContext.Done() == nil {
+			return nil, fmt.Errorf("handler context cannot be canceled")
+		}
+		return nil, nil
+	})
+	for {
+		worked, err := worker.RunOnce(workerContext)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !worked {
+			break
+		}
+	}
+
+	handlerSpans := map[string]tracetest.SpanStub{}
+	for _, span := range exporter.GetSpans() {
+		if span.Name != "workhorse.handler" {
+			continue
+		}
+		assertSpanAttribute(t, span.Attributes, "workhorse.handler.outcome", "succeeded")
+		for _, value := range span.Attributes {
+			if value.Key == "workhorse.task.id" {
+				handlerSpans[value.Value.AsString()] = span
+			}
+		}
+	}
+	untraced, ok := handlerSpans[untracedID]
+	if !ok {
+		t.Fatal("worker did not export the untraced task's handler span")
+	}
+	if untraced.Parent.IsValid() {
+		t.Fatalf("untraced handler span has parent %s/%s", untraced.Parent.TraceID(), untraced.Parent.SpanID())
+	}
+	if untraced.SpanContext.TraceID() == unrelated.SpanContext().TraceID() {
+		t.Fatal("untraced handler span joined the worker context's trace")
+	}
+	traced, ok := handlerSpans[tracedID]
+	if !ok {
+		t.Fatal("worker did not export the traced task's handler span")
+	}
+	if traced.Parent.TraceID() != enqueueSpan.SpanContext().TraceID() || traced.Parent.SpanID() != enqueueSpan.SpanContext().SpanID() {
+		t.Fatalf("traced handler span parent is %s/%s, expected %s/%s", traced.Parent.TraceID(), traced.Parent.SpanID(), enqueueSpan.SpanContext().TraceID(), enqueueSpan.SpanContext().SpanID())
+	}
+}
+
 type typeScriptEnqueueTrace struct {
 	TaskID  string `json:"taskId"`
 	TraceID string `json:"traceId"`

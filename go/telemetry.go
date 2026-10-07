@@ -228,7 +228,12 @@ func startHandlerSpan(ctx context.Context, task ClaimedTask) (context.Context, t
 	)
 }
 
+// extractTraceContext returns ctx with the task's stored trace context as its span parent. A task
+// descends only from the trace its enqueue stored, so any span context on ctx is replaced, and a
+// task without a stored context starts a new trace. Cancellation and values on ctx still reach the
+// handler.
 func extractTraceContext(ctx context.Context, stored any) context.Context {
+	ctx = trace.ContextWithSpanContext(ctx, trace.SpanContext{})
 	carrier := propagation.MapCarrier{}
 	switch value := stored.(type) {
 	case map[string]any:

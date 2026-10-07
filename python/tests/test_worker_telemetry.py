@@ -3,8 +3,10 @@ from __future__ import annotations
 
 
 import asyncio
+import contextvars
 import json
 import subprocess
+import threading
 from collections.abc import Iterable, Mapping
 from contextlib import suppress
 from pathlib import Path
@@ -12,6 +14,7 @@ from typing import Any
 
 import psycopg
 import pytest
+import workhorse.worker
 from opentelemetry import metrics, trace
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.sdk._logs import LoggerProvider
@@ -188,6 +191,54 @@ def test_worker_telemetry_matches_the_typescript_contract(database_url: str) -> 
         if record.log_record.event_name == "workhorse.worker.stopped"
     )
     assert stopped.attributes["workhorse.worker.active_slots"] == 0
+
+
+class _ContextThread(threading.Thread):
+    """Run in the starting thread's context, as OpenTelemetry's threading instrumentation does."""
+
+    def start(self) -> None:
+        self._started_context = contextvars.copy_context()
+        super().start()
+
+    def run(self) -> None:
+        self._started_context.run(super().run)
+
+
+def test_a_handler_span_descends_only_from_the_task_trace_context(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    SPAN_EXPORTER.clear()
+    monkeypatch.setattr(workhorse.worker, "Thread", _ContextThread)
+    stored = {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+    with psycopg.connect(database_url) as connection:
+        queue = Queue(connection, "trace-parent")
+        untraced_id = queue.enqueue("trace.parent", {})
+        traced_id = queue.enqueue("trace.parent", {})
+        connection.execute(
+            "UPDATE workhorse.task SET trace_context = %s::jsonb WHERE id = %s",
+            (json.dumps(stored), traced_id),
+        )
+        connection.commit()
+
+    worker = Worker(worker_pool, queue="trace-parent", worker_id="python-trace-parent")
+    worker.handle("trace.parent", lambda _payload, _context: None)
+    with trace.get_tracer("unrelated").start_as_current_span("unrelated") as unrelated:
+        assert worker.run_once() is True
+        while worker.run_once():
+            pass
+
+    handler_spans = {
+        span.attributes["workhorse.task.id"]: span
+        for span in SPAN_EXPORTER.get_finished_spans()
+        if span.name == "workhorse.handler"
+    }
+    untraced = handler_spans[untraced_id]
+    assert untraced.parent is None
+    assert untraced.context.trace_id != unrelated.get_span_context().trace_id
+    traced = handler_spans[traced_id]
+    assert traced.parent is not None
+    assert format(traced.parent.trace_id, "032x") == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert format(traced.parent.span_id, "016x") == "00f067aa0ba902b7"
 
 
 @pytest.mark.asyncio

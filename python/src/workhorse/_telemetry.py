@@ -235,13 +235,18 @@ def start_span(
         yield _NoOpSpan()
         return
     parent = cast(Context | None, parent_context)
+    # A consumer span runs a claimed task, which descends only from the trace its enqueue stored.
+    # A span active where the worker runs is unrelated to the task, so both start from an empty
+    # context, and a task without a stored context starts a new trace.
+    if consumer:
+        parent = Context()
     if isinstance(trace_context, Mapping):
         carrier = {
             key.lower(): value
             for key, value in trace_context.items()
             if isinstance(key, str) and isinstance(value, str)
         }
-        parent = _PROPAGATOR.extract(carrier=carrier)
+        parent = _PROPAGATOR.extract(carrier=carrier, context=Context())
     with _TRACER.start_as_current_span(
         name,
         context=parent,

@@ -49,6 +49,10 @@ it and lease recovery settles the task as before (SM-1164).
 
 Migration 0059 (`0059-close-sql-integrity-gaps-in-rate-refill-dependency-edges-and-mixed-batches.sql`) closes five SQL integrity gaps (SM-1165). A rate synchronization refills each changed bucket at the old rate up to one clock reading, and the new rate applies from that reading. The new `rate_limit_policy_per_key_complete_check` and `budget_rate_complete_check` constraints reject a rate setting with one or two null fields. The migration first clears such a setting, and deletes a budget that the clearing leaves without a limit. An update can no longer change a dependency edge's endpoints or outcome policies. A batch with a debounce or throttle member locks every member's prerequisites before its first member runs. `run_task_now_v1` reports `not_scheduled` for a blocked task instead of raising an error.
 
+**Fixed:** The `workhorse.handler` span descends only from the task's stored trace context. A task
+without one starts a new trace instead of joining a span carried by the worker's context. The
+handler context still carries that context's cancellation and values (SM-1176).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
