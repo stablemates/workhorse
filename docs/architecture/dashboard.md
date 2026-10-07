@@ -205,7 +205,7 @@ ADR 0037 keeps presentation policy out of those backends. The backends return ra
 - `system.status.reasons` returns the database verdict inputs without English checks.
 - Retry buckets use `upperBoundMs`.
 - Worker rows use `lastHeartbeatAt`.
-- Activity returns every group.
+- `activity` returns every group.
 - System queue rows retain database order.
 - `cron.maintenance` returns the maintenance policy, cadences, and routine state instead of
   fabricated schedule rows.
@@ -456,7 +456,9 @@ The tag sample walks `task_created_retention_idx` newest first and returns at mo
 values. No index supports a distinct array scan, so the bound keeps facet latency independent of
 the full task table.
 
-### Activity
+<a id="activity"></a>
+
+### Activity chart
 
 `dashboard_activity_v1(p_input jsonb)` builds the activity chart:
 

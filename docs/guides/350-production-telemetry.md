@@ -209,7 +209,7 @@ explains both public collectors, their instrument sets, and how to avoid duplica
 
 ## Ask business questions by task type and queue
 
-Your team asks which job got slower after Tuesday's release. You group the handler duration
+Your team asks which task type got slower after Tuesday's release. You group the handler duration
 histogram by task type and see that `pdf.render` doubled its runtime. Then you group failures by
 queue and see they all come from `exports`.
 

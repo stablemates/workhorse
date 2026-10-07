@@ -281,3 +281,6 @@ For either documentation layer:
 - Explain what a mechanism is for before explaining how it works. This holds per guide: state the
   purpose once, early, and a later section may be pure mechanism.
 - Give each term one meaning and one part of speech.
+- Use the terms `CONTEXT.md` defines; it is the vocabulary source.
+  `scripts/glossary-avoid-words.test.ts` flags its avoided words under `docs/`, apart from the
+  senses `scripts/glossary-allowlist.json` names.

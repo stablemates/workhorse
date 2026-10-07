@@ -1563,7 +1563,7 @@ Insert-only named JSON results at explicit handler restart boundaries.
 #### Key and write rules
 
 - The primary key `(task_id, checkpoint_name)` makes each name immutable for the stable task
-  identity, so retries can reuse completed steps.
+  identity, so retries can reuse completed checkpoints.
 - `checkpoint_name` holds 1 to 200 characters.
 - `save_checkpoint_v1` locks and verifies the exact active, unexpired worker/fence generation before
   inserting. That serializes the write against completion, failure, and lease recovery.
@@ -1596,8 +1596,9 @@ they write. TypeScript throws a `TypeError`, and Rust returns a `HandlerError`. 
 `serde_json` would store such a number as `null`.
 
 Checkpoints intentionally have no independent retirement path. Deleting a completed name while
-retaining a retryable task could repeat that step. They cascade only when the stable parent task
-identity is deleted, so future task-retention policy must account for checkpoint storage.
+retaining a retryable task could repeat that checkpoint's code. They cascade only when the stable
+parent task identity is deleted, so future task-retention policy must account for checkpoint
+storage.
 
 ### `task_progress`
 
@@ -2437,10 +2438,10 @@ increase monotonically within a session.
 
 Each partitioned relation has a composite primary key over its partition key and record identity:
 `(occurred_at, event_id)` or `(occurred_at, attempt_id)`. The UUID remains the portable identity in
-an archive. The composite key satisfies PostgreSQL's partitioned uniqueness rule.
+an export store. The composite key satisfies PostgreSQL's partitioned uniqueness rule.
 
-`task_event_identity_idx` and `attempt_history_identity_idx` support direct dashboard and archive
-lookups by UUID when the caller does not know the history day.
+`task_event_identity_idx` and `attempt_history_identity_idx` support direct dashboard and
+cold-export lookups by UUID when the caller does not know the history day.
 
 #### Timeline reads
 

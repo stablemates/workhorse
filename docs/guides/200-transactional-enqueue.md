@@ -129,7 +129,7 @@ connection.
 <details>
 <summary>Reference: Python clients and pools</summary>
 
-| Class                      | Takes                                                              |
+| Python client              | Takes                                                              |
 | -------------------------- | ------------------------------------------------------------------ |
 | `Queue`                    | A caller-owned Psycopg connection                                  |
 | `AsyncQueue`               | A Psycopg `AsyncConnection` or an asyncpg `Connection`             |

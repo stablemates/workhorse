@@ -19,7 +19,7 @@ succeeds. This is what each table holds along the way.
    row and inserts a `task_outcome` row with state `succeeded` and the result.
 4. **Afterwards.** The `task` row and the `task_outcome` row stay. Nothing updates either again.
 
-Each table has one job:
+Each table has one purpose:
 
 - **`task`** holds the stable id and the accepted definition: queue, type, payload, attempt budget,
   and policy. A pending [keyed debounce](215-debounce.md) may replace that definition while keeping
@@ -133,7 +133,7 @@ attempt left one closed-attempt row.
 Two append-only tables hold that record. `task_event` keeps every lifecycle event. `attempt_history`
 keeps one row for every attempt that closed. They are separate from the three core tables, so they
 can grow without slowing dispatch. A retention routine removes old rows on its own schedule. Each
-history row has a UUID that stays stable when you archive history or combine history from several
+history row has a UUID that stays stable when you export history or combine history from several
 Workhorse installations.
 
 <details>
@@ -147,7 +147,7 @@ Workhorse installations.
 - A timer suspension emits events but closes no attempt.
 - Both relations use UTC-daily range partitions with default fallbacks.
 - `task_event.event_id` and `attempt_history.attempt_id` are UUIDv7 values from `uuid_v7_v1()`. The
-  UUID is the portable identity in an archive.
+  UUID is the portable identity in an export store.
 - `retain_history_v1` runs from `run_maintenance_v1`, once per local date.
 
 More detail: [Data model: History](../architecture/data-model.md#history).

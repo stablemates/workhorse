@@ -8,7 +8,7 @@ deployed.
 
 Every earlier task hands the session a URL. Task E hands it none. The session starts inside a
 scratch application that already depends on `@stablemates/workhorse`, with `npm install` run for
-real, and is told only that the application uses a job library it should use. Whether the
+real, and is told only that the application uses a task queue library it should use. Whether the
 session finds the documentation at all, and how, is the whole question: a packaged skill exists
 for exactly this start point, and ADR 0063 builds one only if this session misses.
 
@@ -51,7 +51,7 @@ router names first.
 The session then made nine more reads, eight of them inside the installed package, all `.d.ts`
 declarations under `dist/src/`, while fetching nine documentation twins. The produced program uses the typed handler
 signature, contracts with a sensitive payload key, an idempotency key on enqueue, a decorrelated
-jitter retry policy, the job's abort signal, and the `defineWorkerProcess` entry point, none of
+jitter retry policy, the handler's abort signal, and the `defineWorkerProcess` entry point, none of
 which the playbook's example shows. It states in its own first sentence that the README pointed
 at `llms.txt`.
 
@@ -75,7 +75,7 @@ Recorded read, from the produced program:
 detector does not recognise a generic call, `queue.enqueue<Payload>(...)`, and the handler
 detector does not recognise a handler declared as a typed constant rather than registered inline.
 An unclear signal never contradicts a recorded read, and both patterns are worth teaching the
-detectors; that is the same class of gap WH-662 fixed for the schema signal.
+detectors; that is the same kind of gap WH-662 fixed for the schema signal.
 
 ## What this decides
 

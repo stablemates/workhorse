@@ -1,0 +1,164 @@
+{
+  "historicalPaths": [
+    {
+      "files": "docs/decisions/**",
+      "reason": "A decision record keeps the wording of the decision it records, including terms CONTEXT.md later retired."
+    },
+    {
+      "files": "docs/benchmarks/**",
+      "reason": "A benchmark report keeps the wording of the run it reports."
+    }
+  ],
+  "contexts": [
+    {
+      "word": "job",
+      "files": "docs/**/*.md",
+      "context": "Active Job",
+      "reason": "Active Job is the name of the Rails framework the Ruby adapter integrates."
+    },
+    {
+      "word": "job",
+      "files": "docs/{architecture/schema-and-protocol,parity}.md",
+      "context": "[Dd]efault jobs?|[Tt]yped jobs?|job class|job format|Active Job job|skips a job whose priority|how many jobs it enqueued|each job's|a job reports only|receives the job|builds the job from the payload|the current job",
+      "reason": "In the Active Job adapter, a job is an Active Job instance, Rails's own noun. The adapter maps each one to a task."
+    },
+    {
+      "word": "job",
+      "files": "docs/compatibility.md",
+      "context": "(build|publish|CI|crates-io|rubygems|attestation-rehearsal|attestation rehearsal) jobs?|crates\\.io and RubyGems jobs|its job still succeeds|both of those jobs|Both jobs install|[Tt]he job('s OIDC| exchanges its OIDC| can publish| ends)|job's action and uv|any job outside that environment|block this job|to a job holding",
+      "reason": "A GitHub Actions job is one unit of a CI or release workflow, not a Workhorse task."
+    },
+    {
+      "word": "job",
+      "files": "docs/{kubernetes,worker-processes}.md",
+      "context": "(versioned|new|migration|schema|the|Kubernetes) Jobs?|a Job's Pod",
+      "reason": "A Kubernetes Job is the resource that runs the schema migration once per release."
+    },
+    {
+      "word": "message",
+      "files": "docs/**/*.md",
+      "context": "error messages?|conflict messages?|[Rr]efused result message|ORPCError message|FastTierUnsupportedError message",
+      "reason": "An error message is the text an error carries, not a task."
+    },
+    {
+      "word": "message",
+      "files": "docs/{architecture,guides}/**/*.md",
+      "context": "(verdict's|fixed|version) message|status, code, message|SQLSTATE, message|SQLSTATE values, messages|class and message|without message parsing|parameter values into the message|Messages never copy parameter values|[Ii]ts message (is|names|identifies)|[Tt]he message (names the reason|carries no part)|That message names only codes|Neither message changes the exit code|one of these messages|with this message:|with the message (queue|Fast-tier queue|P1007)|and the message (Task handler failed|$)|batched completion and the message|[Tt]he batched completion message|message fast-tier queue|answers with its message|error whose message quotes",
+      "reason": "These sentences describe the text of an error or a refusal, not a task."
+    },
+    {
+      "word": "message",
+      "files": "docs/dashboard-security-review.md",
+      "context": "answers with its message",
+      "reason": "The message is the text of a compatibility verdict, not a task."
+    },
+    {
+      "word": "message",
+      "files": "docs/{architecture/operations,guides/380-admin-cli-and-tui}.md",
+      "context": "a message to a live process|does not send a message to the process",
+      "reason": "These sentences say a pause is not a signal sent to a worker process."
+    },
+    {
+      "word": "message",
+      "files": "docs/guides/{305-fast-tier,315-batch-handlers}.md",
+      "context": "sends a message, then waits for a bounce|five messages in one request|provider's message ID",
+      "reason": "The scenario's messages are emails an application sends through a provider."
+    },
+    {
+      "word": "message",
+      "files": "docs/recipes/slack-approvals.md",
+      "context": "(live|ephemeral|non-ephemeral|orphan|Slack) messages?|one message per pass|[Mm]essage (identity|timestamp|fields|reconciliation|identifiers)|Message identifiers|delete messages|channel and message",
+      "reason": "The Slack recipe's messages are Slack chat messages."
+    },
+    {
+      "word": "archive",
+      "files": "docs/architecture/dashboard.md",
+      "context": "(compiled static|installed npm) archive|archive (name|digest)|The archive contains no Workhorse package version",
+      "reason": "This archive is the packaged npm tarball of the dashboard bundle."
+    },
+    {
+      "word": "archive",
+      "files": "docs/compatibility.md",
+      "context": "npm and Python archive|\\.crate archive|(packaged|unpacked) archive|archive into an empty gem home",
+      "reason": "These archives are package tarballs a release builds and verifies."
+    },
+    {
+      "word": "archive",
+      "files": "docs/{architecture/telemetry,guides/350-production-telemetry}.md",
+      "context": "numbered archives|archive count",
+      "reason": "These archives are rotated demo log files."
+    },
+    {
+      "word": "backup",
+      "files": "docs/{schema-lifecycle,compatibility,recipes/slack-approvals}.md",
+      "context": "Take a backup|[Rr]estor(e|ing) the backup|after the backup|Backup, rollback|backup and recovery|backups, and recovery",
+      "reason": "A database backup is the operator's restore point for a migration, not cold export."
+    },
+    {
+      "word": "down migration",
+      "files": "docs/schema-lifecycle.md",
+      "context": "no down migrations|absence of down migrations",
+      "reason": "The sentence states that the framework ships no reverse migration; it does not name the contract step."
+    },
+    {
+      "word": "processor",
+      "files": "docs/{architecture/telemetry,guides/350-production-telemetry}.md",
+      "context": "log processor|processors, exporters",
+      "reason": "An OpenTelemetry log processor is an SDK component, not a handler."
+    },
+    {
+      "word": "public API",
+      "files": "docs/compatibility.md",
+      "context": "may break the public API|which artifact is the public API",
+      "reason": "The sentence quotes SemVer's wording to explain why governed surfaces need naming."
+    },
+    {
+      "word": "work item",
+      "files": "docs/tracker-history.md",
+      "context": "Plane work items",
+      "reason": "Work item is the issue noun of the retired Plane tracker."
+    },
+    {
+      "word": "class",
+      "files": "docs/{architecture,guides}/**/*.md",
+      "context": "error class(es)?|[Cc]onflict class(es)?|terminal classes|class names|conflict's class|That class descends|job class|A class that includes|when the class loads|class-name tag|typed class|listed class|two classes that declare|SQLSTATE classes",
+      "reason": "These are Ruby, Python, Go, or SQLSTATE error classes, not tiers."
+    },
+    {
+      "word": "class",
+      "files": "docs/agent-evals/2026-09-05-lighter-pages.md",
+      "context": "colours into classes",
+      "reason": "These are CSS classes in the site's markup."
+    },
+    {
+      "word": "lane",
+      "files": "docs/**/*.md",
+      "context": "(separate|package|direct|pooled|smoke|runtime-smoke|green|latest-version|CI|database CI|five) lanes?|The lane runs|the lane audits|lane exercises enqueue|connected lane|Every lane|lane coverage|a lane separate from",
+      "reason": "A CI lane is one configuration a test job runs, not a tier."
+    },
+    {
+      "word": "lane",
+      "files": "docs/demo-feature-coverage.md",
+      "context": "Priority lanes|per-key lanes",
+      "reason": "The demo names its scenarios after the dispatch behavior they show, such as demo.priority-lane."
+    },
+    {
+      "word": "activity",
+      "files": "docs/**/*.md",
+      "context": "Activity (over time|chart)|activity (chart|JSON document|result|query)",
+      "reason": "Activity is the dashboard chart of task counts over time."
+    },
+    {
+      "word": "activity",
+      "files": "docs/{features,benchmarking}.md",
+      "context": "progress, activity, schedules|PostgreSQL activity",
+      "reason": "These name a dashboard page section and PostgreSQL's pg_stat_activity view."
+    },
+    {
+      "word": "activity",
+      "files": "docs/guides/{217-throttle,320-statistics,355-observability}.md",
+      "context": "recent activity|activity event|pairs by activity|runtime activity",
+      "reason": "Activity here is ordinary volume of work or an application's own event, not a task or handler."
+    }
+  ]
+}

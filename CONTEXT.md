@@ -21,7 +21,7 @@ _Avoid_: Job, message, work item, activity
 The per-queue setting that decides how much Workhorse records for each of the queue's tasks. It
 belongs to the queue, never to a task or a worker, and changes only while the queue holds no live
 task.
-_Avoid_: Mode, lane, class, execution profile
+_Avoid_: Queue mode, tier mode, execution mode, fast mode, lane, class, execution profile
 
 **Full tier**:
 The default tier. A task keeps its live state in `workhorse.task_runtime` and its final state in
@@ -42,9 +42,10 @@ crash, or a durable wait.
 _Avoid_: Processor, job function, activity, task function
 
 **Checkpoint**:
-The named durable step inside one handler run whose stored result a later run replays instead of
-recomputing.
-_Avoid_: Step, sub-task, memoized call
+A named piece of handler code whose result Workhorse stores for its task, so a later run of that
+task returns the stored result instead of running the code again.
+_Avoid_: Durable step, checkpointed step, named step, completed step, workflow step, step result,
+sub-task, memoized call
 
 **Routine**:
 A scheduled maintenance activity a worker offers to PostgreSQL, such as the tick, history
@@ -53,10 +54,15 @@ handler.
 _Avoid_: Maintenance task, background task, cron job
 
 **Cold export**:
-The optional copy of each finished UTC day of history to a store the operator owns, recorded in
+The optional copy of each finished UTC day of history to an export store, recorded in
 PostgreSQL so retention waits for it. It is off by default and is not a routine: an operator runs
 the exporter.
 _Avoid_: Archive, backup, offload, tiering
+
+**Export store**:
+The storage an operator owns, such as an object store, that holds the files cold export writes for
+each finished day. PostgreSQL records which days it holds, and Workhorse does not read from it.
+_Avoid_: Archive, backup, cold storage
 
 **Schedule pause**:
 A durable operator override that prevents a configured recurring schedule from firing until an

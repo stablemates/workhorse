@@ -133,8 +133,8 @@ A step opts into that by declaring `execution` in both places its kind is declar
 
 and `execution: "nontransactional"` on its `SCHEMA_MIGRATIONS` entry. The runner refuses a step
 whose two declarations disagree, exactly as it does for `kind`. Omitting `execution` means
-`transactional`, which is what every step before this class was and what a step should be unless a
-statement in it cannot be.
+`transactional`. Every step before this option existed was transactional, and a step should stay
+transactional unless a statement in it cannot be.
 
 Such a step buys availability with atomicity, and the resume semantics follow from that:
 
@@ -142,7 +142,7 @@ Such a step buys availability with atomicity, and the resume semantics follow fr
    cannot be held across the body, because the body runs outside the transaction that would hold
    it.
 2. The runner sends each statement of the body on its own, outside any transaction. `lock_timeout`
-   is not set, because the statements this class exists for take a lock that does not block writes.
+   is not set, because the statements such a step exists for take a lock that does not block writes.
 3. Bookkeeping runs last, in its own transaction, behind the advisory lock and behind a repeat of
    the guard. A peer migrator that got there first wins the step; this one fails the guard, and the
    runner accepts that outcome as the peer's success.
