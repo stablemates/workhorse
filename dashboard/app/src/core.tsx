@@ -144,13 +144,6 @@ export const activityGroupings: Array<{ value: ActivityGroupBy; label: string }>
   { value: "task", label: "Task" },
   { value: "status", label: "Status" },
 ];
-export interface ActivityData {
-  period: ActivityPeriod;
-  groupBy: ActivityGroupBy;
-  bucketSeconds: number;
-  groups: string[];
-  buckets: Array<{ bucketStart: string; counts: Record<string, number> }>;
-}
 export const activitySeriesColors = [
   "#4fa9e8",
   "#ff9a5c",
@@ -163,10 +156,6 @@ export const activitySeriesColors = [
   "#a6d147",
   "#f57676",
 ];
-export // Recharts treats dots in dataKey as nested paths (task types like "demo.failure").
-function activityChartKey(group: string): string {
-  return group.replaceAll(".", "_");
-}
 export type PageRoute =
   | "/tasks"
   | "/events"

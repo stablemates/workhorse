@@ -16979,6 +16979,32 @@ AS $$
   SELECT 65536;
 $$;
 
+-- The quick action a listed task offers for its pending human decision. An application opts in
+-- through `dashboard.quickAction` in the decision's context, with a non-empty string `label` and a
+-- `result`. A listing is polled and the context can hold 64 KiB, so a row carries the label alone.
+-- The task detail carries the full context, and the dashboard reads the result from there.
+CREATE OR REPLACE FUNCTION workhorse.dashboard_human_wait_quick_action_v1(p_context jsonb)
+RETURNS jsonb
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+  -- The whitespace set is JavaScript's String.prototype.trim set, so a label this function
+  -- offers is one the dashboard accepts when it reads the full context.
+  SELECT CASE
+    WHEN jsonb_typeof(p_context #> '{dashboard,quickAction,label}') = 'string'
+     AND p_context #> '{dashboard,quickAction}' ? 'result'
+     AND label.trimmed <> ''
+    THEN jsonb_build_object('label', left(label.trimmed, 200))
+  END
+    FROM (
+      SELECT regexp_replace(
+        p_context #>> '{dashboard,quickAction,label}',
+        E'^[\t\n\x0b\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+|[\t\n\x0b\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+$', '', 'g'
+      ) AS trimmed
+    ) label;
+$$;
+
 -- Which tasks a request can reach, named before the runtime and outcome joins read a row. A tag
 -- filter seeks `task_tags_gin_idx`, and a queue or task-type filter seeks the routing projection's
 -- index. A request that names none of the three reaches every task, and composing the scope here
@@ -17195,7 +17221,9 @@ BEGIN
                                   'deadlineAt',
                                   workhorse.dashboard_iso_v1(signal_wait_deadline_at)) END,
         'humanWait', CASE WHEN human_wait_name IS NOT NULL AND human_wait_deadline_at IS NOT NULL
-          THEN jsonb_build_object('name', human_wait_name, 'context', human_wait_context,
+          THEN jsonb_build_object('name', human_wait_name,
+                                  'quickAction',
+                                  workhorse.dashboard_human_wait_quick_action_v1(human_wait_context),
                                   'deadlineAt',
                                   workhorse.dashboard_iso_v1(human_wait_deadline_at)) END
       ) ORDER BY CASE WHEN parameters.sort = 'priority' THEN priority END DESC,
@@ -17779,70 +17807,80 @@ AS $$
     ), '[]'::jsonb));
 $$;
 
+-- The recent-history cutoff is read once into a variable. In the predicate, clock_timestamp() is
+-- volatile, so the planner can neither prune history partitions nor use the occurred_at key with
+-- it, and the read scanned every retained partition. A variable reaches the planner as a value.
 CREATE OR REPLACE FUNCTION workhorse.dashboard_workers_v1(p_input jsonb)
 RETURNS jsonb
-LANGUAGE sql
+LANGUAGE plpgsql
 AS $$
-  WITH configured_workers AS (
-    SELECT jsonb_array_elements_text(
-             CASE WHEN jsonb_typeof(p_input->'configuredWorkers') = 'array'
-                  THEN p_input->'configuredWorkers' END
-           ) AS id
-  ), fleet AS (
-    SELECT worker_id AS id FROM workhorse.dashboard_worker_registry_v1
-    UNION SELECT id FROM configured_workers
-  ), active AS (
-    SELECT worker_id AS id, count(*)::integer AS active_tasks, max(acquired_at) AS last_seen_at
-      FROM workhorse.dashboard_task_runtime_v1
-     WHERE state = 'active' AND worker_id IN (SELECT id FROM fleet)
-     GROUP BY worker_id
-  ), recent_history AS (
-    SELECT worker_id AS id, count(*)::integer AS completed_attempts,
-           count(*) FILTER (WHERE outcome = 'failed')::integer AS failed_attempts,
-           avg(extract(epoch FROM finished_at - claimed_at) * 1000)::double precision
-             AS average_execution_ms,
-           max(finished_at) AS last_seen_at
-      FROM workhorse.dashboard_attempt_history_v1
-     WHERE occurred_at >= clock_timestamp() - interval '1 hour'
-       AND finished_at >= clock_timestamp() - interval '1 hour'
-       AND worker_id IN (SELECT id FROM fleet)
-     GROUP BY worker_id
-  ), workers AS (
-    SELECT fleet.id, registry.worker_id IS NOT NULL AS registered,
-           registry.hostname, registry.pid, registry.queue_names, registry.schedule_namespaces,
-           registry.concurrency,
-           registry.active_slots, registry.draining, registry.paused, registry.started_at,
-           registry.last_heartbeat_at, registry.sdk_language, registry.sdk_version,
-           COALESCE(active.active_tasks, 0)::integer AS active_tasks,
-           COALESCE(recent_history.completed_attempts, 0)::integer AS completed_attempts,
-           COALESCE(recent_history.failed_attempts, 0)::integer AS failed_attempts,
-           recent_history.average_execution_ms,
-           GREATEST(active.last_seen_at, recent_history.last_seen_at,
-                    registry.last_heartbeat_at) AS last_seen_at
-      FROM fleet
-      LEFT JOIN workhorse.dashboard_worker_registry_v1 registry
-        ON registry.worker_id = fleet.id
-      LEFT JOIN active ON active.id = fleet.id
-      LEFT JOIN recent_history ON recent_history.id = fleet.id
-  )
-  SELECT jsonb_build_object(
-    'capturedAt', workhorse.dashboard_iso_v1(clock_timestamp()),
-    'canManageWorkers', COALESCE((p_input->>'canManageWorkers')::boolean, false),
-    'workers', COALESCE((
-      SELECT jsonb_agg(jsonb_build_object(
-        'id', id, 'queues', COALESCE(to_jsonb(queue_names), '[]'::jsonb),
-        'scheduleNamespaces', COALESCE(to_jsonb(schedule_namespaces), '[]'::jsonb),
-        'hostname', hostname, 'pid', pid, 'activeTasks', active_tasks,
-        'concurrency', concurrency, 'activeSlots', active_slots,
-        'draining', COALESCE(draining, false), 'completedAttempts', completed_attempts,
-        'failedAttempts', failed_attempts, 'averageExecutionMs', average_execution_ms,
-        'lastSeenAt', workhorse.dashboard_iso_v1(last_seen_at),
-        'startedAt', workhorse.dashboard_iso_v1(started_at), 'registered', registered,
-        'lastHeartbeatAt', workhorse.dashboard_iso_v1(last_heartbeat_at),
-        'paused', COALESCE(paused, false),
-        'sdkLanguage', sdk_language, 'sdkVersion', sdk_version
-      ) ORDER BY id) FROM workers
-    ), '[]'::jsonb));
+DECLARE
+  v_captured_at timestamptz := clock_timestamp();
+  v_since timestamptz := v_captured_at - interval '1 hour';
+BEGIN
+  RETURN (
+    WITH configured_workers AS (
+      SELECT jsonb_array_elements_text(
+               CASE WHEN jsonb_typeof(p_input->'configuredWorkers') = 'array'
+                    THEN p_input->'configuredWorkers' END
+             ) AS id
+    ), fleet AS (
+      SELECT worker_id AS id FROM workhorse.dashboard_worker_registry_v1
+      UNION SELECT id FROM configured_workers
+    ), active AS (
+      SELECT worker_id AS id, count(*)::integer AS active_tasks, max(acquired_at) AS last_seen_at
+        FROM workhorse.dashboard_task_runtime_v1
+       WHERE state = 'active' AND worker_id IN (SELECT id FROM fleet)
+       GROUP BY worker_id
+    ), recent_history AS (
+      SELECT worker_id AS id, count(*)::integer AS completed_attempts,
+             count(*) FILTER (WHERE outcome = 'failed')::integer AS failed_attempts,
+             avg(extract(epoch FROM finished_at - claimed_at) * 1000)::double precision
+               AS average_execution_ms,
+             max(finished_at) AS last_seen_at
+        FROM workhorse.dashboard_attempt_history_v1
+       WHERE occurred_at >= v_since
+         AND finished_at >= v_since
+         AND worker_id IN (SELECT id FROM fleet)
+       GROUP BY worker_id
+    ), workers AS (
+      SELECT fleet.id, registry.worker_id IS NOT NULL AS registered,
+             registry.hostname, registry.pid, registry.queue_names, registry.schedule_namespaces,
+             registry.concurrency,
+             registry.active_slots, registry.draining, registry.paused, registry.started_at,
+             registry.last_heartbeat_at, registry.sdk_language, registry.sdk_version,
+             COALESCE(active.active_tasks, 0)::integer AS active_tasks,
+             COALESCE(recent_history.completed_attempts, 0)::integer AS completed_attempts,
+             COALESCE(recent_history.failed_attempts, 0)::integer AS failed_attempts,
+             recent_history.average_execution_ms,
+             GREATEST(active.last_seen_at, recent_history.last_seen_at,
+                      registry.last_heartbeat_at) AS last_seen_at
+        FROM fleet
+        LEFT JOIN workhorse.dashboard_worker_registry_v1 registry
+          ON registry.worker_id = fleet.id
+        LEFT JOIN active ON active.id = fleet.id
+        LEFT JOIN recent_history ON recent_history.id = fleet.id
+    )
+    SELECT jsonb_build_object(
+      'capturedAt', workhorse.dashboard_iso_v1(v_captured_at),
+      'canManageWorkers', COALESCE((p_input->>'canManageWorkers')::boolean, false),
+      'workers', COALESCE((
+        SELECT jsonb_agg(jsonb_build_object(
+          'id', id, 'queues', COALESCE(to_jsonb(queue_names), '[]'::jsonb),
+          'scheduleNamespaces', COALESCE(to_jsonb(schedule_namespaces), '[]'::jsonb),
+          'hostname', hostname, 'pid', pid, 'activeTasks', active_tasks,
+          'concurrency', concurrency, 'activeSlots', active_slots,
+          'draining', COALESCE(draining, false), 'completedAttempts', completed_attempts,
+          'failedAttempts', failed_attempts, 'averageExecutionMs', average_execution_ms,
+          'lastSeenAt', workhorse.dashboard_iso_v1(last_seen_at),
+          'startedAt', workhorse.dashboard_iso_v1(started_at), 'registered', registered,
+          'lastHeartbeatAt', workhorse.dashboard_iso_v1(last_heartbeat_at),
+          'paused', COALESCE(paused, false),
+          'sdkLanguage', sdk_language, 'sdkVersion', sdk_version
+        ) ORDER BY id) FROM workers
+      ), '[]'::jsonb))
+  );
+END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.dashboard_cron_v1(p_input jsonb)
@@ -17953,6 +17991,10 @@ AS $$
   SELECT jsonb_build_object(
     'capturedAt', workhorse.dashboard_iso_v1(clock_timestamp()),
     'schedules', schedules.value,
+    -- The listing stops at 50 schedules, so the count tells the page how many it did not show.
+    'scheduleCount', (
+      SELECT count(*)::integer FROM workhorse.dashboard_schedule_definition_v1
+    ),
     'maintenance', jsonb_build_object(
       'cadences', COALESCE(p_input->'maintenanceLoops', '{}'::jsonb),
       'policy', jsonb_build_object(
@@ -19495,7 +19537,9 @@ __outcome_scope__
                                   'deadlineAt',
                                   workhorse.dashboard_iso_v1(signal_wait_deadline_at)) END,
         'humanWait', CASE WHEN human_wait_name IS NOT NULL AND human_wait_deadline_at IS NOT NULL
-          THEN jsonb_build_object('name', human_wait_name, 'context', human_wait_context,
+          THEN jsonb_build_object('name', human_wait_name,
+                                  'quickAction',
+                                  workhorse.dashboard_human_wait_quick_action_v1(human_wait_context),
                                   'deadlineAt',
                                   workhorse.dashboard_iso_v1(human_wait_deadline_at)) END
       ) ORDER BY CASE WHEN parameters.sort = 'priority' THEN priority END DESC,
@@ -19976,10 +20020,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (57, 'let terminal cleanup keep pace and share its budget across tiers'),
   (58, 'close SQL integrity gaps in rate refill, dependency edges, and mixed batches'),
   (59, 'judge fast-tier completions and cancellation acknowledgements after waits'),
-  (60, 'bound the scan cost of fast dead letters, statistics, and repeated ticks')
+  (60, 'bound the scan cost of fast dead letters, statistics, and repeated ticks'),
+  (61, 'bound dashboard worker and task listings')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (60) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (61) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

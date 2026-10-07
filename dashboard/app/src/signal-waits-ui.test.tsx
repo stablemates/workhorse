@@ -82,7 +82,7 @@ describe("dashboard signal waits", () => {
       signalWait: null,
       humanWait: {
         name: "account-review",
-        context: { prompt: "Approve this account?" },
+        quickAction: null,
         deadlineAt: "2026-08-17T03:00:00.000Z",
       },
     } as DashboardTaskRow;

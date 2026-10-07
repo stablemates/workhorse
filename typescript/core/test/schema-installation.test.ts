@@ -551,6 +551,10 @@ describe("schema installation", () => {
         version: 60,
         description: "bound the scan cost of fast dead letters, statistics, and repeated ticks",
       },
+      {
+        version: 61,
+        description: "bound dashboard worker and task listings",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

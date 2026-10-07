@@ -1,5 +1,6 @@
 import {
   dashboardAttemptOutcomes,
+  dashboardPageMax,
   dashboardTaskEventTypes,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import type {
@@ -110,7 +111,11 @@ export function parseEventsLocation(search: string | URLSearchParams): EventsLoc
     search: optionalValue(parameters, "q"),
     taskId: requestedTaskId && taskIdentity.test(requestedTaskId) ? requestedTaskId : null,
     types,
-    page: Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1,
+    // A page past the server's limit is read as the last page it accepts.
+    page:
+      Number.isInteger(requestedPage) && requestedPage > 0
+        ? Math.min(requestedPage, dashboardPageMax)
+        : 1,
     pageSize: eventPageSizes.includes(requestedPageSize as EventPageSize)
       ? (requestedPageSize as EventPageSize)
       : 50,
@@ -132,7 +137,8 @@ export function eventsLocationHref(state: EventsLocationState): string {
   if (state.search) parameters.set("q", state.search);
   if (state.taskId) parameters.set("task", state.taskId);
   if (state.types.length > 0) parameters.set("events", state.types.join(","));
-  if (state.page > 1) parameters.set("page", String(state.page));
+  const page = Math.min(state.page, dashboardPageMax);
+  if (page > 1) parameters.set("page", String(page));
   if (state.pageSize !== 50) parameters.set("per", String(state.pageSize));
   if (state.eventId) parameters.set("event", state.eventId);
   const query = parameters.toString();

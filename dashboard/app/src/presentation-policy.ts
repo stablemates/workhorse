@@ -18,7 +18,6 @@ const CEILING_PRESSURE = 0.8;
 const WORKER_REGISTRATION_STALE_MS = 30_000;
 const RECENT_WORKER_MS = 5 * 60_000;
 const MAX_ACTIVITY_GROUPS = 10;
-const OTHER_ACTIVITY_GROUP = "other";
 
 export interface DashboardSettingsRecommendation {
   id:
@@ -540,7 +539,27 @@ export function sortQueuesByRisk(
   });
 }
 
-export function capActivityGroups(page: DashboardActivityPage): DashboardActivityPage {
+/** One plotted activity series. `id` is the chart key; `label` is what the operator reads. */
+interface ActivitySeries {
+  id: string;
+  label: string;
+  /** True for the series that folds every group beyond the legend cap. */
+  overflow: boolean;
+}
+
+export interface ActivityChartModel {
+  series: ActivitySeries[];
+  buckets: Array<{ bucketStart: string; values: Record<string, number> }>;
+}
+
+/**
+ * Cap the activity legend and key each series by position.
+ *
+ * A group name is application data. Used as a chart key, a dot reads as a nested path, a name
+ * can equal the axis key, and a group named "other" would merge with the overflow. Keys built
+ * from the series position cannot collide with any of them.
+ */
+export function activityChartModel(page: DashboardActivityPage): ActivityChartModel {
   const totals = new Map(page.groups.map((group) => [group, 0]));
   for (const bucket of page.buckets) {
     for (const [group, count] of Object.entries(bucket.counts)) {
@@ -553,21 +572,26 @@ export function capActivityGroups(page: DashboardActivityPage): DashboardActivit
     .map(([group]) => group);
   const kept =
     ranked.length > MAX_ACTIVITY_GROUPS ? ranked.slice(0, MAX_ACTIVITY_GROUPS - 1) : ranked;
-  const keptSet = new Set(kept);
-  const hasOther = ranked.length > kept.length;
   // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
-  const groups = [...kept].sort();
-  if (hasOther) groups.push(OTHER_ACTIVITY_GROUP);
+  const series: ActivitySeries[] = [...kept].sort().map((label, index) => ({
+    id: `series-${index}`,
+    label,
+    overflow: false,
+  }));
+  const idByGroup = new Map(series.map(({ id, label }) => [label, id]));
+  if (ranked.length > kept.length) {
+    series.push({ id: `series-${series.length}`, label: "Other", overflow: true });
+  }
+  const overflowId = series.at(-1)?.overflow ? series.at(-1)!.id : null;
   return {
-    ...page,
-    groups,
+    series,
     buckets: page.buckets.map((bucket) => {
-      const counts: Record<string, number> = {};
+      const values: Record<string, number> = Object.fromEntries(series.map(({ id }) => [id, 0]));
       for (const [group, count] of Object.entries(bucket.counts)) {
-        const key = keptSet.has(group) ? group : OTHER_ACTIVITY_GROUP;
-        counts[key] = (counts[key] ?? 0) + count;
+        const id = idByGroup.get(group) ?? overflowId;
+        if (id !== null) values[id] = (values[id] ?? 0) + count;
       }
-      return { ...bucket, counts };
+      return { bucketStart: bucket.bucketStart, values };
     }),
   };
 }

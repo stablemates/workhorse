@@ -419,7 +419,7 @@ export interface DashboardTaskRow extends Record<string, unknown> {
   wakeAt: string | null;
   wait: { name: string; wakeAt: string; mode: "relative" | "absolute" } | null;
   signalWait: DashboardSignalWaitSummary | null;
-  humanWait: DashboardHumanWaitSummary | null;
+  humanWait: DashboardTaskRowHumanWait | null;
 }
 
 export interface DashboardScheduleRow {
@@ -551,6 +551,15 @@ export const dashboardRedriveBatchMax = 1_000;
 
 export const dashboardRedriveBatchDefault = 100;
 
+/**
+ * Highest 1-based page a paged listing accepts.
+ *
+ * Offset paging reads every row before the page, so the request schema stops here. The browser
+ * reads the same value to stop its pager, and offers a narrower request rather than a page the
+ * server would reject.
+ */
+export const dashboardPageMax = 100;
+
 export type DashboardTaskCounts = Record<DashboardTaskFilter, number>;
 
 /**
@@ -631,7 +640,10 @@ export interface DashboardTaskFacets {
 
 export interface DashboardCronPage {
   capturedAt: string;
+  /** The first 50 schedules by namespace and name. */
   schedules: DashboardScheduleRow[];
+  /** Every configured schedule, so a page can say how many `schedules` left out. */
+  scheduleCount: number;
   maintenance: {
     cadences: DashboardMaintenanceLoopCadences;
     policy: {
@@ -1368,6 +1380,23 @@ export interface DashboardHumanWaitSummary {
   name: string;
   context: unknown;
   deadlineAt: string;
+}
+
+/**
+ * The quick action an application offers for a pending decision, without its result.
+ *
+ * The full action lives in the decision's context, which the task detail carries. A listing polls
+ * many rows, so it names the action and leaves the result to the detail read.
+ */
+export interface DashboardHumanWaitQuickActionSummary {
+  label: string;
+}
+
+/** A listed task's pending human decision, without its context. */
+export interface DashboardTaskRowHumanWait {
+  name: string;
+  deadlineAt: string;
+  quickAction: DashboardHumanWaitQuickActionSummary | null;
 }
 
 export interface DashboardHumanWaitPage {

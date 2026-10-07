@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { taskRowActionGroups, type TaskRowAction } from "./presentation.js";
-import type { DashboardTaskRow } from "@stablemates/workhorse-dashboard-server/wire";
+import type {
+  DashboardTaskDetail,
+  DashboardTaskRow,
+} from "@stablemates/workhorse-dashboard-server/wire";
+
+Object.defineProperty(globalThis, "localStorage", {
+  value: { getItem: () => null, setItem: () => undefined },
+});
 
 function row(overrides: Partial<DashboardTaskRow> = {}): DashboardTaskRow {
   return {
@@ -237,9 +244,7 @@ describe("task row actions", () => {
         row({
           humanWait: {
             name: "account-review",
-            context: {
-              dashboard: { quickAction: { label: "Approve", result: { approved: true } } },
-            },
+            quickAction: { label: "Approve" },
             deadlineAt: "2026-01-02T00:00:00.000Z",
           },
         }),
@@ -250,5 +255,44 @@ describe("task row actions", () => {
     expect(action(row(), "complete-human-wait").unavailable).toContain(
       "not waiting for a human decision",
     );
+    expect(
+      action(
+        row({
+          humanWait: {
+            name: "account-review",
+            quickAction: null,
+            deadlineAt: "2026-01-02T00:00:00.000Z",
+          },
+        }),
+        "complete-human-wait",
+      ).unavailable,
+    ).toContain("no application-defined quick action");
+  });
+
+  it("reads a listed decision's full quick action from the task detail", async () => {
+    const { loadHumanWaitQuickAction } = await import("./task-actions.js");
+    const requested: unknown[] = [];
+    const client = {
+      taskDetail: async (input: { id: string }) => {
+        requested.push(input);
+        return {
+          humanWait: {
+            name: "account-review",
+            context: {
+              dashboard: { quickAction: { label: "Approve", result: { approved: true } } },
+            },
+            deadlineAt: "2026-01-02T00:00:00.000Z",
+          },
+        } as DashboardTaskDetail;
+      },
+    };
+    await expect(loadHumanWaitQuickAction(client, "task-1", "account-review")).resolves.toEqual({
+      label: "Approve",
+      result: { approved: true },
+      formatted: '{\n  "approved": true\n}',
+    });
+    expect(requested).toEqual([{ id: "task-1" }]);
+    // The decision may have closed, or another one opened, since the listing was read.
+    await expect(loadHumanWaitQuickAction(client, "task-1", "other-review")).resolves.toBeNull();
   });
 });

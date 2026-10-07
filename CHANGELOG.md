@@ -24,7 +24,7 @@ The optional `@stablemates/workhorse-knex` adapter preserves native PostgreSQL s
 The tested Objection recipe shares the model-write transaction with enqueue. Callers retain transaction and resource ownership (SM-1118).
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **60**, and the SDK compatibility floor is schema version **54**.
+The final schema version is **61**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.
@@ -121,6 +121,28 @@ The TypeScript worker measures lease windows and expiry timers on the monotonic 
 Migration 0061 (`0061-bound-the-scan-cost-of-fast-dead-letters-statistics-and-repeated-ticks.sql`) bounds three reads whose cost grew with table size or fleet size (SM-1167). The new `fast_task_outcome_failed_finished_idx` lets `list_dead_letters_v1` read only failed fast-tier outcomes. `aggregate_stats_v1` no longer materializes fast-tier rows that cannot hold a fact inside its window, so a backlog enqueued earlier stays out of every rollup. `tick_v1` runs the expired-lease scan, which reads every active lease, only when no tick ran it within half the shortest maintenance interval of the live registered workers. It records that run in the new `maintenance_state.lease_recovery_started_at` column. Promotion and the deadline and timeout scans still run on every tick, and while workers keep ticking, expired leases are still recovered within one interval.
 
 A TypeScript handler whose deadline or attempt timeout PostgreSQL confirms now always sees `DeadlineExceededError` or `ExecutionTimeoutError` as its abort reason. A heartbeat could answer `stale` after `expire_owned_v1` committed the expiry and before its answer arrived, and the handler was aborted as a lost lease. A `stale` heartbeat answer now waits for an in-flight expiry answer, and a real lease loss still aborts with the lease-loss error (SM-1195).
+
+**Breaking `dashboard/v1` change:** `dashboard.tasks` and `dashboard.tasksCursor` rows no longer
+carry `humanWait.context`. They carry `humanWait.quickAction`, which is `{ label }` or `null`, so
+polling a listing no longer sends up to 64 KiB of decision context per row. `dashboard.taskDetail`
+still returns the full context, and the dashboard reads it before confirming a quick action. The
+break is taken in place under the ADR 0064 exception in `docs/compatibility.md`, and the published
+`openapi.json` changes with it. In the TypeScript packages, `DashboardTaskRow.humanWait` becomes
+`DashboardTaskRowHumanWait`, and `TaskActionTarget.humanWait` becomes `TaskActionHumanWait`, whose
+`context` is optional (SM-1171).
+
+Migration 0062 (`0062-bound-dashboard-worker-and-task-listings.sql`) adds
+`dashboard_human_wait_quick_action_v1` and changes four dashboard read functions (SM-1171).
+`dashboard_workers_v1` reads its one-hour cutoff once, so a Workers poll prunes attempt history to
+the partitions that can hold that hour instead of reading all of it. `dashboard_cron_v1` adds
+`scheduleCount`, and the Schedules page says how many schedules past the first 50 it does not show.
+
+**Pending release — fixed:** The Events pager stops at the last page the server accepts and offers
+to continue with older events through a custom range. The activity chart shows loading, error, and
+stale states with a Retry button, and never draws one query's bars under another query's controls.
+Activity series keys no longer collide when group names differ only by `.` and `_`, or a group is
+named `bucket` or `other`. Event rows keep their table semantics and open through a named button in
+the Event cell (SM-1171).
 
 ## 0.6.1 — 2026-10-02
 

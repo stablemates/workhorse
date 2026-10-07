@@ -34,6 +34,7 @@ const page: DashboardCronPage = {
       evaluatorCount: 2,
     },
   ],
+  scheduleCount: 1,
   maintenance: {
     cadences: { tickIntervalMs: 1_000 },
     policy: {
@@ -75,6 +76,25 @@ const page: DashboardCronPage = {
 };
 
 describe("schedules page", () => {
+  it("says how many schedules the listing left out", async () => {
+    const { CronPage } = await import("./pages/schedules.js");
+    const render = (scheduleCount: number) =>
+      renderToStaticMarkup(
+        createElement(
+          MantineProvider,
+          null,
+          createElement(CronPage, {
+            data: { ...page, scheduleCount },
+            togglingSchedule: null,
+            setSchedulePaused: () => undefined,
+            scheduleTasksHref: () => "/tasks",
+          }),
+        ),
+      );
+    expect(render(1)).not.toContain("Showing");
+    expect(render(1_200)).toContain("Showing 1 of 1,200 schedules");
+  });
+
   it("explains that a maintenance destination is not a queue", async () => {
     const { CronPage, MaintenanceRunHistory, pauseScheduleWarning, resumeScheduleWarnings } =
       await import("./pages/schedules.js");

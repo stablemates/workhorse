@@ -1782,7 +1782,10 @@ Dashboard task rows join the current runtime name to `dashboard_signal_wait_v1` 
 `dashboard_human_wait_v1`. They expose:
 
 - `signalWait` as `{ name, deadlineAt }`
-- `humanWait` as `{ name, context, deadlineAt }`
+- `humanWait` as `{ name, deadlineAt, quickAction }`, where `quickAction` is `{ label }` or `null`
+
+A task row carries no decision context. Task detail returns `humanWait` as
+`{ name, context, deadlineAt }`.
 
 `DashboardTasksPage.canCompleteHumanWait` reports the server-owned operator capability. Task detail
 also returns `canSignal`.
@@ -1883,6 +1886,10 @@ retain value-free lifecycle evidence.
 The dashboard recognizes an optional `context.dashboard.quickAction` object with `label` and
 `result` fields. It renders `label` in the task-row menu. It submits the stored JSON `result` only
 after confirmation.
+
+A task row carries only the label, which `dashboard_human_wait_quick_action_v1` derives in
+PostgreSQL. When an operator picks the action from a row, the dashboard reads the task detail and
+confirms the `result` from the full context.
 
 A missing or malformed object leaves the menu action disabled. The dashboard does not invent a
 result for a generic decision.

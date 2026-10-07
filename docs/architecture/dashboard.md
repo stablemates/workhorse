@@ -221,7 +221,7 @@ ADR 0037 keeps presentation policy out of those backends. The backends return ra
 | `retryBucketLabel`                                                         | Maps upper bounds of 60,000, 300,000, 900,000, and 3,600,000 milliseconds to `1m`, `5m`, `15m`, and `1h`. Every other bound is `later`.                                                                                            |
 | `workerStatus`                                                             | See the status rules below.                                                                                                                                                                                                        |
 | `sortQueuesByRisk`                                                         | Orders descending by `oldestReadyMs + ready * 1,000 + dueSoon * 100`, then by queue name.                                                                                                                                          |
-| `capActivityGroups`                                                        | Keeps at most 10 legend groups. When more exist, it keeps the nine highest-count groups and combines the rest as `other`.                                                                                                          |
+| `activityChartModel`                                                       | Keeps at most 10 legend series. When more exist, it keeps the nine highest-count groups and combines the rest into one `Other` series. Keys each series `series-<position>`, never by its group name.                              |
 | `presentSchedules`                                                         | Adds the `workhorse:tick`, `workhorse:history-partitions`, `workhorse:history-retention`, and `workhorse:terminal-storage` rows. Derives their descriptions and maintenance state from the raw policy, cadence, and routine state. |
 
 `workerStatus` checks these conditions in order:
@@ -299,11 +299,31 @@ Before the backend calls the function, the wire validator applies these limits:
 | Input                        | Limit                             |
 | ---------------------------- | --------------------------------- |
 | `pageSize`                   | 25, 50, or 100                    |
-| `page`                       | at most 100                       |
+| `page`                       | at most `dashboardPageMax`, 100   |
 | selected tags                | at most 20 values                 |
 | each search or string filter | at most 200 characters            |
 | `priority`                   | null, or 0 through 100            |
 | `sort`                       | `updated` (default) or `priority` |
+
+#### Human decisions in rows
+
+`dashboard_tasks_v1` and `dashboard_tasks_cursor_v1` return a pending human decision as
+`humanWait: { name, deadlineAt, quickAction }`, with no `context`. A listing is polled, and one
+context can hold 65,536 bytes. `dashboard_human_wait_quick_action_v1` derives `quickAction`:
+
+1. `context.dashboard.quickAction.label` is a string.
+2. `context.dashboard.quickAction` has a `result` key, whatever its value.
+3. The label is not empty after trimming whitespace.
+
+Trimming removes the characters JavaScript's `String.prototype.trim` removes, so a label a row
+offers is one the SPA accepts from the full context. When all three hold, `quickAction` is
+`{ label }`, with the trimmed label cut to 200 characters.
+Otherwise it is `null`. When an operator picks the quick action from a row, the SPA reads
+`dashboard.taskDetail`, whose `humanWait` keeps the full context. It confirms the result from that
+context. If the task no longer waits on that decision, it reports that and sends nothing.
+
+Removing `context` from listed rows was an in-place `dashboard/v1` break under the ADR 0064
+exception in [compatibility.md](../compatibility.md).
 
 #### Total and `hasMore`
 
@@ -449,6 +469,23 @@ filtering requires that value. It returns the complete version 1 activity JSON d
 bucket timestamps are rendered by `dashboard_iso_v1`. The wire validator limits each string filter
 to 200 characters before the backend calls the function.
 
+#### Activity chart states
+
+The SPA keys each activity result by the query that produced it: `filter`, `period`, `groupBy`,
+`tags`, `queue`, and `worker`. `activityView` in `dashboard/app/src/charts/activity.tsx` decides
+what the chart shows for the query its controls name:
+
+| Newest result for this query | Newest failure for this query | Chart shows                            |
+| ---------------------------- | ----------------------------- | -------------------------------------- |
+| none                         | none                          | loading                                |
+| none                         | present                       | an error alert with Retry, and no bars |
+| present                      | none                          | the bars                               |
+| present                      | present                       | the bars with a stale alert and Retry  |
+
+A success clears the failure. A result for a different query is never drawn under the current
+controls. Series keys come from `activityChartModel`, so a group named `a.b`, `bucket`, or `other`
+cannot collide with another series or with the axis key.
+
 ### Event feed
 
 `dashboard_events_v1(p_input jsonb)` returns the complete version 1 events JSON document. The
@@ -462,7 +499,7 @@ Callers must supply both ISO-8601 range instants, and `rangeEnd` must be later t
 It applies the time bound, `kind`, `queue`, `taskType`, `types`, and `taskId` before merging
 `dashboard_task_event_v1` with `dashboard_attempt_history_v1`. Each source reads at most
 `page * pageSize + 1` rows before the merge. Before the backend calls the function, the wire
-validator limits `page` to 100 and each string filter to 200 characters.
+validator limits `page` to `dashboardPageMax`, 100, and each string filter to 200 characters.
 
 The event listing also accepts `worker` and `search`. Both filters apply before source limits and
 in the exact count. Both strings are limited to 200 characters.
@@ -485,6 +522,31 @@ that second pass out of the plan for every other request.
 The function disables JIT. Compiling its generic partitioned plan costs more than executing the
 bounded reads.
 
+#### Page limit in the SPA
+
+`dashboardPageMax` in `typescript/dashboard-server/src/wire.ts` is the one page limit. The router's
+`page` validator and the Events pager both read it. The pager offers at most that many pages. When
+`total` exceeds `dashboardPageMax * pageSize`, the page says how many events the pager reaches.
+`parseEventsLocation` and `eventsLocationHref` read a `page` above `dashboardPageMax` as
+`dashboardPageMax`, so a bookmarked URL cannot ask for a page the router rejects.
+
+On the last page, Continue with older events sets a custom range. `continueEventsRange` keeps the
+current `rangeStart` and ends the range 1 millisecond after the oldest event shown, because
+`rangeEnd` is exclusive. Events at that instant that the last page did not reach stay in range. The
+events it did reach at that instant appear again.
+
+When that end would not move the range back, every page shares the oldest instant. The range then
+ends at that instant, and the page says that continuing skips the rest of its events. When the
+oldest event shown sits at `rangeStart`, the range holds nothing older, and the page offers no
+Continue.
+
+#### Event rows
+
+Each event row keeps the native table row role, so assistive technology pairs every cell with its
+column. A pointer click anywhere on the row opens the event. The Event cell holds a button whose
+accessible name starts with the visible event label, such as `Task claimed event, inspect for
+invoice.send`. Keyboard and screen-reader users open the event through that button.
+
 ### Event detail
 
 `dashboard_event_detail_v1(p_input jsonb)` accepts the stable `event:<UUIDv7 event_id>` or
@@ -506,6 +568,12 @@ returns the complete version 1 worker-page JSON document.
 - Attempt counts, failure counts, average execution time, and last-seen times cover the previous
   hour of `dashboard_attempt_history_v1`.
 
+The function reads `clock_timestamp()` once into `v_since` and filters `occurred_at` and
+`finished_at` with that variable. A volatile `clock_timestamp()` in the predicate would stop the
+planner from pruning history partitions or using the `occurred_at` key. Every poll would then read
+all retained attempt history. With `v_since`, a poll reads the partitions that can hold the past
+hour.
+
 ### Schedules page
 
 `dashboard_cron_v1(p_input jsonb)` accepts `maintenanceLoops` and returns the complete version 1
@@ -515,6 +583,8 @@ cron-page JSON document.
 
 The function returns at most 50 schedule definitions ordered by `namespace` and `schedule_name`.
 Occurrence counts and last-fired times come from `dashboard_schedule_occurrence_v1`.
+`scheduleCount` counts every definition. When it exceeds the rows returned, the Schedules page
+says `Showing 50 of <scheduleCount> schedules`.
 
 Each definition includes `evaluatorCount`. It counts registrations that meet both conditions:
 

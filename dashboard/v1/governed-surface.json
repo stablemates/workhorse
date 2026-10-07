@@ -403,6 +403,9 @@
         "maintenance.routines[].runs[].startedAt": {
           "type": "string"
         },
+        "scheduleCount": {
+          "type": "number"
+        },
         "schedules": {
           "type": "array"
         },
@@ -3933,13 +3936,16 @@
         "tasks[].humanWait": {
           "type": "null|object"
         },
-        "tasks[].humanWait.context": {
-          "type": "unknown"
-        },
         "tasks[].humanWait.deadlineAt": {
           "type": "string"
         },
         "tasks[].humanWait.name": {
+          "type": "string"
+        },
+        "tasks[].humanWait.quickAction": {
+          "type": "null|object"
+        },
+        "tasks[].humanWait.quickAction.label": {
           "type": "string"
         },
         "tasks[].id": {
@@ -4279,13 +4285,16 @@
         "tasks[].humanWait": {
           "type": "null|object"
         },
-        "tasks[].humanWait.context": {
-          "type": "unknown"
-        },
         "tasks[].humanWait.deadlineAt": {
           "type": "string"
         },
         "tasks[].humanWait.name": {
+          "type": "string"
+        },
+        "tasks[].humanWait.quickAction": {
+          "type": "null|object"
+        },
+        "tasks[].humanWait.quickAction.label": {
           "type": "string"
         },
         "tasks[].id": {

@@ -9,4 +9,5 @@
 
 baseline github.com/stablemates/workhorse/go@v0.6.1 (tag go/v0.6.1)
 
+- ./dashboard.DashboardTaskRow.HumanWait: changed from *DashboardHumanWaitSummary to *DashboardTaskRowHumanWait
 - ./dashboard.HandlerOptions.AuditActor: removed

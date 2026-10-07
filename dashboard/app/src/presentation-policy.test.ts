@@ -8,7 +8,7 @@ import type {
 import type { MaintenancePolicy, RetentionPolicy } from "@stablemates/workhorse";
 import { describe, expect, it } from "vitest";
 import {
-  capActivityGroups,
+  activityChartModel,
   deriveSettingsRecommendations,
   healthCheckMessages,
   presentSchedules,
@@ -185,7 +185,7 @@ describe("dashboard presentation policy", () => {
     ).toEqual(["high", "low"]);
   });
 
-  it("caps activity in the SPA and folds overflow into other", () => {
+  it("caps activity in the SPA and folds overflow into one series", () => {
     const groups = Array.from({ length: 11 }, (_, index) => `group-${index}`);
     const page = {
       groups,
@@ -196,10 +196,55 @@ describe("dashboard presentation policy", () => {
         },
       ],
     } as DashboardActivityPage;
-    const presented = capActivityGroups(page);
-    expect(presented.groups).toHaveLength(10);
-    expect(presented.groups.at(-1)).toBe("other");
-    expect(presented.buckets[0]!.counts.other).toBe(3);
+    const model = activityChartModel(page);
+    expect(model.series).toHaveLength(10);
+    expect(model.series.at(-1)).toMatchObject({ label: "Other", overflow: true });
+    expect(model.buckets[0]!.values[model.series.at(-1)!.id]).toBe(3);
+  });
+
+  it("keys activity series by position, never by a group name", () => {
+    // Recharts reads a dot as a path, a group can be named like the axis key, and an application
+    // can name a group "other" while the cap also folds overflow.
+    const groups = ["a.b", "a_b", "bucket", "other"];
+    const page = {
+      groups,
+      buckets: [
+        {
+          bucketStart: "2026-08-17T12:00:00.000Z",
+          counts: { "a.b": 1, a_b: 2, bucket: 3, other: 4 },
+        },
+      ],
+    } as DashboardActivityPage;
+    const model = activityChartModel(page);
+    const ids = model.series.map(({ id }) => id);
+    expect(new Set(ids).size).toBe(groups.length);
+    for (const id of ids) {
+      expect(groups).not.toContain(id);
+      expect(id).not.toContain(".");
+      expect(id).not.toBe("bucket");
+    }
+    expect(model.series.map(({ label }) => label)).toEqual(["a.b", "a_b", "bucket", "other"]);
+    const values = model.buckets[0]!.values;
+    expect(model.series.map(({ id }) => values[id])).toEqual([1, 2, 3, 4]);
+  });
+
+  it("keeps a group named other apart from the overflow series", () => {
+    const groups = ["other", ...Array.from({ length: 10 }, (_, index) => `group-${index}`)];
+    const page = {
+      groups,
+      buckets: [
+        {
+          bucketStart: "2026-08-17T12:00:00.000Z",
+          counts: { other: 100, ...Object.fromEntries(groups.slice(1).map((g, i) => [g, i + 1])) },
+        },
+      ],
+    } as DashboardActivityPage;
+    const model = activityChartModel(page);
+    const named = model.series.find((series) => series.label === "other")!;
+    const overflow = model.series.find((series) => series.overflow)!;
+    expect(named.overflow).toBe(false);
+    expect(model.buckets[0]!.values[named.id]).toBe(100);
+    expect(model.buckets[0]!.values[overflow.id]).toBe(1 + 2);
   });
 
   it("fabricates maintenance schedule labels and expressions in the SPA", () => {

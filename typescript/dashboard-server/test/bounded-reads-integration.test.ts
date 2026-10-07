@@ -7,7 +7,12 @@ import { describe, expect, it } from "vitest";
 import { Worker } from "../../core/src/index.js";
 import { createIntegrationTestContext } from "../../core/test/support/integration.js";
 import { createDashboardHost } from "../src/server/host.js";
-import { readDashboardTaskDetail, readDashboardTaskValue } from "../src/server/read-model.js";
+import {
+  readDashboardCron,
+  readDashboardTaskDetail,
+  readDashboardTaskValue,
+} from "../src/server/read-model.js";
+import { dashboardPageMax } from "../src/wire.js";
 import { DashboardReadTimeoutError, dashboardDatabase, sql } from "../src/server/sql.js";
 import type { DashboardRouter } from "../src/server/router.js";
 
@@ -162,6 +167,67 @@ describe("bounded dashboard task values", () => {
     await expect(
       dashboardClient(host).dashboard.taskValue({ id: missing, kind: "payload" }),
     ).rejects.toThrow(/Task not found/);
+  });
+});
+
+describe("bounded dashboard listings", () => {
+  it("counts the schedules past the 50 the listing returns", async () => {
+    await pool.query(
+      `INSERT INTO workhorse.schedule_definition
+         (namespace, schedule_name, cron_expression, queue_name, task_type, payload, max_attempts)
+       SELECT 'billing', 'schedule-' || lpad(n::text, 2, '0'), '0 * * * *', 'billing', 'invoice', '{}', 1
+         FROM generate_series(1, 55) AS n`,
+    );
+    const page = await readDashboardCron(dashboardDatabase(pool), {});
+    expect(page.schedules).toHaveLength(50);
+    expect(page.schedules.at(-1)?.name).toBe("schedule-50");
+    expect(page.scheduleCount).toBe(55);
+  });
+
+  it("reads no attempt-history partition older than the Workers page's hour", async () => {
+    // A volatile cutoff in the predicate kept the planner from pruning, so every poll read each
+    // retained day. A backend's scan counts show which partitions one call touched. They include
+    // work not yet flushed to the statistics system, so the test compares before and after.
+    const oldDay = new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10);
+    await pool.query("SELECT workhorse.create_history_day_v1($1::date)", [oldDay]);
+    const client = await pool.connect();
+    const scanCounts = async () => {
+      const result = await client.query<{ partition: string; scans: string }>(
+        `SELECT child.relname AS partition, pg_stat_get_xact_numscans(child.oid) AS scans
+           FROM pg_inherits
+           JOIN pg_class child ON child.oid = pg_inherits.inhrelid
+          WHERE pg_inherits.inhparent = 'workhorse.attempt_history'::regclass`,
+      );
+      return new Map(result.rows.map((row) => [row.partition, Number(row.scans)]));
+    };
+    try {
+      await client.query("BEGIN");
+      const before = await scanCounts();
+      await client.query(
+        `SELECT workhorse.dashboard_workers_v1('{"configuredWorkers": ["worker-a"]}'::jsonb)`,
+      );
+      const after = await scanCounts();
+      const scanned = [...after].filter(([partition, count]) => count > before.get(partition)!);
+      const names = scanned.map(([partition]) => partition);
+      expect(names).not.toContain(`attempt_history_${oldDay.replaceAll("-", "")}`);
+      // The counter does move: the read scanned the partitions that can hold the past hour.
+      expect(names.length).toBeGreaterThan(0);
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
+  });
+
+  it("accepts the last page the browser's pager offers and rejects the next", async () => {
+    const client = dashboardClient(
+      createDashboardHost({ database: pool, path: "/", authorize: () => true }),
+    );
+    await expect(client.dashboard.events({ page: dashboardPageMax })).resolves.toMatchObject({
+      page: dashboardPageMax,
+    });
+    await expect(client.dashboard.events({ page: dashboardPageMax + 1 })).rejects.toThrow(
+      /Input validation failed|BAD_REQUEST/i,
+    );
   });
 });
 

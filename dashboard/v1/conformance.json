@@ -1214,12 +1214,10 @@
                     },
                     "humanWait": {
                       "name": "review",
-                      "context": {
-                        "question": "Approve the conformance run?"
-                      },
                       "deadlineAt": {
                         "$type": "timestamp"
-                      }
+                      },
+                      "quickAction": null
                     },
                     "updatedAt": {
                       "$type": "timestamp"
@@ -2701,7 +2699,8 @@
                       "recordedRunCount": 0
                     }
                   ]
-                }
+                },
+                "scheduleCount": 1
               }
             }
           },
@@ -5688,12 +5687,10 @@
                     },
                     "humanWait": {
                       "name": "review",
-                      "context": {
-                        "question": "Approve the conformance run?"
-                      },
                       "deadlineAt": {
                         "$type": "timestamp"
-                      }
+                      },
+                      "quickAction": null
                     },
                     "updatedAt": {
                       "$type": "timestamp"
@@ -7196,12 +7193,10 @@
                     },
                     "humanWait": {
                       "name": "review",
-                      "context": {
-                        "question": "Approve the conformance run?"
-                      },
                       "deadlineAt": {
                         "$type": "timestamp"
-                      }
+                      },
+                      "quickAction": null
                     },
                     "updatedAt": {
                       "$type": "timestamp"
@@ -8009,12 +8004,10 @@
                     },
                     "humanWait": {
                       "name": "review",
-                      "context": {
-                        "question": "Approve the conformance run?"
-                      },
                       "deadlineAt": {
                         "$type": "timestamp"
-                      }
+                      },
+                      "quickAction": null
                     },
                     "updatedAt": {
                       "$type": "timestamp"

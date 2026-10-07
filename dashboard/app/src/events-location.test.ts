@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { dashboardPageMax } from "@stablemates/workhorse-dashboard-server/wire";
 import {
   defaultEventsLocation,
   eventsListingKey,
@@ -38,6 +39,15 @@ describe("events location state", () => {
     ).toEqual({ ...defaultEventsLocation, types: ["failed"] });
     expect(parseEventsLocation("?from=2026-08-16T12:00:00Z&to=2026-08-15T12:00:00Z")).toEqual(
       defaultEventsLocation,
+    );
+  });
+
+  it("never asks for a page past the one the server accepts", () => {
+    // A bookmarked or hand-edited URL would otherwise send a page the router rejects.
+    expect(parseEventsLocation(`?page=${dashboardPageMax + 1}`).page).toBe(dashboardPageMax);
+    expect(parseEventsLocation(`?page=${dashboardPageMax}`).page).toBe(dashboardPageMax);
+    expect(eventsLocationHref({ ...defaultEventsLocation, page: dashboardPageMax + 5 })).toBe(
+      `/events?page=${dashboardPageMax}`,
     );
   });
 
