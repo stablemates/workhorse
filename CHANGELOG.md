@@ -120,6 +120,8 @@ The TypeScript worker measures lease windows and expiry timers on the monotonic 
 
 Migration 0061 (`0061-bound-the-scan-cost-of-fast-dead-letters-statistics-and-repeated-ticks.sql`) bounds three reads whose cost grew with table size or fleet size (SM-1167). The new `fast_task_outcome_failed_finished_idx` lets `list_dead_letters_v1` read only failed fast-tier outcomes. `aggregate_stats_v1` no longer materializes fast-tier rows that cannot hold a fact inside its window, so a backlog enqueued earlier stays out of every rollup. `tick_v1` runs the expired-lease scan, which reads every active lease, only when no tick ran it within half the shortest maintenance interval of the live registered workers. It records that run in the new `maintenance_state.lease_recovery_started_at` column. Promotion and the deadline and timeout scans still run on every tick, and while workers keep ticking, expired leases are still recovered within one interval.
 
+A TypeScript handler whose deadline or attempt timeout PostgreSQL confirms now always sees `DeadlineExceededError` or `ExecutionTimeoutError` as its abort reason. A heartbeat could answer `stale` after `expire_owned_v1` committed the expiry and before its answer arrived, and the handler was aborted as a lost lease. A `stale` heartbeat answer now waits for an in-flight expiry answer, and a real lease loss still aborts with the lease-loss error (SM-1195).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

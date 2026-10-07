@@ -168,8 +168,7 @@ export class TaskAttempt {
 
   /** Stop renewing the lease and cancel the local expiration timer. */
   stop(): void {
-    this.heartbeatStopped = true;
-    this.removeHeartbeatLease?.();
+    this.stopHeartbeat();
     this.cancelExpirationTimer?.();
     this.cancelExpirationTimer = undefined;
     this.cancelLeaseWatchdog?.();
@@ -239,6 +238,12 @@ export class TaskAttempt {
       // release. Both remaining answers mean this worker no longer owns what it is handing back.
       if (this.arbiter.submit("lease_expired")) this.recordExecution("lease_lost");
     }
+  }
+
+  private stopHeartbeat(): void {
+    this.heartbeatStopped = true;
+    this.removeHeartbeatLease?.();
+    this.removeHeartbeatLease = undefined;
   }
 
   private abort(reason: Error): void {
@@ -365,9 +370,25 @@ export class TaskAttempt {
       this.expireOwnershipInBackground();
       this.abort(new ExecutionTimeoutError(this.task.id, this.task.attempt));
     } else if (status === "stale") {
-      this.arbiter.submit("lease_expired");
-      this.stop();
-      this.abort(new Error("Task lease was lost"));
+      const expiration = this.expirationPromise;
+      if (expiration === undefined) {
+        this.loseLease();
+        return;
+      }
+      // expire_owned_v1 is in flight, and its own commit can be what this heartbeat found missing.
+      // Its answer names the outcome, so the lease is reported lost only if that answer does not.
+      // The lease watchdog keeps running and still ends the attempt if the answer never comes.
+      this.stopHeartbeat();
+      void expiration.then(
+        () => this.loseLease(),
+        () => this.loseLease(),
+      );
     }
+  }
+
+  private loseLease(): void {
+    this.arbiter.submit("lease_expired");
+    this.stop();
+    this.abort(new Error("Task lease was lost"));
   }
 }
