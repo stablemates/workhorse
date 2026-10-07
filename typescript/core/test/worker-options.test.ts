@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { MAX_TIMER_DELAY_MS } from "../src/timers.js";
 import { Worker, type WorkerOptions, type WorkerQueueApi } from "../src/worker.js";
 
 // SM-1034: a comparison with NaN is always false, so the Worker constructor accepted NaN, the
 // infinities, and fractions for its timing and limit options. Each value then failed later in a
 // timer, the heartbeat statement timeout, or an integer SQL parameter.
+//
+// SM-1169: a Node timer whose delay exceeds MAX_TIMER_DELAY_MS fires after 1 ms, so an interval
+// above it would run every millisecond.
+
+const overTimerMaximum = MAX_TIMER_DELAY_MS + 1;
 
 function recordingQueue() {
   const calls: string[] = [];
@@ -25,11 +31,11 @@ function recordingQueue() {
 
 const invalid: Array<[keyof WorkerOptions, number[]]> = [
   ["leaseMs", [Number.NaN, Infinity, -1, 0, 1.5]],
-  ["heartbeatMs", [Number.NaN, Infinity, -1, 0, 1.5]],
-  ["pollMs", [Number.NaN, Infinity, -1, 1.5]],
-  ["maintenanceIntervalMs", [Number.NaN, Infinity, -1, 99, 100.5]],
-  ["maintenanceRoutinePollMs", [Number.NaN, Infinity, -1, 99, 100.5]],
-  ["registryIntervalMs", [Number.NaN, Infinity, -1, 99, 100.5]],
+  ["heartbeatMs", [Number.NaN, Infinity, -1, 0, 1.5, overTimerMaximum]],
+  ["pollMs", [Number.NaN, Infinity, -1, 1.5, overTimerMaximum]],
+  ["maintenanceIntervalMs", [Number.NaN, Infinity, -1, 99, 100.5, overTimerMaximum]],
+  ["maintenanceRoutinePollMs", [Number.NaN, Infinity, -1, 99, 100.5, overTimerMaximum]],
+  ["registryIntervalMs", [Number.NaN, Infinity, -1, 99, 100.5, overTimerMaximum]],
   ["scheduleCatchupLimit", [Number.NaN, Infinity, -1, 0, 1.5, 10_001]],
   ["retryDelayMs", [Number.NaN, Infinity, -1, 1.5]],
 ];
@@ -60,6 +66,17 @@ describe("Worker timing and limit options", () => {
           maintenanceRoutinePollMs: 100,
           leaseMs: 2,
           heartbeatMs: 1,
+        }),
+    ).not.toThrow();
+    expect(
+      () =>
+        new Worker(queue, {
+          pollMs: MAX_TIMER_DELAY_MS,
+          maintenanceIntervalMs: MAX_TIMER_DELAY_MS,
+          maintenanceRoutinePollMs: MAX_TIMER_DELAY_MS,
+          registryIntervalMs: MAX_TIMER_DELAY_MS,
+          leaseMs: MAX_TIMER_DELAY_MS + 1,
+          heartbeatMs: MAX_TIMER_DELAY_MS,
         }),
     ).not.toThrow();
     expect(() => new Worker(queue, { retryDelayMs: () => undefined })).not.toThrow();

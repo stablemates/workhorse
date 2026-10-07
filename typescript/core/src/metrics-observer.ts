@@ -1,5 +1,6 @@
 import { SQL_STATEMENTS } from "./queue/sql-catalogue.generated.js";
 import { lazyGauge } from "./telemetry.js";
+import { MAX_TIMER_DELAY_MS } from "./timers.js";
 import { EXTERNAL_WAIT_REJECTION_WINDOW_MS, type Queryable } from "./types.js";
 
 // Every instrument here uses the lazy lifecycle selected by ADR 0024. A module-scope instrument
@@ -97,8 +98,15 @@ export class WorkhorseMetricsObserver {
     this.intervalMs = options.intervalMs ?? 10_000;
     this.onError =
       options.onError ?? ((error) => console.error("Workhorse metrics collection failed", error));
-    if (!Number.isSafeInteger(this.intervalMs) || this.intervalMs < 1_000) {
-      throw new RangeError("metrics intervalMs must be a safe integer of at least 1000");
+    // Node runs a setInterval delay above the timer maximum every millisecond.
+    if (
+      !Number.isSafeInteger(this.intervalMs) ||
+      this.intervalMs < 1_000 ||
+      this.intervalMs > MAX_TIMER_DELAY_MS
+    ) {
+      throw new RangeError(
+        `metrics intervalMs must be a safe integer between 1000 and ${MAX_TIMER_DELAY_MS}`,
+      );
     }
   }
 

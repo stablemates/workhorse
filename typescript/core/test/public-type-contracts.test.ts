@@ -1,6 +1,14 @@
 import { expectTypeOf, it } from "vitest";
 import { Pool } from "../src/index.js";
-import type { Admin, ClaimedTask, TaskSnapshot, Queryable, Queue } from "../src/index.js";
+import type {
+  Admin,
+  ChildTaskOptions,
+  ChildTaskRequest,
+  ClaimedTask,
+  TaskSnapshot,
+  Queryable,
+  Queue,
+} from "../src/index.js";
 
 function assertNonJsonTypeArgumentsFail(queue: Queue, admin: Admin): void {
   // @ts-expect-error Date cannot be stored in a JSON payload column.
@@ -17,6 +25,10 @@ it("constrains claimed payloads and snapshot results to JSON", () => {
   expectTypeOf<Awaited<ReturnType<Queue["claim"]>>>().toEqualTypeOf<ClaimedTask | null>();
   expectTypeOf<Awaited<ReturnType<Admin["getTask"]>>>().toEqualTypeOf<TaskSnapshot | null>();
   expectTypeOf(assertNonJsonTypeArgumentsFail).toBeFunction();
+});
+
+it("exports the options type that child task requests name", () => {
+  expectTypeOf<NonNullable<ChildTaskRequest["options"]>>().toEqualTypeOf<ChildTaskOptions>();
 });
 
 it("exports the default node-postgres pool as a queryable", () => {

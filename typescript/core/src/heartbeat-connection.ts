@@ -82,14 +82,21 @@ export class ReservedConnection {
     return round;
   }
 
-  /** Stop reserving and return the client to its pool once every round in flight settles. */
+  /**
+   * Stop reserving and return the client to its pool once every round in flight settles.
+   *
+   * Each round is bounded, but a reservation's connect is not: it can wait behind an exhausted pool
+   * indefinitely. Close does not wait for it, and releases a client that arrives later.
+   */
   async close(): Promise<void> {
     this.closed = true;
     await Promise.allSettled(this.rounds);
     const pending = this.client;
     this.client = undefined;
-    const client = await pending?.catch(() => undefined);
-    client?.release();
+    void pending?.then(
+      (client) => client.release(),
+      () => undefined,
+    );
   }
 
   private acquire(): Promise<ReservedClient> {

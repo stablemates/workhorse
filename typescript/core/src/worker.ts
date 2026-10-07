@@ -15,6 +15,7 @@ import { HumanWaitConflictError } from "./queue/human-waits.js";
 import { errorForTelemetry, type FailureStatus } from "./queue/claim-lease-fence.js";
 import { jitterDuration } from "./notifications.js";
 import type { TaskNotificationSubscription } from "./notifications.js";
+import { MAX_TIMER_DELAY_MS } from "./timers.js";
 import type {
   ScheduleWaitRequest,
   ScheduleWaitResult,
@@ -458,6 +459,18 @@ export interface WorkerOptions {
   failpoint?: Failpoint | ((point: Failpoint, task: ClaimedTask) => boolean | Promise<boolean>);
 }
 
+// An interval drives a Node timer, which fires after 1 ms when its delay exceeds the timer maximum.
+function requireTimerInterval(
+  name: string,
+  value: number,
+  minimum: number,
+  range = `between ${minimum} and ${MAX_TIMER_DELAY_MS}`,
+): void {
+  if (!Number.isSafeInteger(value) || value < minimum || value > MAX_TIMER_DELAY_MS) {
+    throw new Error(`${name} must be a safe integer ${range}`);
+  }
+}
+
 function requireSafeInteger(
   name: string,
   value: number,
@@ -750,13 +763,18 @@ export class Worker {
     // A comparison with NaN is always false, so each option must first be a safe integer. A bad
     // value would otherwise surface later in a timer, a statement timeout, or a SQL parameter.
     requireSafeInteger("leaseMs", this.leaseMs, 1);
-    requireSafeInteger("heartbeatMs", this.heartbeatMs, 1);
+    requireTimerInterval("heartbeatMs", this.heartbeatMs, 1);
     if (this.heartbeatMs >= this.leaseMs) throw new Error("heartbeatMs must be less than leaseMs");
-    requireSafeInteger("pollMs", this.pollMs, 0);
-    requireSafeInteger("maintenanceIntervalMs", this.maintenanceIntervalMs, 100);
-    requireSafeInteger("maintenanceRoutinePollMs", this.maintenanceRoutinePollMs, 100);
+    requireTimerInterval("pollMs", this.pollMs, 0);
+    requireTimerInterval("maintenanceIntervalMs", this.maintenanceIntervalMs, 100);
+    requireTimerInterval("maintenanceRoutinePollMs", this.maintenanceRoutinePollMs, 100);
     if (this.registryIntervalMs !== 0)
-      requireSafeInteger("registryIntervalMs", this.registryIntervalMs, 100, "0 or at least 100");
+      requireTimerInterval(
+        "registryIntervalMs",
+        this.registryIntervalMs,
+        100,
+        `0 or between 100 and ${MAX_TIMER_DELAY_MS}`,
+      );
     requireSafeInteger("scheduleCatchupLimit", this.scheduleCatchupLimit, 1, "between 1 and 10000");
     if (this.scheduleCatchupLimit > 10_000)
       throw new Error("scheduleCatchupLimit must be a safe integer between 1 and 10000");

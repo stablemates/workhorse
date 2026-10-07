@@ -48,6 +48,7 @@ type ChildOutcome
 type ChildOutcomes
 class ChildResultLimitExceededError
 interface ChildTask
+type ChildTaskOptions
 interface ChildTaskRequest
 interface ClaimedTask
 type ColdExportDataset

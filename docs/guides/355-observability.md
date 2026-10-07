@@ -88,13 +88,13 @@ rows, so multiple observers would export duplicate gauges and add unnecessary qu
 <details>
 <summary>Reference: WorkhorseMetricsObserver</summary>
 
-| Member       | Behavior                                                     |
-| ------------ | ------------------------------------------------------------ |
-| `intervalMs` | Default 10,000. A safe integer of at least 1,000.            |
-| `start()`    | Collects immediately, then repeats on an unreferenced timer. |
-| `stop()`     | Clears the timer.                                            |
-| `collect()`  | One serialized collection.                                   |
-| `onError`    | Receives interval failures.                                  |
+| Member       | Behavior                                                         |
+| ------------ | ---------------------------------------------------------------- |
+| `intervalMs` | Default 10,000. A safe integer from 1,000 through 2,147,483,647. |
+| `start()`    | Collects immediately, then repeats on an unreferenced timer.     |
+| `stop()`     | Clears the timer.                                                |
+| `collect()`  | One serialized collection.                                       |
+| `onError`    | Receives interval failures.                                      |
 
 Each collection runs two read-only queries at once.
 
