@@ -1926,8 +1926,14 @@ func (worker *Worker) execute(
 		handlerStartedLogMessage,
 		func() []any { return taskLogAttributes(task, worker.workerID) },
 	)
+	settledAfterShutdown := false
 	defer func() {
-		finishHandlerSpan(span, outcome, resultError)
+		// The stop still ends execute with its error, but a settled task is not a failed span.
+		spanError := resultError
+		if settledAfterShutdown {
+			spanError = nil
+		}
+		finishHandlerSpan(span, outcome, spanError)
 		worker.metrics.recordHandler(handlerParent, task, outcome, time.Since(startedAt))
 		attributes := func() []any {
 			return append(
@@ -1994,16 +2000,21 @@ func (worker *Worker) execute(
 	cancelHandler(nil)
 	cancelDeadline()
 
-	// A handler that fails after the stop cancelled it returns its task to the queue without an
-	// attempt. A panic still fails the attempt. The stop is the end of Run, or of the context a caller passed to RunOnce. The
-	// supervisor usually reports it first, as its ownership error.
+	// The stop is the end of Run, or of the context a caller passed to RunOnce. The supervisor
+	// usually reports it first, as its ownership error. A handler that fails after the stop
+	// cancelled it returns its task to the queue without an attempt, and a panic still fails the
+	// attempt. A handler that returns a value once the stop has come completes its task, whether
+	// it returned before or after its cancellation.
 	var panicked *HandlerPanicError
-	stoppedForShutdown := handlerError != nil && !errors.As(handlerError, &panicked) &&
-		ctx.Err() != nil && cancelledAtReturn != nil &&
-		errors.Is(cancelledAtReturn, context.Cause(ctx)) && !durability.suspended.Load()
+	stoppedForShutdown := !durability.suspended.Load() && ctx.Err() != nil &&
+		((handlerError == nil && cancelledAtReturn == nil) ||
+			(cancelledAtReturn != nil && errors.Is(cancelledAtReturn, context.Cause(ctx)) &&
+				!errors.As(handlerError, &panicked)))
 	if ownership.err != nil {
 		if stoppedForShutdown && errors.Is(ownership.err, ctx.Err()) {
-			outcome = worker.releaseAfterShutdown(ctx, executor, task)
+			outcome = worker.settleAfterShutdown(ctx, executor, task, result, handlerError)
+			settledAfterShutdown = outcome == handlerOutcomeSucceeded ||
+				outcome == handlerOutcomeReleased
 		}
 		return ownership.err
 	}
@@ -2055,7 +2066,9 @@ func (worker *Worker) execute(
 	if ctx.Err() != nil {
 		outcome = handlerOutcomeCanceled
 		if stoppedForShutdown {
-			outcome = worker.releaseAfterShutdown(ctx, executor, task)
+			outcome = worker.settleAfterShutdown(ctx, executor, task, result, handlerError)
+			settledAfterShutdown = outcome == handlerOutcomeSucceeded ||
+				outcome == handlerOutcomeReleased
 		}
 		return ctx.Err()
 	}
@@ -2703,27 +2716,52 @@ func (worker *Worker) release(ctx context.Context, executor Executor, task Claim
 	})
 }
 
-// releaseAfterShutdown returns the task of a handler that stopped for shutdown to its queue, so the
-// stop charges no attempt. The release runs within the unwind window: when it fails, the worker
-// logs the failure and lease recovery settles the task, as it would without this release.
-func (worker *Worker) releaseAfterShutdown(
+// settleAfterShutdown settles the task of a handler that returned once the stop had come, so the
+// stop leaves no finished task to lease recovery. A returned value completes the task, as it would
+// without the stop. A handler error, or a value the task cannot store, returns the task to its
+// queue and charges no attempt. Both writes are fenced and share one unwind window: when the write
+// fails, the worker logs the failure and lease recovery settles the task, as it would without this
+// settlement. A rejected completion is reconciled first, within the same window.
+func (worker *Worker) settleAfterShutdown(
 	ctx context.Context,
 	executor Executor,
 	task ClaimedTask,
+	result any,
+	handlerError error,
 ) handlerOutcome {
-	releaseContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), handlerUnwindPeriod)
+	settleContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), handlerUnwindPeriod)
 	defer cancel()
 	outcome := handlerOutcomeCanceled
-	err := worker.releaseOwned(releaseContext, executor, task, func(released handlerOutcome) {
-		outcome = released
-	})
+	var err error
+	var encoded []byte
+	if handlerError == nil {
+		encoded, err = worker.encodeResult(settleContext, executor, task, result)
+	}
+	if handlerError == nil && err == nil {
+		// Without its slot, a fast-tier completion goes alone: a batch runs on its first entry's
+		// context, which the stop may already have cancelled, and the stopped loop claims nothing.
+		alone := task
+		alone.slot = nil
+		err = worker.complete(settleContext, executor, alone, encoded)
+		if err == nil {
+			outcome = handlerOutcomeSucceeded
+		} else if errors.Is(err, ErrStaleLease) {
+			// As after a normal completion, a cancellation request or an expiry may have won the
+			// fence. Reconciling acknowledges or settles it, so only a lost lease reaches recovery.
+			outcome = handlerOutcomeLeaseLost
+			err = worker.reconcileRejectedSettlement(settleContext, executor, task, err)
+		}
+	} else {
+		err = worker.releaseOwned(settleContext, executor, task, func(released handlerOutcome) {
+			outcome = released
+		})
+	}
 	if err != nil {
 		worker.logger.WarnContext(
 			ctx,
-			shutdownReleaseFailedMessage,
+			shutdownSettlementFailedMessage,
 			append(taskLogAttributes(task, worker.workerID), slog.String(errorLogField, err.Error()))...,
 		)
-		return handlerOutcomeCanceled
 	}
 	return outcome
 }

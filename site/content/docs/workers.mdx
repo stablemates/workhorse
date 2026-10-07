@@ -814,7 +814,8 @@ stops the run. The deadline bounds every shutdown step, including a claim still 
 registry update that marks the worker draining. A claim the deadline cuts short may hold a lease it
 never returned. PostgreSQL recovers that task once the lease expires. A handler cancelled at the
 deadline does not turn a clean shutdown into an error. When that handler returns an error, the worker
-hands its task back to the queue without charging an attempt.
+hands its task back to the queue without charging an attempt. When it returns a value instead, the
+worker completes its task.
 
 A Rust worker starts its grace period, `shutdown_grace_period`, as soon as `Worker::run` observes its
 shutdown future. The same deadline bounds a claim in flight and the registry update that marks the
