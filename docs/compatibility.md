@@ -419,7 +419,9 @@ one commit and one version number.
 The Python package releases from its own `python/vX.Y.Z` tag. The tag must match
 `python/pyproject.toml` and a heading in `python/CHANGELOG.md`. `.github/workflows/release-python.yml`
 requires a successful `main` CI run on the tagged commit. It then runs `pnpm python:release-check`,
-which builds a source distribution and universal wheel with uv, and `pnpm rust:release-check`.
+which builds a source distribution and universal wheel with uv. It runs no Rust check. The required
+`main` CI run includes `pnpm rust:gates`, and the build job of `release.yml` runs
+`pnpm rust:release-check` before any npm, crate, or gem publish.
 A separate `pypi` environment publishes those artifacts through PyPI trusted publishing with
 `id-token: write`.
 Before publication, the publish task generates a PEP 740 attestation beside each distribution.

@@ -2,6 +2,8 @@
 # as the matching v* and go/v* tags, so all three registries carry one version (ADR 0050).
 # The build job validates only Python and the dashboard assets embedded in its distributions. It
 # carries no publication identity; only the PyPI environment can mint the publisher token.
+# It runs no Rust check: main CI runs the Rust gates on this commit, and release.yml runs
+# `pnpm rust:release-check` before any npm, crate, or gem publish (SM-1102).
 # The attestation rehearsal proves, before publish and on every dry run, that the pinned uv uploads
 # a PEP 740 attestation with each distribution. uv before 0.9.12 dropped them silently (SM-1098).
 name: Release Python
@@ -75,17 +77,6 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: actions-rust-lang/setup-rust-toolchain@c8ff772090ab9d00f7f7bd7b388f3c3032282e3b # v1
-        with:
-          toolchain: 1.89.0
-          components: rustfmt, clippy
-      - name: Install matching PostgreSQL client
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes postgresql-common
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install --yes postgresql-client-18
-          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: 0.12.21 # Pinned to the uv version in mise.toml.
@@ -93,7 +84,6 @@ jobs:
       # The tooling that builds these distributions is judged before they are built for publication.
       - run: pnpm tooling:vuln
       - run: pnpm python:release-check
-      - run: pnpm rust:release-check
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
