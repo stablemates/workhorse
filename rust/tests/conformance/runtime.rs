@@ -1368,8 +1368,9 @@ async fn oversized_result(database: &ScratchDatabase, fixture: &Value) -> Checke
     })
 }
 
-/// Stops the worker while its handler runs. The handler returns an error once the shutdown grace
-/// cancels it. One attempt makes a charged attempt fail the task for good.
+/// Stops the worker while its handler runs. Once the shutdown grace cancels the handler, it returns
+/// an error or a value, as `handlerResult` says. One attempt makes a charged attempt fail the task
+/// for good.
 async fn shutdown_cancellation(database: &ScratchDatabase, fixture: &Value) -> Checked {
     let behavior = text(&fixture["shutdownBehavior"], "rust");
     check(behavior == "cancel", || {
@@ -1391,6 +1392,7 @@ async fn shutdown_cancellation(database: &ScratchDatabase, fixture: &Value) -> C
             ..options(fixture)
         },
     )?;
+    let returns_value = text(fixture, "handlerResult") == "value";
     let (started, mut handler_started) = watch::channel(false);
     let reasons = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&reasons);
@@ -1400,7 +1402,10 @@ async fn shutdown_cancellation(database: &ScratchDatabase, fixture: &Value) -> C
             let _ = started.send(true);
             context.cancellation().cancelled().await;
             seen.lock().unwrap().push(context.cancellation().reason());
-            Err::<Value, _>(HandlerError::named("Cancelled", "the worker is shutting down"))
+            if returns_value {
+                return Ok(json!({ "finished": true }));
+            }
+            Err(HandlerError::named("Cancelled", "the worker is shutting down"))
         }
     });
     let (stop, running) = run(&worker);

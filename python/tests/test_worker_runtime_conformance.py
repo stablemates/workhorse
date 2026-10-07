@@ -1174,7 +1174,7 @@ def execute_shutdown_cancellation_fixture(
     """The Python worker has no shutdown grace: its drain waits for every running handler.
 
     So the handler outlives the stop, never sees its cancellation, and completes on its only
-    attempt.
+    attempt. It returns a value whatever `handlerResult` says, because no cancellation reaches it.
     """
     assert fixture["shutdownBehavior"]["python"] == "drain"
     queue_name = runtime_queue(fixture)

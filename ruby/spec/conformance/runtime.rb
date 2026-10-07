@@ -702,8 +702,9 @@ module Conformance
       end
     end
 
-    # The handler waits for its cancellation, then raises CancelledError(:shutdown) through check!.
-    # One attempt makes a charged attempt fail the task for good.
+    # The handler waits for its cancellation. With an "error" handlerResult it then raises
+    # CancelledError(:shutdown) through check!; with a "value" one it returns a value. One attempt
+    # makes a charged attempt fail the task for good.
     def shutdown_cancellation(fixture)
       check(fixture.dig("shutdownBehavior", "ruby") == "cancel", "the fixture does not expect a cancelling Ruby worker")
       task_id = queue.enqueue(fixture["taskType"], {}, queue: queue_name(fixture),
@@ -717,7 +718,8 @@ module Conformance
             raise "the shutdown never reached the handler" unless context.cancellation.wait(5)
 
             reasons << context.cancellation.reason
-            context.cancellation.check!
+            context.cancellation.check! if fixture["handlerResult"] == "error"
+            {"finished" => true}
           end
         thread = Thread.new { subject.run }
         check(started.wait(5), "the handler never started")

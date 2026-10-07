@@ -915,9 +915,10 @@ func executeWorkerOversizedResultFixture(t *testing.T, fixture workerRuntimeFixt
 	}
 }
 
-// executeWorkerShutdownCancellationFixture stops the worker while its handler runs. The handler
-// returns once the shutdown grace cancels its context. One attempt makes a charged attempt fail the
-// task, either at once or when lease recovery settles an abandoned lease.
+// executeWorkerShutdownCancellationFixture stops the worker while its handler runs. Once the
+// shutdown grace cancels its context, the handler returns an error or a value, as HandlerResult
+// says. One attempt makes a charged attempt fail the task, either at once or when lease recovery
+// settles an abandoned lease.
 func executeWorkerShutdownCancellationFixture(t *testing.T, fixture workerRuntimeFixture) {
 	if fixture.ShutdownBehavior["go"] != "cancel" {
 		t.Fatalf("the fixture expects Go shutdown behavior %q, want cancel", fixture.ShutdownBehavior["go"])
@@ -953,6 +954,9 @@ func executeWorkerShutdownCancellationFixture(t *testing.T, fixture workerRuntim
 	) (any, error) {
 		close(started)
 		<-handlerContext.Done()
+		if fixture.HandlerResult == "value" {
+			return map[string]bool{"finished": true}, nil
+		}
 		return nil, context.Cause(handlerContext)
 	})
 	runContext, stop := context.WithCancel(ctx)

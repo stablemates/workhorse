@@ -85,7 +85,8 @@
     "maintenance-phase-resilience",
     "terminal-replay-conflict",
     "result-size-limit",
-    "shutdown-cancellation-release"
+    "shutdown-cancellation-release",
+    "shutdown-cancellation-completion"
   ],
   "functions": [
     {

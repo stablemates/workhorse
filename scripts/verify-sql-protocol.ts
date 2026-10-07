@@ -265,13 +265,15 @@ export interface OversizedResultRuntimeFixture extends RuntimeFixtureBase {
 
 /**
  * A worker that stops while a handler runs charges that handler no attempt. A worker with a
- * shutdown grace (`cancel`) cancels the handler once `shutdownGraceMs` elapses; the handler raises,
- * and the worker releases its task. A worker without one (`drain`) waits for the handler, which
- * returns after `drainHoldMs` without seeing a cancellation. One attempt makes a charged attempt
- * fail the task for good.
+ * shutdown grace (`cancel`) cancels the handler once `shutdownGraceMs` elapses. A handler whose
+ * `handlerResult` is `error` then raises, and the worker releases its task; one whose
+ * `handlerResult` is `value` returns a value, and the worker completes its task. A worker without
+ * a grace (`drain`) waits for the handler, which returns after `drainHoldMs` without seeing a
+ * cancellation. One attempt makes a charged attempt fail the task for good.
  */
 export interface ShutdownCancellationRuntimeFixture extends RuntimeFixtureBase {
   kind: "shutdown-cancellation";
+  handlerResult: "error" | "value";
   maxAttempts: number;
   shutdownGraceMs: number;
   drainHoldMs: number;
