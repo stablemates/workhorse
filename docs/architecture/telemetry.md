@@ -207,15 +207,19 @@ The `task.trace_context` column has these rules:
 consumer span. The Go worker performs the same extraction and creates the same consumer span. A
 stored enqueue or caller context can therefore parent any language's handler span.
 
-The TypeScript, Python, and Go workers start an untraced task's handler span as a new trace. A span
-active where the worker runs does not parent it. TypeScript extracts a stored context onto
-`ROOT_CONTEXT`, and Python extracts it onto an empty `Context`. Go `extractTraceContext` replaces the
-span in the worker's context with an empty span context before extraction. The Go handler context
-keeps the worker context's cancellation and values.
+Every worker parents a handler span only to its task's stored context. A task without one starts a
+new trace, even when a span is active where the worker runs. Each worker achieves this as follows:
 
-The Rust and Ruby workers parent an untraced task's handler span to the span current where the
-worker starts it. Rust `telemetry::handler_span` takes the current `tracing` span as its parent.
-Ruby `Telemetry.span` falls back to `OpenTelemetry::Context.current`.
+- TypeScript extracts a stored context onto `ROOT_CONTEXT`.
+- Python `_telemetry.start_span` starts a consumer span from an empty `Context` and extracts a
+  stored context onto it.
+- Go `extractTraceContext` replaces the span in the worker's context with an empty span context
+  before extraction. The Go handler context keeps the worker context's cancellation and values.
+- Rust `telemetry::handler_span` sets the span's OpenTelemetry parent to the stored context, or to
+  an empty `Context`. The `tracing` span keeps its contextual parent, so its log events still nest
+  under the caller's `tracing` span.
+- Ruby `Telemetry.span` starts a consumer span from `OpenTelemetry::Context.empty` and extracts a
+  stored context onto it.
 
 Child tasks prefer the parent task's stored context over the ambient handler context. Replay
 therefore preserves the original trace chain.
