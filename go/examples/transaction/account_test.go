@@ -111,11 +111,13 @@ func createTransactionDatabase(t *testing.T, sourceURL string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, statement := range []string{"DROP DATABASE IF EXISTS ", "CREATE DATABASE "} {
-		if _, err := admin.Exec(ctx, statement+quotedName); err != nil {
-			_ = admin.Close(ctx)
-			t.Fatal(err)
-		}
+	if err := dropScratchDatabase(ctx, admin, databaseName); err != nil {
+		_ = admin.Close(ctx)
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, "CREATE DATABASE "+quotedName); err != nil {
+		_ = admin.Close(ctx)
+		t.Fatal(err)
 	}
 	if err := admin.Close(ctx); err != nil {
 		t.Fatal(err)
@@ -127,9 +129,8 @@ func createTransactionDatabase(t *testing.T, sourceURL string) string {
 			return
 		}
 		defer func() { _ = admin.Close(ctx) }()
-		_, _ = admin.Exec(ctx, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()", databaseName)
-		if _, err := admin.Exec(ctx, "DROP DATABASE IF EXISTS "+quotedName); err != nil {
-			t.Errorf("drop transaction example database: %v", err)
+		if err := dropScratchDatabase(ctx, admin, databaseName); err != nil {
+			t.Errorf("drop transaction example database: %v; run pnpm db:sweep", err)
 		}
 	})
 
