@@ -452,6 +452,7 @@
     "kind": "shutdown-cancellation",
     "covers": ["shutdown-cancellation-release"],
     "taskType": "protocol.shutdown-cancellation",
+    "handlerResult": "error",
     "maxAttempts": 1,
     "shutdownGraceMs": 50,
     "drainHoldMs": 200,
@@ -466,6 +467,29 @@
       "state": "ready",
       "attempt": 1,
       "events": ["enqueued", "claimed", "released"]
+    },
+    "expectedDrained": { "state": "succeeded", "attempt": 1 }
+  },
+  {
+    "id": "shutdown-cancellation-completes-a-task-whose-handler-returns-a-value",
+    "kind": "shutdown-cancellation",
+    "covers": ["shutdown-cancellation-completion"],
+    "taskType": "protocol.shutdown-cancellation-value",
+    "handlerResult": "value",
+    "maxAttempts": 1,
+    "shutdownGraceMs": 50,
+    "drainHoldMs": 200,
+    "shutdownBehavior": {
+      "typescript": "drain",
+      "python": "drain",
+      "go": "cancel",
+      "rust": "cancel",
+      "ruby": "cancel"
+    },
+    "expectedCancelled": {
+      "state": "succeeded",
+      "attempt": 1,
+      "events": ["enqueued", "claimed", "succeeded"]
     },
     "expectedDrained": { "state": "succeeded", "attempt": 1 }
   }

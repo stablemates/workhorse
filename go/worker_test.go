@@ -106,6 +106,7 @@ type workerRuntimeFixture struct {
 	ShutdownGraceMS                      int                               `json:"shutdownGraceMs"`
 	DrainHoldMS                          int                               `json:"drainHoldMs"`
 	ShutdownBehavior                     map[string]string                 `json:"shutdownBehavior"`
+	HandlerResult                        string                            `json:"handlerResult"`
 	ExpectedCancelled                    workerFixtureReleasedState        `json:"expectedCancelled"`
 	ExpectedDrained                      workerFixtureTaskState            `json:"expectedDrained"`
 }

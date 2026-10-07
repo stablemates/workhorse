@@ -941,7 +941,8 @@ async function executeOversizedResultRuntimeFixture(
 
 /**
  * The TypeScript worker has no shutdown grace: `stop()` waits for every running handler. So the
- * handler outlives the stop, never sees its signal abort, and completes on its only attempt.
+ * handler outlives the stop, never sees its signal abort, and completes on its only attempt. It
+ * returns a value whatever `handlerResult` says, because no cancellation reaches it.
  */
 async function executeShutdownCancellationRuntimeFixture(
   queue: Queue,
