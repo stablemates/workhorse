@@ -5,6 +5,7 @@ import hashlib
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -101,7 +102,7 @@ def database_url(request: pytest.FixtureRequest) -> Iterator[str]:
     admin_url = urlunsplit(parsed._replace(path="/postgres"))
     isolated_url = urlunsplit(parsed._replace(path=f"/{database_name}"))
     with psycopg.connect(admin_url, autocommit=True) as admin:
-        admin.execute(f'DROP DATABASE IF EXISTS "{database_name}"')
+        drop_scratch_database(admin, database_name)
         admin.execute(f'CREATE DATABASE "{database_name}"')
     try:
         with psycopg.connect(isolated_url, autocommit=True) as connection:
@@ -109,12 +110,38 @@ def database_url(request: pytest.FixtureRequest) -> Iterator[str]:
         yield isolated_url
     finally:
         with psycopg.connect(admin_url, autocommit=True) as admin:
-            admin.execute(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                "WHERE datname = %s AND usename = current_user AND pid <> pg_backend_pid()",
-                (database_name,),
-            )
-            admin.execute(f'DROP DATABASE IF EXISTS "{database_name}"')
+            try:
+                drop_scratch_database(admin, database_name)
+            except psycopg.Error as error:
+                raise RuntimeError(
+                    f"could not drop scratch database {database_name}; run pnpm db:sweep"
+                ) from error
+
+
+# Drop attempts before giving up. PostgreSQL waits a few seconds inside each attempt for other
+# sessions to exit, so the bound is a count rather than a deadline.
+SCRATCH_DROP_ATTEMPTS = 10
+
+
+def drop_scratch_database(admin: psycopg.Connection, name: str) -> None:
+    """Drop ``name`` without ``WITH (FORCE)``, waiting out sessions the test role does not own.
+
+    FORCE signals sessions of every role, which the test role may not do to autovacuum. Terminate
+    only this role's sessions, then retry while foreign sessions still hold the database.
+    """
+    for attempt in range(1, SCRATCH_DROP_ATTEMPTS + 1):
+        admin.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            "WHERE datname = %s AND usename = current_user AND pid <> pg_backend_pid()",
+            (name,),
+        )
+        try:
+            admin.execute(f'DROP DATABASE IF EXISTS "{name}"')
+            return
+        except psycopg.errors.ObjectInUse:
+            if attempt == SCRATCH_DROP_ATTEMPTS:
+                raise
+        time.sleep(0.1)
 
 
 @pytest.fixture

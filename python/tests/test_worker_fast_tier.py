@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 import time
 from collections import Counter
 from collections.abc import Callable, Sequence
 from contextlib import suppress
+from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import asyncpg
@@ -277,6 +282,152 @@ def test_expired_fast_claim_reruns_once_and_rejects_the_stale_completion(
         ).fetchone()
     assert stale is not None and stale[0] == []
     assert recorded == (1,)
+
+
+FAST_CRASH_FIXTURE = Path(__file__).parent / "fixtures" / "fast_crash_worker.py"
+# The killed worker's sessions carry this name, so the test can find what its process left open.
+FAST_CRASH_CHILD = "python-fast-crash-child"
+
+
+def _wait_for(condition: Callable[[], bool]) -> None:
+    deadline = time.monotonic() + 20
+    while not condition():
+        assert time.monotonic() < deadline, "the fast crash scenario stalled"
+        time.sleep(0.01)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process signals are required")
+def test_killed_fast_worker_loses_no_buffered_completion(
+    database_url: str, worker_pool: ConnectionPool
+) -> None:
+    """Kill a real worker process while its completions and refill claims are in flight.
+
+    A trigger holds every outcome insert of the queue on an advisory lock the test owns, so the
+    worker's first completion statement waits inside PostgreSQL. Later completions wait in the
+    worker's memory behind it. The worker is then killed, its sessions end, and a second worker
+    recovers every task.
+    """
+    queue_name, concurrency, total = "python-fast-kill", 4, 12
+    _make_fast(database_url, queue_name)
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        task_ids = Queue(connection).enqueue_many(
+            [
+                EnqueueRequest("effect", {"n": n}, EnqueueOptions(queue=queue_name, max_attempts=3))
+                for n in range(total)
+            ]
+        )
+        connection.execute(
+            "CREATE TABLE fast_crash_invocation "
+            "(task_id uuid NOT NULL, attempt integer NOT NULL, worker text NOT NULL)"
+        )
+        connection.execute(
+            "CREATE FUNCTION hold_fast_outcome() RETURNS trigger LANGUAGE plpgsql AS $$ "
+            "BEGIN PERFORM pg_advisory_xact_lock(1172); RETURN NEW; END; $$"
+        )
+        connection.execute(
+            "CREATE TRIGGER hold_fast_outcome AFTER INSERT ON workhorse.fast_task_outcome "
+            f"FOR EACH ROW WHEN (NEW.queue_name = '{queue_name}') "
+            "EXECUTE FUNCTION hold_fast_outcome()"
+        )
+
+    with psycopg.connect(database_url, autocommit=True) as holder:
+        row = holder.execute(
+            "SELECT pg_backend_pid() FROM (SELECT pg_advisory_lock(1172)) held"
+        ).fetchone()
+        assert row is not None
+        holder_pid = row[0]
+        separator = "&" if urlsplit(database_url).query else "?"
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                str(FAST_CRASH_FIXTURE),
+                f"{database_url}{separator}application_name={FAST_CRASH_CHILD}",
+                queue_name,
+                str(concurrency),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+
+            def held() -> bool:
+                # Every slot's handler has run, and a completion statement waits on the lock.
+                row = holder.execute(
+                    "SELECT (SELECT count(DISTINCT task_id) FROM fast_crash_invocation), "
+                    "(SELECT count(*) FROM pg_stat_activity "
+                    "WHERE %s::integer = ANY(pg_blocking_pids(pid)))",
+                    (holder_pid,),
+                ).fetchone()
+                assert row is not None
+                return row[0] >= concurrency and row[1] > 0
+
+            _wait_for(held)
+        finally:
+            process.kill()
+            # pytest prints a failed test's captured output, which then includes the worker's.
+            print(process.communicate(timeout=10)[0].decode(errors="replace"))
+
+        # The kernel closes the dead process's sockets, but a session waiting on a lock does not
+        # notice until it next talks to the client. Ending the sessions rolls their statements back.
+        def ended() -> bool:
+            row = holder.execute(
+                "SELECT count(*) FROM pg_stat_activity, pg_terminate_backend(pid) "
+                "WHERE application_name = %s",
+                (FAST_CRASH_CHILD,),
+            ).fetchone()
+            return row == (0,)
+
+        _wait_for(ended)
+        holder.execute("SELECT pg_advisory_unlock(1172)")
+        holder.execute("DROP TRIGGER hold_fast_outcome ON workhorse.fast_task_outcome")
+
+        # No completion committed, and every task the killed worker ran still holds its lease.
+        assert _outcomes(database_url, task_ids) == []
+        active = {
+            str(row[0])
+            for row in holder.execute(
+                "SELECT task_id FROM workhorse.fast_task_runtime "
+                "WHERE queue_name = %s AND state = 'active' AND attempt = 1",
+                (queue_name,),
+            )
+        }
+        crashed_runs = [
+            (str(row[0]), row[1])
+            for row in holder.execute("SELECT task_id, attempt FROM fast_crash_invocation")
+        ]
+        ran = {task_id for task_id, _ in crashed_runs}
+        assert len(ran) >= concurrency
+        assert len(crashed_runs) == len(ran)
+        assert all(attempt == 1 for _, attempt in crashed_runs)
+        assert ran <= active
+
+        holder.execute(
+            "UPDATE workhorse.fast_task_runtime "
+            "SET expires_at = clock_timestamp() - interval '1 millisecond' "
+            "WHERE queue_name = %s AND state = 'active'",
+            (queue_name,),
+        )
+        holder.execute("SELECT * FROM workhorse.recover_expired_telemetry_v1(100, 0)")
+
+    survivor_runs: Counter[tuple[str, int]] = Counter()
+    lock = Lock()
+
+    def effect(_payload: object, context: HandlerContext) -> Json:
+        with lock:
+            survivor_runs[(context.task.id, context.task.attempt)] += 1
+        return {"ok": True}
+
+    worker = Worker(
+        worker_pool, worker_id="python-fast-survivor", queue=queue_name, concurrency=3, poll_ms=5
+    ).handle("effect", effect)
+    _run_until(worker, lambda: len(_outcomes(database_url, task_ids)) == len(task_ids))
+
+    # A task the killed worker held runs again as attempt 2. Every other task runs once.
+    expected = {task_id: 2 if task_id in active else 1 for task_id in task_ids}
+    assert sorted(_outcomes(database_url, task_ids)) == sorted(
+        (task_id, "succeeded", attempt) for task_id, attempt in expected.items()
+    )
+    assert survivor_runs == Counter(expected.items())
 
 
 class _CrashAfterCompletions:

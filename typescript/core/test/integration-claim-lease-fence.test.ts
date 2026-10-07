@@ -1143,8 +1143,10 @@ describe("claim lease fence", () => {
 
   it("excludes durable wait suspension from attempt execution budget while deadlines keep running", async () => {
     let activations = 0;
+    // The pause alone outlasts the execution budget, so the second activation succeeds only if the
+    // suspension is excluded. The budget still leaves a loaded runner room for both activations.
     const timeoutId = await queue.enqueue("wait-timeout-budget", null, {
-      executionTimeoutMs: 300,
+      executionTimeoutMs: 1_000,
     });
     const timeoutWorker = new Worker(queue, {
       workerId: "wait-timeout-budget-worker",
@@ -1152,12 +1154,18 @@ describe("claim lease fence", () => {
       heartbeatMs: 50,
     }).handle("wait-timeout-budget", async (_payload, context) => {
       activations += 1;
-      if (activations === 1) await context.sleep("pause", 180);
+      if (activations === 1) await context.sleep("pause", 1_200);
       return { activations };
     });
     expect(await timeoutWorker.runOnce()).toBe(true);
-    await sleep(200);
-    await queue.promote();
+    // The wake time is judged by PostgreSQL's clock, so wait until PostgreSQL promotes the task.
+    await vi.waitFor(
+      async () => {
+        await queue.promote();
+        expect(await admin.getTask(timeoutId)).toMatchObject({ state: "ready" });
+      },
+      { timeout: 10_000, interval: 50 },
+    );
     expect(await timeoutWorker.runOnce()).toBe(true);
     expect(await admin.getTask(timeoutId)).toMatchObject({
       state: "succeeded",
@@ -1478,13 +1486,37 @@ describe("claim lease fence", () => {
         "SELECT pg_advisory_xact_lock(hashtextextended('workhorse:concurrency-policy:' || $1, 0))",
         [queueName],
       );
-      const claiming = queue.claim("timestamp-worker", { queue: queueName, leaseMs: 100 });
-      await sleep(120);
+      const blockerPid = (await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
+        .rows[0]!.pid;
+      const leaseMs = 30_000;
+      const claiming = queue.claim("timestamp-worker", { queue: queueName, leaseMs });
+      await vi.waitFor(
+        async () => {
+          const waiting = await pool.query<{ count: number }>(
+            `SELECT count(*)::integer AS count FROM pg_stat_activity
+              WHERE $1::integer = ANY(pg_blocking_pids(pid))`,
+            [blockerPid],
+          );
+          expect(waiting.rows[0]!.count).toBe(1);
+        },
+        { timeout: 10_000, interval: 20 },
+      );
+      // Every timestamp comes from PostgreSQL's clock. A lease computed before the wait would end
+      // before this release time plus the lease.
+      const releasedAt = (
+        await blocker.query<{ at: string }>("SELECT clock_timestamp()::text AS at")
+      ).rows[0]!.at;
       await blocker.query("COMMIT");
 
       const claimed = await claiming;
       expect(claimed).not.toBeNull();
-      expect(claimed!.leaseExpiresAt.getTime() - Date.now()).toBeGreaterThan(50);
+      const bounds = await pool.query<{ after_release: boolean; before_now: boolean }>(
+        `SELECT expires_at >= $2::timestamptz + $3 * interval '1 millisecond' AS after_release,
+                expires_at <= clock_timestamp() + $3 * interval '1 millisecond' AS before_now
+           FROM workhorse.task_runtime WHERE task_id = $1`,
+        [claimed!.id, releasedAt, leaseMs],
+      );
+      expect(bounds.rows[0]).toEqual({ after_release: true, before_now: true });
     } finally {
       await blocker.query("ROLLBACK").catch(() => undefined);
       blocker.release();
@@ -2387,7 +2419,9 @@ describe("claim lease fence", () => {
     await expect(admin.getTask(id)).resolves.toMatchObject({ state: "active", currentAttempt: 1 });
   });
   it("renews leases on a reserved connection while handlers hold every other pooled one", async () => {
-    const leaseMs = 300;
+    // Several heartbeats fit in one lease, so a loaded runner that delays one heartbeat does not
+    // lose the lease. The handler still holds the pool for two leases.
+    const leaseMs = 2_000;
     const small = new Pool({ connectionString: databaseUrl, max: 3 });
     try {
       const smallQueue = new Queue(small, `reserved-heartbeat-${randomUUID()}`);
@@ -2397,13 +2431,13 @@ describe("claim lease fence", () => {
         workerId: "reserved-heartbeat-worker",
         registryIntervalMs: 0,
         leaseMs,
-        heartbeatMs: 100,
+        heartbeatMs: 250,
       }).handle("reserved-heartbeat", async (_payload, context) => {
         // Take every connection the pool can still lend, as busy handlers would.
         const held: PoolClient[] = [];
         while (small.totalCount < 3 || small.idleCount > 0) held.push(await small.connect());
         try {
-          await sleep(leaseMs * 3);
+          await sleep(leaseMs * 2);
         } finally {
           for (const client of held) client.release();
         }

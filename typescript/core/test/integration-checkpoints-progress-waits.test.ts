@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { logs, type LogRecord, type LoggerProvider } from "@opentelemetry/api-logs";
 import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   MAX_CHECKPOINT_VALUE_BYTES,
   MAX_PROGRESS_VALUE_BYTES,
@@ -203,7 +203,8 @@ describe("checkpoints progress waits", () => {
 
   it("rechecks checkpoint lease expiry after waiting for the runtime lock", async () => {
     const id = await queue.enqueue("checkpoint-lock-expiry", {});
-    const task = await queue.claim("worker-a", { leaseMs: 100 });
+    // Long enough to outlast the wait for the save to block on a loaded runner.
+    const task = await queue.claim("worker-a", { leaseMs: 2_000 });
     const blocker = await pool.connect();
 
     try {
@@ -211,6 +212,8 @@ describe("checkpoints progress waits", () => {
       await blocker.query("SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", [
         id,
       ]);
+      const blockerPid = (await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
+        .rows[0]!.pid;
       const saving = queue.saveCheckpoint(task!, "worker-a", "expired-while-waiting", {
         persisted: true,
       });
@@ -218,7 +221,35 @@ describe("checkpoints progress waits", () => {
         () => null,
         (error: unknown) => error,
       );
-      await sleep(130);
+      await vi.waitFor(
+        async () => {
+          const waiting = await pool.query<{ count: number }>(
+            `SELECT count(*)::integer AS count FROM pg_stat_activity
+              WHERE $1::integer = ANY(pg_blocking_pids(pid))`,
+            [blockerPid],
+          );
+          expect(waiting.rows[0]!.count).toBe(1);
+        },
+        { timeout: 10_000, interval: 20 },
+      );
+      // The save must start waiting under a live lease, or the test would only show a plain
+      // expiry check before the lock.
+      const live = await pool.query<{ live: boolean }>(
+        "SELECT expires_at > clock_timestamp() AS live FROM workhorse.task_runtime WHERE task_id = $1",
+        [id],
+      );
+      expect(live.rows[0]!.live).toBe(true);
+      await vi.waitFor(
+        async () => {
+          const expired = await pool.query<{ expired: boolean }>(
+            `SELECT expires_at <= clock_timestamp() AS expired
+               FROM workhorse.task_runtime WHERE task_id = $1`,
+            [id],
+          );
+          expect(expired.rows[0]!.expired).toBe(true);
+        },
+        { timeout: 10_000, interval: 20 },
+      );
       await blocker.query("COMMIT");
 
       await expect(rejection).resolves.toMatchObject({

@@ -154,16 +154,31 @@ describe("retry and attempt lifecycle", () => {
       [recoverId],
     );
     expect((await queue.tick()).find((phase) => phase.phase === "recover")?.rowsAffected).toBe(1);
-    const events = await pool.query<{ details: Record<string, unknown> }>(
-      "SELECT details FROM workhorse.task_event WHERE task_id = ANY($1::uuid[]) AND event_type IN ('retry_scheduled', 'lease_expired')",
+    const events = await pool.query<{
+      task_id: string;
+      event_type: string;
+      details: Record<string, unknown>;
+    }>(
+      "SELECT task_id, event_type, details FROM workhorse.task_event WHERE task_id = ANY($1::uuid[]) AND event_type IN ('retry_scheduled', 'lease_expired') ORDER BY event_type",
       [[failId, recoverId]],
     );
-    for (const event of events.rows)
-      expect(event.details).toMatchObject({
-        retry_policy: fixed,
-        retry_delay_ms: 5_000,
-        retry_delay_source: "policy:fixed",
-      });
+    const policyDetails = {
+      retry_policy: fixed,
+      retry_delay_ms: 5_000,
+      retry_delay_source: "policy:fixed",
+    };
+    expect(events.rows).toEqual([
+      {
+        task_id: recoverId,
+        event_type: "lease_expired",
+        details: expect.objectContaining(policyDetails),
+      },
+      {
+        task_id: failId,
+        event_type: "retry_scheduled",
+        details: expect.objectContaining(policyDetails),
+      },
+    ]);
 
     const capped = await pool.query<{ delay_ms: string }>(
       `SELECT retry.delay_ms::text FROM generate_series(1, 4) attempt

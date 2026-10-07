@@ -36,6 +36,16 @@ export const databaseTestFiles = [
   "typescript/core/test/schema-migrations.test.ts",
 ];
 
+/**
+ * Hook timeout for a database test file. Every such file drops its scratch database in teardown,
+ * and PostgreSQL forces a cluster-wide immediate checkpoint on each DROP DATABASE. When two
+ * checkouts run database tests on the same instance, those checkpoints queue behind each other's
+ * write load; a drop that waits on `CheckpointStart` for a minute is the instance serializing work,
+ * not a hung hook. Timing it out only leaks the database it was about to drop.
+ * scripts/vitest-database-hook-timeout.ts applies it to the files above under every config.
+ */
+export const databaseHookTimeout = 120_000;
+
 export default defineConfig({
   resolve: {
     conditions: ["workhorse-source", ...defaultServerConditions],
@@ -83,6 +93,8 @@ export default defineConfig({
     maxWorkers,
     testTimeout: 20_000,
     hookTimeout: 20_000,
+    setupFiles: ["./scripts/vitest-database-hook-timeout.ts"],
+    provide: { databaseHookTimeout, databaseTestFiles },
     sequence: { concurrent: false },
   },
 });
