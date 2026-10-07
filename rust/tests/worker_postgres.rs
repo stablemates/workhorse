@@ -96,6 +96,83 @@ fn run(worker: &Worker) -> (oneshot::Sender<()>, tokio::task::JoinHandle<Result<
     (stop, running)
 }
 
+/// How long a handler that shutdown cancels at the end of grace may unwind, as `UNWIND_WINDOW` in
+/// `rust/src/worker/mod.rs` sets it.
+const UNWIND_WINDOW: Duration = Duration::from_millis(250);
+/// How long shutdown waits for its loops and deregistration after the later of the deadline and
+/// the end of the drain, as `CLEANUP_WINDOW` in `rust/src/worker/mod.rs` sets it.
+const CLEANUP_WINDOW: Duration = Duration::from_secs(1);
+/// Scheduling slack for a loaded host. With three busy threads per core, one test runtime stalled
+/// for 0.35 s.
+const SHUTDOWN_SLACK: Duration = Duration::from_secs(1);
+/// A runtime stall this long inside the unwind window leaves a handler that honors cancellation
+/// too little of the window to settle.
+const STALL_LIMIT: Duration = Duration::from_millis(125);
+/// How many times a test reruns a shutdown that a host stall pushed past the unwind window.
+const STALLED_ATTEMPTS: usize = 3;
+
+/// The latest a worker run with `grace` may return after its shutdown begins: grace, the unwind
+/// window and the cleanup window, plus slack.
+fn shutdown_bound(grace: Duration) -> Duration {
+    grace + UNWIND_WINDOW + CLEANUP_WINDOW + SHUTDOWN_SLACK
+}
+
+/// Waits for a worker run with `grace` whose shutdown began at `began`, failing past its bound.
+///
+/// The worker shares the current-thread runtime, so a host stall of that runtime also stops the
+/// worker. The outcome comes back with the longest stall inside the unwind window that follows
+/// grace.
+async fn shutdown_outcome(
+    running: tokio::task::JoinHandle<Result<(), Error>>,
+    grace: Duration,
+    began: tokio::time::Instant,
+) -> (Result<(), Error>, Duration) {
+    const TICK: Duration = Duration::from_millis(5);
+    let bound = shutdown_bound(grace);
+    let (unwinding, unwound) = (began + grace, began + grace + UNWIND_WINDOW);
+    tokio::pin!(running);
+    let mut stall = Duration::ZERO;
+    loop {
+        let due = tokio::time::Instant::now() + TICK;
+        let joined = tokio::select! {
+            biased;
+            joined = &mut running => Some(joined.unwrap()),
+            () = tokio::time::sleep_until(due) => None,
+        };
+        let woke = tokio::time::Instant::now();
+        // The part of this wake's delay that fell inside the unwind window.
+        stall = stall.max(woke.min(unwound).saturating_duration_since(due.max(unwinding)));
+        assert!(
+            woke - began < bound,
+            "shutdown outlived grace, its unwind and cleanup windows, and {SHUTDOWN_SLACK:?} \
+             of slack: {bound:?}"
+        );
+        if let Some(outcome) = joined {
+            return (outcome, stall);
+        }
+    }
+}
+
+/// Whether a shutdown that cancelled a handler which honors cancellation can be judged.
+///
+/// The handler must settle within the unwind window, so it settles and `run` returns `Ok`. A host
+/// stall of `STALL_LIMIT` or longer inside that window can push it past the window; that attempt
+/// is not judged.
+fn judged_cooperative_shutdown(outcome: &Result<(), Error>, stall: Duration) -> bool {
+    match outcome {
+        Ok(()) => true,
+        Err(Error::ShutdownIncomplete { abandoned: 1 }) if stall >= STALL_LIMIT => {
+            eprintln!(
+                "a {stall:?} runtime stall inside the unwind window abandoned the handler; rerunning"
+            );
+            false
+        }
+        other => {
+            panic!("a handler that honors cancellation stopped with {other:?} ({stall:?} unwind stall)")
+        }
+    }
+}
+
 #[tokio::test]
 async fn a_failed_attempt_settles_through_fail_v1() {
     let Some(harness) = harness("worker_fail").await else { return };
@@ -217,8 +294,8 @@ async fn dispatch_follows_the_task_type_and_releases_an_unhandled_task() {
 async fn a_stuck_handler_is_abandoned_when_grace_ends() {
     let Some(harness) = harness("worker_abandon").await else { return };
     let task = harness.enqueue("rust.stuck", json!({}), EnqueueOptions::default()).await;
-    let options = WorkerOptions { shutdown_grace_period: Duration::from_millis(200), ..options() };
-    let worker = harness.worker(options);
+    let grace = Duration::from_millis(200);
+    let worker = harness.worker(WorkerOptions { shutdown_grace_period: grace, ..options() });
     let (started, mut running_handlers) = mpsc::unbounded_channel();
     worker.handle("rust.stuck", move |_: Value, _| {
         let _ = started.send(());
@@ -229,12 +306,9 @@ async fn a_stuck_handler_is_abandoned_when_grace_ends() {
     running_handlers.recv().await.unwrap();
     let began = tokio::time::Instant::now();
     stop.send(()).unwrap();
-    let outcome = tokio::time::timeout(Duration::from_secs(2), running)
-        .await
-        .expect("drain never returned while a handler stayed stuck")
-        .unwrap();
+    let (outcome, _) = shutdown_outcome(running, grace, began).await;
     assert!(matches!(outcome, Err(Error::ShutdownIncomplete { abandoned: 1 })), "{outcome:?}");
-    assert!(began.elapsed() >= Duration::from_millis(200), "drain ended before grace");
+    assert!(began.elapsed() >= grace + UNWIND_WINDOW, "drain ended before its unwind window");
     // The abandoned lease stays with PostgreSQL, which recovers it after expiry.
     assert_eq!(harness.state(task).await, TaskState::Active);
 }
@@ -545,7 +619,8 @@ async fn a_run_once_dropped_during_registration_deregisters() {
 async fn a_drain_finishes_running_handlers_within_grace() {
     let Some(harness) = harness("worker_drain").await else { return };
     let task = harness.enqueue("rust.slow", json!({}), EnqueueOptions::default()).await;
-    let worker = harness.worker(options());
+    let grace = Duration::from_secs(1);
+    let worker = harness.worker(WorkerOptions { shutdown_grace_period: grace, ..options() });
     let (started, mut running_handlers) = mpsc::unbounded_channel();
     worker.handle("rust.slow", move |_: Value, _| {
         let _ = started.send(());
@@ -556,16 +631,29 @@ async fn a_drain_finishes_running_handlers_within_grace() {
     });
     let (stop, running) = run(&worker);
     running_handlers.recv().await.unwrap();
+    let began = tokio::time::Instant::now();
     stop.send(()).unwrap();
-    tokio::time::timeout(Duration::from_secs(5), running).await.unwrap().unwrap().unwrap();
+    let (outcome, _) = shutdown_outcome(running, grace, began).await;
+    outcome.unwrap();
     assert_eq!(harness.state(task).await, TaskState::Succeeded);
 }
 
 #[tokio::test]
 async fn shutdown_returns_within_its_bound_while_the_registry_row_stays_locked() {
     let Some(harness) = harness("worker_stalled_registry").await else { return };
+    for _ in 0..STALLED_ATTEMPTS {
+        if shutdown_with_a_locked_registry_row(&harness).await {
+            return;
+        }
+    }
+    panic!("a runtime stall pushed every attempt past its unwind window");
+}
+
+/// One attempt of the test above. Returns false when a host stall leaves the attempt unjudged.
+async fn shutdown_with_a_locked_registry_row(harness: &Harness) -> bool {
     let task = harness.enqueue("rust.cooperative", json!({}), EnqueueOptions::default()).await;
-    let grace = Duration::from_secs(1);
+    // Longer than the slack, so a fresh grace period per phase would overrun each bound below.
+    let grace = Duration::from_secs(2);
     let options = WorkerOptions { shutdown_grace_period: grace, ..options() };
     let worker_id = options.worker_id.clone().unwrap();
     let pool = harness.pool();
@@ -587,7 +675,7 @@ async fn shutdown_returns_within_its_bound_while_the_registry_row_stays_locked()
     let (stop, running) = run(&worker);
     running_handlers.recv().await.unwrap();
 
-    // Every registry write the drain makes now waits on this row lock until the test ends.
+    // Every registry write the drain makes now waits on this row lock until the attempt ends.
     let mut locker = harness.database.connect().await;
     let lock = locker.transaction().await.unwrap();
     let locked = lock
@@ -601,60 +689,51 @@ async fn shutdown_returns_within_its_bound_while_the_registry_row_stays_locked()
 
     let began = tokio::time::Instant::now();
     stop.send(()).unwrap();
-    // The stalled refresh spends the whole grace period. One deadline still bounds the handler,
-    // so it sees cancellation when grace ends rather than a fresh grace period later.
-    let cancelled_at = tokio::time::timeout(Duration::from_secs(5), cancellation)
-        .await
-        .expect("the handler never saw shutdown cancellation")
-        .unwrap();
-    let cancelled_after = cancelled_at - began;
-    assert!(
-        cancelled_after >= grace,
-        "the handler was cancelled before grace: {cancelled_after:?}"
-    );
-    assert!(
-        cancelled_after < grace + Duration::from_millis(600),
-        "the stalled refresh delayed handler cancellation past grace: {cancelled_after:?}"
-    );
-    // Grace, the unwind window and the cleanup window for the stalled deregistration, plus
-    // scheduling tolerance. A fresh bound per phase would need at least one more second.
-    let outcome = tokio::time::timeout(Duration::from_secs(5), running)
-        .await
-        .expect("shutdown waited on the locked registry row")
-        .unwrap();
-    let elapsed = began.elapsed();
-    assert!(outcome.is_ok(), "{outcome:?}");
-    assert!(
-        elapsed < Duration::from_millis(2_900),
-        "shutdown outlived grace plus its unwind and cleanup windows: {elapsed:?}"
-    );
-    // The handler that honored cancellation released its task.
-    assert_eq!(harness.state(task).await, TaskState::Ready);
-    // The abandoned registry statements still wait on the lock. Their connections left the pool,
-    // so every connection the pool lends now answers at once.
-    let mut lent = Vec::new();
-    for _ in 0..pool.status().max_size {
-        lent.push(pool.get().await.unwrap());
+    // The cleanup window also bounds the stalled deregistration.
+    let (outcome, stall) = shutdown_outcome(running, grace, began).await;
+    let judged = judged_cooperative_shutdown(&outcome, stall);
+    if judged {
+        // The stalled refresh spends the whole grace period. One deadline still bounds the
+        // handler, so it sees cancellation when grace ends rather than a fresh grace period later.
+        // It reports that before it returns.
+        let cancelled_after = cancellation.await.unwrap() - began;
+        assert!(
+            cancelled_after >= grace,
+            "the handler was cancelled before grace: {cancelled_after:?}"
+        );
+        assert!(
+            cancelled_after < grace + SHUTDOWN_SLACK,
+            "the stalled refresh delayed handler cancellation past grace: {cancelled_after:?}"
+        );
+        // The handler that honored cancellation released its task.
+        assert_eq!(harness.state(task).await, TaskState::Ready);
+        // The abandoned registry statements still wait on the lock. Their connections left the
+        // pool, so every connection the pool lends now answers at once.
+        let mut lent = Vec::new();
+        for _ in 0..pool.status().max_size {
+            lent.push(pool.get().await.unwrap());
+        }
+        for connection in &lent {
+            tokio::time::timeout(Duration::from_secs(2), connection.query_one("SELECT 1", &[]))
+                .await
+                .expect("the pool lent a connection still running an abandoned registry statement")
+                .unwrap();
+        }
     }
-    for connection in &lent {
-        tokio::time::timeout(Duration::from_secs(2), connection.query_one("SELECT 1", &[]))
-            .await
-            .expect("the pool lent a connection still running an abandoned registry statement")
-            .unwrap();
-    }
-    drop(lent);
     lock.rollback().await.unwrap();
+    judged
 }
 
 #[tokio::test]
 async fn shutdown_discards_the_connection_of_a_claim_it_abandons() {
     let Some(harness) = harness("worker_stalled_claim").await else { return };
+    let grace = Duration::from_millis(100);
     let options = WorkerOptions {
         disable_registry: true,
         shared_heartbeats: true,
         maintenance_interval: Duration::from_secs(600),
         maintenance_routine_interval: Duration::from_secs(600),
-        shutdown_grace_period: Duration::from_millis(100),
+        shutdown_grace_period: grace,
         ..options()
     };
     let pool = harness.pool();
@@ -686,12 +765,10 @@ async fn shutdown_discards_the_connection_of_a_claim_it_abandons() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
+    let began = tokio::time::Instant::now();
     stop.send(()).unwrap();
-    tokio::time::timeout(Duration::from_secs(5), running)
-        .await
-        .expect("shutdown waited on the stalled claim")
-        .unwrap()
-        .unwrap();
+    let (outcome, _) = shutdown_outcome(running, grace, began).await;
+    outcome.unwrap();
     // The abandoned claim still waits on the lock. Its connection left the pool, so every
     // connection the pool lends now answers at once.
     let mut lent = Vec::new();
@@ -713,8 +790,9 @@ async fn shutdown_does_not_wait_for_a_stalled_heartbeat_round() {
     let Some(harness) = harness("worker_stalled_heartbeat").await else { return };
     let task = harness.enqueue("rust.stuck", json!({}), EnqueueOptions::default()).await;
     let interval = Duration::from_secs(8);
+    let grace = Duration::from_millis(200);
     let options = WorkerOptions {
-        shutdown_grace_period: Duration::from_millis(200),
+        shutdown_grace_period: grace,
         lease_duration: Duration::from_secs(60),
         heartbeat_interval: Some(interval),
         ..options()
@@ -758,23 +836,30 @@ async fn shutdown_does_not_wait_for_a_stalled_heartbeat_round() {
 
     let began = tokio::time::Instant::now();
     stop.send(()).unwrap();
-    // Grace, the unwind window and the cleanup window, with margin well short of the interval
-    // the stalled round would otherwise hold the heartbeat connection for.
-    let outcome = tokio::time::timeout(Duration::from_secs(5), running)
-        .await
-        .expect("shutdown waited for the stalled heartbeat round")
-        .unwrap();
+    // The bound falls well short of the interval the stalled round would otherwise hold the
+    // heartbeat connection for.
+    assert!(shutdown_bound(grace) < interval);
+    let (outcome, _) = shutdown_outcome(running, grace, began).await;
     assert!(matches!(outcome, Err(Error::ShutdownIncomplete { abandoned: 1 })), "{outcome:?}");
-    assert!(began.elapsed() < Duration::from_secs(3), "shutdown took {:?}", began.elapsed());
     lock.rollback().await.unwrap();
 }
 
 #[tokio::test]
 async fn a_handler_that_honors_shutdown_cancellation_releases_its_task() {
     let Some(harness) = harness("worker_unwind").await else { return };
+    for _ in 0..STALLED_ATTEMPTS {
+        if shutdown_releases_a_cooperative_task(&harness).await {
+            return;
+        }
+    }
+    panic!("a runtime stall pushed every attempt past its unwind window");
+}
+
+/// One attempt of the test above. Returns false when a host stall leaves the attempt unjudged.
+async fn shutdown_releases_a_cooperative_task(harness: &Harness) -> bool {
     let task = harness.enqueue("rust.cooperative", json!({}), EnqueueOptions::default()).await;
-    let options = WorkerOptions { shutdown_grace_period: Duration::from_millis(100), ..options() };
-    let worker = harness.worker(options);
+    let grace = Duration::from_millis(100);
+    let worker = harness.worker(WorkerOptions { shutdown_grace_period: grace, ..options() });
     let (started, mut running_handlers) = mpsc::unbounded_channel();
     worker.handle("rust.cooperative", move |_: Value, context: HandlerContext| {
         let _ = started.send(());
@@ -786,11 +871,16 @@ async fn a_handler_that_honors_shutdown_cancellation_releases_its_task() {
     });
     let (stop, running) = run(&worker);
     running_handlers.recv().await.unwrap();
+    let began = tokio::time::Instant::now();
     stop.send(()).unwrap();
-    tokio::time::timeout(Duration::from_secs(2), running).await.unwrap().unwrap().unwrap();
+    let (outcome, stall) = shutdown_outcome(running, grace, began).await;
+    if !judged_cooperative_shutdown(&outcome, stall) {
+        return false;
+    }
     let snapshot = harness.admin.get_task(task).await.unwrap().unwrap();
     assert_eq!(snapshot.state, TaskState::Ready, "a shutdown release keeps the attempt budget");
     assert!(snapshot.error.is_none());
+    true
 }
 
 #[tokio::test]
@@ -952,6 +1042,7 @@ async fn shutdown_closes_the_notification_connection_while_listen_stalls() {
     }
     let (stalled, listen_sent) = oneshot::channel();
     let (closed, client_closed) = oneshot::channel();
+    let grace = Duration::from_millis(100);
     tokio::spawn(async move {
         let (client, _) = proxy.accept().await.unwrap();
         let server = tokio::net::TcpStream::connect(upstream).await.unwrap();
@@ -964,17 +1055,15 @@ async fn shutdown_closes_the_notification_connection_while_listen_stalls() {
     let worker = harness.worker(WorkerOptions {
         polling_only: false,
         listen_config: Some(listen),
-        shutdown_grace_period: Duration::from_millis(100),
+        shutdown_grace_period: grace,
         ..options()
     });
     let (stop, running) = run(&worker);
     tokio::time::timeout(WAIT, listen_sent).await.expect("the listener never sent LISTEN").unwrap();
+    let began = tokio::time::Instant::now();
     stop.send(()).unwrap();
-    tokio::time::timeout(Duration::from_secs(5), running)
-        .await
-        .expect("shutdown waited on the stalled listener")
-        .unwrap()
-        .unwrap();
+    let (outcome, _) = shutdown_outcome(running, grace, began).await;
+    outcome.unwrap();
     // Shutdown aborted the stalled listener. Its connection must close with it.
     tokio::time::timeout(Duration::from_secs(2), client_closed)
         .await
@@ -1068,10 +1157,11 @@ async fn cancelled_batch_members_keep_their_callbacks_inside_the_concurrency() {
     for _ in 0..3 {
         harness.enqueue("rust.stuck", json!({}), EnqueueOptions::default()).await;
     }
+    let grace = Duration::from_millis(100);
     let worker = harness.worker(WorkerOptions {
         concurrency: 1,
         heartbeat_interval: Some(Duration::from_millis(50)),
-        shutdown_grace_period: Duration::from_millis(100),
+        shutdown_grace_period: grace,
         ..options()
     });
     let (mut starts, mut cancellations, peak) = stuck_batches(&worker, 1);
@@ -1084,24 +1174,25 @@ async fn cancelled_batch_members_keep_their_callbacks_inside_the_concurrency() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(starts.try_recv().is_err(), "a second callback started beside the first");
     assert_eq!(peak.load(Ordering::SeqCst), 1);
+    let began = tokio::time::Instant::now();
     stop.send(()).unwrap();
-    assert!(matches!(running.await.unwrap(), Err(Error::ShutdownIncomplete { abandoned: 1 })));
+    let (outcome, _) = shutdown_outcome(running, grace, began).await;
+    assert!(matches!(outcome, Err(Error::ShutdownIncomplete { abandoned: 1 })), "{outcome:?}");
 }
 
 #[tokio::test]
 async fn shutdown_counts_a_batch_callback_that_outlives_the_grace_period() {
     let Some(harness) = harness("worker_batch_drain").await else { return };
     harness.enqueue("rust.stuck", json!({}), EnqueueOptions::default()).await;
-    let worker = harness.worker(WorkerOptions {
-        concurrency: 1,
-        shutdown_grace_period: Duration::from_millis(200),
-        ..options()
-    });
+    let grace = Duration::from_millis(200);
+    let worker =
+        harness.worker(WorkerOptions { concurrency: 1, shutdown_grace_period: grace, ..options() });
     let (mut starts, _, _) = stuck_batches(&worker, 1);
     let (stop, running) = run(&worker);
     tokio::time::timeout(WAIT, starts.recv()).await.unwrap().unwrap();
+    let began = tokio::time::Instant::now();
     stop.send(()).unwrap();
-    let stopped = tokio::time::timeout(WAIT, running).await.unwrap().unwrap();
+    let (stopped, _) = shutdown_outcome(running, grace, began).await;
     assert!(
         matches!(stopped, Err(Error::ShutdownIncomplete { abandoned: 1 })),
         "shutdown reported {stopped:?} while the callback still ran"
@@ -2019,6 +2110,7 @@ async fn an_abandoned_batching_worker_reruns_no_more_tasks_than_its_concurrency(
         .collect();
     let effects = Arc::new(Mutex::new(std::collections::HashMap::<Uuid, usize>::new()));
     let concurrency = 8;
+    let grace = Duration::from_millis(50);
 
     // The first worker completes 20 tasks in fused batches, then every handler hangs until the
     // worker abandons them. Their leases lapse as if the process had died.
@@ -2028,7 +2120,7 @@ async fn an_abandoned_batching_worker_reruns_no_more_tasks_than_its_concurrency(
         concurrency,
         lease_duration: Duration::from_millis(500),
         heartbeat_interval: Some(Duration::from_millis(100)),
-        shutdown_grace_period: Duration::from_millis(50),
+        shutdown_grace_period: grace,
         ..serving("fast-abandon")
     });
     crashing.handle("effect", move |_: Value, context: HandlerContext| {
@@ -2049,8 +2141,10 @@ async fn an_abandoned_batching_worker_reruns_no_more_tasks_than_its_concurrency(
     })
     .await
     .expect("the first worker fills every slot with a hung handler");
+    let began = tokio::time::Instant::now();
     stop.send(()).unwrap();
-    assert!(matches!(run_crashing.await.unwrap(), Err(Error::ShutdownIncomplete { .. })));
+    let (outcome, _) = shutdown_outcome(run_crashing, grace, began).await;
+    assert!(matches!(outcome, Err(Error::ShutdownIncomplete { .. })), "{outcome:?}");
     tokio::time::sleep(Duration::from_millis(600)).await;
     harness
         .database
