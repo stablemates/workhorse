@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.resources
 import json
+import logging
 import mimetypes
 import tarfile
 from collections.abc import Callable, Iterable, Mapping
@@ -19,6 +20,7 @@ from .._compatibility import assert_sync_compatible as _assert_sync_compatible
 from .._drivers import PsycopgConnection as _PsycopgConnection, SyncExecutor as _SyncExecutor
 from .._version import WORKHORSE_VERSION as _WORKHORSE_VERSION
 from ..dashboard_v1 import DashboardInputValidationError, validate_input
+from ..errors import ProtocolCompatibilityError as _ProtocolCompatibilityError
 from ._backend import DashboardBackend as _DashboardBackend
 from ._errors import DashboardRPCError as _DashboardRPCError
 
@@ -42,6 +44,15 @@ _MUTATIONS = frozenset(
     }
 )
 _OPTIONAL_MUTATIONS = frozenset({"enqueueTest", "setSchedulePaused"})
+# The largest RPC request body the host reads, the same bound the Go and Rust hosts apply.
+_MAX_REQUEST_BYTES = 2 << 20
+# Characters escaped in the runtime configuration so it cannot close its inline script.
+# ``json.dumps`` already escapes every non-ASCII character, including U+2028 and U+2029.
+_SCRIPT_ESCAPES = {ord("<"): "\\u003c", ord(">"): "\\u003e", ord("&"): "\\u0026"}
+_UNVERIFIED_COMPATIBILITY = (
+    "Unable to verify Workhorse schema compatibility because the database query failed."
+)
+_LOGGER = logging.getLogger("workhorse.dashboard")
 _CONTENT_TYPES = {
     ".css": "text/css; charset=utf-8",
     ".html": "text/html; charset=utf-8",
@@ -195,8 +206,12 @@ class DashboardHost:
         actor = (self._audit_actor or "dashboard") if authorization is True else authorization.actor
         try:
             self._assert_compatible()
-        except Exception as error:
+        except _ProtocolCompatibilityError as error:
             return self._json(503, {"error": str(error)})
+        except Exception:
+            # A driver error can name the database host, user, or path, so it stays in the log.
+            _LOGGER.exception("Dashboard schema compatibility check failed")
+            return self._json(503, {"error": _UNVERIFIED_COMPATIBILITY})
 
         mount_root = self.base_path or "/"
         if path == mount_root:
@@ -230,10 +245,11 @@ class DashboardHost:
             if procedure in _OPTIONAL_MUTATIONS:
                 return self._rpc_error(403, "FORBIDDEN", "This procedure is not available")
             return self._rpc_error(404, "NOT_FOUND", "Procedure not found")
+        body = self._read_body(environ)
+        if body is None:
+            return self._rpc_error(413, "PAYLOAD_TOO_LARGE", "Payload Too Large")
         try:
-            length = int(str(environ.get("CONTENT_LENGTH", "0")) or "0")
-            stream = cast(Any, environ["wsgi.input"])
-            envelope = json.loads(stream.read(length) or b"{}")
+            envelope = json.loads(body or b"{}")
             if not isinstance(envelope, dict):
                 raise DashboardInputValidationError("request envelope must be an object")
             input_value = envelope.get("json")
@@ -295,6 +311,25 @@ class DashboardHost:
             return self._rpc_error(500, "INTERNAL_SERVER_ERROR", "Internal server error")
         return self._json(200, {} if result is None else {"json": result})
 
+    @staticmethod
+    def _read_body(environ: dict[str, object]) -> bytes | None:
+        """Read at most ``_MAX_REQUEST_BYTES``, or return None for a body that is larger."""
+        declared = str(environ.get("CONTENT_LENGTH", "") or "")
+        stream = cast(Any, environ["wsgi.input"])
+        if declared:
+            # A length too long to parse is too large; the check also keeps int() within its limit.
+            if len(declared) > 20 or not declared.isascii() or not declared.isdigit():
+                return None
+            length = int(declared)
+            if length > _MAX_REQUEST_BYTES:
+                return None
+            return cast(bytes, stream.read(length))
+        # Without a declared length WSGI defines the stream's end only when the server marks it.
+        if not environ.get("wsgi.input_terminated"):
+            return b""
+        body = cast(bytes, stream.read(_MAX_REQUEST_BYTES + 1))
+        return None if len(body) > _MAX_REQUEST_BYTES else body
+
     def _same_origin(self, environ: dict[str, object]) -> bool:
         origin = environ.get("HTTP_ORIGIN")
         if not isinstance(origin, str):
@@ -324,7 +359,8 @@ class DashboardHost:
         )
         html = template.replace(
             "/*__WORKHORSE_RUNTIME_CONFIG__*/",
-            "window.workhorseDashboard = " + json.dumps(config, separators=(",", ":")),
+            "window.workhorseDashboard = "
+            + json.dumps(config, separators=(",", ":")).translate(_SCRIPT_ESCAPES),
         ).replace("<!--__WORKHORSE_BROWSER_MODULES__-->", modules)
         return DashboardResponse(
             200, html.encode(), (("Content-Type", "text/html; charset=utf-8"),)

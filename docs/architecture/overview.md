@@ -448,8 +448,9 @@ Each workspace gets its own `Admin`, `Queue`, schema-compatibility probe, and RP
 
 `DashboardRuntimeConfig` carries two fields so the browser renders its switcher:
 
-- `workspaces`: every `{ name, url, databaseHost?, databaseName? }`. The database labels appear
-  only when configured.
+- `workspaces`: one `{ name, url, databaseHost?, databaseName? }` for each workspace that
+  `authorize(request, workspace)` grants for this request. The database labels appear only when
+  configured.
 - `workspace`: the rendered one.
 
 Both are `[]` and `null` in single-workspace mode. The switcher menu shows `databaseHost` and

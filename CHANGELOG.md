@@ -62,6 +62,18 @@ a stored trace context no longer joins a span active in the worker, including du
 dispatch. The `@stablemates/workhorse-drizzle` README documents that a `forTransaction` queue must not
 outlive its transaction (SM-1170).
 
+**Behavior change:** `@stablemates/workhorse-dashboard-server` single-admin login throttling now counts
+failures per client address instead of process-wide, and a global bound limits concurrent password hashing.
+The node middleware supplies the socket address; behind a reverse proxy every client still shares the proxy's
+window (ADR 0093, SM-1168).
+
+`DashboardHost.handle(request, context?)` accepts an optional `DashboardRequestContext` whose `clientAddress`
+a fetch-native host sets from its own transport (SM-1168).
+
+The dashboard workspace switcher lists only the workspaces `authorize(request, workspace)` grants for the
+request, and an unexpected schema-compatibility failure emits `workhorse.dashboard.compatibility_check_failed`
+(SM-1168).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

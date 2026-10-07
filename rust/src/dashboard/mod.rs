@@ -325,7 +325,7 @@ impl<E: Executor> Host<E> {
             Authorization::Response(response) => return response,
         };
         if let Err(error) = self.assert_compatible().await {
-            return json_response(503, &json!({ "error": error.to_string() }));
+            return compatibility_failure(&error);
         }
 
         let mount_root = if self.base_path.is_empty() { "/" } else { &self.base_path };
@@ -699,6 +699,20 @@ fn rpc_error(error: RpcError) -> Response {
     json_response(error.status, &json!({ "json": body }))
 }
 
+/// Answers a failed compatibility check. Only a verdict reaches the browser: a driver error can
+/// name the database host, user, or path, so it stays in the log.
+fn compatibility_failure(error: &Error) -> Response {
+    if matches!(error, Error::Compatibility { .. }) {
+        return json_response(503, &json!({ "error": error.to_string() }));
+    }
+    tracing::error!(error = %error, "dashboard schema compatibility check failed");
+    json_response(503, &json!({ "error": UNVERIFIED_COMPATIBILITY }))
+}
+
+/// The answer to a compatibility check that failed without a verdict.
+const UNVERIFIED_COMPATIBILITY: &str =
+    "Unable to verify Workhorse schema compatibility because the database query failed.";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -723,6 +737,23 @@ mod tests {
         let value = json!({ "auditActor": "</script><script>alert(1)</script>&" });
         assert!(!script_json(&value).contains('<'));
         assert_eq!(serde_json::from_str::<Value>(&script_json(&value)).unwrap(), value);
+    }
+
+    async fn error_message(response: Response) -> Value {
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice::<Value>(&bytes).unwrap()["error"].clone()
+    }
+
+    #[tokio::test]
+    async fn reports_only_a_compatibility_verdict() {
+        let refusal =
+            Error::Compatibility { code: crate::compatibility::CompatibilityCode::SchemaTooOld };
+        let message = error_message(compatibility_failure(&refusal)).await;
+        assert_eq!(message, json!(refusal.to_string()));
+        let unreachable = Error::invalid("could not connect to db.internal:5432");
+        let message = error_message(compatibility_failure(&unreachable)).await;
+        assert_eq!(message, json!(UNVERIFIED_COMPATIBILITY));
     }
 
     #[test]

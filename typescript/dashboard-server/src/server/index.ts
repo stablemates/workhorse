@@ -14,6 +14,7 @@ export type {
   DashboardHost,
   DashboardHostOptions,
   DashboardPrincipal,
+  DashboardRequestContext,
   DashboardWorkspaceOptions,
 } from "./host.js";
 export type { DashboardSingleAdminOptions } from "@stablemates/workhorse-dashboard-contract";

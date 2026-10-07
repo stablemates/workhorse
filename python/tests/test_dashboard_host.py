@@ -8,8 +8,10 @@ from typing import cast
 import pytest
 from psycopg.rows import tuple_row
 
+from workhorse import dashboard
 from workhorse._version import WORKHORSE_VERSION
 from workhorse.dashboard import DashboardHost, DashboardPrincipal, DashboardResponse
+from workhorse.errors import ProtocolCompatibilityError
 
 
 class _Connection:
@@ -227,4 +229,120 @@ def test_dashboard_host_forbids_an_unavailable_optional_mutation() -> None:
             "message": "This procedure is not available",
             "status": 403,
         }
+    }
+
+
+def test_dashboard_host_escapes_script_delimiters_in_the_runtime_config() -> None:
+    actor = "</script><script>alert(1)</script>&"
+    status, _, body = _request(_host(lambda _: DashboardPrincipal(actor)), "/workhorse/tasks")
+    assert status == "200 OK"
+    assert b"</script><script>alert(1)" not in body
+    assert (
+        b'"auditActor":"\\u003c/script\\u003e\\u003cscript\\u003ealert(1)'
+        b'\\u003c/script\\u003e\\u0026"' in body
+    )
+    start = body.index(b"window.workhorseDashboard = ") + len(b"window.workhorseDashboard = ")
+    config, _ = json.JSONDecoder().raw_decode(body[start:].decode())
+    assert config["auditActor"] == actor
+
+
+def _raw_request(host: DashboardHost, environ: dict[str, object]) -> tuple[str, bytes]:
+    captured: dict[str, str] = {}
+
+    def start_response(status: str, _headers: list[tuple[str, str]]) -> None:
+        captured["status"] = status
+
+    base: dict[str, object] = {
+        "REQUEST_METHOD": "POST",
+        "PATH_INFO": "/workhorse/rpc/dashboard/meta",
+        "wsgi.url_scheme": "https",
+        "HTTP_HOST": "example.test",
+    }
+    chunks = cast(Iterable[bytes], host({**base, **environ}, start_response))
+    return captured["status"], b"".join(chunks)
+
+
+class _CountingStream(io.BytesIO):
+    def __init__(self, payload: bytes) -> None:
+        super().__init__(payload)
+        self.requested: list[int] = []
+
+    def read(self, size: int | None = -1) -> bytes:
+        self.requested.append(-1 if size is None else size)
+        return super().read(size)
+
+
+_TOO_LARGE = {
+    "json": {
+        "code": "PAYLOAD_TOO_LARGE",
+        "defined": False,
+        "message": "Payload Too Large",
+        "status": 413,
+    }
+}
+
+
+def test_dashboard_host_refuses_an_oversized_declared_length_before_reading() -> None:
+    for declared in (str((2 << 20) + 1), "12abc", "-1", "9" * 5_000):
+        stream = _CountingStream(b'{"json":null}')
+        status, body = _raw_request(_host(), {"CONTENT_LENGTH": declared, "wsgi.input": stream})
+        assert status.startswith("413 ")  # The reason phrase changed in Python 3.14.
+        assert json.loads(body) == _TOO_LARGE
+        assert stream.requested == []
+
+
+def test_dashboard_host_caps_an_undeclared_body() -> None:
+    stream = _CountingStream(b" " * ((2 << 20) + 10))
+    status, body = _raw_request(_host(), {"wsgi.input": stream, "wsgi.input_terminated": True})
+    assert status.startswith("413 ")
+    assert json.loads(body) == _TOO_LARGE
+    assert stream.requested == [(2 << 20) + 1]
+
+    stream = _CountingStream(b'{"json":null}')
+    status, body = _raw_request(_host(), {"wsgi.input": stream, "wsgi.input_terminated": True})
+    assert status == "200 OK"
+    assert json.loads(body)["json"]["actor"] == "operator@example.test"
+
+
+class _UnreachableConnection(_Connection):
+    def cursor(self, **_options: object) -> object:
+        raise ConnectionError("could not connect to db.internal:5432 as workhorse_admin")
+
+
+def test_dashboard_host_hides_an_unexpected_compatibility_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    host = DashboardHost(
+        cast(object, _UnreachableConnection()),
+        authorize=lambda _: DashboardPrincipal("operator@example.test"),
+    )
+    with caplog.at_level("ERROR", logger="workhorse.dashboard"):
+        status, _, body = _request(host, "/workhorse/tasks")
+    assert status == "503 Service Unavailable"
+    assert json.loads(body) == {
+        "error": (
+            "Unable to verify Workhorse schema compatibility because the database query failed."
+        )
+    }
+    assert b"db.internal" not in body
+    assert any(
+        "db.internal:5432" in (record.exc_text or "")
+        for record in caplog.records
+        if record.name == "workhorse.dashboard"
+    )
+
+
+def test_dashboard_host_reports_a_compatibility_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(_executor: object) -> None:
+        raise ProtocolCompatibilityError("schema-too-old")
+
+    monkeypatch.setattr(dashboard, "_assert_sync_compatible", refuse)
+    host = DashboardHost(
+        cast(object, _Connection()),
+        authorize=lambda _: DashboardPrincipal("operator@example.test"),
+    )
+    status, _, body = _request(host, "/workhorse/tasks")
+    assert status == "503 Service Unavailable"
+    assert json.loads(body) == {
+        "error": "SQL protocol compatibility check refused mutation: schema-too-old"
     }

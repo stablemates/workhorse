@@ -36,6 +36,16 @@ const response = (await host.handle(request)) ?? new Response("Not found", { sta
 Fetch-native hosts pass requests to `host.handle`. Express and other Connect-style hosts can pass
 the same host to `dashboardNodeMiddleware`.
 
+`handle` takes an optional second argument, `{ clientAddress }`. Built-in `singleAdmin` login
+counts failures per client address, so pass the peer address your transport established. Never
+pass a value read from `Forwarded` or `X-Forwarded-For` unless your own proxy chain sets it.
+Without an address, every request shares one failure window. `dashboardNodeMiddleware` passes the
+socket's remote address itself.
+
+```ts
+const response = await host.handle(request, { clientAddress: connection.remoteAddress });
+```
+
 ## Package boundary
 
 The host serves the compiled application and RPC API, but it never installs or migrates schema and

@@ -124,7 +124,12 @@ export function dashboardNodeMiddleware(
 
     void (async () => {
       try {
-        const result = await host.handle(fetchRequestValue);
+        // The socket's peer is the one client address the transport establishes itself.
+        const clientAddress = request.socket.remoteAddress;
+        const result = await host.handle(
+          fetchRequestValue,
+          clientAddress === undefined ? undefined : { clientAddress },
+        );
         if (!result) {
           next();
           return;

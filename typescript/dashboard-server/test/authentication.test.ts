@@ -6,6 +6,7 @@ import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
 import type { Queryable } from "@stablemates/workhorse";
 import { describe, expect, it, vi } from "vitest";
+import { loginThrottleKey } from "../src/server/authentication.js";
 import { createDashboardHost } from "../src/server/host.js";
 import { isDashboardMutation, type DashboardRouter } from "../src/server/router.js";
 import type { DashboardAuditContext } from "../src/server/types.js";
@@ -33,6 +34,7 @@ const dashboardAuthenticationSuiteName =
 async function login(
   host: ReturnType<typeof createDashboardHost>,
   password = "correct horse",
+  clientAddress?: string,
 ): Promise<Response> {
   const response = await host.handle(
     new Request("https://dashboard.test/login", {
@@ -40,6 +42,7 @@ async function login(
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ username: "operator", password }),
     }),
+    clientAddress === undefined ? undefined : { clientAddress },
   );
   if (!response) throw new Error("Dashboard did not own its login route");
   return response;
@@ -348,7 +351,47 @@ dashboardAuthenticationSuite(dashboardAuthenticationSuiteName, () => {
     }
   });
 
-  it("reserves throttle capacity before concurrent password checks begin", async () => {
+  it("throttles each client address separately and ignores forwarding headers", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      const host = createDashboardHost({
+        database,
+        path: "/",
+        singleAdmin: { username: "operator", passwordHash },
+      });
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        expect((await login(host, "wrong password", "203.0.113.7")).status).toBe(401);
+      }
+      expect((await login(host, "correct horse", "203.0.113.7")).status).toBe(429);
+      expect((await login(host, "correct horse", "198.51.100.4")).status).toBe(303);
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        expect((await login(host, "wrong password", "2001:db8:1:2::10")).status).toBe(401);
+      }
+      // Another address in the same /64 shares the window; another /64 does not.
+      expect((await login(host, "correct horse", "2001:db8:1:2:ffff::1")).status).toBe(429);
+      expect((await login(host, "correct horse", "2001:db8:1:3::10")).status).toBe(303);
+
+      const forwarded = await host.handle(
+        new Request("https://dashboard.test/login", {
+          method: "POST",
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            "x-forwarded-for": "198.51.100.4",
+            forwarded: "for=198.51.100.4",
+          },
+          body: new URLSearchParams({ username: "operator", password: "correct horse" }),
+        }),
+        { clientAddress: "203.0.113.7" },
+      );
+      expect(forwarded?.status).toBe(429);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("bounds concurrent password hashing across every client", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
     try {
       const host = createDashboardHost({
@@ -358,14 +401,37 @@ dashboardAuthenticationSuite(dashboardAuthenticationSuiteName, () => {
       });
 
       const responses = await Promise.all(
-        Array.from({ length: 6 }, () => login(host, "wrong password")),
+        Array.from({ length: 6 }, (_, index) =>
+          login(host, "wrong password", `192.0.2.${String(index + 1)}`),
+        ),
       );
       expect(responses.map(({ status }) => status).toSorted()).toEqual([
-        401, 401, 401, 401, 401, 429,
+        401, 401, 429, 429, 429, 429,
       ]);
+      expect(
+        responses.filter(({ status }) => status === 429).map((r) => r.headers.get("retry-after")),
+      ).toEqual(["1", "1", "1", "1"]);
+      // A refusal by the hashing bound reserves nothing, so those clients may try again at once.
+      expect((await login(host, "correct horse", "192.0.2.6")).status).toBe(303);
     } finally {
       now.mockRestore();
     }
+  });
+
+  it("keys login throttling by IPv4 address and IPv6 /64 prefix", () => {
+    expect(loginThrottleKey("203.0.113.7")).toBe("203.0.113.7");
+    expect(loginThrottleKey("::ffff:203.0.113.7")).toBe("203.0.113.7");
+    expect(loginThrottleKey("::FFFF:cb00:7107")).toBe("203.0.113.7");
+    expect(loginThrottleKey("0:0:0:0:0:ffff:cb00:7107")).toBe("203.0.113.7");
+    expect(loginThrottleKey("0000:0000:0000:0000:0000:ffff:203.0.113.7")).toBe("203.0.113.7");
+    expect(loginThrottleKey("::cb00:7107")).toBe("0:0:0:0::/64");
+    expect(loginThrottleKey("2001:db8:1:2:3:4:203.0.113.7")).toBe("2001:db8:1:2::/64");
+    expect(loginThrottleKey("2001:DB8:0001:0002:aaaa::1")).toBe("2001:db8:1:2::/64");
+    expect(loginThrottleKey("[2001:db8::1]")).toBe("2001:db8:0:0::/64");
+    expect(loginThrottleKey("fe80::1%eth0")).toBe("fe80:0:0:0::/64");
+    expect(loginThrottleKey("::1")).toBe("0:0:0:0::/64");
+    expect(loginThrottleKey(undefined)).toBe("unidentified");
+    expect(loginThrottleKey("not an address")).toBe("unidentified");
   });
 
   it("bounds retained sessions by evicting the oldest successful login", async () => {

@@ -470,6 +470,7 @@ interface DashboardQueueController
 interface DashboardRedriveBatch
 interface DashboardRedriveFilter
 interface DashboardRedriveResult
+interface DashboardRequestContext
 type DashboardRouter
 interface DashboardRpcContext
 interface DashboardRunNowResult
@@ -706,6 +707,7 @@ interface DashboardQueueController
 interface DashboardRedriveBatch
 interface DashboardRedriveFilter
 interface DashboardRedriveResult
+interface DashboardRequestContext
 type DashboardRouter
 interface DashboardRpcContext
 interface DashboardRunNowResult
@@ -1549,7 +1551,7 @@ interface DashboardHost {
   /** True when this request belongs to the dashboard's mount path. */
   owns(request: Request): boolean;
   /** Handle one request, or return null when the path is not owned by the dashboard. */
-  handle(request: Request): Promise<Response | null>;
+  handle(request: Request, context?: DashboardRequestContext): Promise<Response | null>;
 }
 
 interface DashboardHostOptions {
@@ -1962,6 +1964,18 @@ interface DashboardRedriveResult {
 }
 
 type DashboardRedriveStatus = RedriveStatus;
+
+interface DashboardRequestContext {
+  /**
+  * The peer address the transport accepted the connection from, such as a socket's remote address.
+  *
+  * `singleAdmin` counts failed logins per address, grouping IPv6 by its /64 prefix. Pass only an
+  * address the transport established or a proxy chain the application already trusts, never one
+  * read from a header the client controls. Requests without one share a single failure window.
+  * `dashboardNodeMiddleware` passes the socket's remote address.
+  */
+  clientAddress?: string;
+}
 
 type DashboardResultTone = "neutral" | "success" | "failure";
 

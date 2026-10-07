@@ -1,4 +1,5 @@
 import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
 import type { DashboardSingleAdminOptions } from "@stablemates/workhorse-dashboard-contract";
 
 const SESSION_COOKIE = "__Host-workhorse-dashboard-session";
@@ -7,6 +8,12 @@ const MAX_LOGIN_BODY_BYTES = 4_096;
 const MAX_SERVER_SESSIONS = 16;
 const MAX_FAILED_LOGINS = 5;
 const FAILED_LOGIN_WINDOW_MS = 60_000;
+/** Clients whose login reservations the server tracks at once. The oldest entry leaves first. */
+const MAX_TRACKED_LOGIN_CLIENTS = 1_024;
+/** Password derivations that may run at once across every client. */
+const MAX_CONCURRENT_PASSWORD_HASHES = 2;
+/** The throttle key of every request whose transport supplied no peer address. */
+const UNIDENTIFIED_CLIENT = "unidentified";
 const SCRYPT_OPTIONS = { N: 16_384, r: 8, p: 1, maxmem: 32 * 1_024 * 1_024 } as const;
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 const LOGIN_ERROR_PLACEHOLDER = "<!--__WORKHORSE_LOGIN_ERROR__-->";
@@ -22,7 +29,12 @@ interface SessionRecord {
 
 interface SingleAdminAuthentication {
   authorize(request: Request, basePath: string): { actor: string } | Response;
-  handle(request: Request, loginPath: string, logoutPath: string): Promise<Response | null>;
+  handle(
+    request: Request,
+    loginPath: string,
+    logoutPath: string,
+    clientAddress?: string,
+  ): Promise<Response | null>;
 }
 
 function parsePasswordHash(value: string): ParsedPasswordHash {
@@ -84,6 +96,64 @@ async function readLoginBody(request: Request): Promise<string | undefined> {
   return new TextDecoder().decode(body);
 }
 
+/**
+ * The key that login reservations are counted under for one transport peer address.
+ *
+ * An IPv6 client usually controls a whole /64, so its addresses share one key. An IPv4-mapped IPv6
+ * address counts as its IPv4 address. A missing or unparseable address shares one key with every
+ * other such request, which is the process-wide window the mode had before.
+ */
+export function loginThrottleKey(clientAddress: string | undefined): string {
+  const address =
+    clientAddress
+      ?.trim()
+      .replace(/^\[|\]$/g, "")
+      .replace(/%.*$/, "") ?? "";
+  const family = isIP(address);
+  if (family === 4) return address;
+  if (family !== 6) return UNIDENTIFIED_CLIENT;
+  const groups = ipv6Groups(address);
+  // ::ffff:0:0/96 carries an IPv4 address in its last two groups, however the address is spelled.
+  if (groups.slice(0, 6).every((group, index) => group === (index === 5 ? 0xffff : 0))) {
+    const [high = 0, low = 0] = groups.slice(6);
+    return [high >> 8, high & 0xff, low >> 8, low & 0xff].join(".");
+  }
+  return `${groups
+    .slice(0, 4)
+    .map((group) => group.toString(16))
+    .join(":")}::/64`;
+}
+
+/** The 16-bit groups of one side of `::`, where a dotted IPv4 tail fills two groups. */
+function ipv6GroupValues(part: string): number[] {
+  if (!part) return [];
+  return part.split(":").flatMap((group) => {
+    if (!group.includes(".")) return [Number.parseInt(group, 16)];
+    const [a = 0, b = 0, c = 0, d = 0] = group.split(".").map(Number);
+    return [(a << 8) | b, (c << 8) | d];
+  });
+}
+
+/** The eight 16-bit groups of an address that `isIP` already accepted as IPv6. */
+function ipv6Groups(address: string): number[] {
+  const [head = "", tail] = address.split("::");
+  const headGroups = ipv6GroupValues(head);
+  if (tail === undefined) return headGroups;
+  const tailGroups = ipv6GroupValues(tail);
+  return [
+    ...headGroups,
+    ...Array<number>(8 - headGroups.length - tailGroups.length).fill(0),
+    ...tailGroups,
+  ];
+}
+
+function tooManyRequests(retryAfterSeconds: number): Response {
+  return new Response(null, {
+    status: 429,
+    headers: { "retry-after": String(retryAfterSeconds), "cache-control": "no-store" },
+  });
+}
+
 function cookieValue(request: Request): string | undefined {
   for (const part of (request.headers.get("cookie") ?? "").split(";")) {
     const [name, ...value] = part.trim().split("=");
@@ -140,7 +210,10 @@ export function createSingleAdminAuthentication(
     );
   }
   const sessions = new Map<string, SessionRecord>();
-  const failedLogins: number[] = [];
+  // Reservation times per throttle key, oldest first. Map order is insertion order, so the first
+  // key is the client the server started tracking longest ago.
+  const failedLogins = new Map<string, number[]>();
+  let activePasswordHashes = 0;
 
   function deleteExpiredSessions(now: number): void {
     for (const [token, session] of sessions) {
@@ -148,10 +221,24 @@ export function createSingleAdminAuthentication(
     }
   }
 
-  function deleteOldLoginFailures(now: number): void {
-    while ((failedLogins[0] ?? Number.POSITIVE_INFINITY) <= now - FAILED_LOGIN_WINDOW_MS) {
-      failedLogins.shift();
+  /** The client's reservations still inside the window, with every expired client removed. */
+  function currentLoginFailures(key: string, now: number): number[] {
+    for (const [client, reservations] of failedLogins) {
+      while ((reservations[0] ?? Number.POSITIVE_INFINITY) <= now - FAILED_LOGIN_WINDOW_MS) {
+        reservations.shift();
+      }
+      if (reservations.length === 0) failedLogins.delete(client);
     }
+    const existing = failedLogins.get(key);
+    if (existing) return existing;
+    while (failedLogins.size >= MAX_TRACKED_LOGIN_CLIENTS) {
+      const oldestClient = failedLogins.keys().next().value as string | undefined;
+      if (oldestClient === undefined) break;
+      failedLogins.delete(oldestClient);
+    }
+    const reservations: number[] = [];
+    failedLogins.set(key, reservations);
+    return reservations;
   }
 
   async function passwordExpiry(password: string, now: number): Promise<number | undefined> {
@@ -194,7 +281,7 @@ export function createSingleAdminAuthentication(
       }
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     },
-    async handle(request, loginPath, logoutPath) {
+    async handle(request, loginPath, logoutPath, clientAddress) {
       const url = new URL(request.url);
       if (url.pathname === logoutPath) {
         if (request.method !== "POST") {
@@ -235,25 +322,32 @@ export function createSingleAdminAuthentication(
       const username = form.get("username") ?? "";
       const password = form.get("password") ?? "";
       const now = Date.now();
-      deleteOldLoginFailures(now);
-      if (failedLogins.length >= MAX_FAILED_LOGINS) {
-        const retryAfter = Math.max(
-          1,
-          Math.ceil(((failedLogins[0] ?? now) + FAILED_LOGIN_WINDOW_MS - now) / 1_000),
+      // The key comes from the transport, never from Forwarded or X-Forwarded-For, which the
+      // client writes itself. One client's failures therefore cannot pause another client's login.
+      const client = loginThrottleKey(clientAddress);
+      const reservations = currentLoginFailures(client, now);
+      if (reservations.length >= MAX_FAILED_LOGINS) {
+        return tooManyRequests(
+          Math.max(1, Math.ceil(((reservations[0] ?? now) + FAILED_LOGIN_WINDOW_MS - now) / 1_000)),
         );
-        return new Response(null, {
-          status: 429,
-          headers: { "retry-after": String(retryAfter), "cache-control": "no-store" },
-        });
       }
+      // Distinct clients can each submit their own reservations, so the process separately bounds
+      // how many scrypt derivations run at once.
+      if (activePasswordHashes >= MAX_CONCURRENT_PASSWORD_HASHES) return tooManyRequests(1);
       // Reserve capacity before scrypt yields. Concurrent submissions cannot all observe the same
       // spare slot and create an unbounded password-hashing burst.
-      failedLogins.push(now);
-      const credentialExpiresAt = await passwordExpiry(password, now);
+      reservations.push(now);
+      activePasswordHashes += 1;
+      let credentialExpiresAt: number | undefined;
+      try {
+        credentialExpiresAt = await passwordExpiry(password, now);
+      } finally {
+        activePasswordHashes -= 1;
+      }
       if (username !== credentials.username || credentialExpiresAt === undefined) {
         return htmlResponse(loginPage(loginTemplate, true), 401);
       }
-      failedLogins.length = 0;
+      failedLogins.delete(client);
 
       deleteExpiredSessions(now);
       while (sessions.size >= MAX_SERVER_SESSIONS) {

@@ -108,9 +108,49 @@ describe("dashboard workspaces", () => {
   it("hands the resolved workspace to the authorization boundary", async () => {
     const seen: (string | null)[] = [];
     const host = createWorkspaceHost((workspace) => seen.push(workspace));
-    await get(host, "/workhorse/production/tasks");
+    await get(host, "/workhorse/production/rpc/dashboard/meta");
     await get(host, "/workhorse");
     expect(seen).toEqual(["production", null]);
+    seen.length = 0;
+    // The application page also asks about every other workspace before listing it.
+    await get(host, "/workhorse/production/tasks");
+    expect(seen).toEqual(["production", "staging"]);
+  });
+
+  it("lists only the workspaces the authorization boundary grants for this request", async () => {
+    const host = createDashboardHost({
+      path: "/workhorse",
+      workspaces: {
+        production: { database: fakeDatabase(), databaseHost: "db.internal:5432" },
+        staging: { database: fakeDatabase() },
+        audit: { database: fakeDatabase(), databaseName: "audit_archive" },
+      },
+      authorize: (request, workspace) => {
+        const role = request.headers.get("x-role");
+        if (workspace === "production") return role === "admin";
+        if (workspace === "audit")
+          return role === "admin" ? true : new Response(null, { status: 403 });
+        return { actor: role ?? "anonymous" };
+      },
+      dev,
+    });
+    const page = async (role: string) =>
+      (
+        await host.handle(
+          new Request("http://dashboard.test/workhorse/staging/tasks", {
+            headers: { "x-role": role },
+          }),
+        )
+      )?.text();
+
+    const viewer = (await page("viewer")) ?? "";
+    expect(viewer).toContain('"workspaces":[{"name":"staging","url":"/workhorse/staging"}]');
+    expect(viewer).not.toContain("db.internal");
+    expect(viewer).not.toContain("audit_archive");
+
+    const admin = (await page("admin")) ?? "";
+    expect(admin).toContain('"name":"production"');
+    expect(admin).toContain('"databaseName":"audit_archive"');
   });
 
   it("answers 404 outside every workspace instead of serving the application", async () => {

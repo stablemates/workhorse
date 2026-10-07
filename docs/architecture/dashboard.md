@@ -1021,6 +1021,9 @@ development. `renderDashboardHtml` is the sole assembler:
 3. It HTML-attribute escapes each host-owned browser module URL.
 4. It fills that placeholder with another callback.
 
+The Python, Ruby, and Rust hosts write their own runtime configuration and escape each `<` the
+same way. Python and Ruby also escape `>` and `&`.
+
 Dollar patterns in either input remain literal data rather than `String.prototype.replace` syntax.
 `typescript/dashboard-server/test/html.test.ts` exercises both substitutions against the packaged
 template. It requires one runtime assignment with no remaining placeholder.
@@ -1109,17 +1112,32 @@ with `POST`.
 
 #### Login rate limit
 
-Single-admin authentication retains at most five login reservations in a rolling 60-second window.
+Single-admin authentication retains at most five login reservations per client in a rolling
+60-second window.
 
-1. Each form submission reserves capacity before scrypt begins, so concurrent requests cannot
-   bypass the bound.
-2. Invalid submissions retain their reservations and return the generic `401` response.
-3. Further submissions return `429` with `Retry-After` until the oldest reservation leaves the
-   window.
-4. A successful login clears the reservations.
+1. `loginThrottleKey()` derives the client from the transport peer address in
+   `DashboardRequestContext.clientAddress`. An IPv4 address, or an IPv4-mapped IPv6 address, is its
+   own key. An IPv6 address shares one key with its /64 prefix. A request without a parseable
+   address uses the shared key `unidentified`.
+2. Each form submission reserves capacity for its client before scrypt begins, so concurrent
+   requests cannot bypass the bound.
+3. Invalid submissions retain their reservations and return the generic `401` response.
+4. Further submissions from that client return `429` with `Retry-After` until its oldest
+   reservation leaves the window. Other clients keep logging in.
+5. A successful login clears that client's reservations.
 
-The limit is process-wide. The mode has one configured administrator and does not trust
-caller-supplied forwarding headers as client identity.
+The server tracks at most `MAX_TRACKED_LOGIN_CLIENTS` (1,024) clients. Before it tracks another,
+it removes clients without a current reservation, then the client it started tracking longest
+ago.
+
+At most `MAX_CONCURRENT_PASSWORD_HASHES` (2) scrypt derivations run at once across every client.
+A submission that finds both slots busy returns `429` with `Retry-After: 1`. It reserves nothing.
+
+`dashboardNodeMiddleware` passes `request.socket.remoteAddress` as `clientAddress`. A host that
+calls `handle(request, context)` itself supplies an address it established. The server never
+reads `Forwarded` or `X-Forwarded-*`. Behind a reverse proxy the socket peer is the proxy, so
+every client of that proxy shares one key. [ADR 0093](../decisions/0093-key-single-admin-login-throttling-by-transport-peer.md)
+records this identity model.
 
 #### Process boundary
 
@@ -1165,6 +1183,25 @@ before any operator controller runs.
 `BoundaryTimeline` reads `details.requested_by` from task events and renders it beside the event's
 reason. Cancellation, signal, redrive, and other operator events therefore retain visible
 attribution.
+
+### Schema compatibility answer
+
+Every dashboard host checks schema compatibility after authorization and before it serves a
+request. It caches only a passing answer.
+
+- A compatibility verdict, such as `schema-too-old`, answers `503` with the verdict's message. That
+  message names only codes and versions.
+- Any other failure answers `503` with the fixed message "Unable to verify Workhorse schema
+  compatibility because the database query failed." A driver error can name a database host, user,
+  or path, so the host logs it instead.
+
+| Host       | Where the unexpected failure is logged                                  |
+| ---------- | ----------------------------------------------------------------------- |
+| TypeScript | OpenTelemetry record `workhorse.dashboard.compatibility_check_failed`   |
+| Python     | `logging.getLogger("workhorse.dashboard")`, at error with the traceback |
+| Ruby       | the Rack `rack.errors` stream                                           |
+| Go         | `slog.ErrorContext` on the default logger                               |
+| Rust       | `tracing::error!`                                                       |
 
 ### Listener exposure
 

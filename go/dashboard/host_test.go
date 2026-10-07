@@ -1,9 +1,12 @@
 package dashboard
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -170,5 +173,55 @@ func TestHandlerRejectsAnAllowedHostThatIsNotABareHost(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "host") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+type failingExecutor struct{ err error }
+
+func (executor failingExecutor) Query(context.Context, string, ...any) ([]workhorse.Row, error) {
+	return nil, executor.err
+}
+
+func TestHandlerHidesAnUnexpectedCompatibilityFailure(t *testing.T) {
+	var logged bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	handler, err := newHandler(HandlerOptions{
+		Executor: failingExecutor{err: errors.New("dial tcp db.internal:5432: connection refused")},
+		Authorize: func(*http.Request) Authorization {
+			return Authorization{Principal: &Principal{Actor: "operator"}}
+		},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := httptest.NewRecorder()
+	handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "https://example.test/workhorse/tasks", nil))
+	if page.Code != http.StatusServiceUnavailable || strings.Contains(page.Body.String(), "db.internal") ||
+		!strings.Contains(page.Body.String(), unverifiedCompatibility) {
+		t.Fatalf("page = %d %s", page.Code, page.Body.String())
+	}
+	if !strings.Contains(logged.String(), "db.internal:5432") {
+		t.Fatalf("log = %q", logged.String())
+	}
+}
+
+func TestHandlerReportsACompatibilityRefusal(t *testing.T) {
+	handler, err := newHandler(HandlerOptions{
+		Executor: failingExecutor{err: &workhorse.CompatibilityError{Code: workhorse.SchemaTooOld}},
+		Authorize: func(*http.Request) Authorization {
+			return Authorization{Principal: &Principal{Actor: "operator"}}
+		},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := httptest.NewRecorder()
+	handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "https://example.test/workhorse/tasks", nil))
+	if page.Code != http.StatusServiceUnavailable ||
+		!strings.Contains(page.Body.String(), "refused mutation: schema-too-old") {
+		t.Fatalf("page = %d %s", page.Code, page.Body.String())
 	}
 }

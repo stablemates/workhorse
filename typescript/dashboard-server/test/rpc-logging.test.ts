@@ -155,3 +155,58 @@ describe("dashboard RPC logging", () => {
     ]);
   });
 });
+
+describe("dashboard compatibility logging", () => {
+  it("logs a failed compatibility query and answers without its detail", async () => {
+    const unreachable = {
+      query: async () => {
+        throw new Error("connect ECONNREFUSED db.internal:5432");
+      },
+    } as unknown as Queryable;
+    const host = createDashboardHost({
+      workspaces: { production: { database: unreachable } },
+      path: "/",
+      authorize: () => true,
+    });
+
+    const response = await host.handle(new Request("http://dashboard.test/production/tasks"));
+
+    expect(response?.status).toBe(503);
+    const body = await response?.text();
+    expect(body).not.toContain("db.internal");
+    expect(JSON.parse(body ?? "")).toEqual({
+      error: "Unable to verify Workhorse schema compatibility because the database query failed.",
+    });
+    expect(
+      records.filter(({ eventName }) => eventName !== "workhorse.dashboard.workspaces_configured"),
+    ).toEqual([
+      expect.objectContaining({
+        eventName: "workhorse.dashboard.compatibility_check_failed",
+        severityText: "ERROR",
+        attributes: {
+          "exception.message": "Error: connect ECONNREFUSED db.internal:5432",
+          "workhorse.dashboard.workspace": "production",
+        },
+      }),
+    ]);
+  });
+
+  it("answers a compatibility refusal with its version message and logs nothing", async () => {
+    const outdated = {
+      query: async () => ({
+        rows: [
+          { kind: "protocol", version: PROTOCOL_VERSION },
+          { kind: "schema", version: 1 },
+        ],
+      }),
+    } as unknown as Queryable;
+    const host = createDashboardHost({ database: outdated, path: "/", authorize: () => true });
+
+    const response = await host.handle(new Request("http://dashboard.test/tasks"));
+
+    expect(response?.status).toBe(503);
+    const body = (await response?.json()) as { error: string } | undefined;
+    expect(body?.error).toMatch(/schema/i);
+    expect(records).toEqual([]);
+  });
+});

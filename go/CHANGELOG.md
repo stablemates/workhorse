@@ -36,6 +36,9 @@ return a `Principal` with that `Actor` from `Authorize` (SM-1152).
 
 Migration 0057 (`0057-close-a-released-task-without-attributing-its-unrun-attempt.sql`) changes only `cancel_v1` and `terminalize_deadline_v1`. A full-tier task that a worker without a handler returned through `release_owned_v1` can now be canceled, and deadline recovery terminalizes it instead of rolling back the whole recovery pass. Both close it like never-started work, with no attempt history row (SM-1158).
 
+The dashboard handler answers an unexpected schema-compatibility failure with a generic `503` and logs the
+cause through the default `slog` logger, instead of returning the driver error text (SM-1168).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

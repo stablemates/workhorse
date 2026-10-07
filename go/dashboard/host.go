@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -18,6 +19,9 @@ import (
 
 	workhorse "github.com/stablemates/workhorse/go"
 )
+
+// unverifiedCompatibility answers a compatibility check that failed without a verdict.
+const unverifiedCompatibility = "Unable to verify Workhorse schema compatibility because the database query failed."
 
 // Principal is the identity established by an embedding application's authorization boundary.
 type Principal struct{ Actor string }
@@ -192,7 +196,15 @@ func (host *handler) ServeHTTP(response http.ResponseWriter, request *http.Reque
 	}
 	actor := authorization.Principal.Actor
 	if err := host.assertCompatible(request.Context()); err != nil {
-		writeJSON(response, http.StatusServiceUnavailable, map[string]any{"error": err.Error()})
+		var refusal *workhorse.CompatibilityError
+		message := unverifiedCompatibility
+		if errors.As(err, &refusal) {
+			message = err.Error()
+		} else {
+			// A driver error can name the database host, user, or path, so it stays in the log.
+			slog.ErrorContext(request.Context(), "dashboard schema compatibility check failed", "error", err)
+		}
+		writeJSON(response, http.StatusServiceUnavailable, map[string]any{"error": message})
 		return
 	}
 	mountRoot := host.basePath
