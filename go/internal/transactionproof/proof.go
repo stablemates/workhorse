@@ -171,8 +171,8 @@ func Database(t *testing.T) string {
 			return
 		}
 		defer func() { _ = admin.Close(ctx) }()
-		if _, err := admin.Exec(ctx, "DROP DATABASE "+quotedName); err != nil {
-			t.Errorf("drop scratch database: %v", err)
+		if err := dropScratchDatabase(ctx, admin, databaseName); err != nil {
+			t.Errorf("drop scratch database: %v; run pnpm db:sweep", err)
 		}
 	})
 	parsed.Path = "/" + databaseName
