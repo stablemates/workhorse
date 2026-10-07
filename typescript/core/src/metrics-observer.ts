@@ -55,6 +55,14 @@ const workerActive = lazyGauge("workhorse.worker.active", {
   unit: "{slot}",
 });
 
+type Gauge = ReturnType<typeof lazyGauge>;
+type GaugeAttributes = Record<string, string>;
+type GaugeSeries = Map<Gauge, Map<string, GaugeAttributes>>;
+
+function reporterFailed(failure: unknown): void {
+  console.error("Workhorse metrics error reporter failed", failure);
+}
+
 type QueueObservationRow = {
   queue_name: string;
   scheduled: string;
@@ -90,6 +98,9 @@ export class WorkhorseMetricsObserver {
   private readonly onError: (error: unknown) => void;
   private timer: NodeJS.Timeout | undefined;
   private pending: Promise<void> | undefined;
+  // Series the last collection recorded. A synchronous gauge exports its last value until something
+  // records again, so a series PostgreSQL stops returning is recorded once more as zero.
+  private recorded: GaugeSeries = new Map();
 
   constructor(
     private readonly database: Queryable,
@@ -121,7 +132,7 @@ export class WorkhorseMetricsObserver {
 
   start(): this {
     if (this.timer) return this;
-    const collect = () => void this.collect().catch(this.onError);
+    const collect = () => void this.collect().catch((error: unknown) => this.report(error));
     collect();
     this.timer = setInterval(collect, this.intervalMs);
     this.timer.unref();
@@ -134,43 +145,67 @@ export class WorkhorseMetricsObserver {
     this.timer = undefined;
   }
 
+  // The timer calls the reporter without awaiting it. A reporter that throws or rejects would
+  // otherwise become an unhandled rejection, which ends a Node process under default settings.
+  private report(error: unknown): void {
+    try {
+      // Promise.resolve also adopts a thenable or a promise from another realm.
+      Promise.resolve(this.onError(error) as unknown).catch(reporterFailed);
+    } catch (failure) {
+      reporterFailed(failure);
+    }
+  }
+
   private async collectOnce(): Promise<void> {
     const rejectedSince = new Date(Date.now() - EXTERNAL_WAIT_REJECTION_WINDOW_MS);
     const [queues, workers] = await Promise.all([
       this.database.query<QueueObservationRow>(SQL_STATEMENTS["metrics_observer"], [rejectedSince]),
       this.database.query<WorkerObservationRow>(SQL_STATEMENTS["worker_registry"]),
     ]);
+    const current: GaugeSeries = new Map();
+    const record = (gauge: Gauge, value: number, attributes: GaugeAttributes) => {
+      gauge.record(value, attributes);
+      let series = current.get(gauge);
+      if (!series) current.set(gauge, (series = new Map()));
+      series.set(JSON.stringify(attributes), attributes);
+    };
 
     for (const row of queues.rows) {
       for (const state of ["scheduled", "ready", "active"] as const) {
-        taskCount.record(Number(row[state]), {
+        record(taskCount, Number(row[state]), {
           "workhorse.queue.name": row.queue_name,
           "workhorse.task.state": state,
         });
       }
       const attributes = { "workhorse.queue.name": row.queue_name };
-      if (row.oldest_ready_age_ms !== null) {
-        oldestReadyAge.record(Number(row.oldest_ready_age_ms) / 1_000, attributes);
-      }
-      expiredLeases.record(Number(row.expired), attributes);
-      overdueDeadlines.record(Number(row.overdue_deadlines), attributes);
-      overdueExecutionTimeouts.record(Number(row.overdue_execution_timeouts), attributes);
+      // A queue with no ready task has no oldest ready age, so its alarm reads zero.
+      record(
+        oldestReadyAge,
+        row.oldest_ready_age_ms === null ? 0 : Number(row.oldest_ready_age_ms) / 1_000,
+        attributes,
+      );
+      record(expiredLeases, Number(row.expired), attributes);
+      record(overdueDeadlines, Number(row.overdue_deadlines), attributes);
+      record(overdueExecutionTimeouts, Number(row.overdue_execution_timeouts), attributes);
       for (const kind of ["signal", "human"] as const) {
         const waitAttributes = { ...attributes, "workhorse.wait.kind": kind };
-        pendingExternalWaits.record(
+        record(
+          pendingExternalWaits,
           Number(kind === "signal" ? row.pending_signal_waits : row.pending_human_waits),
           waitAttributes,
         );
-        overdueExternalWaits.record(
+        record(
+          overdueExternalWaits,
           Number(kind === "signal" ? row.overdue_signal_waits : row.overdue_human_waits),
           waitAttributes,
         );
-        rejectedWaitDeliveries.record(
+        record(
+          rejectedWaitDeliveries,
           Number(kind === "signal" ? row.rejected_signals : row.rejected_human_waits),
           waitAttributes,
         );
       }
-      queuePaused.record(row.paused ? 1 : 0, attributes);
+      record(queuePaused, row.paused ? 1 : 0, attributes);
     }
 
     for (const row of workers.rows) {
@@ -178,9 +213,17 @@ export class WorkhorseMetricsObserver {
         "workhorse.queue.name": row.queue_name,
         "workhorse.worker.state": row.state,
       };
-      workerCount.record(Number(row.workers), attributes);
-      workerCapacity.record(Number(row.capacity), attributes);
-      workerActive.record(Number(row.active_slots), attributes);
+      record(workerCount, Number(row.workers), attributes);
+      record(workerCapacity, Number(row.capacity), attributes);
+      record(workerActive, Number(row.active_slots), attributes);
     }
+
+    for (const [gauge, series] of this.recorded) {
+      const kept = current.get(gauge);
+      for (const [key, attributes] of series) {
+        if (!kept?.has(key)) gauge.record(0, attributes);
+      }
+    }
+    this.recorded = current;
   }
 }

@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { metrics } from "@opentelemetry/api";
 import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
 import {
@@ -640,6 +641,127 @@ describe("Workhorse OpenTelemetry metrics", () => {
     expect(
       () => new WorkhorseMetricsObserver(database, { intervalMs: MAX_TIMER_DELAY_MS }),
     ).not.toThrow();
+  });
+
+  it("records zero for a gauge series that a later collection no longer returns", async () => {
+    let collection = 0;
+    const database: Queryable = {
+      query: async <R extends QueryResultRow>(text: string) => {
+        if (text.includes("FROM workhorse.worker_registry")) {
+          return queryResult(
+            (collection === 0
+              ? [
+                  {
+                    queue_name: "mail",
+                    state: "running",
+                    workers: "2",
+                    capacity: "4",
+                    active_slots: "3",
+                  },
+                ]
+              : []) as unknown as R[],
+          );
+        }
+        return queryResult([
+          {
+            queue_name: "mail",
+            scheduled: "0",
+            ready: collection === 0 ? "1" : "0",
+            active: "0",
+            oldest_ready_age_ms: collection === 0 ? 2_000 : null,
+            expired: "0",
+            overdue_deadlines: "0",
+            overdue_execution_timeouts: "0",
+            pending_signal_waits: "0",
+            pending_human_waits: "0",
+            overdue_signal_waits: "0",
+            overdue_human_waits: "0",
+            rejected_signals: "0",
+            rejected_human_waits: "0",
+            paused: false,
+          },
+        ] as unknown as R[]);
+      },
+    };
+    const { WorkhorseMetricsObserver } = await import("../src/metrics-observer.js");
+    const observer = new WorkhorseMetricsObserver(database);
+
+    await observer.collect();
+    await collect();
+    exporter.reset();
+    collection = 1;
+    await observer.collect();
+    await collect();
+
+    const running = { "workhorse.queue.name": "mail", "workhorse.worker.state": "running" };
+    for (const name of [
+      "workhorse.worker.count",
+      "workhorse.worker.capacity",
+      "workhorse.worker.active",
+    ]) {
+      expect(metric(name)?.dataPoints).toEqual([
+        expect.objectContaining({ attributes: running, value: 0 }),
+      ]);
+    }
+    expect(metric("workhorse.queue.oldest_ready.age")?.dataPoints).toEqual([
+      expect.objectContaining({ attributes: { "workhorse.queue.name": "mail" }, value: 0 }),
+    ]);
+
+    // A zeroed series is recorded once; the next collection that still lacks it records nothing.
+    exporter.reset();
+    await observer.collect();
+    await collect();
+    expect(metric("workhorse.worker.count")).toBeUndefined();
+  });
+
+  it("keeps a failing error reporter from producing an unhandled rejection", async () => {
+    vi.useFakeTimers();
+    const unhandled = vi.fn<(reason: unknown) => void>();
+    process.on("unhandledRejection", unhandled);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const failure = new Error("database unavailable");
+    const database: Queryable = {
+      query: async () => {
+        throw failure;
+      },
+    };
+    const { WorkhorseMetricsObserver } = await import("../src/metrics-observer.js");
+    const throwing = new WorkhorseMetricsObserver(database, {
+      onError: () => {
+        throw new Error("reporter threw");
+      },
+    });
+    const rejecting = new WorkhorseMetricsObserver(database, {
+      onError: async () => {
+        throw new Error("reporter rejected");
+      },
+    });
+    // A promise from another realm fails an instanceof Promise check.
+    const otherRealm = new WorkhorseMetricsObserver(database, {
+      onError: () =>
+        runInNewContext("Promise.reject(new Error('reporter rejected in another realm'))"),
+    });
+    try {
+      throwing.start();
+      rejecting.start();
+      otherRealm.start();
+      await vi.advanceTimersByTimeAsync(0);
+      vi.useRealTimers();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(unhandled).not.toHaveBeenCalled();
+      expect(
+        consoleError.mock.calls.map(([, reason]) => (reason as Error).message).toSorted(),
+      ).toEqual(["reporter rejected", "reporter rejected in another realm", "reporter threw"]);
+    } finally {
+      throwing.stop();
+      rejecting.stop();
+      otherRealm.stop();
+      vi.useRealTimers();
+      consoleError.mockRestore();
+      process.off("unhandledRejection", unhandled);
+    }
   });
 
   it("records SQL-owned maintenance work and duration", async () => {

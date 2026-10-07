@@ -102,6 +102,14 @@ Migration 0059 (`0059-close-sql-integrity-gaps-in-rate-refill-dependency-edges-a
 task's stored trace context. A task without one starts a new trace instead of joining a span active
 in the worker. The Go handler context keeps the worker context's cancellation and values (SM-1176).
 
+**Pending release — fixed:** `WorkhorseMetricsObserver` and `registerQueueMetrics` now count
+fast-tier tasks. A fast-tier ready task with a future run time counts as scheduled, as in
+`queue_health_v1`. The fix changes only the `metrics_observer` and `queue_metric_snapshot`
+statements, so it needs no migration. The observer records 0 once for a gauge series that a later
+collection no longer returns, such as a worker group that left a state. The oldest ready age of a
+queue with no ready task is 0. An `onError` reporter that throws or rejects is written to
+`console.error` instead of becoming an unhandled rejection (SM-1166).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

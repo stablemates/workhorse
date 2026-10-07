@@ -639,12 +639,17 @@ Each collection runs two read-only queries at once.
 
 **Queue gauges:** `workhorse.tasks.count` by queue and state, `workhorse.queue.oldest_ready.age`,
 `workhorse.queue.paused`, `workhorse.lease.expired`, `workhorse.deadline.overdue`, and
-`workhorse.execution_timeout.overdue`.
+`workhorse.execution_timeout.overdue`. They count both full-tier and fast-tier tasks. The oldest
+ready age is 0 when no task is ready.
 
 **Worker gauges:** `workhorse.worker.count`, `workhorse.worker.capacity`, and
 `workhorse.worker.active`, by queue and worker state. The states are `running`, `paused`,
 `draining`, and `offline`. A worker is `offline` when its last heartbeat is at least 30 seconds old.
 A multi-queue worker appears under every queue it serves, so do not sum across queues.
+
+A series that a later collection no longer returns is recorded once as 0. The timer does not await
+`onError`, which may return a promise. A reporter that throws or rejects is written to
+`console.error` instead of becoming an unhandled rejection.
 
 More detail: [Telemetry: Metrics observer](https://github.com/stablemates/workhorse/blob/main/docs/architecture/telemetry.md#metrics-observer).
 
