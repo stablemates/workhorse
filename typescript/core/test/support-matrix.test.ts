@@ -863,6 +863,14 @@ describe("continuous integration", () => {
     expect(workflow).not.toContain("pnpm check");
     expect(workflow).not.toContain("actions/setup-go");
     expect(workflow).not.toContain("DATABASE_URL_TEST_PACKED");
+    // Main CI judges the Rust gates on this commit, and release.yml runs the Rust release check
+    // before the crate publishes. Running it here again only exposed PyPI to Rust test flakes.
+    // Comments may name the Rust check to explain its absence, so only the steps are searched,
+    // whether a step writes its command on one line or in a block.
+    const steps = workflow.replaceAll(/^\s*#.*$/gm, "");
+    expect(steps).not.toContain("pnpm rust:");
+    expect(steps).not.toContain("cargo");
+    expect(steps).not.toMatch(/rust-?toolchain|rustup/);
     expect(releaseCheck).toContain('checkRelease("python", releaseTag(version))');
     expect(releaseCheck).toContain('["dashboard-bundle:check"]');
     expect(releaseCheck).toContain('["python:format:check"]');
@@ -1002,7 +1010,7 @@ describe("continuous integration", () => {
     }
   });
 
-  it("installs a PostgreSQL client that matches the release service", async () => {
+  it("installs a PostgreSQL client that matches the npm release service", async () => {
     const npmRelease = await read(".github/workflows/release.yml");
     expect(npmRelease).toContain("image: postgres:18-alpine");
     expect(npmRelease).toContain(
@@ -1012,13 +1020,14 @@ describe("continuous integration", () => {
     expect(npmRelease).toContain("postgresql-client-18");
     expect(npmRelease).toContain("/usr/lib/postgresql/18/bin");
 
+    // The Python tests create their databases through psycopg, so that release needs the service
+    // but no client binaries.
     const pythonRelease = await read(".github/workflows/release-python.yml");
     expect(pythonRelease).toContain("image: postgres:18-alpine");
     expect(pythonRelease).toContain(
       "DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test",
     );
-    expect(pythonRelease).toContain("postgresql-client-18");
-    expect(pythonRelease).toContain("/usr/lib/postgresql/18/bin");
+    expect(pythonRelease).not.toContain("postgresql-client");
   });
 
   it("benchmarks weekly on a supported PostgreSQL major under an explicit timeout", async () => {
