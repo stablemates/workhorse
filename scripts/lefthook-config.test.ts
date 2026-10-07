@@ -73,25 +73,32 @@ describe("lefthook pre-commit ordering", () => {
   });
 });
 
-// Package name to `typecheck` script, for every workspace package under `typescript/`.
+// Package name to `typecheck` script, for every workspace package under `typescript/` and
+// `dashboard/`.
 const packageTypecheckScripts = new Map<string, string | undefined>();
-for (const entry of await readdir(path.resolve(import.meta.dirname, "../typescript"), {
-  withFileTypes: true,
-})) {
-  if (!entry.isDirectory()) continue;
-  const manifest = path.resolve(import.meta.dirname, "../typescript", entry.name, "package.json");
-  const contents = await readFile(manifest, "utf8").catch(() => undefined);
-  if (contents === undefined) continue;
-  const { name, scripts } = JSON.parse(contents) as {
-    name: string;
-    scripts?: Record<string, string>;
-  };
-  packageTypecheckScripts.set(name, scripts?.typecheck);
+for (const parent of ["typescript", "dashboard"]) {
+  const directory = path.resolve(import.meta.dirname, "..", parent);
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const manifest = path.resolve(directory, entry.name, "package.json");
+    const contents = await readFile(manifest, "utf8").catch(() => undefined);
+    if (contents === undefined) continue;
+    const { name, scripts } = JSON.parse(contents) as {
+      name: string;
+      scripts?: Record<string, string>;
+    };
+    packageTypecheckScripts.set(name, scripts?.typecheck);
+  }
+}
+
+// The package a job type checks through `pnpm --filter <package> typecheck`.
+function typecheckedPackage(job: Job): string | undefined {
+  return /^mise exec -- pnpm --filter (\S+) typecheck$/.exec(job.run ?? "")?.[1];
 }
 
 // The `typecheck` script a job runs through `pnpm --filter <package> typecheck`.
 function typecheckScript(job: Job): string | undefined {
-  const name = /^mise exec -- pnpm --filter (\S+) typecheck$/.exec(job.run ?? "")?.[1];
+  const name = typecheckedPackage(job);
   return name === undefined ? undefined : packageTypecheckScripts.get(name);
 }
 
@@ -112,6 +119,14 @@ describe("lefthook package type checks", () => {
     expect(packageGroup?.group?.parallel).toBeUndefined();
     expect(packageGroup?.group?.piped).toBeUndefined();
     expect(checks.jobs.filter((job) => typecheckScript(job)?.startsWith("tsc -b "))).toEqual([]);
+  });
+
+  it("checks every package whose `typecheck` script runs `tsc -b`", () => {
+    const checked = new Set((packageGroup?.group?.jobs ?? []).map(typecheckedPackage));
+    const unchecked = [...packageTypecheckScripts]
+      .filter(([name, script]) => script?.startsWith("tsc -b ") && !checked.has(name))
+      .map(([name]) => name);
+    expect(unchecked).toEqual([]);
   });
 });
 
