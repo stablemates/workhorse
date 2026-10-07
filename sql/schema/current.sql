@@ -2628,7 +2628,7 @@ CREATE OR REPLACE FUNCTION workhorse.evaluate_queue_health_v1(
   p_snapshot jsonb, p_policy jsonb
 ) RETURNS jsonb
 LANGUAGE sql
-IMMUTABLE
+STABLE
 PARALLEL SAFE
 AS $$
   WITH reasons AS (
@@ -2708,6 +2708,18 @@ AS $$
       OR ((p_snapshot->>'schedule_occurrence_due_lag_ms')::numeric
             > (p_policy->>'row_retention_lag_ms')::numeric
           AND (p_snapshot->>'schedule_occurrence_lag_ms')::numeric > 0)
+    UNION ALL
+    -- A backlog that outlasts the row retention budget means cleanup has run saturated that long.
+    -- The oldest eligible row can still be young, because cleanup deletes the oldest rows first.
+    SELECT 120, jsonb_build_object(
+      'code', 'terminal-cleanup-backlog', 'severity', 'degraded',
+      'observed', backlog.age_ms,
+      'budget', (p_policy->>'row_retention_lag_ms')::numeric
+    ) FROM (
+      SELECT floor(extract(epoch FROM (p_snapshot->>'captured_at')::timestamptz
+        - (p_snapshot->>'terminal_cleanup_backlog_since')::timestamptz) * 1000) AS age_ms
+    ) backlog
+    WHERE backlog.age_ms > (p_policy->>'row_retention_lag_ms')::numeric
     UNION ALL
     SELECT 130, jsonb_build_object(
       'code', 'eligible-history-partitions', 'severity', 'degraded',
@@ -15381,6 +15393,18 @@ BEGIN
 END;
 $$;
 
+-- How long after a terminal storage pass that ended with a backlog the follow-up pass falls due,
+-- unless terminal_cleanup_interval_ms is shorter. prune_terminal_storage_v1 gates on it and
+-- dashboard_cron_v1 reports the routine as due by it, so the two cannot disagree.
+CREATE OR REPLACE FUNCTION workhorse.terminal_cleanup_follow_up_delay_ms_v1()
+RETURNS integer
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+  SELECT 5000;
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.prune_terminal_storage_v1(
   p_force boolean DEFAULT false,
   p_now timestamptz DEFAULT clock_timestamp()
@@ -15418,13 +15442,15 @@ BEGIN
   SELECT * INTO STRICT v_maintenance FROM workhorse.maintenance_policy WHERE singleton;
   SELECT * INTO STRICT v_state FROM workhorse.maintenance_state
    WHERE routine_name = 'terminal_storage' FOR UPDATE;
-  -- A pass that ended with a full batch left eligible rows behind. The follow-up pass is due five
-  -- seconds later, or after the configured interval when that is shorter, instead of a full interval.
+  -- A pass that ended with a full batch left eligible rows behind. The follow-up pass is due after
+  -- the follow-up delay, or after the configured interval when that is shorter, instead of a full
+  -- interval.
   IF NOT p_force AND v_state.last_completed_at IS NOT NULL
      AND v_state.last_completed_at > p_now - make_interval(
        secs => CASE WHEN v_state.terminal_cleanup_backlog_since IS NULL
          THEN v_maintenance.terminal_cleanup_interval_ms
-         ELSE LEAST(v_maintenance.terminal_cleanup_interval_ms, 5000) END / 1000.0
+         ELSE LEAST(v_maintenance.terminal_cleanup_interval_ms,
+           workhorse.terminal_cleanup_follow_up_delay_ms_v1()) END / 1000.0
      ) THEN
     RETURN;
   END IF;
@@ -16878,7 +16904,8 @@ CREATE OR REPLACE VIEW workhorse.dashboard_maintenance_policy_v1 AS
          history_retention_local_time, statistics_rollup_interval_ms, statistics_group_limit,
          statistics_recompute_buckets, updated_at FROM workhorse.maintenance_policy;
 CREATE OR REPLACE VIEW workhorse.dashboard_maintenance_state_v1 AS
-  SELECT routine_name, last_started_at, last_completed_at, last_completed_local_date
+  SELECT routine_name, last_started_at, last_completed_at, last_completed_local_date,
+         terminal_cleanup_backlog_since
     FROM workhorse.maintenance_state;
 CREATE OR REPLACE VIEW workhorse.dashboard_maintenance_run_v1 AS
   SELECT run_id, routine_name, started_at, completed_at, outcome, rows_affected, phases
@@ -17947,9 +17974,13 @@ AS $$
         WHEN 'history_partitions' THEN state.last_completed_at IS NULL
           OR state.last_completed_at <= clock_timestamp()
             - make_interval(secs => policy.partition_preparation_interval_ms / 1000.0)
+        -- A recorded backlog makes the follow-up pass due as prune_terminal_storage_v1 gates it.
         WHEN 'terminal_storage' THEN state.last_completed_at IS NULL
           OR state.last_completed_at <= clock_timestamp()
-            - make_interval(secs => policy.terminal_cleanup_interval_ms / 1000.0)
+            - make_interval(secs => CASE WHEN state.terminal_cleanup_backlog_since IS NULL
+                THEN policy.terminal_cleanup_interval_ms
+                ELSE LEAST(policy.terminal_cleanup_interval_ms,
+                  workhorse.terminal_cleanup_follow_up_delay_ms_v1()) END / 1000.0)
         WHEN 'history_retention' THEN
           (clock_timestamp() AT TIME ZONE policy.timezone)::time
             >= policy.history_retention_local_time
@@ -20021,10 +20052,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (58, 'close SQL integrity gaps in rate refill, dependency edges, and mixed batches'),
   (59, 'judge fast-tier completions and cancellation acknowledgements after waits'),
   (60, 'bound the scan cost of fast dead letters, statistics, and repeated ticks'),
-  (61, 'bound dashboard worker and task listings')
+  (61, 'bound dashboard worker and task listings'),
+  (62, 'raise a health reason for a terminal cleanup backlog')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (61) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (62) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

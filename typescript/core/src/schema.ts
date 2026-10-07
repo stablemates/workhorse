@@ -439,6 +439,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "bound dashboard worker and task listings",
     kind: "additive",
   },
+  {
+    fromVersion: 61,
+    toVersion: 62,
+    file: "0063-raise-a-health-reason-for-a-terminal-cleanup-backlog.sql",
+    description: "raise a health reason for a terminal cleanup backlog",
+    kind: "additive",
+  },
 ];
 
 /**

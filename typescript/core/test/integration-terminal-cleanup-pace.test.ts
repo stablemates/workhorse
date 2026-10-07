@@ -60,12 +60,32 @@ const pruneBatch = async (limit: number) =>
     )
   ).rows[0]!.pruned;
 
-const backlogSince = async () =>
-  (
-    await pool.query<{ since: Date | null }>(
-      `SELECT (workhorse.queue_health_v1()->>'terminal_cleanup_backlog_since')::timestamptz AS since`,
-    )
-  ).rows[0]!.since;
+const backlogSince = async () => (await queue.health()).terminalCleanupBacklogSince;
+
+const recordBacklog = async (ageMs: number | null, lastCompletedAgoMs = 0) =>
+  pool.query(
+    `UPDATE workhorse.maintenance_state
+        SET terminal_cleanup_backlog_since =
+              clock_timestamp() - make_interval(secs => $1::numeric / 1000),
+            last_completed_at = clock_timestamp() - make_interval(secs => $2::numeric / 1000)
+      WHERE routine_name = 'terminal_storage'`,
+    [ageMs, lastCompletedAgoMs],
+  );
+
+const backlogReasons = async () =>
+  (await queue.health()).status.reasons.filter(
+    (reason) => reason.code === "terminal-cleanup-backlog",
+  );
+
+const terminalStorageDue = async () => {
+  const { rows } = await pool.query<{ due: boolean }>(
+    `SELECT (routine->>'due')::boolean AS due
+       FROM jsonb_array_elements(
+              workhorse.dashboard_cron_v1('{}'::jsonb)->'maintenance'->'routines') routine
+      WHERE routine->>'routine' = 'terminal_storage'`,
+  );
+  return rows[0]!.due;
+};
 
 const terminalTasksPruned = (phases: Awaited<ReturnType<typeof queue.pruneTerminalStorage>>) =>
   phases.find(({ phase }) => phase === "terminal_tasks")?.rowsAffected;
@@ -128,7 +148,7 @@ describe("terminal cleanup pace", () => {
     }
     expect(await backlogSince()).toEqual(now);
 
-    // The follow-up waits five seconds, not the five-minute terminal_cleanup_interval_ms.
+    // The follow-up waits the five-second follow-up delay, not terminal_cleanup_interval_ms.
     expect(await queue.pruneTerminalStorage({ now: new Date(now.getTime() + 4_000) })).toEqual([]);
     expect(
       terminalTasksPruned(
@@ -140,6 +160,46 @@ describe("terminal cleanup pace", () => {
 
     // A pass that drains its backlog returns to the configured interval.
     expect(await queue.pruneTerminalStorage({ now: new Date(now.getTime() + 11_000) })).toEqual([]);
+  });
+
+  it("raises terminal-cleanup-backlog once a backlog outlasts the row retention budget", async () => {
+    const { rowRetentionLagMs } = (await queue.health()).budgets;
+    expect(await backlogReasons()).toEqual([]);
+
+    // A backlog younger than the budget is routine: a daily release drains within hours.
+    await recordBacklog(rowRetentionLagMs - 60_000);
+    expect(await backlogSince()).toBeInstanceOf(Date);
+    expect(await backlogReasons()).toEqual([]);
+
+    await recordBacklog(rowRetentionLagMs + 60_000);
+    const health = await queue.health();
+    const reason = health.status.reasons.find(({ code }) => code === "terminal-cleanup-backlog");
+    expect(health.status.level).toBe("degraded");
+    // PostgreSQL measures in microseconds and a Date holds milliseconds, so the two can differ by 1.
+    const backlogAgeMs =
+      health.capturedAt.getTime() - health.terminalCleanupBacklogSince!.getTime();
+    expect(reason).toEqual({
+      code: "terminal-cleanup-backlog",
+      severity: "degraded",
+      observed: expect.any(Number),
+      budget: rowRetentionLagMs,
+    });
+    expect(Math.abs(reason!.observed - backlogAgeMs)).toBeLessThanOrEqual(1);
+    expect(reason!.observed).toBeGreaterThan(rowRetentionLagMs);
+
+    await recordBacklog(null);
+    expect(await backlogSince()).toBeNull();
+    expect(await backlogReasons()).toEqual([]);
+  });
+
+  it("shows the dashboard routine as due when the follow-up pass is", async () => {
+    // Six seconds after a pass, only a recorded backlog makes the next pass due.
+    await recordBacklog(null, 6_000);
+    expect(await terminalStorageDue()).toBe(false);
+    await recordBacklog(60_000, 6_000);
+    expect(await terminalStorageDue()).toBe(true);
+    await recordBacklog(60_000, 1_000);
+    expect(await terminalStorageDue()).toBe(false);
   });
 
   it("keeps pace with a sustained completion rate of 15 tasks per second", async () => {

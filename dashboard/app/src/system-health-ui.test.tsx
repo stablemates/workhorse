@@ -114,13 +114,28 @@ function renderChecks(reasons: QueueHealthReason[]): string {
 describe("individual system health checks", () => {
   it("shows every check when none needs attention", () => {
     const html = renderChecks([]);
-    expect(html.match(/<li\b/g)).toHaveLength(13);
-    expect(html.match(/>Passing<\/span>/g)).toHaveLength(13);
+    expect(html.match(/<li\b/g)).toHaveLength(14);
+    expect(html.match(/>Passing<\/span>/g)).toHaveLength(14);
     expect(html).toContain("Worker leases");
     expect(html).toContain("Retention cleanup");
     expect(html).toContain("Rate limits");
     expect(html).toContain("Shared budgets");
     expect(html).not.toContain("All checks pass.");
+  });
+
+  it("shows a terminal cleanup backlog as a degraded check", () => {
+    const html = renderChecks([
+      {
+        code: "terminal-cleanup-backlog",
+        severity: "degraded",
+        observed: 25_200_000,
+        budget: 21_600_000,
+      },
+    ]);
+    expect(html.match(/<li\b/g)).toHaveLength(14);
+    expect(html.match(/>Degraded<\/span>/g)).toHaveLength(1);
+    expect(html).toContain("Terminal cleanup pace");
+    expect(html).toContain("Terminal cleanup is not keeping pace");
   });
 
   it("shows all failures first with separate severities and resolution links", () => {
@@ -137,7 +152,7 @@ describe("individual system health checks", () => {
       { code: "overdue-execution-timeouts", severity: "critical", observed: 3, budget: 0 },
       { code: "missing-history-partitions", severity: "critical", observed: 4, budget: 0 },
     ]);
-    expect(html.match(/<li\b/g)).toHaveLength(13);
+    expect(html.match(/<li\b/g)).toHaveLength(14);
     expect(html.match(/>Critical<\/span>/g)).toHaveLength(4);
     expect(html.match(/>Degraded<\/span>/g)).toHaveLength(1);
     expect(html).toContain("Tasks are past their deadlines");

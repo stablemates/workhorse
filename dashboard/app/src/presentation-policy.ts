@@ -295,6 +295,17 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
           lateRetentionCategories.push(reason.category);
         }
         break;
+      case "terminal-cleanup-backlog":
+        degradedChecks.push({
+          code: reason.code,
+          message: "Terminal cleanup is not keeping pace",
+          advice:
+            "Every recent cleanup pass ended with a full batch, so finished tasks arrive faster " +
+            "than cleanup deletes them and the tables grow. Raise the terminal task prune limit " +
+            "on the Settings page so each pass deletes more.",
+          helpHref: docs("maintenance"),
+        });
+        break;
       case "eligible-history-partitions":
         degradedChecks.push({
           code: reason.code,
@@ -404,6 +415,10 @@ const healthCheckDefinitions = {
   "retention-lag": {
     label: "Retention cleanup",
     summary: "No retention category exceeds its cleanup budget.",
+  },
+  "terminal-cleanup-backlog": {
+    label: "Terminal cleanup pace",
+    summary: "Terminal cleanup has kept pace within its budget.",
   },
   "eligible-history-partitions": {
     label: "History partition cleanup",

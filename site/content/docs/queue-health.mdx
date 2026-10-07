@@ -144,8 +144,8 @@ severities:
 - **Critical** means work is stopping or being lost right now. Examples include an expired lease,
   an overdue external wait, stalled promotion, or missing daily history storage.
 - **Degraded** means the queue still runs but something is falling behind. Examples include a
-  stalled statistics rollup, late retention cleanup, history spilling into fallback storage, or
-  ready work blocked by concurrency or rate-limit policies.
+  stalled statistics rollup, late retention cleanup, terminal cleanup that cannot keep pace, history
+  spilling into fallback storage, or ready work blocked by concurrency or rate-limit policies.
 
 Because the codes are stable strings, automation can branch on them instead of parsing prose. The
 `workhorse health --json` command exits non-zero when any budget is exceeded.
@@ -223,6 +223,7 @@ same reason codes and the `capped` lower-bound marker for operator tooling.
 | `missing-history-partitions`  | critical | A partition side is absent for the current day or the three days after. |
 | `rollup-stalled`              | degraded | Rollup lag exceeds `rollupStalledLagMs`.                                |
 | `retention-lag`               | degraded | A retention category's cleanup lag exceeds its budget.                  |
+| `terminal-cleanup-backlog`    | degraded | A terminal cleanup backlog has lasted longer than `rowRetentionLagMs`.  |
 | `eligible-history-partitions` | degraded | Fully eligible event and attempt partitions exceed the budget.          |
 | `default-history-rows`        | degraded | Any row sits in a default history partition.                            |
 | `concurrency-blocked`         | degraded | A concurrency policy holds ready tasks back.                            |
@@ -302,7 +303,7 @@ operations show the latest snapshot. Changing the range also refreshes that snap
 <summary>Reference: System page health</summary>
 
 - `DashboardSystemPage.status` carries `level` and the raw reasons.
-- The SPA lists all 13 reason-code checks through `systemHealthChecks`, including passing checks.
+- The SPA lists all 14 reason-code checks through `systemHealthChecks`, including passing checks.
 - It labels `rate-limit-throttled` as `Throttling`. It labels `concurrency-blocked` and
   `budget-blocked` as `Limiting`. Their protocol severity does not change.
 - It does not display `status.level` or add thresholds.

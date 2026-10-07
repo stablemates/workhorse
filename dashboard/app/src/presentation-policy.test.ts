@@ -137,6 +137,25 @@ describe("dashboard presentation policy", () => {
     expect(criticalChecks[1]!.helpHref).toBe("https://workhorse.run/docs/maintenance");
   });
 
+  it("tells the operator to raise the prune limit when terminal cleanup cannot keep pace", () => {
+    const { degradedChecks } = healthCheckMessages([
+      {
+        code: "terminal-cleanup-backlog",
+        severity: "degraded",
+        observed: 25_200_000,
+        budget: 21_600_000,
+      },
+    ]);
+    expect(degradedChecks).toEqual([
+      {
+        code: "terminal-cleanup-backlog",
+        message: "Terminal cleanup is not keeping pace",
+        advice: expect.stringContaining("Raise the terminal task prune limit"),
+        helpHref: "https://workhorse.run/docs/maintenance",
+      },
+    ]);
+  });
+
   it("points late schedule runs at the daily history-retention pass", () => {
     const scheduleOnly = healthCheckMessages([retentionLag("scheduleOccurrences")])
       .degradedChecks[0]!;
