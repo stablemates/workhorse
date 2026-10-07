@@ -534,6 +534,7 @@ describe("schema installation", () => {
         version: 55,
         description: "count row retention lag from the history pass that released the row",
       },
+      { version: 56, description: "close a released task without attributing its unrun attempt" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

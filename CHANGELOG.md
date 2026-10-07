@@ -24,7 +24,7 @@ The optional `@stablemates/workhorse-knex` adapter preserves native PostgreSQL s
 The tested Objection recipe shares the model-write transaction with enqueue. Callers retain transaction and resource ownership (SM-1118).
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **55**, and the SDK compatibility floor is schema version **54**.
+The final schema version is **56**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.
@@ -44,6 +44,8 @@ stored versions and rebuilds under those versions when the current contract reje
 Changed payloads and child sets still raise `ChildConflictError`. This contract replay fix requires no additional migration.
 
 Migration 0056 (`0056-count-row-retention-lag-from-the-history-pass-that-released-the-row.sql`) changes only `queue_health_v1`. Row retention lag now counts from the scheduled history pass that released the row when that pass came after the row window, so health no longer reports task records and finished results as late after every daily pass (SM-1134).
+
+Migration 0057 (`0057-close-a-released-task-without-attributing-its-unrun-attempt.sql`) changes only `cancel_v1` and `terminalize_deadline_v1`. A full-tier task that a worker without a handler returned through `release_owned_v1` can now be canceled, and deadline recovery terminalizes it instead of rolling back the whole recovery pass. Both close it like never-started work, with no attempt history row (SM-1158).
 
 ## 0.6.1 — 2026-10-02
 

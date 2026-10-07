@@ -1110,6 +1110,8 @@ Ready, future-scheduled, and durable-wait continuations delete runtime and inser
 - Never-started work emits no attempt history.
 - A durable wait whose logical attempt already started closes exactly one canceled attempt using
   retained provenance.
+- A task returned through `release_owned_v1` with no retained provenance for its current attempt
+  closes like never-started work, as [Owned release](#owned-release) describes.
 
 #### Active work
 
@@ -1149,6 +1151,16 @@ prevent the next occurrence from enqueueing independently.
 | Execution timeout | One logical attempt. Active execution consumes the budget; a named durable wait releases the lease and pauses that accounting.               | PostgreSQL closes the attempt with timeout-specific history. It schedules the next attempt through the persisted retry policy, or materializes terminal failure when the retry budget is exhausted. |
 
 Both boundaries are optional. `execution_timeout_ms` is an integer from 1 through 31,536,000,000.
+
+`terminalize_deadline_v1` closes an expired task in one of three ways:
+
+- An active row closes the current attempt with the owning worker and fence.
+- An inactive row whose current attempt retains a wait, signal, or human-wait row closes that attempt
+  with the latest retained attribution.
+- Any other inactive row, including a task returned through `release_owned_v1`, closes with fence 0
+  and no `attempt_history` row.
+
+A pending cancellation request takes precedence over all three and closes the task `canceled`.
 
 Ordinary handlers should complete within 110 seconds so rolling deployments retain practical drain
 headroom. Longer operations should use durable execution boundaries: idempotent stages, named
@@ -1261,6 +1273,19 @@ Otherwise it:
 5. Appends a `released` event carrying `worker_id` and `fence_token`.
 
 It writes no `attempt_history` row, because the attempt is not closed.
+
+The released row keeps `attempt_started_at` and the accumulated `execution_used_ms`, but no wait,
+signal, or human-wait row records it. No worker reached the handler, so the release leaves no
+attribution for the attempt. Until a later claim reaches a handler, cancellation and deadline
+recovery close the task like never-started work:
+
+- The outcome carries fence 0.
+- No `attempt_history` row is written.
+- The terminal event carries no attempt, and a `deadline_exceeded` event reports `started` as false.
+
+A task that suspended earlier in the same logical attempt keeps the attribution its suspension
+retained, so a later release does not erase it. Before schema version 56, `cancel_v1` raised for a
+released task and `terminalize_deadline_v1` rolled back the whole recovery pass that reached one.
 
 Each SDK releases a task of an unregistered type through it and records the `released` handler
 outcome. A pass whose claims were all unrunnable counts as empty for the poll backoff. A task no
