@@ -9,6 +9,7 @@ import {
   type DashboardSingleAdminOptions,
 } from "@stablemates/workhorse-dashboard-server/server";
 import { sql } from "drizzle-orm";
+import type { Http2Bindings, HttpBindings } from "@hono/node-server";
 import { Hono } from "hono";
 import {
   Admin,
@@ -45,6 +46,7 @@ import {
 } from "./feature-showcase.js";
 import { DEMO_QUEUE_OPTIONS } from "./contracts.js";
 import type { DemoDatabase } from "./database.js";
+import { demoClientAddress } from "./operator-rate-limit.js";
 
 import {
   DEMO_CONCURRENCY_MAX_ACTIVE,
@@ -1496,7 +1498,8 @@ export function createDemoApplication(
     defaultQueue: DEMO_QUEUE,
     queueOptions: DEMO_QUEUE_OPTIONS,
   });
-  const app = new Hono();
+  // The Node adapter passes its request object as bindings; `app.request` in tests passes none.
+  const app = new Hono<{ Bindings: Partial<HttpBindings | Http2Bindings> }>();
 
   app.use("*", async (context, next) => {
     await next();
@@ -1575,7 +1578,13 @@ export function createDemoApplication(
             request,
           )
         : request;
-      const response = await dashboard.handle(dashboardRequest);
+      // The login throttle counts failures by the client the deployment proxy appended, the same
+      // address the operator rate limit uses, so a visitor cannot choose or share another's window.
+      const incoming = context.env?.incoming;
+      const response = await dashboard.handle(
+        dashboardRequest,
+        incoming ? { clientAddress: demoClientAddress(incoming) } : undefined,
+      );
       return response ? addGoogleAnalytics(response) : context.notFound();
     });
   }

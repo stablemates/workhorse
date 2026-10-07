@@ -273,7 +273,9 @@ transport and the edge allowlist unchanged.
 The demo keeps anonymous operator controls available, and the server limits each client to a burst
 of five mutations and then twelve mutations per minute. The proxy in front of it must append the
 address it observes to `X-Forwarded-For`; the server uses the right-most address so a caller cannot
-choose the rate-limit key. Any replacement proxy must preserve that append-only chain.
+choose the rate-limit key. When single-admin credentials are set, the dashboard's login throttle
+counts failed logins by that same address, so each client gets its own failure window. Any
+replacement proxy must preserve that append-only chain.
 
 The standalone `workhorse dashboard` listener reads `WORKHORSE_DASHBOARD_TRUSTED_PROXIES`, a
 comma-separated list of proxy addresses and CIDR ranges. For a connection from a listed proxy, its
