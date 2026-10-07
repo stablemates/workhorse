@@ -293,6 +293,7 @@ describe("schema installation", () => {
         "last_started_at",
         "last_completed_at",
         "last_completed_local_date",
+        "terminal_cleanup_backlog_since",
       ],
       dashboard_queue_control_v1: [
         "queue_name",
@@ -554,6 +555,10 @@ describe("schema installation", () => {
       {
         version: 61,
         description: "bound dashboard worker and task listings",
+      },
+      {
+        version: 62,
+        description: "raise a health reason for a terminal cleanup backlog",
       },
     ]);
 

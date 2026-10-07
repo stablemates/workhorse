@@ -1989,7 +1989,8 @@
             "rate-limit-throttled",
             "retention-lag",
             "rollup-stalled",
-            "stalled-promotion"
+            "stalled-promotion",
+            "terminal-cleanup-backlog"
           ]
         },
         "recommendationInputs.reasons[].observed": {
@@ -2970,7 +2971,8 @@
             "rate-limit-throttled",
             "retention-lag",
             "rollup-stalled",
-            "stalled-promotion"
+            "stalled-promotion",
+            "terminal-cleanup-backlog"
           ]
         },
         "status.reasons[].observed": {

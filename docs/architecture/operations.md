@@ -503,10 +503,10 @@ Launching without an interactive stdin and stdout is refused with exit 1.
 
 ### Schema and PostgreSQL
 
-- The canonical artifact installs version 61, the whole current schema.
+- The canonical artifact installs version 62, the whole current schema.
 - Version 6 is the migration baseline and is frozen as `sql/releases/0006.sql`.
 - A schema change is an upgrade rather than a reinstall: `migrateSchema` applies the ordered steps
-  under `sql/migrations/`, which run from 6 to 61.
+  under `sql/migrations/`, which run from 6 to 62.
 - A database below 6 is not carried forward
   ([ADR 0073](../decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)).
 - Only plain PostgreSQL 15+ is required. No extension beyond the default `plpgsql` is installed.
@@ -535,11 +535,12 @@ Launching without an interactive stdin and stdout is refused with exit 1.
   attribution can extend actual storage beyond a configured cutoff.
 - Terminal cleanup repeats its batch while each batch fills, for up to one second per pass. The
   full and fast tiers share every batch, so neither tier starves the other.
-- A terminal cleanup pass that ends with a full batch makes its follow-up due five seconds later,
-  not after `terminal_cleanup_interval_ms`. With one worker's 60-second offers and the default
+- A terminal cleanup pass that ends with a full batch makes its follow-up due after the 5,000 ms
+  that `terminal_cleanup_follow_up_delay_ms_v1()` returns, not after `terminal_cleanup_interval_ms`. With one worker's 60-second offers and the default
   limit, cleanup removes at least 1,000 tasks a minute while a backlog remains.
 - `terminal_cleanup_backlog_since` in the `queue_health_v1` document shows when a terminal cleanup
-  backlog began. It is null while cleanup keeps pace.
+  backlog began. It is null while cleanup keeps pace. A backlog older than `row_retention_lag_ms`
+  raises the degraded health reason `terminal-cleanup-backlog`.
 - Cold export is off by default. While it is on:
   - Event and attempt retention never pass that dataset's `cold_export_dataset.exported_through`.
   - A day is exportable only after it closed and the minute rollup passed it.

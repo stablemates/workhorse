@@ -394,9 +394,11 @@ run for one second. Its `rows_affected` sums every batch. A phase error rolls ba
 
 A pass ends with a backlog when any phase reached the limit in its last batch. The pass then sets
 `maintenance_state.terminal_cleanup_backlog_since`, or keeps its earlier value. While that column is
-set, the next pass is due five seconds after the last completion, or after
-`terminal_cleanup_interval_ms` when that is shorter. A successful pass without a backlog clears the
-column and restores the configured interval. A failed pass clears nothing.
+set, the next pass is due after the follow-up delay, or after `terminal_cleanup_interval_ms` when
+that is shorter. `terminal_cleanup_follow_up_delay_ms_v1()` returns that delay, 5,000 ms.
+`prune_terminal_storage_v1` gates on it, and `dashboard_cron_v1` derives the routine's `due` flag
+from it, so the two cannot disagree. A successful pass without a backlog clears the column and
+restores the configured interval. A failed pass clears nothing.
 
 With the default limit of 1,000 and one worker offering the routine every 60 seconds, a backlog
 therefore loses at least 1,000 tasks a minute. A pass usually deletes more, because its batches
@@ -1443,7 +1445,7 @@ deadline, timeout, promotion, concurrency, rate-limit, rollup, and retention pre
 - `terminal_cleanup_backlog_since` copies `maintenance_state.terminal_cleanup_backlog_since`. It is
   the start of the pass that first ended with a full batch, and null while terminal cleanup keeps
   pace. Go, Python, Rust, and Ruby return the document as a map, so the key reaches callers.
-  TypeScript `Queue.health()` maps named fields and does not carry it yet.
+  TypeScript `Queue.health()` maps it to `terminalCleanupBacklogSince`.
 
 #### Snapshot cost
 
@@ -1509,8 +1511,22 @@ Critical codes mean work is stopping or being lost:
   three days after it
 
 Degraded codes cost storage or throughput: `rollup-stalled`, `retention-lag`,
-`eligible-history-partitions`, `default-history-rows`, `concurrency-blocked`,
-`rate-limit-throttled`, and `budget-blocked`.
+`terminal-cleanup-backlog`, `eligible-history-partitions`, `default-history-rows`,
+`concurrency-blocked`, `rate-limit-throttled`, and `budget-blocked`.
+
+`terminal-cleanup-backlog` fires when `terminal_cleanup_backlog_since` is older than
+`row_retention_lag_ms`. Its `observed` value is the milliseconds from that start to `capturedAt`,
+and its `budget` is `row_retention_lag_ms`. The evaluator reads `capturedAt` as a timestamp, so
+`evaluate_queue_health_v1` is `STABLE`.
+
+The reason covers a state `retention-lag` misses. When completions roughly match the cleanup pace,
+every pass ends with a full batch and the tables grow. Cleanup deletes the oldest rows first, so the
+oldest eligible row can stay younger than its budget. The reason reuses `row_retention_lag_ms`
+rather than a policy column of its own. That budget already bounds how long terminal row cleanup may
+stay behind, and a dedicated column would change `sync_queue_health_policy_v1` and the defaults
+every SDK synchronizes. At its 6 h default the budget stays generous against a routine daily
+release, which a saturated cleanup drains within hours. A zero budget would fire after every such
+release. Observations do not carry it: they hold lagging statistics, and this value is exact.
 
 #### Health policy
 
@@ -1560,7 +1576,7 @@ as procedure input, and a converted `QueueHealth` would need converting back.
 `DashboardSystemPage.status` carries `level` and the raw reasons.
 
 - The SPA derives human wording through `healthCheckMessages`.
-- It lists all 13 reason-code checks through `systemHealthChecks`, including passing checks.
+- It lists all 14 reason-code checks through `systemHealthChecks`, including passing checks.
 - Individual critical and degraded checks appear first with advice and documentation links.
 - The SPA labels `rate-limit-throttled` as `Throttling`. It labels `concurrency-blocked` and
   `budget-blocked` as `Limiting`. These are neutral operating states, without changes to their
@@ -1614,7 +1630,9 @@ intentionally retained partial boundary day.
 
 Row lag grows only once the oldest eligible row has waited longer than its budget.
 `terminal_cleanup_backlog_since` shows a terminal cleanup backlog earlier. A value that stays set
-across several passes means completions outrun cleanup. Each recorded `terminal_storage` run in
+across several passes means completions outrun cleanup. Once it is older than
+`row_retention_lag_ms`, the evaluator raises `terminal-cleanup-backlog`, as
+[Health verdict](#health-verdict) describes. Each recorded `terminal_storage` run in
 `maintenance_run` gives the rows that pass deleted, so successive runs give the deletion rate.
 
 #### Schedule run retention lag

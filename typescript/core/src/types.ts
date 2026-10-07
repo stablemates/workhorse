@@ -1086,6 +1086,7 @@ export type QueueHealthReasonCode =
   | "missing-history-partitions"
   | "rollup-stalled"
   | "retention-lag"
+  | "terminal-cleanup-backlog"
   | "eligible-history-partitions"
   | "default-history-rows"
   | "concurrency-blocked"
@@ -1096,7 +1097,8 @@ export type QueueHealthReasonCode =
  * One exceeded health budget.
  *
  * `observed` and `budget` share one unit per code: milliseconds for `stalled-promotion`,
- * `rollup-stalled`, and `retention-lag`; plain counts for every other code.
+ * `rollup-stalled`, `retention-lag`, and `terminal-cleanup-backlog`; plain counts for every other
+ * code.
  */
 export interface QueueHealthReason {
   code: QueueHealthReasonCode;
@@ -1135,7 +1137,10 @@ export interface QueueHealthBudgets {
    * watermark, so a stalled rollup turns into unbounded history growth.
    */
   rollupStalledLagMs: number;
-  /** Grace for row-deleted retention categories before cleanup lag counts as degradation. */
+  /**
+   * Grace for row-deleted retention categories before cleanup lag counts as degradation. It also
+   * bounds how long a terminal cleanup backlog may last before `terminal-cleanup-backlog` fires.
+   */
   rowRetentionLagMs: number;
   /** Grace for partition-dropped categories; covers cadence plus a partial boundary day. */
   partitionRetentionLagMs: number;
@@ -1296,6 +1301,12 @@ export interface QueueHealth {
   retentionLagMs: RetentionCategoryValues<number | null>;
   /** Oldest retained timestamp used to compute category lag. */
   oldestRetainedAt: RetentionCategoryValues<Date | null>;
+  /**
+   * Start of the first terminal cleanup pass that ended with a full batch and left eligible rows
+   * behind. Null while terminal cleanup keeps pace. A value older than `rowRetentionLagMs` raises
+   * `terminal-cleanup-backlog`.
+   */
+  terminalCleanupBacklogSince: Date | null;
   eligibleHistoryPartitions: {
     taskEvents: number;
     attemptHistory: number;

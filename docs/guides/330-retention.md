@@ -325,14 +325,16 @@ of them, so two million tasks become eligible for cleanup at once.
 3. **When a pass ends with a batch that is not full**, cleanup has caught up. It clears the backlog
    record, and the configured interval applies again.
 4. **If completions outrun even that pace**, the backlog record stays set from pass to pass. The
-   oldest eligible task keeps aging. Once it has waited too long, queue health reports retention lag.
+   oldest eligible task keeps aging. Once the backlog has lasted longer than its budget, queue health
+   reports a terminal cleanup backlog. Once the oldest task has waited too long, it reports retention
+   lag as well.
 
 Full-tier and fast-tier tasks share every batch. A backlog in one tier therefore cannot keep the
 other tier's tasks from being deleted.
 
 Cleanup is bounded on purpose: a limited number of tasks, partitions, and rows per pass. If the
 incoming rate outruns it, tables grow. This shows up in queue health rather than as a stall: first as
-the backlog record, then as retention lag. The fix is usually a shorter window rather than a bigger
+the backlog record, then as a backlog reason or retention lag. The fix is usually a shorter window rather than a bigger
 batch.
 
 Health also reports how many rows sit in the fallback partitions. Those are the default partitions
@@ -370,11 +372,15 @@ Lag differs by category:
 - `terminal_task_prune_limit` bounds each batch. The `terminal_tasks` phase repeats batches while
   each one fills, for at most one second per pass.
 - A pass whose last batch filled sets `maintenance_state.terminal_cleanup_backlog_since`, or keeps
-  its earlier value. The next pass is then due five seconds after the last completion, or after
-  `terminal_cleanup_interval_ms` when that is shorter.
+  its earlier value. The next pass is then due after the follow-up delay of five seconds, or after
+  `terminal_cleanup_interval_ms` when that is shorter. The dashboard's `due` flag for the routine
+  uses the same delay.
 - A successful pass that ends without a full batch clears the column.
 - The `queue_health_v1` document reports the column as `terminal_cleanup_backlog_since`. Go,
-  Python, Rust, and Ruby return that key. TypeScript `Queue.health()` does not map it yet.
+  Python, Rust, and Ruby return that key. TypeScript `Queue.health()` maps it to
+  `terminalCleanupBacklogSince`.
+- A backlog older than `row_retention_lag_ms` raises the degraded reason
+  `terminal-cleanup-backlog`. Its `observed` value is the backlog's age in milliseconds.
 - Each `terminal_storage` row in `maintenance_run` records the rows its pass deleted.
 
 More detail: [Task lifecycle: Retention health](../architecture/lifecycle.md#retention-health), [Task lifecycle: Health policy](../architecture/lifecycle.md#health-policy), and [Task lifecycle: Background routines](../architecture/lifecycle.md#background-routines).

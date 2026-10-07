@@ -24,7 +24,7 @@ The optional `@stablemates/workhorse-knex` adapter preserves native PostgreSQL s
 The tested Objection recipe shares the model-write transaction with enqueue. Callers retain transaction and resource ownership (SM-1118).
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **61**, and the SDK compatibility floor is schema version **54**.
+The final schema version is **62**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.
@@ -143,6 +143,8 @@ stale states with a Retry button, and never draws one query's bars under another
 Activity series keys no longer collide when group names differ only by `.` and `_`, or a group is
 named `bucket` or `other`. Event rows keep their table semantics and open through a named button in
 the Event cell (SM-1171).
+
+Migration 0063 (`0063-raise-a-health-reason-for-a-terminal-cleanup-backlog.sql`) changes `evaluate_queue_health_v1`, `prune_terminal_storage_v1`, `dashboard_cron_v1`, and `dashboard_maintenance_state_v1`, and adds `terminal_cleanup_follow_up_delay_ms_v1`. Queue health raises the degraded reason `terminal-cleanup-backlog` once `terminal_cleanup_backlog_since` is older than `row_retention_lag_ms`, so a cleanup that runs saturated while the oldest eligible row stays young no longer reads as healthy. The dashboard's `terminal_storage` routine is due after the same five-second follow-up delay that gates the pass, and the System page lists the new check. `dashboard/v1` adds the reason code to its enum, an additive change (SM-1178). TypeScript `Queue.health()` returns the backlog start as `terminalCleanupBacklogSince`, and `QueueHealthReasonCode` includes `terminal-cleanup-backlog`.
 
 ## 0.6.1 — 2026-10-02
 

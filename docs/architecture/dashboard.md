@@ -256,7 +256,7 @@ The version 1 views expose these exact columns:
 | `dashboard_task_wait_v1`           | `task_id`, `wait_name`, `mode`, `duration_ms`, `requested_wake_at`, `wake_at`, `attempt`, `fence_token`, `worker_id`, `created_at`                                                                                                                                                                            |
 | `dashboard_maintenance_policy_v1`  | `singleton`, `timezone`, `partition_preparation_interval_ms`, `terminal_cleanup_interval_ms`, `history_retention_local_time`, `statistics_rollup_interval_ms`, `statistics_group_limit`, `statistics_recompute_buckets`, `updated_at`                                                                         |
 | `dashboard_maintenance_run_v1`     | `run_id`, `routine_name`, `started_at`, `completed_at`, `outcome`, `rows_affected`, `phases`                                                                                                                                                                                                                  |
-| `dashboard_maintenance_state_v1`   | `routine_name`, `last_started_at`, `last_completed_at`, `last_completed_local_date`                                                                                                                                                                                                                           |
+| `dashboard_maintenance_state_v1`   | `routine_name`, `last_started_at`, `last_completed_at`, `last_completed_local_date`, `terminal_cleanup_backlog_since`                                                                                                                                                                                         |
 | `dashboard_queue_control_v1`       | `queue_name`, `paused`, `tier`, `record_attempts`, `record_claims`                                                                                                                                                                                                                                            |
 | `dashboard_rate_limit_policy_v1`   | `queue_name`                                                                                                                                                                                                                                                                                                  |
 | `dashboard_retention_policy_v1`    | `singleton`, `task_event_retention_days`, `attempt_history_retention_days`                                                                                                                                                                                                                                    |
@@ -614,6 +614,10 @@ from these inputs:
 - the supplied tick cadence;
 - the policy;
 - the current database time.
+
+While `terminal_cleanup_backlog_since` is set, `terminal_storage` is due after
+`terminal_cleanup_follow_up_delay_ms_v1()` or `terminal_cleanup_interval_ms`, whichever is shorter.
+`prune_terminal_storage_v1` gates its follow-up pass on the same delay.
 
 The Schedules page uses the tick state's completion time as the built-in tick row's last run.
 

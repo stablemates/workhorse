@@ -8441,7 +8441,8 @@
           "rate-limit-throttled",
           "retention-lag",
           "rollup-stalled",
-          "stalled-promotion"
+          "stalled-promotion",
+          "terminal-cleanup-backlog"
         ]
       },
       "DashboardQueuesPage": {

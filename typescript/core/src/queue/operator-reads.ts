@@ -276,6 +276,7 @@ type QueueHealthDocument = RetentionPolicyRow & {
   attempt_history_lag_ms: number | null;
   schedule_occurrence_lag_ms: number | null;
   statistics_lag_ms: number | null;
+  terminal_cleanup_backlog_since: Date | string | null;
   eligible_event_partitions: string;
   eligible_attempt_partitions: string;
   default_event_rows: string;
@@ -768,6 +769,7 @@ function queueHealthFromDocument(row: QueueHealthDocument): QueueHealth {
       scheduleOccurrences: nullableHealthTimestamp(row.oldest_schedule_occurrence_at),
       statistics: nullableHealthTimestamp(row.oldest_statistics_at),
     },
+    terminalCleanupBacklogSince: nullableHealthTimestamp(row.terminal_cleanup_backlog_since),
     eligibleHistoryPartitions: {
       taskEvents: Number(row.eligible_event_partitions),
       attemptHistory: Number(row.eligible_attempt_partitions),
