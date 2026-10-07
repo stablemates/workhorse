@@ -881,19 +881,26 @@ mod example_trial {
         follow_up_at: DateTime<Utc>,
     }
 
-    async fn send_welcome(to: &str) -> Result<Value, HandlerError> {
-        Ok(json!({ "deliveredTo": to, "kind": "welcome" }))
+    // Stand-ins for a mail provider. A real send passes the key to the provider's
+    // idempotency option, and the provider drops a repeated send with the same key.
+    async fn send_welcome(to: &str, idempotency_key: &str) -> Result<Value, HandlerError> {
+        Ok(json!({ "deliveredTo": to, "kind": "welcome", "idempotencyKey": idempotency_key }))
     }
 
-    async fn send_follow_up(to: &str) -> Result<Value, HandlerError> {
-        Ok(json!({ "deliveredTo": to, "kind": "follow-up" }))
+    async fn send_follow_up(to: &str, idempotency_key: &str) -> Result<Value, HandlerError> {
+        Ok(json!({ "deliveredTo": to, "kind": "follow-up", "idempotencyKey": idempotency_key }))
     }
 
     pub fn register_trial_handler(worker: &Worker) {
         worker.handle("trial.lifecycle", |trial: Trial, context| async move {
-            let _: Value = context.checkpoint("welcome", || send_welcome(&trial.to)).await?;
+            let welcome_key = format!("welcome:{}", context.task().id);
+            let _: Value =
+                context.checkpoint("welcome", || send_welcome(&trial.to, &welcome_key)).await?;
             context.sleep_until("follow-up-window", trial.follow_up_at).await?;
-            let _: Value = context.checkpoint("follow-up", || send_follow_up(&trial.to)).await?;
+            let follow_up_key = format!("follow-up:{}", context.task().id);
+            let _: Value = context
+                .checkpoint("follow-up", || send_follow_up(&trial.to, &follow_up_key))
+                .await?;
             Ok(json!({ "deliveredTo": trial.to }))
         });
     }

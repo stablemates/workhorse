@@ -466,16 +466,26 @@ module DocsExamples
     # docs:start examples-trial
     require "time"
 
-    def self.send_welcome(to) = {"deliveredTo" => to, "kind" => "welcome"}
+    # Stand-ins for a mail provider. A real send passes the key to the provider's
+    # idempotency option, and the provider drops a repeated send with the same key.
+    def self.send_welcome(to, idempotency_key:)
+      {"deliveredTo" => to, "kind" => "welcome", "idempotencyKey" => idempotency_key}
+    end
 
-    def self.send_follow_up(to) = {"deliveredTo" => to, "kind" => "follow-up"}
+    def self.send_follow_up(to, idempotency_key:)
+      {"deliveredTo" => to, "kind" => "follow-up", "idempotencyKey" => idempotency_key}
+    end
 
     def self.register_trial_handler(worker)
       worker.handle("trial.lifecycle") do |trial, context|
         to = trial.fetch("to")
-        context.checkpoint("welcome") { send_welcome(to) }
+        context.checkpoint("welcome") do
+          send_welcome(to, idempotency_key: "welcome:#{context.task.id}")
+        end
         context.sleep_until("follow-up-window", Time.iso8601(trial.fetch("followUpAt")))
-        context.checkpoint("follow-up") { send_follow_up(to) }
+        context.checkpoint("follow-up") do
+          send_follow_up(to, idempotency_key: "follow-up:#{context.task.id}")
+        end
         {"deliveredTo" => to}
       end
     end

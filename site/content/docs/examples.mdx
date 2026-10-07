@@ -10,8 +10,10 @@ concept guides linked from each pattern explain the behavior behind it.
 ## Transactional enqueue in an API route
 
 The problem: a request creates an order and must guarantee a fulfillment task — but only if the
-order commits. Pass your open transaction as the last argument to `enqueue`, and the task and the
-order share one commit or one rollback.
+order commits. Enqueue through the open transaction, and the task and the order share one commit or
+one rollback. In TypeScript, pass the transaction client as the last argument to `enqueue`. In
+Python, Go, Rust, and Ruby, build the `Queue` on the open transaction or on the connection that holds
+it.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -148,18 +150,23 @@ get the same guarantee through the adapter package's `forTransaction` boundary.
 ## Multi-stage handler with checkpoints and a durable sleep
 
 The problem: a trial signup should send a welcome email now and a follow-up in seven days, and
-neither email may ever send twice. Checkpoints make each send a restart boundary; the durable sleep
-releases the worker slot for the whole week.
+neither email may reach the reader twice. Checkpoints make each send a restart boundary; the durable
+sleep releases the worker slot for the whole week. Each send also gives the mail provider an
+idempotency key built from the task ID, because a checkpoint alone cannot stop a repeated send.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
     worker.handle("trial.lifecycle", async (payload: { to: string; followUpAt: string }, context) => {
-      await context.checkpoint("welcome", () => mailer.welcome(payload.to));
+      await context.checkpoint("welcome", () =>
+        mailer.welcome(payload.to, { idempotencyKey: `welcome:${context.task.id}` }),
+      );
 
       await context.sleepUntil("follow-up-window", new Date(payload.followUpAt));
 
-      await context.checkpoint("follow-up", () => mailer.followUp(payload.to));
+      await context.checkpoint("follow-up", () =>
+        mailer.followUp(payload.to, { idempotencyKey: `follow-up:${context.task.id}` }),
+      );
       return { deliveredTo: payload.to };
     });
     ```
@@ -172,12 +179,14 @@ releases the worker slot for the whole week.
     from workhorse import HandlerContext, Json, Worker
 
 
-    def send_welcome(to: str) -> dict[str, Json]:
-        return {"deliveredTo": to, "kind": "welcome"}
+    # Stand-ins for a mail provider. A real send passes the key to the provider's
+    # idempotency option, and the provider drops a repeated send with the same key.
+    def send_welcome(to: str, *, idempotency_key: str) -> dict[str, Json]:
+        return {"deliveredTo": to, "kind": "welcome", "idempotencyKey": idempotency_key}
 
 
-    def send_follow_up(to: str) -> dict[str, Json]:
-        return {"deliveredTo": to, "kind": "follow-up"}
+    def send_follow_up(to: str, *, idempotency_key: str) -> dict[str, Json]:
+        return {"deliveredTo": to, "kind": "follow-up", "idempotencyKey": idempotency_key}
 
 
     def register_trial_handler(worker: Worker) -> None:
@@ -187,9 +196,15 @@ releases the worker slot for the whole week.
             follow_up_at = payload["followUpAt"]
             assert isinstance(to, str) and isinstance(follow_up_at, str)
 
-            context.checkpoint("welcome", lambda: send_welcome(to))
+            context.checkpoint(
+                "welcome",
+                lambda: send_welcome(to, idempotency_key=f"welcome:{context.task.id}"),
+            )
             context.sleep_until("follow-up-window", datetime.fromisoformat(follow_up_at))
-            context.checkpoint("follow-up", lambda: send_follow_up(to))
+            context.checkpoint(
+                "follow-up",
+                lambda: send_follow_up(to, idempotency_key=f"follow-up:{context.task.id}"),
+            )
             return {"deliveredTo": to}
 
         worker.handle("trial.lifecycle", trial_lifecycle)
@@ -207,6 +222,16 @@ releases the worker slot for the whole week.
 
     	workhorse "github.com/stablemates/workhorse/go"
     )
+
+    // Stand-ins for a mail provider. A real send passes the key to the provider's
+    // idempotency option, and the provider drops a repeated send with the same key.
+    func sendWelcome(to, idempotencyKey string) (any, error) {
+    	return map[string]any{"deliveredTo": to, "kind": "welcome", "idempotencyKey": idempotencyKey}, nil
+    }
+
+    func sendFollowUp(to, idempotencyKey string) (any, error) {
+    	return map[string]any{"deliveredTo": to, "kind": "follow-up", "idempotencyKey": idempotencyKey}, nil
+    }
 
     func registerTrialHandler(worker *workhorse.Worker) {
     	worker.Handle("trial.lifecycle", func(
@@ -232,7 +257,7 @@ releases the worker slot for the whole week.
     		}
 
     		if _, err := handler.Checkpoint("welcome", func() (any, error) {
-    			return map[string]any{"deliveredTo": to, "kind": "welcome"}, nil
+    			return sendWelcome(to, "welcome:"+handler.Task.ID)
     		}); err != nil {
     			return nil, err
     		}
@@ -240,7 +265,7 @@ releases the worker slot for the whole week.
     			return nil, err
     		}
     		if _, err := handler.Checkpoint("follow-up", func() (any, error) {
-    			return map[string]any{"deliveredTo": to, "kind": "follow-up"}, nil
+    			return sendFollowUp(to, "follow-up:"+handler.Task.ID)
     		}); err != nil {
     			return nil, err
     		}
@@ -264,19 +289,26 @@ releases the worker slot for the whole week.
         follow_up_at: DateTime<Utc>,
     }
 
-    async fn send_welcome(to: &str) -> Result<Value, HandlerError> {
-        Ok(json!({ "deliveredTo": to, "kind": "welcome" }))
+    // Stand-ins for a mail provider. A real send passes the key to the provider's
+    // idempotency option, and the provider drops a repeated send with the same key.
+    async fn send_welcome(to: &str, idempotency_key: &str) -> Result<Value, HandlerError> {
+        Ok(json!({ "deliveredTo": to, "kind": "welcome", "idempotencyKey": idempotency_key }))
     }
 
-    async fn send_follow_up(to: &str) -> Result<Value, HandlerError> {
-        Ok(json!({ "deliveredTo": to, "kind": "follow-up" }))
+    async fn send_follow_up(to: &str, idempotency_key: &str) -> Result<Value, HandlerError> {
+        Ok(json!({ "deliveredTo": to, "kind": "follow-up", "idempotencyKey": idempotency_key }))
     }
 
     pub fn register_trial_handler(worker: &Worker) {
         worker.handle("trial.lifecycle", |trial: Trial, context| async move {
-            let _: Value = context.checkpoint("welcome", || send_welcome(&trial.to)).await?;
+            let welcome_key = format!("welcome:{}", context.task().id);
+            let _: Value =
+                context.checkpoint("welcome", || send_welcome(&trial.to, &welcome_key)).await?;
             context.sleep_until("follow-up-window", trial.follow_up_at).await?;
-            let _: Value = context.checkpoint("follow-up", || send_follow_up(&trial.to)).await?;
+            let follow_up_key = format!("follow-up:{}", context.task().id);
+            let _: Value = context
+                .checkpoint("follow-up", || send_follow_up(&trial.to, &follow_up_key))
+                .await?;
             Ok(json!({ "deliveredTo": trial.to }))
         });
     }
@@ -286,16 +318,26 @@ releases the worker slot for the whole week.
     ```ruby
     require "time"
 
-    def self.send_welcome(to) = {"deliveredTo" => to, "kind" => "welcome"}
+    # Stand-ins for a mail provider. A real send passes the key to the provider's
+    # idempotency option, and the provider drops a repeated send with the same key.
+    def self.send_welcome(to, idempotency_key:)
+      {"deliveredTo" => to, "kind" => "welcome", "idempotencyKey" => idempotency_key}
+    end
 
-    def self.send_follow_up(to) = {"deliveredTo" => to, "kind" => "follow-up"}
+    def self.send_follow_up(to, idempotency_key:)
+      {"deliveredTo" => to, "kind" => "follow-up", "idempotencyKey" => idempotency_key}
+    end
 
     def self.register_trial_handler(worker)
       worker.handle("trial.lifecycle") do |trial, context|
         to = trial.fetch("to")
-        context.checkpoint("welcome") { send_welcome(to) }
+        context.checkpoint("welcome") do
+          send_welcome(to, idempotency_key: "welcome:#{context.task.id}")
+        end
         context.sleep_until("follow-up-window", Time.iso8601(trial.fetch("followUpAt")))
-        context.checkpoint("follow-up") { send_follow_up(to) }
+        context.checkpoint("follow-up") do
+          send_follow_up(to, idempotency_key: "follow-up:#{context.task.id}")
+        end
         {"deliveredTo" => to}
       end
     end
@@ -305,8 +347,14 @@ releases the worker slot for the whole week.
 
 The sleep stores a named timer, drops the lease, and parks the task in `scheduled` — no worker slot
 is held for seven days. When the timer is due, a worker runs the handler from the top; the saved
-`welcome` checkpoint returns its stored value instead of sending again. A crash at any point
-replays only the stages that never committed.
+`welcome` checkpoint returns its stored value instead of sending again.
+
+A checkpoint saves its value only after the send returns. Suppose the process dies after the
+provider accepts the welcome email but before the `welcome` checkpoint commits. The next attempt
+finds no saved value and sends again. The key `welcome:<task ID>` is the same on every attempt, so
+the provider can drop that second send. Without such a key, the email can arrive twice.
+[The honest limit of checkpoints](/docs/concepts#the-honest-limit-of-checkpoints) explains this
+window.
 
 ## Nightly task synced on deploy
 
