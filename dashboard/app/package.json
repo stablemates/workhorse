@@ -52,7 +52,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && cp src/styles.css dist/library/styles.css && rm -rf dist/library/assets dist/app && mkdir -p dist/library/assets && cp -R src/assets/. dist/library/assets/ && vite build",
     "build:dev": "pnpm build:library",
-    "build:library": "tsc -p tsconfig.json && cp src/styles.css dist/library/styles.css && cp -R src/assets dist/library/assets",
+    "build:library": "tsc -p tsconfig.json && cp src/styles.css dist/library/styles.css && rm -rf dist/library/assets && mkdir -p dist/library/assets && cp -R src/assets/. dist/library/assets/",
     "dev": "vite",
     "typecheck": "tsc -p tsconfig.typecheck.json"
   },

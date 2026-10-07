@@ -17,6 +17,13 @@ permissions:
   actions: read
   contents: read
 
+# A tag push and a manual run for the same tag would otherwise build and publish side by side. The
+# second run waits for the first rather than cancelling it, because a cancelled publish can leave a
+# registry holding part of a release.
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: depot-ubuntu-24.04

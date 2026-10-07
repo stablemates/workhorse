@@ -5,6 +5,7 @@
  * repository command, does not pay to load a PostgreSQL driver it will never use.
  */
 import { readFile } from "node:fs/promises";
+import { parseEnv } from "node:util";
 
 export async function readEnvironment(path: string): Promise<Record<string, string>> {
   try {
@@ -15,14 +16,10 @@ export async function readEnvironment(path: string): Promise<Record<string, stri
   }
 }
 
+// Node's own parser, so a file means what `node --env-file` would make of it: an unquoted `#`
+// starts a comment, and quotes end a value before any comment that follows them.
 export function parseEnvironment(contents: string): Record<string, string> {
-  const environment: Record<string, string> = {};
-  for (const line of contents.split(/\r?\n/)) {
-    const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
-    if (!match) continue;
-    environment[match[1]!] = unquote(match[2]!.trim());
-  }
-  return environment;
+  return parseEnv(contents) as Record<string, string>;
 }
 
 export function updateEnvironment(contents: string, updates: Record<string, string>): string {
@@ -43,9 +40,4 @@ export function updateEnvironment(contents: string, updates: Record<string, stri
 
 export function isMissing(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
-}
-
-function unquote(value: string): string {
-  const quote = value[0];
-  return (quote === '"' || quote === "'") && value.at(-1) === quote ? value.slice(1, -1) : value;
 }
