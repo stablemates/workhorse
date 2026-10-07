@@ -48,9 +48,11 @@ covers the whole database, not one task or queue. So a later claim always has a 
 `heartbeatMs` must be shorter than `leaseMs`.
 
 **Recovery cadence.** Each worker calls `tick_v1` once per `maintenanceIntervalMs` (TypeScript
-default 1,000 ms). Each tick recovers a bounded batch of expired rows.
+default 1,000 ms). A tick skips the expired-lease scan when another tick ran it within half the
+shortest live maintenance interval. The scan still runs at least once per interval while workers
+keep ticking, and each run recovers a bounded batch of expired rows.
 
-More detail: [Task lifecycle: Claim](../architecture/lifecycle.md#claim) and [Task lifecycle: Worker options](../architecture/lifecycle.md#worker-options).
+More detail: [Task lifecycle: Claim](../architecture/lifecycle.md#claim), [Task lifecycle: Worker options](../architecture/lifecycle.md#worker-options), and [Task lifecycle: Maintenance cadence](../architecture/lifecycle.md#maintenance-cadence).
 
 </details>
 

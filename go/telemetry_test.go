@@ -194,6 +194,13 @@ func emitGoRecoveryMetrics(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 		t.Fatal(err)
 	}
 	time.Sleep(125 * time.Millisecond)
+	// An earlier pass in this test ran the expired-lease scan, so this tick would leave it to the next.
+	if _, err := pool.Exec(
+		ctx,
+		"UPDATE workhorse.maintenance_state SET lease_recovery_started_at = NULL WHERE routine_name = 'tick'",
+	); err != nil {
+		t.Fatal(err)
+	}
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
 		Queue: queueName, WorkerID: "go-catalog-recovery", LeaseDuration: time.Second,
 	})

@@ -12,7 +12,7 @@ adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses 
 ## Unreleased
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **59**, and the SDK compatibility floor is schema version **54**.
+The final schema version is **60**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.
@@ -63,6 +63,8 @@ a cancellation request or an expiry rejects that write, the worker acknowledges 
 the write still fails, the worker logs it and lease recovery settles the task as before. The log
 message for a failed shutdown release or completion is now `Shutdown settlement failed; lease
 recovery will settle the task` (SM-1187).
+
+Migration 0061 (`0061-bound-the-scan-cost-of-fast-dead-letters-statistics-and-repeated-ticks.sql`) bounds three reads whose cost grew with table size or fleet size (SM-1167). The new `fast_task_outcome_failed_finished_idx` lets `list_dead_letters_v1` read only failed fast-tier outcomes. `aggregate_stats_v1` no longer materializes fast-tier rows that cannot hold a fact inside its window, so a backlog enqueued earlier stays out of every rollup. `tick_v1` runs the expired-lease scan, which reads every active lease, only when no tick ran it within half the shortest maintenance interval of the live registered workers. It records that run in the new `maintenance_state.lease_recovery_started_at` column. Promotion and the deadline and timeout scans still run on every tick, and while workers keep ticking, expired leases are still recovered within one interval.
 
 ## 0.6.1 — 2026-10-02
 

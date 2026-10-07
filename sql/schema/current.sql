@@ -1872,6 +1872,10 @@ CREATE INDEX IF NOT EXISTS fast_task_outcome_finished_brin_idx
   ON workhorse.fast_task_outcome USING brin (finished_at);
 CREATE INDEX IF NOT EXISTS fast_task_outcome_retention_idx
   ON workhorse.fast_task_outcome (finished_at, task_id);
+-- The dead-letter listing pages failed outcomes newest first, as task_outcome_failed_finished_idx
+-- does for the full tier. Without it the listing reads every fast outcome to find the failures.
+CREATE INDEX IF NOT EXISTS fast_task_outcome_failed_finished_idx
+  ON workhorse.fast_task_outcome (finished_at DESC, task_id DESC) WHERE state = 'failed';
 
 -- An installation that never uses the fast tier leaves these tables empty, so autovacuum never
 -- analyzes them. PostgreSQL then sizes a never-analyzed table at ten pages, and the dashboard's
@@ -2003,6 +2007,9 @@ CREATE TABLE IF NOT EXISTS workhorse.maintenance_state (
   -- started ending with a full batch.
   terminal_prune_fast_first boolean NOT NULL DEFAULT false,
   terminal_cleanup_backlog_since timestamptz,
+  -- The tick's expired-lease scan reads every active lease, so the tick records when it last ran
+  -- that scan and spaces it out across the fleet.
+  lease_recovery_started_at timestamptz,
   CHECK (
     (routine_name = 'history_retention')
     OR (last_completed_local_date IS NULL AND history_retained_before IS NULL)
@@ -13589,7 +13596,12 @@ DECLARE
   v_now timestamptz := clock_timestamp();
   v_limit integer := GREATEST(1, LEAST(p_limit, 10000));
   v_fast record;
+  -- tick_v1 sets this when another tick ran the expired-lease scan within half an interval.
+  v_skip_expired_leases boolean := COALESCE(
+    NULLIF(current_setting('workhorse.recovery_skip_expired_leases', true), ''), 'false'
+  )::boolean;
 BEGIN
+  PERFORM set_config('workhorse.recovery_scanned_expired_leases', 'false', true);
   PERFORM set_config('workhorse.recovery_expired_leases', '0', true);
   PERFORM set_config('workhorse.recovery_retried', '0', true);
   PERFORM set_config('workhorse.recovery_retry_dimensions', '[]', true);
@@ -13662,9 +13674,14 @@ BEGIN
     RETURN v_count;
   END IF;
 
+  -- Reaching this scan is what tick_v1 records, so an early return above never spaces the next one.
+  PERFORM set_config(
+    'workhorse.recovery_scanned_expired_leases', (NOT v_skip_expired_leases)::text, true
+  );
   FOR v_runtime IN
     SELECT r.* FROM workhorse.task_runtime r
-     WHERE r.state = 'active' AND r.expires_at <= v_now
+     WHERE NOT v_skip_expired_leases
+       AND r.state = 'active' AND r.expires_at <= v_now
        AND (
          r.cancel_requested_at IS NOT NULL
          OR r.deadline_at IS NULL OR r.deadline_at > v_now
@@ -13824,6 +13841,9 @@ DECLARE
   v_had_error boolean := false;
   v_rows_affected integer := 0;
   v_phases jsonb := '[]'::jsonb;
+  v_gate_ms integer;
+  v_lease_recovery_started_at timestamptz;
+  v_scan_leases boolean;
 BEGIN
   IF NOT pg_try_advisory_xact_lock(hashtextextended('workhorse:tick', 0)) THEN
     RETURN QUERY VALUES
@@ -13833,6 +13853,27 @@ BEGIN
   END IF;
 
   v_tick_started_at := clock_timestamp();
+  -- Every worker ticks once per interval, and the lock stops only overlapping ticks. Promotion and
+  -- the deadline and timeout scans seek indexes, so a tick that finds nothing due costs little. The
+  -- expired-lease scan reads every active lease, because an index on expires_at would cost every
+  -- heartbeat its HOT update. That scan therefore runs only when no tick ran it within half the
+  -- shortest maintenance interval of the live registered workers. The scan still runs at least
+  -- once per interval of the worker that ticks most often. A worker is live while its last
+  -- heartbeat is within its own lease, as in worker_client_protocols_v1. With no live
+  -- registration, as for a direct caller, every tick runs the scan.
+  SELECT min(registry.maintenance_interval_ms) INTO v_gate_ms
+    FROM workhorse.worker_registry registry
+   WHERE registry.last_heartbeat_at
+         >= clock_timestamp() - make_interval(secs => registry.lease_ms / 1000.0);
+  SELECT state.lease_recovery_started_at INTO v_lease_recovery_started_at
+    FROM workhorse.maintenance_state state
+   WHERE state.routine_name = 'tick';
+  v_scan_leases := NOT COALESCE(
+    v_lease_recovery_started_at <= v_tick_started_at
+      AND v_lease_recovery_started_at
+        > v_tick_started_at - make_interval(secs => v_gate_ms / 2000.0),
+    false
+  );
   UPDATE workhorse.maintenance_state
      SET last_started_at = v_tick_started_at, updated_at = v_tick_started_at
    WHERE routine_name = 'tick';
@@ -13865,6 +13906,7 @@ BEGIN
   rows_affected := 0;
   error := NULL;
   v_started_at := clock_timestamp();
+  PERFORM set_config('workhorse.recovery_skip_expired_leases', (NOT v_scan_leases)::text, true);
   BEGIN
     SELECT recovery.rows_affected, recovery.expired_leases, recovery.retried,
            recovery.retry_dimensions
@@ -13874,6 +13916,15 @@ BEGIN
     error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
     v_had_error := true;
   END;
+  PERFORM set_config('workhorse.recovery_skip_expired_leases', 'false', true);
+  -- Only a scan that ran spaces the next one. Recovery skips the scan when deadline, timeout, or
+  -- fast-tier work fills its limit, and a failed phase rolls the scan back with this setting.
+  IF error IS NULL
+     AND current_setting('workhorse.recovery_scanned_expired_leases', true) = 'true' THEN
+    UPDATE workhorse.maintenance_state
+       SET lease_recovery_started_at = v_tick_started_at
+     WHERE routine_name = 'tick';
+  END IF;
   duration_ms := GREATEST(
     0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
   );
@@ -14540,18 +14591,30 @@ AS $$
   -- outcome row carry the same facts: the enqueue time, one errors entry per closed attempt, and
   -- the final attempt. Every such fact happened before the outcome row closed, so outcome rows that
   -- closed before p_from cannot contribute to the window.
+  --
+  -- Every fact also happened at or after enqueued_at, so a row enqueued at or after p_to cannot
+  -- contribute. A live row's earlier attempts closed at or before its run_at, because a retry sets
+  -- run_at to the close time plus the delay and every other write sets it to the current time. A
+  -- live row whose enqueue, current claim, and retry all precede p_from therefore has no fact in
+  -- the window, so a backlog enqueued earlier is never materialized.
   WITH fast_row AS MATERIALIZED (
     SELECT runtime.task_id, runtime.queue_name, runtime.task_type, runtime.enqueued_at,
            runtime.attempt, runtime.claimed_at, runtime.errors,
            NULL::text AS state, NULL::text AS closed_as, NULL::jsonb AS error,
            NULL::timestamptz AS finished_at
       FROM workhorse.fast_task_runtime runtime
+     WHERE runtime.enqueued_at < p_to
+       AND (
+         runtime.enqueued_at >= p_from
+         OR runtime.claimed_at >= p_from
+         OR (runtime.attempt > 1 AND runtime.run_at >= p_from)
+       )
      UNION ALL
     SELECT outcome.task_id, outcome.queue_name, outcome.task_type, outcome.enqueued_at,
            outcome.attempt, outcome.claimed_at, outcome.errors,
            outcome.state, outcome.closed_as, outcome.error, outcome.finished_at
       FROM workhorse.fast_task_outcome outcome
-     WHERE outcome.finished_at >= p_from
+     WHERE outcome.finished_at >= p_from AND outcome.enqueued_at < p_to
   ), fast_attempt AS (
     SELECT fast_row.task_id, fast_row.queue_name, fast_row.task_type, entry.attempt,
            entry.outcome, entry.claimed_at, entry.finished_at, entry.error
@@ -19912,10 +19975,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (56, 'close a released task without attributing its unrun attempt'),
   (57, 'let terminal cleanup keep pace and share its budget across tiers'),
   (58, 'close SQL integrity gaps in rate refill, dependency edges, and mixed batches'),
-  (59, 'judge fast-tier completions and cancellation acknowledgements after waits')
+  (59, 'judge fast-tier completions and cancellation acknowledgements after waits'),
+  (60, 'bound the scan cost of fast dead letters, statistics, and repeated ticks')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (59) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (60) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

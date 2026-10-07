@@ -1466,6 +1466,10 @@ rows (`MAX_REDRIVE_BATCH_SIZE`) and defaults to 100. It joins the frozen accepte
 only after selecting terminal candidates. This index is not a dispatch path, and
 claim never reads it.
 
+`fast_task_outcome_failed_finished_idx` gives failed fast-tier outcomes the same order, and the
+listing reads both indexes. Since migration 0061 (schema version 60), a dead-letter page
+therefore reads only failed outcomes in both tiers.
+
 ### `task_query`
 
 A bounded operator routing projection created with each task.
@@ -2563,6 +2567,17 @@ The aggregation includes both queue tiers. Fast-tier inputs come from `fast_task
 - If the compact error list overflows, older unrecorded attempts and first claims can be absent from
   raw recomputation.
 
+Every fast-tier fact happens at or after the row's `enqueued_at`. A live row's earlier attempts
+closed at or before its `run_at`, because `fast_retry_v1` sets `run_at` to the close time plus the
+delay and every other write sets it to the current time. Since migration 0061 (schema version 60),
+the aggregation therefore materializes only these fast rows:
+
+- a live row with `enqueued_at < p_to` whose `enqueued_at` or `claimed_at` is at or after `p_from`;
+- a live row with `enqueued_at < p_to`, `attempt > 1`, and `run_at` at or after `p_from`;
+- an outcome row with `finished_at >= p_from` and `enqueued_at < p_to`.
+
+A fast-tier backlog enqueued before the window is not materialized.
+
 #### UTC bin origin
 
 Every bin anchors on `timestamp '2000-01-01' AT TIME ZONE 'UTC'`, a fixed instant. Bucket boundaries
@@ -3053,6 +3068,9 @@ Two more columns belong to `terminal_storage` alone:
   call. Each call flips it.
 - `terminal_cleanup_backlog_since` is set while terminal storage passes end with a full batch. It
   holds the start of the first such pass, and a successful pass without a backlog clears it.
+
+`lease_recovery_started_at` belongs to `tick` alone. It records the start of the last tick that ran
+the expired-lease scan, as [Tick](lifecycle.md#maintenance-cadence) describes.
 
 Workers poll all four database-scheduled routines — the statistics rollup included — on their SDK's
 maintenance interval. PostgreSQL performs the global due check and advisory-lock coordination.

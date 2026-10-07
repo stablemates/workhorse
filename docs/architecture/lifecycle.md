@@ -288,6 +288,24 @@ Each worker calls `tick_v1` at most once per configured `maintenanceIntervalMs` 
 3. Performs bounded expired-lease recovery.
 4. Records `last_completed_at` if both phases avoid an error.
 
+The lock stops only overlapping ticks, so every worker runs one tick per interval. Promotion and the
+deadline and timeout scans seek indexes, so a tick that finds nothing due stays cheap. The
+expired-lease scan reads every active row instead, because an `expires_at` index would cost every
+heartbeat its HOT update. Since migration 0061 (schema version 60), `tick_v1` skips that one scan
+when another tick ran it within half the shortest live maintenance interval:
+
+1. It takes the shortest `maintenance_interval_ms` among live `worker_registry` rows. A row is live
+   while its `last_heartbeat_at` is within its own `lease_ms`, the rule
+   `worker_client_protocols_v1` uses.
+2. It skips the scan when `maintenance_state.lease_recovery_started_at` is within half that interval.
+   Otherwise it runs the scan. When the recovery phase reaches the scan and succeeds, it records the
+   tick's start there. Recovery returns before the scan when other recovery work fills its limit.
+3. With no live row, as for a direct `tick_v1` caller, every tick runs the scan.
+
+A spaced tick still promotes, recovers deadlines and timeouts, and reports `skipped_lock = false`.
+While workers keep ticking, the worker that ticks most often reaches the scan within one interval.
+Recovery then still follows a lease's expiry by at most one interval. `recover_expired_v1` called directly always runs the scan.
+
 Concurrent callers return immediately with `skipped_lock = true` and do not change the state.
 
 A skipped tick still spends the caller's interval. The TypeScript and Python workers stamp their
@@ -954,7 +972,8 @@ next fallback poll or when `recover_expired_v1` releases the expired row, whiche
 
 That release still counts the expired row toward `max_active`, so it publishes the queue. The budget
 trigger wakes every queue waiting on the budget. Every worker offers `tick_v1` once per maintenance
-interval, one second by default, and each tick recovers a bounded batch of expired rows. The wake
+interval, one second by default. The expired-lease scan runs at least once per interval while
+workers keep ticking, and each run recovers a bounded batch of expired rows. The wake
 therefore follows expiry by about one maintenance interval, unless more expired leases are waiting
 than one tick recovers. PostgreSQL has no event that fires at a stored timestamp, so Workhorse
 leaves this wake to recovery instead of adding one.
@@ -1262,7 +1281,8 @@ The deadline, timeout, and lease scans compare against one `v_now` read at entry
 - The deadline and timeout scans seek `task_runtime_deadline_idx` and `task_runtime_timeout_idx` to
   the current time.
 - The lease scan reads every active row through `task_runtime_expired_active_idx`, which has no
-  `expires_at` key.
+  `expires_at` key. A tick skips it when another tick ran it recently, as
+  [Maintenance cadence](#maintenance-cadence) describes.
 - The writes and their per-row compare-and-set guards still read `clock_timestamp()`.
 
 The sequence below shows why a resumed worker cannot overwrite newer work. Recovery replaces the

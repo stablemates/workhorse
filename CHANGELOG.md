@@ -24,7 +24,7 @@ The optional `@stablemates/workhorse-knex` adapter preserves native PostgreSQL s
 The tested Objection recipe shares the model-write transaction with enqueue. Callers retain transaction and resource ownership (SM-1118).
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **59**, and the SDK compatibility floor is schema version **54**.
+The final schema version is **60**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.
@@ -117,6 +117,8 @@ in the worker. Every SDK now parents a handler span this way (SM-1179).
 Migration 0060 (`0060-judge-fast-tier-completions-and-cancellation-acknowledgements-after-waits.sql`) judges two fast-tier operations at the time they act (SM-1163). `fast_complete_many_v1` reads the clock again after failing oversized members, so a later member whose lease expired while one of those failures waited no longer completes. `fast_acknowledge_cancel_v1` checks the lease after its row lock, as `acknowledge_cancel_v1` does on the full tier.
 
 The TypeScript worker measures lease windows and expiry timers on the monotonic clock, so a worker wall clock that runs ahead or jumps backward moves neither. It counts the deadline and attempt timeout from the database time of the claim, and aborts the handler only after `expire_owned_v1` confirms the expiry. A `not_due` answer keeps the handler running and asks again. A claim answer that arrives after its lease window has run out no longer starts the handler (SM-1163).
+
+Migration 0061 (`0061-bound-the-scan-cost-of-fast-dead-letters-statistics-and-repeated-ticks.sql`) bounds three reads whose cost grew with table size or fleet size (SM-1167). The new `fast_task_outcome_failed_finished_idx` lets `list_dead_letters_v1` read only failed fast-tier outcomes. `aggregate_stats_v1` no longer materializes fast-tier rows that cannot hold a fact inside its window, so a backlog enqueued earlier stays out of every rollup. `tick_v1` runs the expired-lease scan, which reads every active lease, only when no tick ran it within half the shortest maintenance interval of the live registered workers. It records that run in the new `maintenance_state.lease_recovery_started_at` column. Promotion and the deadline and timeout scans still run on every tick, and while workers keep ticking, expired leases are still recovered within one interval.
 
 ## 0.6.1 — 2026-10-02
 
