@@ -141,6 +141,10 @@ pub struct WorkerOptions {
     pub maintenance_interval: Duration,
     pub maintenance_routine_interval: Duration,
     pub registry_interval: Duration,
+    /// Skips registration, so operator surfaces neither see nor pause this worker. An unregistered
+    /// worker does not shorten the expired-lease scan spacing, which follows the shortest
+    /// maintenance interval among live registered workers. While any are live, an expired lease can
+    /// wait up to that interval for recovery.
     pub disable_registry: bool,
     /// Schedule namespaces this worker fires during maintenance. Empty fires none.
     pub schedule_namespaces: Vec<String>,

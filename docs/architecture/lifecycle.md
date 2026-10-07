@@ -303,8 +303,40 @@ when another tick ran it within half the shortest live maintenance interval:
 3. With no live row, as for a direct `tick_v1` caller, every tick runs the scan.
 
 A spaced tick still promotes, recovers deadlines and timeouts, and reports `skipped_lock = false`.
-While workers keep ticking, the worker that ticks most often reaches the scan within one interval.
-Recovery then still follows a lease's expiry by at most one interval. `recover_expired_v1` called directly always runs the scan.
+While registered workers keep ticking, the registered worker that ticks most often reaches the scan
+within one of its intervals. Recovery then follows a lease's expiry by at most that interval.
+`recover_expired_v1` called directly always runs the scan.
+
+Only registered workers set the spacing. A worker that opts out of the registry writes no
+`worker_registry` row, so its interval never counts. Each SDK has an opt-out:
+
+| SDK        | Opt-out                           |
+| ---------- | --------------------------------- |
+| TypeScript | `registryIntervalMs: 0`           |
+| Python     | `registry_interval_ms=0`          |
+| Go         | `WorkerOptions.DisableRegistry`   |
+| Rust       | `WorkerOptions::disable_registry` |
+| Ruby       | `disable_registry: true`          |
+
+Take one registered worker with a 60 s maintenance interval and ten unregistered workers that tick
+every 1 s. The shortest live registered interval is 60 s, so the spacing is 30 s.
+
+1. At 0 s a tick runs the scan.
+2. At 1 s a lease expires.
+3. The ticks from 1 s to 29 s skip the scan, because the last scan is less than 30 s old.
+4. At 30 s the next tick runs the scan and recovers the lease.
+
+Before migration 0061, the tick at 2 s would have recovered it. In general, the scan runs at the
+first tick from any worker once the spacing has passed. While registered workers are live, recovery
+therefore waits up to the spacing plus one interval of the fastest unregistered worker. It never
+waits longer than one interval of the fastest registered worker, whose own ticks still reach the
+scan. A fleet with no live registration runs the scan on every tick, so a fleet of only
+unregistered workers keeps the one-interval bound. Each bound holds only while recovery reaches the
+scan. When other recovery work fills the limit, the scan waits for a later tick.
+
+Workhorse does not count unregistered workers, because `tick_v1(p_promote_limit, p_recover_limit)`
+receives no interval from its caller. To restore the shorter bound, register the fast workers or
+shorten the maintenance interval of the registered workers.
 
 Concurrent callers return immediately with `skipped_lock = true` and do not change the state.
 
@@ -974,10 +1006,11 @@ next fallback poll or when `recover_expired_v1` releases the expired row, whiche
 
 That release still counts the expired row toward `max_active`, so it publishes the queue. The budget
 trigger wakes every queue waiting on the budget. Every worker offers `tick_v1` once per maintenance
-interval, one second by default. The expired-lease scan runs at least once per interval while
-workers keep ticking, and each run recovers a bounded batch of expired rows. The wake
-therefore follows expiry by about one maintenance interval, unless more expired leases are waiting
-than one tick recovers. PostgreSQL has no event that fires at a stored timestamp, so Workhorse
+interval, one second by default. While registered workers keep ticking, a tick reaches the
+expired-lease scan at least once per shortest maintenance interval among live registered workers,
+and each run recovers a bounded batch of expired rows. Unregistered workers do not shorten that
+interval, as [Maintenance cadence](#maintenance-cadence) explains. The wake therefore follows expiry
+by at most that interval, unless more expired leases are waiting than one tick recovers. PostgreSQL has no event that fires at a stored timestamp, so Workhorse
 leaves this wake to recovery instead of adding one.
 
 ##### Releases inside a caller's transaction
