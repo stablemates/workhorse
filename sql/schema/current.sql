@@ -14598,6 +14598,12 @@ CREATE OR REPLACE FUNCTION workhorse.aggregate_stats_v1(
   last_attempt_at timestamptz, last_error text, last_error_at timestamptz
 )
 LANGUAGE sql STABLE
+-- A window that starts in the past overestimates its fast rows by orders of magnitude, so its cost
+-- crosses jit_above_cost and often jit_optimize_above_cost. Compiling the plan then costs far more
+-- than running it. The setting holds when rollup_stats_v1 and stat_buckets_v1 call the function,
+-- and it keeps PostgreSQL from inlining the call. The body is planned on its own, and PostgreSQL
+-- caches that plan per session.
+SET jit = off
 AS $$
   -- A fast-tier task writes no events and, by default, no attempt rows. Its live row and its
   -- outcome row carry the same facts: the enqueue time, one errors entry per closed attempt, and
@@ -20053,10 +20059,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (59, 'judge fast-tier completions and cancellation acknowledgements after waits'),
   (60, 'bound the scan cost of fast dead letters, statistics, and repeated ticks'),
   (61, 'bound dashboard worker and task listings'),
-  (62, 'raise a health reason for a terminal cleanup backlog')
+  (62, 'raise a health reason for a terminal cleanup backlog'),
+  (63, 'keep JIT out of the statistics aggregate')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (62) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (63) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

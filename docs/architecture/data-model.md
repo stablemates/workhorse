@@ -2585,6 +2585,22 @@ the aggregation therefore materializes only these fast rows:
 
 A fast-tier backlog enqueued before the window is not materialized.
 
+#### JIT
+
+Since migration 0064 (schema version 63), `aggregate_stats_v1` disables JIT for itself with
+`SET jit = off`. The setting holds whoever calls the function, including `rollup_stats_v1` and the
+live tail of `stat_buckets_v1`.
+
+The planner cannot estimate how few fast rows a window materializes. For a window that starts in
+the past, it expects about a thousand times the rows the function reads. The plan's cost then
+crosses `jit_above_cost`, and often `jit_optimize_above_cost` and `jit_inline_above_cost`. On
+100,000 ready rows and 400,000 fast outcomes, a three-bucket catch-up pass took about 1 s with JIT
+and 34 ms without.
+
+A function with a setting is never inlined, so a caller's statement plans the function as a
+function scan. PostgreSQL plans the body on its own and caches that plan per session, as it does
+for any SQL function that is not inlined.
+
 #### UTC bin origin
 
 Every bin anchors on `timestamp '2000-01-01' AT TIME ZONE 'UTC'`, a fixed instant. Bucket boundaries

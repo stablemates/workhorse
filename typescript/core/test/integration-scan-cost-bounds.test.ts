@@ -21,6 +21,25 @@ async function plan(sql: string, values: unknown[] = []): Promise<PlanNode> {
   return result.rows[0]!["QUERY PLAN"][0]!.Plan;
 }
 
+// aggregate_stats_v1's jit setting keeps PostgreSQL from inlining it, so EXPLAIN shows only a
+// function scan. Resetting the setting inside a rolled-back transaction shows the body's plan.
+async function bodyPlan(sql: string): Promise<PlanNode> {
+  const client = await database.pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      "ALTER FUNCTION workhorse.aggregate_stats_v1(timestamptz, timestamptz, integer) RESET jit",
+    );
+    const result = await client.query<{ "QUERY PLAN": Array<{ Plan: PlanNode }> }>(
+      `EXPLAIN (ANALYZE, FORMAT JSON) ${sql}`,
+    );
+    return result.rows[0]!["QUERY PLAN"][0]!.Plan;
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
+}
+
 function nodes(node: PlanNode): PlanNode[] {
   return [node, ...(node.Plans ?? []).flatMap(nodes)];
 }
@@ -280,6 +299,23 @@ describe("scan cost bounds", () => {
       return result.rows[0]!;
     }
 
+    it("disables JIT for the aggregate whoever calls it", async () => {
+      // A window that starts in the past overestimates its fast rows by orders of magnitude, and
+      // compiling the plan then costs far more than running it (SM-1193).
+      const result = await database.pool.query<{ proconfig: string[] | null }>(
+        `SELECT routine.proconfig
+           FROM pg_proc routine
+           JOIN pg_namespace namespace ON namespace.oid = routine.pronamespace
+          WHERE namespace.nspname = 'workhorse' AND routine.proname = 'aggregate_stats_v1'`,
+      );
+      expect(result.rows).toEqual([{ proconfig: ["jit=off"] }]);
+
+      const outer = await plan(
+        `SELECT * FROM workhorse.aggregate_stats_v1(${window}, ${windowEnd})`,
+      );
+      expect(outer["Node Type"]).toBe("Function Scan");
+    });
+
     it("leaves a backlog enqueued before the window out of the materialized fast rows", async () => {
       await insertFastRuntime(500, "backlog-", {
         enqueuedAt: "clock_timestamp() - interval '1 day'",
@@ -287,7 +323,7 @@ describe("scan cost bounds", () => {
       await insertFastRuntime(3, "fresh-", { enqueuedAt: "clock_timestamp()" });
 
       const fastRow = nodes(
-        await plan(`SELECT * FROM workhorse.aggregate_stats_v1(${window}, ${windowEnd})`),
+        await bodyPlan(`SELECT * FROM workhorse.aggregate_stats_v1(${window}, ${windowEnd})`),
       ).find((node) => node["Subplan Name"] === "CTE fast_row");
 
       expect(fastRow?.["Actual Rows"]).toBe(3);

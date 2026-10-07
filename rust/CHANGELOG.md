@@ -13,7 +13,7 @@ adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses 
 ## Unreleased
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **62**, and the SDK compatibility floor is schema version **54**.
+The final schema version is **63**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.
@@ -82,6 +82,8 @@ Migration 0060 (`0060-judge-fast-tier-completions-and-cancellation-acknowledgeme
 Migration 0061 (`0061-bound-the-scan-cost-of-fast-dead-letters-statistics-and-repeated-ticks.sql`) bounds three reads whose cost grew with table size or fleet size (SM-1167). The new `fast_task_outcome_failed_finished_idx` lets `list_dead_letters_v1` read only failed fast-tier outcomes. `aggregate_stats_v1` no longer materializes fast-tier rows that cannot hold a fact inside its window, so a backlog enqueued earlier stays out of every rollup. `tick_v1` runs the expired-lease scan, which reads every active lease, only when no tick ran it within half the shortest maintenance interval of the live registered workers. It records that run in the new `maintenance_state.lease_recovery_started_at` column. Promotion and the deadline and timeout scans still run on every tick, and while workers keep ticking, expired leases are still recovered within one interval.
 
 Migration 0063 (`0063-raise-a-health-reason-for-a-terminal-cleanup-backlog.sql`) changes `evaluate_queue_health_v1`, `prune_terminal_storage_v1`, `dashboard_cron_v1`, and `dashboard_maintenance_state_v1`, and adds `terminal_cleanup_follow_up_delay_ms_v1`. Queue health raises the degraded reason `terminal-cleanup-backlog` once `terminal_cleanup_backlog_since` is older than `row_retention_lag_ms`, so a cleanup that runs saturated while the oldest eligible row stays young no longer reads as healthy. The dashboard's `terminal_storage` routine is due after the same five-second follow-up delay that gates the pass, and the System page lists the new check. `dashboard/v1` adds the reason code to its enum, an additive change (SM-1178). The health document's `status.reasons` can now carry `terminal-cleanup-backlog`; code that switches on reason codes should accept it.
+
+Migration 0064 (`0064-keep-jit-out-of-the-statistics-aggregate.sql`) disables JIT for `aggregate_stats_v1` (SM-1193). A catch-up `rollup_stats_v1` pass overestimated its fast-tier rows by orders of magnitude, and could spend about a second compiling a plan that runs in tens of milliseconds. The live tail of `stat_buckets_v1` behind a lagging rollup compiled its plan the same way. The function's body, signature, and result are unchanged.
 
 ## 0.6.1 — 2026-10-02
 

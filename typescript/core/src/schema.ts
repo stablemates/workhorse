@@ -446,6 +446,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "raise a health reason for a terminal cleanup backlog",
     kind: "additive",
   },
+  {
+    fromVersion: 62,
+    toVersion: 63,
+    file: "0064-keep-jit-out-of-the-statistics-aggregate.sql",
+    description: "keep JIT out of the statistics aggregate",
+    kind: "additive",
+  },
 ];
 
 /**
