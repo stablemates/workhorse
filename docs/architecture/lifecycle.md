@@ -1548,18 +1548,19 @@ Degraded codes cost storage or throughput: `rollup-stalled`, `retention-lag`,
 `concurrency-blocked`, `rate-limit-throttled`, and `budget-blocked`.
 
 `terminal-cleanup-backlog` fires when `terminal_cleanup_backlog_since` is older than
-`row_retention_lag_ms`. Its `observed` value is the milliseconds from that start to `capturedAt`,
-and its `budget` is `row_retention_lag_ms`. The evaluator reads `capturedAt` as a timestamp, so
-`evaluate_queue_health_v1` is `STABLE`.
+`terminal_cleanup_backlog_ms`. Its `observed` value is the milliseconds from that start to
+`capturedAt`, and its `budget` is `terminal_cleanup_backlog_ms`. The evaluator reads `capturedAt` as
+a timestamp, so `evaluate_queue_health_v1` is `STABLE`.
 
 The reason covers a state `retention-lag` misses. When completions roughly match the cleanup pace,
 every pass ends with a full batch and the tables grow. Cleanup deletes the oldest rows first, so the
-oldest eligible row can stay younger than its budget. The reason reuses `row_retention_lag_ms`
-rather than a policy column of its own. That budget already bounds how long terminal row cleanup may
-stay behind, and a dedicated column would change `sync_queue_health_policy_v1` and the defaults
-every SDK synchronizes. At its 6 h default the budget stays generous against a routine daily
-release, which a saturated cleanup drains within hours. A zero budget would fire after every such
-release. Observations do not carry it: they hold lagging statistics, and this value is exact.
+oldest eligible row can stay younger than its budget. Schemas 62 and 63 judged the backlog by
+`row_retention_lag_ms`. Schema 64 gives it a budget of its own, so an operator can warn on a
+saturated cleanup without tightening `retention-lag`. Its 6 h default equals the row retention
+default, and migration 0065 starts it from the installed row retention values. The default stays
+generous against a routine daily release, which a saturated cleanup drains within hours. A zero
+budget would fire after every such release. Observations do not carry the backlog start: they hold
+lagging statistics, and this value is exact.
 
 #### Health policy
 
@@ -1572,18 +1573,25 @@ release. Observations do not carry it: they hold lagging statistics, and this va
 | `row_retention_lag_ms`        | 21,600,000 milliseconds (6 h) | `application_row_retention_lag_ms`        |
 | `partition_retention_lag_ms`  | 172,800,000 milliseconds      | `application_partition_retention_lag_ms`  |
 | `eligible_history_partitions` | 2 partitions                  | `application_eligible_history_partitions` |
+| `terminal_cleanup_backlog_ms` | 21,600,000 milliseconds (6 h) | `application_terminal_cleanup_backlog_ms` |
 
-`operator_overrides` records provenance, and `updated_at` records the last policy change.
+`operator_overrides` records provenance, and `updated_at` records the last policy change. Migration
+0065 appended the two backlog columns after `updated_at`. It copied each from its row retention
+counterpart, and it added `terminal_cleanup_backlog_ms` to `operator_overrides` wherever
+`row_retention_lag_ms` was overridden. From then on the two budgets are independent.
 
-| Function                          | Behavior                                                                       |
-| --------------------------------- | ------------------------------------------------------------------------------ |
-| `sync_queue_health_policy_v1`     | Seeds application values without replacing overrides unless `p_force` is true. |
-| `override_queue_health_policy_v1` | Accepts named non-negative integer values.                                     |
-| `revert_queue_health_policy_v1`   | Restores named application defaults.                                           |
-| `get_queue_health_policy_v1`      | Returns the policy row.                                                        |
+| Function                          | Behavior                                                                                                                      |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `sync_queue_health_policy_v2`     | Seeds all six application values without replacing overrides unless `p_force` is true.                                        |
+| `sync_queue_health_policy_v1`     | Retained. Seeds the first five and leaves `terminal_cleanup_backlog_ms` alone; `p_force` also restores its application value. |
+| `override_queue_health_policy_v1` | Accepts named non-negative integer values.                                                                                    |
+| `revert_queue_health_policy_v1`   | Restores named application defaults.                                                                                          |
+| `get_queue_health_policy_v1`      | Returns the policy row.                                                                                                       |
 
 `QueueHealth.budgets` reports the values used for the returned verdict; callers cannot supply
-per-call thresholds.
+per-call thresholds. `queue_health_v1` reports the backlog budget as
+`budgets.terminalCleanupBacklogMs`. Against a schema older than 64, TypeScript `Queue.health()`
+reports `rowRetentionLagMs` there, because that is the budget those schemas apply.
 
 ### Health consumers
 
@@ -1664,7 +1672,7 @@ intentionally retained partial boundary day.
 Row lag grows only once the oldest eligible row has waited longer than its budget.
 `terminal_cleanup_backlog_since` shows a terminal cleanup backlog earlier. A value that stays set
 across several passes means completions outrun cleanup. Once it is older than
-`row_retention_lag_ms`, the evaluator raises `terminal-cleanup-backlog`, as
+`terminal_cleanup_backlog_ms`, the evaluator raises `terminal-cleanup-backlog`, as
 [Health verdict](#health-verdict) describes. Each recorded `terminal_storage` run in
 `maintenance_run` gives the rows that pass deleted, so successive runs give the deletion rate.
 

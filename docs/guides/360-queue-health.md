@@ -165,22 +165,22 @@ if (health.status.level !== "healthy") {
 - Queue admission codes add `queue`. `budget-blocked` adds `budgetName`. `retention-lag` adds
   `category`.
 
-| Code                          | Severity | Raised when                                                             |
-| ----------------------------- | -------- | ----------------------------------------------------------------------- |
-| `expired-leases`              | critical | Any lease has expired.                                                  |
-| `overdue-deadlines`           | critical | Any deadline is overdue.                                                |
-| `overdue-execution-timeouts`  | critical | Any execution timeout is overdue.                                       |
-| `overdue-external-waits`      | critical | Any signal or human wait is past its deadline.                          |
-| `stalled-promotion`           | critical | The oldest due scheduled runtime exceeds `promotionLagMs`.              |
-| `missing-history-partitions`  | critical | A partition side is absent for the current day or the three days after. |
-| `rollup-stalled`              | degraded | Rollup lag exceeds `rollupStalledLagMs`.                                |
-| `retention-lag`               | degraded | A retention category's cleanup lag exceeds its budget.                  |
-| `terminal-cleanup-backlog`    | degraded | A terminal cleanup backlog has lasted longer than `rowRetentionLagMs`.  |
-| `eligible-history-partitions` | degraded | Fully eligible event and attempt partitions exceed the budget.          |
-| `default-history-rows`        | degraded | Any row sits in a default history partition.                            |
-| `concurrency-blocked`         | degraded | A concurrency policy holds ready tasks back.                            |
-| `rate-limit-throttled`        | degraded | A rate limit holds ready tasks back.                                    |
-| `budget-blocked`              | degraded | A shared budget holds ready tasks back.                                 |
+| Code                          | Severity | Raised when                                                                   |
+| ----------------------------- | -------- | ----------------------------------------------------------------------------- |
+| `expired-leases`              | critical | Any lease has expired.                                                        |
+| `overdue-deadlines`           | critical | Any deadline is overdue.                                                      |
+| `overdue-execution-timeouts`  | critical | Any execution timeout is overdue.                                             |
+| `overdue-external-waits`      | critical | Any signal or human wait is past its deadline.                                |
+| `stalled-promotion`           | critical | The oldest due scheduled runtime exceeds `promotionLagMs`.                    |
+| `missing-history-partitions`  | critical | A partition side is absent for the current day or the three days after.       |
+| `rollup-stalled`              | degraded | Rollup lag exceeds `rollupStalledLagMs`.                                      |
+| `retention-lag`               | degraded | A retention category's cleanup lag exceeds its budget.                        |
+| `terminal-cleanup-backlog`    | degraded | A terminal cleanup backlog has lasted longer than `terminalCleanupBacklogMs`. |
+| `eligible-history-partitions` | degraded | Fully eligible event and attempt partitions exceed the budget.                |
+| `default-history-rows`        | degraded | Any row sits in a default history partition.                                  |
+| `concurrency-blocked`         | degraded | A concurrency policy holds ready tasks back.                                  |
+| `rate-limit-throttled`        | degraded | A rate limit holds ready tasks back.                                          |
+| `budget-blocked`              | degraded | A shared budget holds ready tasks back.                                       |
 
 **CLI.** `workhorse health --json` writes the same `QueueHealth` object. `workhorse health` exits 2
 when the level is not `healthy`, with or without `--json`.
@@ -215,13 +215,15 @@ field lets automation explain a reason without guessing which process supplied i
 | `row_retention_lag_ms`        | 21,600,000 milliseconds  | `rowRetentionLagMs`         |
 | `partition_retention_lag_ms`  | 172,800,000 milliseconds | `partitionRetentionLagMs`   |
 | `eligible_history_partitions` | 2 partitions             | `eligibleHistoryPartitions` |
+| `terminal_cleanup_backlog_ms` | 21,600,000 milliseconds  | `terminalCleanupBacklogMs`  |
 
-| Function                          | Behavior                                                                       |
-| --------------------------------- | ------------------------------------------------------------------------------ |
-| `sync_queue_health_policy_v1`     | Seeds application values without replacing overrides unless `p_force` is true. |
-| `override_queue_health_policy_v1` | Accepts named non-negative integer values.                                     |
-| `revert_queue_health_policy_v1`   | Restores named application defaults.                                           |
-| `get_queue_health_policy_v1`      | Returns the policy row.                                                        |
+| Function                          | Behavior                                                                                      |
+| --------------------------------- | --------------------------------------------------------------------------------------------- |
+| `sync_queue_health_policy_v2`     | Seeds application values without replacing overrides unless `p_force` is true.                |
+| `sync_queue_health_policy_v1`     | Retained. Seeds the other five values; `p_force` also restores `terminal_cleanup_backlog_ms`. |
+| `override_queue_health_policy_v1` | Accepts named non-negative integer values.                                                    |
+| `revert_queue_health_policy_v1`   | Restores named application defaults.                                                          |
+| `get_queue_health_policy_v1`      | Returns the policy row.                                                                       |
 
 `operator_overrides` records which values an operator set. Callers cannot supply per-call
 thresholds.

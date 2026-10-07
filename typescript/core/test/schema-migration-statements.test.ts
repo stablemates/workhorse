@@ -23,6 +23,10 @@ const EXCLUSIVE_SCANS_SHIPPED = new Map([
     "0052-keep-cold-export-segments-one-utc-day.sql",
     "the cold-export ledger holds one row per dataset and UTC day",
   ],
+  [
+    "0065-give-the-terminal-cleanup-backlog-reason-its-own-health-budget.sql",
+    "queue_health_policy holds one singleton row",
+  ],
 ]);
 
 /** The work in one transactional step that holds a table's ACCESS EXCLUSIVE for time its size sets. */

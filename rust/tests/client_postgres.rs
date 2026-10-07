@@ -82,6 +82,7 @@ async fn health_returns_the_queue_health_snapshot() {
     let health = queue.health().await.unwrap();
     assert!(health["status"]["level"].is_string(), "{health:?}");
     assert!(health.contains_key("budgets"), "{health:?}");
+    assert_eq!(health["budgets"]["terminalCleanupBacklogMs"], json!(21_600_000), "{health:?}");
 }
 
 #[tokio::test]

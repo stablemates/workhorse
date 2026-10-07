@@ -308,7 +308,9 @@ type QueueHealthDocument = RetentionPolicyRow & {
     has_task_events: boolean;
     has_attempt_history: boolean;
   }> | null;
-  budgets: QueueHealthBudgets;
+  /** Schema 64 added `terminalCleanupBacklogMs`; an older schema judges the backlog by row retention. */
+  budgets: Omit<QueueHealthBudgets, "terminalCleanupBacklogMs"> &
+    Partial<Pick<QueueHealthBudgets, "terminalCleanupBacklogMs">>;
   status: QueueHealthStatus;
   observations: {
     relations: Array<{
@@ -813,7 +815,11 @@ function queueHealthFromDocument(row: QueueHealthDocument): QueueHealth {
   };
   return {
     ...base,
-    budgets: row.budgets,
+    budgets: {
+      ...row.budgets,
+      terminalCleanupBacklogMs:
+        row.budgets.terminalCleanupBacklogMs ?? row.budgets.rowRetentionLagMs,
+    },
     status: row.status,
   };
 }

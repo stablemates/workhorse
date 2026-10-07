@@ -1973,23 +1973,32 @@ CREATE TABLE IF NOT EXISTS workhorse.queue_health_policy (
   application_eligible_history_partitions integer NOT NULL CHECK (
     application_eligible_history_partitions >= 0
   ),
-  operator_overrides text[] NOT NULL DEFAULT '{}' CHECK (
-    operator_overrides <@ ARRAY[
-      'promotion_lag_ms', 'rollup_stalled_lag_ms', 'row_retention_lag_ms',
-      'partition_retention_lag_ms', 'eligible_history_partitions'
-    ]::text[]
-  ),
-  updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+  operator_overrides text[] NOT NULL DEFAULT '{}'
+    CONSTRAINT queue_health_policy_operator_overrides_check CHECK (
+      operator_overrides <@ ARRAY[
+        'promotion_lag_ms', 'rollup_stalled_lag_ms', 'row_retention_lag_ms',
+        'partition_retention_lag_ms', 'eligible_history_partitions',
+        'terminal_cleanup_backlog_ms'
+      ]::text[]
+    ),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  -- How long a terminal cleanup backlog may last before terminal-cleanup-backlog fires. Migration
+  -- 0065 appended it, so it follows updated_at.
+  terminal_cleanup_backlog_ms integer NOT NULL CHECK (terminal_cleanup_backlog_ms >= 0),
+  application_terminal_cleanup_backlog_ms integer NOT NULL CHECK (
+    application_terminal_cleanup_backlog_ms >= 0
+  )
 );
 INSERT INTO workhorse.queue_health_policy(
   singleton, promotion_lag_ms, rollup_stalled_lag_ms, row_retention_lag_ms,
   partition_retention_lag_ms, eligible_history_partitions,
   application_promotion_lag_ms, application_rollup_stalled_lag_ms,
   application_row_retention_lag_ms, application_partition_retention_lag_ms,
-  application_eligible_history_partitions
+  application_eligible_history_partitions, terminal_cleanup_backlog_ms,
+  application_terminal_cleanup_backlog_ms
 ) VALUES (
   true, 10000, 1800000, 21600000, 172800000, 2,
-  10000, 1800000, 21600000, 172800000, 2
+  10000, 1800000, 21600000, 172800000, 2, 21600000, 21600000
 )
 ON CONFLICT (singleton) DO NOTHING;
 
@@ -2490,6 +2499,9 @@ ON CONFLICT (singleton) DO NOTHING;
 
 -- Objects that depend on the complete relation block.
 
+-- Retained beside sync_queue_health_policy_v2. It writes only its five budgets, so a v1 sync leaves
+-- terminal_cleanup_backlog_ms alone. p_force clears every override, so it also restores that
+-- budget's application value.
 CREATE OR REPLACE FUNCTION workhorse.sync_queue_health_policy_v1(
   p_promotion_lag_ms integer,
   p_rollup_stalled_lag_ms integer,
@@ -2524,6 +2536,58 @@ BEGIN
     eligible_history_partitions = CASE
       WHEN p_force OR NOT ('eligible_history_partitions' = ANY(policy.operator_overrides))
         THEN p_eligible_history_partitions ELSE policy.eligible_history_partitions END,
+    terminal_cleanup_backlog_ms = CASE WHEN p_force
+      THEN policy.application_terminal_cleanup_backlog_ms
+      ELSE policy.terminal_cleanup_backlog_ms END,
+    operator_overrides = CASE WHEN p_force THEN '{}'::text[] ELSE policy.operator_overrides END,
+    updated_at = clock_timestamp()
+  WHERE singleton
+  RETURNING * INTO v_policy;
+  RETURN v_policy;
+END;
+$$;
+
+-- Seeds every application value, terminal_cleanup_backlog_ms included, without replacing operator
+-- overrides unless p_force is true.
+CREATE OR REPLACE FUNCTION workhorse.sync_queue_health_policy_v2(
+  p_promotion_lag_ms integer,
+  p_rollup_stalled_lag_ms integer,
+  p_row_retention_lag_ms integer,
+  p_partition_retention_lag_ms integer,
+  p_eligible_history_partitions integer,
+  p_terminal_cleanup_backlog_ms integer,
+  p_force boolean DEFAULT false
+) RETURNS workhorse.queue_health_policy
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_policy workhorse.queue_health_policy;
+BEGIN
+  UPDATE workhorse.queue_health_policy policy SET
+    application_promotion_lag_ms = p_promotion_lag_ms,
+    application_rollup_stalled_lag_ms = p_rollup_stalled_lag_ms,
+    application_row_retention_lag_ms = p_row_retention_lag_ms,
+    application_partition_retention_lag_ms = p_partition_retention_lag_ms,
+    application_eligible_history_partitions = p_eligible_history_partitions,
+    application_terminal_cleanup_backlog_ms = p_terminal_cleanup_backlog_ms,
+    promotion_lag_ms = CASE
+      WHEN p_force OR NOT ('promotion_lag_ms' = ANY(policy.operator_overrides))
+        THEN p_promotion_lag_ms ELSE policy.promotion_lag_ms END,
+    rollup_stalled_lag_ms = CASE
+      WHEN p_force OR NOT ('rollup_stalled_lag_ms' = ANY(policy.operator_overrides))
+        THEN p_rollup_stalled_lag_ms ELSE policy.rollup_stalled_lag_ms END,
+    row_retention_lag_ms = CASE
+      WHEN p_force OR NOT ('row_retention_lag_ms' = ANY(policy.operator_overrides))
+        THEN p_row_retention_lag_ms ELSE policy.row_retention_lag_ms END,
+    partition_retention_lag_ms = CASE
+      WHEN p_force OR NOT ('partition_retention_lag_ms' = ANY(policy.operator_overrides))
+        THEN p_partition_retention_lag_ms ELSE policy.partition_retention_lag_ms END,
+    eligible_history_partitions = CASE
+      WHEN p_force OR NOT ('eligible_history_partitions' = ANY(policy.operator_overrides))
+        THEN p_eligible_history_partitions ELSE policy.eligible_history_partitions END,
+    terminal_cleanup_backlog_ms = CASE
+      WHEN p_force OR NOT ('terminal_cleanup_backlog_ms' = ANY(policy.operator_overrides))
+        THEN p_terminal_cleanup_backlog_ms ELSE policy.terminal_cleanup_backlog_ms END,
     operator_overrides = CASE WHEN p_force THEN '{}'::text[] ELSE policy.operator_overrides END,
     updated_at = clock_timestamp()
   WHERE singleton
@@ -2547,7 +2611,7 @@ BEGIN
     FROM jsonb_object_keys(p_values) key;
   IF cardinality(v_names) = 0 OR NOT v_names <@ ARRAY[
     'promotion_lag_ms', 'rollup_stalled_lag_ms', 'row_retention_lag_ms',
-    'partition_retention_lag_ms', 'eligible_history_partitions'
+    'partition_retention_lag_ms', 'eligible_history_partitions', 'terminal_cleanup_backlog_ms'
   ]::text[] THEN
     RAISE EXCEPTION 'queue health policy override names are invalid';
   END IF;
@@ -2570,6 +2634,9 @@ BEGIN
     eligible_history_partitions = CASE WHEN p_values ? 'eligible_history_partitions'
       THEN (p_values->>'eligible_history_partitions')::integer
       ELSE policy.eligible_history_partitions END,
+    terminal_cleanup_backlog_ms = CASE WHEN p_values ? 'terminal_cleanup_backlog_ms'
+      THEN (p_values->>'terminal_cleanup_backlog_ms')::integer
+      ELSE policy.terminal_cleanup_backlog_ms END,
     operator_overrides = ARRAY(
       SELECT DISTINCT name FROM unnest(policy.operator_overrides || v_names) name ORDER BY name
     ),
@@ -2589,7 +2656,7 @@ DECLARE
 BEGIN
   IF p_settings IS NULL OR cardinality(p_settings) = 0 OR NOT p_settings <@ ARRAY[
     'promotion_lag_ms', 'rollup_stalled_lag_ms', 'row_retention_lag_ms',
-    'partition_retention_lag_ms', 'eligible_history_partitions'
+    'partition_retention_lag_ms', 'eligible_history_partitions', 'terminal_cleanup_backlog_ms'
   ]::text[] THEN
     RAISE EXCEPTION 'queue health policy setting names are invalid';
   END IF;
@@ -2605,6 +2672,9 @@ BEGIN
     eligible_history_partitions = CASE WHEN 'eligible_history_partitions' = ANY(p_settings)
       THEN policy.application_eligible_history_partitions
       ELSE policy.eligible_history_partitions END,
+    terminal_cleanup_backlog_ms = CASE WHEN 'terminal_cleanup_backlog_ms' = ANY(p_settings)
+      THEN policy.application_terminal_cleanup_backlog_ms
+      ELSE policy.terminal_cleanup_backlog_ms END,
     operator_overrides = ARRAY(
       SELECT name FROM unnest(policy.operator_overrides) name
        WHERE NOT (name = ANY(p_settings))
@@ -2709,17 +2779,17 @@ AS $$
             > (p_policy->>'row_retention_lag_ms')::numeric
           AND (p_snapshot->>'schedule_occurrence_lag_ms')::numeric > 0)
     UNION ALL
-    -- A backlog that outlasts the row retention budget means cleanup has run saturated that long.
-    -- The oldest eligible row can still be young, because cleanup deletes the oldest rows first.
+    -- A backlog that outlasts its budget means cleanup has run saturated that long. The oldest
+    -- eligible row can still be young, because cleanup deletes the oldest rows first.
     SELECT 120, jsonb_build_object(
       'code', 'terminal-cleanup-backlog', 'severity', 'degraded',
       'observed', backlog.age_ms,
-      'budget', (p_policy->>'row_retention_lag_ms')::numeric
+      'budget', (p_policy->>'terminal_cleanup_backlog_ms')::numeric
     ) FROM (
       SELECT floor(extract(epoch FROM (p_snapshot->>'captured_at')::timestamptz
         - (p_snapshot->>'terminal_cleanup_backlog_since')::timestamptz) * 1000) AS age_ms
     ) backlog
-    WHERE backlog.age_ms > (p_policy->>'row_retention_lag_ms')::numeric
+    WHERE backlog.age_ms > (p_policy->>'terminal_cleanup_backlog_ms')::numeric
     UNION ALL
     SELECT 130, jsonb_build_object(
       'code', 'eligible-history-partitions', 'severity', 'degraded',
@@ -2793,7 +2863,8 @@ BEGIN
              'rollupStalledLagMs', policy.rollup_stalled_lag_ms,
              'rowRetentionLagMs', policy.row_retention_lag_ms,
              'partitionRetentionLagMs', policy.partition_retention_lag_ms,
-             'eligibleHistoryPartitions', policy.eligible_history_partitions
+             'eligibleHistoryPartitions', policy.eligible_history_partitions,
+             'terminalCleanupBacklogMs', policy.terminal_cleanup_backlog_ms
            )
          )
     INTO v_document
@@ -20060,10 +20131,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (60, 'bound the scan cost of fast dead letters, statistics, and repeated ticks'),
   (61, 'bound dashboard worker and task listings'),
   (62, 'raise a health reason for a terminal cleanup backlog'),
-  (63, 'keep JIT out of the statistics aggregate')
+  (63, 'keep JIT out of the statistics aggregate'),
+  (64, 'give the terminal cleanup backlog reason its own health budget')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (63) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (64) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

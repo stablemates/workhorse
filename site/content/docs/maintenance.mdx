@@ -506,9 +506,10 @@ Lag differs by category:
   The rollup and export clamps are not applied. So a stalled rollup or exporter shows as growing
   history lag, even while retention may not delete those rows.
 
-| `queue_health_policy` column | Default          |
-| ---------------------------- | ---------------- |
-| `row_retention_lag_ms`       | 21,600,000 (6 h) |
+| `queue_health_policy` column  | Default          |
+| ----------------------------- | ---------------- |
+| `row_retention_lag_ms`        | 21,600,000 (6 h) |
+| `terminal_cleanup_backlog_ms` | 21,600,000 (6 h) |
 
 | Condition                  | `status.reasons` code         | Severity |
 | -------------------------- | ----------------------------- | -------- |
@@ -531,7 +532,7 @@ Lag differs by category:
 - The `queue_health_v1` document reports the column as `terminal_cleanup_backlog_since`. Go,
   Python, Rust, and Ruby return that key. TypeScript `Queue.health()` maps it to
   `terminalCleanupBacklogSince`.
-- A backlog older than `row_retention_lag_ms` raises the degraded reason
+- A backlog older than `terminal_cleanup_backlog_ms` raises the degraded reason
   `terminal-cleanup-backlog`. Its `observed` value is the backlog's age in milliseconds.
 - Each `terminal_storage` row in `maintenance_run` records the rows its pass deleted.
 

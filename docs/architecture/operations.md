@@ -503,10 +503,10 @@ Launching without an interactive stdin and stdout is refused with exit 1.
 
 ### Schema and PostgreSQL
 
-- The canonical artifact installs version 63, the whole current schema.
+- The canonical artifact installs version 64, the whole current schema.
 - Version 6 is the migration baseline and is frozen as `sql/releases/0006.sql`.
 - A schema change is an upgrade rather than a reinstall: `migrateSchema` applies the ordered steps
-  under `sql/migrations/`, which run from 6 to 63.
+  under `sql/migrations/`, which run from 6 to 64.
 - A database below 6 is not carried forward
   ([ADR 0073](../decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)).
 - Only plain PostgreSQL 15+ is required. No extension beyond the default `plpgsql` is installed.
@@ -539,8 +539,13 @@ Launching without an interactive stdin and stdout is refused with exit 1.
   that `terminal_cleanup_follow_up_delay_ms_v1()` returns, not after `terminal_cleanup_interval_ms`. With one worker's 60-second offers and the default
   limit, cleanup removes at least 1,000 tasks a minute while a backlog remains.
 - `terminal_cleanup_backlog_since` in the `queue_health_v1` document shows when a terminal cleanup
-  backlog began. It is null while cleanup keeps pace. A backlog older than `row_retention_lag_ms`
-  raises the degraded health reason `terminal-cleanup-backlog`.
+  backlog began. It is null while cleanup keeps pace. A backlog older than
+  `terminal_cleanup_backlog_ms` raises the degraded health reason `terminal-cleanup-backlog`.
+- `terminal_cleanup_backlog_ms` defaults to 21,600,000 ms (6 h) and is independent of
+  `row_retention_lag_ms` from schema 64. `sync_queue_health_policy_v2` sets it with the other five
+  budgets. A five-value `sync_queue_health_policy_v1` call no longer moves it, so a deployment that
+  tunes row retention through v1 sets the backlog budget through v2 or
+  `override_queue_health_policy_v1`.
 - Cold export is off by default. While it is on:
   - Event and attempt retention never pass that dataset's `cold_export_dataset.exported_through`.
   - A day is exportable only after it closed and the minute rollup passed it.

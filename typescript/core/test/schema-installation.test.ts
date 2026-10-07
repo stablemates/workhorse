@@ -409,6 +409,7 @@ describe("schema installation", () => {
       { name: "create_child_v2" },
       { name: "create_single_child_v2" },
       { name: "fire_due_schedules_v2" },
+      { name: "sync_queue_health_policy_v2" },
       { name: "sync_schedule_definitions_v2" },
     ]);
 
@@ -564,6 +565,10 @@ describe("schema installation", () => {
         version: 63,
         description: "keep JIT out of the statistics aggregate",
       },
+      {
+        version: 64,
+        description: "give the terminal cleanup backlog reason its own health budget",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
@@ -616,6 +621,8 @@ describe("schema installation", () => {
       row_retention_lag_ms: number;
       partition_retention_lag_ms: number;
       eligible_history_partitions: number;
+      terminal_cleanup_backlog_ms: number;
+      application_terminal_cleanup_backlog_ms: number;
       operator_overrides: string[];
     }>("SELECT * FROM workhorse.get_queue_health_policy_v1()");
     expect(healthPolicy.rows[0]).toMatchObject({
@@ -624,6 +631,8 @@ describe("schema installation", () => {
       row_retention_lag_ms: 21_600_000,
       partition_retention_lag_ms: 172_800_000,
       eligible_history_partitions: 2,
+      terminal_cleanup_backlog_ms: 21_600_000,
+      application_terminal_cleanup_backlog_ms: 21_600_000,
       operator_overrides: [],
     });
     await expect(queue.health()).resolves.toMatchObject({
@@ -634,6 +643,7 @@ describe("schema installation", () => {
         rowRetentionLagMs: 21_600_000,
         partitionRetentionLagMs: 172_800_000,
         eligibleHistoryPartitions: 2,
+        terminalCleanupBacklogMs: 21_600_000,
       },
     });
 

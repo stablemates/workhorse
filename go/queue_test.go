@@ -107,6 +107,25 @@ func TestQueueHealthReturnsTheVersionedPostgreSQLDocument(t *testing.T) {
 	}
 }
 
+func TestQueueHealthReportsTheTerminalCleanupBacklogBudget(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "queue-health-budgets")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	health, err := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-health").Health(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	budgets, ok := health["budgets"].(map[string]any)
+	if !ok || budgets["terminalCleanupBacklogMs"] != float64(21_600_000) {
+		t.Fatalf("expected the default terminal cleanup backlog budget: %#v", health["budgets"])
+	}
+}
+
 func TestQueueCancelReturnsPostgreSQLCancellationMetadata(t *testing.T) {
 	requestedAt := time.Date(2026, time.August, 23, 2, 0, 0, 0, time.UTC)
 	executor := &queueExecutor{responses: [][]workhorse.Row{
