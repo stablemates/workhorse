@@ -30,42 +30,49 @@ pre-commit:
           - name: check the Go public API for unaccepted breaks
             glob: "{go/**,scripts/generate-go-api.ts,scripts/api-snapshot.ts,api/go.txt}"
             run: mise exec -- pnpm go-api:check
-          - name: check adapter conformance types
-            glob: "typescript/adapter-conformance/**"
-            run: mise exec -- pnpm --filter @stablemates/workhorse-adapter-conformance typecheck
-          - name: check core types
-            glob: "typescript/core/**"
-            run: mise exec -- pnpm --filter @stablemates/workhorse typecheck
+          # Each package check runs `tsc -b`, which builds the projects its config references into
+          # `.build/typecheck` before it checks the package. `tsc -p` only read those outputs, so it
+          # failed in a worktree that had never run the root type check. Packages share referenced
+          # projects, so these checks run one at a time and never write the same file together.
+          - name: check TypeScript package types
+            group:
+              jobs:
+                - name: check core types
+                  glob: "typescript/core/**"
+                  run: mise exec -- pnpm --filter @stablemates/workhorse typecheck
+                - name: check adapter conformance types
+                  glob: "typescript/adapter-conformance/**"
+                  run: mise exec -- pnpm --filter @stablemates/workhorse-adapter-conformance typecheck
+                - name: check dashboard server types
+                  glob: "typescript/dashboard-server/**"
+                  run: mise exec -- pnpm --filter @stablemates/workhorse-dashboard-server typecheck
+                - name: check dashboard types
+                  glob: "typescript/dashboard/**"
+                  run: mise exec -- pnpm --filter @stablemates/workhorse-dashboard typecheck
+                - name: check demo types
+                  glob: "typescript/demo/**"
+                  run: mise exec -- pnpm --filter @stablemates/workhorse-demo typecheck
+                - name: check drizzle types
+                  glob: "typescript/drizzle/**"
+                  run: mise exec -- pnpm --filter @stablemates/workhorse-drizzle typecheck
+                - name: check kysely types
+                  glob: "typescript/kysely/**"
+                  run: mise exec -- pnpm --filter @stablemates/workhorse-kysely typecheck
+                - name: check prisma types
+                  glob: "typescript/prisma/**"
+                  run: mise exec -- pnpm --filter @stablemates/workhorse-prisma typecheck
+                - name: check typeorm types
+                  glob: "typescript/typeorm/**"
+                  run: mise exec -- pnpm --filter @stablemates/workhorse-typeorm typecheck
           - name: check dashboard contract types
             glob: "typescript/dashboard-contract/**"
             run: mise exec -- pnpm --filter @stablemates/workhorse-dashboard-contract typecheck
-          - name: check dashboard server types
-            glob: "typescript/dashboard-server/**"
-            run: mise exec -- pnpm --filter @stablemates/workhorse-dashboard-server typecheck
           - name: check generated dashboard specification
             glob: "{dashboard/v1/**,typescript/dashboard-server/spec/**,typescript/dashboard-server/src/router.ts,typescript/dashboard-server/src/wire.ts,go/dashboard/v1_generated.go,python/src/workhorse/dashboard_v1.py,rust/src/dashboard/v1_generated.rs}"
             run: mise exec -- pnpm dashboard-spec:check
           - name: check generated dashboard bundle
             glob: "{dashboard/app/**,dashboard/v1/bundle/**,dashboard/v1/manifest.json,scripts/build-runtime.ts,scripts/generate-dashboard-bundle.ts,go/dashboard/bundle.json,go/dashboard/read-surface-*.tar.gz,python/src/workhorse/dashboard/bundle.json,python/src/workhorse/dashboard/read-surface-*.tar.gz,rust/dashboard/bundle.json,rust/dashboard/read-surface-*.tar.gz}"
             run: mise exec -- pnpm dashboard-bundle:check
-          - name: check dashboard types
-            glob: "typescript/dashboard/**"
-            run: mise exec -- pnpm --filter @stablemates/workhorse-dashboard typecheck
-          - name: check demo types
-            glob: "typescript/demo/**"
-            run: mise exec -- pnpm --filter @stablemates/workhorse-demo typecheck
-          - name: check drizzle types
-            glob: "typescript/drizzle/**"
-            run: mise exec -- pnpm --filter @stablemates/workhorse-drizzle typecheck
-          - name: check kysely types
-            glob: "typescript/kysely/**"
-            run: mise exec -- pnpm --filter @stablemates/workhorse-kysely typecheck
-          - name: check prisma types
-            glob: "typescript/prisma/**"
-            run: mise exec -- pnpm --filter @stablemates/workhorse-prisma typecheck
-          - name: check typeorm types
-            glob: "typescript/typeorm/**"
-            run: mise exec -- pnpm --filter @stablemates/workhorse-typeorm typecheck
           - name: check Python types
             glob: "python/**"
             run: mise exec -- pnpm python:typecheck

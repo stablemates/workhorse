@@ -54,7 +54,7 @@
     "build": "pnpm build:library",
     "build:dev": "pnpm build:library",
     "build:library": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.typecheck.json"
+    "typecheck": "tsc -b tsconfig.typecheck.json"
   },
   "dependencies": {
     "@opentelemetry/api-logs": "0.222.0",

@@ -17,7 +17,7 @@
     "start": "WORKHORSE_DEMO_SERVICE_NAME=workhorse-demo-server node --require ./telemetry.cjs dist/index.js",
     "start:worker": "NODE_OPTIONS=--require=./telemetry.cjs workhorse worker --config dist/worker.js",
     "start:worker:typescript": "WORKHORSE_DEMO_SERVICE_NAME=workhorse-demo-worker-typescript pnpm start:worker",
-    "typecheck": "tsc -p tsconfig.typecheck.json"
+    "typecheck": "tsc -b tsconfig.typecheck.json"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.3",

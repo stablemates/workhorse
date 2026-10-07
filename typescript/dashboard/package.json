@@ -65,7 +65,7 @@
   "scripts": {
     "build": "rm -rf dist development && cp -R ../../dashboard/app/dist/library dist && mkdir -p development/browser && cp ../../dashboard/app/browser/index.html development/browser/index.html && cp -R ../../dashboard/app/src development/src && find dist -name '*.map' -delete && find development/src -name '*.test.*' -delete && node ../../scripts/strip-source-map-comments.mjs dist",
     "build:dev": "mkdir -p dist development/browser development/src && cp -R ../../dashboard/app/dist/library/. dist && cp ../../dashboard/app/browser/index.html development/browser/index.html && cp -R ../../dashboard/app/src/. development/src && find dist -name '*.map' -delete && find development/src -name '*.test.*' -delete && node ../../scripts/strip-source-map-comments.mjs dist",
-    "typecheck": "tsc -p tsconfig.typecheck.json"
+    "typecheck": "tsc -b tsconfig.typecheck.json"
   },
   "dependencies": {
     "@mantine/charts": "^9.6.3",
