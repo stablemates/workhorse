@@ -413,8 +413,9 @@ A Go worker runs two tasks when its `Run` context ends. One claim is still in fl
 the run. The deadline bounds every shutdown step, including a claim still in flight. A claim the
 deadline cuts short may hold a lease it never returned, and that lease expires so recovery picks the
 task up. A handler cancelled at the deadline does not turn a clean shutdown into an error. When that
-handler returns an error, the worker hands its task back to the queue without charging an attempt. A
-handler panic fails that attempt, while the worker stays alive to serve later tasks.
+handler returns an error, the worker hands its task back to the queue without charging an attempt.
+When it returns a value instead, the worker completes its task. A handler panic fails that attempt,
+while the worker stays alive to serve later tasks.
 
 A Rust worker starts its grace period as soon as `Worker::run` observes its shutdown future. The same
 deadline bounds a claim in flight and the registry update that marks the worker draining. A short
@@ -437,6 +438,8 @@ When `ShutdownGracePeriod` expires, `Run` acts in this order:
 - After the deadline, the drain does not report an execution error that matches `context.Canceled`.
 - A handler that returns an error after its cancellation charges no attempt. `release_owned_v1`
   returns its task to the queue, and a failed release leaves the task to lease recovery.
+- A handler that returns a value after its cancellation completes its task through `complete_v1`,
+  and a failed completion leaves the task to lease recovery.
 - A handler panic becomes a `HandlerPanicError` and fails that attempt.
 
 More detail: [Schema and SQL protocol: Shutdown grace period](../architecture/schema-and-protocol.md#shutdown-grace-period).

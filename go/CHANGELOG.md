@@ -55,6 +55,15 @@ handler context still carries that context's cancellation and values (SM-1176).
 
 Migration 0060 (`0060-judge-fast-tier-completions-and-cancellation-acknowledgements-after-waits.sql`) judges two fast-tier operations at the time they act (SM-1163). `fast_complete_many_v1` reads the clock again after failing oversized members, so a later member whose lease expired while one of those failures waited no longer completes. `fast_acknowledge_cancel_v1` checks the lease after its row lock, as `acknowledge_cancel_v1` does on the full tier.
 
+**Fixed:** A handler that returns a value after its shutdown cancellation now completes its task,
+as a Rust handler does. Before, the worker left the task unsettled, and lease recovery charged the
+attempt as `lease_expired`, so the task ran again or failed on its last attempt although its
+handler succeeded. The worker writes the fenced completion within the 250 ms unwind period. When
+a cancellation request or an expiry rejects that write, the worker acknowledges or settles it. When
+the write still fails, the worker logs it and lease recovery settles the task as before. The log
+message for a failed shutdown release or completion is now `Shutdown settlement failed; lease
+recovery will settle the task` (SM-1187).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

@@ -1232,12 +1232,25 @@ When the period expires, `Run` acts in this order:
 3. It stops renewing the leases of whatever still runs.
 4. It returns an error matching `ErrShutdownIncomplete`, naming how many it abandoned.
 
-A handler that returns an error after that cancellation charges no attempt. `releaseAfterShutdown`
-hands its task to `release_owned_v1` on a context bounded by the 250 millisecond unwind period. When
-that release fails, the worker logs it and lease recovery settles the task. A `HandlerPanicError`
-keeps its usual settlement. `execute` reads the handler context's cancellation as the handler
-returns. A handler that failed before the stop keeps its usual settlement. `RunOnce` treats the end
-of its caller's context the same way.
+`settleAfterShutdown` settles the task of a handler that returns once the stop has come. It writes
+on a context free of the stop and bounded by the 250 millisecond unwind period:
+
+- A handler that returns a value completes its task through `complete_v1`, as the Rust worker
+  does. This holds whether the handler returned before or after its cancellation. A fast-tier
+  completion runs alone, outside its cohort's batch, so it claims no replacement task.
+- A handler that returns an error after that cancellation charges no attempt. Its task goes to
+  `release_owned_v1`.
+- A value the task cannot store also goes to `release_owned_v1`, so the next attempt meets the same
+  check.
+
+Both writes are fenced. When PostgreSQL rejects the completion, `reconcileRejectedSettlement`
+acknowledges a cancellation request or settles an expiry within the same window. When a write or
+that reconciliation fails, the worker logs the failure and lease recovery settles the task. The
+handler span of a task completed or released this way carries no error status. A `HandlerPanicError` keeps its usual settlement. `execute`
+reads the handler context's cancellation as the handler returns. A handler that failed before the
+stop keeps its usual settlement. A handler cancelled for another cause, such as a cancellation
+request, keeps that cause's settlement. `RunOnce` treats the end of its caller's context the same
+way.
 
 `recover_expired_telemetry_v1` recovers the tasks of abandoned handlers once the leases expire. The abandoned goroutines
 keep running inside the caller's process and may still use the pool.
