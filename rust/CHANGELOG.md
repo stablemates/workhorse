@@ -49,6 +49,9 @@ with `TaskValueSizeLimitError` on both tiers, and the task's retry policy and th
 recovery. The fast tier's batched completion failed the attempt in PostgreSQL, which skipped
 `retry_delay` (SM-1159).
 
+The dashboard service answers an unexpected schema-compatibility failure with a generic `503` and logs the
+cause through `tracing`, instead of returning the driver error text (SM-1168).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

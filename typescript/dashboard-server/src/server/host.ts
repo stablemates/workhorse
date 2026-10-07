@@ -6,7 +6,13 @@ import { brotliCompress, constants, gzip } from "node:zlib";
 import { SeverityNumber, logs } from "@opentelemetry/api-logs";
 import { BodyLimitPlugin, RPCHandler } from "@orpc/server/fetch";
 import type { DashboardSingleAdminOptions } from "@stablemates/workhorse-dashboard-contract";
-import { Admin, assertSchemaCompatible, Queue, type Queryable } from "@stablemates/workhorse";
+import {
+  Admin,
+  assertSchemaCompatible,
+  Queue,
+  SchemaCompatibilityError,
+  type Queryable,
+} from "@stablemates/workhorse";
 import { WORKHORSE_VERSION } from "@stablemates/workhorse/version";
 import type { DashboardMaintenanceLoopCadences } from "../wire.js";
 import { dashboardAssetsDirectory } from "./assets.js";
@@ -153,13 +159,26 @@ export interface DashboardPrincipal {
   actor: string;
 }
 
+/** Facts about one request that its transport establishes and the `Request` itself cannot carry. */
+export interface DashboardRequestContext {
+  /**
+   * The peer address the transport accepted the connection from, such as a socket's remote address.
+   *
+   * `singleAdmin` counts failed logins per address, grouping IPv6 by its /64 prefix. Pass only an
+   * address the transport established or a proxy chain the application already trusts, never one
+   * read from a header the client controls. Requests without one share a single failure window.
+   * `dashboardNodeMiddleware` passes the socket's remote address.
+   */
+  clientAddress?: string;
+}
+
 export interface DashboardHost {
   /** Normalized mount path. Empty string when the dashboard owns the host root. */
   readonly basePath: string;
   /** True when this request belongs to the dashboard's mount path. */
   owns(request: Request): boolean;
   /** Handle one request, or return null when the path is not owned by the dashboard. */
-  handle(request: Request): Promise<Response | null>;
+  handle(request: Request, context?: DashboardRequestContext): Promise<Response | null>;
 }
 
 /** Normalize a caller-supplied mount path. `/` and `""` both mean "own the host root". */
@@ -199,6 +218,10 @@ interface HostWorkspace {
 }
 
 const SLOW_RPC_REQUEST_MS = 1_000;
+
+/** The answer to a compatibility check that failed without a verdict, shared by every host. */
+const UNVERIFIED_COMPATIBILITY =
+  "Unable to verify Workhorse schema compatibility because the database query failed.";
 
 /**
  * Largest RPC request body the host reads.
@@ -474,7 +497,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
   const single = options.database
     ? resolveWorkspace(null, { ...options, database: options.database })
     : undefined;
-  const workspaceLinks = [...workspaces.values()].map((workspace) => {
+  const workspaceLink = (workspace: HostWorkspace): DashboardWorkspaceLink => {
     const link: DashboardWorkspaceLink = {
       name: workspace.name as string,
       url: workspace.basePath,
@@ -482,7 +505,29 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
     if (workspace.databaseHost !== undefined) link.databaseHost = workspace.databaseHost;
     if (workspace.databaseName !== undefined) link.databaseName = workspace.databaseName;
     return link;
-  });
+  };
+
+  /**
+   * The workspaces this request may open, each confirmed by its own authorization decision.
+   *
+   * A workspace name and its database labels describe the deployment, so the switcher lists only
+   * the workspaces the embedding application grants. The request's own workspace was authorized
+   * before the application was served, so it is listed without asking again.
+   */
+  async function authorizedWorkspaceLinks(
+    request: Request,
+    current: HostWorkspace,
+  ): Promise<DashboardWorkspaceLink[]> {
+    const links: DashboardWorkspaceLink[] = [];
+    for (const workspace of workspaces.values()) {
+      if (workspace !== current && options.authorize) {
+        const decision = await options.authorize(request, workspace.name);
+        if (decision instanceof Response || !decision) continue;
+      }
+      links.push(workspaceLink(workspace));
+    }
+    return links;
+  }
   if (workspaces.size > 0) {
     logs.getLogger("@stablemates/workhorse-dashboard").emit({
       severityNumber: SeverityNumber.INFO,
@@ -501,6 +546,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
     path === "" || pathname === path || pathname.startsWith(`${path}/`);
 
   async function serveApplication(
+    request: Request,
     url: URL,
     authenticatedActor: string,
     workspace: HostWorkspace,
@@ -516,7 +562,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
           ? { loginUrl: `${path}/login`, logoutUrl: `${path}/logout` }
           : null,
         demoTools: Boolean(workspace.operator.enqueueTest),
-        workspaces: workspaceLinks,
+        workspaces: await authorizedWorkspaceLinks(request, workspace),
         workspace: workspace.name,
       },
       browserModules: options.browserModules,
@@ -532,7 +578,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
     owns(request) {
       return owns(new URL(request.url).pathname);
     },
-    async handle(request) {
+    async handle(request, context) {
       const url = new URL(request.url);
       const pathname = url.pathname;
       if (!owns(pathname)) return null;
@@ -547,6 +593,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
         request,
         `${path}/login`,
         `${path}/logout`,
+        context?.clientAddress,
       );
       if (authenticationResponse) return authenticationResponse;
 
@@ -588,10 +635,25 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
         await workspace.compatibility;
       } catch (error) {
         workspace.compatibility = undefined;
-        return Response.json(
-          { error: error instanceof Error ? error.message : "Incompatible Workhorse schema" },
-          { status: 503 },
-        );
+        if (!(error instanceof SchemaCompatibilityError)) {
+          // The answer names no driver detail, which can carry a database host, user, or path.
+          logs.getLogger("@stablemates/workhorse-dashboard").emit({
+            severityNumber: SeverityNumber.ERROR,
+            severityText: "ERROR",
+            eventName: "workhorse.dashboard.compatibility_check_failed",
+            body: "Dashboard schema compatibility check failed",
+            attributes: {
+              "exception.message": String(
+                error instanceof Error ? (error.cause ?? error).toString() : error,
+              ),
+              ...(workspace.name === null
+                ? {}
+                : { "workhorse.dashboard.workspace": workspace.name }),
+            },
+          });
+          return Response.json({ error: UNVERIFIED_COMPATIBILITY }, { status: 503 });
+        }
+        return Response.json({ error: error.message }, { status: 503 });
       }
 
       if (pathname === `${basePath}/rpc` || pathname.startsWith(`${basePath}/rpc/`)) {
@@ -643,7 +705,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
         return new Response(null, { status: 302, headers: { location: `${basePath}/tasks` } });
       }
 
-      return serveApplication(url, authenticatedActor, workspace);
+      return serveApplication(request, url, authenticatedActor, workspace);
     },
   };
 }

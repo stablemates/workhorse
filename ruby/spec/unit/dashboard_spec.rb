@@ -124,6 +124,23 @@ RSpec.describe W::Dashboard do
       expect(status).to eq(503)
       expect(JSON.parse(chunks.join)).to eq({"error" => "workhorse compatibility check refused: schema-not-installed"})
     end
+
+    it "answers 503 with a generic message and logs an unexpected compatibility failure" do
+      failing = Class.new(W::Executor) {
+        def initialize = super(nil)
+
+        def rows(_sql, _params = []) = raise(PG::ConnectionBad, "could not connect to db.internal:5432")
+      }.new
+      env = env_for("/workhorse/tasks").merge("rack.errors" => StringIO.new)
+
+      status, _, chunks = dashboard(failing).call(env)
+
+      expect(status).to eq(503)
+      expect(JSON.parse(chunks.join)).to eq(
+        {"error" => "Unable to verify Workhorse schema compatibility because the database query failed."}
+      )
+      expect(env["rack.errors"].string).to include("PG::ConnectionBad: could not connect to db.internal:5432")
+    end
   end
 
   describe "procedure calls" do
@@ -189,6 +206,30 @@ RSpec.describe W::Dashboard do
       expect(dashboard.call(env)[0]).to eq(400)
       expect(rpc(dashboard, "setQueuePaused", {"queue" => "", "paused" => true, "audit" => audit})[0]).to eq(400)
       expect(rpc(dashboard, "queues", {"unexpected" => true})[0]).to eq(400)
+    end
+
+    it "answers 413 before reading a body whose declared length is too large or malformed" do
+      too_large = {"json" => {"defined" => false, "code" => "PAYLOAD_TOO_LARGE", "status" => 413,
+                              "message" => "Payload Too Large"}}
+      [((2 << 20) + 1).to_s, "12abc", "-1"].each do |declared|
+        input = StringIO.new(JSON.generate({"json" => nil}))
+        env = env_for("/workhorse/rpc/dashboard/queues", method: "POST")
+          .merge("CONTENT_LENGTH" => declared, "rack.input" => input)
+
+        status, _, chunks = dashboard.call(env)
+
+        expect(status).to eq(413)
+        expect(JSON.parse(chunks.join)).to eq(too_large)
+        expect(input.pos).to eq(0)
+      end
+    end
+
+    it "reads at most one byte past the bound of an undeclared body" do
+      input = StringIO.new(" " * ((2 << 20) + 10))
+      env = env_for("/workhorse/rpc/dashboard/queues", method: "POST").merge("rack.input" => input)
+
+      expect(dashboard.call(env)[0]).to eq(413)
+      expect(input.pos).to eq((2 << 20) + 1)
     end
 
     it "answers 500 without detail when a procedure fails" do

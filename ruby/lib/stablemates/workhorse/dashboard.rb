@@ -62,6 +62,10 @@ module Stablemates
         ".woff2" => "font/woff2"
       }.freeze
       JSON_TYPE = "application/json; charset=utf-8"
+      # The largest RPC request body the dashboard reads, the same bound the Go and Rust hosts apply.
+      MAX_REQUEST_BYTES = 2 << 20
+      UNVERIFIED_COMPATIBILITY =
+        "Unable to verify Workhorse schema compatibility because the database query failed."
       DEFAULT_PORTS = {"http" => ":80", "https" => ":443"}.freeze
       # Characters escaped in the runtime configuration so it cannot close its inline script.
       SCRIPT_ESCAPES = {"<" => "\\u003c", ">" => "\\u003e", "&" => "\\u0026",
@@ -74,8 +78,8 @@ module Stablemates
         "issues" => [{"code" => "custom", "path" => ["feature"],
                       "message" => "The feature demo kind requires a feature family"}]
       }.freeze
-      private_constant :MUTATIONS, :OPTIONAL_MUTATIONS, :CONTENT_TYPES, :JSON_TYPE, :DEFAULT_PORTS,
-        :SCRIPT_ESCAPES, :TOO_SMALL_PAGE, :MISSING_FEATURE
+      private_constant :MUTATIONS, :OPTIONAL_MUTATIONS, :CONTENT_TYPES, :JSON_TYPE, :MAX_REQUEST_BYTES,
+        :UNVERIFIED_COMPATIBILITY, :DEFAULT_PORTS, :SCRIPT_ESCAPES, :TOO_SMALL_PAGE, :MISSING_FEATURE
 
       attr_reader :base_path
 
@@ -126,8 +130,12 @@ module Stablemates
         actor = (authorization == true) ? (@audit_actor || "dashboard") : authorization.actor
         begin
           assert_compatible
-        rescue Error => e
+        rescue CompatibilityError => e
           return json(503, {"error" => e.message})
+        rescue => e
+          # A driver error can name the database host, user, or path, so it stays in the log.
+          env["rack.errors"]&.puts("workhorse dashboard: schema compatibility check failed: #{e.class}: #{e.message}")
+          return json(503, {"error" => UNVERIFIED_COMPATIBILITY})
         end
 
         # A mounting stack may hand over the mount point itself as SCRIPT_NAME plus a PATH_INFO of "/".
@@ -201,9 +209,11 @@ module Stablemates
           return rpc_error(404, "NOT_FOUND", "Procedure not found")
         end
 
+        body = read_body(env)
+        return rpc_error(413, "PAYLOAD_TOO_LARGE", "Payload Too Large") if body.nil?
+
         input = nil
         begin
-          body = env["rack.input"]&.read.to_s
           envelope = JSON.parse(body.empty? ? "{}" : body)
           raise InputValidationError, "request envelope must be an object" unless envelope.is_a?(Hash)
 
@@ -229,6 +239,17 @@ module Stablemates
           return rpc_error(500, "INTERNAL_SERVER_ERROR", "Internal server error")
         end
         json(200, result.nil? ? {} : {"json" => result})
+      end
+
+      # At most MAX_REQUEST_BYTES of the request body, or nil for a body that is larger.
+      def read_body(env)
+        declared = env["CONTENT_LENGTH"].to_s
+        unless declared.empty?
+          return nil unless declared.match?(/\A\d+\z/) && declared.to_i <= MAX_REQUEST_BYTES
+        end
+
+        body = env["rack.input"]&.read(MAX_REQUEST_BYTES + 1).to_s
+        (body.bytesize > MAX_REQUEST_BYTES) ? nil : body
       end
 
       def same_origin?(env)

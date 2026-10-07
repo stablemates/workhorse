@@ -34,6 +34,10 @@ application already installs `logger` (SM-1138). The dashboard requires `cgi/esc
 
 Migration 0057 (`0057-close-a-released-task-without-attributing-its-unrun-attempt.sql`) changes only `cancel_v1` and `terminalize_deadline_v1`. A full-tier task that a worker without a handler returned through `release_owned_v1` can now be canceled, and deadline recovery terminalizes it instead of rolling back the whole recovery pass. Both close it like never-started work, with no attempt history row (SM-1158).
 
+`Dashboard` refuses an RPC body over 2 MiB, or a malformed declared length, with `413` before parsing.
+An unexpected schema-compatibility failure, such as a connection error, now answers a generic `503` and is
+written to `rack.errors` instead of escaping the Rack app (SM-1168).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

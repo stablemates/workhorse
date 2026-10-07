@@ -379,6 +379,18 @@ queue behavior is unchanged.
 The bound is twice the 65,536-byte cap the database places on a signal payload or a human-wait
 result. Every `audit.reason` accepts at most 2,000 characters, the limit the database enforces.
 
+The embedded SDK hosts read at most 2,097,152 bytes (`2 << 20`) of an RPC request body.
+
+- Python `DashboardHost` (`_MAX_REQUEST_BYTES`) and Ruby `Dashboard` (`MAX_REQUEST_BYTES`) answer
+  `413` with the `PAYLOAD_TOO_LARGE` envelope before reading when the declared length is larger or
+  is not decimal digits. Without a declared length they read at most one byte past the bound and
+  answer `413` when that byte arrives. Python reads such a body only when the server sets
+  `wsgi.input_terminated`.
+- Go `Handler` decodes the first JSON value from at most the bound. An envelope that crosses the
+  bound fails decoding with `400`. Bytes after a complete envelope are never read.
+- Rust `MAX_REQUEST_BYTES` bounds the body with `http_body_util::Limited`; a longer body answers
+  `400`.
+
 #### RPC logs
 
 `createDashboardHost` emits one OpenTelemetry log after `RPCHandler` returns a matched dashboard RPC
@@ -402,6 +414,18 @@ They never include the request input, response output, error details, headers, o
 
 Dashboard assets, application pages, authorization failures, and schema compatibility failures do
 not produce these RPC records. Without a Logs SDK, the OpenTelemetry API discards them.
+
+#### Compatibility check records
+
+When the schema-compatibility check fails without a compatibility verdict, such as a query that
+cannot reach the database, `createDashboardHost` emits one error record,
+`workhorse.dashboard.compatibility_check_failed`. It carries these attributes:
+
+- `exception.message`, the text of the underlying error
+- `workhorse.dashboard.workspace`, in workspaces mode only
+
+A compatibility verdict, such as a schema that is too old, emits no record. Its version message is
+the `503` answer.
 
 #### Workspace records
 

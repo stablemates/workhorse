@@ -116,30 +116,42 @@ More detail: [Dashboard: Process boundary](../architecture/dashboard.md#process-
 
 ## Repeated failures pause login
 
-Someone tries to guess Dana's password.
+Someone at `203.0.113.7` tries to guess Dana's password.
 
 1. **Within a minute,** they submit several wrong passwords. Each gets the generic invalid-login
    page.
-2. **On the next attempt,** the server stops processing logins. It answers that the client should
-   retry later, and it does not check the password.
-3. **When the oldest attempt leaves the window,** the server processes logins again.
+2. **On the next attempt,** the server stops processing logins from that address. It answers that
+   the client should retry later, and it does not check the password.
+3. **Meanwhile,** Dana logs in from another address. The server checks Dana's password as usual.
+4. **When the oldest attempt leaves the window,** the server processes logins from `203.0.113.7`
+   again.
 
-Repeated failures temporarily pause login processing. The server owns this limit. It counts all
-login attempts in the process together, because it does not trust proxy headers to decide who
-shares the limit. A successful login clears the count.
+Repeated failures temporarily pause login processing for the client that caused them. The server
+owns this limit. It identifies the client by the address the connection came from, not by a proxy
+header, because the client writes those headers itself. A successful login clears that client's
+count.
+
+Behind a reverse proxy every connection comes from the proxy. All clients of that proxy then share
+one count, and one caller can still pause login for all of them. Separately, the server checks only
+a small number of passwords at the same time, because each check is deliberately expensive.
 
 <details>
 <summary>Reference: login rate limit</summary>
 
-1. The server keeps at most five login reservations in a rolling 60-second window.
-2. Each form submission reserves capacity before scrypt begins. Concurrent requests therefore cannot
+1. The server keeps at most five login reservations per client in a rolling 60-second window.
+2. The client is the transport peer address. An IPv6 address shares its /64 prefix with its
+   neighbors. A request without an address uses one shared key.
+3. Each form submission reserves capacity before scrypt begins. Concurrent requests therefore cannot
    bypass the bound.
-3. An invalid submission keeps its reservation and returns the generic `401` page.
-4. Further submissions return `429` with `Retry-After` until the oldest reservation leaves the
-   window.
-5. A successful login clears the reservations.
+4. An invalid submission keeps its reservation and returns the generic `401` page.
+5. Further submissions from that client return `429` with `Retry-After` until its oldest
+   reservation leaves the window.
+6. A successful login clears that client's reservations.
+7. At most `MAX_CONCURRENT_PASSWORD_HASHES` (2) password checks run at once. Another submission
+   gets `429` with `Retry-After: 1` and reserves nothing.
 
-The limit is process-wide. It does not trust `Forwarded` or `X-Forwarded-*` as client identity.
+The server never trusts `Forwarded` or `X-Forwarded-*` as client identity. `dashboardNodeMiddleware`
+passes the socket address. [ADR 0093](../decisions/0093-key-single-admin-login-throttling-by-transport-peer.md) records this model.
 
 **Login body.** The login body may be at most `MAX_LOGIN_BODY_BYTES` (4,096 bytes). A larger or
 malformed declared length gets `413` before the form is read. The body must be

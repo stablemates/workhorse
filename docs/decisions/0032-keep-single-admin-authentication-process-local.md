@@ -1,6 +1,6 @@
 # ADR 0032: Keep single-admin authentication process-local
 
-- **Status:** Accepted
+- **Status:** Accepted; login throttling superseded by [ADR 0093](0093-key-single-admin-login-throttling-by-transport-peer.md)
 - **Date:** 2026-08-16
 - **Related:** [ADR 0018](0018-framework-neutral-dashboard-host.md), [ADR 0022](0022-built-in-dashboard-authentication.md), [ADR 0029](0029-embeddable-dashboard-backends.md)
 - **Clarifies:** the baseline session model selected by ADR 0022

@@ -52,10 +52,14 @@ a writable operator.
   dispatches any RPC, asset, or application request.
 - Confirm the browser cannot choose its own attribution: `auditWithOccurredAt` must overwrite
   `audit.actor` with `context.authenticatedActor`.
+- Confirm the application page lists a workspace only after `authorize(request, workspace)` grants
+  it for that request. `authorizedWorkspaceLinks` builds the list per request, so a principal
+  denied a workspace never sees its name or database labels.
 
 **Re-walk when** a procedure is added, removed, or changes its `mutation` classification; when
 `mutationProcedure` or `mutationAuthorization` changes; when a controller becomes optional or
-mandatory; or when handler authorization moves.
+mandatory; when handler authorization moves; or when the runtime configuration gains a field that
+describes another workspace.
 
 ## Row 2: payload and result redaction in the read surface
 
@@ -103,10 +107,15 @@ Confirm an error body reveals nothing about container paths or package internals
   them from the other.
 - Confirm the standalone listener sets `redactErrorStacks` whenever it is remotely reachable,
   unless the operator passed `--reveal-error-stacks`.
-- Confirm the schema-compatibility `503` body carries only version information.
+- Confirm the schema-compatibility `503` body carries only version information in all five hosts.
+  A compatibility verdict answers with its message. Any other failure answers with the fixed
+  "Unable to verify Workhorse schema compatibility because the database query failed." and is
+  logged on the server, never returned. Each host's test drives a driver error that names a
+  database address and asserts the address stays out of the body.
 
 **Re-walk when** a read starts projecting a persisted error, when `redactErrorStacks` changes
-shape, or when the oRPC major version moves.
+shape, when a host's compatibility check changes what it returns, or when the oRPC major version
+moves.
 
 ## Row 5: CSRF, CORS, and browser response headers
 
@@ -153,15 +162,23 @@ Confirm the CLI's single-administrator mode is the boundary it claims to be.
   `application/x-www-form-urlencoded`, throttles failures in a fixed window, reserves throttle
   capacity before `scrypt` yields, and returns one generic failure for a wrong username and a wrong
   password alike.
+- Confirm `loginThrottleKey` keys the failure window by `DashboardRequestContext.clientAddress`,
+  that `dashboardNodeMiddleware` fills it from the socket, and that no code path reads `Forwarded`
+  or `X-Forwarded-*`. Confirm the tracked-client table is bounded, and that
+  `MAX_CONCURRENT_PASSWORD_HASHES` refuses a submission before it reserves anything.
+  [ADR 0093](decisions/0093-key-single-admin-login-throttling-by-transport-peer.md) records that a
+  reverse proxy still shares one key among its clients.
 - Confirm every RPC request body is bounded before a procedure is matched, whether or not it
-  declares its length.
+  declares its length. The Python and Ruby hosts refuse a larger or malformed declared length with
+  `413` before reading, and read at most one byte past their bound otherwise. The Go and Rust hosts
+  stop reading at their bound.
 - Confirm sessions are server-side, bounded in count, bounded in lifetime, minted only at a
   successful login, and deleted at logout and at expiry.
 - Confirm a rotated previous password and every session created with it end at the configured
   cutoff.
 
-**Re-walk when** credential resolution, the login handler, the session store, or the listener
-guards change. [ADR 0032](decisions/0032-keep-single-admin-authentication-process-local.md) owns
+**Re-walk when** credential resolution, the login handler, the throttle key, the session store,
+an SDK host's body reader, or the listener guards change. [ADR 0032](decisions/0032-keep-single-admin-authentication-process-local.md) owns
 why this mode is process-local.
 
 ## Row 7: dependency advisories
@@ -214,6 +231,9 @@ Any exploitable walkthrough remains in the private operations review under
   `typescript/dashboard-server/test/html.test.ts` exercises that packaged template with
   caller-shaped values containing script delimiters, replacement markers, and attribute
   metacharacters.
+- Confirm the Python, Ruby, and Rust hosts, which write the runtime configuration themselves,
+  escape every `<` in it. A principal's actor is caller-shaped. Each host's tests render an actor
+  containing `</script>` and assert that the serialized value cannot close its script element.
 
 **Re-walk when** `DashboardRuntimeConfig` gains a field, `renderDashboardHtml` changes its
 serialization, escaping, or placeholder replacement, the packaged `index.html` changes either
