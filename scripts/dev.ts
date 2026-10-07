@@ -2,6 +2,9 @@ import { spawn } from "node:child_process";
 
 const usesProcessGroups = process.platform !== "win32";
 const forceKillAfterMs = 5_000;
+// How long a process group may outlive the force kill before the supervisor stops waiting for it.
+const processGroupGiveUpAfterMs = 1_000;
+const processGroupPollMs = 25;
 
 const publicPort = Number(process.env.PORT ?? 3000);
 const dashboardDevPort = Number(process.env.WORKHORSE_DASHBOARD_DEV_PORT ?? 4173);
@@ -132,6 +135,8 @@ if (process.env.WORKHORSE_DEMO_DASHBOARD_DEV === "true") {
 
 let stopping = false;
 let shutdownRequested = false;
+let stoppedAt = 0;
+let processGroupsLeftRunning = false;
 let forceKillTimer: NodeJS.Timeout | undefined;
 
 function killProcessTree(child: (typeof children)[number], signal: NodeJS.Signals): void {
@@ -146,13 +151,45 @@ function killProcessTree(child: (typeof children)[number], signal: NodeJS.Signal
   child.kill(signal);
 }
 
+/**
+ * Whether any process is still in the child's process group, including one not yet reaped.
+ *
+ * A command's own exit does not end its descendants. They share its process group, so the group
+ * outlives the command until the last of them is reaped.
+ */
+function processGroupExists(child: (typeof children)[number]): boolean {
+  if (!usesProcessGroups || !child.pid) return false;
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+async function waitForProcessGroup(child: (typeof children)[number]): Promise<void> {
+  const deadline = stoppedAt + forceKillAfterMs + processGroupGiveUpAfterMs;
+  while (processGroupExists(child)) {
+    if (Date.now() >= deadline) {
+      processGroupsLeftRunning = true;
+      console.error(`Process group ${child.pid} still has running processes after SIGKILL`);
+      return;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, processGroupPollMs);
+    });
+  }
+}
+
 function stop(signal: NodeJS.Signals): void {
   if (stopping) return;
   stopping = true;
+  stoppedAt = Date.now();
   for (const child of children) killProcessTree(child, signal);
   forceKillTimer = setTimeout(() => {
     for (const child of children) {
-      if (child.exitCode === null && child.signalCode === null) killProcessTree(child, "SIGKILL");
+      const running = child.exitCode === null && child.signalCode === null;
+      if (running || processGroupExists(child)) killProcessTree(child, "SIGKILL");
     }
   }, forceKillAfterMs);
   forceKillTimer.unref();
@@ -178,11 +215,13 @@ const exitCodes = await Promise.all(
         });
         child.once("exit", (code, signal) => {
           if (!stopping) stop("SIGTERM");
-          resolve(code ?? (signal ? 1 : 0));
+          // Report the stop only once the command's descendants have exited too.
+          void waitForProcessGroup(child).then(() => resolve(code ?? (signal ? 1 : 0)));
         });
       }),
   ),
 );
 
 if (forceKillTimer) clearTimeout(forceKillTimer);
-process.exitCode = shutdownRequested ? 0 : (exitCodes.find((code) => code !== 0) ?? 0);
+if (processGroupsLeftRunning) process.exitCode = 1;
+else process.exitCode = shutdownRequested ? 0 : (exitCodes.find((code) => code !== 0) ?? 0);
