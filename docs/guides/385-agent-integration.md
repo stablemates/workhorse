@@ -96,8 +96,8 @@ writes four things.
 1. **The schema install.** It runs from the deployment, not from the application.
 2. **The enqueue.** It runs inside the transaction that inserts `order-42`, so the order and the
    task commit together.
-3. **The handler.** It sends the confirmation email inside a checkpoint, a named step whose result
-   Workhorse records so a replay reuses it.
+3. **The handler.** It sends the confirmation email inside a checkpoint. A checkpoint is named
+   handler code whose result Workhorse records, so a replay reuses it.
 4. **The failure policy.** The agent chooses the retry budget and the time bounds when it enqueues.
 
 After the worker settles the task, the agent reads it back by its identifier. A settled task

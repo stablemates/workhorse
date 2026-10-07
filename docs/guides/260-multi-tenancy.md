@@ -91,9 +91,9 @@ Go applications set `ConcurrencyKey`, `Budget`, and `Tags` on `EnqueueOptions` a
 with `Queue.SyncBudgets`. Python applications set `concurrency_key`, `budget`, and `tags` and
 synchronize with `Queue.sync_budgets` or `AsyncQueue.sync_budgets`.
 
-A queue is a dispatch lane, not a tenant. Tenants share queues, and the key and budget keep them
-fair. A queue per tenant works for a handful of tenants, but it multiplies health rows, worker queue
-lists, and policy rows without adding any isolation.
+A queue groups work for dispatch, not tenants. Tenants share queues, and the key and budget keep
+them fair. A queue per tenant works for a handful of tenants, but it multiplies health rows, worker
+queue lists, and policy rows without adding any isolation.
 
 A recurring schedule names its tenant through the `concurrencyKey` in its task definition. Schedule
 definitions do not carry tags or a budget yet. A scheduled task therefore has fair share but no

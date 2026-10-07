@@ -307,4 +307,4 @@ Full method and results: [`benchmarks/2026-08-17-statistics-tiers-analysis.md`](
 - **Wait percentiles are approximate.** The logarithmic sketch has roughly one percent relative error and returns a bin midpoint rather than an exact retained sample.
 - **No worker or tag dimensions.** Their cardinality is controlled by deployment data, so including them would remove the aggregate row bound. Filtered views keep using bounded live queries.
 - **Window edges are minute-granular.** A 15-minute window is 15 whole minutes, not 15 minutes to the microsecond.
-- **Schema baseline.** Rolling statistics are part of the current pre-release baseline described in [`schema-lifecycle.md`](schema-lifecycle.md).
+- **Schema baseline.** Rolling statistics are part of the current public beta baseline described in [`schema-lifecycle.md`](schema-lifecycle.md).

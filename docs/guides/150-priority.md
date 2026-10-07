@@ -18,7 +18,7 @@ priority, and every worker slot is busy with earlier reminders.
 4. **At 4 s** another slot frees up. No urgent work is left, so the oldest ordinary reminder starts.
 
 PostgreSQL considers higher values first when a worker asks for ready work. Tasks with the same
-value keep their FIFO order. Priority changes which class leads without reordering peers.
+value keep their FIFO order. Priority changes which value leads without reordering peers.
 
 Priority only orders tasks that are ready. The earlier reminders that were already running in step
 1 keep running.

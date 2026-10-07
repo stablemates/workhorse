@@ -2,10 +2,10 @@
 
 <!-- scenario-names: archiver-1, archiver-2 -->
 
-Retention deletes events and attempts after a bounded window. That suits a database whose job is
+Retention deletes events and attempts after a bounded window. That suits a database whose purpose is
 dispatch. It does not suit an auditor who asks in March what happened to a task in January. Cold
 export answers that question without stretching retention. Workhorse copies each finished day of
-history to a store you own, and only then lets retention delete it.
+history to an export store you own, and only then lets retention delete it.
 
 Export is off by default. With it off, nothing in this guide runs and Workhorse remains
 PostgreSQL-only.
@@ -24,7 +24,7 @@ your tasks wrote on 14 September.
    day's rows and writes one compressed file of JSON lines. Beside it, it writes a small manifest.
    Then it marks the segment complete.
 5. **When the retention window ends.** Retention may now delete 14 September from PostgreSQL. The
-   archive still holds it.
+   export store still holds it.
 
 Each day of each history relation becomes one segment. A segment is one compressed file with one
 row per event or attempt, every column kept. Its manifest records the row count, the byte length,
@@ -86,7 +86,7 @@ holds it, the object name, the checksum, and any error. It also keeps one waterm
 The watermark advances only across contiguous complete days, so it can never skip a hole.
 
 That ledger is the interlock. While export is enabled, history retention does not delete a day at or
-above the watermark. An exporter that stops holds history rather than leaving the archive
+above the watermark. An exporter that stops holds history rather than leaving the export store
 incomplete.
 
 <details>
@@ -182,7 +182,7 @@ clocks forward an hour. Earlier releases handled that day like this:
 2. **The next claim.** The next segment started at 8 March 23:00 UTC, off midnight. Its UTC date was
    also 8 March, so it had the same object name.
 3. **The upload.** The exporter wrote the second segment under that name. It overwrote the object of
-   the first, and the archive lost most of 8 March.
+   the first, and the export store lost most of 8 March.
 
 A day that turns the clocks back made a segment an hour too long instead. Either way, later
 segments started off midnight.
@@ -217,13 +217,13 @@ The upgrade raises a warning per relation with the count and the range of each k
 
 The rewind reaches only history that PostgreSQL still holds. Retention may already have removed
 some of those days. The watermark then stops at the oldest day still present. A second warning
-names the days that cannot be written again. Treat their archive objects as suspect, and restore
+names the days that cannot be written again. Treat their exported objects as suspect, and restore
 them from another copy if you have one.
 
 Retention can also remove part of a day. The fast tier prunes outcomes one row at a time, so a day
-it already archived may keep only some of its rows. Exporting that day again would overwrite a
+it already exported may keep only some of its rows. Exporting that day again would overwrite a
 complete object with a smaller one. The rewind therefore also stops after the last completed day
-whose source now holds fewer rows than its archive object recorded. Those days keep their objects,
+whose source now holds fewer rows than its exported object recorded. Those days keep their objects,
 and the same warning names them.
 
 <details>
@@ -392,7 +392,7 @@ already deleted September from PostgreSQL, but `archiver-1` exported every day o
 2. **The auditor then asks about one task.** The operator loads 14 September into a scratch table
    and queries it with PostgreSQL.
 
-There is no transparent hot-and-cold query in this version. Read the archive with a tool that
+There is no transparent hot-and-cold query in this version. Read the export store with a tool that
 understands JSON lines, or load a day into a scratch schema for a PostgreSQL query. Never load it
 into the live `workhorse` schema. Retention would delete it again, and statistics would count it
 twice.

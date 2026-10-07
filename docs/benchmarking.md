@@ -402,7 +402,7 @@ Also record storage type, VM/container status, concurrent workloads, held transa
 
 ## Remaining evidence gaps
 
-V2 closes the original equivalent-semantics, confidence interval, comparative-worker, churn, telemetry, and lifecycle-scenario gaps. Schema v11 adds invariant-gated `idempotent-ingress`, `worker-concurrency`, and `cancellation-lifecycle` coverage after the historical artifacts below were recorded. A commercial build decision still needs recorded live artifacts for those newer scenarios, larger retained-history horizons, deliberately held old snapshots or replication horizons, production-shaped payloads, reference-system comparisons, multiple PostgreSQL versions, and repeated runs on production-class hardware.
+V2 closes the original equivalent-semantics, confidence interval, comparative-worker, churn, telemetry, and lifecycle-scenario gaps. Schema v11 adds invariant-gated `idempotent-ingress`, `worker-concurrency`, and `cancellation-lifecycle` coverage after the historical artifacts below were recorded. A commercial build decision still needs recorded live artifacts for those newer scenarios, larger retained-history horizons, deliberately held old snapshots or replication horizons, production-shaped payloads, reference-system comparisons, multiple PostgreSQL versions, and repeated runs on production-grade hardware.
 
 ## Troubleshooting
 

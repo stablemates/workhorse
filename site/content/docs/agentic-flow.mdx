@@ -147,7 +147,7 @@ the stored stage the same way before it advances it.
 
 - `update_progress_v1` accepts only the exact unexpired worker and fence.
 - Workhorse keeps one latest value per task. Each accepted change replaces it and increments a
-  monotonic revision. Keeping stages in order is the handler's job.
+  monotonic revision. Keeping stages in order is the handler's responsibility.
 - An identical value is a no-op.
 - A value holds at most 64 KiB of canonical JSONB text.
 - One fence may commit a changed value at most every 100 ms. A faster change raises
