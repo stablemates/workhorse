@@ -1,5 +1,6 @@
 import type { WorkhorseAdapter } from "./adapter.js";
 import type { Worker, WorkerOptions } from "./worker.js";
+import { observeWorkerFailure } from "./worker-failure.js";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 
@@ -291,6 +292,13 @@ export async function startWorkerProcess<TTransaction = unknown>(
     return shutdownPromise;
   };
 
+  // A worker reports a fatal error before it drains, so readiness and the deadline do not wait on a
+  // handler that ignores cancellation. The rejection of run() below covers any other failure path.
+  for (const worker of workers) {
+    observeWorkerFailure(worker, (error) => {
+      if (!shuttingDown) void beginShutdown(asError(error)).catch(() => undefined);
+    });
+  }
   runs.forEach((run, index) => {
     void run.then(
       () => {
@@ -301,7 +309,7 @@ export async function startWorkerProcess<TTransaction = unknown>(
         }
       },
       (error: unknown) => {
-        if (!shuttingDown) void beginShutdown(error).catch(() => undefined);
+        if (!shuttingDown) void beginShutdown(asError(error)).catch(() => undefined);
       },
     );
   });

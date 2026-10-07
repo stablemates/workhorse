@@ -168,7 +168,7 @@ startup or during a failure drain.
 5. Start every worker run loop.
 6. Report readiness only after the workers have started.
 
-A configuration or probe startup failure closes adapter-owned resources and rejects startup. An unexpected resolution or rejection from any worker is fatal to the dedicated process runtime: sibling workers are stopped, all runs settle, resources close, and the CLI exits unsuccessfully.
+A configuration or probe startup failure closes adapter-owned resources and rejects startup. An unexpected resolution or rejection from any worker is fatal to the dedicated process runtime: sibling workers are stopped, all runs settle, resources close, and the CLI exits unsuccessfully. A fatal error reaches the runtime before the failing worker drains, as [Fatal worker error](#fatal-worker-error) describes.
 
 ### First `SIGTERM` or `SIGINT`
 
@@ -185,6 +185,20 @@ A process signal does **not** abort active handler `AbortSignal`s. Handler cance
 
 There is one unavoidable transaction boundary: a claim query already in flight when shutdown begins may commit. That committed task is treated as active work and drained. The guarantee is therefore “no new claim requests after shutdown is observed,” not “no claim can commit after the signal timestamp.”
 
+### Fatal worker error
+
+Suppose PostgreSQL becomes unreachable while one handler waits on a call that ignores its
+`AbortSignal`. The next claim fails. The worker records the claim error, stops its claim, maintenance,
+and registration loops, and reports the error to the process runtime at once. The runtime marks
+readiness false, calls `stop()` on every sibling worker, and starts the failure deadline. Only then
+does the worker wait for its active handlers. The stalled handler cannot hold `/readyz` at 200 or
+keep the deadline from starting.
+
+The same order applies to every fatal error a worker loop observes: a claim error, a maintenance
+error, or a settlement write that fails. The worker reports the first one when it observes it, not
+when `run()` rejects after the drain. If the handlers settle before the deadline, the runtime closes
+its resources and exits with code 1. Otherwise the deadline exits with code 1.
+
 ### Deadline and second signal
 
 The default shutdown deadline is 25 seconds and may be configured from 1 millisecond through 1 hour. Set it below the deployment platform's termination grace period so Node has time to hard-exit before the platform sends `SIGKILL`.
@@ -192,7 +206,7 @@ The default shutdown deadline is 25 seconds and may be configured from 1 millise
 - A second `SIGINT` exits immediately with code 130.
 - A second `SIGTERM` exits immediately with code 143.
 - A missed graceful-shutdown deadline exits immediately with code 1.
-- A fatal worker-loop failure uses the same deadline while sibling workers drain, then exits with code 1 if they do not settle.
+- A fatal worker-loop failure starts the same deadline when the worker first observes it. The deadline exits with code 1 if the failing worker and its siblings do not settle in time.
 
 A hard exit does not invent a task failure or retry transition. Active leases remain durable PostgreSQL state. Another worker recovers them after lease expiry using the existing fenced recovery protocol. External effects remain at least once, so handlers must retain their normal idempotency strategy.
 
@@ -202,10 +216,13 @@ The deadline exists because JavaScript cannot safely preempt an arbitrary promis
 
 When `probes` is configured, Workhorse starts a small status-only HTTP server:
 
-| Endpoint      | Running | Draining |
-| ------------- | ------: | -------: |
-| `GET /livez`  |     200 |      200 |
-| `GET /readyz` |     200 |      503 |
+| Endpoint      | Running | Draining or failing |
+| ------------- | ------: | ------------------: |
+| `GET /livez`  |     200 |                 200 |
+| `GET /readyz` |     200 |                 503 |
+
+Liveness stays 200 during a failure drain. The failure deadline, not the liveness probe, ends a
+process whose handlers do not settle.
 
 Both paths are configurable. `HEAD` is supported. Other paths and methods return 404. The default hostname is `127.0.0.1`; bind `0.0.0.0` only when the orchestrator must reach the pod or container network address.
 
