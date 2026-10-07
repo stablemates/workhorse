@@ -47,6 +47,17 @@ function fakeServices() {
   return { services, heartbeat };
 }
 
+// An expire_owned_v1 answer the test delivers when it chooses.
+function deferredExpiry() {
+  let resolve!: (status: ExpireOwnedStatus) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<ExpireOwnedStatus>((settle, fail) => {
+    resolve = settle;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
 function thrownBy(operation: () => unknown): unknown {
   try {
     operation();
@@ -209,6 +220,102 @@ describe("TaskAttempt", () => {
 
     expect(services.expireOwned).toHaveBeenCalledTimes(2);
     expect(attempt.arbiter.is("deadline_exceeded")).toBe(true);
+  });
+
+  it("reports the confirmed deadline when a heartbeat answers stale before the expiry answer", async () => {
+    // expire_owned_v1 commits the deadline, a heartbeat evaluated after that commit finds no
+    // active row, and its stale answer arrives before expire_owned_v1's own answer.
+    vi.useFakeTimers({ now: 0 });
+    const { attempt, services, heartbeat } = startAttempt(
+      claimedTask({ deadlineAt: new Date(1_000) }),
+    );
+    const expiry = deferredExpiry();
+    vi.mocked(services.expireOwned).mockReturnValue(expiry.promise);
+
+    await vi.advanceTimersByTimeAsync(1_001);
+    expect(services.expireOwned).toHaveBeenCalledTimes(1);
+    heartbeat.status!("stale", performance.now());
+    expect(attempt.signal.aborted).toBe(false);
+    expect(heartbeat.removed).toBe(1);
+
+    expiry.resolve("deadline_exceeded");
+    await attempt.settleExpiration();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(attempt.signal.reason).toBeInstanceOf(DeadlineExceededError);
+    expect(attempt.arbiter.is("deadline_exceeded")).toBe(true);
+  });
+
+  it("reports the confirmed attempt timeout when a heartbeat answers stale before the expiry answer", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const { attempt, services, heartbeat } = startAttempt(
+      claimedTask({ attemptTimeoutAt: new Date(1_000) }),
+    );
+    const expiry = deferredExpiry();
+    vi.mocked(services.expireOwned).mockReturnValue(expiry.promise);
+
+    await vi.advanceTimersByTimeAsync(1_001);
+    heartbeat.status!("stale", performance.now());
+    expiry.resolve("timeout_exceeded");
+    await attempt.settleExpiration();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(attempt.signal.reason).toBeInstanceOf(ExecutionTimeoutError);
+    expect(attempt.arbiter.is("attempt_timeout")).toBe(true);
+  });
+
+  it("reports a lost lease when the expiry in flight also finds the task gone", async () => {
+    // Another worker recovered the task. Both the heartbeat and expire_owned_v1 answer stale.
+    vi.useFakeTimers({ now: 0 });
+    const { attempt, services, heartbeat } = startAttempt(
+      claimedTask({ deadlineAt: new Date(1_000) }),
+    );
+    const expiry = deferredExpiry();
+    vi.mocked(services.expireOwned).mockReturnValue(expiry.promise);
+
+    await vi.advanceTimersByTimeAsync(1_001);
+    heartbeat.status!("stale", performance.now());
+    expiry.resolve("stale");
+    await attempt.settleExpiration();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(() => attempt.requireLease()).toThrow("Task lease was lost");
+    expect(attempt.arbiter.is("lease_expired")).toBe(true);
+  });
+
+  it("reports a lost lease when the expiry in flight fails after a heartbeat answered stale", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const { attempt, services, heartbeat } = startAttempt(
+      claimedTask({ deadlineAt: new Date(1_000) }),
+    );
+    const expiry = deferredExpiry();
+    vi.mocked(services.expireOwned).mockReturnValue(expiry.promise);
+
+    await vi.advanceTimersByTimeAsync(1_001);
+    heartbeat.status!("stale", performance.now());
+    expiry.reject(new Error("connection refused"));
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(services.expireOwned).toHaveBeenCalledTimes(1);
+    expect(() => attempt.requireLease()).toThrow("Task lease was lost");
+    expect(attempt.arbiter.is("lease_expired")).toBe(true);
+  });
+
+  it("ends the lease window when the expiry in flight never answers after a stale heartbeat", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const { attempt, services, heartbeat } = startAttempt(
+      claimedTask({ deadlineAt: new Date(1_000) }),
+    );
+    vi.mocked(services.expireOwned).mockReturnValue(deferredExpiry().promise);
+
+    await vi.advanceTimersByTimeAsync(1_001);
+    heartbeat.status!("stale", performance.now());
+    await vi.advanceTimersByTimeAsync(28_998);
+    expect(attempt.signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(attempt.arbiter.is("lease_expired")).toBe(true);
+    expect(() => attempt.requireLease()).toThrow("No heartbeat was accepted within the task lease");
   });
 
   it("keeps the handler running when PostgreSQL cannot be asked, and asks again", async () => {

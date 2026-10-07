@@ -1078,7 +1078,8 @@ The SDKs differ in what a refusal does once the handler has returned.
 
 - TypeScript `TaskAttempt` has no handler-returned state. A `stale` renewal or a lapsed watchdog
   submits `lease_expired`. A due deadline or attempt timeout calls `expire_owned_v1`, as
-  [Local timers](#local-timers) describes.
+  [Local timers](#local-timers) describes. A `stale` renewal that arrives while that request is in
+  flight waits for its answer.
 - Go `superviseOwnership` and Python `_run_supervised_attempt` mark when the handler returned. After
   that, a refused renewal, a lapsed watchdog, or a due expiration only stops renewing. The fenced
   completion or failure then meets the same verdict in PostgreSQL:
@@ -1244,6 +1245,15 @@ The TypeScript `TaskAttempt` keeps the worker's wall clock out of that timer:
 A `deadline_exceeded` or `timeout_exceeded` heartbeat answer is already the database's verdict. It
 aborts the handler at once and calls `expire_owned_v1` in the background. The worker keeps asking
 until PostgreSQL closes the attempt, even if an earlier timer request got `not_due`.
+
+A `stale` heartbeat answer can come from the attempt's own expiry. `expire_owned_v1` commits the
+expiry, and a heartbeat evaluated after that commit finds no active row. Its answer can arrive before
+the expiry's own answer. While an `expire_owned_v1` request is in flight, a `stale` heartbeat answer
+therefore only stops the heartbeat. The expiry's answer chooses the abort reason, as step 3 lists. If
+that request fails, the attempt aborts with the lease-loss error and asks no more. The lease watchdog
+keeps running meanwhile, so an answer that never arrives still ends the attempt one lease after the
+last accepted renewal. Without an expiry request in flight, a `stale` answer aborts with the
+lease-loss error at once.
 
 JavaScript and external effects are not forcibly preempted. The completed timeout transition still
 fences every late completion, failure, heartbeat, checkpoint, or wait write. Heartbeat and bounded
