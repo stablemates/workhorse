@@ -55,10 +55,16 @@ const MAX_CATCHUP_LIMIT: i32 = 10_000;
 const PROMOTE_LIMIT: i32 = 100;
 const RECOVER_LIMIT: i32 = 100;
 /// How long a stopped handler may unwind after its cancellation fires at the end of grace.
-const UNWIND_WINDOW: Duration = Duration::from_millis(250);
+///
+/// Public only so integration tests derive their shutdown bounds from it; not part of the API.
+#[doc(hidden)]
+pub const UNWIND_WINDOW: Duration = Duration::from_millis(250);
 /// How long shutdown waits, past its deadline, for the registry loop and the listener to stop and
 /// for the worker to deregister.
-const CLEANUP_WINDOW: Duration = Duration::from_secs(1);
+///
+/// Public only so integration tests derive their shutdown bounds from it; not part of the API.
+#[doc(hidden)]
+pub const CLEANUP_WINDOW: Duration = Duration::from_secs(1);
 /// The heartbeat connection plus one claim and one settlement.
 const MIN_DEDICATED_POOL: usize = 3;
 /// How long a worker claims a queue that rejected a fast claim through `claim_many_v1` before
