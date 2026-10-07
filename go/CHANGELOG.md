@@ -12,7 +12,7 @@ adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses 
 ## Unreleased
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **57**, and the SDK compatibility floor is schema version **54**.
+The final schema version is **58**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.
@@ -46,6 +46,8 @@ attempt. The worker hands its task to `release_owned_v1` within the 250 ms unwin
 the worker left the task unsettled, and lease recovery charged the attempt as `lease_expired`, so a
 task on its last attempt failed because its worker stopped. When the release fails, the worker logs
 it and lease recovery settles the task as before (SM-1164).
+
+Migration 0059 (`0059-close-sql-integrity-gaps-in-rate-refill-dependency-edges-and-mixed-batches.sql`) closes five SQL integrity gaps (SM-1165). A rate synchronization refills each changed bucket at the old rate up to one clock reading, and the new rate applies from that reading. The new `rate_limit_policy_per_key_complete_check` and `budget_rate_complete_check` constraints reject a rate setting with one or two null fields. The migration first clears such a setting, and deletes a budget that the clearing leaves without a limit. An update can no longer change a dependency edge's endpoints or outcome policies. A batch with a debounce or throttle member locks every member's prerequisites before its first member runs. `run_task_now_v1` reports `not_scheduled` for a blocked task instead of raising an error.
 
 ## 0.6.1 — 2026-10-02
 

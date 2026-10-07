@@ -12,7 +12,7 @@ adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses 
 ## Unreleased
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **57**, and the SDK compatibility floor is schema version **54**.
+The final schema version is **58**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.
@@ -47,6 +47,8 @@ maintenance, execution, or settlement failure before it drains. The runner then 
 `shutdown_timeout_ms` deadline, and a missed deadline calls `force_exit(1)` (SM-1175).
 
 Migration 0058 (`0058-let-terminal-cleanup-keep-pace-and-share-its-budget-across-tiers.sql`) changes `prune_terminal_tasks_v1`, `prune_terminal_storage_v1`, and `queue_health_v1`, and adds two `maintenance_state` columns. Terminal cleanup repeats its batch while each one fills, for up to one second per pass, and a pass that still ends with a full batch makes its follow-up due five seconds later instead of after the five-minute interval. Full-tier and fast-tier tasks share every batch, so neither tier starves the other. The health document reports `terminal_cleanup_backlog_since` while cleanup is behind (SM-1160).
+
+Migration 0059 (`0059-close-sql-integrity-gaps-in-rate-refill-dependency-edges-and-mixed-batches.sql`) closes five SQL integrity gaps (SM-1165). A rate synchronization refills each changed bucket at the old rate up to one clock reading, and the new rate applies from that reading. The new `rate_limit_policy_per_key_complete_check` and `budget_rate_complete_check` constraints reject a rate setting with one or two null fields. The migration first clears such a setting, and deletes a budget that the clearing leaves without a limit. An update can no longer change a dependency edge's endpoints or outcome policies. A batch with a debounce or throttle member locks every member's prerequisites before its first member runs. `run_task_now_v1` reports `not_scheduled` for a blocked task instead of raising an error.
 
 ## 0.6.1 — 2026-10-02
 

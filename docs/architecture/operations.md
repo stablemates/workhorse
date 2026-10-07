@@ -503,10 +503,10 @@ Launching without an interactive stdin and stdout is refused with exit 1.
 
 ### Schema and PostgreSQL
 
-- The canonical artifact installs version 57, the whole current schema.
+- The canonical artifact installs version 58, the whole current schema.
 - Version 6 is the migration baseline and is frozen as `sql/releases/0006.sql`.
 - A schema change is an upgrade rather than a reinstall: `migrateSchema` applies the ordered steps
-  under `sql/migrations/`, which run from 6 to 57.
+  under `sql/migrations/`, which run from 6 to 58.
 - A database below 6 is not carried forward
   ([ADR 0073](../decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)).
 - Only plain PostgreSQL 15+ is required. No extension beyond the default `plpgsql` is installed.

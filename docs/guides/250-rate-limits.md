@@ -170,7 +170,8 @@ namespace.
 1. **First deploy.** The service synchronizes both policies. Workhorse creates them.
 2. **Second deploy.** The provider raised its limit, and the service stopped sending webhooks. The
    service synchronizes only `provider-api`, with the new rate. Workhorse updates that policy and
-   removes the `webhooks` policy and its buckets.
+   removes the `webhooks` policy and its buckets. Time before this deploy earns tokens at the old
+   rate, and the new rate applies from the deploy on.
 3. **Third deploy.** Webhooks come back. Workhorse creates the `webhooks` policy again, and it
    starts with a full burst.
 
@@ -205,6 +206,9 @@ burst.
 - The call rejects a queue that another namespace owns.
 - Pruning is on by default. It removes the namespace's policies that the call omits.
 - The call rebalances the admission shards of every queue it changes.
+- For each queue whose rate changed, the call reads `clock_timestamp()` once. It refills the
+  queue's shards and key buckets to that reading at the old rate. The new rate applies from that
+  reading.
 - Deleting a policy cascades to its `rate_limit_bucket` rows.
 - A listing has no implicit result cap. An omitted or empty list of names reads every policy.
 - A fast-tier queue rejects a rate-limit policy with `P1007`.
@@ -279,6 +283,8 @@ it. The same facts appear in `Queue.health()`.
   `rate_limit_policy`. At least one limit is required.
 - `Queue.syncBudgets(namespace, definitions, { prune })` wraps `sync_budgets_v1`. A definition
   contains only `name`, optional `maxActive`, and optional `rate`.
+- A changed budget rate refills `budget_bucket` to one `clock_timestamp()` reading at the old rate.
+  The new rate applies from that reading.
 - `budget_name` is 1 to 256 UTF-8 bytes.
 - `budget_bucket` holds one row per budget with the refill arithmetic of `rate_limit_bucket_v1`.
   Deleting a budget cascades to its bucket.
@@ -288,7 +294,7 @@ it. The same facts appear in `Queue.health()`.
   `availableTokens`, null without a rate, and `blockedReady`, zero unless the budget is saturated.
 - `QueueHealth.budgetPolicies` carries the same rows.
 
-More detail: [Data model: Counting and charging](../architecture/data-model.md#counting-and-charging), [Data model: Naming a budget on a task](../architecture/data-model.md#naming-a-budget-on-a-task), and [Data model: Status and telemetry](../architecture/data-model.md#status-and-telemetry-1).
+More detail: [Data model: Synchronization](../architecture/data-model.md#synchronization-2), [Data model: Counting and charging](../architecture/data-model.md#counting-and-charging), [Data model: Naming a budget on a task](../architecture/data-model.md#naming-a-budget-on-a-task), and [Data model: Status and telemetry](../architecture/data-model.md#status-and-telemetry-1).
 
 </details>
 
