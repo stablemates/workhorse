@@ -1652,6 +1652,8 @@
       "project_task_query_v1",
       "prune_default_history_v1",
       "prune_enqueue_idempotency_v1",
+      "prune_fast_terminal_tasks_internal_v1",
+      "prune_full_terminal_tasks_internal_v1",
       "prune_released_dependencies_v1",
       "prune_schedule_occurrences_v1",
       "prune_terminal_tasks_v1",

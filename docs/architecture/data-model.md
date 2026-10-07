@@ -2995,7 +2995,15 @@ Maintenance state stores `last_started_at` and `last_completed_at` for `tick`, `
 
 `maintenance_state.terminal_prune_dependency_starved` records whether the last
 `prune_terminal_tasks_v1` call deleted nothing from its exact locked candidate window while that
-window contained a prerequisite protected by a dependency edge.
+window contained a prerequisite protected by a dependency edge. A call that gave the full tier no
+share leaves the flag unchanged.
+
+Two more columns belong to `terminal_storage` alone:
+
+- `terminal_prune_fast_first` names the tier that goes first in the next `prune_terminal_tasks_v1`
+  call. Each call flips it.
+- `terminal_cleanup_backlog_since` is set while terminal storage passes end with a full batch. It
+  holds the start of the first such pass, and a successful pass without a backlog clears it.
 
 Workers poll all four database-scheduled routines — the statistics rollup included — on their SDK's
 maintenance interval. PostgreSQL performs the global due check and advisory-lock coordination.

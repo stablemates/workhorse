@@ -353,7 +353,7 @@ no-ops. None shares the promotion advisory lock. Each routine has its own defaul
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------- |
 | Statistics rollup        | Every minute.                                                                                                       |
 | Partition preparation    | Every six hours.                                                                                                    |
-| Terminal storage cleanup | Every five minutes.                                                                                                 |
+| Terminal storage cleanup | Every five minutes. Five seconds after a pass that ended with a full batch.                                         |
 | History retention        | Once per local date at or after `maintenance_policy.history_retention_local_time` in `maintenance_policy.timezone`. |
 
 Partition retirement abandons a DDL lock attempt after 250 ms rather than waiting indefinitely
@@ -369,6 +369,20 @@ Failure handling:
 
 Terminal storage reports `enqueue_idempotency`, `released_dependencies`, then `terminal_tasks`.
 Released-edge compaction runs first so the same pass can prune a newly unpinned prerequisite.
+
+Each phase deletes at most `retention_policy.terminal_task_prune_limit` rows per batch. The
+`terminal_tasks` phase repeats `prune_terminal_tasks_v1` while each batch fills, until the phase has
+run for one second. Its `rows_affected` sums every batch. A phase error rolls back all of its batches.
+
+A pass ends with a backlog when any phase reached the limit in its last batch. The pass then sets
+`maintenance_state.terminal_cleanup_backlog_since`, or keeps its earlier value. While that column is
+set, the next pass is due five seconds after the last completion, or after
+`terminal_cleanup_interval_ms` when that is shorter. A successful pass without a backlog clears the
+column and restores the configured interval. A failed pass clears nothing.
+
+With the default limit of 1,000 and one worker offering the routine every 60 seconds, a backlog
+therefore loses at least 1,000 tasks a minute. A pass usually deletes more, because its batches
+repeat for up to one second.
 
 #### Terminal-task pruning
 
@@ -386,6 +400,14 @@ Terminal-task pruning selects a bounded candidate window of identities that meet
    `SKIP LOCKED`.
 2. Drops candidates that a retained enqueue key, a dependency edge, or an unprunable child pins.
 3. Deletes at most `p_limit`. The bounded delete cascades outcome, checkpoints, and waits.
+
+The full and fast tiers share `p_limit`. The tier that goes first gets half of it, rounded up. The
+other tier gets the rest of `p_limit`. When the first tier used its whole share and the batch still
+has room, the first tier runs again for the remainder. A share that one tier cannot use therefore
+goes to the other tier. `maintenance_state.terminal_prune_fast_first` alternates the first tier on
+every call, so at a limit of 1 the tiers take turns. A backlog in either tier cannot starve the
+other. `prune_full_terminal_tasks_internal_v1` and `prune_fast_terminal_tasks_internal_v1` run one
+tier's share each.
 
 Since migration 0049 the window itself excludes a redrive source, through
 `task_redrive_source_time_idx`. A source waits for its younger target. A window of sources would
@@ -1360,6 +1382,10 @@ deadline, timeout, promotion, concurrency, rate-limit, rollup, and retention pre
 
 - `historyPartitionDays` reports whether each required daily history partition exists.
 - `capturedAt` is PostgreSQL's transaction timestamp for the statement.
+- `terminal_cleanup_backlog_since` copies `maintenance_state.terminal_cleanup_backlog_since`. It is
+  the start of the pass that first ended with a full batch, and null while terminal cleanup keeps
+  pace. Go, Python, Rust, and Ruby return the document as a map, so the key reaches callers.
+  TypeScript `Queue.health()` maps named fields and does not carry it yet.
 
 #### Snapshot cost
 
@@ -1527,6 +1553,11 @@ makes its rows count as late too. Health measures the oldest eligible row only:
 
 History lag is based only on fully droppable partitions or expired default rows. It excludes the
 intentionally retained partial boundary day.
+
+Row lag grows only once the oldest eligible row has waited longer than its budget.
+`terminal_cleanup_backlog_since` shows a terminal cleanup backlog earlier. A value that stays set
+across several passes means completions outrun cleanup. Each recorded `terminal_storage` run in
+`maintenance_run` gives the rows that pass deleted, so successive runs give the deletion rate.
 
 #### Schedule run retention lag
 
