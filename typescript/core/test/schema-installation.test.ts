@@ -560,6 +560,10 @@ describe("schema installation", () => {
         version: 62,
         description: "raise a health reason for a terminal cleanup backlog",
       },
+      {
+        version: 63,
+        description: "keep JIT out of the statistics aggregate",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
