@@ -26,6 +26,14 @@ import (
 
 type pollCadenceQueryContextKey struct{}
 
+// pollCadenceClaim is one claim_many_v1 call: its start, its return to the worker, and whether
+// it found a task.
+type pollCadenceClaim struct {
+	started  time.Time
+	returned time.Time
+	found    bool
+}
+
 // pollCadenceQueryTracer holds the worker at the end of each empty claim until the test
 // releases it. Counting empty polls is not enough: an uncounted poll between the count and
 // the enqueue advances the backoff step, and the delay is then measured against the wrong one.
@@ -33,6 +41,8 @@ type pollCadenceQueryTracer struct {
 	holding  atomic.Bool
 	reached  chan struct{}
 	released chan struct{}
+	mu       sync.Mutex
+	claims   []pollCadenceClaim
 }
 
 func (tracer *pollCadenceQueryTracer) TraceQueryStart(
@@ -43,19 +53,26 @@ func (tracer *pollCadenceQueryTracer) TraceQueryStart(
 	if !strings.Contains(data.SQL, "claim_many_v1") {
 		return ctx
 	}
-	return context.WithValue(ctx, pollCadenceQueryContextKey{}, true)
+	return context.WithValue(ctx, pollCadenceQueryContextKey{}, time.Now())
 }
 
 func (tracer *pollCadenceQueryTracer) TraceQueryEnd(
 	ctx context.Context,
 	_ *pgx.Conn,
-	_ pgx.TraceQueryEndData,
+	data pgx.TraceQueryEndData,
 ) {
-	if ctx.Value(pollCadenceQueryContextKey{}) != true || !tracer.holding.Load() {
+	started, ok := ctx.Value(pollCadenceQueryContextKey{}).(time.Time)
+	if !ok {
 		return
 	}
-	tracer.reached <- struct{}{}
-	<-tracer.released
+	found := data.CommandTag.RowsAffected() > 0
+	if !found && tracer.holding.Load() {
+		tracer.reached <- struct{}{}
+		<-tracer.released
+	}
+	tracer.mu.Lock()
+	tracer.claims = append(tracer.claims, pollCadenceClaim{started: started, returned: time.Now(), found: found})
+	tracer.mu.Unlock()
 }
 
 func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
@@ -215,19 +232,20 @@ func executeWorkerPollCadenceFixture(t *testing.T, fixture workerRuntimeFixture)
 	if err != nil {
 		t.Fatal(err)
 	}
-	handled := make(chan time.Time, 1)
+	handled := make(chan struct{}, 1)
 	worker.Handle(fixture.TaskType, func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
-		handled <- time.Now()
+		handled <- struct{}{}
 		return nil, nil
 	})
 	runContext, stop := context.WithCancel(ctx)
 	runResult := make(chan error, 1)
 	go func() { runResult <- worker.Run(runContext) }()
 	// The worker is held at the end of every empty poll, so the enqueue happens against a
-	// known backoff step and no further poll can advance it. The task is committed before the
-	// last poll is released, and the delay is measured from that commit.
+	// known backoff step and no further poll can advance it. The delay runs from the moment the
+	// last empty claim returns to the worker to the start of the next claim. That span is the
+	// worker's own cadence. It leaves out the claim that finds the task and the dispatch to the
+	// handler, so a slow runner cannot charge them to the backoff.
 	pollTimeout := time.Duration(fixture.ExpectedMaximumDelayMS+1000) * time.Millisecond
-	var enqueuedAt time.Time
 	for poll := 1; poll <= fixture.EmptyPollsBeforeEnqueue; poll++ {
 		select {
 		case <-tracer.reached:
@@ -243,18 +261,12 @@ func executeWorkerPollCadenceFixture(t *testing.T, fixture workerRuntimeFixture)
 				stop()
 				t.Fatal(err)
 			}
-			enqueuedAt = time.Now()
 			tracer.holding.Store(false)
 		}
 		tracer.released <- struct{}{}
 	}
 	select {
-	case handledAt := <-handled:
-		delay := handledAt.Sub(enqueuedAt)
-		if delay < time.Duration(fixture.ExpectedMinimumDelayMS)*time.Millisecond ||
-			delay > time.Duration(fixture.ExpectedMaximumDelayMS)*time.Millisecond {
-			t.Fatalf("poll delay %s fell outside fixture bounds", delay)
-		}
+	case <-handled:
 	case <-time.After(time.Duration(fixture.ExpectedMaximumDelayMS+1000) * time.Millisecond):
 		stop()
 		t.Fatal("worker did not claim after the polling backoff")
@@ -262,6 +274,29 @@ func executeWorkerPollCadenceFixture(t *testing.T, fixture workerRuntimeFixture)
 	stop()
 	if err := <-runResult; err != nil {
 		t.Fatal(err)
+	}
+	tracer.mu.Lock()
+	claims := slices.Clone(tracer.claims)
+	tracer.mu.Unlock()
+	slices.SortFunc(claims, func(a, b pollCadenceClaim) int { return a.started.Compare(b.started) })
+	found := slices.IndexFunc(claims, func(claim pollCadenceClaim) bool { return claim.found })
+	if found < 1 {
+		t.Fatal("no claim_many_v1 call after an empty poll returned the enqueued task")
+	}
+	empty := 0
+	for _, claim := range claims[:found] {
+		if !claim.found {
+			empty++
+		}
+	}
+	if empty != fixture.EmptyPollsBeforeEnqueue {
+		t.Fatalf("the worker claimed the task after %d empty polls, want %d", empty, fixture.EmptyPollsBeforeEnqueue)
+	}
+	delay := claims[found].started.Sub(claims[found-1].returned)
+	if delay < time.Duration(fixture.ExpectedMinimumDelayMS)*time.Millisecond ||
+		delay > time.Duration(fixture.ExpectedMaximumDelayMS)*time.Millisecond {
+		t.Fatalf("the claim after %d empty polls waited %s, want %d ms to %d ms",
+			fixture.EmptyPollsBeforeEnqueue, delay, fixture.ExpectedMinimumDelayMS, fixture.ExpectedMaximumDelayMS)
 	}
 }
 

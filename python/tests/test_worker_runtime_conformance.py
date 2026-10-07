@@ -589,6 +589,8 @@ class HeldPollConnection:
         self.holding = True
         self.reached: SimpleQueue[None] = SimpleQueue()
         self.released: SimpleQueue[None] = SimpleQueue()
+        # Each claim_many_v1 call's start, its return to the worker, and whether it found a task.
+        self.claims: list[tuple[float, float, bool]] = []
 
     @property
     def autocommit(self) -> bool:
@@ -605,7 +607,7 @@ class HeldPollCursor:
     def __init__(self, gate: HeldPollConnection, cursor: Any) -> None:
         self._gate = gate
         self._cursor = cursor
-        self._holds = False
+        self._claim_started: float | None = None
 
     def __enter__(self) -> HeldPollCursor:
         self._cursor.__enter__()
@@ -618,24 +620,31 @@ class HeldPollCursor:
         return getattr(self._cursor, name)
 
     def execute(self, sql: str, parameters: Any = ()) -> object:
-        self._holds = self._gate.holding and "claim_many_v1" in sql
+        self._claim_started = monotonic() if "claim_many_v1" in sql else None
         return self._cursor.execute(sql, parameters)
 
     def fetchall(self) -> Any:
         rows = self._cursor.fetchall()
-        if self._holds:
-            self._holds = False
-            self._gate.reached.put(None)
-            self._gate.released.get(timeout=5)
+        started, self._claim_started = self._claim_started, None
+        if started is not None:
+            if not rows and self._gate.holding:
+                self._gate.reached.put(None)
+                self._gate.released.get(timeout=5)
+            self._gate.claims.append((started, monotonic(), bool(rows)))
         return rows
 
 
 def execute_poll_cadence_fixture(
     connection: psycopg.Connection[Any], fixture: Mapping[str, Any], database_url: str
 ) -> None:
+    """Measures the worker's backoff after the last empty claim.
+
+    The delay runs from the moment the last empty claim returns to the worker to the start of the
+    next claim. That span is the worker's own cadence. It leaves out the claim that finds the task
+    and the dispatch to the handler, so a slow runner cannot charge them to the backoff.
+    """
     queue_name = runtime_queue(fixture)
     handled = Event()
-    handled_at = 0.0
     with psycopg.connect(database_url, autocommit=True) as worker_connection:
         gate = HeldPollConnection(worker_connection)
         worker = Worker(
@@ -646,17 +655,13 @@ def execute_poll_cadence_fixture(
             registry_interval_ms=0,
             _executor=SyncExecutor(gate),
         )
-
-        def handle(_payload: object, _context: HandlerContext) -> None:
-            nonlocal handled_at
-            handled_at = monotonic()
-            handled.set()
-
-        worker.handle(fixture["taskType"], handle)
+        # A listening worker waits the poll interval without doubling, because a notification
+        # wakes it for new work. The fixture pins the polling backoff, so the worker polls only.
+        worker._notification_connection_factory = None  # type: ignore[assignment]
+        worker.handle(fixture["taskType"], lambda _payload, _context: handled.set())
         running = Thread(target=worker.run)
         running.start()
         try:
-            enqueued_at = 0.0
             for poll in range(1, fixture["emptyPollsBeforeEnqueue"] + 1):
                 try:
                     gate.reached.get(timeout=fixture["expectedMaximumDelayMs"] / 1_000 + 1)
@@ -671,20 +676,28 @@ def execute_poll_cadence_fixture(
                     Queue(connection).enqueue(
                         fixture["taskType"], {}, EnqueueOptions(queue=queue_name)
                     )
-                    enqueued_at = monotonic()
-                    sleep(fixture["pollMs"] / 1_000)
                     gate.holding = False
                 gate.release()
             assert handled.wait(fixture["expectedMaximumDelayMs"] / 1_000 + 1)
-            delay_ms = (handled_at - enqueued_at) * 1_000
-            assert delay_ms >= fixture["expectedMinimumDelayMs"]
-            assert delay_ms <= fixture["expectedMaximumDelayMs"]
         finally:
             gate.holding = False
             gate.release()
             worker.stop()
             running.join(timeout=2)
             assert not running.is_alive()
+    claims = sorted(gate.claims)
+    found = next((index for index, claim in enumerate(claims) if claim[2]), None)
+    assert found, "no claim_many_v1 call after an empty poll returned the enqueued task"
+    empty = sum(1 for claim in claims[:found] if not claim[2])
+    assert empty == fixture["emptyPollsBeforeEnqueue"], (
+        f"the worker claimed the task after {empty} empty polls, "
+        f"want {fixture['emptyPollsBeforeEnqueue']}"
+    )
+    delay_ms = (claims[found][0] - claims[found - 1][1]) * 1_000
+    assert fixture["expectedMinimumDelayMs"] <= delay_ms <= fixture["expectedMaximumDelayMs"], (
+        f"the claim after {empty} empty polls waited {delay_ms:.0f} ms, want "
+        f"{fixture['expectedMinimumDelayMs']} to {fixture['expectedMaximumDelayMs']} ms"
+    )
 
 
 def execute_graceful_drain_fixture(
