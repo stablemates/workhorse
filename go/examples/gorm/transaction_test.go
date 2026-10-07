@@ -472,8 +472,8 @@ func scratchDatabase(t *testing.T, ctx context.Context, sourceURL string) string
 			return
 		}
 		defer func() { _ = admin.Close(cleanup) }()
-		if _, err := admin.Exec(cleanup, "DROP DATABASE "+quotedName); err != nil {
-			t.Errorf("drop GORM scratch database: %v", err)
+		if err := dropScratchDatabase(cleanup, admin, databaseName); err != nil {
+			t.Errorf("drop GORM scratch database: %v; run pnpm db:sweep", err)
 		}
 	})
 	databaseURL := *parsed
