@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import signal
 from collections.abc import Callable
-from threading import Thread, Timer
+from threading import Lock, Thread, Timer
 from types import FrameType
 from typing import NoReturn
 
@@ -19,7 +19,7 @@ def run_worker_process(
     shutdown_timeout_ms: int = _DEFAULT_SHUTDOWN_TIMEOUT_MS,
     force_exit: Callable[[int], NoReturn] = os._exit,
 ) -> None:
-    """Run one worker with bounded SIGINT and SIGTERM drain handling."""
+    """Run one worker with a bounded drain after SIGINT, SIGTERM, or a fatal worker error."""
     if (
         isinstance(shutdown_timeout_ms, bool)
         or not isinstance(shutdown_timeout_ms, int)
@@ -29,6 +29,8 @@ def run_worker_process(
 
     first_signal: int | None = None
     deadline: Timer | None = None
+    deadline_lock = Lock()
+    finished = False
     requested_stop_version = worker._stop_version_snapshot()
     signal_reader, signal_writer = os.pipe()
     os.set_blocking(signal_writer, False)
@@ -42,16 +44,24 @@ def run_worker_process(
         except BlockingIOError:
             pass
 
+    def start_deadline() -> None:
+        # A signal and a fatal worker error share one deadline. Whichever comes first starts it.
+        nonlocal deadline
+        with deadline_lock:
+            if finished or deadline is not None:
+                return
+            deadline = Timer(shutdown_timeout_ms / 1000, force_exit, args=(1,))
+            deadline.daemon = True
+            deadline.start()
+
     def relay_signals() -> None:
-        nonlocal first_signal, deadline
+        nonlocal first_signal
         while payload := os.read(signal_reader, 1):
             signum = payload[0]
             if first_signal is not None:
                 force_exit(128 + signum)
             first_signal = signum
-            deadline = Timer(shutdown_timeout_ms / 1000, force_exit, args=(1,))
-            deadline.daemon = True
-            deadline.start()
+            start_deadline()
             Thread(target=worker.stop, daemon=True).start()
 
     handled_signals = (signal.SIGINT, signal.SIGTERM)
@@ -63,15 +73,19 @@ def run_worker_process(
         for signum in handled_signals:
             signal.signal(signum, handle_signal)
             installed_signals.append(signum)
-        worker._run_continuously(requested_stop_version)
+        # The worker reports its first fatal error before it drains, so a handler that ignores
+        # cancellation cannot keep the deadline from starting.
+        worker._run_continuously(requested_stop_version, lambda _error: start_deadline())
     finally:
         for signum in installed_signals:
             signal.signal(signum, previous_handlers[signum])
         os.close(signal_writer)
         signal_relay.join()
         os.close(signal_reader)
-        if deadline is not None:
-            deadline.cancel()
+        with deadline_lock:
+            finished = True
+            if deadline is not None:
+                deadline.cancel()
 
 
 __all__ = ["run_worker_process"]

@@ -1236,6 +1236,9 @@ class Worker:
         self._dispatch_sequence = 0
         self._dispatch_order: dict[str, int] = {}
         self._run_errors: list[BaseException] = []
+        # The process runner observes the first fatal error of a run before the drain starts.
+        self._fatal_error_observer: Callable[[BaseException], None] | None = None
+        self._fatal_error_reported = False
         self._locally_paused = False
         self._remotely_paused = False
         self._stopping = False
@@ -1616,12 +1619,22 @@ class Worker:
         requested_stop_version = self._stop_version_snapshot()
         self._run_continuously(requested_stop_version)
 
-    def _run_continuously(self, requested_stop_version: int) -> None:
+    def _run_continuously(
+        self,
+        requested_stop_version: int,
+        on_fatal_error: Callable[[BaseException], None] | None = None,
+    ) -> None:
         with self._execution_lock:
-            self._run_loop(
-                continuous=True,
-                requested_stop_version=requested_stop_version,
-            )
+            with self._state_lock:
+                self._fatal_error_observer = on_fatal_error
+            try:
+                self._run_loop(
+                    continuous=True,
+                    requested_stop_version=requested_stop_version,
+                )
+            finally:
+                with self._state_lock:
+                    self._fatal_error_observer = None
 
     def pause(self) -> None:
         """Stop new claims without interrupting running handlers."""
@@ -1669,6 +1682,20 @@ class Worker:
         )
         self._wake_dispatcher()
 
+    def _report_fatal_error(self, error: BaseException) -> None:
+        """Report the run's first fatal error when it is observed, before the drain waits.
+
+        A handler that ignores cancellation can hold the drain open, so the process runner starts
+        its deadline here rather than after the run raises.
+        """
+        with self._state_lock:
+            if self._fatal_error_reported:
+                return
+            self._fatal_error_reported = True
+            observer = self._fatal_error_observer
+        if observer is not None:
+            observer(error)
+
     def _stop_version_snapshot(self) -> int:
         with self._state_lock:
             return self._stop_version
@@ -1690,6 +1717,7 @@ class Worker:
         with self._state_lock:
             self._stopping = self._stop_version != requested_stop_version
             self._run_errors.clear()
+            self._fatal_error_reported = False
         listener = self._start_notification_listener() if continuous else None
         self._refresh_registration(force=True)
         _emit_log(
@@ -1747,6 +1775,7 @@ class Worker:
                     maintenance_stopped.wait(self._seconds_until_maintenance_due())
             except BaseException as error:
                 maintenance_errors.append(error)
+                self._report_fatal_error(error)
             finally:
                 self._wake.set()
 
@@ -1768,6 +1797,8 @@ class Worker:
                         for task, claim_started_at in outcome.claimed
                     ]
                     self._settle_claim_progress(slots, outcome)
+            if outcome.error is not None:
+                self._report_fatal_error(outcome.error)
             for thread in threads:
                 thread.start()
 
@@ -1891,6 +1922,10 @@ class Worker:
                     slots.open = False
                 while claims:
                     settle(results.get())
+        except BaseException as error:
+            # The loop's own failure, such as a registration write, reaches the drain below.
+            self._report_fatal_error(error)
+            raise
         finally:
             maintenance_stopped.set()
             if maintenance is not None:
@@ -2643,6 +2678,7 @@ class Worker:
             with self._state_lock:
                 self._run_errors.append(error)
                 self._stopping = True
+            self._report_fatal_error(error)
         finally:
             running = current_thread()
             with self._state_lock:
