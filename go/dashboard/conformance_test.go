@@ -597,7 +597,7 @@ func createDashboardConformanceDatabase(t *testing.T, sourceURL string) string {
 		t.Fatal(err)
 	}
 	quotedName := pgx.Identifier{databaseName}.Sanitize()
-	if _, err := admin.Exec(ctx, "DROP DATABASE IF EXISTS "+quotedName); err != nil {
+	if err := dropScratchDatabase(ctx, admin, databaseName); err != nil {
 		_ = admin.Close(ctx)
 		t.Fatal(err)
 	}
@@ -615,9 +615,8 @@ func createDashboardConformanceDatabase(t *testing.T, sourceURL string) string {
 			return
 		}
 		defer func() { _ = admin.Close(ctx) }()
-		_, _ = admin.Exec(ctx, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()", databaseName)
-		if _, err := admin.Exec(ctx, "DROP DATABASE IF EXISTS "+quotedName); err != nil {
-			t.Errorf("drop dashboard conformance database: %v", err)
+		if err := dropScratchDatabase(ctx, admin, databaseName); err != nil {
+			t.Errorf("drop dashboard conformance database: %v; run pnpm db:sweep", err)
 		}
 	})
 
