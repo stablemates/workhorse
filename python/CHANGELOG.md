@@ -12,7 +12,7 @@ adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses 
 ## Unreleased
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **55**, and the SDK compatibility floor is schema version **54**.
+The final schema version is **56**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.
@@ -32,6 +32,8 @@ Migration 0056 (`0056-count-row-retention-lag-from-the-history-pass-that-release
 `DashboardPrincipal` that `authorize` returns. The dashboard records the principal's actor, as the
 `dashboard/v1` protocol requires. `audit_actor` still names the actor when `authorize` returns
 `True`, and defaults to `dashboard` there (SM-1152).
+
+Migration 0057 (`0057-close-a-released-task-without-attributing-its-unrun-attempt.sql`) changes only `cancel_v1` and `terminalize_deadline_v1`. A full-tier task that a worker without a handler returned through `release_owned_v1` can now be canceled, and deadline recovery terminalizes it instead of rolling back the whole recovery pass. Both close it like never-started work, with no attempt history row (SM-1158).
 
 ## 0.6.1 — 2026-10-02
 

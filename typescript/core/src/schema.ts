@@ -397,6 +397,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "count row retention lag from the history pass that released the row",
     kind: "additive",
   },
+  {
+    fromVersion: 55,
+    toVersion: 56,
+    file: "0057-close-a-released-task-without-attributing-its-unrun-attempt.sql",
+    description: "close a released task without attributing its unrun attempt",
+    kind: "additive",
+  },
 ];
 
 /**

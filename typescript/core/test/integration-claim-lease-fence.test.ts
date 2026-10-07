@@ -387,6 +387,90 @@ describe("claim lease fence", () => {
     expect(await queue.releaseOwned(claimed!, "stale-release-owner")).toBe("stale");
   });
 
+  it("cancels a released task without attributing its unrun attempt", async () => {
+    const queueName = `cancel-released-${randomUUID()}`;
+    const id = await queue.enqueue("cancel-released", null, { queue: queueName });
+    const claimed = await queue.claim("cancel-released-owner", {
+      queue: queueName,
+      leaseMs: 5_000,
+    });
+    expect(claimed?.id).toBe(id);
+    expect(await queue.releaseOwned(claimed!, "cancel-released-owner")).toBe("released");
+
+    expect(await queue.cancel(id, { reason: "no worker handles it" })).toMatchObject({
+      status: "canceled",
+      state: "canceled",
+      currentAttempt: 1,
+      reason: "no worker handles it",
+    });
+    expect(await admin.getTask(id)).toMatchObject({
+      state: "canceled",
+      error: { name: "CancellationRequested", reason: "no worker handles it" },
+    });
+    // The releasing worker never reached a handler, so no attempt closes and the outcome carries
+    // no fence, exactly as for work that was never claimed.
+    const evidence = await pool.query<{
+      attempts: number;
+      fence_token: string;
+      event_attempt: number | null;
+    }>(
+      `SELECT
+        (SELECT count(*)::integer FROM workhorse.attempt_history WHERE task_id = $1) AS attempts,
+        (SELECT fence_token::text FROM workhorse.task_outcome WHERE task_id = $1) AS fence_token,
+        (SELECT attempt FROM workhorse.task_event
+          WHERE task_id = $1 AND event_type = 'canceled') AS event_attempt`,
+      [id],
+    );
+    expect(evidence.rows[0]).toEqual({ attempts: 0, fence_token: "0", event_attempt: null });
+  });
+
+  it("terminalizes a released task at its deadline and commits the rest of the batch", async () => {
+    const queueName = `deadline-released-${randomUUID()}`;
+    const deadline = new Date(Date.now() + 1_500);
+    const released = await queue.enqueue("deadline-released", null, {
+      queue: queueName,
+      deadline,
+    });
+    const claimed = await queue.claim("deadline-released-owner", {
+      queue: queueName,
+      leaseMs: 5_000,
+    });
+    expect(claimed?.id).toBe(released);
+    expect(await queue.releaseOwned(claimed!, "deadline-released-owner")).toBe("released");
+    // Enqueued after the release, so it stays ready behind the released task and shares its batch.
+    const neighbour = await queue.enqueue("deadline-released-neighbour", null, {
+      queue: queueName,
+      deadline,
+    });
+
+    await sleep(Math.max(0, deadline.getTime() - Date.now()) + 50);
+    expect(await queue.recoverExpired()).toBeGreaterThanOrEqual(2);
+
+    for (const id of [released, neighbour]) {
+      expect(await admin.getTask(id)).toMatchObject({
+        state: "failed",
+        error: { name: "DeadlineExceeded" },
+      });
+    }
+    const evidence = await pool.query<{
+      attempts: number;
+      fence_token: string;
+      event_attempt: number | null;
+      started: boolean;
+    }>(
+      `SELECT
+        (SELECT count(*)::integer FROM workhorse.attempt_history WHERE task_id = $1) AS attempts,
+        (SELECT fence_token::text FROM workhorse.task_outcome WHERE task_id = $1) AS fence_token,
+        event.attempt AS event_attempt, (event.details->>'started')::boolean AS started
+         FROM workhorse.task_event event
+        WHERE event.task_id = $1 AND event.event_type = 'deadline_exceeded'`,
+      [released],
+    );
+    expect(evidence.rows).toEqual([
+      { attempts: 0, fence_token: "0", event_attempt: null, started: false },
+    ]);
+  });
+
   it("delivers CancellationRequestedError and acknowledges cooperative handler settlement", async () => {
     const started = deferred();
     const aborted = deferred<unknown>();

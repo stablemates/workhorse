@@ -16032,6 +16032,7 @@ DECLARE
   v_worker_id text;
   v_fence_token bigint := 0;
   v_claimed_at timestamptz;
+  v_attributed boolean := false;
 BEGIN
   IF EXISTS (SELECT 1 FROM workhorse.fast_task_runtime fast WHERE fast.task_id = p_task_id) THEN
     RETURN workhorse.fast_terminalize_deadline_v1(p_task_id);
@@ -16075,9 +16076,13 @@ BEGIN
     v_worker_id := v_runtime.worker_id;
     v_fence_token := v_runtime.fence_token;
     v_claimed_at := v_runtime.acquired_at;
+    v_attributed := true;
   ELSIF v_runtime.attempt_started_at IS NOT NULL THEN
+    -- A suspension retains the attribution of the worker that ran the handler. A task an owner
+    -- released through release_owned_v1 keeps attempt_started_at but retains none, because no
+    -- worker reached the handler; it closes like never-started work.
     SELECT provenance.worker_id, provenance.fence_token, provenance.claimed_at
-      INTO STRICT v_worker_id, v_fence_token, v_claimed_at
+      INTO v_worker_id, v_fence_token, v_claimed_at
       FROM (
         SELECT wait_row.worker_id, wait_row.fence_token, wait_row.claimed_at,
                wait_row.created_at, wait_row.wait_name AS name
@@ -16096,6 +16101,8 @@ BEGIN
            AND human_wait.attempt = v_runtime.current_attempt
       ) provenance
      ORDER BY provenance.created_at DESC, provenance.name DESC LIMIT 1;
+    v_attributed := FOUND;
+    IF NOT v_attributed THEN v_fence_token := 0; END IF;
   END IF;
   DELETE FROM workhorse.task_runtime runtime WHERE runtime.task_id = p_task_id;
   INSERT INTO workhorse.task_outcome(
@@ -16104,7 +16111,7 @@ BEGIN
     p_task_id, 'failed', v_runtime.current_attempt, v_fence_token, v_runtime.run_at, v_error,
     clock_timestamp()
   );
-  IF v_runtime.attempt_started_at IS NOT NULL THEN
+  IF v_attributed THEN
     INSERT INTO workhorse.attempt_history(
       task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
     ) VALUES (
@@ -16115,12 +16122,12 @@ BEGIN
   INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
     VALUES (
       p_task_id,
-      CASE WHEN v_runtime.attempt_started_at IS NULL THEN NULL ELSE v_runtime.current_attempt END,
+      CASE WHEN v_attributed THEN v_runtime.current_attempt END,
       'deadline_exceeded',
       jsonb_build_object(
         'deadline_at', v_runtime.deadline_at,
         'fence_token', v_fence_token::text,
-        'started', v_runtime.attempt_started_at IS NOT NULL
+        'started', v_attributed
       )
     );
   RETURN true;
@@ -16205,7 +16212,9 @@ BEGIN
     END IF;
 
     -- A suspended logical attempt retains its original worker/fence attribution in its timer or
-    -- signal or human boundary even though scheduled runtime ownership has been released.
+    -- signal or human boundary even though scheduled runtime ownership has been released. A task an
+    -- owner released through release_owned_v1 keeps attempt_started_at but retains none, because
+    -- no worker reached the handler; it closes like never-started work.
     IF v_runtime.attempt_started_at IS NOT NULL THEN
       SELECT provenance.fence_token, provenance.worker_id, provenance.attempt,
              provenance.claimed_at
@@ -16229,9 +16238,7 @@ BEGIN
         ) provenance
        ORDER BY provenance.created_at DESC, provenance.name DESC
        LIMIT 1;
-      IF NOT FOUND THEN
-        RAISE EXCEPTION 'started task % has no retained suspension attribution', p_task_id;
-      END IF;
+      IF NOT FOUND THEN v_fence_token := 0; END IF;
     END IF;
     v_envelope := workhorse.cancellation_envelope_v1(v_now, p_requested_by, p_reason);
     DELETE FROM workhorse.task_runtime runtime WHERE runtime.task_id = p_task_id;
@@ -16242,7 +16249,7 @@ BEGIN
       p_task_id, 'canceled', v_runtime.current_attempt, v_fence_token, v_runtime.run_at,
       v_envelope, v_now, v_now, v_now
     ) RETURNING * INTO v_outcome;
-    IF v_runtime.attempt_started_at IS NOT NULL THEN
+    IF v_attempt IS NOT NULL THEN
       INSERT INTO workhorse.attempt_history(
         task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
       ) VALUES (
@@ -16253,7 +16260,7 @@ BEGIN
     INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
       VALUES (
         p_task_id,
-        CASE WHEN v_runtime.attempt_started_at IS NULL THEN NULL ELSE v_attempt END,
+        v_attempt,
         'canceled',
         jsonb_build_object(
           'requested_at', v_now,
@@ -19598,10 +19605,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (52, 'serialize schedule synchronization with the tick'),
   (53, 'distinguish a single-child rename from a second child'),
   (54, 'fail durable replay conflicts without retrying'),
-  (55, 'count row retention lag from the history pass that released the row')
+  (55, 'count row retention lag from the history pass that released the row'),
+  (56, 'close a released task without attributing its unrun attempt')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (55) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (56) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

@@ -6,7 +6,7 @@ other SDKs carry, because every tag names one release of all of them.
 ## Unreleased
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **55**, and the SDK compatibility floor is schema version **54**.
+The final schema version is **56**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.
@@ -31,6 +31,8 @@ The gemspec now declares `logger` at least 1.6 and below 2. Ruby 4.0 no longer s
 default gem. On Ruby 4.0, 0.6.1 raises `LoadError` at `require "stablemates/workhorse"` unless the
 application already installs `logger` (SM-1138). The dashboard requires `cgi/escape` instead of
 `cgi`, which Ruby 4.0 reduces to a stub that warns.
+
+Migration 0057 (`0057-close-a-released-task-without-attributing-its-unrun-attempt.sql`) changes only `cancel_v1` and `terminalize_deadline_v1`. A full-tier task that a worker without a handler returned through `release_owned_v1` can now be canceled, and deadline recovery terminalizes it instead of rolling back the whole recovery pass. Both close it like never-started work, with no attempt history row (SM-1158).
 
 ## 0.6.1 — 2026-10-02
 
