@@ -23,12 +23,12 @@ Separating workers from the web tier used to mean the operator dashboard could n
 runtime state from process-local `Worker` objects, so it only ever knew about workers sharing its
 own process.
 
-The worker registry removes that constraint. TypeScript, Python, Go, and Rust workers upsert
-`workhorse.worker_registry` on their configured cadence with declared concurrency, busy slots, and
-drain state, together with the client protocol version and the SDK they run. Each refresh reads the
-operator-requested pause flag in the same round trip. A dashboard mounted anywhere reads the fleet
-from that relation, which is also how an operator sees that a rolling deploy is running two builds
-at once.
+The worker registry removes that constraint. By default, TypeScript, Python, Go, Rust, and Ruby
+workers upsert `workhorse.worker_registry` on their configured cadence. Each row holds declared
+concurrency, busy slots, and drain state, together with the client protocol version and the SDK the
+worker runs. Each refresh reads the operator-requested pause flag in the same round trip. A
+dashboard mounted anywhere reads the fleet from that relation, which is also how an operator sees
+that a rolling deploy is running two builds at once.
 
 This makes worker control cooperative and durable rather than a process-local method call:
 
@@ -44,10 +44,25 @@ This makes worker control cooperative and durable rather than a process-local me
 - Reported slot use is only as fresh as the cadence. Treat it as an operational indicator, not as a
   synchronous read of another process's event loop.
 
-The registry holds one row per live worker, is never consulted by the claim path, and cannot affect
-dispatch cost. TypeScript's `registryIntervalMs: 0`, Python's `registry_interval_ms=0`, and Go's
-`DisableRegistry` opt out entirely, at the cost of the worker becoming invisible to operator
-surfaces.
+The registry holds one row per live registered worker. The claim path never consults it, so it
+cannot affect dispatch cost. Every worker registers by default, and each SDK can opt out:
+
+| SDK        | Opt-out                           |
+| ---------- | --------------------------------- |
+| TypeScript | `registryIntervalMs: 0`           |
+| Python     | `registry_interval_ms=0`          |
+| Go         | `WorkerOptions.DisableRegistry`   |
+| Rust       | `WorkerOptions::disable_registry` |
+| Ruby       | `disable_registry: true`          |
+
+An unregistered worker writes no `worker_registry` row, which has two costs. Operator surfaces
+cannot see the worker. Its maintenance interval also never shortens the spacing of the expired-lease
+scan. While registered workers keep ticking, an expired lease can therefore wait up to one interval
+of the fastest registered worker for recovery, however often the unregistered workers tick. That
+bound holds only while recovery reaches the scan. When other recovery work fills the limit, the scan
+waits for a later tick.
+[Maintenance cadence](architecture/lifecycle.md#maintenance-cadence) states the bound and how to
+restore a shorter one.
 
 The dashboard reads worker state from PostgreSQL on its bounded polling interval, so it does not
 observe handlers or depend on worker process notifications.

@@ -169,7 +169,7 @@ While registered workers keep ticking, a tick reaches the scan at least once per
 registered interval, unless other recovery work fills the limit first. With no live registered
 worker, every tick runs the scan. Each run recovers a bounded batch of expired rows.
 
-More detail: [Task lifecycle: Claim](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#claim).
+More detail: [Task lifecycle: Claim](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#claim), [Task lifecycle: Worker options](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#worker-options), and [Task lifecycle: Maintenance cadence](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#maintenance-cadence).
 
 </details>
 
@@ -911,16 +911,22 @@ More detail: [Data model: Pause scope](https://github.com/stablemates/workhorse/
 A deploy replaces workers one at a time, so for a while two builds run at once. One worker behaves
 differently, and an operator wants to know why.
 
-1. **Every few seconds, each worker writes its registry row.** The row holds its ID, queues, schedule
-   namespaces, concurrency, and how many slots are busy.
+1. **Every few seconds, each worker writes its registry row,** as workers do by default. The row
+   holds its ID, queues, schedule namespaces, concurrency, and how many slots are busy.
 2. **The row also says what the worker is**: which client library it runs, at which version, and
    which protocol it speaks.
 3. **The operator opens the Workers page.** The odd worker still reports the old version.
 
 That is how a dashboard can show a fleet it does not host. `Worker.runtimeState` reads only a
 TypeScript worker's local process state. The dashboard and `Admin.listWorkers` read the durable
-registry that every runtime refreshes on an interval. Registry slot counts are recent observations,
-not synchronous views of another event loop. Treat them as a moment-ago snapshot.
+registry that every runtime refreshes on an interval by default. Registry slot counts are recent
+observations, not synchronous views of another event loop. Treat them as a moment-ago snapshot.
+
+Each SDK lets a worker opt out of the registry. An opted-out worker writes no row, so operator
+surfaces cannot see it. Its maintenance interval also never shortens the spacing of the
+expired-lease scan, which drives [recovery](#who-owns-a-task-leases-and-fence-tokens). While
+registered workers keep ticking, a lease that expires can wait up to the maintenance interval of the
+fastest registered worker before recovery. Other recovery work can delay it further.
 
 Queues control which tasks a worker can claim. Schedule namespaces control which recurring
 definitions it can evaluate. The Workers page shows both. `claim_v1` never reads this registry, so
@@ -961,7 +967,14 @@ stopped.
 **Removal.** Graceful shutdown calls `deregister_worker_v1`. `run_maintenance_v1` calls
 `prune_worker_registry_v1` with a one-minute maximum age.
 
-More detail: [Data model: `worker_registry`](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#worker_registry).
+**Opt-out.** An opted-out worker writes no `worker_registry` row. `tick_v1` spaces the expired-lease
+scan by half the shortest maintenance interval among live registered workers, so an opted-out
+worker never shortens that spacing. While registered workers keep ticking, recovery follows a
+lease's expiry by at most one interval of the fastest registered worker. That bound holds only
+while recovery reaches the scan. When other recovery work fills the limit, the scan waits for a
+later tick. With no live registered worker, every tick runs the scan.
+
+More detail: [Data model: `worker_registry`](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#worker_registry) and [Task lifecycle: Maintenance cadence](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#maintenance-cadence).
 
 </details>
 
