@@ -51,6 +51,7 @@ import type {
   MaintenancePhaseErrorRuntimeFixture,
   MissingHandlerRuntimeFixture,
   OversizedResultRuntimeFixture,
+  ShutdownCancellationRuntimeFixture,
   PollCadenceRuntimeFixture,
   SlotRefillRuntimeFixture,
   RuntimeFunctionInjection,
@@ -921,6 +922,55 @@ async function executeOversizedResultRuntimeFixture(
 }
 
 /**
+ * The TypeScript worker has no shutdown grace: `stop()` waits for every running handler. So the
+ * handler outlives the stop, never sees its signal abort, and completes on its only attempt.
+ */
+async function executeShutdownCancellationRuntimeFixture(
+  queue: Queue,
+  admin: Admin,
+  fixture: ShutdownCancellationRuntimeFixture,
+): Promise<void> {
+  expect(fixture.shutdownBehavior.typescript).toBe("drain");
+  const queueName = `runtime-${fixture.id}`;
+  const id = await queue.enqueue(fixture.taskType, null, {
+    queue: queueName,
+    maxAttempts: fixture.maxAttempts,
+  });
+  const started = deferred();
+  const stopped = deferred();
+  let aborted = false;
+  const worker = new Worker(queue, {
+    workerId: `runtime-${fixture.id}`,
+    queue: queueName,
+    pollMs: 0,
+    registryIntervalMs: 0,
+  }).handle(fixture.taskType, async (_payload, context) => {
+    started.resolve();
+    await stopped.promise;
+    await sleep(fixture.drainHoldMs);
+    aborted = context.signal.aborted;
+    return null;
+  });
+
+  const running = worker.run();
+  try {
+    await started.promise;
+    worker.stop();
+    stopped.resolve();
+    await expect(running).resolves.toBeUndefined();
+    expect(aborted).toBe(false);
+    await expect(admin.getTask(id)).resolves.toMatchObject({
+      state: fixture.expectedDrained.state,
+      currentAttempt: fixture.expectedDrained.attempt,
+    });
+  } finally {
+    worker.stop();
+    stopped.resolve();
+    await running.catch(() => undefined);
+  }
+}
+
+/**
  * Replaces one installed function with a raising body for the duration of `observe`, and restores
  * the definition the database reports afterwards, whatever `observe` does.
  */
@@ -1409,6 +1459,9 @@ describe("SQL protocol conformance fixtures", () => {
             break;
           case "oversized-result":
             await executeOversizedResultRuntimeFixture(queue, admin, fixture);
+            break;
+          case "shutdown-cancellation":
+            await executeShutdownCancellationRuntimeFixture(queue, admin, fixture);
             break;
           case "heartbeat-failure":
             await executeHeartbeatFailureRuntimeFixture(

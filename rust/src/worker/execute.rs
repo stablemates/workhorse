@@ -207,7 +207,10 @@ impl Inner {
             }
             (Some(CancelReason::LeaseLost), _) => return Ok("lease_lost"),
             // A handler that stopped for shutdown returns the task to the queue without an attempt.
-            (Some(CancelReason::Shutdown), Err(_)) => return self.release(task, false).await,
+            // A panic still fails the attempt.
+            (Some(CancelReason::Shutdown), Err(error)) if !error.is_panic() => {
+                return self.release(task, false).await
+            }
             _ => {}
         }
         match result {
@@ -503,16 +506,7 @@ impl Inner {
                 "stack": error.stack,
             })
         };
-        let terminal_conflict = matches!(
-            error.name.as_deref(),
-            Some(
-                "CheckpointConflictError"
-                    | "WaitConflictError"
-                    | "ChildConflictError"
-                    | "HumanWaitConflictError"
-            )
-        );
-        let delay = if terminal_conflict {
+        let delay = if error.is_conflict() {
             Some(-1)
         } else {
             self.options

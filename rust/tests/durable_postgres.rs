@@ -714,6 +714,97 @@ async fn a_different_request_under_a_retained_name_conflicts() {
     assert_eq!(harness.result(task).await, Some(json!(true)));
 }
 
+// SM-1164: the worker failed any error named after a conflict class for good. It now reads the
+// marker that converting `Error::Conflict` sets, so an application error that only shares a
+// conflict's name retries under the task's policy.
+#[tokio::test]
+async fn only_a_converted_conflict_fails_without_a_retry() {
+    let Some(harness) = harness("durable_conflict_marker").await else { return };
+    let options = || EnqueueOptions { max_attempts: 3, ..EnqueueOptions::default() };
+    let named = harness.queue.enqueue("named", &Value::Null, options()).await.unwrap().task_id;
+    let replayed =
+        harness.queue.enqueue("replayed", &Value::Null, options()).await.unwrap().task_id;
+    harness.worker.handle("named", |_: Value, _| async {
+        Err::<Value, _>(HandlerError::named("WaitConflictError", "upstream briefly unavailable"))
+    });
+    let runs = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&runs);
+    harness.worker.handle("replayed", move |_: Value, context: HandlerContext| {
+        let run = counted.fetch_add(1, Ordering::SeqCst);
+        async move {
+            if run == 0 {
+                context.sleep("nap", HOUR).await?;
+            } else {
+                context.sleep_until("nap", Utc::now() + chrono::Duration::hours(1)).await?;
+            }
+            Ok(Value::Null)
+        }
+    });
+    harness.run_once().await;
+    harness.run_once().await;
+    harness.wake(replayed).await;
+    harness.run_once().await;
+
+    let named = harness.admin.get_task(named).await.unwrap().expect("task exists");
+    assert_ne!(named.state, TaskState::Failed, "a named application error failed for good");
+    assert_eq!(named.current_attempt, 2);
+    assert_eq!(named.error.expect("the attempt recorded its error")["name"], "WaitConflictError");
+    let replayed = harness.admin.get_task(replayed).await.unwrap().expect("task exists");
+    assert_eq!(replayed.state, TaskState::Failed);
+    assert_eq!(replayed.current_attempt, 1);
+    assert_eq!(
+        replayed.error.expect("the conflict recorded its error")["name"],
+        "WaitConflictError"
+    );
+}
+
+// A handler panic fails its attempt, even when it follows the shutdown cancellation. Only an
+// ordinary error after that cancellation returns the task without an attempt.
+#[tokio::test]
+async fn a_panic_after_the_shutdown_fails_its_attempt() {
+    let Some(harness) = harness("durable_shutdown_panic").await else { return };
+    let options = EnqueueOptions { max_attempts: 1, ..EnqueueOptions::default() };
+    let task = harness.queue.enqueue("panicking", &Value::Null, options).await.unwrap().task_id;
+    let worker = Worker::new(
+        harness.pool.clone(),
+        WorkerOptions {
+            queues: vec![QUEUE.into()],
+            worker_id: Some(format!("rust-shutdown-panic-{}", Uuid::new_v4())),
+            polling_only: true,
+            poll_interval: Some(Duration::from_millis(20)),
+            shutdown_grace_period: Duration::from_millis(50),
+            ..WorkerOptions::default()
+        },
+    )
+    .unwrap();
+    let (started, mut handler_started) = tokio::sync::watch::channel(false);
+    worker.handle("panicking", move |_: Value, context: HandlerContext| {
+        let started = started.clone();
+        async move {
+            let _ = started.send(true);
+            context.cancellation().cancelled().await;
+            panic!("the unwind failed");
+            #[allow(unreachable_code)]
+            Ok(Value::Null)
+        }
+    });
+    let (stop, stopped) = oneshot::channel::<()>();
+    let running = tokio::spawn({
+        let worker = worker.clone();
+        async move {
+            worker
+                .run(async move {
+                    let _ = stopped.await;
+                })
+                .await
+        }
+    });
+    handler_started.wait_for(|started| *started).await.unwrap();
+    stop.send(()).unwrap();
+    running.await.unwrap().unwrap();
+    assert_eq!(harness.state(task).await, TaskState::Failed);
+}
+
 #[tokio::test]
 async fn concurrent_calls_under_one_name_share_one_durable_write() {
     let Some(harness) = harness("durable_in_flight").await else { return };

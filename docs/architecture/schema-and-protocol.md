@@ -230,12 +230,17 @@ The terminal classes are `CheckpointConflictError`, `WaitConflictError`, `ChildC
   and `WaitForHuman` into those named `HandlerError` values. Its generic error conversion requires
   an owned (`'static`) error so it can inspect the error chain. Conversion examines at most 16
   errors, including the root, so a cyclic source chain cannot block settlement.
+- Rust marks the converted `HandlerError` with a private conflict flag, and `fail_with_state` reads
+  that flag, not the name. A handler error built with `HandlerError::named("WaitConflictError", …)`
+  therefore retries under the task's policy.
 - Ruby uses `ConflictError`. Its message identifies the operation and retained name.
 
 #### Settling a conflict
 
 The worker skips its retry-delay callback for these errors, then records the conflict name in the
-failure envelope. Configured redaction still records `RedactedTaskError`, while terminal
+failure envelope. Only conflict settlement sends `-1`. A TypeScript `retryDelayMs` callback that
+returns anything other than `undefined` or a safe integer from 0 through 2,147,483,647 throws before
+`fail_v1`. Python and Ruby raise for a negative callback result, and Go replaces one with nil. Configured redaction still records `RedactedTaskError`, while terminal
 classification happens before redaction.
 
 Transient failures, lease loss, child-limit refusals, and already-waiting signal refusals keep their
@@ -1227,7 +1232,14 @@ When the period expires, `Run` acts in this order:
 3. It stops renewing the leases of whatever still runs.
 4. It returns an error matching `ErrShutdownIncomplete`, naming how many it abandoned.
 
-`recover_expired_telemetry_v1` recovers their tasks once the leases expire. The abandoned goroutines
+A handler that returns an error after that cancellation charges no attempt. `releaseAfterShutdown`
+hands its task to `release_owned_v1` on a context bounded by the 250 millisecond unwind period. When
+that release fails, the worker logs it and lease recovery settles the task. A `HandlerPanicError`
+keeps its usual settlement. `execute` reads the handler context's cancellation as the handler
+returns. A handler that failed before the stop keeps its usual settlement. `RunOnce` treats the end
+of its caller's context the same way.
+
+`recover_expired_telemetry_v1` recovers the tasks of abandoned handlers once the leases expire. The abandoned goroutines
 keep running inside the caller's process and may still use the pool.
 
 After the period expires, `drainExecutions` does not report an execution error that matches
@@ -1545,6 +1557,12 @@ After `stop`, the worker shuts down in this order:
 3. It cancels the rest with `:shutdown` and waits a 250 millisecond unwind window.
 4. It abandons a handler still running after that window with its lease, and `run` raises
    `ShutdownIncompleteError`.
+
+A handler that raises the `CancelledError` of its `:shutdown` cancellation charges no attempt. The
+error may arrive directly, as `check!` raises it, or as the cause of another error. The worker also
+requires its own token to carry `:shutdown`, so an error the application builds charges its attempt.
+`run_handler` hands the task to `release_owned_v1` instead of `fail_v1`, as it does for a task
+without a handler. Any other error keeps its usual settlement, even after the cancellation.
 
 ### Ruby handler context
 
@@ -1992,7 +2010,9 @@ still in flight, the draining `register_worker_v1` refresh, and running handlers
   recovery reclaims it.
 - Tasks from claims that returned in time still run, even when another claim stalls.
 - Handlers still running when grace ends see `CancelReason::Shutdown` and get 250 milliseconds to
-  unwind.
+  unwind. A handler that returns an error after that cancellation charges no attempt: the worker
+  hands its task to `release_owned_v1`. A handler panic still fails the attempt, and a handler that
+  returns a value still completes.
 - `run` abandons any that outlive that window and returns `Error::ShutdownIncomplete`. Their leases
   expire, and lease recovery reclaims the tasks.
 

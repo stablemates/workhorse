@@ -1986,12 +1986,25 @@ func (worker *Worker) execute(
 		}
 	}
 	result, handlerError := callHandler(task.Type, handler, handlerContext, task.Payload, durability)
+	// Read before the supervisor settles, so a stop that lands after the handler returned cannot
+	// turn the handler's own failure into a shutdown.
+	cancelledAtReturn := context.Cause(handlerContext)
 	ownership := handlerReturned()
 	cause := context.Cause(handlerContext)
 	cancelHandler(nil)
 	cancelDeadline()
 
+	// A handler that fails after the stop cancelled it returns its task to the queue without an
+	// attempt. A panic still fails the attempt. The stop is the end of Run, or of the context a caller passed to RunOnce. The
+	// supervisor usually reports it first, as its ownership error.
+	var panicked *HandlerPanicError
+	stoppedForShutdown := handlerError != nil && !errors.As(handlerError, &panicked) &&
+		ctx.Err() != nil && cancelledAtReturn != nil &&
+		errors.Is(cancelledAtReturn, context.Cause(ctx)) && !durability.suspended.Load()
 	if ownership.err != nil {
+		if stoppedForShutdown && errors.Is(ownership.err, ctx.Err()) {
+			outcome = worker.releaseAfterShutdown(ctx, executor, task)
+		}
 		return ownership.err
 	}
 	if durability.suspended.Load() {
@@ -2041,6 +2054,9 @@ func (worker *Worker) execute(
 	}
 	if ctx.Err() != nil {
 		outcome = handlerOutcomeCanceled
+		if stoppedForShutdown {
+			outcome = worker.releaseAfterShutdown(ctx, executor, task)
+		}
 		return ctx.Err()
 	}
 	// A result the task cannot store fails the attempt like a handler error, so it settles under the
@@ -2682,6 +2698,44 @@ func (worker *Worker) release(ctx context.Context, executor Executor, task Claim
 		handlerMissingLogMessage,
 		func() []any { return taskLogAttributes(task, worker.workerID) },
 	)
+	return worker.releaseOwned(ctx, executor, task, func(outcome handlerOutcome) {
+		worker.metrics.recordHandler(ctx, task, outcome, time.Since(startedAt))
+	})
+}
+
+// releaseAfterShutdown returns the task of a handler that stopped for shutdown to its queue, so the
+// stop charges no attempt. The release runs within the unwind window: when it fails, the worker
+// logs the failure and lease recovery settles the task, as it would without this release.
+func (worker *Worker) releaseAfterShutdown(
+	ctx context.Context,
+	executor Executor,
+	task ClaimedTask,
+) handlerOutcome {
+	releaseContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), handlerUnwindPeriod)
+	defer cancel()
+	outcome := handlerOutcomeCanceled
+	err := worker.releaseOwned(releaseContext, executor, task, func(released handlerOutcome) {
+		outcome = released
+	})
+	if err != nil {
+		worker.logger.WarnContext(
+			ctx,
+			shutdownReleaseFailedMessage,
+			append(taskLogAttributes(task, worker.workerID), slog.String(errorLogField, err.Error()))...,
+		)
+		return handlerOutcomeCanceled
+	}
+	return outcome
+}
+
+// releaseOwned hands an owned task back through release_owned_v1 without charging its attempt.
+// It reports the handler outcome the release status implies before it settles that status.
+func (worker *Worker) releaseOwned(
+	ctx context.Context,
+	executor Executor,
+	task ClaimedTask,
+	settled func(handlerOutcome),
+) error {
 	lease := worker.fencedLease(task)
 	rows, err := queryFencedWrite(
 		ctx,
@@ -2713,7 +2767,7 @@ func (worker *Worker) release(ctx context.Context, executor Executor, task Claim
 	default:
 		return fmt.Errorf(rejectedReleaseStatusFormat, status)
 	}
-	worker.metrics.recordHandler(ctx, task, outcome, time.Since(startedAt))
+	settled(outcome)
 	logWorkerEvent(
 		ctx,
 		worker.logger,

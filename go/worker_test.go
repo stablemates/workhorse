@@ -103,6 +103,17 @@ type workerRuntimeFixture struct {
 	ExpectedSettled                      workerFixtureTaskState            `json:"expectedSettled"`
 	ExpectedErrorNames                   map[string]string                 `json:"expectedErrorNames"`
 	ExpectedFitting                      workerFixtureTaskState            `json:"expectedFitting"`
+	ShutdownGraceMS                      int                               `json:"shutdownGraceMs"`
+	DrainHoldMS                          int                               `json:"drainHoldMs"`
+	ShutdownBehavior                     map[string]string                 `json:"shutdownBehavior"`
+	ExpectedCancelled                    workerFixtureReleasedState        `json:"expectedCancelled"`
+	ExpectedDrained                      workerFixtureTaskState            `json:"expectedDrained"`
+}
+
+// workerFixtureReleasedState is the state of a task a worker released, with the events it recorded.
+type workerFixtureReleasedState struct {
+	workerFixtureTaskState
+	Events []string `json:"events"`
 }
 
 // workerFixtureInjection replaces one installed function with a raising body, so a fixture can

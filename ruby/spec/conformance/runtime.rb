@@ -74,6 +74,7 @@ module Conformance
       when "missing-handler" then missing_handler(fixture)
       when "json-round-trip" then json_round_trip(fixture)
       when "oversized-result" then oversized_result(fixture)
+      when "shutdown-cancellation" then shutdown_cancellation(fixture)
       when "heartbeat-failure" then heartbeat_failure(fixture)
       when "maintenance-phase-error" then maintenance_phase_error(fixture)
       when "suspension-replay" then suspension_replay(fixture)
@@ -686,6 +687,39 @@ module Conformance
         check(fitting.state.to_s == expected["state"] && fitting.current_attempt == expected["attempt"],
           "the fitting task is #{fitting.state}/#{fitting.current_attempt}: #{Matcher.render(fitting.error)}")
       end
+    end
+
+    # The handler waits for its cancellation, then raises CancelledError(:shutdown) through check!.
+    # One attempt makes a charged attempt fail the task for good.
+    def shutdown_cancellation(fixture)
+      check(fixture.dig("shutdownBehavior", "ruby") == "cancel", "the fixture does not expect a cancelling Ruby worker")
+      task_id = queue.enqueue(fixture["taskType"], {}, queue: queue_name(fixture),
+        max_attempts: fixture["maxAttempts"]).task_id
+      started = Concurrent::Event.new
+      reasons = Concurrent::Array.new
+      with_pool do |pool|
+        subject = worker(pool, fixture, shutdown_grace: fixture["shutdownGraceMs"] / 1000.0)
+          .handle(fixture["taskType"]) do |_payload, context|
+            started.set
+            raise "the shutdown never reached the handler" unless context.cancellation.wait(5)
+
+            reasons << context.cancellation.reason
+            context.cancellation.check!
+          end
+        thread = Thread.new { subject.run }
+        check(started.wait(5), "the handler never started")
+        subject.stop
+        check(thread.join(10), "the worker did not stop")
+        thread.value
+      end
+      check(reasons == [:shutdown], "the handler saw cancellation reasons #{reasons.to_a}")
+      expected = fixture.fetch("expectedCancelled")
+      actual = state(task_id)
+      check(actual.values_at("state", "attempt") == expected.values_at("state", "attempt"),
+        "the stopped task is #{actual["state"]}/#{actual["attempt"]}, want #{expected["state"]}/#{expected["attempt"]}")
+      events = @connection.exec_params("SELECT event_type FROM workhorse.task_event WHERE task_id = $1 " \
+        "ORDER BY occurred_at, event_id", [task_id]).column_values(0)
+      check(events == expected["events"], "the stopped task recorded events #{events}, want #{expected["events"]}")
     end
 
     def heartbeat_failure(fixture)

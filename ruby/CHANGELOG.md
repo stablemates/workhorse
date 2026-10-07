@@ -40,6 +40,11 @@ written to `rack.errors` instead of escaping the Rack app (SM-1168).
 
 Migration 0058 (`0058-let-terminal-cleanup-keep-pace-and-share-its-budget-across-tiers.sql`) changes `prune_terminal_tasks_v1`, `prune_terminal_storage_v1`, and `queue_health_v1`, and adds two `maintenance_state` columns. Terminal cleanup repeats its batch while each one fills, for up to one second per pass, and a pass that still ends with a full batch makes its follow-up due five seconds later instead of after the five-minute interval. Full-tier and fast-tier tasks share every batch, so neither tier starves the other. The health document reports `terminal_cleanup_backlog_since` while cleanup is behind (SM-1160).
 
+**Fixed:** A handler that raises the `CancelledError` of its `:shutdown` cancellation no longer
+charges an attempt. The worker hands its task to `release_owned_v1`, as it does for a task without a
+handler. Before, `CancelledError(:shutdown)` reached `fail_v1`, so a task on its last attempt failed
+because its worker stopped (SM-1164).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

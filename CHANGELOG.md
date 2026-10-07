@@ -84,6 +84,11 @@ millisecond. `ChildTaskOptions` is now exported from the package root (SM-1169).
 
 Migration 0058 (`0058-let-terminal-cleanup-keep-pace-and-share-its-budget-across-tiers.sql`) changes `prune_terminal_tasks_v1`, `prune_terminal_storage_v1`, and `queue_health_v1`, and adds two `maintenance_state` columns. Terminal cleanup repeats its batch while each one fills, for up to one second per pass, and a pass that still ends with a full batch makes its follow-up due five seconds later instead of after the five-minute interval. Full-tier and fast-tier tasks share every batch, so neither tier starves the other. The health document reports `terminal_cleanup_backlog_since` while cleanup is behind (SM-1160).
 
+**Pending release — fixed:** A TypeScript `retryDelayMs` callback must return `undefined` or a safe
+integer from 0 through 2,147,483,647. Any other result throws before `fail_v1`. Before, a computed
+`-1` reached `fail_v1`, which reads it as terminal failure, so the task failed on its first attempt
+(SM-1164).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

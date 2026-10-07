@@ -12,7 +12,8 @@ module Stablemates
     # Durations are Numeric seconds. +run+ blocks until +stop+; +run_once+ claims and runs one
     # batch. A stopping worker claims nothing new, waits up to +shutdown_grace+ for running
     # handlers, cancels the rest with +:shutdown+, and raises ShutdownIncompleteError when any
-    # handler still runs after one short unwind window.
+    # handler still runs after one short unwind window. A handler that raises the CancelledError of
+    # that cancellation, as +check!+ does, returns its task to the queue without charging the attempt.
     class Worker
       MAX_EMPTY_POLL_MS = 5_000
       NOTIFICATION_POLL_MS = 5_000
@@ -1182,10 +1183,16 @@ module Stablemates
           attributes.merge("workhorse.handler.outcome" => outcome))
       end
 
-      # Hands a task with no handler back to PostgreSQL, which makes it claimable again without
-      # charging the attempt. Returns the release status for the handler span.
+      # Hands a task with no handler back to PostgreSQL. Returns the release status for the handler
+      # span.
       def release(task, arbiter, attributes)
         log(:warn, "workhorse.handler.missing", "No handler registered for the claimed task type", attributes)
+        release_owned(task, arbiter, attributes)
+      end
+
+      # Hands an owned task back to PostgreSQL, which makes it claimable again without charging the
+      # attempt. Returns the release status.
+      def release_owned(task, arbiter, attributes)
         status = fenced_row(SqlCatalogue::RELEASE_OWNED_V1, task)["status"]
         log(:info, "workhorse.task.release_processed", "Owned task release processed",
           attributes.merge("workhorse.release.status" => status))
@@ -1216,6 +1223,12 @@ module Stablemates
           raise Error, "Durable wait suspension was not accepted by the arbiter"
         rescue => e
           return if finish_suspended(task, ownership, arbiter)
+
+          # A handler that stopped for shutdown returns the task to the queue without an attempt.
+          if cancellation.reason == :shutdown && shutdown_cancellation?(e)
+            state[:span_outcome] = release_owned(task, arbiter, Telemetry.task_span_attributes(task))
+            return
+          end
 
           state[:span_outcome] = settle_failure(task, e, arbiter)
           state[:errors] << (task.redact_error_details ? REDACTED_NAME : e.class.name)
@@ -1470,6 +1483,19 @@ module Stablemates
           settle_status(task, state, arbiter, "fail", %w[failed], :failed)
         end
         state
+      end
+
+      # Whether +error+, or an error it wraps, is a +:shutdown+ CancelledError. With the token's own
+      # reason, it proves the handler saw the stop, so a failure of its own that races the grace
+      # still charges its attempt. The walk stays bounded against a cyclic cause chain.
+      def shutdown_cancellation?(error)
+        16.times do
+          return false if error.nil?
+          return true if error.is_a?(CancelledError) && error.reason == :shutdown
+
+          error = error.cause
+        end
+        false
       end
 
       def retry_delay_override(task)

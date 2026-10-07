@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -79,6 +80,7 @@ func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 		"missing-handler":          executeWorkerMissingHandlerFixture,
 		"json-round-trip":          executeWorkerJSONRoundTripFixture,
 		"oversized-result":         executeWorkerOversizedResultFixture,
+		"shutdown-cancellation":    executeWorkerShutdownCancellationFixture,
 		"heartbeat-failure":        executeWorkerHeartbeatFailureFixture,
 		"maintenance-phase-error":  executeWorkerMaintenancePhaseErrorFixture,
 	}
@@ -875,6 +877,76 @@ func executeWorkerOversizedResultFixture(t *testing.T, fixture workerRuntimeFixt
 		fitting.CurrentAttempt != fixture.ExpectedFitting.Attempt {
 		t.Fatalf("the fitting task is %s/%d with error %v, expected %s/%d",
 			fitting.State, fitting.CurrentAttempt, fitting.Error, fixture.ExpectedFitting.State, fixture.ExpectedFitting.Attempt)
+	}
+}
+
+// executeWorkerShutdownCancellationFixture stops the worker while its handler runs. The handler
+// returns once the shutdown grace cancels its context. One attempt makes a charged attempt fail the
+// task, either at once or when lease recovery settles an abandoned lease.
+func executeWorkerShutdownCancellationFixture(t *testing.T, fixture workerRuntimeFixture) {
+	if fixture.ShutdownBehavior["go"] != "cancel" {
+		t.Fatalf("the fixture expects Go shutdown behavior %q, want cancel", fixture.ShutdownBehavior["go"])
+	}
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-shutdown-cancellation")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "runtime-" + fixture.ID
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	taskID, err := queue.Enqueue(ctx, fixture.TaskType, nil, workhorse.EnqueueOptions{
+		MaxAttempts: fixture.MaxAttempts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-" + fixture.ID, PollInterval: 5 * time.Millisecond,
+		ShutdownGracePeriod: time.Duration(fixture.ShutdownGraceMS) * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	worker.Handle(fixture.TaskType, func(
+		handlerContext context.Context,
+		_ any,
+		_ *workhorse.HandlerContext,
+	) (any, error) {
+		close(started)
+		<-handlerContext.Done()
+		return nil, context.Cause(handlerContext)
+	})
+	runContext, stop := context.WithCancel(ctx)
+	runResult := make(chan error, 1)
+	go func() { runResult <- worker.Run(runContext) }()
+	<-started
+	stop()
+	select {
+	case err := <-runResult:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run returned %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run never returned after the shutdown grace")
+	}
+
+	expected := fixture.ExpectedCancelled
+	assertWorkerFixtureTaskState(t, ctx, pool, taskID, expected.workerFixtureTaskState)
+	rows, err := pool.Query(ctx, `SELECT event_type FROM workhorse.task_event WHERE task_id = $1
+		ORDER BY occurred_at, event_id`, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(events, expected.Events) {
+		t.Fatalf("the stopped task recorded events %v, want %v", events, expected.Events)
 	}
 }
 

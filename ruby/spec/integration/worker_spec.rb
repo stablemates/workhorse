@@ -326,6 +326,57 @@ RSpec.describe "Worker against PostgreSQL" do
     expect(versions.column_values(0)).to eq(%w[v1] * 3)
   end
 
+  # SM-1164: a handler that raised CancelledError(:shutdown) reached fail_v1, which charged the
+  # attempt, so a task on its last attempt failed for good because its worker stopped.
+  it "releases a task whose handler stops for shutdown without charging the attempt" do
+    task_id = queue.enqueue("stopping", {}, max_attempts: 1).task_id
+    started = Queue.new
+    reasons = Queue.new
+    subject = worker(shutdown_grace: 0.05).handle("stopping") do |_payload, context|
+      started << true
+      raise "the shutdown never reached the handler" unless context.cancellation.wait(5)
+
+      reasons << context.cancellation.reason
+      context.cancellation.check!
+    end
+    runner = Thread.new { subject.run }
+    started.pop
+    subject.stop
+    runner.value
+
+    expect(reasons.pop).to eq(:shutdown)
+    expect(status(task_id).values_at("state", "attempt")).to eq(["ready", "1"])
+    events = @connection.exec_params("SELECT event_type FROM workhorse.task_event WHERE task_id = $1 ORDER BY occurred_at, event_id",
+      [task_id]).column_values(0)
+    expect(events).to eq(%w[enqueued claimed released])
+  end
+
+  it "still charges the attempt when a handler raises its own error after the shutdown" do
+    task_id = queue.enqueue("failing", {}, max_attempts: 1).task_id
+    started = Queue.new
+    subject = worker(shutdown_grace: 0.05).handle("failing") do |_payload, context|
+      started << true
+      raise "the shutdown never reached the handler" unless context.cancellation.wait(5)
+
+      raise ArgumentError, "the upstream call failed"
+    end
+    runner = Thread.new { subject.run }
+    started.pop
+    subject.stop
+    runner.value
+
+    row = status(task_id)
+    expect(row.values_at("state", "attempt")).to eq(["failed", "1"])
+    expect(JSON.parse(row["error"])["name"]).to eq("ArgumentError")
+  end
+
+  it "charges the attempt of a handler that raises a shutdown CancelledError without a stop" do
+    task_id = queue.enqueue("forged", {}, max_attempts: 1).task_id
+    worker.handle("forged") { raise W::CancelledError.new(:shutdown) }.run_once
+
+    expect(status(task_id).values_at("state", "attempt")).to eq(["failed", "1"])
+  end
+
   it "raises ShutdownIncompleteError when a handler outlives the grace and the unwind window" do
     queue.enqueue("stuck", {})
     started = Queue.new
