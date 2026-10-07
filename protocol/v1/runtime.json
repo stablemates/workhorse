@@ -173,7 +173,7 @@
     "pollMs": 100,
     "emptyPollsBeforeEnqueue": 2,
     "enqueueStallMs": 250,
-    "expectedMinimumDelayMs": 100,
+    "expectedMinimumDelayMs": 150,
     "expectedMaximumDelayMs": 300
   },
   {

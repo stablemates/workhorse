@@ -570,21 +570,33 @@ async function executePollCadenceRuntimeFixture(
   // The worker is held at the end of every empty claim until the test releases it. Counting
   // empty polls is not enough: an uncounted poll between the count and the enqueue advances
   // the backoff step, and the delay is then measured against the wrong one.
+  //
+  // The delay runs from the moment the last empty claim returns to the worker to the start of
+  // the next claim. That span is the worker's own cadence. It leaves out the claim that finds
+  // the task and the dispatch to the handler, so a slow runner cannot charge them to the backoff.
   let holding = true;
   let pollReached = deferred<void>();
   let pollReleased = deferred<void>();
+  // Each claim_many_v1 call's start, its return to the worker, and whether it found a task.
+  const claims: { started: number; returned: number; found: boolean }[] = [];
   const pollingDatabase = {
     async query(text: string, values?: readonly unknown[]) {
+      if (!text.includes("claim_many_v1")) {
+        return await database.query(text, values);
+      }
+      const started = performance.now();
       const result = await database.query(text, values);
-      if (holding && text.includes("claim_many_v1")) {
+      const found = result.rows.length > 0;
+      if (holding && !found) {
         pollReached.resolve();
         await pollReleased.promise;
       }
+      claims.push({ started, returned: performance.now(), found });
       return result;
     },
   } as Queryable;
   const queue = new Queue(pollingDatabase);
-  const handled = deferred<number>();
+  const handled = deferred<void>();
   // The polling wrapper has no pool to lend a heartbeat connection from.
   const worker = new Worker(queue, {
     sharedHeartbeats: true,
@@ -593,12 +605,11 @@ async function executePollCadenceRuntimeFixture(
     pollMs: fixture.pollMs,
     registryIntervalMs: 0,
   }).handle(fixture.taskType, () => {
-    handled.resolve(performance.now());
+    handled.resolve();
     return null;
   });
   const running = worker.run();
   try {
-    let enqueuedAt = 0;
     for (let poll = 1; poll <= fixture.emptyPollsBeforeEnqueue; poll += 1) {
       await pollReached.promise;
       const release = pollReleased;
@@ -607,22 +618,29 @@ async function executePollCadenceRuntimeFixture(
         // pinned step, so this changes nothing; an unheld one fails on every run.
         await sleep(fixture.enqueueStallMs);
         await queue.enqueue(fixture.taskType, {}, { queue: queueName });
-        enqueuedAt = performance.now();
         holding = false;
       }
       pollReached = deferred<void>();
       pollReleased = deferred<void>();
       release.resolve();
     }
-    const delayMs = (await handled.promise) - enqueuedAt;
-    expect(delayMs).toBeGreaterThanOrEqual(fixture.expectedMinimumDelayMs);
-    expect(delayMs).toBeLessThanOrEqual(fixture.expectedMaximumDelayMs);
+    await handled.promise;
   } finally {
     holding = false;
     pollReleased.resolve();
     worker.stop();
     await running;
   }
+  const ordered = claims.toSorted((left, right) => left.started - right.started);
+  const found = ordered.findIndex((claim) => claim.found);
+  expect(found, "no claim_many_v1 call after an empty poll returned the task").toBeGreaterThan(0);
+  expect(
+    ordered.slice(0, found).filter((claim) => !claim.found),
+    "empty polls before the claim that found the task",
+  ).toHaveLength(fixture.emptyPollsBeforeEnqueue);
+  const delayMs = ordered[found]!.started - ordered[found - 1]!.returned;
+  expect(delayMs).toBeGreaterThanOrEqual(fixture.expectedMinimumDelayMs);
+  expect(delayMs).toBeLessThanOrEqual(fixture.expectedMaximumDelayMs);
 }
 
 async function executeGracefulDrainRuntimeFixture(
