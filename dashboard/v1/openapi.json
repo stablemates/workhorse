@@ -892,10 +892,8 @@
                             "createdAt": "2026-01-01T00:00:00.000Z",
                             "humanWait": {
                               "name": "review",
-                              "context": {
-                                "question": "Approve the conformance run?"
-                              },
-                              "deadlineAt": "2026-01-01T00:00:00.000Z"
+                              "deadlineAt": "2026-01-01T00:00:00.000Z",
+                              "quickAction": null
                             },
                             "updatedAt": "2026-01-01T00:00:00.000Z",
                             "durability": null,
@@ -2072,7 +2070,8 @@
                               "recordedRunCount": 0
                             }
                           ]
-                        }
+                        },
+                        "scheduleCount": 1
                       }
                     }
                   }
@@ -7295,6 +7294,9 @@
               "$ref": "#/components/schemas/DashboardScheduleRow"
             }
           },
+          "scheduleCount": {
+            "type": "number"
+          },
           "maintenance": {
             "type": "object",
             "properties": {
@@ -7399,6 +7401,7 @@
         "required": [
           "capturedAt",
           "schedules",
+          "scheduleCount",
           "maintenance"
         ]
       },
@@ -7932,6 +7935,17 @@
           "diagnostics",
           "waits",
           "signalWaits"
+        ]
+      },
+      "DashboardHumanWaitQuickActionSummary": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label"
         ]
       },
       "DashboardHumanWaitRow": {
@@ -11996,7 +12010,7 @@
           "humanWait": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/DashboardHumanWaitSummary"
+                "$ref": "#/components/schemas/DashboardTaskRowHumanWait"
               },
               {
                 "type": "null"
@@ -12033,6 +12047,32 @@
           "humanWait"
         ],
         "additionalProperties": {}
+      },
+      "DashboardTaskRowHumanWait": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "deadlineAt": {
+            "type": "string"
+          },
+          "quickAction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DashboardHumanWaitQuickActionSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "deadlineAt",
+          "quickAction"
+        ]
       },
       "DashboardTaskValue": {
         "type": "object",

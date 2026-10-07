@@ -106,6 +106,99 @@ describe("dashboard event history", () => {
     expect(bottomPageSize).toBeGreaterThan(bottomPagination);
   });
 
+  it("caps the pager at the page the server accepts and offers to continue", async () => {
+    const { EventsPage } = await import("./pages/events.js");
+    const { dashboardPageMax } = await import("@stablemates/workhorse-dashboard-server/wire");
+    const event = {
+      id: "event:018f0000-0000-7000-8000-000000000044",
+      kind: "event",
+      recordId: "018f0000-0000-7000-8000-000000000044",
+      taskId: "task-9",
+      queue: "billing",
+      taskType: "invoice.send",
+      occurredAt: "2026-08-16T11:20:00.123Z",
+      attempt: 1,
+      type: "claimed",
+      details: null,
+      workerId: null,
+      fenceToken: null,
+      durationMs: null,
+      errorMessage: null,
+    } satisfies DashboardEventRow;
+    const render = (page: number, setQuery: (next: unknown) => void = () => undefined) =>
+      renderToStaticMarkup(
+        createElement(
+          MantineProvider,
+          null,
+          createElement(
+            DashboardClientContext.Provider,
+            {
+              value: {
+                taskFacets: async () => ({ queues: [], workers: [], taskTypes: [], tags: [] }),
+              } as DashboardClient,
+            },
+            createElement(EventsPage, {
+              data: {
+                capturedAt: "2026-08-16T12:00:00.000Z",
+                window: "1h",
+                windowSeconds: 3600,
+                rangeStart: "2026-08-16T11:00:00.000Z",
+                rangeEnd: "2026-08-16T12:00:00.000Z",
+                events: [event],
+                page,
+                pageSize: 25,
+                count: "none",
+                hasMore: true,
+                total: page * 25 + 1,
+                retention: { taskEventDays: null, attemptHistoryDays: null },
+              } satisfies DashboardEventsPage,
+              query: { ...defaultEventsLocation, page, pageSize: 25 },
+              setQuery,
+              inspectEvent: () => undefined,
+            }),
+          ),
+        ),
+      );
+
+    expect(dashboardPageMax).toBe(100);
+    // Short of the cap, the pager grows by one page while more events remain.
+    expect(render(3)).not.toContain("Continue with older events");
+    const last = render(dashboardPageMax);
+    expect(last).not.toContain(`>${dashboardPageMax + 1}<`);
+    expect(last).toContain(`>${dashboardPageMax}<`);
+    expect(last).toContain("newest 2,500 events");
+    expect(last).toContain(">Continue with older events<");
+  });
+
+  it("continues from the oldest event shown without losing ties at that instant", async () => {
+    const { continueEventsRange } = await import("./pages/events.js");
+    const range = { rangeStart: "2026-08-16T11:00:00.000Z", rangeEnd: "2026-08-16T12:00:00.000Z" };
+    expect(continueEventsRange(range, "2026-08-16T11:20:00.123Z")).toEqual({
+      from: "2026-08-16T11:00:00.000Z",
+      to: "2026-08-16T11:20:00.124Z",
+      skipsTies: false,
+    });
+  });
+
+  it("always moves the range back, even when one instant fills every page", async () => {
+    const { continueEventsRange } = await import("./pages/events.js");
+    // The previous Continue ended the range 1 ms after this instant, and all 100 pages share it.
+    // Ending there again would repeat the same window, so the range ends at the instant itself.
+    const range = { rangeStart: "2026-08-16T11:00:00.000Z", rangeEnd: "2026-08-16T11:20:00.124Z" };
+    expect(continueEventsRange(range, "2026-08-16T11:20:00.123Z")).toEqual({
+      from: "2026-08-16T11:00:00.000Z",
+      to: "2026-08-16T11:20:00.123Z",
+      skipsTies: true,
+    });
+    // Nothing older than the range start exists in the range, so there is nothing to continue to.
+    expect(
+      continueEventsRange(
+        { rangeStart: "2026-08-16T11:00:00.000Z", rangeEnd: "2026-08-16T11:00:00.001Z" },
+        "2026-08-16T11:00:00.000Z",
+      ),
+    ).toBeNull();
+  });
+
   it("validates and converts local custom event ranges", async () => {
     const { parseEventRange } = await import("./dashboard.js");
     const range = parseEventRange("2026-08-15T12:00", "2026-08-15T13:30");
@@ -209,6 +302,12 @@ describe("dashboard event history", () => {
     );
     expect(row).toContain(">Task dependency counter repaired<");
     expect(row).toContain("source=resolver");
+    // The row keeps its table role, so a screen reader still pairs each cell with its column.
+    expect(row).not.toMatch(/<tr[^>]*role=/);
+    expect(row).not.toMatch(/<tr[^>]*tabindex=/);
+    expect(row).toMatch(
+      /<td[^>]*><button[^>]*aria-label="Task dependency counter repaired event, inspect for invoice\.send"/,
+    );
 
     const timeline = await renderExport(
       "BoundaryTimeline",

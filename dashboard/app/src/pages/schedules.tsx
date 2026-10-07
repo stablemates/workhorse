@@ -143,6 +143,12 @@ export function CronPage({
         title="Schedules"
         description="See when recurring tasks run and where Workhorse sends them."
       />
+      {data.scheduleCount > data.schedules.length ? (
+        <Text size="sm" c="dimmed">
+          Showing {formatCount(data.schedules.length)} of {formatCount(data.scheduleCount)}{" "}
+          schedules, the first by namespace and name.
+        </Text>
+      ) : null}
       {schedules.length === 0 ? (
         <EmptyState>Workhorse has no recurring schedules.</EmptyState>
       ) : (

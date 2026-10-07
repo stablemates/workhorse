@@ -432,6 +432,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "bound the scan cost of fast dead letters, statistics, and repeated ticks",
     kind: "additive",
   },
+  {
+    fromVersion: 60,
+    toVersion: 61,
+    file: "0062-bound-dashboard-worker-and-task-listings.sql",
+    description: "bound dashboard worker and task listings",
+    kind: "additive",
+  },
 ];
 
 /**

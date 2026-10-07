@@ -93,9 +93,10 @@ type DashboardConcurrencyPolicySummary struct {
 }
 
 type DashboardCronPage struct {
-	CapturedAt  string                 `json:"capturedAt"`
-	Schedules   []DashboardScheduleRow `json:"schedules"`
-	Maintenance struct {
+	CapturedAt    string                 `json:"capturedAt"`
+	Schedules     []DashboardScheduleRow `json:"schedules"`
+	ScheduleCount float64                `json:"scheduleCount"`
+	Maintenance   struct {
 		Cadences DashboardMaintenanceLoopCadences `json:"cadences"`
 		Policy   struct {
 			Timezone                       string  `json:"timezone"`
@@ -215,6 +216,10 @@ type DashboardHumanWaitPage struct {
 	} `json:"diagnostics"`
 	Waits       []DashboardHumanWaitRow  `json:"waits"`
 	SignalWaits []DashboardSignalWaitRow `json:"signalWaits"`
+}
+
+type DashboardHumanWaitQuickActionSummary struct {
+	Label string `json:"label"`
 }
 
 type DashboardHumanWaitRow struct {
@@ -992,7 +997,13 @@ type DashboardTaskRow struct {
 		Mode   string `json:"mode"`
 	} `json:"wait"`
 	SignalWait *DashboardSignalWaitSummary `json:"signalWait"`
-	HumanWait  *DashboardHumanWaitSummary  `json:"humanWait"`
+	HumanWait  *DashboardTaskRowHumanWait  `json:"humanWait"`
+}
+
+type DashboardTaskRowHumanWait struct {
+	Name        string                                `json:"name"`
+	DeadlineAt  string                                `json:"deadlineAt"`
+	QuickAction *DashboardHumanWaitQuickActionSummary `json:"quickAction"`
 }
 
 type DashboardTaskValue struct {

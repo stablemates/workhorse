@@ -6,6 +6,7 @@ import type {
   DashboardDemoTaskKind,
   DashboardDemoScenario,
   DashboardTaskRow,
+  DashboardTaskRowHumanWait,
   DashboardHumanWaitRow,
   DashboardRedriveStatus,
   DashboardRunNowStatus,
@@ -870,7 +871,7 @@ function redriveRowAction(task: TaskActionTarget): TaskRowAction {
 }
 
 function completeHumanWaitRowAction(task: TaskActionTarget, supported: boolean): TaskRowAction {
-  const quickAction = task.humanWait ? humanWaitQuickAction(task.humanWait.context) : null;
+  const quickAction = task.humanWait?.quickAction ?? null;
   if (!task.humanWait) {
     return {
       id: "complete-human-wait",
@@ -912,8 +913,17 @@ export type TaskActionTarget = Pick<
   | "cancellation"
   | "waitName"
   | "wait"
-  | "humanWait"
-> & { payload?: unknown };
+> & { payload?: unknown; humanWait: TaskActionHumanWait | null };
+
+/**
+ * A pending human decision as an action reads it.
+ *
+ * A listing row names its quick action without the context, so the action loads the task detail
+ * before it asks for confirmation. The task detail already holds the context and passes it along.
+ */
+export interface TaskActionHumanWait extends DashboardTaskRowHumanWait {
+  context?: unknown;
+}
 
 /** What the connected host can do, so unavailable actions explain the capability limit. */
 export interface TaskRowActionCapabilities {

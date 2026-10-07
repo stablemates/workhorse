@@ -11,7 +11,7 @@ remain thin protocol clients.
 
 ### Current version and baseline
 
-The current schema version is 60 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
+The current schema version is 61 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
 (`WORKHORSE_SCHEMA_BASELINE_VERSION`). `sql/releases/0006.sql` contains the baseline clean-install
 artifact, which is the 0.2.0 schema.
 
@@ -35,10 +35,10 @@ function or reinterpret that suffix.
 
 The current migration plan has one contract step. `0025-add-a-fast-task-tier.sql` moves schema 24 to
 25 and retires protocols 1 through 4. On an older installation, `migrateSchema` therefore stops at
-schema 24, and `contractSchema` applies step 25. The additive steps 26 through 60 follow, so a
+schema 24, and `contractSchema` applies step 25. The additive steps 26 through 61 follow, so a
 second `migrateSchema` run completes the plan.
 
-Their files run from `0026` to `0061`. File number `0035` was reserved and never used. From `0036`
+Their files run from `0026` to `0062`. File number `0035` was reserved and never used. From `0036`
 on, a file's number is therefore one above the version it produces.
 
 Step 25 ships without the usual retention window, as
@@ -115,7 +115,7 @@ reports `Workhorse migration <file> failed part-way and rolled nothing back`.
 
 Each of these fails without running a migration:
 
-- An installed version below the baseline 6 or above the current 60.
+- An installed version below the baseline 6 or above the current 61.
 - A version no step starts from.
 - A `workhorse.schema_version` table without exactly one row.
 

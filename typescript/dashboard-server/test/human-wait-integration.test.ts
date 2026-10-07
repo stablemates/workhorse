@@ -76,24 +76,32 @@ describe("dashboard human waits", () => {
         }),
       ],
     });
+    // A polled listing names the quick action and leaves the context to the task detail.
+    const listedWait = {
+      name: "account-review",
+      quickAction: { label: "Approve" },
+      deadlineAt: expect.any(String),
+    };
     await expect(
       client(true).dashboard.tasks({ filter: "waiting", page: 1, pageSize: 25 }),
     ).resolves.toMatchObject({
       canCompleteHumanWait: true,
-      tasks: [
-        expect.objectContaining({
-          id,
-          humanWait: {
-            name: "account-review",
-            context: {
-              prompt: "Approve this account?",
-              accountId: "account-1",
-              dashboard: { quickAction: { label: "Approve", result: { approved: true } } },
-            },
-            deadlineAt: expect.any(String),
-          },
-        }),
-      ],
+      tasks: [expect.objectContaining({ id, humanWait: listedWait })],
+    });
+    await expect(
+      client(true).dashboard.tasksCursor({ filter: "waiting", pageSize: 25 }),
+    ).resolves.toMatchObject({
+      tasks: [expect.objectContaining({ id, humanWait: listedWait })],
+    });
+    await expect(client(true).dashboard.taskDetail({ id })).resolves.toMatchObject({
+      humanWait: {
+        name: "account-review",
+        context: {
+          prompt: "Approve this account?",
+          accountId: "account-1",
+          dashboard: { quickAction: { label: "Approve", result: { approved: true } } },
+        },
+      },
     });
 
     const input = {
@@ -114,6 +122,47 @@ describe("dashboard human waits", () => {
       state: "succeeded",
       result: { approved: true },
     });
+  });
+});
+
+describe("dashboard human wait quick action summary", () => {
+  it("names an action only when the context offers a label and a result", async () => {
+    const summaries = await pool.query<{ summary: unknown }>(
+      `SELECT workhorse.dashboard_human_wait_quick_action_v1(context::jsonb) AS summary
+         FROM unnest($1::text[]) WITH ORDINALITY AS cases(context, position)
+        ORDER BY position`,
+      [
+        [
+          { dashboard: { quickAction: { label: "  Approve  ", result: null } } },
+          { dashboard: { quickAction: { label: "Approve" } } },
+          { dashboard: { quickAction: { label: " ", result: true } } },
+          { dashboard: { quickAction: { label: 1, result: true } } },
+          { dashboard: { quickAction: ["label", "result"] } },
+          { prompt: "Approve this account?" },
+          { dashboard: { quickAction: { label: "x".repeat(300), result: true } } },
+          // JavaScript's String.prototype.trim set, which the dashboard applies to the full context.
+          {
+            dashboard: { quickAction: { label: "\u00a0\u3000Approve\ufeff\u2029", result: true } },
+          },
+          { dashboard: { quickAction: { label: "\u00a0\u200a\u205f", result: true } } },
+          { dashboard: { quickAction: { label: "\vDev\v", result: true } } },
+          { dashboard: { quickAction: { label: "Dev", result: true } } },
+        ].map((context) => JSON.stringify(context)),
+      ],
+    );
+    expect(summaries.rows.map(({ summary }) => summary)).toEqual([
+      { label: "Approve" },
+      null,
+      null,
+      null,
+      null,
+      null,
+      { label: "x".repeat(200) },
+      { label: "Approve" },
+      null,
+      { label: "Dev" },
+      { label: "Dev" },
+    ]);
   });
 });
 

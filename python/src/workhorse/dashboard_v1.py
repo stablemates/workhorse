@@ -126,6 +126,7 @@ class DashboardCronPageMaintenance(TypedDict, total=False):
 class DashboardCronPage(TypedDict, total=False):
     capturedAt: Required[str]
     schedules: Required[list[DashboardScheduleRow]]
+    scheduleCount: Required[float]
     maintenance: Required[DashboardCronPageMaintenance]
 
 
@@ -239,6 +240,10 @@ class DashboardHumanWaitPage(TypedDict, total=False):
     diagnostics: Required[DashboardHumanWaitPageDiagnostics]
     waits: Required[list[DashboardHumanWaitRow]]
     signalWaits: Required[list[DashboardSignalWaitRow]]
+
+
+class DashboardHumanWaitQuickActionSummary(TypedDict, total=False):
+    label: Required[str]
 
 
 class DashboardHumanWaitRow(TypedDict, total=False):
@@ -1211,7 +1216,13 @@ class DashboardTaskRow(TypedDict, total=False):
     wakeAt: Required[str | None]
     wait: Required[DashboardTaskRowWait | None]
     signalWait: Required[DashboardSignalWaitSummary | None]
-    humanWait: Required[DashboardHumanWaitSummary | None]
+    humanWait: Required[DashboardTaskRowHumanWait | None]
+
+
+class DashboardTaskRowHumanWait(TypedDict, total=False):
+    name: Required[str]
+    deadlineAt: Required[str]
+    quickAction: Required[DashboardHumanWaitQuickActionSummary | None]
 
 
 class DashboardTaskValue(TypedDict, total=False):
@@ -1988,6 +1999,7 @@ __all__ = [
     "DashboardHumanWaitCompletionStatus",
     "DashboardHumanWaitPage",
     "DashboardHumanWaitPageDiagnostics",
+    "DashboardHumanWaitQuickActionSummary",
     "DashboardHumanWaitRow",
     "DashboardHumanWaitSummary",
     "DashboardInputValidationError",
@@ -2110,6 +2122,7 @@ __all__ = [
     "DashboardTaskFacets",
     "DashboardTaskRow",
     "DashboardTaskRowDurability",
+    "DashboardTaskRowHumanWait",
     "DashboardTaskRowRetryPolicyVariant2",
     "DashboardTaskRowRetryPolicyVariant3",
     "DashboardTaskRowRetryPolicyVariant4",

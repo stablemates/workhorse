@@ -1608,6 +1608,7 @@
       "cron_field_values_v1",
       "cron_occurrences_v1",
       "dashboard_budgets_v1",
+      "dashboard_human_wait_quick_action_v1",
       "dashboard_inline_value_bytes_v1",
       "dashboard_iso_v1",
       "dashboard_tag_filter_v1",

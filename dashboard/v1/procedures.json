@@ -2544,6 +2544,9 @@
             "$ref": "#/$defs/DashboardScheduleRow"
           }
         },
+        "scheduleCount": {
+          "type": "number"
+        },
         "maintenance": {
           "type": "object",
           "properties": {
@@ -2648,6 +2651,7 @@
       "required": [
         "capturedAt",
         "schedules",
+        "scheduleCount",
         "maintenance"
       ]
     },
@@ -3181,6 +3185,17 @@
         "diagnostics",
         "waits",
         "signalWaits"
+      ]
+    },
+    "DashboardHumanWaitQuickActionSummary": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label"
       ]
     },
     "DashboardHumanWaitRow": {
@@ -7245,7 +7260,7 @@
         "humanWait": {
           "anyOf": [
             {
-              "$ref": "#/$defs/DashboardHumanWaitSummary"
+              "$ref": "#/$defs/DashboardTaskRowHumanWait"
             },
             {
               "type": "null"
@@ -7282,6 +7297,32 @@
         "humanWait"
       ],
       "additionalProperties": {}
+    },
+    "DashboardTaskRowHumanWait": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "deadlineAt": {
+          "type": "string"
+        },
+        "quickAction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DashboardHumanWaitQuickActionSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "deadlineAt",
+        "quickAction"
+      ]
     },
     "DashboardTaskValue": {
       "type": "object",

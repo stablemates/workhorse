@@ -2,8 +2,10 @@ import { useCallback, useRef, useState } from "react";
 import { Button, Code, Group, Modal, Text, TextInput } from "@mantine/core";
 import { useDashboardClient } from "./core.js";
 import { useConfirmationActivity } from "./dropdown-activity.js";
+import type { DashboardClient } from "@stablemates/workhorse-dashboard-server";
 import {
   humanWaitQuickAction,
+  type HumanWaitQuickAction,
   isTerminalTaskState,
   redriveAtLeastOnceWarning,
   type TaskActionTarget,
@@ -19,6 +21,21 @@ import {
 import { copyToClipboard, formatJson } from "./preferences.js";
 import type { RunNowFeedback } from "./run-now.js";
 import type { TaskLocationState } from "./task-location.js";
+
+/**
+ * Read the full quick action of one pending decision from the task detail.
+ *
+ * Returns null when the task no longer waits on that decision or its context offers no action.
+ */
+export async function loadHumanWaitQuickAction(
+  client: Pick<DashboardClient, "taskDetail">,
+  taskId: string,
+  waitName: string,
+): Promise<HumanWaitQuickAction | null> {
+  const detail = await client.taskDetail({ id: taskId });
+  const wait = detail.humanWait;
+  return wait?.name === waitName ? humanWaitQuickAction(wait.context) : null;
+}
 
 /** Shared execution and confirmation flow for listing and detail actions. */
 export function useTaskActions({
@@ -43,7 +60,7 @@ export function useTaskActions({
   const [confirmingHumanWait, setConfirmingHumanWait] = useState<{
     taskId: string;
     waitName: string;
-    quickAction: NonNullable<ReturnType<typeof humanWaitQuickAction>>;
+    quickAction: HumanWaitQuickAction;
   } | null>(null);
   const [confirmingRedrive, setConfirmingRedrive] = useState<TaskActionTarget | null>(null);
   const [redrivingTaskId, setRedrivingTaskId] = useState<string | null>(null);
@@ -75,9 +92,32 @@ export function useTaskActions({
       }
       if (id === "complete-human-wait") {
         const wait = task.humanWait;
-        const quickAction = wait ? humanWaitQuickAction(wait.context) : null;
-        if (!wait || !quickAction || !canCompleteHumanWait || completingHumanWaitTaskId) return;
-        setConfirmingHumanWait({ taskId: task.id, waitName: wait.name, quickAction });
+        if (!wait?.quickAction || !canCompleteHumanWait || completingHumanWaitTaskId) return;
+        if (wait.context !== undefined) {
+          const quickAction = humanWaitQuickAction(wait.context);
+          if (quickAction)
+            setConfirmingHumanWait({ taskId: task.id, waitName: wait.name, quickAction });
+          return;
+        }
+        // A listing row names the action without its result, so the confirmation reads the
+        // decision's context from the task detail.
+        setCompletingHumanWaitTaskId(task.id);
+        void loadHumanWaitQuickAction(client, task.id, wait.name)
+          .then((quickAction) => {
+            if (quickAction) {
+              setConfirmingHumanWait({ taskId: task.id, waitName: wait.name, quickAction });
+              return;
+            }
+            notifyDashboard({
+              title: "Decision unavailable",
+              message: `${wait.name} is no longer waiting for this quick action. Refresh to see its current state.`,
+              tone: "neutral",
+            });
+          })
+          .catch((cause: unknown) =>
+            notifyFailure("Decision not loaded", cause, "Workhorse could not load the decision"),
+          )
+          .finally(() => setCompletingHumanWaitTaskId(null));
         return;
       }
       if (id === "run-now") {
@@ -112,6 +152,7 @@ export function useTaskActions({
       );
     },
     [
+      client,
       completingHumanWaitTaskId,
       canCompleteHumanWait,
       inspectTask,

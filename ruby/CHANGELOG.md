@@ -6,7 +6,7 @@ other SDKs carry, because every tag names one release of all of them.
 ## Unreleased
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **60**, and the SDK compatibility floor is schema version **54**.
+The final schema version is **61**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.

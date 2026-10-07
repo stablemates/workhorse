@@ -378,6 +378,7 @@ type DashboardEventsWindow
 type DashboardExternalWaitHealth
 interface DashboardFailureRow
 interface DashboardHumanWaitPage
+interface DashboardHumanWaitQuickActionSummary
 interface DashboardHumanWaitRow
 interface DashboardHumanWaitSummary
 interface DashboardIdempotencyEvidence
@@ -417,6 +418,7 @@ type DashboardTaskEventType
 interface DashboardTaskFacets
 type DashboardTaskFilter
 interface DashboardTaskRow
+interface DashboardTaskRowHumanWait
 type DashboardTaskSort
 interface DashboardTaskValue
 type DashboardTaskValueKind
@@ -432,6 +434,7 @@ function dashboardBudgetSummary
 function dashboardConcurrencyPolicySummary
 const dashboardIdempotencyEventDetailKeys
 const dashboardListingCounts
+const dashboardPageMax
 function dashboardRateLimitPolicySummary
 const dashboardRedriveBatchDefault
 const dashboardRedriveBatchMax
@@ -562,6 +565,7 @@ type DashboardEventsWindow
 type DashboardExternalWaitHealth
 interface DashboardFailureRow
 interface DashboardHumanWaitPage
+interface DashboardHumanWaitQuickActionSummary
 interface DashboardHumanWaitRow
 interface DashboardHumanWaitSummary
 interface DashboardIdempotencyEvidence
@@ -601,6 +605,7 @@ type DashboardTaskEventType
 interface DashboardTaskFacets
 type DashboardTaskFilter
 interface DashboardTaskRow
+interface DashboardTaskRowHumanWait
 type DashboardTaskSort
 interface DashboardTaskValue
 type DashboardTaskValueKind
@@ -616,6 +621,7 @@ function dashboardBudgetSummary
 function dashboardConcurrencyPolicySummary
 const dashboardIdempotencyEventDetailKeys
 const dashboardListingCounts
+const dashboardPageMax
 function dashboardRateLimitPolicySummary
 const dashboardRedriveBatchDefault
 const dashboardRedriveBatchMax
@@ -644,6 +650,7 @@ interface RedriveOutcomeDescription
 interface RedriveSelection
 interface RetryPolicyDescription
 interface RunNowOutcomeDescription
+interface TaskActionHumanWait
 type TaskActionTarget
 interface TaskResultDescription
 interface TaskResultEvidence
@@ -1364,7 +1371,10 @@ interface DashboardConcurrencyPolicySummary {
 
 interface DashboardCronPage {
   capturedAt: string;
+  /** The first 50 schedules by namespace and name. */
   schedules: DashboardScheduleRow[];
+  /** Every configured schedule, so a page can say how many `schedules` left out. */
+  scheduleCount: number;
   maintenance: {
     cadences: DashboardMaintenanceLoopCadences;
     policy: {
@@ -1656,6 +1666,10 @@ interface DashboardHumanWaitPage {
   diagnostics: Awaited<ReturnType<Queue["health"]>>["externalWaits"];
   waits: DashboardHumanWaitRow[];
   signalWaits: DashboardSignalWaitRow[];
+}
+
+interface DashboardHumanWaitQuickActionSummary {
+  label: string;
 }
 
 interface DashboardHumanWaitRow {
@@ -2682,7 +2696,13 @@ interface DashboardTaskRow extends Record<string, unknown> {
     mode: "relative" | "absolute";
   } | null;
   signalWait: DashboardSignalWaitSummary | null;
-  humanWait: DashboardHumanWaitSummary | null;
+  humanWait: DashboardTaskRowHumanWait | null;
+}
+
+interface DashboardTaskRowHumanWait {
+  name: string;
+  deadlineAt: string;
+  quickAction: DashboardHumanWaitQuickActionSummary | null;
 }
 
 type DashboardTaskSort = (typeof dashboardTaskSorts)[number];
@@ -3296,7 +3316,7 @@ interface LiveProtocolWorker {
 
 const MAXIMUM_PROTOCOL_VERSION = 5;
 
-const MAXIMUM_SCHEMA_VERSION = 60;
+const MAXIMUM_SCHEMA_VERSION = 61;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -4389,8 +4409,13 @@ interface StoredSchedule {
 
 const TRACE_ATTRIBUTE_COUNT_LIMIT = 8;
 
-type TaskActionTarget = Pick<DashboardTaskRow, "id" | "type" | "queue" | "state" | "workerId" | "lastWorkerId" | "cancellation" | "waitName" | "wait" | "humanWait"> & {
+interface TaskActionHumanWait extends DashboardTaskRowHumanWait {
+  context?: unknown;
+}
+
+type TaskActionTarget = Pick<DashboardTaskRow, "id" | "type" | "queue" | "state" | "workerId" | "lastWorkerId" | "cancellation" | "waitName" | "wait"> & {
   payload?: unknown;
+  humanWait: TaskActionHumanWait | null;
 };
 
 type TaskActivityGroup = "queue" | "worker" | "task" | "status";
@@ -4774,7 +4799,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
 
-const WORKHORSE_SCHEMA_VERSION = 60;
+const WORKHORSE_SCHEMA_VERSION = 61;
 
 const WORKHORSE_VERSION = "0.6.1";
 
@@ -5253,6 +5278,8 @@ const dashboardListingCounts: readonly ["none", "exact"];
 function dashboardNodeMiddleware(host: DashboardHost, options?: DashboardNodeMiddlewareOptions): DashboardNodeMiddleware;
 
 const dashboardNotificationPosition = "bottom-right";
+
+const dashboardPageMax = 100;
 
 function dashboardRateLimitPolicySummary(policy: QueueRateLimitPolicy): DashboardRateLimitPolicySummary;
 

@@ -17,6 +17,7 @@ import type {
 import {
   dashboardAttemptOutcomes,
   dashboardListingCounts,
+  dashboardPageMax,
   dashboardTaskEventTypes,
   dashboardRedriveBatchDefault,
   dashboardRedriveBatchMax,
@@ -149,7 +150,7 @@ const taskFilter = z.enum(dashboardTaskFilters);
 const taskSort = z.enum(dashboardTaskSorts);
 const checkedDashboardTaskPriorityMax: typeof MAX_TASK_PRIORITY = dashboardTaskPriorityMax;
 const dashboardFilterString = z.string().trim().min(1).max(200);
-const dashboardPage = z.number().int().min(1).max(100).default(1);
+const dashboardPage = z.number().int().min(1).max(dashboardPageMax).default(1);
 /**
  * Whether a listing counts every matching row.
  *

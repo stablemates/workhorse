@@ -8,6 +8,7 @@ import type {
 } from "@stablemates/workhorse-dashboard-server/wire";
 import {
   dashboardAttemptOutcomes,
+  dashboardPageMax,
   dashboardTaskEventTypes,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import { isEventTypeFilter, type EventsLocationState } from "../events-location.js";
@@ -26,6 +27,7 @@ import {
   Text,
   TextInput,
   Tooltip,
+  UnstyledButton,
 } from "@mantine/core";
 import { MultiSelect, Select } from "../dropdown-activity.js";
 import { useEffect, useState } from "react";
@@ -37,6 +39,7 @@ import {
   useTaskFacets,
 } from "../components/task-list.js";
 import { formatDuration, formatExact, formatRelative } from "../preferences.js";
+import { formatCount } from "../count-format.js";
 
 export const eventsKindOptions = [
   { value: "all", label: "All" },
@@ -83,6 +86,26 @@ export function parseEventRange(fromValue: string, toValue: string): ParsedEvent
   }
   if (from >= to) return { error: "The end time must be after the start time." };
   return { from: from.toISOString(), to: to.toISOString() };
+}
+/**
+ * The custom range that continues the feed past the last page the server accepts.
+ *
+ * The range end is exclusive, so it normally sits one millisecond after the oldest event shown.
+ * Events at that instant that the last page did not reach stay in the new range, at the cost of
+ * showing the ones it did reach again. When that end would not move the range back, every page
+ * shares one instant, so the range ends at that instant and `skipsTies` says the rest of it is
+ * passed over. Returns null when the range holds nothing older.
+ */
+export function continueEventsRange(
+  range: { rangeStart: string; rangeEnd: string },
+  oldestShownAt: string,
+): { from: string; to: string; skipsTies: boolean } | null {
+  const oldest = Date.parse(oldestShownAt);
+  const overlapping = oldest + 1;
+  const skipsTies = overlapping >= Date.parse(range.rangeEnd);
+  const to = skipsTies ? oldest : overlapping;
+  if (to <= Date.parse(range.rangeStart)) return null;
+  return { from: range.rangeStart, to: new Date(to).toISOString(), skipsTies };
 }
 /**
  * The fleet-wide feed of durable lifecycle history.
@@ -161,8 +184,13 @@ export function EventsPage({
   const filter = (next: Partial<EventsLocationState>) =>
     setQuery({ ...query, ...next, page: 1, eventId: null });
   // The feed reports the total it proved rather than a count over the whole window, so the pager
-  // gains one page while more remain and settles on the real last page once it is reached.
-  const totalPages = Math.max(1, Math.ceil(data.total / data.pageSize));
+  // gains one page while more remain and settles on the real last page once it is reached. It
+  // stops at the last page the server accepts, and the note below offers the rest another way.
+  const totalPages = Math.min(dashboardPageMax, Math.max(1, Math.ceil(data.total / data.pageSize)));
+  const beyondLastPage = data.total > dashboardPageMax * data.pageSize;
+  const oldestShown = data.page === dashboardPageMax ? data.events.at(-1) : undefined;
+  const continuation =
+    oldestShown === undefined ? null : continueEventsRange(data, oldestShown.occurredAt);
   const pagination = (label: string) =>
     totalPages > 1 ? (
       <Pagination
@@ -427,6 +455,30 @@ export function EventsPage({
           </Text>
         ) : null}
       </Group>
+      {beyondLastPage ? (
+        <Group gap="xs" wrap="wrap">
+          <Text size="xs">
+            The pager reaches the newest {formatCount(dashboardPageMax * data.pageSize)} events.
+            {oldestShown === undefined
+              ? ` Narrow the window or filters, or open page ${dashboardPageMax} to continue with older events.`
+              : continuation === null
+                ? " Narrow the window or filters to see the rest."
+                : " Narrow the window or filters, or continue with the events older than this page."}
+            {continuation?.skipsTies && oldestShown
+              ? ` Every page shares ${formatExact(oldestShown.occurredAt)}, so continuing skips the rest of that instant's events.`
+              : null}
+          </Text>
+          {continuation === null ? null : (
+            <Button
+              size="xs"
+              variant="light"
+              onClick={() => filter({ from: continuation.from, to: continuation.to })}
+            >
+              Continue with older events
+            </Button>
+          )}
+        </Group>
+      ) : null}
       <Text c="dimmed" size="xs">
         A task completion can record both a lifecycle transition and an attempt outcome. Use Source
         to view either separately. This feed stays complete when notifications are missed because
@@ -444,30 +496,26 @@ export function EventRow({
   inspectEvent: (event: DashboardEventRow) => void;
 }) {
   const detail = event.errorMessage ?? eventDetailSummary(event.details);
+  const label = `${event.kind === "attempt" ? "Attempt" : "Task"} ${event.type.replaceAll("_", " ")}`;
   return (
-    <Table.Tr
-      onClick={() => inspectEvent(event)}
-      onKeyDown={(keyboardEvent) => {
-        if (keyboardEvent.target !== keyboardEvent.currentTarget) return;
-        if (keyboardEvent.key === "Enter" || keyboardEvent.key === " ") {
-          keyboardEvent.preventDefault();
-          inspectEvent(event);
-        }
-      }}
-      tabIndex={0}
-      role="button"
-      aria-label={`Inspect ${event.type.replaceAll("_", " ")} event for ${event.taskType ?? event.taskId}`}
-      style={{ cursor: "pointer" }}
-    >
+    // The row stays a table row, so assistive technology keeps each cell's column. A pointer
+    // click anywhere opens the event; the keyboard and screen readers use the named button.
+    <Table.Tr onClick={() => inspectEvent(event)} style={{ cursor: "pointer" }}>
       <Table.Td className="event-table__col--id">
         <TaskTableId id={event.taskId} />
       </Table.Td>
       <Table.Td className="event-table__col--status">
-        <StatusLabel
-          state={event.type}
-          text={`${event.kind === "attempt" ? "Attempt" : "Task"} ${event.type.replaceAll("_", " ")}`}
-          color={eventTypeColor(event.type)}
-        />
+        <UnstyledButton
+          className="task-table__open"
+          // The name starts from the visible label, so speech input can say what it sees.
+          aria-label={`${label} event, inspect for ${event.taskType ?? event.taskId}`}
+          onClick={(clickEvent) => {
+            clickEvent.stopPropagation();
+            inspectEvent(event);
+          }}
+        >
+          <StatusLabel state={event.type} text={label} color={eventTypeColor(event.type)} />
+        </UnstyledButton>
       </Table.Td>
       <Table.Td className="event-table__col--when">
         <Tooltip label={formatExact(event.occurredAt)} withArrow>

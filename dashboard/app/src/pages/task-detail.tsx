@@ -1,7 +1,7 @@
 import { useTaskActions } from "../task-actions.js";
 import { TaskRowActions, TaskTags } from "../components/task-list.js";
 import { taskHref } from "../core.js";
-import type { TaskActionTarget } from "../presentation.js";
+import { humanWaitQuickAction, type TaskActionTarget } from "../presentation.js";
 import type { DashboardTaskDetail } from "@stablemates/workhorse-dashboard-server/wire";
 import { Badge, Box, Center, Code, Group, Loader, Paper, Stack, Text } from "@mantine/core";
 import { ResizableTaskDrawer } from "../components/resizable-task-drawer.js";
@@ -273,7 +273,9 @@ function TaskDetailActions({
           return wait ? { name: wait.name, mode: wait.mode, wakeAt: wait.wakeAt } : null;
         })()
       : null,
-    humanWait: task.humanWait ?? null,
+    humanWait: task.humanWait
+      ? { ...task.humanWait, quickAction: humanWaitQuickAction(task.humanWait.context) }
+      : null,
   };
   const actions = useTaskActions({
     canCompleteHumanWait: task.canCompleteHumanWait ?? false,
