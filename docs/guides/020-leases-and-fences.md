@@ -49,8 +49,10 @@ covers the whole database, not one task or queue. So a later claim always has a 
 
 **Recovery cadence.** Each worker calls `tick_v1` once per `maintenanceIntervalMs` (TypeScript
 default 1,000 ms). A tick skips the expired-lease scan when another tick ran it within half the
-shortest live maintenance interval. The scan still runs at least once per interval while workers
-keep ticking, and each run recovers a bounded batch of expired rows.
+shortest maintenance interval among live registered workers. Unregistered workers do not count.
+While registered workers keep ticking, a tick reaches the scan at least once per shortest
+registered interval, unless other recovery work fills the limit first. With no live registered
+worker, every tick runs the scan. Each run recovers a bounded batch of expired rows.
 
 More detail: [Task lifecycle: Claim](../architecture/lifecycle.md#claim), [Task lifecycle: Worker options](../architecture/lifecycle.md#worker-options), and [Task lifecycle: Maintenance cadence](../architecture/lifecycle.md#maintenance-cadence).
 

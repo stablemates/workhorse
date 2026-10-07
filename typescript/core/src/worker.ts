@@ -433,7 +433,10 @@ export interface WorkerOptions {
    * Each refresh publishes this worker's runtime state and reads back the operator-requested pause
    * flag, which is how an operator surface running in another process observes and controls a
    * worker it does not host. A pause therefore takes effect within roughly one interval, and is
-   * cleared automatically if this process is replaced. Set to 0 to opt out of registration.
+   * cleared automatically if this process is replaced. Set to 0 to opt out of registration. An
+   * unregistered worker does not shorten the expired-lease scan spacing, which follows the shortest
+   * maintenance interval among live registered workers. While any are live, an expired lease can
+   * wait up to that interval for recovery.
    */
   registryIntervalMs?: number;
   /**

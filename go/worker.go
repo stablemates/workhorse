@@ -212,11 +212,15 @@ type WorkerOptions struct {
 	// to PostgreSQL. It defaults to one minute and never runs faster than MaintenanceInterval.
 	MaintenanceRoutineInterval time.Duration
 	RegistryInterval           time.Duration
-	DisableRegistry            bool
-	ScheduleNamespaces         []string
-	ScheduleCatchupLimit       int
-	ShutdownGracePeriod        time.Duration
-	PollingOnly                bool
+	// DisableRegistry skips registration, so operator surfaces neither see nor pause this worker.
+	// An unregistered worker does not shorten the expired-lease scan spacing, which follows the
+	// shortest maintenance interval among live registered workers. While any are live, an expired
+	// lease can wait up to that interval for recovery.
+	DisableRegistry      bool
+	ScheduleNamespaces   []string
+	ScheduleCatchupLimit int
+	ShutdownGracePeriod  time.Duration
+	PollingOnly          bool
 	// SharedHeartbeats opts out of the dedicated heartbeat connection reservation.
 	SharedHeartbeats bool
 	// Cohorts splits the slots into fixed shares for fast-tier dispatch (ADR 0076). It takes 1
