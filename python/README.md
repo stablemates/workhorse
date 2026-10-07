@@ -29,8 +29,10 @@ The machine that runs that deployment step needs Node.js 22 or newer. The applic
 no Node.js.
 
 Pin that version to the `stablemates-workhorse` version the application depends on. The two are
-released together from one commit, so the numbers match. A schema tool older than the application
-leaves a schema the application refuses to start against.
+released together from one commit, so the numbers match. The application refuses a schema below its
+schema floor, the oldest schema version it runs against. A schema at or above the floor is
+compatible while it still serves the application's protocol. A schema tool from an older release can
+leave a schema below that floor.
 
 Runtime processes verify compatibility instead of changing the schema. Call
 `assert_schema_compatible(connection)` at startup. Call `assert_schema_compatible_psycopg` or

@@ -32,9 +32,11 @@ npx --package @stablemates/workhorse@0.6.1 workhorse schema install
 The machine that runs that deployment step needs Node.js 22 or newer. The application itself needs
 no Node.js.
 
-Pin that version to the gem version the application depends on. The two come from one commit of
-this repository, so the numbers match. A schema tool older than the application leaves a schema the
-application refuses to start against.
+Pin that version to the gem version the application depends on. The two come from one commit of this
+repository, so the numbers match. The application refuses a schema below its schema floor, the
+oldest schema version it runs against. A schema at or above the floor is compatible while it still
+serves the application's protocol. A schema tool from an older release can leave a schema below that
+floor.
 
 Runtime processes verify compatibility instead of changing the schema. Call
 `Queue#assert_compatible` or `Admin#assert_compatible` at startup. A refusal is
