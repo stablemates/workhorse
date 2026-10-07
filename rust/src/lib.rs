@@ -48,3 +48,5 @@ pub use worker::{
     run_worker_process, BatchItem, BatchOptions, BatchResult, CancellationToken, ClaimedTask,
     HandlerError, RegistrationErrorHook, RetryDelay, Worker, WorkerOptions,
 };
+#[doc(hidden)]
+pub use worker::{CLEANUP_WINDOW, UNWIND_WINDOW};

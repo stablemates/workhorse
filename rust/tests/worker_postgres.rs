@@ -20,7 +20,7 @@ use workhorse::{
     Admin, AdminAudit, BatchItem, BatchOptions, BatchResult, CancelReason, ChildTaskRequest,
     ClaimedTask, Debounce, DebounceSchedule, EnqueueOptions, EnqueueRequest, Error, HandlerContext,
     HandlerError, Queue, QueueHistory, QueueTier, ScheduleCatchupPolicy, ScheduleDefinition,
-    ScheduledTask, TaskState, Worker, WorkerOptions,
+    ScheduledTask, TaskState, Worker, WorkerOptions, CLEANUP_WINDOW, UNWIND_WINDOW,
 };
 
 const QUEUE: &str = "rust-worker";
@@ -96,12 +96,6 @@ fn run(worker: &Worker) -> (oneshot::Sender<()>, tokio::task::JoinHandle<Result<
     (stop, running)
 }
 
-/// How long a handler that shutdown cancels at the end of grace may unwind, as `UNWIND_WINDOW` in
-/// `rust/src/worker/mod.rs` sets it.
-const UNWIND_WINDOW: Duration = Duration::from_millis(250);
-/// How long shutdown waits for its loops and deregistration after the later of the deadline and
-/// the end of the drain, as `CLEANUP_WINDOW` in `rust/src/worker/mod.rs` sets it.
-const CLEANUP_WINDOW: Duration = Duration::from_secs(1);
 /// Scheduling slack for a loaded host. With three busy threads per core, one test runtime stalled
 /// for 0.35 s.
 const SHUTDOWN_SLACK: Duration = Duration::from_secs(1);
