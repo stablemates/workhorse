@@ -882,7 +882,7 @@ describe("claim lease fence", () => {
     });
   });
 
-  it("observes a timer-driven expiration rejection while the handler ignores abort", async () => {
+  it("keeps the handler running when a timer-driven expiration request fails", async () => {
     const expirationStarted = deferred();
     const releaseHandler = deferred();
     const expirationFailure = new Error("expiration connection lost");
@@ -901,12 +901,14 @@ describe("claim lease fence", () => {
         return Reflect.get(target, property, receiver);
       },
     });
-    await queue.enqueue("expiration-rejection", null, { executionTimeoutMs: 50 });
+    const id = await queue.enqueue("expiration-rejection", null, { executionTimeoutMs: 50 });
+    let signal: AbortSignal | undefined;
     const worker = new Worker(rejectingQueue, {
       workerId: "expiration-rejection-worker",
       leaseMs: 5_000,
       heartbeatMs: 1_000,
-    }).handle("expiration-rejection", async () => {
+    }).handle("expiration-rejection", async (_payload, context) => {
+      signal = context.signal;
       await releaseHandler.promise;
       return null;
     });
@@ -917,13 +919,21 @@ describe("claim lease fence", () => {
       await expirationStarted.promise;
       await sleep(0);
       expect(unhandledRejections).toEqual([]);
+      // A failed request does not confirm the expiry, so the attempt keeps its task.
+      expect(signal?.aborted).toBe(false);
       releaseHandler.resolve();
-      await expect(execution).rejects.toBe(expirationFailure);
+      await expect(execution).resolves.toBe(true);
     } finally {
       releaseHandler.resolve();
       await execution.catch(() => undefined);
       process.off("unhandledRejection", recordUnhandledRejection);
     }
+    expect(unhandledRejections).toEqual([]);
+    // The late completion meets the passed timeout in PostgreSQL, which closes the attempt.
+    await expect(admin.getTask(id)).resolves.toMatchObject({
+      currentAttempt: 2,
+      error: { name: "ExecutionTimeout" },
+    });
   });
 
   it("keeps lease recovery authoritative when it wins an attempt-timeout race", async () => {
@@ -995,7 +1005,8 @@ describe("claim lease fence", () => {
       await execution.catch(() => undefined);
     }
 
-    expect(reasons).toEqual([expect.any(ExecutionTimeoutError)]);
+    // The handler runs until PostgreSQL answers, and that answer is that recovery took the task.
+    expect(reasons).toEqual([new Error("Task lease was lost")]);
     await expect(admin.getTask(id)).resolves.toMatchObject({ state: "ready", currentAttempt: 2 });
     const history = await pool.query<{ outcome: string }>(
       "SELECT outcome FROM workhorse.attempt_history WHERE task_id = $1",

@@ -8987,6 +8987,10 @@ $$;
 -- can lock them in index order. Without the shared order, a worker's completion and its own
 -- heartbeat could each hold a row the other needs, and PostgreSQL rolled one back with 40P01.
 -- The oversized attempts fail after that lock, in task ID order, so they add no new lock order.
+--
+-- Failing an oversized attempt writes its outcome row, and that write can wait, for example behind
+-- partition maintenance. The function therefore reads the clock again after those failures. The
+-- completion DELETE judges every lease, deadline, and attempt timeout at that later time.
 CREATE OR REPLACE FUNCTION workhorse.fast_complete_many_v1(
   p_worker_id text, p_task_ids uuid[], p_fence_tokens bigint[], p_results jsonb[]
 ) RETURNS uuid[]
@@ -9026,6 +9030,8 @@ BEGIN
       NULL
     );
   END LOOP;
+  -- A failure above can wait for a lock, so a lease that was live before it may have expired since.
+  v_now := clock_timestamp();
   WITH input AS (
     SELECT * FROM unnest(p_task_ids, p_fence_tokens, p_results)
       AS input(task_id, fence_token, result)
@@ -9317,6 +9323,10 @@ BEGIN
 END;
 $$;
 
+-- Close a fast-tier task whose owner acknowledges a pending cancellation. The lease is judged
+-- after the row lock, as acknowledge_cancel_v1 judges it on the full tier: a row lock taken by
+-- another transaction that does not change the row leaves the earlier filter unchecked, so a lease
+-- that expired during the wait would otherwise still be accepted.
 CREATE OR REPLACE FUNCTION workhorse.fast_acknowledge_cancel_v1(
   p_task_id uuid, p_worker_id text, p_fence_token bigint
 ) RETURNS boolean
@@ -9328,9 +9338,11 @@ BEGIN
   SELECT * INTO v_runtime FROM workhorse.fast_task_runtime runtime
    WHERE runtime.task_id = p_task_id AND runtime.state = 'active'
      AND runtime.worker_id = p_worker_id AND runtime.fence_token = p_fence_token
-     AND runtime.expires_at > clock_timestamp() AND runtime.cancel_requested_at IS NOT NULL
    FOR UPDATE;
-  IF NOT FOUND THEN RETURN false; END IF;
+  IF NOT FOUND OR v_runtime.expires_at <= clock_timestamp()
+     OR v_runtime.cancel_requested_at IS NULL THEN
+    RETURN false;
+  END IF;
   PERFORM workhorse.fast_finish_v1(
     v_runtime, 'canceled', NULL,
     workhorse.cancellation_envelope_v1(
@@ -19899,10 +19911,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (55, 'count row retention lag from the history pass that released the row'),
   (56, 'close a released task without attributing its unrun attempt'),
   (57, 'let terminal cleanup keep pace and share its budget across tiers'),
-  (58, 'close SQL integrity gaps in rate refill, dependency edges, and mixed batches')
+  (58, 'close SQL integrity gaps in rate refill, dependency edges, and mixed batches'),
+  (59, 'judge fast-tier completions and cancellation acknowledgements after waits')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (58) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (59) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

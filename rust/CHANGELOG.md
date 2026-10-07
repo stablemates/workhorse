@@ -13,7 +13,7 @@ adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses 
 ## Unreleased
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **58**, and the SDK compatibility floor is schema version **54**.
+The final schema version is **59**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.
@@ -76,6 +76,8 @@ Migration 0059 (`0059-close-sql-integrity-gaps-in-rate-refill-dependency-edges-a
 task's stored trace context. A task without one starts a new trace instead of joining the current
 `tracing` span. The `tracing` span still nests under that span, so its log events keep their scope
 (SM-1179).
+
+Migration 0060 (`0060-judge-fast-tier-completions-and-cancellation-acknowledgements-after-waits.sql`) judges two fast-tier operations at the time they act (SM-1163). `fast_complete_many_v1` reads the clock again after failing oversized members, so a later member whose lease expired while one of those failures waited no longer completes. `fast_acknowledge_cancel_v1` checks the lease after its row lock, as `acknowledge_cancel_v1` does on the full tier.
 
 ## 0.6.1 — 2026-10-02
 

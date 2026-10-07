@@ -83,6 +83,62 @@ describe("worker expiration timer", () => {
   );
 });
 
+describe("worker lease window", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("does not run a handler whose claim answer arrived after a full lease", async () => {
+    // Only the monotonic clock is fake, so the claim can take a full lease without the test waiting.
+    vi.useFakeTimers({ toFake: ["performance"] });
+    const task: ClaimedTask = {
+      id: "late-claim",
+      queue: "default",
+      type: "late",
+      priority: 0,
+      payload: null,
+      contractVersion: null,
+      resultMaxBytes: 1_048_576,
+      redactErrorDetails: false,
+      traceContext: null,
+      attempt: 1,
+      maxAttempts: 1,
+      retryPolicy: null,
+      deadlineAt: null,
+      executionTimeoutMs: null,
+      attemptTimeoutAt: null,
+      fenceToken: 1n,
+      leaseExpiresAt: new Date(Date.now() + 1_000),
+    };
+    const queue = {
+      defaultQueue: "default",
+      claim: async () => {
+        vi.advanceTimersByTime(1_000);
+        return task;
+      },
+      complete: unsupportedWorkerQueueOperation,
+      fail: unsupportedWorkerQueueOperation,
+      expireOwned: unsupportedWorkerQueueOperation,
+      releaseOwned: unsupportedWorkerQueueOperation,
+      tick: async () => [],
+      runMaintenance: async () => [],
+    } as unknown as WorkerQueueApi;
+    let handlerRuns = 0;
+    const worker = new Worker(queue, {
+      registryIntervalMs: 0,
+      leaseMs: 1_000,
+      heartbeatMs: 500,
+    }).handle("late", async () => {
+      handlerRuns += 1;
+      return null;
+    });
+
+    await expect(worker.runOnce()).resolves.toBe(true);
+
+    expect(handlerRuns).toBe(0);
+  });
+});
+
 describe("setUnrefTimeoutAt", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -100,6 +156,17 @@ describe("setUnrefTimeoutAt", () => {
     vi.advanceTimersByTime(1);
     expect(fired).toBe(1);
     vi.advanceTimersByTime(THIRTY_DAYS_MS);
+    expect(fired).toBe(1);
+  });
+
+  it("fires on time when the wall clock jumps backward", () => {
+    vi.useFakeTimers({ now: 0 });
+    let fired = 0;
+    setUnrefTimeoutAt(1_000, () => fired++);
+
+    vi.setSystemTime(-60_000);
+    vi.advanceTimersByTime(1_000);
+
     expect(fired).toBe(1);
   });
 

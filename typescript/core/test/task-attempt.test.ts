@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DeadlineExceededError, ExecutionTimeoutError } from "../src/errors.js";
 import { TaskAttempt, type TaskAttemptServices } from "../src/task-attempt.js";
 import type { TaskExecutionOutcome } from "../src/telemetry.js";
-import type { ClaimedTask, HeartbeatStatus } from "../src/types.js";
+import type { ClaimedTask, ExpireOwnedStatus, HeartbeatStatus } from "../src/types.js";
 
 function claimedTask(overrides: Partial<ClaimedTask> = {}): ClaimedTask {
   return {
@@ -56,10 +56,10 @@ function thrownBy(operation: () => unknown): unknown {
   return undefined;
 }
 
-function startAttempt(task = claimedTask()) {
+function startAttempt(task = claimedTask(), claimSentAt = performance.now()) {
   const { services, heartbeat } = fakeServices();
   const activation: { outcome: TaskExecutionOutcome } = { outcome: "unknown" };
-  const attempt = new TaskAttempt(task, services, activation, Date.now());
+  const attempt = new TaskAttempt(task, services, activation, claimSentAt);
   return { attempt, services, heartbeat, activation };
 }
 
@@ -104,21 +104,126 @@ describe("TaskAttempt", () => {
     expect(thrownBy(() => attempt.requireLease())).toBe(childSuspension);
   });
 
-  it("fires the local deadline and asks PostgreSQL to expire ownership", async () => {
+  it("fires the local deadline and aborts once PostgreSQL confirms the expiry", async () => {
     vi.useFakeTimers({ now: 0 });
     const { attempt, services, heartbeat } = startAttempt(
       claimedTask({ deadlineAt: new Date(1_000) }),
     );
 
-    vi.advanceTimersByTime(1_000);
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(attempt.signal.aborted).toBe(false);
-    vi.advanceTimersByTime(1);
+    expect(services.expireOwned).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
 
+    expect(services.expireOwned).toHaveBeenCalledTimes(1);
     expect(attempt.signal.reason).toBeInstanceOf(DeadlineExceededError);
     expect(heartbeat.removed).toBe(1);
-    expect(services.expireOwned).toHaveBeenCalledTimes(1);
     await attempt.settleExpiration();
     expect(attempt.arbiter.is("deadline_exceeded")).toBe(true);
+  });
+
+  it("measures the attempt timeout from database time when the worker clock runs ahead", async () => {
+    // PostgreSQL claimed the task at its time 0 and granted a 10-second timeout. The worker's
+    // wall clock reads 5 seconds later than the database's.
+    vi.useFakeTimers({ now: 5_000 });
+    const { attempt, services } = startAttempt(
+      claimedTask({ attemptTimeoutAt: new Date(10_000), leaseExpiresAt: new Date(30_000) }),
+    );
+    const startedAt = performance.now();
+    vi.mocked(services.expireOwned).mockImplementation(async () =>
+      performance.now() - startedAt > 10_000 ? "timeout_exceeded" : "not_due",
+    );
+
+    await vi.advanceTimersByTimeAsync(5_001);
+    expect(attempt.signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(attempt.signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(2);
+
+    expect(attempt.signal.reason).toBeInstanceOf(ExecutionTimeoutError);
+    await attempt.settleExpiration();
+    expect(attempt.arbiter.is("attempt_timeout")).toBe(true);
+  });
+
+  it("keeps the handler running on not_due and asks PostgreSQL again", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const { attempt, services, heartbeat } = startAttempt(
+      claimedTask({ attemptTimeoutAt: new Date(1_000) }),
+    );
+    const answers: ExpireOwnedStatus[] = ["not_due", "not_due", "timeout_exceeded"];
+    vi.mocked(services.expireOwned).mockImplementation(async () => answers.shift()!);
+
+    await vi.advanceTimersByTimeAsync(1_001);
+    expect(services.expireOwned).toHaveBeenCalledTimes(1);
+    expect(attempt.signal.aborted).toBe(false);
+    expect(heartbeat.removed).toBe(0);
+    expect(() => attempt.requireLease()).not.toThrow();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(services.expireOwned).toHaveBeenCalledTimes(3);
+    expect(attempt.signal.reason).toBeInstanceOf(ExecutionTimeoutError);
+    expect(heartbeat.removed).toBe(1);
+  });
+
+  it("stops asking PostgreSQL once another outcome wins", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const { attempt, services } = startAttempt(claimedTask({ attemptTimeoutAt: new Date(1_000) }));
+    vi.mocked(services.expireOwned).mockImplementation(async () => "not_due");
+
+    await vi.advanceTimersByTimeAsync(1_001);
+    attempt.arbiter.submit("completed");
+    attempt.stop();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(services.expireOwned).toHaveBeenCalledTimes(1);
+    expect(attempt.signal.aborted).toBe(false);
+    await attempt.settleExpiration();
+  });
+
+  it("stops asking PostgreSQL once the attempt stops without an outcome", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const { attempt, services } = startAttempt(claimedTask({ attemptTimeoutAt: new Date(1_000) }));
+    vi.mocked(services.expireOwned).mockImplementation(async () => "not_due");
+
+    await vi.advanceTimersByTimeAsync(1_001);
+    attempt.stop();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(services.expireOwned).toHaveBeenCalledTimes(1);
+    await attempt.settleExpiration();
+  });
+
+  it("keeps asking after a heartbeat reports the expiry that PostgreSQL first called not_due", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const { attempt, services, heartbeat } = startAttempt(
+      claimedTask({ deadlineAt: new Date(1_000) }),
+    );
+    const answers: ExpireOwnedStatus[] = ["not_due", "deadline_exceeded"];
+    vi.mocked(services.expireOwned).mockImplementation(async () => answers.shift()!);
+
+    await vi.advanceTimersByTimeAsync(1_001);
+    heartbeat.status!("deadline_exceeded", performance.now());
+    expect(attempt.signal.reason).toBeInstanceOf(DeadlineExceededError);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await attempt.settleExpiration();
+
+    expect(services.expireOwned).toHaveBeenCalledTimes(2);
+    expect(attempt.arbiter.is("deadline_exceeded")).toBe(true);
+  });
+
+  it("keeps the handler running when PostgreSQL cannot be asked, and asks again", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const { attempt, services } = startAttempt(claimedTask({ deadlineAt: new Date(1_000) }));
+    vi.mocked(services.expireOwned)
+      .mockRejectedValueOnce(new Error("connection refused"))
+      .mockResolvedValue("deadline_exceeded");
+
+    await vi.advanceTimersByTimeAsync(1_001);
+    expect(attempt.signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(services.expireOwned).toHaveBeenCalledTimes(2);
+    expect(attempt.signal.reason).toBeInstanceOf(DeadlineExceededError);
   });
 
   it("stop cancels the expiration timer and releases the heartbeat lease", () => {
@@ -159,6 +264,50 @@ describe("TaskAttempt", () => {
     vi.advanceTimersByTime(24_999);
     expect(attempt.signal.aborted).toBe(false);
     vi.advanceTimersByTime(1);
+
+    expect(attempt.arbiter.is("lease_expired")).toBe(true);
+  });
+
+  it("ends the lease window on time when the worker clock jumps backward", () => {
+    vi.useFakeTimers({ now: 0 });
+    const { attempt } = startAttempt();
+
+    vi.setSystemTime(-60_000);
+    vi.advanceTimersByTime(30_000);
+
+    expect(attempt.arbiter.is("lease_expired")).toBe(true);
+  });
+
+  it("fires the attempt timeout on time when the worker clock jumps backward", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const { attempt, services } = startAttempt(claimedTask({ attemptTimeoutAt: new Date(1_000) }));
+    vi.mocked(services.expireOwned).mockResolvedValue("timeout_exceeded");
+
+    vi.setSystemTime(-60_000);
+    await vi.advanceTimersByTimeAsync(1_001);
+
+    expect(services.expireOwned).toHaveBeenCalledTimes(1);
+    expect(attempt.signal.reason).toBeInstanceOf(ExecutionTimeoutError);
+  });
+
+  it("ends the lease window at once when the claim answer arrives a full lease late", () => {
+    vi.useFakeTimers({ now: 0 });
+    vi.advanceTimersByTime(30_000);
+    const { attempt } = startAttempt(claimedTask(), 0);
+
+    expect(attempt.arbiter.is("lease_expired")).toBe(true);
+    expect(() => attempt.requireLease()).toThrow("No heartbeat was accepted within the task lease");
+  });
+
+  it("ends the lease window at once when a heartbeat answer arrives a full lease late", () => {
+    vi.useFakeTimers({ now: 0 });
+    const { attempt, heartbeat } = startAttempt();
+
+    vi.advanceTimersByTime(29_000);
+    heartbeat.status!("accepted", 0);
+    expect(attempt.arbiter.is("lease_expired")).toBe(false);
+    vi.advanceTimersByTime(500);
+    heartbeat.status!("accepted", -1_000);
 
     expect(attempt.arbiter.is("lease_expired")).toBe(true);
   });

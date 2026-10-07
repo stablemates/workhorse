@@ -1030,6 +1030,13 @@ The watchdog measures from the moment the claim request left. Every `accepted` h
 the moment that round's request left. Both moments precede the database's renewal, so the local
 window never outlasts the stored `expires_at`.
 
+The TypeScript worker reads both moments from `monotonicNow()` in `timers.ts`, which is
+`performance.now()`. A worker wall clock that is stepped forward or backward therefore does not move
+the window. A claim or heartbeat answer can arrive after its window has already ended. `TaskAttempt`
+then ends the window at once instead of on the next timer turn. `TaskAttempt.requireLease()` also
+ends a spent window before it answers. The worker calls it just before the handler, so a claim answer
+that arrives a full lease late never starts the handler.
+
 Once one lease passes without a newer accepted renewal, the watchdog:
 
 1. Submits `lease_expired`.
@@ -1051,8 +1058,8 @@ finished task to recovery. Every accepted renewal still extends the lease.
 The SDKs differ in what a refusal does once the handler has returned.
 
 - TypeScript `TaskAttempt` has no handler-returned state. A `stale` renewal or a lapsed watchdog
-  submits `lease_expired`. A due deadline or attempt timeout calls `expire_owned_v1` in the
-  background.
+  submits `lease_expired`. A due deadline or attempt timeout calls `expire_owned_v1`, as
+  [Local timers](#local-timers) describes.
 - Go `superviseOwnership` and Python `_run_supervised_attempt` mark when the handler returned. After
   that, a refused renewal, a lapsed watchdog, or a due expiration only stops renewing. The fenced
   completion or failure then meets the same verdict in PostgreSQL:
@@ -1194,9 +1201,30 @@ than relying on an unbounded handler.
 #### Local timers
 
 The worker mirrors authoritative timestamps with local timers for prompt cooperative delivery. At
-the earlier of `deadline_at` and `attempt_timeout_at`, the local timer aborts the handler signal and
-calls `expire_owned_v1` with the current worker and fence. PostgreSQL then closes the timed-out
-attempt and schedules its retry or terminal failure without waiting for lease expiry.
+the earlier of `deadline_at` and `attempt_timeout_at`, the local timer calls `expire_owned_v1` with
+the current worker and fence. PostgreSQL then closes the timed-out attempt and schedules its retry or
+terminal failure without waiting for lease expiry.
+
+The TypeScript `TaskAttempt` keeps the worker's wall clock out of that timer:
+
+1. The claim's database time is `leaseExpiresAt` minus the worker's `leaseMs`, because PostgreSQL
+   computes the lease and the attempt timeout from one clock reading.
+2. The timer runs on `monotonicNow()` for the time from that reading to the expiry, plus 1 ms for
+   millisecond truncation. It starts when the attempt starts, after the claim answer arrived, so it
+   can fire late but never early.
+3. The handler signal is aborted only after PostgreSQL confirms the expiry. `deadline_exceeded`
+   aborts with `DeadlineExceededError`, `timeout_exceeded` with `ExecutionTimeoutError`, and `stale`
+   with a lease-loss error. `cancel_requested` takes the cancellation path.
+4. A `not_due` answer leaves the handler running under its lease. The attempt asks again after the
+   database-relative due time, and at least after a backoff that starts at 5 ms and doubles up to
+   1 s. It stops asking once another outcome wins. It also stops when the attempt stops, unless a
+   heartbeat has reported the expiry.
+5. A failed request is not a confirmation either. The handler keeps running, and the timer asks again
+   after the same backoff. The lease watchdog still ends an attempt whose lease nobody renews.
+
+A `deadline_exceeded` or `timeout_exceeded` heartbeat answer is already the database's verdict. It
+aborts the handler at once and calls `expire_owned_v1` in the background. The worker keeps asking
+until PostgreSQL closes the attempt, even if an earlier timer request got `not_due`.
 
 JavaScript and external effects are not forcibly preempted. The completed timeout transition still
 fences every late completion, failure, heartbeat, checkpoint, or wait write. Heartbeat and bounded

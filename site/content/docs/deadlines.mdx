@@ -278,17 +278,19 @@ More detail: [Task lifecycle: Deadlines and execution timeouts](https://github.c
 In the timeout story, the `report.build` handler was stuck in a hung call at 2 min. This is what
 the worker did:
 
-1. **At `attempt_timeout_at`** the worker's local timer fired. It aborted the handler's `signal`,
-   the same signal that [cancellation](/docs/cancellation) uses, but with a different reason.
-2. **Right after** the worker called `expire_owned_v1` with its worker id and fence token.
-3. **In that call** PostgreSQL closed the attempt and applied its retry decision. Ordinary timeout
-   settlement does not wait for the lease to expire.
+1. **At `attempt_timeout_at`** the worker's local timer fired. The worker called `expire_owned_v1`
+   with its worker id and fence token.
+2. **In that call** PostgreSQL closed the attempt and applied its retry decision. Ordinary timeout
+   settlement does not wait for the lease to expire. If PostgreSQL had answered `not_due`, the
+   handler would have kept running and the worker would have asked again.
+3. **Right after** the worker aborted the handler's `signal`, the same signal that
+   [cancellation](/docs/cancellation) uses, but with a different reason.
 4. **At 3 min** the hung call returns, and the handler tries to complete. The attempt is already
    closed, so that late write cannot land.
 
 Neither clock can forcibly stop JavaScript. The local timer asks PostgreSQL to settle the deadline
-or timeout, and it aborts the handler's signal. If the handler ignores the signal, its code may
-continue, but the committed transition fences its writes. Completion, failure, heartbeat,
+or timeout. Once PostgreSQL has settled it, the worker aborts the handler's signal. If the handler
+ignores the signal, its code may continue, but the committed transition fences its writes. Completion, failure, heartbeat,
 checkpoint, and wait writes all carry the current fence. Heartbeats and maintenance remain
 fallbacks when the process or timer cannot settle the attempt.
 

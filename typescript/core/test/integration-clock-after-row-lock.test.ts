@@ -108,6 +108,8 @@ async function callWhileLocked<Row extends object>(
 }
 
 const statements = {
+  fastAcknowledgeCancel:
+    "SELECT workhorse.fast_acknowledge_cancel_v1($2::uuid, $1, $3::bigint) AS acknowledged",
   fastComplete:
     "SELECT workhorse.fast_complete_many_v1($1, ARRAY[$2::uuid], ARRAY[$3::bigint], ARRAY['{\"ok\":true}'::jsonb]) AS accepted",
   fastHeartbeat:
@@ -141,6 +143,103 @@ describe("clock after row lock", () => {
       task.id,
     ]);
     expect(outcome.rowCount).toBe(0);
+    const runtime = await pool.query<{ state: string }>(
+      "SELECT state FROM workhorse.fast_task_runtime WHERE task_id = $1",
+      [task.id],
+    );
+    expect(runtime.rows).toEqual([{ state: "active" }]);
+  });
+
+  it("rejects a fast batch completion whose lease expired while another member failed", async () => {
+    // Failing an oversized member writes its outcome row. If that write waits, for example behind
+    // partition maintenance, a later member's lease can expire before its own completion.
+    const oversized = await activeTask("fast", "complete-batch-failing", "worker-a", 60_000);
+    const expiring = await activeTask("fast", "complete-batch-expiring", "worker-a", 2_000);
+    await pool.query(
+      `UPDATE workhorse.fast_task_runtime SET result_max_bytes = 1, max_attempts = 1
+        WHERE task_id = $1`,
+      [oversized.id],
+    );
+    const blocker = await pool.connect();
+    const caller = await pool.connect();
+    let call: Promise<{ rows: { accepted: string[] }[] }> | undefined;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("LOCK TABLE workhorse.fast_task_outcome IN SHARE MODE");
+      const callerPid = (await caller.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
+        .rows[0]!.pid;
+      call = caller.query<{ accepted: string[] }>(
+        `SELECT workhorse.fast_complete_many_v1(
+                  $1, ARRAY[$2::uuid, $3::uuid], ARRAY[$4::bigint, $5::bigint],
+                  ARRAY['{"too":"large"}'::jsonb, '{"ok":true}'::jsonb]
+                ) AS accepted`,
+        ["worker-a", oversized.id, expiring.id, oversized.fenceToken, expiring.fenceToken],
+      );
+      await vi.waitFor(
+        async () => {
+          const waiting = await pool.query<{ blocked: boolean }>(
+            "SELECT cardinality(pg_blocking_pids($1)) > 0 AS blocked",
+            [callerPid],
+          );
+          expect(waiting.rows[0]!.blocked).toBe(true);
+        },
+        { timeout: 10_000, interval: 20 },
+      );
+      const live = await pool.query<{ live: boolean }>(
+        "SELECT expires_at > clock_timestamp() AS live FROM workhorse.fast_task_runtime WHERE task_id = $1",
+        [expiring.id],
+      );
+      if (live.rows[0]?.live !== true) throw new Error("the lease expired before the wait began");
+      await vi.waitFor(
+        async () => {
+          const expired = await pool.query<{ expired: boolean }>(
+            `SELECT expires_at <= clock_timestamp() AS expired
+               FROM workhorse.fast_task_runtime WHERE task_id = $1`,
+            [expiring.id],
+          );
+          if (expired.rows[0]?.expired !== true) throw new Error("the lease has not expired yet");
+        },
+        { timeout: 10_000, interval: 20 },
+      );
+      await blocker.query("COMMIT");
+      const { rows } = await call;
+
+      expect(rows[0]!.accepted).toEqual([]);
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      await call?.catch(() => undefined);
+      blocker.release();
+      caller.release();
+    }
+    const outcomes = await pool.query<{ task_id: string; state: string }>(
+      "SELECT task_id, state FROM workhorse.fast_task_outcome WHERE task_id = ANY($1::uuid[])",
+      [[oversized.id, expiring.id]],
+    );
+    expect(outcomes.rows).toEqual([{ task_id: oversized.id, state: "failed" }]);
+    const runtime = await pool.query<{ state: string }>(
+      "SELECT state FROM workhorse.fast_task_runtime WHERE task_id = $1",
+      [expiring.id],
+    );
+    expect(runtime.rows).toEqual([{ state: "active" }]);
+  });
+
+  it("refuses a fast cancellation acknowledgement whose lease expired while it waited for the row lock", async () => {
+    const task = await activeTask("fast", "acknowledge-cancel-expired", "worker-a", 2_000);
+    await pool.query(
+      `UPDATE workhorse.fast_task_runtime
+          SET cancel_requested_at = clock_timestamp(), cancel_requested_by = 'operator'
+        WHERE task_id = $1`,
+      [task.id],
+    );
+    const { rows } = await callWhileLocked<{ acknowledged: boolean }>(
+      task.table,
+      task.id,
+      "until expiry",
+      statements.fastAcknowledgeCancel,
+      ["worker-a", task.id, task.fenceToken],
+    );
+
+    expect(rows).toEqual([{ acknowledged: false }]);
     const runtime = await pool.query<{ state: string }>(
       "SELECT state FROM workhorse.fast_task_runtime WHERE task_id = $1",
       [task.id],

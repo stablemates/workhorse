@@ -418,6 +418,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "close SQL integrity gaps in rate refill, dependency edges, and mixed batches",
     kind: "additive",
   },
+  {
+    fromVersion: 58,
+    toVersion: 59,
+    file: "0060-judge-fast-tier-completions-and-cancellation-acknowledgements-after-waits.sql",
+    description: "judge fast-tier completions and cancellation acknowledgements after waits",
+    kind: "additive",
+  },
 ];
 
 /**
