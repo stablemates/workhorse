@@ -53,6 +53,15 @@ active handlers drain, so a handler that ignores cancellation no longer keeps `/
 the process alive. The failing worker also stops its maintenance and registration loops at once
 (SM-1161).
 
+**Pending release — fixed:** A producer that never called `syncContracts()` now retries a contract
+mismatch with the contract definition it fetched, instead of failing with "Contract policy changed
+again while retrying enqueue" and aborting the caller's transaction. The Objection recipe, which
+builds a new adapter per transaction, can enqueue a task type whose contract another process
+installed. `@stablemates/workhorse-otel` starts a task's spans from `ROOT_CONTEXT`, so a task without
+a stored trace context no longer joins a span active in the worker, including during fused fast-tier
+dispatch. The `@stablemates/workhorse-drizzle` README documents that a `forTransaction` queue must not
+outlive its transaction (SM-1170).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

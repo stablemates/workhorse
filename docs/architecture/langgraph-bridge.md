@@ -97,6 +97,7 @@ An approval request owns its transaction and must commit it.
 | Window                                              | Recovery                                                                                                                                           |
 | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Graph saved, bridge still `preparing`               | Read the existing graph and persist its original interrupt identity/context. Never invoke existing graph state with fresh input.                   |
+| Bridge `preparing`, no graph checkpoint             | `prepare()` invokes the graph from the start. `stop()` stores the stop outcome through `update_state(..., as_node="approval")`.                    |
 | Decision saved, graph not resumed                   | Retain the decision and address the same interrupt with the same resume identity.                                                                  |
 | Local tool committed, graph tool checkpoint missing | Resume pending graph work with `invoke(None, config)`; the deterministic effect ledger validates and reuses the note.                              |
 | Graph resumed, bridge save missing                  | Read the terminal graph and repair the bridge phase/outcome without resuming the approval again.                                                   |
@@ -105,7 +106,7 @@ An approval request owns its transaction and must commit it.
 | Lease lost while tool node is paused                | The new attempt cannot take the application lock. The old node's next fenced write fails; a later authorized attempt resumes persisted graph work. |
 | Lock session terminated                             | A successor can acquire the lock; the old checkpointer and local tool cannot write through their disconnected connection.                          |
 
-`prepare()` refuses a missing graph when the bridge already retains an interrupt or later phase.
+`prepare()` and `stop()` refuse a missing graph when the bridge already retains an interrupt or later phase.
 `row()` refuses a mismatched application version.
 Neither condition authorizes starting another graph to conceal lost history.
 

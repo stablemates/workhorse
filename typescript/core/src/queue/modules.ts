@@ -20,7 +20,6 @@ export interface CachedContractDefinition {
 export interface QueueModuleState {
   readonly currentDatabaseContracts: Map<string, CachedContractDefinition>;
   readonly retainedDatabaseContracts: Map<string, Map<string, CachedContractDefinition>>;
-  contractsSynchronized: boolean;
 }
 
 /** @internal */
@@ -28,7 +27,6 @@ export function createQueueModuleState(): QueueModuleState {
   return {
     currentDatabaseContracts: new Map(),
     retainedDatabaseContracts: new Map(),
-    contractsSynchronized: false,
   };
 }
 

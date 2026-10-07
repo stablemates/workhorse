@@ -141,6 +141,41 @@ describe("released Knex native route and Objection recipe", () => {
     expect(await pairs()).toEqual({ accounts: [], tasks: [] });
   });
 
+  it("enqueues from a new producer against a contract another process installed", async () => {
+    // The deployment that owns the contract synchronizes it. The recipe builds a new adapter per
+    // transaction that never synchronizes, so its first enqueue meets a contract mismatch.
+    await new Queue(pool, "default", {
+      contracts: {
+        "account.created": {
+          currentVersion: "v1",
+          versions: {
+            v1: {
+              payloadSchema: {
+                type: "object",
+                required: ["accountId"],
+                properties: { accountId: { type: "integer" } },
+              },
+            },
+          },
+        },
+      },
+    }).syncContracts();
+
+    const created = await connection.transaction((transaction) =>
+      createAccount(transaction, "contracted@example.test"),
+    );
+
+    expect(await pairs()).toEqual({
+      accounts: [{ email: "contracted@example.test" }],
+      tasks: [{ task_type: "account.created", payload: { accountId: created.account.id } }],
+    });
+    const stored = await pool.query<{ contract_version: string | null }>(
+      "SELECT contract_version FROM workhorse.task WHERE id = $1",
+      [created.taskId],
+    );
+    expect(stored.rows).toEqual([{ contract_version: "v1" }]);
+  });
+
   it("runs the disposable example CLI and observes the committed pair after Knex shutdown", async () => {
     const { stdout } = await promisify(execFile)(
       process.execPath,

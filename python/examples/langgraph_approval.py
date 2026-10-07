@@ -171,10 +171,10 @@ class Driver:
             (self.task_id, self.config["configurable"]["thread_id"], VERSION),
         )
         retained = self.row()
+        self.fault("bridge_saved")
         snapshot = self.graph.get_state(self.config)
         if not snapshot.values:
-            if retained["phase"] != "preparing" or retained["interrupt_id"] is not None:
-                raise RuntimeError("retained bridge lost its graph; restore it, do not restart it")
+            self.require_unstarted_graph(retained)
             self.graph.invoke({"task_id": self.task_id}, self.config, durability="sync")
         elif snapshot.next and not snapshot.interrupts:
             self.graph.invoke(None, self.config, durability="sync")
@@ -189,6 +189,12 @@ class Driver:
         else:
             raise RuntimeError("graph has neither an approval nor a terminal outcome")
         return self.receipt()
+
+    def require_unstarted_graph(self, retained: dict[str, Any]) -> None:
+        # An empty graph is legitimate only before its first checkpoint. Once the bridge has seen
+        # an interrupt or moved past preparing, an empty graph means its history is missing.
+        if retained["phase"] != "preparing" or retained["interrupt_id"] is not None:
+            raise RuntimeError("retained bridge lost its graph; restore it, do not restart it")
 
     def retain_interrupt(self, pending: Interrupt) -> None:
         row = self.row()
@@ -256,12 +262,20 @@ class Driver:
 
     def stop(self, reason: str) -> dict[str, Json]:
         self.authorize()
-        self.row()
+        retained = self.row()
         self.connection.execute(
             "UPDATE langgraph_example.bridge SET stop_reason = %s WHERE task_id = %s",
             (reason, self.task_id),
         )
         snapshot = self.graph.get_state(self.config)
+        if not snapshot.values:
+            # The attempt stopped after the bridge row committed and before the graph saved
+            # anything. Record the stop as the graph's terminal outcome without running a node.
+            self.require_unstarted_graph(retained)
+            self.graph.update_state(
+                self.config, {"task_id": self.task_id, "outcome": reason}, as_node="approval"
+            )
+            snapshot = self.graph.get_state(self.config)
         if snapshot.interrupts:
             if len(snapshot.interrupts) != 1:
                 raise RuntimeError("this recipe supports exactly one approval interrupt")

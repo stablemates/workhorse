@@ -58,6 +58,10 @@ If the callback throws, Drizzle rolls back both the account and the task. Nothin
 transaction ever sees a half-committed pair. A queue created from the adapter's default `queue`
 property remains outside that caller transaction — use it for enqueues that stand alone.
 
+Use the queue from `forTransaction(tx)` only inside the callback. Drizzle tells the adapter nothing
+when a transaction ends, so a queue kept past that point still works. Its next enqueue either
+commits on its own or joins whichever transaction borrowed the released connection.
+
 ## Create workers from the same adapter
 
 `workhorse.createWorker` uses the adapter's default queue and database connection, so a worker

@@ -386,6 +386,44 @@ describe("enqueue contracts", () => {
     ).rejects.toThrow(/contract documents are immutable/);
   });
 
+  it("retries an unsynchronized producer's enqueue under the contract another producer installed", async () => {
+    await new Queue(pool, "default", {
+      contracts: {
+        "contract.unsynchronized": {
+          currentVersion: "installed",
+          versions: {
+            installed: {
+              payloadSchema: { type: "object", required: ["id"], properties: { id: true } },
+            },
+          },
+        },
+      },
+    }).syncContracts();
+    const producer = new Queue(pool);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("CREATE TEMPORARY TABLE caller_write (id integer) ON COMMIT DROP");
+      await client.query("INSERT INTO caller_write VALUES (1)");
+      const id = await producer.enqueue("contract.unsynchronized", { id: 1 }, {}, client);
+      const stored = await client.query<{ contract_version: string; written: number }>(
+        `SELECT task.contract_version, (SELECT count(*)::integer FROM caller_write) AS written
+           FROM workhorse.task task WHERE task.id = $1`,
+        [id],
+      );
+      expect(stored.rows).toEqual([{ contract_version: "installed", written: 1 }]);
+      await expect(
+        producer.enqueue("contract.unsynchronized", { other: 1 }, {}, client),
+      ).rejects.toMatchObject({
+        name: "TaskContractValidationError",
+        contractVersion: "installed",
+      });
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
+  });
+
   describe("a stale cached contract", () => {
     const shapes: TaskTypeContracts["versions"] = {
       one: { payloadSchema: { type: "object", required: ["one"], properties: { one: true } } },
