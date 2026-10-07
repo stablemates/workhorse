@@ -104,13 +104,20 @@ runs a longer timer delay every millisecond.
 Applications must run at most one observer per database. Every observer sees the same global
 PostgreSQL state.
 
+The timer calls `onError` and does not await it. A reporter may be synchronous or return a promise.
+When the reporter throws or its promise rejects, the observer writes that failure to `console.error`.
+The failure never becomes an unhandled rejection. A direct `collect()` call rejects to its caller
+instead of calling `onError`.
+
 #### Queue query
 
 The queue query is pinned as `metrics_observer` in `protocol/v1/manifest.json`. It joins
-`queue_control` for the pause flag. The observer records these gauges from it:
+`queue_control` for the pause flag. It counts live rows from both `task_runtime` and
+`fast_task_runtime`. A fast-tier row has no scheduled state, so a ready row with a future `run_at`
+counts as scheduled, as in `queue_health_v1`. The observer records these gauges from it:
 
 - `workhorse.tasks.count` for scheduled, ready, and active rows, by queue and state
-- `workhorse.queue.oldest_ready.age`
+- `workhorse.queue.oldest_ready.age`, which is 0 for a queue with no ready task
 - `workhorse.queue.paused`
 - `workhorse.lease.expired`
 - `workhorse.deadline.overdue`
@@ -131,6 +138,15 @@ The observer then records `workhorse.worker.count`, `workhorse.worker.capacity`,
 
 Capacity and active-slot observations repeat a multi-queue worker under every queue it can serve.
 They describe eligible shared capacity per queue. Do not sum them across queue labels.
+
+#### Series that disappear
+
+Every observer gauge is synchronous, so an exporter with cumulative temporality repeats a series'
+last recorded value. Each observer therefore remembers the series its last collection recorded.
+When a later collection no longer returns a series, the observer records 0 for it once and then
+forgets it. This covers a worker group whose workers change state or leave `worker_registry`, and a
+queue that no longer has live rows or a `queue_control` row. A failed collection records nothing
+and keeps the remembered series for the next collection.
 
 #### Observer attributes
 
@@ -584,7 +600,8 @@ rather than on an emission path.
 `workhorse.queue.depth` and `WorkhorseMetricsObserver`'s `workhorse.tasks.count` measure the same
 live work. Both use manifest-pinned statements. `queue_health_v1`, `queue_metric_snapshot`, and
 `metrics_observer` in `protocol/v1/manifest.json` own their exact aggregates over
-`workhorse.task_runtime`.
+`workhorse.task_runtime` and `workhorse.fast_task_runtime`. Each counts a fast-tier ready row with a
+future `run_at` as scheduled.
 
 Every count aggregates the `task_id` primary key. A queue with no runtime rows therefore reports
 zero across the outer join rather than one. Callers supply their own queue-name source and name the

@@ -438,6 +438,8 @@ var internalStatementRegistry = map[string]string{
         WITH queue_names AS (
           SELECT queue_name FROM workhorse.task_runtime
           UNION
+          SELECT queue_name FROM workhorse.fast_task_runtime
+          UNION
           SELECT queue_name FROM workhorse.queue_control
         ), depth AS (
           SELECT names.queue_name,
@@ -457,7 +459,17 @@ var internalStatementRegistry = map[string]string{
        WHERE runtime.state = 'active' AND runtime.attempt_timeout_at <= clock_timestamp()
      )::text AS overdue_execution_timeouts
       FROM queue_names names
-      LEFT JOIN workhorse.task_runtime runtime
+      LEFT JOIN (
+        SELECT task_id, queue_name, state, ready_at, expires_at, deadline_at, attempt_timeout_at
+          FROM workhorse.task_runtime
+        UNION ALL
+        SELECT task_id, queue_name,
+               CASE WHEN state = 'ready' AND run_at > clock_timestamp() THEN 'scheduled'
+                    ELSE state END,
+               CASE WHEN state = 'ready' THEN run_at END, expires_at, deadline_at,
+               attempt_timeout_at
+          FROM workhorse.fast_task_runtime
+      ) runtime
         ON runtime.queue_name = names.queue_name
      GROUP BY names.queue_name
         )
@@ -525,6 +537,7 @@ var internalStatementRegistry = map[string]string{
 	"queue_metric_snapshot": `WITH queue_names AS (
          SELECT $1::text AS queue_name
          UNION SELECT queue_name FROM workhorse.task_runtime
+         UNION SELECT queue_name FROM workhorse.fast_task_runtime
          UNION SELECT queue_name FROM workhorse.queue_control
          UNION SELECT queue_name FROM workhorse.concurrency_policy
          UNION SELECT queue_name FROM workhorse.rate_limit_policy
@@ -546,7 +559,16 @@ var internalStatementRegistry = map[string]string{
        WHERE runtime.state = 'ready'
      )) * 1000 AS oldest_ready_age_ms
       FROM queue_names names
-      LEFT JOIN workhorse.task_runtime runtime
+      LEFT JOIN (
+        SELECT task_id, queue_name, state, ready_at, expires_at
+          FROM workhorse.task_runtime
+        UNION ALL
+        SELECT task_id, queue_name,
+               CASE WHEN state = 'ready' AND run_at > clock_timestamp() THEN 'scheduled'
+                    ELSE state END,
+               CASE WHEN state = 'ready' THEN run_at END, expires_at
+          FROM workhorse.fast_task_runtime
+      ) runtime
         ON runtime.queue_name = names.queue_name
      GROUP BY names.queue_name
        )
