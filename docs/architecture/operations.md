@@ -298,6 +298,7 @@ The guarded commands are:
 - `admin pause-worker <worker-id>`
 - `admin resume-worker <worker-id>`
 - `admin redrive-many`
+- `admin repair-dependencies`
 - `admin signal <task-id>`
 - `admin complete-human <task-id>`
 
@@ -315,7 +316,8 @@ Two independent checks gate every mutation:
      that token as its first parameter, so no front end can reach a destructive operation around
      the check.
 2. **Confirmation.** Without `--yes`, an interactive session must retype the exact target — task
-   id, queue name, or worker id — at a prompt written to stderr.
+   id, queue name, or worker id — at a prompt written to stderr. `admin repair-dependencies` asks
+   for the literal target `dependencies`.
    - A mismatched answer changes nothing and exits 1.
    - A non-interactive session without `--yes` is a usage error.
 
@@ -365,6 +367,20 @@ newest-first.
 Preserving request identity and audit fields replays each selected source's original target.
 
 A preview does not reserve candidates. Each execution processes only its bounded page.
+
+#### Dependency drift repair
+
+`admin repair-dependencies` examines at most `--limit` drifted dependents, default 1,000 and at
+most `MAX_DEPENDENCY_DRIFT_LIMIT` (100,000).
+
+| Mode                  | Behavior                                                                                                                   |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Preview (`--dry-run`) | Calls `WorkhorseAdminClient.listDependencyDrift` and writes nothing. Requires no `--reason`, `--env`, or confirmation.     |
+| Execution             | Calls `WorkhorseAdminClient.repairDependencyDrift`. Requires `--reason` and the usual environment and confirmation checks. |
+
+Execution defaults `--request-id` to a random UUID. The request id correlates the repair and is not
+an idempotency key. [Data model: Governed drift repair](data-model.md#governed-drift-repair-schema-version-40)
+owns the functions and audit fields.
 
 #### Signal and human-wait delivery
 
@@ -521,7 +537,8 @@ Launching without an interactive stdin and stdout is refused with exit 1.
   - Event and attempt retention never pass that dataset's `cold_export_dataset.exported_through`.
   - A day is exportable only after it closed and the minute rollup passed it.
   - One exporter claim covers one UTC day of one dataset.
-  - A claim lease is 1,000 through 86,400,000 ms and defaults to one hour.
+  - A claim lease is 1,000 through 86,400,000 ms. `claim_cold_export_segment_v1` requires
+    `p_lease_ms` and has no default.
 
 ### Maintenance and health bounds
 

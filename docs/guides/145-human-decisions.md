@@ -90,8 +90,8 @@ handler's context also carried a quick action: a `dashboard.quickAction` object 
 3. The dashboard shows the stored result `{ "approved": true }` and asks the operator to confirm.
 4. The operator confirms. The dashboard server completes the decision. It replaces any
    browser-supplied attribution with the host's audit actor, so the signed-in operator is the
-   recorded actor. A Python, Go, Rust, or Ruby host can configure its own audit actor instead; see
-   [370-dashboard-authentication.md](370-dashboard-authentication.md).
+   recorded actor. [370-dashboard-authentication.md](370-dashboard-authentication.md) explains
+   which actor each host records.
 
 The quick action is opt-in. Without a valid `dashboard.quickAction`, the menu action stays
 disabled. The dashboard never assumes that `{ "approved": true }` is a valid answer to a generic
@@ -108,8 +108,8 @@ decision.
 - It renders `label` in the task-row menu. It submits `result` only after confirmation.
 - A missing or malformed object leaves the menu action disabled.
 - `DashboardTasksPage.canCompleteHumanWait` reports whether the operator may complete decisions.
-- The dashboard derives `requestedBy` from the host's audit actor: the authenticated principal, or a
-  configured audit actor in Python, Go, Rust, and Ruby.
+- The dashboard derives `requestedBy` from the host's audit actor: the authenticated principal, or
+  the configured audit actor when the host authorized without one.
 - `/tasks?filter=waiting` marks both signal and human-decision waits.
 
 More detail: [Data model: Dashboard quick action](../architecture/data-model.md#dashboard-quick-action).

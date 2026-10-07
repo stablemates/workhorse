@@ -469,6 +469,8 @@ The stored canonical fingerprint covers:
 - `prerequisiteTaskId` and normalized `dependencies`
 - TTL
 - explicitly supplied `runAt`
+- `deadline` and `executionTimeoutMs`
+- `budget`, only when the request names one
 
 An omitted `runAt` stays omitted for keyed immediate ingress instead of capturing the classification
 timestamp.
@@ -495,7 +497,8 @@ The ownership relation stores scope and full key hash, never the raw key.
 - Structured conflicts additionally carry full SHA-256 stored and rejected request digests.
 
 Expired ownership can be replaced by a new request. Housekeeping prunes expired bindings before
-terminal task identity. Purging ready or scheduled tasks releases their bindings with the task.
+terminal task identity. `purge_queue_internal_v1` deletes the bindings of the `blocked`, `ready`,
+and `scheduled` tasks it purges, and of purged ready fast-tier tasks.
 
 ### `task_dependency`
 

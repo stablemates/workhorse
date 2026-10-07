@@ -33,6 +33,13 @@ data, build `HandlerError::new(error.to_string())` explicitly.
 
 Migration 0056 (`0056-count-row-retention-lag-from-the-history-pass-that-released-the-row.sql`) changes only `queue_health_v1`. Row retention lag now counts from the scheduled history pass that released the row when that pass came after the row window, so health no longer reports task records and finished results as late after every daily pass (SM-1134).
 
+**Breaking:** `dashboard::DashboardOptions::audit_actor` is removed. It replaced the verified
+principal's actor on every mutation, so a dashboard could record a service name instead of the
+operator who acted. The dashboard now always records the actor of the returned
+`Authorization::Principal`, as the `dashboard/v1` protocol requires. Delete the field from your
+options; to record a fixed actor, return a `Principal` with that `actor` from `authorize`
+(SM-1152).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

@@ -50,7 +50,6 @@ type HandlerOptions struct {
 	Authorize         Authorize
 	Path              string
 	Environment       string
-	AuditActor        string
 	ReadOnly          bool
 	BrowserModules    []string
 	ConfiguredWorkers []string
@@ -192,9 +191,6 @@ func (host *handler) ServeHTTP(response http.ResponseWriter, request *http.Reque
 		return
 	}
 	actor := authorization.Principal.Actor
-	if host.options.AuditActor != "" {
-		actor = host.options.AuditActor
-	}
 	if err := host.assertCompatible(request.Context()); err != nil {
 		writeJSON(response, http.StatusServiceUnavailable, map[string]any{"error": err.Error()})
 		return

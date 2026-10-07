@@ -34,7 +34,7 @@ was cleaned up", so use `getTask` whenever existence is the question.
 
 ## List tasks with bounded payloads
 
-`admin.listTasks(query)` filters by queue, type, states, tags, and creation time. It orders pages
+`admin.listTasks(query)` filters by queue, type, states, and creation time. It orders pages
 newest-first by immutable creation keys and returns a signed cursor for the next call.
 
 ```ts
