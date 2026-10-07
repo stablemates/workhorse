@@ -66,6 +66,7 @@ pub async fn run_runtime(fixture: &Value) -> Outcome {
             "missing-handler" => missing_handler(database, fixture).await,
             "json-round-trip" => json_round_trip(database, fixture).await,
             "oversized-result" => oversized_result(database, fixture).await,
+            "shutdown-cancellation" => shutdown_cancellation(database, fixture).await,
             "heartbeat-failure" => heartbeat_failure(database, fixture).await,
             "maintenance-phase-error" => maintenance_phase_error(database, fixture).await,
             other => Err(format!("the Rust runner does not know runtime kind {other}")),
@@ -259,12 +260,11 @@ async fn failure(database: &ScratchDatabase, fixture: &Value, envelope: &Value) 
     }
     let declared = &fixture["error"];
     let message = text(declared, "message").to_owned();
-    let error = HandlerError {
-        name: (declared["declaresName"].as_bool() == Some(true)).then(|| "PaymentDeclined".into()),
-        message,
-        stack: (declared["declaresStack"].as_bool() == Some(true))
-            .then(|| "PaymentDeclined: card declined\n    at fixture".into()),
-    };
+    let mut error = HandlerError::new(message);
+    error.name =
+        (declared["declaresName"].as_bool() == Some(true)).then(|| "PaymentDeclined".into());
+    error.stack = (declared["declaresStack"].as_bool() == Some(true))
+        .then(|| "PaymentDeclined: card declined\n    at fixture".into());
     let worker = worker(
         database,
         4,
@@ -1365,6 +1365,73 @@ async fn oversized_result(database: &ScratchDatabase, fixture: &Value) -> Checke
     let (state, attempt) = (snapshot.state.as_str(), i64::from(snapshot.current_attempt));
     check(state == text(expected, "state") && attempt == number(expected, "attempt"), || {
         format!("the fitting result left task {task} {state}/{attempt}: {:?}", snapshot.error)
+    })
+}
+
+/// Stops the worker while its handler runs. The handler returns an error once the shutdown grace
+/// cancels it. One attempt makes a charged attempt fail the task for good.
+async fn shutdown_cancellation(database: &ScratchDatabase, fixture: &Value) -> Checked {
+    let behavior = text(&fixture["shutdownBehavior"], "rust");
+    check(behavior == "cancel", || {
+        format!("the fixture expects Rust shutdown behavior {behavior}")
+    })?;
+    let client = database.connect().await;
+    let queue = queue(database, fixture).await?;
+    let task_type = text(fixture, "taskType");
+    let attempts = EnqueueOptions {
+        max_attempts: i32::try_from(number(fixture, "maxAttempts")).map_err(|e| e.to_string())?,
+        ..Default::default()
+    };
+    let task = queue.enqueue(task_type, &json!({}), attempts).await.map_err(driver)?.task_id;
+    let worker = worker(
+        database,
+        4,
+        WorkerOptions {
+            shutdown_grace_period: millis(fixture, "shutdownGraceMs"),
+            ..options(fixture)
+        },
+    )?;
+    let (started, mut handler_started) = watch::channel(false);
+    let reasons = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&reasons);
+    worker.handle(task_type, move |_: Value, context: HandlerContext| {
+        let (started, seen) = (started.clone(), Arc::clone(&seen));
+        async move {
+            let _ = started.send(true);
+            context.cancellation().cancelled().await;
+            seen.lock().unwrap().push(context.cancellation().reason());
+            Err::<Value, _>(HandlerError::named("Cancelled", "the worker is shutting down"))
+        }
+    });
+    let (stop, running) = run(&worker);
+    handler_started.wait_for(|started| *started).await.map_err(|error| error.to_string())?;
+    let _ = stop.send(());
+    running.await.map_err(|error| error.to_string())?.map_err(driver)?;
+    let reasons = reasons.lock().unwrap().clone();
+    check(reasons == [Some(CancelReason::Shutdown)], || {
+        format!("the handler saw cancellation reasons {reasons:?}")
+    })?;
+    let expected = &fixture["expectedCancelled"];
+    let (state, attempt, _) = task_state(&client, task).await?;
+    let (want_state, want_attempt) = (text(expected, "state"), number(expected, "attempt"));
+    check(state == want_state && i64::from(attempt) == want_attempt, || {
+        format!("the stopped task is {state}/{attempt}, want {want_state}/{want_attempt}")
+    })?;
+    let events: Vec<String> = client
+        .query(
+            "SELECT event_type FROM workhorse.task_event WHERE task_id = $1
+              ORDER BY occurred_at, event_id",
+            &[&task],
+        )
+        .await
+        .map_err(sql)?
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    let want_events: Vec<&str> =
+        expected["events"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    check(events == want_events, || {
+        format!("the stopped task recorded events {events:?}, want {want_events:?}")
     })
 }
 

@@ -1511,6 +1511,16 @@ export class Worker {
       : typeof this.options.retryDelayMs === "function"
         ? this.options.retryDelayMs(task.attempt, task)
         : this.options.retryDelayMs;
+    // fail_v1 reads -1 as the terminal sentinel, which only a durable replay conflict may send.
+    if (
+      !terminalConflict &&
+      delay !== undefined &&
+      (!Number.isSafeInteger(delay) || delay < 0 || delay > 2_147_483_647)
+    ) {
+      throw new Error(
+        "retryDelayMs must return a safe integer between 0 and 2147483647, or undefined",
+      );
+    }
     const failed = await this.queue.fail(task, this.workerId, error, delay);
     span.setAttribute("workhorse.handler.outcome", failed);
     if (failed === "cancel_requested") {

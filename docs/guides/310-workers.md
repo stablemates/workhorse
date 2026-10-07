@@ -409,11 +409,12 @@ A Go worker runs two tasks when its `Run` context ends. One claim is still in fl
    lease stops renewing. Recovery can rerun the task elsewhere.
 
 `Run` returning is not the process exiting. Go applications pass a context from
-`signal.NotifyContext` to `Worker.Run`. The grace period also starts when a lifecycle error stops the
-run. The deadline bounds every shutdown step, including a claim still in flight. A claim the deadline
-cuts short may hold a lease it never returned, and that lease expires so recovery picks the task up.
-A handler cancelled at the deadline does not turn a clean shutdown into an error. A handler panic
-fails that attempt, while the worker stays alive to serve later tasks.
+`signal.NotifyContext` to `Worker.Run`. The grace period also starts when a lifecycle error stops
+the run. The deadline bounds every shutdown step, including a claim still in flight. A claim the
+deadline cuts short may hold a lease it never returned, and that lease expires so recovery picks the
+task up. A handler cancelled at the deadline does not turn a clean shutdown into an error. When that
+handler returns an error, the worker hands its task back to the queue without charging an attempt. A
+handler panic fails that attempt, while the worker stays alive to serve later tasks.
 
 A Rust worker starts its grace period as soon as `Worker::run` observes its shutdown future. The same
 deadline bounds a claim in flight and the registry update that marks the worker draining. A short
@@ -434,6 +435,8 @@ When `ShutdownGracePeriod` expires, `Run` acts in this order:
   refresh.
 - `deregister_worker_v1` then gets at most 1,000 ms.
 - After the deadline, the drain does not report an execution error that matches `context.Canceled`.
+- A handler that returns an error after its cancellation charges no attempt. `release_owned_v1`
+  returns its task to the queue, and a failed release leaves the task to lease recovery.
 - A handler panic becomes a `HandlerPanicError` and fails that attempt.
 
 More detail: [Schema and SQL protocol: Shutdown grace period](../architecture/schema-and-protocol.md#shutdown-grace-period).
@@ -447,6 +450,8 @@ More detail: [Schema and SQL protocol: Shutdown grace period](../architecture/sc
   `register_worker_v1` refresh, and running handlers all spend from it.
 - A claim still pending at the deadline is dropped. Any task it claimed stays leased until recovery.
 - Handlers still running when grace ends see `CancelReason::Shutdown` and get 250 ms to unwind.
+- A handler that returns an error after that cancellation charges no attempt. `release_owned_v1`
+  returns its task to the queue. A panic still fails the attempt.
 - `run` abandons any that outlive that window and returns `Error::ShutdownIncomplete`.
 - The cleanup window covers stopping the registry loop and listener, `deregister_worker_v1`, and the
   heartbeat connection release. It ends 1 s after the later of the deadline and the end of the drain.

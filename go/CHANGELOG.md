@@ -41,6 +41,12 @@ cause through the default `slog` logger, instead of returning the driver error t
 
 Migration 0058 (`0058-let-terminal-cleanup-keep-pace-and-share-its-budget-across-tiers.sql`) changes `prune_terminal_tasks_v1`, `prune_terminal_storage_v1`, and `queue_health_v1`, and adds two `maintenance_state` columns. Terminal cleanup repeats its batch while each one fills, for up to one second per pass, and a pass that still ends with a full batch makes its follow-up due five seconds later instead of after the five-minute interval. Full-tier and fast-tier tasks share every batch, so neither tier starves the other. The health document reports `terminal_cleanup_backlog_since` while cleanup is behind (SM-1160).
 
+**Fixed:** A handler that returns an error after its shutdown cancellation no longer charges an
+attempt. The worker hands its task to `release_owned_v1` within the 250 ms unwind period. Before,
+the worker left the task unsettled, and lease recovery charged the attempt as `lease_expired`, so a
+task on its last attempt failed because its worker stopped. When the release fails, the worker logs
+it and lease recovery settles the task as before (SM-1164).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

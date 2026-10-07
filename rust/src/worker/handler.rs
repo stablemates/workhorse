@@ -68,17 +68,32 @@ impl CancellationToken {
 
 /// A handler failure, submitted through the task's persisted retry policy.
 ///
-/// Any owned (`'static`) `std::error::Error` converts into it, so a handler can use `?`.
+/// Any owned (`'static`) `std::error::Error` converts into it, so a handler can use `?`. A
+/// durable replay conflict ([`crate::Error::Conflict`]) converts into an error that fails the
+/// task without a retry. Only that conversion marks it: an error built with [`HandlerError::named`]
+/// retries under the policy, whatever its name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HandlerError {
     pub name: Option<String>,
     pub message: String,
     pub stack: Option<String>,
+    conflict: bool,
+    panic: bool,
 }
 
 impl HandlerError {
     pub fn new(message: impl Into<String>) -> Self {
-        Self { name: None, message: message.into(), stack: None }
+        Self { name: None, message: message.into(), stack: None, conflict: false, panic: false }
+    }
+
+    /// Whether the error came from a durable replay conflict, which fails the task for good.
+    pub(crate) fn is_conflict(&self) -> bool {
+        self.conflict
+    }
+
+    /// Whether the error reports a handler panic, which fails the attempt even after a shutdown.
+    pub(crate) fn is_panic(&self) -> bool {
+        self.panic
     }
 
     pub fn named(name: impl Into<String>, message: impl Into<String>) -> Self {
@@ -96,7 +111,8 @@ impl HandlerError {
             .or_else(|| panic.downcast_ref::<String>().cloned())
             .unwrap_or_else(|| "non-string panic".into());
         let kind = if batch { "batch handler" } else { "handler" };
-        Self::named("HandlerPanic", format!("{kind} for {task_type} panicked: {detail}"))
+        let message = format!("{kind} for {task_type} panicked: {detail}");
+        Self { panic: true, ..Self::named("HandlerPanic", message) }
     }
 }
 
@@ -128,7 +144,7 @@ impl<E: std::error::Error + 'static> From<E> for HandlerError {
                     _ => None,
                 };
                 if let Some(name) = name {
-                    return Self::named(name, error.to_string());
+                    return Self { conflict: true, ..Self::named(name, error.to_string()) };
                 }
             }
             source = current.source();

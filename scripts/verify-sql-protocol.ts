@@ -264,6 +264,23 @@ export interface OversizedResultRuntimeFixture extends RuntimeFixtureBase {
 }
 
 /**
+ * A worker that stops while a handler runs charges that handler no attempt. A worker with a
+ * shutdown grace (`cancel`) cancels the handler once `shutdownGraceMs` elapses; the handler raises,
+ * and the worker releases its task. A worker without one (`drain`) waits for the handler, which
+ * returns after `drainHoldMs` without seeing a cancellation. One attempt makes a charged attempt
+ * fail the task for good.
+ */
+export interface ShutdownCancellationRuntimeFixture extends RuntimeFixtureBase {
+  kind: "shutdown-cancellation";
+  maxAttempts: number;
+  shutdownGraceMs: number;
+  drainHoldMs: number;
+  shutdownBehavior: Record<string, "cancel" | "drain">;
+  expectedCancelled: ExpectedRuntimeState & { events: string[] };
+  expectedDrained: ExpectedRuntimeState;
+}
+
+/**
  * Replaces one installed function with a body that raises, so a runner can fail a call the SDK
  * makes without reaching into that SDK. The runner restores `function` from its own definition
  * afterwards. A `counterSequence` counts the raised calls, because a sequence survives the
@@ -329,6 +346,7 @@ export type RuntimeFixture =
   | MissingHandlerRuntimeFixture
   | JsonRoundTripRuntimeFixture
   | OversizedResultRuntimeFixture
+  | ShutdownCancellationRuntimeFixture
   | HeartbeatFailureRuntimeFixture
   | MaintenancePhaseErrorRuntimeFixture;
 

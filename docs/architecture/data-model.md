@@ -1320,7 +1320,8 @@ and expired-lease recovery.
      `(count ** 4) + 15 + floor(random() * 10) * (count + 1)` seconds.
    - Lease recovery and execution timeout use a delay of 0.
 
-A worker callback may return `undefined` to omit the override, so step 2 or 3 applies. Retry-budget
+A worker callback may return `undefined` to omit the override, so step 2 or 3 applies. The worker
+validates any other result before `fail_v1`, because `fail_v1` reads `-1` as terminal failure. Retry-budget
 enforcement remains in SQL regardless of delay source.
 
 Policy bounds:

@@ -60,6 +60,16 @@ to decode on every retry (SM-1180).
 
 Migration 0058 (`0058-let-terminal-cleanup-keep-pace-and-share-its-budget-across-tiers.sql`) changes `prune_terminal_tasks_v1`, `prune_terminal_storage_v1`, and `queue_health_v1`, and adds two `maintenance_state` columns. Terminal cleanup repeats its batch while each one fills, for up to one second per pass, and a pass that still ends with a full batch makes its follow-up due five seconds later instead of after the five-minute interval. Full-tier and fast-tier tasks share every batch, so neither tier starves the other. The health document reports `terminal_cleanup_backlog_since` while cleanup is behind (SM-1160).
 
+**Breaking:** `HandlerError` gains private fields, so a struct literal no longer builds one. Use
+`HandlerError::new` or `HandlerError::named`, then set `stack` or `name` on the result. One field
+marks an error converted from `Error::Conflict`, and the worker fails the task without a retry only
+when it is set. Before, the worker read the name, so an application error built with
+`HandlerError::named("WaitConflictError", …)` failed its task for good (SM-1164).
+
+**Fixed:** A handler that panics after its `CancelReason::Shutdown` cancellation now fails its
+attempt, as any handler panic does. Before, the worker released the task without charging the
+attempt (SM-1164).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

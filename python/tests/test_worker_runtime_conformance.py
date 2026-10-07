@@ -70,6 +70,7 @@ SYNC_ONLY_RUNTIME_FIXTURE_KINDS = frozenset(
         "slot-refill",
         "suspension-replay",
         "replay-conflict",
+        "shutdown-cancellation",
         "trace-propagation",
     }
 )
@@ -132,6 +133,7 @@ def execute_runtime_fixture(
         "replay-conflict": execute_replay_conflict_fixture,
         "json-round-trip": execute_json_round_trip_fixture,
         "oversized-result": execute_oversized_result_fixture,
+        "shutdown-cancellation": execute_shutdown_cancellation_fixture,
         "heartbeat-failure": execute_heartbeat_failure_fixture,
         "maintenance-phase-error": execute_maintenance_phase_error_fixture,
     }
@@ -1151,6 +1153,47 @@ def execute_oversized_result_fixture(
         fixture["expectedFitting"]["state"],
         fixture["expectedFitting"]["attempt"],
     )
+
+
+def execute_shutdown_cancellation_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> None:
+    """The Python worker has no shutdown grace: its drain waits for every running handler.
+
+    So the handler outlives the stop, never sees its cancellation, and completes on its only
+    attempt.
+    """
+    assert fixture["shutdownBehavior"]["python"] == "drain"
+    queue_name = runtime_queue(fixture)
+    task_id = Queue(connection).enqueue(
+        fixture["taskType"],
+        None,
+        EnqueueOptions(queue=queue_name, max_attempts=fixture["maxAttempts"]),
+    )
+    started = Event()
+    stopped = Event()
+    cancelled: list[bool] = []
+    errors: list[BaseException] = []
+
+    def handler(_payload: object, context: HandlerContext) -> None:
+        started.set()
+        assert stopped.wait(timeout=5)
+        sleep(fixture["drainHoldMs"] / 1000)
+        cancelled.append(context.cancellation.cancelled)
+
+    worker = Worker(
+        worker_pool, queue=queue_name, worker_id=f"python-{fixture['id']}", poll_ms=5_000
+    ).handle(fixture["taskType"], handler)
+    thread = run_in_thread(worker.run, errors)
+    assert started.wait(timeout=5), f"{fixture['id']} never started its handler"
+    worker.stop()
+    stopped.set()
+    join(thread)
+    assert errors == []
+    assert cancelled == [False]
+    state = task_state(connection, task_id)
+    expected = fixture["expectedDrained"]
+    assert (state["state"], state["attempt"]) == (expected["state"], expected["attempt"])
 
 
 def lease_expiry(connection: psycopg.Connection[Any], task_id: str) -> datetime:

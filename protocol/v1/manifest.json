@@ -84,7 +84,8 @@
     "heartbeat-failure-tolerance",
     "maintenance-phase-resilience",
     "terminal-replay-conflict",
-    "result-size-limit"
+    "result-size-limit",
+    "shutdown-cancellation-release"
   ],
   "functions": [
     {
