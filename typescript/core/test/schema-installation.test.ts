@@ -543,6 +543,10 @@ describe("schema installation", () => {
         version: 58,
         description: "close SQL integrity gaps in rate refill, dependency edges, and mixed batches",
       },
+      {
+        version: 59,
+        description: "judge fast-tier completions and cancellation acknowledgements after waits",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

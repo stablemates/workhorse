@@ -6,7 +6,7 @@ other SDKs carry, because every tag names one release of all of them.
 ## Unreleased
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **58**, and the SDK compatibility floor is schema version **54**.
+The final schema version is **59**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.
@@ -50,6 +50,8 @@ Migration 0059 (`0059-close-sql-integrity-gaps-in-rate-refill-dependency-edges-a
 **Fixed:** The `workhorse.handler` span descends only from the task's stored trace context. A task
 without one starts a new trace instead of joining a span that a context-propagating executor carries
 into the handler thread (SM-1179).
+
+Migration 0060 (`0060-judge-fast-tier-completions-and-cancellation-acknowledgements-after-waits.sql`) judges two fast-tier operations at the time they act (SM-1163). `fast_complete_many_v1` reads the clock again after failing oversized members, so a later member whose lease expired while one of those failures waited no longer completes. `fast_acknowledge_cancel_v1` checks the lease after its row lock, as `acknowledge_cancel_v1` does on the full tier.
 
 ## 0.6.1 — 2026-10-02
 

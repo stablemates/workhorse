@@ -172,11 +172,13 @@ More detail: [Task lifecycle: Deadlines and execution timeouts](../architecture/
 In the timeout story, worker A's handler was stuck in a hung call at 2 min. This is what the worker
 did:
 
-1. At `attempt_timeout_at`, the worker's local timer fired. It aborted the handler's `signal`, the
-   same signal that [cancellation](120-cancellation.md) uses, but with a different reason.
-2. The worker called `expire_owned_v1` with its worker id and fence token.
-3. PostgreSQL closed the attempt and applied its retry decision in that call. Ordinary timeout
-   settlement does not wait for the lease to expire.
+1. At `attempt_timeout_at`, the worker's local timer fired. The worker called `expire_owned_v1` with
+   its worker id and fence token.
+2. PostgreSQL closed the attempt and applied its retry decision in that call. Ordinary timeout
+   settlement does not wait for the lease to expire. If PostgreSQL had answered `not_due`, the
+   handler would have kept running and the worker would have asked again.
+3. The worker then aborted the handler's `signal`, the same signal that
+   [cancellation](120-cancellation.md) uses, but with a different reason.
 
 JavaScript is not forcibly stopped. Suppose the hung call returns at 3 min and the handler tries to
 complete. The attempt is already closed, so that late write cannot land.

@@ -305,7 +305,7 @@ Go, overrides that count when the database is far away or short of CPU.
 
 A combined completion carries many results in one statement. If one result exceeds its size limit,
 Workhorse fails only that attempt with `TaskValueSizeLimitError`, and the retry policy applies. The
-other completions and the next claim still commit. On the full tier, an oversized result makes
+other completions still commit if their leases are still live, and the next claim still runs. On the full tier, an oversized result makes
 `complete_v1` raise, which rolls back the caller's statement.
 
 <details>
@@ -328,8 +328,9 @@ with a default of 30,000. A worker's combined claim asks for its free slots plus
 `batched completion` rejection sends the worker back to `complete_v1`.
 
 **Oversized results.** `fast_complete_many_v1` passes each result larger than the row's
-`result_max_bytes` to `fast_fail_v1` with a `TaskValueSizeLimitError` error. It completes the rest
-of the batch, and the combined claim still runs.
+`result_max_bytes` to `fast_fail_v1` with a `TaskValueSizeLimitError` error. It then reads the clock
+again, completes the rest of the batch whose leases are still live, and the combined claim still
+runs.
 
 **Cohorts.** Without an explicit count, `defaultDispatchCohorts(concurrency, spareConnections)`
 gives:
@@ -352,7 +353,7 @@ connections give a concurrency-64 worker 1, 2, 4, and 8 cohorts.
 
 An explicit count is never capped.
 
-More detail: [Fast tier: Workers on a fast-tier queue](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#workers-on-a-fast-tier-queue).
+More detail: [Fast tier: Workers on a fast-tier queue](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#workers-on-a-fast-tier-queue) and [Fast tier: Oversized results](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#oversized-results).
 
 </details>
 

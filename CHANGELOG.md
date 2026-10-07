@@ -24,7 +24,7 @@ The optional `@stablemates/workhorse-knex` adapter preserves native PostgreSQL s
 The tested Objection recipe shares the model-write transaction with enqueue. Callers retain transaction and resource ownership (SM-1118).
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **58**, and the SDK compatibility floor is schema version **54**.
+The final schema version is **59**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.
@@ -113,6 +113,10 @@ queue with no ready task is 0. An `onError` reporter that throws or rejects is w
 **Pending release — fixed:** The Rust and Ruby `workhorse.handler` spans descend only from the
 task's stored trace context. A task without one starts a new trace instead of joining a span active
 in the worker. Every SDK now parents a handler span this way (SM-1179).
+
+Migration 0060 (`0060-judge-fast-tier-completions-and-cancellation-acknowledgements-after-waits.sql`) judges two fast-tier operations at the time they act (SM-1163). `fast_complete_many_v1` reads the clock again after failing oversized members, so a later member whose lease expired while one of those failures waited no longer completes. `fast_acknowledge_cancel_v1` checks the lease after its row lock, as `acknowledge_cancel_v1` does on the full tier.
+
+The TypeScript worker measures lease windows and expiry timers on the monotonic clock, so a worker wall clock that runs ahead or jumps backward moves neither. It counts the deadline and attempt timeout from the database time of the claim, and aborts the handler only after `expire_owned_v1` confirms the expiry. A `not_due` answer keeps the handler running and asks again. A claim answer that arrives after its lease window has run out no longer starts the handler (SM-1163).
 
 ## 0.6.1 — 2026-10-02
 

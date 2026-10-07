@@ -403,7 +403,10 @@ handles oversized results in these steps:
    `{"name": "TaskValueSizeLimitError", "message": "<task_type> result exceeds its configured size
 limit", "stack": null}`.
 3. The task's retry policy then schedules another attempt or finishes it as failed.
-4. The function leaves those tasks out of the returned IDs and completes the rest of the batch.
+4. The function leaves those tasks out of the returned IDs.
+5. Since migration 0060 (schema version 59), it then reads the clock again
+   ([Clock sample after the lock](#clock-sample-after-the-lock)). It completes each other member
+   whose lease, deadline, and attempt timeout are still live at that reading.
 
 `complete_many_and_claim_v1` still runs its claim.
 
@@ -448,10 +451,22 @@ Recovery and reclaim skip locked rows and change the fence, so the earlier pre-l
 duplicate or lose a task.
 
 `fast_complete_many_v1`, `fast_heartbeat_many_v1`, and the single-tier paths of
-`heartbeat_many_v1` sample `clock_timestamp()` once, after every row lock of the call is held, not
-before the first. In such a batch, a lease that was live when its own row was locked is still
-rejected if it expired while the call waited for a later row. A mixed-tier `heartbeat_many_v1`
-batch validates each lease separately, as the next section describes.
+`heartbeat_many_v1` sample `clock_timestamp()` after every row lock of the call is held, not before
+the first. In such a batch, a lease that was live when its own row was locked is still rejected if it
+expired while the call waited for a later row. A mixed-tier `heartbeat_many_v1` batch validates each
+lease separately, as the next section describes.
+
+Since migration 0060 (schema version 59), `fast_complete_many_v1` samples the clock a second time.
+That sample follows the oversized failures and precedes the completion `DELETE`.
+Failing one writes an outcome row, and that write can wait, for example behind partition
+maintenance. The `DELETE` and `finished_at` use the later sample, so a member whose lease expired
+during that wait is rejected.
+
+Since the same migration, `fast_acknowledge_cancel_v1` checks the lease after its row lock, as
+`acknowledge_cancel_v1` does on the full tier. It used to filter on `expires_at` in the locking
+`SELECT`. Another transaction can hold the row lock without changing the row. PostgreSQL then
+does not evaluate that filter again after the wait. A lease that expired during the wait was
+therefore still accepted.
 
 #### Heartbeat batch routing
 

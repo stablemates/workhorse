@@ -15,7 +15,7 @@ import { HumanWaitConflictError } from "./queue/human-waits.js";
 import { errorForTelemetry, type FailureStatus } from "./queue/claim-lease-fence.js";
 import { jitterDuration } from "./notifications.js";
 import type { TaskNotificationSubscription } from "./notifications.js";
-import { MAX_TIMER_DELAY_MS } from "./timers.js";
+import { MAX_TIMER_DELAY_MS, monotonicNow } from "./timers.js";
 import type {
   ScheduleWaitRequest,
   ScheduleWaitResult,
@@ -582,7 +582,8 @@ export class Worker {
   private executionTail: Promise<void> = Promise.resolve();
   /** Serializes only durable batch announcements; batch callbacks still execute concurrently. */
   private batchDispatchRecording: Promise<void> = Promise.resolve();
-  // When each claimed task's claim request left, which starts its first local lease window.
+  // When each claimed task's claim request left, on the monotonic clock. It starts the task's first
+  // local lease window.
   private readonly claimSentAt = new WeakMap<ClaimedTask, number>();
   // Tasks claimed from a queue that answered as fast-tier (ADR 0077). Their handlers get the
   // fast-tier context, and their completions take the fused path.
@@ -642,7 +643,7 @@ export class Worker {
       const leases = [...this.heartbeatLeases.values()];
       // A lease renewed by this round runs from the moment the request left, which can only be
       // earlier than the database's renewal, so local lease windows never outlast the real ones.
-      const sentAt = Date.now();
+      const sentAt = monotonicNow();
       const channel = this.reservedHeartbeatChannel();
       // A round on the reserved connection is bounded by the heartbeat interval, so a statement
       // stuck on it cannot hold back the next round.
@@ -1103,7 +1104,7 @@ export class Worker {
         while (tasks.length < limit && emptyQueues < this.queueNames.length) {
           const queueName = this.queueNames[this.nextQueueIndex]!;
           this.nextQueueIndex = (this.nextQueueIndex + 1) % this.queueNames.length;
-          const sentAt = Date.now();
+          const sentAt = monotonicNow();
           const task = await this.queue.claim(this.workerId, {
             queue: queueName,
             leaseMs: this.leaseMs,
@@ -1143,7 +1144,7 @@ export class Worker {
     fastLimit = limit,
   ): Promise<ClaimedTask[]> {
     const options = { queue: queueName, leaseMs: this.leaseMs };
-    const sentAt = Date.now();
+    const sentAt = monotonicNow();
     let claimed: ClaimedTask[] | undefined;
     if (this.queue.claimFast && (this.fullTierUntil.get(queueName) ?? 0) <= sentAt) {
       if (fastLimit <= 0) return [];
@@ -1299,7 +1300,7 @@ export class Worker {
         addHeartbeatLease: (claimed, status) => this.addHeartbeatLease(claimed, status),
       },
       activation,
-      this.claimSentAt.get(task) ?? Date.now(),
+      this.claimSentAt.get(task) ?? monotonicNow(),
     );
     try {
       let writeCompletion: (claim?: CompletionClaim) => Promise<CompletionClaimResult>;
@@ -1327,6 +1328,9 @@ export class Worker {
           return;
         }
         await this.inject("beforeHandler", task);
+        // A claim answer can arrive after its lease window has run out. The handler must not start
+        // then, because its first synchronous effects would run under a claim another worker may hold.
+        attempt.requireLease();
         const result = await handler(
           task.payload,
           createHandlerContext(this.queue, this.workerId, task, attempt, this.contextTier(task)),
@@ -1410,7 +1414,7 @@ export class Worker {
   ): Promise<boolean> {
     if (!this.fastTasks.has(task)) return (await write()).accepted;
     const reservation = this.reserveCompletionClaim?.(task);
-    const sentAt = Date.now();
+    const sentAt = monotonicNow();
     let claimed: readonly ClaimedTask[] | null = null;
     try {
       const outcome = await write(

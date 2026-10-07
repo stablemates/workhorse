@@ -1,4 +1,3 @@
-import { setTimeout as sleep } from "node:timers/promises";
 import {
   CancellationRequestedError,
   DeadlineExceededError,
@@ -11,7 +10,7 @@ import {
   taskSpanAttributes,
   type TaskExecutionOutcome,
 } from "./telemetry.js";
-import { setUnrefTimeoutAt } from "./timers.js";
+import { monotonicNow, setUnrefTimeoutAt } from "./timers.js";
 import type {
   ClaimedTask,
   ExpireOwnedStatus,
@@ -21,6 +20,9 @@ import type {
 
 const DURABLE_WAIT_SUSPENSION = Symbol("workhorse.durableWaitSuspension");
 const CHILD_TASK_SUSPENSION = Symbol("workhorse.childTaskSuspension");
+// Bounds on the wait before asking PostgreSQL again whether a local expiry has arrived.
+const EXPIRATION_RETRY_MIN_MS = 5;
+const EXPIRATION_RETRY_MAX_MS = 1_000;
 
 type AttemptOutcome =
   | "completed"
@@ -62,7 +64,10 @@ export interface TaskAttemptServices {
   leaseMs: number;
   acknowledgeCancel(task: ClaimedTask, workerId: string): Promise<boolean>;
   expireOwned(task: ClaimedTask, workerId: string): Promise<ExpireOwnedStatus>;
-  /** Registers the task for heartbeats; `sentAt` is when the reporting round's request left. */
+  /**
+   * Registers the task for heartbeats. `sentAt` is when the reporting round's request left, read
+   * from `monotonicNow()`.
+   */
   addHeartbeatLease(
     task: ClaimedTask,
     status: (status: HeartbeatStatus, sentAt: number) => void,
@@ -74,25 +79,36 @@ export interface TaskAttemptServices {
  *
  * The attempt owns the abort signal the handler sees, and the arbiter that decides which outcome
  * wins when cancellation, expiry, lease loss, suspension, and completion race. It keeps the lease
- * alive through the worker's heartbeat batch and fires the deadline or attempt timeout locally.
+ * alive through the worker's heartbeat batch and asks PostgreSQL to expire it when the deadline or
+ * attempt timeout arrives. The handler is aborted only once PostgreSQL confirms that expiry.
  *
  * A lease watchdog aborts the attempt once its last accepted renewal is a full lease old. By then
  * another worker may own the task, and fencing only protects the database, not external effects.
- * Construction starts the heartbeat, the expiration timer, and the watchdog; `stop()` ends them.
+ * Both timers run on the monotonic clock, so a worker wall clock that is wrong or that jumps moves
+ * neither of them. Construction starts the heartbeat, the expiration timer, and the watchdog;
+ * `stop()` ends them.
  */
 export class TaskAttempt {
   readonly arbiter = new AttemptOutcomeArbiter();
   private readonly controller = new AbortController();
   private cancelExpirationTimer: (() => void) | undefined;
   private cancelLeaseWatchdog: (() => void) | undefined;
+  // When the local lease window ends, on the monotonic clock.
+  private leaseWindowEndsAt: number | undefined;
+  // When the earlier of the deadline and the attempt timeout arrives, on the monotonic clock.
+  private expirationDueAt: number | undefined;
   private expirationPromise: Promise<ExpireOwnedStatus> | undefined;
   private heartbeatStopped = false;
+  // Set once a heartbeat answer reports the deadline or attempt timeout. That is PostgreSQL's
+  // verdict, so asking it to expire ownership continues after the attempt stops.
+  private expiryReported = false;
   private removeHeartbeatLease: (() => void) | undefined;
 
   constructor(
     readonly task: ClaimedTask,
     private readonly services: TaskAttemptServices,
     private readonly activation: { outcome: TaskExecutionOutcome },
+    /** When the claim request left, read from `monotonicNow()`. */
     claimSentAt: number,
   ) {
     const expirationAt = [task.deadlineAt, task.attemptTimeoutAt].reduce<Date | null>(
@@ -101,30 +117,19 @@ export class TaskAttempt {
       null,
     );
     if (expirationAt) {
-      this.cancelExpirationTimer = setUnrefTimeoutAt(
-        // The extra millisecond keeps the timer from leading the database clock: expirationAt was
-        // truncated to milliseconds on the way to the client, so firing at it exactly can precede
-        // the stored microsecond value and earn a not_due answer from expiration.
-        expirationAt.getTime() + 1,
-        () => {
-          this.cancelExpirationTimer = undefined;
-          const isDeadline =
-            task.deadlineAt !== null &&
-            (task.attemptTimeoutAt === null || task.deadlineAt <= task.attemptTimeoutAt);
-          if (isDeadline) {
-            this.abort(new DeadlineExceededError(task.id));
-          } else {
-            this.abort(new ExecutionTimeoutError(task.id, task.attempt));
-          }
-          this.stop();
-          this.expireOwnershipInBackground();
-        },
-      );
+      // PostgreSQL computed the lease and the expiry from one reading of its clock, and that
+      // reading is leaseExpiresAt minus the lease. The time left from that reading to the expiry
+      // is counted on the monotonic clock from now, so the worker's wall clock never enters it.
+      // The answer arrived after the reading, so the timer can fire late but never early. The extra
+      // millisecond covers both timestamps being truncated to milliseconds on the way here.
+      const databaseClaimedAt = task.leaseExpiresAt.getTime() - services.leaseMs;
+      this.expirationDueAt = monotonicNow() + expirationAt.getTime() - databaseClaimedAt + 1;
+      this.armExpirationTimer(this.expirationDueAt, EXPIRATION_RETRY_MIN_MS);
     }
-    this.renewLease(claimSentAt);
     this.removeHeartbeatLease = services.addHeartbeatLease(task, (status, sentAt) =>
       this.refreshOwnership(status, sentAt),
     );
+    this.renewLease(claimSentAt);
   }
 
   /** The signal handed to the handler; it aborts when this attempt loses its task. */
@@ -132,8 +137,16 @@ export class TaskAttempt {
     return this.controller.signal;
   }
 
-  /** Every durable side effect first confirms that this attempt still owns the task. */
+  /**
+   * Every durable side effect first confirms that this attempt still owns the task.
+   *
+   * A lease window that has run out ends here, even if its watchdog timer has not fired yet. A
+   * late claim answer or a blocked event loop can leave the window spent with that timer still due.
+   */
   requireLease(): void {
+    if (this.leaseWindowEndsAt !== undefined && monotonicNow() >= this.leaseWindowEndsAt) {
+      this.endLeaseWindow();
+    }
     if (this.controller.signal.aborted)
       throw this.controller.signal.reason ?? new Error("Task lease was lost");
   }
@@ -161,6 +174,7 @@ export class TaskAttempt {
     this.cancelExpirationTimer = undefined;
     this.cancelLeaseWatchdog?.();
     this.cancelLeaseWatchdog = undefined;
+    this.leaseWindowEndsAt = undefined;
   }
 
   markCancellationRequested(): void {
@@ -175,23 +189,9 @@ export class TaskAttempt {
     return accepted;
   }
 
-  /**
-   * Waits for PostgreSQL to accept the local expiry.
-   *
-   * "not_due" is the database refusing the transition: its clock has not reached the stored
-   * expiry the local timer fired for. Timestamps round-trip to the client at millisecond
-   * precision while PostgreSQL stores microseconds, so the timer can lead by a fraction.
-   * Ask again until the database agrees — returning on not_due would abandon an attempt the
-   * handler already gave up, leaving it active under a live lease until lease recovery.
-   */
+  /** Waits for the answer to an expiry this attempt asked PostgreSQL for, if it asked. */
   async settleExpiration(): Promise<void> {
-    let expirationStatus = await this.expirationPromise;
-    const expirationRetryBudgetAt = Date.now() + 1_000;
-    while (expirationStatus === "not_due" && Date.now() < expirationRetryBudgetAt) {
-      await sleep(5);
-      this.expirationPromise = undefined;
-      expirationStatus = await this.expireOwnership();
-    }
+    await this.expirationPromise;
   }
 
   /** Records the activation's outcome once; later calls keep the first. */
@@ -246,16 +246,79 @@ export class TaskAttempt {
   }
 
   private expireOwnership(): Promise<ExpireOwnedStatus> {
-    this.expirationPromise ??= this.services
-      .expireOwned(this.task, this.services.workerId)
-      .then((status) => {
-        if (status === "cancel_requested") this.markCancellationRequested();
-        else if (status === "deadline_exceeded") this.arbiter.submit("deadline_exceeded");
-        else if (status === "timeout_exceeded") this.arbiter.submit("attempt_timeout");
-        else if (status === "stale") this.arbiter.submit("lease_expired");
-        return status;
-      });
+    this.expirationPromise ??= this.requestExpiration().then((status) => {
+      if (status === "cancel_requested") this.markCancellationRequested();
+      else if (status === "deadline_exceeded") this.arbiter.submit("deadline_exceeded");
+      else if (status === "timeout_exceeded") this.arbiter.submit("attempt_timeout");
+      else if (status === "stale") this.arbiter.submit("lease_expired");
+      return status;
+    });
     return this.expirationPromise;
+  }
+
+  /**
+   * Asks PostgreSQL to expire ownership until it agrees that the expiry has arrived.
+   *
+   * "not_due" is the database refusing the transition because its clock has not reached the stored
+   * expiry. The attempt still owns the task then, so the handler keeps running and the question is
+   * asked again. The wait runs to the database-relative due time, and at least a short backoff. A
+   * truncated timestamp can make the local timer lead by a fraction of a millisecond. Once another
+   * outcome wins, or the attempt stops before any heartbeat reported the expiry, asking stops and
+   * the answer stays "not_due".
+   */
+  private async requestExpiration(): Promise<ExpireOwnedStatus> {
+    let retryMs = EXPIRATION_RETRY_MIN_MS;
+    for (;;) {
+      const status = await this.services.expireOwned(this.task, this.services.workerId);
+      if (status !== "not_due" || this.finished()) return status;
+      const waitMs = Math.max(retryMs, (this.expirationDueAt ?? 0) - monotonicNow());
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, waitMs);
+      });
+      if (this.finished()) return status;
+      retryMs = Math.min(retryMs * 2, EXPIRATION_RETRY_MAX_MS);
+    }
+  }
+
+  private finished(): boolean {
+    return this.arbiter.outcome !== undefined || (this.heartbeatStopped && !this.expiryReported);
+  }
+
+  private armExpirationTimer(atMs: number, retryMs: number): void {
+    this.cancelExpirationTimer = setUnrefTimeoutAt(atMs, () => {
+      this.cancelExpirationTimer = undefined;
+      this.expireOnConfirmation(retryMs);
+    });
+  }
+
+  // The local expiry has arrived. The handler keeps running until PostgreSQL confirms it.
+  private expireOnConfirmation(retryMs: number): void {
+    this.expireOwnership().then(
+      (status) => {
+        if (status === "deadline_exceeded") {
+          this.stop();
+          this.abort(new DeadlineExceededError(this.task.id));
+        } else if (status === "timeout_exceeded") {
+          this.stop();
+          this.abort(new ExecutionTimeoutError(this.task.id, this.task.attempt));
+        } else if (status === "stale") {
+          this.stop();
+          this.abort(new Error("Task lease was lost"));
+        }
+        // markCancellationRequested already ended a cancel_requested attempt. A not_due answer
+        // means another outcome won while PostgreSQL was being asked.
+      },
+      () => {
+        // A failed request proves nothing about the expiry, so the handler keeps running and the
+        // question is asked again. The lease watchdog still ends an attempt PostgreSQL cannot renew.
+        if (this.finished()) return;
+        this.expirationPromise = undefined;
+        this.armExpirationTimer(
+          monotonicNow() + retryMs,
+          Math.min(retryMs * 2, EXPIRATION_RETRY_MAX_MS),
+        );
+      },
+    );
   }
 
   private expireOwnershipInBackground(): void {
@@ -267,12 +330,23 @@ export class TaskAttempt {
   private renewLease(sentAt: number): void {
     if (this.heartbeatStopped) return;
     this.cancelLeaseWatchdog?.();
-    this.cancelLeaseWatchdog = setUnrefTimeoutAt(sentAt + this.services.leaseMs, () => {
-      this.cancelLeaseWatchdog = undefined;
-      this.arbiter.submit("lease_expired");
-      this.stop();
-      this.abort(new Error("No heartbeat was accepted within the task lease"));
-    });
+    this.cancelLeaseWatchdog = undefined;
+    this.leaseWindowEndsAt = sentAt + this.services.leaseMs;
+    // An answer that arrives a full lease after its request left opens no window at all.
+    if (monotonicNow() >= this.leaseWindowEndsAt) {
+      this.endLeaseWindow();
+      return;
+    }
+    this.cancelLeaseWatchdog = setUnrefTimeoutAt(this.leaseWindowEndsAt, () =>
+      this.endLeaseWindow(),
+    );
+  }
+
+  private endLeaseWindow(): void {
+    this.cancelLeaseWatchdog = undefined;
+    this.arbiter.submit("lease_expired");
+    this.stop();
+    this.abort(new Error("No heartbeat was accepted within the task lease"));
   }
 
   private refreshOwnership(status: HeartbeatStatus, sentAt: number): void {
@@ -281,10 +355,12 @@ export class TaskAttempt {
     } else if (status === "cancel_requested") {
       this.markCancellationRequested();
     } else if (status === "deadline_exceeded") {
+      this.expiryReported = true;
       this.stop();
       this.expireOwnershipInBackground();
       this.abort(new DeadlineExceededError(this.task.id));
     } else if (status === "timeout_exceeded") {
+      this.expiryReported = true;
       this.stop();
       this.expireOwnershipInBackground();
       this.abort(new ExecutionTimeoutError(this.task.id, this.task.attempt));
