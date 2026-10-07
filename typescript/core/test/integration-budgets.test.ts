@@ -414,8 +414,28 @@ describe("named budgets", () => {
             { name: budget, rate: { limit: 1, intervalMs: 60_000, burst: 1 } },
           ]),
       );
-      // The claim charged the burst it read: five tokens less three starts.
-      expect(outcome).toMatchObject({ changedUnderClaim: false, claimed: 3, tokens: 2 });
+      // The claim charged the burst it read: five tokens less three starts, at the clock reading
+      // it also stamps as acquired_at. The synchronization then refilled the bucket to its own
+      // reading, stored as refilled_at, at the old rate of one token per 60,000 ms. The expected
+      // balance repeats that arithmetic in PostgreSQL, so it matches exactly.
+      expect(outcome).toMatchObject({ changedUnderClaim: false, claimed: 3 });
+      const refill = await pool.query<{ tokens: string; expected: string; refilled: boolean }>(
+        `SELECT bucket.tokens::text,
+                LEAST(5::numeric, 2 + GREATEST(
+                  0::numeric, extract(epoch FROM bucket.refilled_at - charge.acquired_at) * 1000
+                ) * 1::numeric / 60000::numeric)::text AS expected,
+                bucket.refilled_at > charge.acquired_at AS refilled
+           FROM workhorse.budget_bucket bucket,
+                (SELECT max(runtime.acquired_at) AS acquired_at,
+                        count(DISTINCT runtime.acquired_at) AS readings
+                   FROM workhorse.task_runtime runtime
+                  WHERE runtime.budget_name = $1 AND runtime.state = 'active') charge
+          WHERE bucket.budget_name = $1 AND charge.readings = 1`,
+        [outcome.budget],
+      );
+      expect(refill.rows).toEqual([
+        { tokens: refill.rows[0]?.expected, expected: expect.any(String), refilled: true },
+      ]);
     });
 
     it("waits for the claim before adding a rate limit", async () => {

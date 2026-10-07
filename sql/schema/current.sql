@@ -345,6 +345,11 @@ CREATE TABLE IF NOT EXISTS workhorse.rate_limit_policy (
       AND per_key_interval_ms BETWEEN 1 AND 86400000
       AND per_key_burst BETWEEN 1 AND 1000000
     )
+  ),
+  -- A CHECK that evaluates to null passes, so the check above accepts a per-key rule with one or
+  -- two null fields. This one cannot evaluate to null and requires all three fields or none.
+  CONSTRAINT rate_limit_policy_per_key_complete_check CHECK (
+    num_nulls(per_key_limit, per_key_interval_ms, per_key_burst) IN (0, 3)
   )
 );
 
@@ -487,6 +492,51 @@ BEGIN
 END;
 $$;
 
+-- Refill a queue's stored admission shards to p_now at the rate policy that synchronization is
+-- about to replace. The refill uses the shares rebalance_admission_shards_v1 reads, keeps the latest
+-- refill time, and leaves a full shard full. A rebalance at the same p_now under the new policy then
+-- refills nothing, so time before p_now never earns tokens at the new rate. The function takes the
+-- locks a rebalance takes, in the same order.
+CREATE OR REPLACE FUNCTION workhorse.refill_admission_shards_internal_v1(
+  p_queue_name text,
+  p_rate_limit integer,
+  p_rate_interval_ms integer,
+  p_rate_burst integer,
+  p_now timestamptz
+) RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:admission-shards:' || p_queue_name, 0));
+  FOR v_shard IN 0..7 LOOP
+    PERFORM pg_advisory_xact_lock(
+      hashtextextended('workhorse:admission-shard:' || p_queue_name || ':' || v_shard, 0)
+    );
+  END LOOP;
+  UPDATE workhorse.admission_shard shard_row
+     SET tokens = LEAST(
+           refilled.share::numeric,
+           shard_row.tokens + GREATEST(
+             0::numeric,
+             extract(epoch FROM p_now - shard_row.refilled_at) * 1000
+           ) * p_rate_limit::numeric * refilled.share
+             / (p_rate_interval_ms::numeric * p_rate_burst)
+         ),
+         refilled_at = GREATEST(p_now, shard_row.refilled_at)
+    FROM (
+      SELECT stored.shard,
+             workhorse.admission_share_v1(
+               p_rate_burst, (count(*) OVER ())::integer,
+               (row_number() OVER (ORDER BY stored.shard))::integer - 1
+             ) AS share
+        FROM workhorse.admission_shard stored
+       WHERE stored.queue_name = p_queue_name
+    ) refilled
+   WHERE shard_row.queue_name = p_queue_name AND shard_row.shard = refilled.shard
+     AND shard_row.tokens IS NOT NULL;
+END;
+$$;
+
 -- Deployment-synchronized budgets that span queues (ADR 0067). A task names at most one budget.
 -- A missing row means the named budget imposes no limit.
 CREATE TABLE IF NOT EXISTS workhorse.budget (
@@ -502,6 +552,11 @@ CREATE TABLE IF NOT EXISTS workhorse.budget (
     OR (rate_limit BETWEEN 1 AND 1000000
       AND rate_interval_ms BETWEEN 1 AND 86400000
       AND rate_burst BETWEEN 1 AND 1000000)
+  ),
+  -- A CHECK that evaluates to null passes, so the check above accepts a rate with one or two null
+  -- fields. This one cannot evaluate to null and requires all three fields or none.
+  CONSTRAINT budget_rate_complete_check CHECK (
+    num_nulls(rate_limit, rate_interval_ms, rate_burst) IN (0, 3)
   ),
   CONSTRAINT budget_limit_check CHECK (max_active IS NOT NULL OR rate_limit IS NOT NULL)
 );
@@ -1037,6 +1092,37 @@ CREATE OR REPLACE TRIGGER task_dependency_validate_insert
   AFTER INSERT ON workhorse.task_dependency
   REFERENCING NEW TABLE AS inserted_dependencies
   FOR EACH STATEMENT EXECUTE FUNCTION workhorse.validate_task_dependencies_v1();
+
+-- The insert triggers validate an edge's endpoints and outcome policies, and the dependent's cached
+-- prerequisite counters count the edge as inserted. An update may only release the edge, so an
+-- update that changes an endpoint or an outcome policy is rejected rather than revalidated.
+CREATE OR REPLACE FUNCTION workhorse.reject_task_dependency_change_v1()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RAISE EXCEPTION USING
+    ERRCODE = '55000',
+    MESSAGE = 'dependency edge endpoints and outcome policies cannot change after insertion',
+    DETAIL = jsonb_build_object(
+      'dependentTaskId', OLD.dependent_task_id,
+      'prerequisiteTaskId', OLD.prerequisite_task_id
+    )::text;
+END;
+$$;
+
+CREATE OR REPLACE TRIGGER task_dependency_reject_change
+  BEFORE UPDATE OF dependent_task_id, prerequisite_task_id, on_success, on_failure, on_cancellation
+  ON workhorse.task_dependency
+  FOR EACH ROW
+  WHEN (
+    (OLD.dependent_task_id, OLD.prerequisite_task_id, OLD.on_success, OLD.on_failure,
+     OLD.on_cancellation)
+    IS DISTINCT FROM
+    (NEW.dependent_task_id, NEW.prerequisite_task_id, NEW.on_success, NEW.on_failure,
+     NEW.on_cancellation)
+  )
+  EXECUTE FUNCTION workhorse.reject_task_dependency_change_v1();
 
 -- PostgreSQL owns enqueue deduplication. The deferred reference lets enqueue reserve a scoped key
 -- through the unique index before creating any task, event, FIFO, or notification side effects.
@@ -5225,8 +5311,12 @@ END;
 $$;
 
 -- Synchronize queue rate limits as deployment-owned desired state. A policy update keeps the tokens
--- a queue has accrued. The synchronization refills the queue's admission shards, clamps their sum to
--- the new burst, and spreads it over the new shards, so it never manufactures starts (ADR 0082).
+-- a queue has accrued. For each changed queue, the synchronization reads the clock once. It refills
+-- the queue's admission shards and per-key buckets to that time at the old rate, then applies the
+-- new policy from that time. It clamps the shards' sum to the new burst and spreads it over the new
+-- shards, so it never manufactures starts (ADR 0082). A per-key rule added to a queue without one
+-- discards any stale per-key bucket, so each key starts full. A removed per-key rule leaves its
+-- buckets for claims to discard.
 CREATE OR REPLACE FUNCTION workhorse.sync_rate_limit_policies_v1(
   p_namespace text,
   p_definitions jsonb,
@@ -5257,6 +5347,10 @@ DECLARE
   v_per_key_burst numeric;
   v_seen text[] := '{}';
   v_notify_queues text[] := '{}';
+  v_previous_policy workhorse.rate_limit_policy%ROWTYPE;
+  v_previous jsonb := '{}';
+  v_old jsonb;
+  v_now timestamptz;
 BEGIN
   IF p_namespace IS NULL OR p_namespace = '' OR octet_length(p_namespace) > 256 THEN
     RAISE EXCEPTION 'rate-limit policy namespace must contain between 1 and 256 UTF-8 bytes';
@@ -5340,6 +5434,11 @@ BEGIN
     ) THEN
       RAISE EXCEPTION 'rate-limit policy queue is owned by another namespace';
     END IF;
+    SELECT policy.* INTO v_previous_policy
+      FROM workhorse.rate_limit_policy policy WHERE policy.queue_name = v_queue_name;
+    IF FOUND THEN
+      v_previous := v_previous || jsonb_build_object(v_queue_name, to_jsonb(v_previous_policy));
+    END IF;
     INSERT INTO workhorse.rate_limit_policy AS policy(
       queue_name, namespace, rate_limit, rate_interval_ms, rate_burst,
       per_key_limit, per_key_interval_ms, per_key_burst, updated_at
@@ -5384,7 +5483,45 @@ BEGIN
       FROM unnest(v_notify_queues) AS affected(queue_name)
      ORDER BY affected.queue_name
   LOOP
-    PERFORM workhorse.rebalance_admission_shards_v1(v_queue_name, clock_timestamp());
+    v_now := clock_timestamp();
+    v_old := v_previous->v_queue_name;
+    IF v_old IS NOT NULL AND EXISTS (
+      SELECT 1 FROM workhorse.rate_limit_policy policy
+       WHERE policy.queue_name = v_queue_name
+         AND (policy.rate_limit, policy.rate_interval_ms, policy.rate_burst)
+             IS DISTINCT FROM ((v_old->>'rate_limit')::integer,
+               (v_old->>'rate_interval_ms')::integer, (v_old->>'rate_burst')::integer)
+    ) THEN
+      PERFORM workhorse.refill_admission_shards_internal_v1(
+        v_queue_name, (v_old->>'rate_limit')::integer, (v_old->>'rate_interval_ms')::integer,
+        (v_old->>'rate_burst')::integer, v_now
+      );
+    END IF;
+    IF v_old IS NOT NULL AND EXISTS (
+      SELECT 1 FROM workhorse.rate_limit_policy policy
+       WHERE policy.queue_name = v_queue_name AND policy.per_key_limit IS NOT NULL
+         AND (policy.per_key_limit, policy.per_key_interval_ms, policy.per_key_burst)
+             IS DISTINCT FROM ((v_old->>'per_key_limit')::integer,
+               (v_old->>'per_key_interval_ms')::integer, (v_old->>'per_key_burst')::integer)
+    ) THEN
+      IF v_old->'per_key_limit' = 'null'::jsonb THEN
+        DELETE FROM workhorse.rate_limit_bucket bucket
+         WHERE bucket.queue_name = v_queue_name AND bucket.bucket_scope = 'key';
+      ELSE
+        UPDATE workhorse.rate_limit_bucket bucket
+           SET tokens = LEAST(
+                 (v_old->>'per_key_burst')::numeric,
+                 bucket.tokens + GREATEST(
+                   0::numeric,
+                   extract(epoch FROM v_now - bucket.refilled_at) * 1000
+                 ) * (v_old->>'per_key_limit')::numeric
+                   / (v_old->>'per_key_interval_ms')::numeric
+               ),
+               refilled_at = GREATEST(v_now, bucket.refilled_at)
+         WHERE bucket.queue_name = v_queue_name AND bucket.bucket_scope = 'key';
+      END IF;
+    END IF;
+    PERFORM workhorse.rebalance_admission_shards_v1(v_queue_name, v_now);
     PERFORM pg_notify('workhorse_tasks', v_queue_name);
   END LOOP;
   RETURN QUERY
@@ -5491,6 +5628,8 @@ DECLARE
   v_seen text[] := '{}';
   v_affected text[] := '{}';
   v_queue_name text;
+  v_previous workhorse.budget%ROWTYPE;
+  v_now timestamptz;
 BEGIN
   IF p_namespace IS NULL OR p_namespace = '' OR octet_length(p_namespace) > 256 THEN
     RAISE EXCEPTION 'budget namespace must contain between 1 and 256 UTF-8 bytes';
@@ -5582,6 +5721,31 @@ BEGIN
        WHERE budget.budget_name = v_budget_name AND budget.namespace <> p_namespace
     ) THEN
       RAISE EXCEPTION 'budget is owned by another namespace';
+    END IF;
+    -- Refill the bucket to now at the old rate before a new rate applies. A rate added to a
+    -- budget without one discards any stale bucket, so the budget starts full. A removed rate
+    -- leaves its bucket unread.
+    SELECT budget.* INTO v_previous
+      FROM workhorse.budget budget WHERE budget.budget_name = v_budget_name;
+    IF FOUND AND v_rate_limit IS NOT NULL
+       AND (v_previous.rate_limit, v_previous.rate_interval_ms, v_previous.rate_burst)
+       IS DISTINCT FROM (v_rate_limit::integer, v_rate_interval_ms::integer, v_rate_burst::integer)
+    THEN
+      v_now := clock_timestamp();
+      IF v_previous.rate_limit IS NULL THEN
+        DELETE FROM workhorse.budget_bucket bucket WHERE bucket.budget_name = v_budget_name;
+      ELSE
+        UPDATE workhorse.budget_bucket bucket
+           SET tokens = LEAST(
+                 v_previous.rate_burst::numeric,
+                 bucket.tokens + GREATEST(
+                   0::numeric,
+                   extract(epoch FROM v_now - bucket.refilled_at) * 1000
+                 ) * v_previous.rate_limit::numeric / v_previous.rate_interval_ms::numeric
+               ),
+               refilled_at = GREATEST(v_now, bucket.refilled_at)
+         WHERE bucket.budget_name = v_budget_name;
+      END IF;
     END IF;
     INSERT INTO workhorse.budget AS budget(
       budget_name, namespace, max_active, rate_limit, rate_interval_ms, rate_burst, updated_at
@@ -5861,6 +6025,55 @@ BEGIN
 END;
 $$;
 
+-- Lock the prerequisites of every request in one enqueue batch before the batch inserts anything.
+--
+-- Every terminal transition deletes the runtime row before it records the outcome that resolves
+-- dependents. Holding the runtime row makes that transition wait until the batch's edges commit, so
+-- its resolver sees them. A transition that committed first has already deleted the row, and the
+-- batch's outcome reads see its outcome. Key-share locks do not block the non-key updates that
+-- claims and heartbeats make.
+--
+-- The locks are taken in identity order. A resolver locks the dependents it deletes in the same
+-- order, so neither can hold a row the other waits for. Locking request by request let one request
+-- hold a row that a resolver was about to delete while the next request waited on a row that
+-- resolver had already locked. The runtime rows are locked before the task rows, in the order
+-- completion and purge lock them. A value that is not a UUID is left to the per-request
+-- validation, which raises its usual error. Every new task identity is random, so no request can
+-- name a task the batch creates.
+CREATE OR REPLACE FUNCTION workhorse.lock_enqueue_prerequisites_internal_v1(p_requests jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_prerequisite_task_ids uuid[];
+BEGIN
+  v_prerequisite_task_ids := ARRAY(
+    SELECT DISTINCT prerequisite.value::uuid
+      FROM jsonb_array_elements(p_requests) input(request)
+      CROSS JOIN LATERAL (
+        SELECT input.request->>'prerequisiteTaskId' AS value
+         WHERE jsonb_typeof(input.request->'prerequisiteTaskId') = 'string'
+        UNION ALL
+        SELECT item.value
+          FROM jsonb_array_elements_text(
+            CASE WHEN jsonb_typeof(input.request->'dependencies') = 'object'
+                  AND jsonb_typeof(input.request->'dependencies'->'prerequisiteTaskIds') = 'array'
+              THEN input.request->'dependencies'->'prerequisiteTaskIds' ELSE '[]'::jsonb END
+          ) item(value)
+      ) prerequisite
+     WHERE prerequisite.value ~* '^(\{[0-9a-f]{4}(-?[0-9a-f]{4}){7}\}|[0-9a-f]{4}(-?[0-9a-f]{4}){7})$'
+  );
+  IF cardinality(v_prerequisite_task_ids) > 0 THEN
+    PERFORM 1 FROM workhorse.task_runtime runtime
+     WHERE runtime.task_id = ANY(v_prerequisite_task_ids)
+     ORDER BY runtime.task_id FOR KEY SHARE;
+    PERFORM 1 FROM workhorse.task prerequisite
+     WHERE prerequisite.id = ANY(v_prerequisite_task_ids)
+     ORDER BY prerequisite.id FOR KEY SHARE;
+  END IF;
+END;
+$$;
+
 -- The core batch insert path. Accept up to 1,000 tasks atomically. Scoped idempotency keys are
 -- resolved in ordinal order through their unique index before any durable task side effects. Exact
 -- replays return the original identity; material mismatches abort the whole statement with SQLSTATE
@@ -5899,7 +6112,6 @@ DECLARE
   v_execution_timeout_ms numeric;
   v_dependencies jsonb;
   v_prerequisite_task_ids uuid[];
-  v_batch_prerequisite_task_ids uuid[];
   v_prerequisite_task_id uuid;
   v_on_success text;
   v_on_failure text;
@@ -6007,43 +6219,7 @@ BEGIN
      WHERE COALESCE(request->>'queue', '') <> ''
   ));
 
-  -- Every terminal transition deletes the runtime row before it records the outcome that resolves
-  -- dependents. Holding the runtime row makes that transition wait until this batch's edges commit,
-  -- so its resolver sees them. A transition that committed first has already deleted the row, and
-  -- the outcome reads in the loop see its outcome. Key-share locks do not block the non-key updates
-  -- that claims and heartbeats make.
-  --
-  -- The batch locks the prerequisites of all its requests before the first request, in identity
-  -- order. A resolver locks the dependents it deletes in the same order, so neither can hold a row
-  -- the other waits for. Locking request by request let one request hold a row that a resolver was
-  -- about to delete while the next request waited on a row that resolver had already locked. The
-  -- runtime rows are locked before the task rows, in the order completion and purge lock them.
-  -- A value that is not a UUID is left to the per-request validation, which raises its usual
-  -- error. Every new task identity is random, so no request can name a task this batch creates.
-  v_batch_prerequisite_task_ids := ARRAY(
-    SELECT DISTINCT prerequisite.value::uuid
-      FROM jsonb_array_elements(p_requests) input(request)
-      CROSS JOIN LATERAL (
-        SELECT input.request->>'prerequisiteTaskId' AS value
-         WHERE jsonb_typeof(input.request->'prerequisiteTaskId') = 'string'
-        UNION ALL
-        SELECT item.value
-          FROM jsonb_array_elements_text(
-            CASE WHEN jsonb_typeof(input.request->'dependencies') = 'object'
-                  AND jsonb_typeof(input.request->'dependencies'->'prerequisiteTaskIds') = 'array'
-              THEN input.request->'dependencies'->'prerequisiteTaskIds' ELSE '[]'::jsonb END
-          ) item(value)
-      ) prerequisite
-     WHERE prerequisite.value ~* '^(\{[0-9a-f]{4}(-?[0-9a-f]{4}){7}\}|[0-9a-f]{4}(-?[0-9a-f]{4}){7})$'
-  );
-  IF cardinality(v_batch_prerequisite_task_ids) > 0 THEN
-    PERFORM 1 FROM workhorse.task_runtime runtime
-     WHERE runtime.task_id = ANY(v_batch_prerequisite_task_ids)
-     ORDER BY runtime.task_id FOR KEY SHARE;
-    PERFORM 1 FROM workhorse.task prerequisite
-     WHERE prerequisite.id = ANY(v_batch_prerequisite_task_ids)
-     ORDER BY prerequisite.id FOR KEY SHARE;
-  END IF;
+  PERFORM workhorse.lock_enqueue_prerequisites_internal_v1(p_requests);
 
   FOR v_request, v_ordinal IN
     SELECT request, ordinality::integer
@@ -7245,6 +7421,10 @@ BEGIN
         FROM workhorse.enqueue_batch_v1(p_requests) result ORDER BY result.ordinal;
     RETURN;
   END IF;
+
+  -- A debounce or throttle member makes the batch enqueue member by member. Each plain member
+  -- would then lock only its own prerequisites, so lock every member's prerequisites first.
+  PERFORM workhorse.lock_enqueue_prerequisites_internal_v1(p_requests);
 
   FOR v_request, v_ordinal IN
     SELECT request, ordinality::integer
@@ -8473,6 +8653,12 @@ BEGIN
     END IF;
     IF v_runtime.wait_name IS NOT NULL OR v_runtime.attempt_started_at IS NOT NULL THEN
       RETURN QUERY VALUES ('waiting'::text, v_runtime.state, v_runtime.run_at);
+      RETURN;
+    END IF;
+    -- A blocked task waits for its prerequisites, not for its run time, so there is nothing to
+    -- release.
+    IF v_runtime.state = 'blocked' THEN
+      RETURN QUERY VALUES ('not_scheduled'::text, v_runtime.state, v_runtime.run_at);
       RETURN;
     END IF;
 
@@ -19712,10 +19898,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (54, 'fail durable replay conflicts without retrying'),
   (55, 'count row retention lag from the history pass that released the row'),
   (56, 'close a released task without attributing its unrun attempt'),
-  (57, 'let terminal cleanup keep pace and share its budget across tiers')
+  (57, 'let terminal cleanup keep pace and share its budget across tiers'),
+  (58, 'close SQL integrity gaps in rate refill, dependency edges, and mixed batches')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (57) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (58) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

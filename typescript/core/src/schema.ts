@@ -411,6 +411,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "let terminal cleanup keep pace and share its budget across tiers",
     kind: "additive",
   },
+  {
+    fromVersion: 57,
+    toVersion: 58,
+    file: "0059-close-sql-integrity-gaps-in-rate-refill-dependency-edges-and-mixed-batches.sql",
+    description: "close SQL integrity gaps in rate refill, dependency edges, and mixed batches",
+    kind: "additive",
+  },
 ];
 
 /**

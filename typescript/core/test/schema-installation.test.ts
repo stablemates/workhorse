@@ -539,6 +539,10 @@ describe("schema installation", () => {
         version: 57,
         description: "let terminal cleanup keep pace and share its budget across tiers",
       },
+      {
+        version: 58,
+        description: "close SQL integrity gaps in rate refill, dependency edges, and mixed batches",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

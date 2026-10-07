@@ -63,13 +63,16 @@ once. The notification would skip `blocked` and start in its ordinary ready or s
 - `enqueue_batch_v1` raises `prerequisite task does not exist` for an unknown id.
 - It locks every prerequisite `FOR KEY SHARE` in the caller's transaction. A concurrent terminal
   transition of a prerequisite therefore sees the new edge.
+- A batch locks every member's prerequisites in identity order before its first member runs. A batch
+  with a debounce or throttle member does too.
+- An update cannot change an edge's endpoints or outcome policies. It raises SQLSTATE `55000`.
 - A live prerequisite makes a `blocked` runtime row and appends `dependency_blocked`.
 - A prerequisite that already succeeded releases the edge at once when `onSuccess` is `release`,
   with `dependency_released.details.reason` `prerequisite_already_succeeded`. A `fail` or `cancel`
   success policy rejects the dependent instead.
 - Debounce, throttle, and [fast-tier queues](305-fast-tier.md) reject dependencies.
 
-More detail: [Data model: Declaring dependencies at enqueue](../architecture/data-model.md#declaring-dependencies-at-enqueue).
+More detail: [Data model: Declaring dependencies at enqueue](../architecture/data-model.md#declaring-dependencies-at-enqueue), [Data model: Prerequisite locking at enqueue](../architecture/data-model.md#prerequisite-locking-at-enqueue), and [Data model: Edge updates](../architecture/data-model.md#edge-updates).
 
 </details>
 

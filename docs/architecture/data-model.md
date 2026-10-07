@@ -542,10 +542,10 @@ validation for direct SQL and untyped JavaScript callers.
 
 `enqueue_batch_v1` locks every prerequisite inside the caller's transaction with `FOR KEY SHARE`:
 
-1. One statement per table locks the prerequisites of every request in the batch before the first
-   request runs. It locks the `task_runtime` rows in identity order first, then the `task` rows.
-   The collection skips a value that does not match the UUID pattern. That request's validation
-   then raises its usual error.
+1. `lock_enqueue_prerequisites_internal_v1(requests)` locks the prerequisites of every request in
+   the batch before the first request runs. One statement per table locks the `task_runtime` rows
+   in identity order first, then the `task` rows. The collection skips a value that does not match
+   the UUID pattern. That request's validation then raises its usual error.
 2. Each request locks its own prerequisites again. That waits for nothing and counts the rows that
    exist.
 
@@ -630,6 +630,11 @@ row the other waits for. The `DELETE` plan alone could lock the rows in any orde
 
 Before schema version 33, a batch locked request by request. One request could then hold a row the
 resolver was about to delete while the next request waited on a row the resolver already held.
+
+A batch with a debounce or throttle member runs `enqueue_many_v1` member by member, and each plain
+member calls `enqueue_batch_v1` alone. Since schema version 58, `enqueue_many_v1` first calls
+`lock_enqueue_prerequisites_internal_v1` with the whole batch. Before that version, such a batch
+still locked request by request.
 
 #### Resolver counters
 
@@ -855,6 +860,18 @@ traversals scoped to touched components.
 
 `enqueue_batch_v1` inserts the prerequisite edges of every accepted task in a batch with one
 statement. The trigger therefore validates the batch's fan-in and fan-out once.
+
+##### Edge updates
+
+Validation runs only on insert. The dependent's cached `pending_prerequisites` counter also counts
+each edge as inserted. An update may therefore only release an edge, by setting `released_at` and
+`resolution`.
+
+Since schema version 58, the row trigger `task_dependency_reject_change` calls
+`reject_task_dependency_change_v1`. It fires before an update that changes `dependent_task_id`,
+`prerequisite_task_id`, `on_success`, `on_failure`, or `on_cancellation`. It raises SQLSTATE `55000`
+with `dependentTaskId` and `prerequisiteTaskId` in the JSON detail. Before that version, an update
+could turn C→A into B→A without a cycle check.
 
 #### Admin reads
 
@@ -2020,6 +2037,11 @@ accepts bounded positive integers.
 | `queue_name`, `namespace`                               | 1 through 256 UTF-8 bytes each              |
 | `per_key_limit`, `per_key_interval_ms`, `per_key_burst` | Nullable; appear together or remain null    |
 
+`rate_limit_policy_per_key_check` bounds the per-key columns. A CHECK that evaluates to null
+passes, so that check alone accepts one or two null per-key columns. Since schema version 58,
+`rate_limit_policy_per_key_complete_check` requires all three or none through `num_nulls`.
+Migration 0059 clears an incomplete per-key rule before it adds the constraint.
+
 A keyed policy gives every non-null `task.concurrency_key` an independent bucket within its queue.
 Keyless tasks consume only the queue bucket.
 
@@ -2038,6 +2060,22 @@ Each definition contains only `queue`, `rate`, and optional `perKey`. Each bucke
 
 Synchronization accepts at most 10,000 unique queues. It rejects cross-namespace ownership and
 prunes omitted rows by default.
+
+Since schema version 58, a rate change applies only from the moment synchronization makes it. For
+each affected queue, in queue-name order, synchronization reads `clock_timestamp()` once and then:
+
+1. When the queue's `rate_limit`, `rate_interval_ms`, or `rate_burst` changed, it calls
+   `refill_admission_shards_internal_v1`. That refills each stored shard to the clock reading at
+   the old rate and old shares. A shard with null `tokens` stays full.
+2. When the per-key columns changed and the new policy has a per-key rule, it refills each key
+   bucket to the clock reading at the old per-key rate. A queue that had no per-key rule deletes its
+   key buckets instead, so each key starts full.
+3. It calls `rebalance_admission_shards_v1(queue, reading)`, which refills nothing more because no
+   time has passed since the reading.
+
+Every refill keeps the later of the reading and the stored `refilled_at`. Before schema version 58,
+a raised rate refilled the time since the last charge at the new rate. A spent burst could then
+return in full at once.
 
 #### Listing
 
@@ -2169,7 +2207,8 @@ queue's shard count:
 Callers:
 
 - `sync_concurrency_policies_v1` and `sync_rate_limit_policies_v1` rebalance every queue they upsert
-  or prune, after their row changes.
+  or prune, after their row changes. `sync_rate_limit_policies_v1` first refills a queue whose rate
+  changed at the old rate, as the `rate_limit_policy` synchronization rules above describe.
 - A claim rebalances a queue whose stored rows do not match its policies. That happens only after a
   policy row changed outside synchronization.
 
@@ -2200,6 +2239,11 @@ One `budget` row per name defines a deployment-owned limit that tasks in any que
 `budget_limit_check` requires at least one limit. A budget has no per-key sub-limit; keys stay
 queue-scoped.
 
+`budget_rate_check` bounds the rate columns, and a CHECK that evaluates to null passes. Since schema
+version 58, `budget_rate_complete_check` requires all three rate columns or none through
+`num_nulls`. Migration 0059 first clears an incomplete rate. It deletes a budget that the clearing
+would leave without a limit, because a missing budget row imposes no limit.
+
 #### Synchronization
 
 `sync_budgets_v1(namespace, definitions, prune)` reconciles deployment-owned desired state. The SDK
@@ -2217,7 +2261,11 @@ limit. Synchronization accepts at most 10,000 unique names. It runs these steps:
 2. Since migration 0050, it then takes `workhorse:budget:<budget_name>` for every name it defines or
    can prune, in name order, before it reads a definition.
 3. It rejects cross-namespace ownership and prunes omitted rows by default.
-4. It sends a `workhorse_tasks` wake hint to at most 100 queues holding ready work that names an
+4. Since schema version 58, it handles a changed rate before it writes the new one. When the new
+   definition has a rate, it reads `clock_timestamp()` and refills the `budget_bucket` row to that
+   reading at the old rate. A budget that had no rate deletes its bucket instead, so it starts full.
+   A removed rate leaves the bucket unread.
+5. It sends a `workhorse_tasks` wake hint to at most 100 queues holding ready work that names an
    affected budget.
 
 A claim holds the per-budget lock from admission to the bucket charge, so a definition cannot change
@@ -3179,6 +3227,10 @@ with a tick.
 
 The four-argument `run_task_now_v1(task_id, requested_by, reason, request_id)` releases an ordinary
 future-scheduled task. It does not change its recurring definition or bypass a durable wait.
+
+A `blocked` task waits for its prerequisites, not for its run time. Since schema version 58, the
+function reports `not_scheduled` with state `blocked` for it and changes nothing. Before that
+version, it raised an internal-state error.
 
 | Field      | Accepted range             |
 | ---------- | -------------------------- |
