@@ -834,8 +834,10 @@ More detail: [Telemetry: Dashboards and alerts](https://github.com/stablemates/w
 
 ## Fleet controls
 
-Every worker registers itself in PostgreSQL on its configured cadence. That registry is how you
-see and steer a fleet you do not host.
+By default, every worker registers itself in PostgreSQL on its configured cadence. That registry
+is how you see and steer a fleet you do not host. A worker that opts out of the registry does not
+appear here, and an operator cannot pause it. [Workers](/docs/workers#read-fleet-state-carefully)
+explains how opting out also delays recovery of expired leases.
 
 Worker `billing-worker-1` keeps timing out against a slow payment provider. An operator wants it to
 stop taking work while they investigate.

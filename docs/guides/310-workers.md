@@ -468,16 +468,22 @@ More detail: [Schema and SQL protocol: Shutdown](../architecture/schema-and-prot
 A deploy replaces workers one at a time, so for a while two builds run at once. One worker behaves
 differently, and an operator wants to know why.
 
-1. **Every few seconds, each worker writes its registry row.** The row holds its id, queues, schedule
-   namespaces, concurrency, and how many slots are busy.
+1. **Every few seconds, each worker writes its registry row,** as workers do by default. The row
+   holds its id, queues, schedule namespaces, concurrency, and how many slots are busy.
 2. **The row also says what the worker is**: which client library it runs, at which version, and
    which protocol it speaks.
 3. **The operator opens the Workers page.** The odd worker still reports the old version.
 
 That is how a dashboard can show a fleet it does not host. Process memory cannot answer "which
 workers are alive" once workers are deployed separately. TypeScript, Python, Go, Rust, and Ruby
-workers all write this row. An older worker may report none of the three identity fields. The
-registry then records that it reported nothing, rather than guessing.
+workers all write this row by default. An older worker may report none of the three identity
+fields. The registry then records that it reported nothing, rather than guessing.
+
+Each SDK lets a worker opt out of the registry. An opted-out worker writes no row, so operator
+surfaces cannot see it. Its maintenance interval also never shortens the spacing of the
+expired-lease scan, which drives [recovery](020-leases-and-fences.md). While registered workers keep
+ticking, a lease that expires can wait up to the maintenance interval of the fastest registered
+worker before recovery. Other recovery work can delay it further.
 
 The namespace list answers a different question from the queue list. Queues control which tasks a
 worker can claim. Schedule namespaces control which recurring definitions it can evaluate.
@@ -515,7 +521,14 @@ temporary database error cannot silently resume claims that an operator stopped.
 **Removal.** Graceful shutdown calls `deregister_worker_v1`. `run_maintenance_v1` calls
 `prune_worker_registry_v1` with a one-minute maximum age.
 
-More detail: [Data model: `worker_registry`](../architecture/data-model.md#worker_registry).
+**Opt-out.** An opted-out worker writes no `worker_registry` row. `tick_v1` spaces the expired-lease
+scan by half the shortest maintenance interval among live registered workers, so an opted-out
+worker never shortens that spacing. While registered workers keep ticking, recovery follows a
+lease's expiry by at most one interval of the fastest registered worker. That bound holds only
+while recovery reaches the scan. When other recovery work fills the limit, the scan waits for a
+later tick. With no live registered worker, every tick runs the scan.
+
+More detail: [Data model: `worker_registry`](../architecture/data-model.md#worker_registry) and [Task lifecycle: Maintenance cadence](../architecture/lifecycle.md#maintenance-cadence).
 
 </details>
 
