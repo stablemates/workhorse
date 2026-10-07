@@ -307,46 +307,51 @@ module Conformance
 
     # Holds the worker after each empty claim until the driver releases it, so an uncounted poll
     # cannot advance the backoff step the delay is measured against.
+    #
+    # The delay runs from the moment the last empty claim returns to the worker to the start of
+    # the next claim. That span is the worker's own cadence. It leaves out the claim that finds
+    # the task and the dispatch to the handler. A slow runner or a slow database therefore cannot
+    # charge that latency to the backoff.
     def poll_cadence(fixture)
       name = queue_name(fixture)
+      polls = fixture["emptyPollsBeforeEnqueue"]
       reached = ::Queue.new
       released = ::Queue.new
       holding = Concurrent::AtomicBoolean.new(true)
-      handled_at = Concurrent::AtomicReference.new
+      # Each claim_many_v1 call's start, its return to the worker, and whether it found a task.
+      claims = Concurrent::Array.new
       handled = Concurrent::Event.new
       maximum = fixture["expectedMaximumDelayMs"] / 1000.0
       with_pool do |pool|
         subject = worker(pool, fixture, poll_interval: fixture["pollMs"] / 1000.0).handle(fixture["taskType"]) do
-          handled_at.set(monotonic)
           handled.set
           nil
         end
         wrap_rows(subject) do |original, sql, params|
+          next original.call(sql, params) unless sql == W::SqlCatalogue::CLAIM_MANY_V1
+
+          started = monotonic
           rows = original.call(sql, params)
-          if sql == W::SqlCatalogue::CLAIM_MANY_V1 && rows.empty? && holding.true?
+          if rows.empty? && holding.true?
             reached << true
             released.pop(timeout: 5)
           end
+          claims << [started, monotonic, rows.any?]
           rows
         end
         thread = Thread.new { subject.run }
         begin
-          enqueued_at = nil
-          1.upto(fixture["emptyPollsBeforeEnqueue"]) do |poll|
+          1.upto(polls) do |poll|
             check(reached.pop(timeout: maximum + 1), "the worker did not complete empty poll #{poll}")
-            if poll == fixture["emptyPollsBeforeEnqueue"]
+            if poll == polls
               # A stall longer than one backoff step changes nothing for a held worker.
               sleep(fixture["enqueueStallMs"] / 1000.0)
               queue.enqueue(fixture["taskType"], {}, queue: name)
-              enqueued_at = monotonic
               holding.make_false
             end
             released << true
           end
           check(handled.wait(maximum + 1), "the worker never ran the enqueued task")
-          delay = (handled_at.get - enqueued_at) * 1000
-          check(delay.between?(fixture["expectedMinimumDelayMs"], fixture["expectedMaximumDelayMs"]),
-            "the task ran #{delay.round} ms after enqueue")
         ensure
           holding.make_false
           released << true
@@ -354,6 +359,14 @@ module Conformance
           check(thread.join(10), "the worker did not stop")
         end
       end
+      found = claims.index { |_, _, any| any }
+      check(found, "no claim_many_v1 call returned the enqueued task")
+      empty = claims.take(found).count { |_, _, any| !any }
+      check(empty == polls, "the worker claimed the task after #{empty} empty polls, want #{polls}")
+      delay = (claims[found][0] - claims[found - 1][1]) * 1000
+      check(delay.between?(fixture["expectedMinimumDelayMs"], fixture["expectedMaximumDelayMs"]),
+        "the claim after #{polls} empty polls waited #{delay.round} ms, want " \
+        "#{fixture["expectedMinimumDelayMs"]} to #{fixture["expectedMaximumDelayMs"]} ms")
     end
 
     def graceful_drain(fixture)
