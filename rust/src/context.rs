@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{ser, Serialize};
 use serde_json::Value;
 use tokio::sync::watch;
 use tokio_postgres::Row;
@@ -114,7 +114,7 @@ impl HandlerContext {
         if let [row] = rows.as_slice() {
             return Ok(row.try_get::<_, Value>("checkpoint_value")?);
         }
-        let value = serde_json::to_value(op().await?)?;
+        let value = finite_json(&op().await?, "Checkpoint")?;
         let row =
             self.call(sql::SAVE_CHECKPOINT_V1, "save_checkpoint_v1", &[&name, &value]).await?;
         match status(&row)?.as_str() {
@@ -136,7 +136,7 @@ impl HandlerContext {
     /// Replaces the task's latest progress under this handler's fenced lease.
     pub async fn set_progress<T: Serialize>(&self, progress: &T) -> Result<(), Error> {
         self.fast_tier_guard("progress")?;
-        let value = serde_json::to_value(progress)?;
+        let value = finite_json(progress, "Progress")?;
         self.check(Operation::Progress)?;
         let row = self.call(sql::UPDATE_PROGRESS_V1, "update_progress_v1", &[&value]).await?;
         match status(&row)?.as_str() {
@@ -284,6 +284,234 @@ fn named(error: Error) -> HandlerError {
         other => other.into(),
     }
 }
+
+/// Encodes a checkpoint or progress value, refusing `NaN` and the infinities at any depth.
+///
+/// `serde_json` encodes a non-finite float as `null`, so a value typed as a number would read
+/// back as `null` and fail to decode on every replay.
+fn finite_json<T: Serialize + ?Sized>(value: &T, label: &str) -> Result<Value, Error> {
+    if let Err(Walk::NonFinite) = value.serialize(FiniteNumbers) {
+        return Err(Error::invalid(format!("{label} value must contain only finite numbers")));
+    }
+    Ok(serde_json::to_value(value)?)
+}
+
+/// Why the walk over a value stopped. `serde_json` reports any reason but a non-finite number.
+#[derive(Debug)]
+enum Walk {
+    NonFinite,
+    Custom,
+}
+
+impl fmt::Display for Walk {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::NonFinite => "non-finite number",
+            Self::Custom => "value refused to serialize",
+        })
+    }
+}
+
+impl std::error::Error for Walk {}
+
+impl ser::Error for Walk {
+    fn custom<T: fmt::Display>(_: T) -> Self {
+        Self::Custom
+    }
+}
+
+/// A serializer that writes nothing and stops at the first non-finite float, key or value.
+struct FiniteNumbers;
+
+macro_rules! accept {
+    ($($method:ident: $type:ty),* $(,)?) => {
+        $(fn $method(self, _: $type) -> Result<(), Walk> { Ok(()) })*
+    };
+}
+
+impl ser::Serializer for FiniteNumbers {
+    type Ok = ();
+    type Error = Walk;
+    type SerializeSeq = Self;
+    type SerializeTuple = Self;
+    type SerializeTupleStruct = Self;
+    type SerializeTupleVariant = Self;
+    type SerializeMap = Self;
+    type SerializeStruct = Self;
+    type SerializeStructVariant = Self;
+
+    accept!(
+        serialize_bool: bool,
+        serialize_i8: i8,
+        serialize_i16: i16,
+        serialize_i32: i32,
+        serialize_i64: i64,
+        serialize_i128: i128,
+        serialize_u8: u8,
+        serialize_u16: u16,
+        serialize_u32: u32,
+        serialize_u64: u64,
+        serialize_u128: u128,
+        serialize_char: char,
+        serialize_str: &str,
+        serialize_bytes: &[u8],
+        serialize_unit_struct: &'static str,
+    );
+
+    fn serialize_f32(self, value: f32) -> Result<(), Walk> {
+        if value.is_finite() {
+            Ok(())
+        } else {
+            Err(Walk::NonFinite)
+        }
+    }
+
+    fn serialize_f64(self, value: f64) -> Result<(), Walk> {
+        if value.is_finite() {
+            Ok(())
+        } else {
+            Err(Walk::NonFinite)
+        }
+    }
+
+    fn serialize_none(self) -> Result<(), Walk> {
+        Ok(())
+    }
+
+    fn serialize_some<T: Serialize + ?Sized>(self, value: &T) -> Result<(), Walk> {
+        value.serialize(self)
+    }
+
+    fn serialize_unit(self) -> Result<(), Walk> {
+        Ok(())
+    }
+
+    fn serialize_unit_variant(self, _: &'static str, _: u32, _: &'static str) -> Result<(), Walk> {
+        Ok(())
+    }
+
+    fn serialize_newtype_struct<T: Serialize + ?Sized>(
+        self,
+        _: &'static str,
+        value: &T,
+    ) -> Result<(), Walk> {
+        value.serialize(self)
+    }
+
+    fn serialize_newtype_variant<T: Serialize + ?Sized>(
+        self,
+        _: &'static str,
+        _: u32,
+        _: &'static str,
+        value: &T,
+    ) -> Result<(), Walk> {
+        value.serialize(self)
+    }
+
+    fn serialize_seq(self, _: Option<usize>) -> Result<Self, Walk> {
+        Ok(self)
+    }
+
+    fn serialize_tuple(self, _: usize) -> Result<Self, Walk> {
+        Ok(self)
+    }
+
+    fn serialize_tuple_struct(self, _: &'static str, _: usize) -> Result<Self, Walk> {
+        Ok(self)
+    }
+
+    fn serialize_tuple_variant(
+        self,
+        _: &'static str,
+        _: u32,
+        _: &'static str,
+        _: usize,
+    ) -> Result<Self, Walk> {
+        Ok(self)
+    }
+
+    fn serialize_map(self, _: Option<usize>) -> Result<Self, Walk> {
+        Ok(self)
+    }
+
+    fn serialize_struct(self, _: &'static str, _: usize) -> Result<Self, Walk> {
+        Ok(self)
+    }
+
+    fn serialize_struct_variant(
+        self,
+        _: &'static str,
+        _: u32,
+        _: &'static str,
+        _: usize,
+    ) -> Result<Self, Walk> {
+        Ok(self)
+    }
+}
+
+macro_rules! walk_elements {
+    ($($trait:ident :: $method:ident),* $(,)?) => {
+        $(impl ser::$trait for FiniteNumbers {
+            type Ok = ();
+            type Error = Walk;
+
+            fn $method<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), Walk> {
+                value.serialize(FiniteNumbers)
+            }
+
+            fn end(self) -> Result<(), Walk> {
+                Ok(())
+            }
+        })*
+    };
+}
+
+walk_elements!(
+    SerializeSeq::serialize_element,
+    SerializeTuple::serialize_element,
+    SerializeTupleStruct::serialize_field,
+    SerializeTupleVariant::serialize_field,
+);
+
+impl ser::SerializeMap for FiniteNumbers {
+    type Ok = ();
+    type Error = Walk;
+
+    fn serialize_key<T: Serialize + ?Sized>(&mut self, key: &T) -> Result<(), Walk> {
+        key.serialize(FiniteNumbers)
+    }
+
+    fn serialize_value<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), Walk> {
+        value.serialize(FiniteNumbers)
+    }
+
+    fn end(self) -> Result<(), Walk> {
+        Ok(())
+    }
+}
+
+macro_rules! walk_fields {
+    ($($trait:ident),* $(,)?) => {
+        $(impl ser::$trait for FiniteNumbers {
+            type Ok = ();
+            type Error = Walk;
+
+            fn serialize_field<T: Serialize + ?Sized>(
+                &mut self,
+                _: &'static str,
+                value: &T,
+            ) -> Result<(), Walk> {
+                value.serialize(FiniteNumbers)
+            }
+
+            fn end(self) -> Result<(), Walk> {
+                Ok(())
+            }
+        })*
+    };
+}
+
+walk_fields!(SerializeStruct, SerializeStructVariant);
 
 pub(crate) fn status(row: &Row) -> Result<String, Error> {
     Ok(row.try_get::<_, Option<String>>("status")?.unwrap_or_default())
@@ -508,6 +736,56 @@ mod tests {
         let checkpoint = context.checkpoint("step", || async { Ok(1) }).await.unwrap_err();
         assert_eq!(checkpoint.name.as_deref(), Some("FastTierUnsupportedError"));
         assert_eq!(checkpoint.message, "Fast-tier queue fast-queue does not support checkpoints");
+    }
+
+    #[derive(Serialize)]
+    struct Reading {
+        name: &'static str,
+        value: f64,
+    }
+
+    fn non_finite(error: Error, label: &str) {
+        match error {
+            Error::InvalidArgument(message) => {
+                assert_eq!(message, format!("{label} value must contain only finite numbers"));
+            }
+            other => panic!("expected {label} to refuse a non-finite number, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_non_finite_float_is_refused_at_any_depth() {
+        non_finite(finite_json(&f64::NAN, "Checkpoint").unwrap_err(), "Checkpoint");
+        non_finite(finite_json(&f32::INFINITY, "Checkpoint").unwrap_err(), "Checkpoint");
+        let field = Reading { name: "load", value: f64::INFINITY };
+        non_finite(finite_json(&field, "Progress").unwrap_err(), "Progress");
+        non_finite(finite_json(&vec![1.0, f64::NEG_INFINITY], "Progress").unwrap_err(), "Progress");
+        let deep = HashMap::from([("readings", vec![Some(f64::NAN)])]);
+        non_finite(finite_json(&deep, "Progress").unwrap_err(), "Progress");
+
+        let finite = Reading { name: "load", value: 1.5 };
+        assert_eq!(
+            finite_json(&finite, "Progress").unwrap(),
+            json!({ "name": "load", "value": 1.5 })
+        );
+        // A value JSON cannot encode for another reason keeps serde_json's error.
+        let keyed = HashMap::from([((1, 2), 3)]);
+        assert!(matches!(finite_json(&keyed, "Progress"), Err(Error::Json(_))));
+    }
+
+    // Any round trip would fail on the unreachable pool with a pool error instead.
+    #[tokio::test]
+    async fn progress_with_a_non_finite_float_is_refused_without_a_round_trip() {
+        let context = context(false, CancellationToken::default(), unreachable_pool());
+        let batch = BatchHandlerContext::new(context.clone());
+        let field = Reading { name: "load", value: f64::INFINITY };
+        let list = vec![1.0, f64::NEG_INFINITY];
+        non_finite(context.set_progress(&f64::NAN).await.unwrap_err(), "Progress");
+        non_finite(context.set_progress(&field).await.unwrap_err(), "Progress");
+        non_finite(context.set_progress(&list).await.unwrap_err(), "Progress");
+        non_finite(batch.set_progress(&f64::NAN).await.unwrap_err(), "Progress");
+        non_finite(batch.set_progress(&field).await.unwrap_err(), "Progress");
+        non_finite(batch.set_progress(&list).await.unwrap_err(), "Progress");
     }
 
     // Any round trip would wait on the stalled server, so only a check before the contract

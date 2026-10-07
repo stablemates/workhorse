@@ -1569,8 +1569,9 @@ system commits but before the checkpoint transaction commits.
 Values are limited to 1 MiB (1,048,576 bytes) of PostgreSQL's canonical JSONB text representation.
 That gives every language client one authoritative definition.
 
-The TypeScript client rejects a value that holds `NaN` or an infinity at any depth with a
-`TypeError` before it writes. `JSON.stringify` would store such a number as `null`.
+The TypeScript and Rust clients reject a value that holds `NaN` or an infinity at any depth before
+they write. TypeScript throws a `TypeError`, and Rust returns a `HandlerError`. `JSON.stringify` and
+`serde_json` would store such a number as `null`.
 
 Checkpoints intentionally have no independent retirement path. Deleting a completed name while
 retaining a retryable task could repeat that step. They cascade only when the stable parent task
@@ -1588,8 +1589,9 @@ payload, checkpoint, and outcome fields.
 - Accepted changes increment a monotonic revision and replace attempt, fence, worker, and
   update-time provenance.
 - Identical values are no-ops.
-- The TypeScript client rejects a value that holds `NaN` or an infinity at any depth with a
-  `TypeError` before it writes, as it does for checkpoints.
+- The TypeScript and Rust clients reject a value that holds `NaN` or an infinity at any depth before
+  they write, as they do for checkpoints. TypeScript throws a `TypeError`, and Rust returns
+  `Error::InvalidArgument`.
 
 #### Handler API
 
