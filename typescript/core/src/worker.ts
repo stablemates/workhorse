@@ -69,6 +69,7 @@ import {
   workerQueueTierRead,
   workerWaitsRead,
 } from "./worker-internal.js";
+import { reportWorkerFailure } from "./worker-failure.js";
 import { createHandlerContext } from "./handler-context.js";
 import { TaskAttempt } from "./task-attempt.js";
 
@@ -1674,10 +1675,15 @@ export class Worker {
       "workhorse.worker.id": this.workerId,
       "workhorse.worker.concurrency": this.concurrency,
     });
-    let firstError: unknown;
+    // Boxed so that a rejection with undefined still counts as a failure.
+    let firstError: { error: unknown } | undefined;
     const shouldStop = () => this.stopping || signal?.aborted === true;
+    // Called when a loop first observes a fatal error, before dispatch drains active handlers.
     const fail = (error: unknown): void => {
-      firstError ??= error;
+      if (firstError === undefined) {
+        firstError = { error };
+        reportWorkerFailure(this, error);
+      }
       this.stopping = true;
       this.draining = this.running || this.activeSlots > 0;
       this.wakeLoops();
@@ -1720,9 +1726,9 @@ export class Worker {
         .then(() => this.maintenanceLoop(shouldStop, signal))
         .catch(fail);
       const registration = this.registrationLoop(shouldStop, signal).catch(fail);
-      const dispatch = this.dispatchLoop(shouldStop, signal).catch(fail);
+      const dispatch = this.dispatchLoop(shouldStop, fail, signal).catch(fail);
       await Promise.all([maintenance, registration, dispatch]);
-      if (firstError !== undefined) throw firstError;
+      if (firstError !== undefined) throw firstError.error;
     })().then(
       () => undefined,
       (error: unknown) => ({ error }),
@@ -1794,7 +1800,11 @@ export class Worker {
   // only with its own cohort and refills only that cohort's slots. With more than one cohort and
   // only fast-tier queues, plain claims leave one at a time, each for one cohort. The cohorts'
   // completion round trips then alternate, and one cohort's handlers run while another waits.
-  private async dispatchLoop(shouldStop: () => boolean, signal?: AbortSignal): Promise<void> {
+  private async dispatchLoop(
+    shouldStop: () => boolean,
+    fail: (error: unknown) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
     type DispatchSettlement = {
       kind: "execution";
       executionId: number;
@@ -1838,7 +1848,7 @@ export class Worker {
     let nextExecutionId = 0;
     let nextClaimId = 0;
     let firstFailure: { executionId: number; reason: unknown } | undefined;
-    let claimError: unknown;
+    let claimError: { error: unknown } | undefined;
     // Set by a claim that found nothing to run. No claim starts until its deadline or a wake.
     let emptyWait: { deadline: number; wakeVersion: number } | undefined;
 
@@ -1864,6 +1874,8 @@ export class Worker {
       cohortActive[cohort]! -= 1;
       if (task && handedOver.delete(task)) cohortHandedOver[cohort]! -= 1;
       if (settlement.status !== "rejected") return;
+      // Report the first fatal error at once. The drain waits on handlers that may ignore cancellation.
+      if (!firstFailure && claimError === undefined) fail(settlement.reason);
       if (!firstFailure || executionId < firstFailure.executionId) {
         firstFailure = { executionId, reason: settlement.reason };
       }
@@ -1950,7 +1962,8 @@ export class Worker {
       // A claimed task holds a lease, so it runs even when the loop is stopping or has failed.
       for (const task of attempt.claimed) launch(task, cohort);
       if ("error" in attempt) {
-        if (claimError === undefined) claimError = attempt.error;
+        if (!firstFailure && claimError === undefined) fail(attempt.error);
+        claimError ??= { error: attempt.error };
         return;
       }
       // A claim that only handed its tasks back made no progress, so it backs off like an empty
@@ -2064,7 +2077,7 @@ export class Worker {
     // claimed is already active when the execution's own settlement arrives.
     while (active.size > 0) observe(await Promise.race(active.values()));
     if (firstFailure) throw firstFailure.reason;
-    if (claimError !== undefined) throw claimError;
+    if (claimError !== undefined) throw claimError.error;
   }
 
   private nextDispatchPollMs(): number {
