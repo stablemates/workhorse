@@ -22,6 +22,8 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from workhorse import (
+    Admin,
+    AdminAudit,
     AsyncHandlerContext,
     AsyncWorker,
     BudgetDefinition,
@@ -63,6 +65,7 @@ SYNC_ONLY_RUNTIME_FIXTURE_KINDS = frozenset(
         "expiration",
         "heartbeat-cadence",
         "lease-loss",
+        "oversized-result",
         "poll-cadence",
         "slot-refill",
         "suspension-replay",
@@ -128,6 +131,7 @@ def execute_runtime_fixture(
         "missing-handler": execute_missing_handler_fixture,
         "replay-conflict": execute_replay_conflict_fixture,
         "json-round-trip": execute_json_round_trip_fixture,
+        "oversized-result": execute_oversized_result_fixture,
         "heartbeat-failure": execute_heartbeat_failure_fixture,
         "maintenance-phase-error": execute_maintenance_phase_error_fixture,
     }
@@ -1103,6 +1107,50 @@ def execute_json_round_trip_fixture(
     assert stored[1] == payload
     assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
     assert_attempt_outcomes(connection, task_id, [fixture["expectedAttemptOutcome"]])
+
+
+def execute_oversized_result_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> None:
+    queue_name = runtime_queue(fixture)
+    admin = Admin(connection)
+    if fixture["tier"] == "fast":
+        audit = AdminAudit(actor="runtime-fixture", reason=fixture["id"], request_id=fixture["id"])
+        admin.set_queue_tier(queue_name, "fast", audit)
+    queue = Queue(connection)
+    task_id = queue.enqueue(
+        fixture["taskType"],
+        fixture["oversizedZeros"],
+        EnqueueOptions(
+            queue=queue_name,
+            max_attempts=fixture["maxAttempts"],
+            retry_policy={"type": "fixed", "delayMs": 0},
+        ),
+    )
+    worker = Worker(worker_pool, queue=queue_name, worker_id=f"python-{fixture['id']}").handle(
+        fixture["taskType"], lambda zeros, _context: [0] * zeros
+    )
+    settled = fixture["expectedSettled"]
+    for _ in range(fixture["maxAttempts"]):
+        snapshot = admin.get_task(task_id)
+        if snapshot is not None and snapshot.state == settled["state"]:
+            break
+        assert worker.run_once() is True
+    snapshot = admin.get_task(task_id)
+    assert snapshot is not None
+    assert (snapshot.state, snapshot.current_attempt) == (settled["state"], settled["attempt"])
+    assert isinstance(snapshot.error, dict)
+    assert snapshot.error["name"] == fixture["expectedErrorNames"]["python"]
+    fitting = queue.enqueue(
+        fixture["taskType"], fixture["fittingZeros"], EnqueueOptions(queue=queue_name)
+    )
+    assert worker.run_once() is True
+    snapshot = admin.get_task(fitting)
+    assert snapshot is not None
+    assert (snapshot.state, snapshot.current_attempt) == (
+        fixture["expectedFitting"]["state"],
+        fixture["expectedFitting"]["attempt"],
+    )
 
 
 def lease_expiry(connection: psycopg.Connection[Any], task_id: str) -> datetime:

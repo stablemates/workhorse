@@ -215,8 +215,8 @@ work.
 Queue defaults set size ceilings. A `TaskContractVersion` can override them. PostgreSQL checks its
 canonical JSON representation before the durable write, so every client gets the same decision.
 
-The TypeScript, Go, Python, and Ruby workers also measure a handler result that way before they send
-its completion. An oversized result fails that attempt and follows the retry path. In Python, a
+The TypeScript, Go, Python, Ruby, and Rust workers also measure a handler result that way before
+they send its completion. An oversized result fails that attempt and follows the retry path. In Python, a
 `NaN` or infinite number fails the attempt the same way.
 
 PostgreSQL jsonb cannot store a NUL character or an unpaired surrogate. Every worker checks a
@@ -241,8 +241,8 @@ the same text.
 - `enqueue_batch_v1` rejects an oversized payload before it inserts any task, history, idempotency,
   or notification row.
 - `complete_v1` checks the persisted result limit before it deletes the active runtime.
-- An oversized result raises `TaskValueSizeLimitError` in the TypeScript, Go, and Python workers,
-  and `ValueSizeLimitError` in the Ruby worker. The retry policy applies.
+- An oversized result raises `TaskValueSizeLimitError` in the TypeScript, Go, Python, and Rust
+  workers, and `ValueSizeLimitError` in the Ruby worker. The retry policy applies.
 
 **Unstorable results.** jsonb refuses `\u0000` (SQLSTATE `22P05`) and an unpaired UTF-16 surrogate
 escape (SQLSTATE `22P02`). The Go, Python, TypeScript, and Ruby workers check for both. The Rust

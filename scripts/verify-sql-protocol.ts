@@ -246,6 +246,24 @@ export interface JsonRoundTripRuntimeFixture extends RuntimeFixtureBase {
 }
 
 /**
+ * A handler result over the task's size limit fails each attempt through the retry policy, without
+ * waiting for lease recovery. The handler returns an array of zeros, whose jsonb text is longer
+ * than its compact JSON: the oversized array fits as compact JSON, and the fitting array sits
+ * exactly at the default limit. A runner passes at most `maxAttempts` times until the task settles,
+ * because one pass may run the immediate retry too.
+ */
+export interface OversizedResultRuntimeFixture extends RuntimeFixtureBase {
+  kind: "oversized-result";
+  tier: "full" | "fast";
+  maxAttempts: number;
+  oversizedZeros: number;
+  fittingZeros: number;
+  expectedSettled: ExpectedRuntimeState;
+  expectedErrorNames: Record<string, string>;
+  expectedFitting: ExpectedRuntimeState;
+}
+
+/**
  * Replaces one installed function with a body that raises, so a runner can fail a call the SDK
  * makes without reaching into that SDK. The runner restores `function` from its own definition
  * afterwards. A `counterSequence` counts the raised calls, because a sequence survives the
@@ -310,6 +328,7 @@ export type RuntimeFixture =
   | BudgetAdmissionRaceRuntimeFixture
   | MissingHandlerRuntimeFixture
   | JsonRoundTripRuntimeFixture
+  | OversizedResultRuntimeFixture
   | HeartbeatFailureRuntimeFixture
   | MaintenancePhaseErrorRuntimeFixture;
 
