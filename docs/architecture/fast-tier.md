@@ -221,6 +221,8 @@ terminal failure leaves it null.
 
 - `fast_task_outcome_finished_brin_idx` is a BRIN index on `finished_at` for time-range reads.
 - `fast_task_outcome_retention_idx` on `(finished_at, task_id)` serves retention and cold export.
+- `fast_task_outcome_failed_finished_idx` on `(finished_at DESC, task_id DESC)`, partial on
+  `state = 'failed'`, serves `list_dead_letters_v1`. Migration 0061 (schema version 60) adds it.
 
 Migration 0025 runs `ANALYZE` on both new tables, so the planner has statistics for them before the
 first dashboard read.
@@ -641,7 +643,8 @@ full-tier one.
 - A fast outcome's `history_through_at` is its `finished_at`.
 
 `aggregate_stats_v1` derives the enqueue, attempt, and terminal counts of fast-tier tasks from the
-two fast tables, because they write no events.
+two fast tables, because they write no events. It materializes only the fast rows that can hold a
+fact inside the window, as [the statistics inputs](data-model.md#fast-tier-inputs) list.
 
 ### Workers on a fast-tier queue
 

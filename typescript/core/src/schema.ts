@@ -425,6 +425,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "judge fast-tier completions and cancellation acknowledgements after waits",
     kind: "additive",
   },
+  {
+    fromVersion: 59,
+    toVersion: 60,
+    file: "0061-bound-the-scan-cost-of-fast-dead-letters-statistics-and-repeated-ticks.sql",
+    description: "bound the scan cost of fast dead letters, statistics, and repeated ticks",
+    kind: "additive",
+  },
 ];
 
 /**

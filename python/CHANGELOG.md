@@ -12,7 +12,7 @@ adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses 
 ## Unreleased
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **59**, and the SDK compatibility floor is schema version **54**.
+The final schema version is **60**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.
@@ -55,6 +55,8 @@ without one starts a new trace instead of joining a span active where the worker
 context is extracted onto an empty context (SM-1176).
 
 Migration 0060 (`0060-judge-fast-tier-completions-and-cancellation-acknowledgements-after-waits.sql`) judges two fast-tier operations at the time they act (SM-1163). `fast_complete_many_v1` reads the clock again after failing oversized members, so a later member whose lease expired while one of those failures waited no longer completes. `fast_acknowledge_cancel_v1` checks the lease after its row lock, as `acknowledge_cancel_v1` does on the full tier.
+
+Migration 0061 (`0061-bound-the-scan-cost-of-fast-dead-letters-statistics-and-repeated-ticks.sql`) bounds three reads whose cost grew with table size or fleet size (SM-1167). The new `fast_task_outcome_failed_finished_idx` lets `list_dead_letters_v1` read only failed fast-tier outcomes. `aggregate_stats_v1` no longer materializes fast-tier rows that cannot hold a fact inside its window, so a backlog enqueued earlier stays out of every rollup. `tick_v1` runs the expired-lease scan, which reads every active lease, only when no tick ran it within half the shortest maintenance interval of the live registered workers. It records that run in the new `maintenance_state.lease_recovery_started_at` column. Promotion and the deadline and timeout scans still run on every tick, and while workers keep ticking, expired leases are still recovered within one interval.
 
 ## 0.6.1 — 2026-10-02
 

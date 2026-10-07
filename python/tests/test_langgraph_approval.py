@@ -341,7 +341,7 @@ def test_stale_lease_cannot_become_second_or_later_graph_driver(harness: Harness
             "WHERE task_id = %s",
             (harness.task_id,),
         )
-        harness.connection.execute("SELECT workhorse.tick_v1()")
+        harness.connection.execute("SELECT workhorse.recover_expired_v1()")
         successor = harness.new_worker("successor")
         harness.step(successor)
         assert harness.effects() == 0

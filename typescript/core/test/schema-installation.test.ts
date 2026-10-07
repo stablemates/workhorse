@@ -547,6 +547,10 @@ describe("schema installation", () => {
         version: 59,
         description: "judge fast-tier completions and cancellation acknowledgements after waits",
       },
+      {
+        version: 60,
+        description: "bound the scan cost of fast dead letters, statistics, and repeated ticks",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
