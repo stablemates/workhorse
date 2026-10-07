@@ -52,6 +52,12 @@ recovery. The fast tier's batched completion failed the attempt in PostgreSQL, w
 The dashboard service answers an unexpected schema-compatibility failure with a generic `503` and logs the
 cause through `tracing`, instead of returning the driver error text (SM-1168).
 
+`HandlerContext::checkpoint` and `HandlerContext::set_progress`, and their
+`BatchHandlerContext` wrappers, now refuse a value that holds `NaN` or an infinity at any depth.
+A checkpoint returns a `HandlerError` and `set_progress` returns `Error::InvalidArgument`, both
+before any write. `serde_json` had stored such a number as `null`, so a `checkpoint::<f64>` failed
+to decode on every retry (SM-1180).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
