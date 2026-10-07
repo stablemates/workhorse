@@ -19,7 +19,7 @@ The project is preproduction. There are no supported live schemas to migrate, so
 
 ### Daily UTC history
 
-`job_event` and `attempt_history` use UTC-daily range partitions with default fallbacks. Clean installation and `prepare_history_partitions_v1` maintain the current day plus three future days. Explicit `create_history_day_v1` and `retire_history_day_v1` functions serialize work per date, repair a missing half of the event/attempt pair, and move matching fallback rows when creating a partition.
+`job_event` and `attempt_history` use UTC-daily range partitions with default fallbacks. Clean installation and `prepare_history_partitions_v1` maintain the current day plus three future days. The [2026-09-16 amendment](#amendment-the-partition-horizon-follows-the-preparation-cadence-2026-09-16) widens that horizon. Explicit `create_history_day_v1` and `retire_history_day_v1` functions serialize work per date, repair a missing half of the event/attempt pair, and move matching fallback rows when creating a partition.
 
 Every retention category defaults to 14 days and remains independently configurable through the persisted retention policy. Null still disables a category. Retention drops only completed daily partitions wholly before the category cutoff and bounded-deletes eligible default rows.
 
@@ -69,3 +69,25 @@ Fourteen-day raw retention does not provide long-term product analytics. A later
 ## Validation
 
 Acceptance requires clean schema installation, current-plus-three partition coverage, partial-pair repair, independently rate-limited tasks, forced execution, task-lock isolation, IANA validation, DST scheduling, default and customized retention, watermark advancement and rollback on late inserts, concurrent history insertion versus terminal cleanup, explicit queue-purge history cleanup, health diagnostics, dashboard maintenance entries, development demo reset, packed consumers, and the complete repository gate.
+
+## Amendment: the partition horizon follows the preparation cadence (2026-09-16)
+
+The horizon of the current day plus three future days left a daily gap. The
+`missing-history-partitions` health check demands the current day and the three days after it.
+Preparation runs on an elapsed-time cadence and does nothing at UTC midnight. From each rollover
+until the next pass, the furthest demanded day did not exist, and health reported it critical.
+
+`history_partition_horizon_days_v1(p_preparation_interval_ms)` now returns the number of future days
+to maintain. It returns `3 + ceil(p_preparation_interval_ms / 86400000.0) + 1`:
+
+- 3 for the days the health check demands;
+- the number of days the UTC date can advance before the next preparation pass;
+- 1 for a pass that starts later than its interval.
+
+Clean installation and `prepare_history_partitions_v1` both use it. At the default six-hour
+`partition_preparation_interval_ms`, that is the current day plus five future days. This amendment
+supersedes "three future days" in the decision, the consequences, and the validation above. The
+daily partition layout, retention, and maintenance split stand.
+
+[Data model: Daily partitions](../architecture/data-model.md#daily-partitions) owns the current
+formula.

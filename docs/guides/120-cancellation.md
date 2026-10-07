@@ -59,7 +59,7 @@ More detail: [Task lifecycle: Inactive work](../architecture/lifecycle.md#inacti
 ## If a handler is running right now
 
 Worker A runs an `import-rows` task. The handler loops over many rows. The worker uses the default
-lease of 30 seconds, so it sends a heartbeat every 10 seconds.
+lease and heartbeat interval, so it sends a heartbeat about every third of the lease.
 
 1. **At 0 s — the claim.** Worker A claims the task, and the handler starts its loop.
 2. **At 12 s — the request.** An operator calls `queue.cancel(taskId, { requestedBy, reason })`.

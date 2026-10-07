@@ -8,7 +8,7 @@ once. This guide explains why a handler can run twice, and what to do about it.
 ## One email, sent twice
 
 A `send-welcome-email` task asks a mail provider to send one email. The worker uses the default
-lease of 30 seconds. This is what happens on a bad day.
+lease. This is what happens on a bad day.
 
 1. **At 0 s — attempt 1.** Worker A claims the task and calls the handler. The handler asks the
    provider to send the email.
