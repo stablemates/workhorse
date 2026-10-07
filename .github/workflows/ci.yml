@@ -83,6 +83,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: 0.12.21 # Pinned to the uv version in mise.toml.
@@ -142,18 +143,14 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go/go.mod
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: 0.12.21 # Pinned to the uv version in mise.toml.
       - run: pnpm install --frozen-lockfile
-      # `pnpm test:unit`, split so each test runs once per change (ADR 0083): the npm-release-scope
-      # lane runs the rest of the TypeScript unit scope.
+      # The TypeScript part of `pnpm test:unit`, split so each test runs once per change (ADR 0083):
+      # the npm-release-scope lane runs the rest of it. The python and go lanes run the whole suite of
+      # their language, which contains its unit scope, so this lane runs neither unit scope again.
       - run: pnpm npm:test:python-toolchain
-      - run: pnpm python:test:unit
-      - run: pnpm go:test:unit
 
   # The TypeScript unit scope minus the tests that spawn Python tools, which the unit lane runs.
   # `pnpm npm:release-check` runs this suite in release.yml, whose build job installs no Python
@@ -229,6 +226,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
       - name: Install matching PostgreSQL client
         run: |
           sudo apt-get update
@@ -338,6 +336,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ matrix.go }}
+          cache-dependency-path: go/go.sum
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:runtime:dev
       - run: pnpm db:reset:test
@@ -665,6 +664,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: 0.12.21 # Pinned to the uv version in mise.toml.

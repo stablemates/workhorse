@@ -1,105 +1,116 @@
 pre-commit:
-  parallel: true
+  # The build runs alone, before the checks, so that no check reads a `dist` directory while
+  # TypeScript rewrites it. Piped jobs stop at the first failure, so a failed build skips the checks.
+  piped: true
   jobs:
-    - name: check generated SQL catalogues
-      glob: "{protocol/v1/manifest.json,scripts/generate-sql-catalogues.ts,go/sql_catalogue_generated.go,typescript/core/src/queue/sql-catalogue.generated.ts,python/src/workhorse/_statements.py,ruby/lib/stablemates/workhorse/sql_catalogue_generated.rb}"
-      run: mise exec -- pnpm sql-catalogues:check
-    - name: check parity tables
-      glob: "{rust/**,rust/PARITY.md,ruby/spec/**,typescript/core/test/support/parity-capabilities.ts,docs/parity.md,scripts/generate-parity-tables.ts}"
-      run: mise exec -- pnpm parity:check
-    - name: check generated Rust conformance evidence
-      glob: "{rust/**,rust/PARITY.md,docs/rust-conformance.md,scripts/generate-rust-conformance.ts}"
-      run: mise exec -- pnpm rust:conformance:check
-    - name: check the TypeScript public API snapshot
+    # `typescript-api:check` reads the built declarations rather than the source, so without this
+    # build a commit was judged against whatever an earlier build left behind.
+    - name: build the TypeScript declarations
       glob: "{typescript/*/src/**,typescript/*/package.json,typescript/dashboard-contract/index.d.ts,scripts/typescript-api.ts,scripts/generate-typescript-api.ts,scripts/api-snapshot.ts,api/typescript.txt}"
-      run: mise exec -- pnpm typescript-api:check
-    - name: check the Python public API snapshot
-      glob: "{python/src/**,python/tools/api_snapshot.py,scripts/generate-python-api.ts,scripts/api-snapshot.ts,api/python.txt}"
-      run: mise exec -- pnpm python-api:check
-    - name: check the Go public API for unaccepted breaks
-      glob: "{go/**,scripts/generate-go-api.ts,scripts/api-snapshot.ts,api/go.txt}"
-      run: mise exec -- pnpm go-api:check
-    - name: check adapter conformance types
-      glob: "typescript/adapter-conformance/**"
-      run: mise exec -- pnpm --filter @stablemates/workhorse-adapter-conformance typecheck
-    - name: check core types
-      glob: "typescript/core/**"
-      run: mise exec -- pnpm --filter @stablemates/workhorse typecheck
-    - name: check dashboard contract types
-      glob: "typescript/dashboard-contract/**"
-      run: mise exec -- pnpm --filter @stablemates/workhorse-dashboard-contract typecheck
-    - name: check dashboard server types
-      glob: "typescript/dashboard-server/**"
-      run: mise exec -- pnpm --filter @stablemates/workhorse-dashboard-server typecheck
-    - name: check generated dashboard specification
-      glob: "{dashboard/v1/**,typescript/dashboard-server/spec/**,typescript/dashboard-server/src/router.ts,typescript/dashboard-server/src/wire.ts,go/dashboard/v1_generated.go,python/src/workhorse/dashboard_v1.py,rust/src/dashboard/v1_generated.rs}"
-      run: mise exec -- pnpm dashboard-spec:check
-    - name: check generated dashboard bundle
-      glob: "{dashboard/app/**,dashboard/v1/bundle/**,dashboard/v1/manifest.json,scripts/build-runtime.ts,scripts/generate-dashboard-bundle.ts,go/dashboard/bundle.json,go/dashboard/read-surface-*.tar.gz,python/src/workhorse/dashboard/bundle.json,python/src/workhorse/dashboard/read-surface-*.tar.gz,rust/dashboard/bundle.json,rust/dashboard/read-surface-*.tar.gz}"
-      run: mise exec -- pnpm dashboard-bundle:check
-    - name: check dashboard types
-      glob: "typescript/dashboard/**"
-      run: mise exec -- pnpm --filter @stablemates/workhorse-dashboard typecheck
-    - name: check demo types
-      glob: "typescript/demo/**"
-      run: mise exec -- pnpm --filter @stablemates/workhorse-demo typecheck
-    - name: check drizzle types
-      glob: "typescript/drizzle/**"
-      run: mise exec -- pnpm --filter @stablemates/workhorse-drizzle typecheck
-    - name: check kysely types
-      glob: "typescript/kysely/**"
-      run: mise exec -- pnpm --filter @stablemates/workhorse-kysely typecheck
-    - name: check prisma types
-      glob: "typescript/prisma/**"
-      run: mise exec -- pnpm --filter @stablemates/workhorse-prisma typecheck
-    - name: check typeorm types
-      glob: "typescript/typeorm/**"
-      run: mise exec -- pnpm --filter @stablemates/workhorse-typeorm typecheck
-    - name: check Python types
-      glob: "python/**"
-      run: mise exec -- pnpm python:typecheck
-    # CI's format lane rejects what an editor forgot to format on save. Staged files pass
-    # through oxfmt itself so its config decides coverage and ignores, exactly as CI does.
-    - name: check formatting
-      glob: "**/*.{ts,tsx,js,jsx,mjs,cjs,json,md,yml,yaml}"
-      run: mise exec -- pnpm exec oxfmt --check {staged_files}
-    - name: check Rust formatting
-      glob: "{rust/**/*.rs,rust/Cargo.toml,rust/Cargo.lock,rustfmt.toml,rust/rust-toolchain.toml}"
-      run: mise exec -- pnpm rust:format:check
-    - name: test Rust workspace
-      glob: "{rust/**/*.rs,rust/Cargo.toml,rust/Cargo.lock}"
-      run: mise exec -- pnpm rust:test
-    - name: lint Ruby
-      glob: "ruby/**"
-      run: mise exec -- pnpm ruby:lint
-    - name: lint Python
-      glob: "python/**"
-      run: mise exec -- pnpm python:lint
-    - name: test Python unit scope
-      glob: "python/**"
-      run: mise exec -- pnpm python:test:unit
-    - name: vet Go
-      glob: "go/**"
-      run: mise exec -- pnpm go:vet
-    - name: lint Go
-      glob: "go/**"
-      run: mise exec -- pnpm go:lint
-    - name: test Go unit scope
-      glob: "go/**"
-      run: mise exec -- pnpm go:test:unit
-    - name: check site types
-      glob: "site/**"
-      run: mise exec -- pnpm docs:typecheck
-    - name: test changed scope
-      run: mise exec -- pnpm test:changed {staged_files}
-    # `vitest related` cannot select tests from a .sql path, so SQL changes name the schema
-    # suites directly. The changed-file database scope once ran beside this job, but a commit
-    # touching widely imported sources selects nearly the whole suite — past the pre-commit
-    # time budget no matter how the group is scheduled — so that scope now runs in CI's
-    # `typescript` lane (`pnpm test:database:typescript`, every pull request and main push).
-    - name: test database scope after SQL changes
-      glob: "sql/**"
-      run: mise exec -- pnpm test:schema
+      run: mise exec -- pnpm build:runtime:dev
+    - name: run the commit checks
+      group:
+        parallel: true
+        jobs:
+          - name: check generated SQL catalogues
+            glob: "{protocol/v1/manifest.json,scripts/generate-sql-catalogues.ts,go/sql_catalogue_generated.go,typescript/core/src/queue/sql-catalogue.generated.ts,python/src/workhorse/_statements.py,ruby/lib/stablemates/workhorse/sql_catalogue_generated.rb}"
+            run: mise exec -- pnpm sql-catalogues:check
+          - name: check parity tables
+            glob: "{rust/**,rust/PARITY.md,ruby/spec/**,typescript/core/test/support/parity-capabilities.ts,docs/parity.md,scripts/generate-parity-tables.ts}"
+            run: mise exec -- pnpm parity:check
+          - name: check generated Rust conformance evidence
+            glob: "{rust/**,rust/PARITY.md,docs/rust-conformance.md,scripts/generate-rust-conformance.ts}"
+            run: mise exec -- pnpm rust:conformance:check
+          - name: check the TypeScript public API snapshot
+            glob: "{typescript/*/src/**,typescript/*/package.json,typescript/dashboard-contract/index.d.ts,scripts/typescript-api.ts,scripts/generate-typescript-api.ts,scripts/api-snapshot.ts,api/typescript.txt}"
+            run: mise exec -- pnpm typescript-api:check
+          - name: check the Python public API snapshot
+            glob: "{python/src/**,python/tools/api_snapshot.py,scripts/generate-python-api.ts,scripts/api-snapshot.ts,api/python.txt}"
+            run: mise exec -- pnpm python-api:check
+          - name: check the Go public API for unaccepted breaks
+            glob: "{go/**,scripts/generate-go-api.ts,scripts/api-snapshot.ts,api/go.txt}"
+            run: mise exec -- pnpm go-api:check
+          - name: check adapter conformance types
+            glob: "typescript/adapter-conformance/**"
+            run: mise exec -- pnpm --filter @stablemates/workhorse-adapter-conformance typecheck
+          - name: check core types
+            glob: "typescript/core/**"
+            run: mise exec -- pnpm --filter @stablemates/workhorse typecheck
+          - name: check dashboard contract types
+            glob: "typescript/dashboard-contract/**"
+            run: mise exec -- pnpm --filter @stablemates/workhorse-dashboard-contract typecheck
+          - name: check dashboard server types
+            glob: "typescript/dashboard-server/**"
+            run: mise exec -- pnpm --filter @stablemates/workhorse-dashboard-server typecheck
+          - name: check generated dashboard specification
+            glob: "{dashboard/v1/**,typescript/dashboard-server/spec/**,typescript/dashboard-server/src/router.ts,typescript/dashboard-server/src/wire.ts,go/dashboard/v1_generated.go,python/src/workhorse/dashboard_v1.py,rust/src/dashboard/v1_generated.rs}"
+            run: mise exec -- pnpm dashboard-spec:check
+          - name: check generated dashboard bundle
+            glob: "{dashboard/app/**,dashboard/v1/bundle/**,dashboard/v1/manifest.json,scripts/build-runtime.ts,scripts/generate-dashboard-bundle.ts,go/dashboard/bundle.json,go/dashboard/read-surface-*.tar.gz,python/src/workhorse/dashboard/bundle.json,python/src/workhorse/dashboard/read-surface-*.tar.gz,rust/dashboard/bundle.json,rust/dashboard/read-surface-*.tar.gz}"
+            run: mise exec -- pnpm dashboard-bundle:check
+          - name: check dashboard types
+            glob: "typescript/dashboard/**"
+            run: mise exec -- pnpm --filter @stablemates/workhorse-dashboard typecheck
+          - name: check demo types
+            glob: "typescript/demo/**"
+            run: mise exec -- pnpm --filter @stablemates/workhorse-demo typecheck
+          - name: check drizzle types
+            glob: "typescript/drizzle/**"
+            run: mise exec -- pnpm --filter @stablemates/workhorse-drizzle typecheck
+          - name: check kysely types
+            glob: "typescript/kysely/**"
+            run: mise exec -- pnpm --filter @stablemates/workhorse-kysely typecheck
+          - name: check prisma types
+            glob: "typescript/prisma/**"
+            run: mise exec -- pnpm --filter @stablemates/workhorse-prisma typecheck
+          - name: check typeorm types
+            glob: "typescript/typeorm/**"
+            run: mise exec -- pnpm --filter @stablemates/workhorse-typeorm typecheck
+          - name: check Python types
+            glob: "python/**"
+            run: mise exec -- pnpm python:typecheck
+          # CI's format lane rejects what an editor forgot to format on save. Staged files pass
+          # through oxfmt itself so its config decides coverage and ignores, exactly as CI does.
+          - name: check formatting
+            glob: "**/*.{ts,tsx,js,jsx,mjs,cjs,json,md,yml,yaml}"
+            run: mise exec -- pnpm exec oxfmt --check {staged_files}
+          - name: check Rust formatting
+            glob: "{rust/**/*.rs,rust/Cargo.toml,rust/Cargo.lock,rustfmt.toml,rust/rust-toolchain.toml}"
+            run: mise exec -- pnpm rust:format:check
+          - name: test Rust workspace
+            glob: "{rust/**/*.rs,rust/Cargo.toml,rust/Cargo.lock}"
+            run: mise exec -- pnpm rust:test
+          - name: lint Ruby
+            glob: "ruby/**"
+            run: mise exec -- pnpm ruby:lint
+          - name: lint Python
+            glob: "python/**"
+            run: mise exec -- pnpm python:lint
+          - name: test Python unit scope
+            glob: "python/**"
+            run: mise exec -- pnpm python:test:unit
+          - name: vet Go
+            glob: "go/**"
+            run: mise exec -- pnpm go:vet
+          - name: lint Go
+            glob: "go/**"
+            run: mise exec -- pnpm go:lint
+          - name: test Go unit scope
+            glob: "go/**"
+            run: mise exec -- pnpm go:test:unit
+          - name: check site types
+            glob: "site/**"
+            run: mise exec -- pnpm docs:typecheck
+          - name: test changed scope
+            run: mise exec -- pnpm test:changed {staged_files}
+          # `vitest related` cannot select tests from a .sql path, so SQL changes name the schema
+          # suites directly. The changed-file database scope once ran beside this job, but a commit
+          # touching widely imported sources selects nearly the whole suite — past the pre-commit
+          # time budget no matter how the group is scheduled — so that scope now runs in CI's
+          # `typescript` lane (`pnpm test:database:typescript`, every pull request and main push).
+          - name: test database scope after SQL changes
+            glob: "sql/**"
+            run: mise exec -- pnpm test:schema
 
 pre-push:
   jobs:
@@ -112,6 +123,10 @@ post-checkout:
   jobs:
     - name: install dependencies the checkout needs
       run: |
+        # Stop at the first failed step. The script's status is otherwise its last command's, so a
+        # failed install followed by a successful prune reported success.
+        set -e
+
         # Git hands post-checkout the previous HEAD, the new HEAD, and a flag that is 1 for a
         # branch checkout and 0 for a file checkout.
 
@@ -145,6 +160,8 @@ post-merge:
   jobs:
     - name: synchronize changed dependencies and clean removed worktrees
       run: |
+        # Stop at the first failed step, as post-checkout does.
+        set -e
         if ! git diff --quiet ORIG_HEAD HEAD -- pnpm-lock.yaml; then
           mise exec -- pnpm install --frozen-lockfile
         fi

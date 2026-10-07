@@ -647,6 +647,27 @@ describe("continuous integration", () => {
     }
   });
 
+  // `pnpm check` is the local reproduction of CI's static lane, so a step added to that lane alone
+  // passes locally and fails only after a push. `go:sqlc:check` was once that step.
+  it("reaches every command of CI's static lane from pnpm check", async () => {
+    const scripts = (await readManifest("package.json")).scripts as Record<string, string>;
+    const reached = reachableScripts(scripts, "check");
+    const ci = await read(".github/workflows/ci.yml");
+    const staticLane = /\n  static:\n[\s\S]*?(?=\n\n  \S)/.exec(ci)?.[0] ?? "";
+    // pnpm check builds through `build:verified`, which also verifies the dashboard bundle.
+    const coveredByVerifiedBuild = new Set(["build:runtime:dev", "dashboard-bundle:check"]);
+    expect(reached).toContain("build:verified");
+    expect(await read("scripts/full-build.ts")).toContain('"--check-dashboard-bundle"');
+
+    const commands = [...staticLane.matchAll(/- run: pnpm ([\w:-]+)$/gm)].map((match) => match[1]!);
+    expect(commands).toContain("go:sqlc:check");
+    const missing = commands.filter(
+      (command) =>
+        command !== "install" && !coveredByVerifiedBuild.has(command) && !reached.has(command),
+    );
+    expect(missing).toEqual([]);
+  });
+
   it("smoke-tests exactly the declared JS runtimes without claiming them as supported", async () => {
     const workflow = await read(".github/workflows/ci.yml");
 
@@ -712,11 +733,15 @@ describe("continuous integration", () => {
     expect(await read("vitest.python-toolchain.config.ts")).toContain(
       "include: pythonToolchainTestFiles",
     );
-    // `pnpm test:unit` is the union the two lanes split.
+    // The two lanes split the TypeScript part of `pnpm test:unit`. The python and go lanes run
+    // their whole suite, which contains its unit scope, so no lane runs that scope a second time.
     expect(scripts["test:unit"]).toContain("--config vitest.unit.config.ts");
     expect(scripts["test:unit"]).toContain("pnpm python:test:unit && pnpm go:test:unit");
-    expect(unitLane).toContain("run: pnpm python:test:unit");
-    expect(unitLane).toContain("run: pnpm go:test:unit");
+    expect(unitLane).not.toContain("python:test");
+    expect(unitLane).not.toContain("go:test");
+    expect(unitLane).not.toContain("actions/setup-go");
+    expect(lane("python")).toMatch(/- run: pnpm python:test$/m);
+    expect(lane("go")).toMatch(/- run: pnpm go:test$/m);
     expect(releaseScope).toContain("run: pnpm build:runtime:check-dashboard-bundle");
     expect(releaseScope).toContain("run: pnpm npm:test:unit");
     expect(releaseScope).toContain("if command -v uv; then");
@@ -880,6 +905,16 @@ describe("continuous integration", () => {
     // move, and the pinning test below proves the pin itself, so neither belongs in this one.
     expect(ci).toMatch(/actions\/setup-go@[0-9a-f]{40}/);
     expect(ci).toContain("go-version-file: go/go.mod");
+    // setup-go keys its module cache on a go.sum at the repository root unless told otherwise.
+    // This module keeps it under go/, so a step without the path never restores the cache.
+    const goSetups = [
+      ...ci.matchAll(/uses: actions\/setup-go@\S+.*\n {8}with:\n((?: {10}.*\n)+)/g),
+    ];
+    expect(goSetups).toHaveLength(ci.match(/uses: actions\/setup-go@/g)?.length ?? 0);
+    expect(goSetups.length).toBeGreaterThan(0);
+    for (const [, inputs] of goSetups) {
+      expect(inputs).toContain("cache-dependency-path: go/go.sum");
+    }
     expect(ci).toMatch(/astral-sh\/setup-uv@[0-9a-f]{40}/);
 
     const npmRelease = await read(".github/workflows/release.yml");
@@ -899,6 +934,17 @@ describe("continuous integration", () => {
     const constraint = "UV_BUILD_CONSTRAINT: ${{ github.workspace }}/python/build-constraints.txt";
     expect(ci).toContain(`\n  ${constraint}\n`);
     expect(pythonRelease).toContain(`\n  ${constraint}\n`);
+  });
+
+  // A tag push and a manual run for the same tag must not publish side by side, and cancelling a
+  // run part-way through a publish could leave a registry holding half a release.
+  it("serializes each release workflow per ref without cancelling a run in progress", async () => {
+    for (const name of ["release", "release-python"]) {
+      const workflow = await read(`.github/workflows/${name}.yml`);
+      expect(`${name}.yml\n${workflow}`).toContain(
+        "\nconcurrency:\n  group: release-${{ github.workflow }}-${{ github.ref }}\n  cancel-in-progress: false\n",
+      );
+    }
   });
 
   // A tag is a pointer its owner can move, so a workflow that names one lets whoever controls that
