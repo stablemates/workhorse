@@ -40,7 +40,9 @@ the same host to `dashboardNodeMiddleware`.
 counts failures per client address, so pass the peer address your transport established. Never
 pass a value read from `Forwarded` or `X-Forwarded-For` unless your own proxy chain sets it.
 Without an address, every request shares one failure window. `dashboardNodeMiddleware` passes the
-socket's remote address itself.
+socket's remote address itself. Behind a reverse proxy, name the proxy in its `trustedProxies`
+option, as addresses or CIDR ranges. The middleware then takes the rightmost `X-Forwarded-For` or
+`Forwarded` hop that is not a listed proxy, and only from a listed peer.
 
 ```ts
 const response = await host.handle(request, { clientAddress: connection.remoteAddress });

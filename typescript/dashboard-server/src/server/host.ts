@@ -167,7 +167,8 @@ export interface DashboardRequestContext {
    * `singleAdmin` counts failed logins per address, grouping IPv6 by its /64 prefix. Pass only an
    * address the transport established or a proxy chain the application already trusts, never one
    * read from a header the client controls. Requests without one share a single failure window.
-   * `dashboardNodeMiddleware` passes the socket's remote address.
+   * `dashboardNodeMiddleware` passes the socket's remote address, or the forwarded client of a
+   * peer its `trustedProxies` option names.
    */
   clientAddress?: string;
 }

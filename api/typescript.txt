@@ -1325,6 +1325,11 @@ interface DashboardCommandOptions {
  * loopback, or that has a remote public origin, omits them unless this is true.
  */
  revealErrorStacks?: boolean;
+ /**
+ * Proxy addresses or CIDR ranges whose forwarded client address single-admin login throttling
+ * accepts. Empty by default, so every client is its socket peer. Requires a TCP listener.
+ */
+ trustedProxies?: readonly string[];
 }
 
 interface DashboardCompleteHumanWaitResult {
@@ -1751,6 +1756,15 @@ type DashboardNodeMiddleware = (request: IncomingMessage, response: ServerRespon
 interface DashboardNodeMiddlewareOptions {
   /** Exact browser-visible origin. Configure this instead of trusting forwarded headers. */
   publicOrigin?: string;
+  /**
+  * Proxy addresses or CIDR ranges, such as `10.0.0.0/8`, whose forwarded client address the
+  * dashboard accepts for `DashboardRequestContext.clientAddress`. Empty by default, so the socket
+  * peer is the client and no forwarding header is read.
+  *
+  * For a request from a listed peer, the client is the rightmost hop of `X-Forwarded-For` or
+  * `Forwarded` that is not itself listed. A malformed entry throws when the middleware is created.
+  */
+  trustedProxies?: readonly string[];
 }
 
 interface DashboardNotification {
@@ -1973,7 +1987,8 @@ interface DashboardRequestContext {
   * `singleAdmin` counts failed logins per address, grouping IPv6 by its /64 prefix. Pass only an
   * address the transport established or a proxy chain the application already trusts, never one
   * read from a header the client controls. Requests without one share a single failure window.
-  * `dashboardNodeMiddleware` passes the socket's remote address.
+  * `dashboardNodeMiddleware` passes the socket's remote address, or the forwarded client of a
+  * peer its `trustedProxies` option names.
   */
   clientAddress?: string;
 }

@@ -167,6 +167,8 @@ ${DATABASE_HELP}  --port <port>            TCP port (default: 3000).
   --public-origin <origin> Public HTTPS origin for a remote authenticated listener.
   --allow-mutations        Enable dashboard mutations.
   --reveal-error-stacks    Show worker stack traces on a remotely reachable listener.
+  --trusted-proxy <cidr>   Proxy address or CIDR range whose forwarded client address login
+                           throttling accepts. Repeatable.
   --actor <name>           Actor recorded for mutations (default: workhorse-cli).
   --workspace <name=url>   Serve <url> as workspace <name>. Repeatable.
   --config <file>          JSON workspace configuration file.
@@ -177,6 +179,10 @@ WORKHORSE_DASHBOARD_USERNAME and WORKHORSE_DASHBOARD_PASSWORD_HASH, or their _FI
 enable single-administrator sessions. Unauthenticated listeners are limited to loopback or a Unix
 socket. A remote authenticated listener requires WORKHORSE_DASHBOARD_PUBLIC_ORIGIN with HTTPS.
 A listener that is not loopback, or that has a remote public origin, omits worker stack traces.
+
+Login throttling counts each client by its socket peer. Behind a reverse proxy, name the proxy with
+--trusted-proxy, or list addresses and ranges in WORKHORSE_DASHBOARD_TRUSTED_PROXIES separated by
+commas. Any --trusted-proxy flag replaces the whole variable. A malformed entry stops the listener.
 
 Workspaces serve several databases from one dashboard, switchable in the browser. The
 configuration file holds {"workspaces": {"<name>": {"url": "..."}}, "defaultWorkspace": "<name>"};
@@ -634,6 +640,11 @@ async function runDashboardCommand(args: readonly string[]): Promise<void> {
   const publicOrigin = values["public-origin"] ?? process.env.WORKHORSE_DASHBOARD_PUBLIC_ORIGIN;
   const allowMutations = values["allow-mutations"] ?? false;
   const revealErrorStacks = values["reveal-error-stacks"] ?? false;
+  // Flags replace the variable rather than adding to it, so one invocation states the whole list.
+  const trustedProxiesVariable = process.env.WORKHORSE_DASHBOARD_TRUSTED_PROXIES?.trim();
+  const trustedProxies =
+    values["trusted-proxy"] ??
+    (trustedProxiesVariable ? trustedProxiesVariable.split(",").map((entry) => entry.trim()) : []);
   const actor = values.actor ?? "workhorse-cli";
   const authentication = await resolveDashboardAuthentication();
 
@@ -666,6 +677,7 @@ async function runDashboardCommand(args: readonly string[]): Promise<void> {
     actor,
     authentication,
     revealErrorStacks,
+    trustedProxies,
   });
   process.stdout.write(
     `Workhorse dashboard on ${running.url} (${allowMutations ? "mutations enabled" : "read-only"})\n`,

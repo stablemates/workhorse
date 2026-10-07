@@ -73,6 +73,7 @@ export const CLI_OPTIONS = {
     "public-origin": { type: "string" },
     "allow-mutations": { type: "boolean" },
     "reveal-error-stacks": { type: "boolean" },
+    "trusted-proxy": { type: "string", multiple: true },
     actor: { type: "string" },
     workspace: { type: "string", multiple: true },
     config: { type: "string" },

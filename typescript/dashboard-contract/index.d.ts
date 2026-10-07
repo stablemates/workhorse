@@ -31,6 +31,11 @@ export interface DashboardCommandOptions {
    * loopback, or that has a remote public origin, omits them unless this is true.
    */
   revealErrorStacks?: boolean;
+  /**
+   * Proxy addresses or CIDR ranges whose forwarded client address single-admin login throttling
+   * accepts. Empty by default, so every client is its socket peer. Requires a TCP listener.
+   */
+  trustedProxies?: readonly string[];
 }
 
 /** A standalone dashboard listener whose database connection remains owned by its caller. */
