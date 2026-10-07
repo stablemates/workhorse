@@ -212,6 +212,6 @@ pnpm rust:release-check
 on the unpacked `.crate` archive, never on the checkout. The check fails when the archive exceeds
 10 MB, or when a consumer without the `dashboard` feature resolves an HTTP crate. With
 `DATABASE_URL_TEST` set, it enqueues one task into a scratch database and runs it through a
-`Worker`. The check then reads back the succeeded outcome. A change to the public API
+`Worker`. The check then reads back the succeeded outcome. A change to the crate's governed surface
 updates the consumer in the same commit. `pnpm rust:release-check` runs the gates and then this
 check. CI packages only committed files; a local run may pass `--allow-dirty`.
