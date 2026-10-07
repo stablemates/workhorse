@@ -6,15 +6,18 @@ import os
 import signal
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
+from threading import Event, Lock, Timer
 from time import monotonic, sleep
-from typing import cast
+from typing import Any, cast
 
 import psycopg
 import pytest
 from eventual_conditions import eventually
 
-from workhorse import Queue, Worker, run_worker_process
+from workhorse import ClaimedTask, Queue, Worker, run_worker_process
+from workhorse._statements import STATEMENTS, DriverStatement
 
 PROCESS_RUNNER_FIXTURE = Path(__file__).parent / "fixtures" / "process_runner.py"
 CRASH_FIXTURE = Path(__file__).parent / "fixtures" / "crash_worker.py"
@@ -127,6 +130,183 @@ def test_signal_while_main_thread_holds_worker_state_lock_still_drains(mode: str
     assert process.returncode == 0, f"stdout: {stdout!r} stderr: {stderr!r}"
     assert stdout.strip() == "stopping"
     assert stderr == ""
+
+
+STALLED_TYPE = "process.stalled"
+
+
+def _task_row(sequence: int) -> dict[str, object]:
+    return {
+        "task_id": f"00000000-0000-0000-0000-{sequence:012d}",
+        "task_type": STALLED_TYPE,
+        "priority": 0,
+        "payload": {},
+        "contract_version": None,
+        "result_max_bytes": 1_048_576,
+        "redact_error_details": False,
+        "trace_context": None,
+        "attempt": 1,
+        "max_attempts": 3,
+        "retry_policy": None,
+        "deadline_at": None,
+        "execution_timeout_ms": None,
+        "attempt_timeout_at": None,
+        "fence_token": 1,
+        "lease_expires_at": None,
+    }
+
+
+class FullTierRejection(Exception):
+    """The error a full-tier queue raises for a fast claim, as a driver reports it."""
+
+    sqlstate = "P1007"
+    detail = '{"queue": "process", "feature": "batched completion"}'
+
+
+class FailingDatabase:
+    """Answer the first claim from a backlog, then fail the next claim or the startup tick.
+
+    The failure waits until a handler runs, so the worker observes it with work still active.
+    """
+
+    def __init__(self, rows: int, *, fail: str, handler_started: Event) -> None:
+        self._lock = Lock()
+        self._backlog = [_task_row(sequence) for sequence in range(rows)]
+        self._fail = fail
+        self._handler_started = handler_started
+        self._claims = 0
+
+    def rows(self, statement: DriverStatement, parameters: Sequence[object] = ()) -> list[Any]:
+        if statement is STATEMENTS.complete_many_and_claim:
+            raise FullTierRejection
+        if statement is STATEMENTS.tick and self._fail == "tick":
+            assert self._handler_started.wait(timeout=5)
+            raise RuntimeError("tick failed")
+        if statement is not STATEMENTS.claim_many:
+            return []
+        with self._lock:
+            self._claims += 1
+            first = self._claims == 1
+            claimed, self._backlog = self._backlog, []
+        if first:
+            return claimed
+        if self._fail == "claim":
+            assert self._handler_started.wait(timeout=5)
+            raise RuntimeError("claim failed")
+        return []
+
+
+class StalledHandlers:
+    """Stand in for task execution. The first task ignores cancellation until released.
+
+    With fail_execution set, the second execution raises. A failed settlement write leaves
+    _execute_claimed_task the same way, so the worker records it as the same fatal run error.
+    """
+
+    def __init__(self, *, fail_execution: bool = False) -> None:
+        self._lock = Lock()
+        self._fail_execution = fail_execution
+        self.started = Event()
+        self.released = Event()
+        self._executions = 0
+
+    def execute(self, _task: ClaimedTask, _claim_sent_at: float) -> None:
+        with self._lock:
+            self._executions += 1
+            first = self._executions == 1
+        if first:
+            self.started.set()
+            self.released.wait(timeout=10)
+            return
+        assert self.started.wait(timeout=5)
+        if self._fail_execution:
+            raise RuntimeError("execution failed")
+
+
+def _stalling_worker(database: FailingDatabase, handlers: StalledHandlers) -> Worker:
+    worker = Worker(
+        object(),  # type: ignore[arg-type]
+        queue="process",
+        worker_id="python-process-fatal",
+        concurrency=2,
+        poll_ms=10,
+        registry_interval_ms=0,
+        shared_heartbeats=True,
+        _executor=database,
+    )
+    worker._compatibility.assert_compatible = lambda: None  # type: ignore[method-assign]
+    worker._notification_connection_factory = None  # type: ignore[assignment]
+    worker._execute_claimed_task = handlers.execute  # type: ignore[method-assign]
+    return worker.handle(STALLED_TYPE, lambda _payload, _context: None)
+
+
+def _run_until_released(
+    worker: Worker, handlers: StalledHandlers, *, shutdown_timeout_ms: int
+) -> tuple[list[int], BaseException | None]:
+    """Run the process in this thread. A fake force_exit records its code and frees the handler.
+
+    A watchdog frees the handler after 5 s, so a deadline that never fires fails the test.
+    """
+    exits: list[int] = []
+
+    def force_exit(code: int) -> None:
+        exits.append(code)
+        handlers.released.set()
+
+    watchdog = Timer(5, handlers.released.set)
+    watchdog.daemon = True
+    watchdog.start()
+    error: BaseException | None = None
+    try:
+        run_worker_process(
+            worker,
+            shutdown_timeout_ms=shutdown_timeout_ms,
+            force_exit=force_exit,  # type: ignore[arg-type]
+        )
+    except RuntimeError as raised:
+        error = raised
+    finally:
+        watchdog.cancel()
+    return exits, error
+
+
+# SM-1175: a fatal worker error never armed the deadline, so a handler that ignored cancellation
+# held the drain, and the process, open forever.
+@pytest.mark.parametrize(
+    ("fail", "rows", "fail_execution", "message"),
+    [
+        ("claim", 1, False, "claim failed"),
+        ("tick", 1, False, "tick failed"),
+        ("none", 2, True, "execution failed"),
+    ],
+)
+def test_fatal_worker_error_starts_the_deadline_while_a_handler_ignores_cancellation(
+    fail: str, rows: int, fail_execution: bool, message: str
+) -> None:
+    handlers = StalledHandlers(fail_execution=fail_execution)
+    database = FailingDatabase(rows, fail=fail, handler_started=handlers.started)
+    worker = _stalling_worker(database, handlers)
+
+    started_at = monotonic()
+    exits, error = _run_until_released(worker, handlers, shutdown_timeout_ms=50)
+
+    assert exits == [1]
+    assert monotonic() - started_at < 4
+    assert str(error) == message
+
+
+def test_fatal_worker_error_drained_before_the_deadline_cancels_it() -> None:
+    handlers = StalledHandlers()
+    handlers.started.set()
+    handlers.released.set()
+    database = FailingDatabase(1, fail="claim", handler_started=handlers.started)
+    worker = _stalling_worker(database, handlers)
+
+    exits, error = _run_until_released(worker, handlers, shutdown_timeout_ms=200)
+    sleep(0.4)
+
+    assert exits == []
+    assert str(error) == "claim failed"
 
 
 @pytest.mark.integration

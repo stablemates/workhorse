@@ -199,6 +199,11 @@ error, or a settlement write that fails. The worker reports the first one when i
 when `run()` rejects after the drain. If the handlers settle before the deadline, the runtime closes
 its resources and exits with code 1. Otherwise the deadline exits with code 1.
 
+Python's `run_worker_process` follows the same order for its one worker. It has no readiness probe.
+The worker reports its first fatal error before it drains, and the runner starts the shutdown
+deadline at once. If the handlers settle before the deadline, `run_worker_process` raises the error.
+Otherwise the deadline calls `force_exit(1)`.
+
 ### Deadline and second signal
 
 The default shutdown deadline is 25 seconds and may be configured from 1 millisecond through 1 hour. Set it below the deployment platform's termination grace period so Node has time to hard-exit before the platform sends `SIGKILL`.

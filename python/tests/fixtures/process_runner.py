@@ -4,6 +4,7 @@ import os
 import signal
 import sys
 import time
+from collections.abc import Callable
 from threading import Event, Lock
 
 from workhorse import run_worker_process
@@ -31,7 +32,11 @@ class FixtureWorker:
         with self._state_lock:
             return self._stop_version
 
-    def _run_continuously(self, requested_stop_version: int) -> None:
+    def _run_continuously(
+        self,
+        requested_stop_version: int,
+        _on_fatal_error: Callable[[BaseException], None] | None = None,
+    ) -> None:
         if self._mode.startswith("state-lock"):
             with self._state_lock:
                 self._announce_ready()

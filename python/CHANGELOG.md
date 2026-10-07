@@ -40,6 +40,12 @@ principal's actor cannot close its script element. It refuses an RPC body over 2
 length, with `413` before parsing. An unexpected schema-compatibility failure now answers a generic `503` and
 is logged on the `workhorse.dashboard` logger (SM-1168).
 
+**Fixed: a fatal worker error now starts the `run_worker_process` deadline.** Suppose PostgreSQL
+fails while a handler ignores cancellation. Before, claims stopped, but the drain waited for that
+handler without a bound, and the process never exited. The worker now reports its first claim,
+maintenance, execution, or settlement failure before it drains. The runner then starts the
+`shutdown_timeout_ms` deadline, and a missed deadline calls `force_exit(1)` (SM-1175).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

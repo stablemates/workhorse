@@ -970,6 +970,13 @@ main thread's signal handler.
   and 143 for `SIGTERM`.
 - An expired deadline calls `force_exit(1)`.
 
+A fatal worker error starts the same deadline. `Worker` reports the first fatal error of a run
+through `_report_fatal_error` when it observes it, before `_drain_active_threads` waits. That
+covers a claim error, a maintenance error, a failed execution or settlement, and a failure of the
+run loop itself. The process runner arms the deadline once, whether a signal or a fatal error comes
+first. If the active handlers settle in time, the runner cancels the deadline and raises the
+error, so the process exits unsuccessfully. Otherwise the deadline calls `force_exit(1)`.
+
 The default `force_exit` is `os._exit`. Hard termination therefore leaves active leases for
 `recover_expired_telemetry_v1`.
 
