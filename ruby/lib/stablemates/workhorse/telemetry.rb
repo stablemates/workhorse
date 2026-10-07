@@ -63,9 +63,14 @@ module Stablemates
 
       # Yields a span, or nil without OpenTelemetry. A +trace_context+ carrier takes precedence
       # over +parent+. The span records no exception by itself; +record_error+ marks a failure.
+      #
+      # A consumer span runs a claimed task, which descends only from the trace its enqueue stored.
+      # A span current where the worker runs is unrelated to the task, so a consumer span starts
+      # from an empty context, and a task without a stored context starts a new trace.
       def span(name, attributes, trace_context: nil, parent: nil, consumer: false)
         return yield(nil) unless tracing?
 
+        parent = ::OpenTelemetry::Context.empty if consumer
         if trace_context.is_a?(Hash)
           carrier = trace_context.each_with_object({}) do |(key, value), result|
             result[key.downcase] = value if key.is_a?(String) && value.is_a?(String)

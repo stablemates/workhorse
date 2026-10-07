@@ -63,6 +63,10 @@ impl Metrics {
 }
 
 /// The `workhorse.handler` consumer span, parented on the task's stored W3C trace context.
+///
+/// The `tracing` span keeps its contextual parent, so its log events still nest under the caller's
+/// span. Its OpenTelemetry parent is only the stored context: a task descends from the trace its
+/// enqueue stored, and a task without one starts a new trace.
 pub(crate) fn handler_span(task: &ClaimedTask) -> tracing::Span {
     let span = tracing::info_span!(
         "workhorse.handler",
@@ -74,9 +78,10 @@ pub(crate) fn handler_span(task: &ClaimedTask) -> tracing::Span {
         workhorse.task.attempt = task.attempt,
     );
     #[cfg(feature = "opentelemetry")]
-    if let Some(parent) = task.trace_context.as_ref().and_then(otel::remote_parent) {
+    {
         use tracing_opentelemetry::OpenTelemetrySpanExt;
-        let _ = span.set_parent(parent);
+        let parent = task.trace_context.as_ref().and_then(otel::remote_parent);
+        let _ = span.set_parent(parent.unwrap_or_default());
     }
     span
 }
@@ -177,5 +182,81 @@ mod otel {
             state,
         );
         context.is_valid().then(|| Context::new().with_remote_span_context(context))
+    }
+}
+
+#[cfg(all(test, feature = "opentelemetry"))]
+mod tests {
+    use opentelemetry::trace::{SpanId, TraceId, TracerProvider};
+    use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
+    use serde_json::json;
+    use tracing_subscriber::layer::SubscriberExt;
+
+    use super::handler_span;
+    use crate::worker::ClaimedTask;
+
+    fn task(trace_context: Option<serde_json::Value>) -> ClaimedTask {
+        ClaimedTask {
+            id: uuid::Uuid::new_v4(),
+            task_type: "trace.parent".into(),
+            queue: "trace-parent".into(),
+            priority: 0,
+            payload: json!({}),
+            contract_version: None,
+            result_max_bytes: None,
+            redact_error_details: false,
+            trace_context,
+            attempt: 1,
+            max_attempts: 1,
+            retry_policy: json!({}),
+            deadline_at: None,
+            execution_timeout: None,
+            attempt_timeout_at: None,
+            fence_token: 1,
+            lease_expires_at: chrono::Utc::now(),
+            claim_sent_at: tokio::time::Instant::now(),
+            fast_tier: false,
+        }
+    }
+
+    #[test]
+    fn a_handler_span_descends_only_from_the_task_trace_context() {
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder().with_simple_exporter(exporter.clone()).build();
+        let layer = tracing_opentelemetry::layer().with_tracer(provider.tracer("workhorse"));
+        let untraced = task(None);
+        let traced = task(Some(json!({
+            "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+        })));
+        tracing::subscriber::with_default(tracing_subscriber::registry().with(layer), || {
+            let unrelated = tracing::info_span!("unrelated");
+            let _entered = unrelated.enter();
+            drop(handler_span(&untraced));
+            drop(handler_span(&traced));
+        });
+
+        let spans = exporter.get_finished_spans().unwrap();
+        let unrelated = spans.iter().find(|span| span.name == "unrelated").unwrap();
+        let handler = |task: &ClaimedTask| {
+            spans
+                .iter()
+                .find(|span| {
+                    span.name == "workhorse.handler"
+                        && span.attributes.iter().any(|attribute| {
+                            attribute.key.as_str() == "workhorse.task.id"
+                                && attribute.value.as_str() == task.id.to_string()
+                        })
+                })
+                .unwrap()
+        };
+        let untraced = handler(&untraced);
+        assert_eq!(untraced.parent_span_id, SpanId::INVALID);
+        assert_ne!(untraced.span_context.trace_id(), unrelated.span_context.trace_id());
+        let traced = handler(&traced);
+        assert_eq!(
+            traced.span_context.trace_id(),
+            TraceId::from_hex("4bf92f3577b34da6a3ce929d0e0e4736").unwrap()
+        );
+        assert_eq!(traced.parent_span_id, SpanId::from_hex("00f067aa0ba902b7").unwrap());
     }
 }

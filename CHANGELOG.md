@@ -110,6 +110,10 @@ collection no longer returns, such as a worker group that left a state. The olde
 queue with no ready task is 0. An `onError` reporter that throws or rejects is written to
 `console.error` instead of becoming an unhandled rejection (SM-1166).
 
+**Pending release — fixed:** The Rust and Ruby `workhorse.handler` spans descend only from the
+task's stored trace context. A task without one starts a new trace instead of joining a span active
+in the worker. Every SDK now parents a handler span this way (SM-1179).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

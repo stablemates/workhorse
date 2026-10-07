@@ -276,4 +276,34 @@ RSpec.describe "Worker runtime against PostgreSQL" do
     expect(recorded).to include("workhorse.tasks.claimed", "workhorse.claim.duration", "workhorse.tasks.completed",
       "workhorse.handler.duration")
   end
+
+  it "parents a handler span only to its task's stored trace context" do
+    untraced_id = queue.enqueue("trace-parent", {}).task_id
+    producer = OpenTelemetry::Trace::SpanContext.new
+    producer_context = OpenTelemetry::Trace.context_with_span(OpenTelemetry::Trace.non_recording_span(producer))
+    traced_id = OpenTelemetry::Context.with_current(producer_context) { queue.enqueue("trace-parent", {}).task_id }
+
+    subject = worker.handle("trace-parent") { {} }
+    # Carry the posting thread's context to the handler thread, as OpenTelemetry's concurrent-ruby
+    # instrumentation does.
+    allow(subject).to receive(:handler_executor).and_wrap_original do |original|
+      original.call.tap do |executor|
+        allow(executor).to receive(:post).and_wrap_original do |post, &task|
+          context = OpenTelemetry::Context.current
+          post.call { OpenTelemetry::Context.with_current(context, &task) }
+        end
+      end
+    end
+    unrelated = OpenTelemetry::Trace.non_recording_span(OpenTelemetry::Trace::SpanContext.new)
+    OpenTelemetry::Trace.with_span(unrelated) do
+      expect(subject.run_once).to be(true)
+      nil while subject.run_once
+    end
+
+    handlers = RecordedTelemetry.spans.select { |span| span.name == "workhorse.handler" }
+      .to_h { |span| [span.attributes["workhorse.task.id"], span] }
+    expect(handlers.fetch(untraced_id).parent).not_to be_valid
+    expect(handlers.fetch(traced_id).parent.hex_trace_id).to eq(producer.hex_trace_id)
+    expect(handlers.fetch(traced_id).parent.hex_span_id).to eq(producer.hex_span_id)
+  end
 end
