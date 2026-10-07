@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import type { DashboardHost } from "./host.js";
+import { forwardedClientAddress, trustedProxyCheck } from "./trusted-proxy.js";
 
 /** Minimal Connect-style middleware signature shared by Express, Connect, and Fastify's middie. */
 export type DashboardNodeMiddleware = (
@@ -12,6 +13,15 @@ export type DashboardNodeMiddleware = (
 export interface DashboardNodeMiddlewareOptions {
   /** Exact browser-visible origin. Configure this instead of trusting forwarded headers. */
   publicOrigin?: string;
+  /**
+   * Proxy addresses or CIDR ranges, such as `10.0.0.0/8`, whose forwarded client address the
+   * dashboard accepts for `DashboardRequestContext.clientAddress`. Empty by default, so the socket
+   * peer is the client and no forwarding header is read.
+   *
+   * For a request from a listed peer, the client is the rightmost hop of `X-Forwarded-For` or
+   * `Forwarded` that is not itself listed. A malformed entry throws when the middleware is created.
+   */
+  trustedProxies?: readonly string[];
 }
 
 const BODYLESS_METHODS = new Set(["GET", "HEAD"]);
@@ -109,6 +119,7 @@ export function dashboardNodeMiddleware(
   const publicOrigin = options.publicOrigin
     ? normalizeDashboardPublicOrigin(options.publicOrigin)
     : undefined;
+  const trustsProxy = trustedProxyCheck(options.trustedProxies ?? []);
   return (request, response, next) => {
     let fetchRequestValue: Request;
     try {
@@ -124,8 +135,13 @@ export function dashboardNodeMiddleware(
 
     void (async () => {
       try {
-        // The socket's peer is the one client address the transport establishes itself.
-        const clientAddress = request.socket.remoteAddress;
+        // The socket's peer is the one client address the transport establishes itself. Only a
+        // peer the operator named as a proxy may state a different one.
+        const clientAddress = forwardedClientAddress(
+          request.socket.remoteAddress,
+          fetchRequestValue.headers,
+          trustsProxy,
+        );
         const result = await host.handle(
           fetchRequestValue,
           clientAddress === undefined ? undefined : { clientAddress },

@@ -1133,11 +1133,43 @@ ago.
 At most `MAX_CONCURRENT_PASSWORD_HASHES` (2) scrypt derivations run at once across every client.
 A submission that finds both slots busy returns `429` with `Retry-After: 1`. It reserves nothing.
 
-`dashboardNodeMiddleware` passes `request.socket.remoteAddress` as `clientAddress`. A host that
-calls `handle(request, context)` itself supplies an address it established. The server never
-reads `Forwarded` or `X-Forwarded-*`. Behind a reverse proxy the socket peer is the proxy, so
-every client of that proxy shares one key. [ADR 0093](../decisions/0093-key-single-admin-login-throttling-by-transport-peer.md)
-records this identity model.
+`dashboardNodeMiddleware` passes `request.socket.remoteAddress` as `clientAddress` by default. A
+host that calls `handle(request, context)` itself supplies an address it established. Behind a
+reverse proxy the socket peer is the proxy, so every client of that proxy shares one key unless
+the operator names the proxy in `DashboardNodeMiddlewareOptions.trustedProxies`.
+
+`trustedProxyCheck()` parses that list when the middleware is created. A malformed entry throws a
+`TypeError`.
+
+- An entry is one IPv4 or IPv6 address, or one CIDR range such as `10.0.0.0/8`.
+- A range must not set bits beyond its prefix. Its prefix is a decimal number from 1 to 32 for
+  IPv4, or to 128 for IPv6, without a leading zero.
+- An IPv4-mapped IPv6 entry must be written as its IPv4 address. An address with a zone is
+  refused.
+- An IPv4-mapped IPv6 peer, as a dual-stack socket reports it, matches as its IPv4 address.
+
+`forwardedClientAddress()` then derives `clientAddress` for each request:
+
+1. With an empty list, or when the socket peer is not listed, the answer is the peer. No header is
+   read.
+2. A listed peer's request must carry exactly one of `X-Forwarded-For` and `Forwarded`. With both
+   or neither, the answer is the peer.
+3. The hops are the comma-separated entries of that header. For `Forwarded`, each hop is the single
+   `for` parameter of its element. Commas and semicolons inside a quoted string do not separate,
+   and a backslash escapes the next character. A `Forwarded` header whose quoted string never
+   closes keeps the peer. An optional port, and the brackets around an IPv6 address, are removed.
+4. The walk starts at the rightmost hop. A listed hop is a proxy, and the walk continues left. The
+   first hop that is not listed is the answer.
+5. An unparseable hop, such as `unknown` or `_hidden`, ends the walk. The answer is the listed
+   address to its right.
+6. When every hop is listed, the answer is the leftmost hop.
+
+`startDashboardServer` passes `DashboardCommandOptions.trustedProxies` to the middleware. It
+validates the list before `listen`, and refuses a non-empty list on a Unix socket listener.
+[ADR 0093](../decisions/0093-key-single-admin-login-throttling-by-transport-peer.md) records the
+identity model, and
+[ADR 0094](../decisions/0094-read-the-login-throttle-client-through-trusted-proxies.md) records the
+trusted-proxy rules.
 
 #### Process boundary
 
@@ -1220,7 +1252,9 @@ scheme and authority instead. Secure-cookie and same-origin mutation policy ther
 independent of untrusted proxy headers.
 
 The CLI maps `--socket`, `--public-origin`, and `WORKHORSE_DASHBOARD_PUBLIC_ORIGIN` to those
-options.
+options. It maps the repeatable `--trusted-proxy` and the comma-separated
+`WORKHORSE_DASHBOARD_TRUSTED_PROXIES` to `trustedProxies`, and any flag replaces the whole variable
+(see [Login rate limit](#login-rate-limit)).
 
 ### Login body limit
 
@@ -1298,6 +1332,9 @@ dashboard command. Its startup contract requires:
 - `DATABASE_URL` or `WORKHORSE_DATABASE_URL`;
 - both single-admin credential values;
 - an HTTPS `WORKHORSE_DASHBOARD_PUBLIC_ORIGIN`.
+
+Behind a reverse proxy, `WORKHORSE_DASHBOARD_TRUSTED_PROXIES` names the proxy so its clients get
+separate login windows.
 
 The packed test asserts that the image consumes the generated tarball names. It also asserts that
 the image starts the installed standalone CLI through the same remote-listener contract.

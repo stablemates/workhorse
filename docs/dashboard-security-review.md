@@ -163,11 +163,19 @@ Confirm the CLI's single-administrator mode is the boundary it claims to be.
   capacity before `scrypt` yields, and returns one generic failure for a wrong username and a wrong
   password alike.
 - Confirm `loginThrottleKey` keys the failure window by `DashboardRequestContext.clientAddress`,
-  that `dashboardNodeMiddleware` fills it from the socket, and that no code path reads `Forwarded`
-  or `X-Forwarded-*`. Confirm the tracked-client table is bounded, and that
-  `MAX_CONCURRENT_PASSWORD_HASHES` refuses a submission before it reserves anything.
-  [ADR 0093](decisions/0093-key-single-admin-login-throttling-by-transport-peer.md) records that a
-  reverse proxy still shares one key among its clients.
+  and that `dashboardNodeMiddleware` fills it from the socket by default. Confirm the tracked-client
+  table is bounded, and that `MAX_CONCURRENT_PASSWORD_HASHES` refuses a submission before it
+  reserves anything.
+  [ADR 0093](decisions/0093-key-single-admin-login-throttling-by-transport-peer.md) records this
+  identity model.
+- Confirm `forwardedClientAddress` reads `Forwarded` or `X-Forwarded-For` only when the socket peer
+  matches `trustedProxies`, which is empty by default. Confirm it keeps the peer when both headers
+  arrive or a `Forwarded` quoted string never closes, and takes the rightmost hop that is not a
+  trusted proxy. Confirm `trustedProxyCheck`
+  refuses a malformed entry, a `/0` prefix, and a range with host bits set, and that a Unix socket
+  listener refuses a non-empty list.
+  [ADR 0094](decisions/0094-read-the-login-throttle-client-through-trusted-proxies.md) records these
+  rules.
 - Confirm every RPC request body is bounded before a procedure is matched, whether or not it
   declares its length. The Python and Ruby hosts refuse a larger or malformed declared length with
   `413` before reading, and read at most one byte past their bound otherwise. The Go and Rust hosts

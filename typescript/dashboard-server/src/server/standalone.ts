@@ -5,6 +5,7 @@ import { Admin, Queue, type Queryable } from "@stablemates/workhorse";
 import { createDashboardHost } from "./host.js";
 import { dashboardNodeMiddleware, normalizeDashboardPublicOrigin } from "./node.js";
 import { createDashboardOperatorControllers } from "./operator-controllers.js";
+import { trustedProxyCheck } from "./trusted-proxy.js";
 
 /**
  * Serve the operator dashboard as its own process against any Workhorse database.
@@ -69,7 +70,15 @@ export const startDashboardServer: DashboardStandaloneModule<Queryable>["startDa
     const publicOrigin = options.publicOrigin
       ? normalizeDashboardPublicOrigin(options.publicOrigin)
       : undefined;
+    const trustedProxies = options.trustedProxies ?? [];
+    // Refuse a malformed setting before the listener binds.
+    trustedProxyCheck(trustedProxies);
     const tcpListener = !options.socketPath;
+    if (!tcpListener && trustedProxies.length > 0) {
+      throw new TypeError(
+        "Dashboard trusted proxies require a TCP listener, because a Unix socket peer has no address",
+      );
+    }
     const loopbackListener = tcpListener && isLoopbackHostname(options.hostname);
     if (!options.authentication && tcpListener && !loopbackListener) {
       throw new TypeError(
@@ -161,7 +170,7 @@ export const startDashboardServer: DashboardStandaloneModule<Queryable>["startDa
           : { database: database as Queryable, ...workspaceControls(database as Queryable) }),
       });
 
-      const middleware = dashboardNodeMiddleware(host, { publicOrigin });
+      const middleware = dashboardNodeMiddleware(host, { publicOrigin, trustedProxies });
       server.on("request", (request, response) => {
         // Set before the middleware writes, so every response the listener produces carries them
         // and a dashboard response that names one of these headers itself still wins.

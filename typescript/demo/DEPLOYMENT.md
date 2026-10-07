@@ -275,6 +275,13 @@ of five mutations and then twelve mutations per minute. The proxy in front of it
 address it observes to `X-Forwarded-For`; the server uses the right-most address so a caller cannot
 choose the rate-limit key. Any replacement proxy must preserve that append-only chain.
 
+The standalone `workhorse dashboard` listener reads `WORKHORSE_DASHBOARD_TRUSTED_PROXIES`, a
+comma-separated list of proxy addresses and CIDR ranges. For a connection from a listed proxy, its
+login throttle counts the rightmost `X-Forwarded-For` or `Forwarded` hop that is not a listed proxy.
+The list is empty by default, and a malformed entry stops the listener at startup. A deployment that
+runs the standalone listener behind a proxy names that proxy there, or every client shares the
+proxy's login window. The demo server does not run that listener and does not read the variable.
+
 The server also bounds each request independently of the rate budget. It refuses a declared
 request body over 131,072 bytes with 413, and a `POST`, `PUT`, or `PATCH` that streams without a
 declared `Content-Length` with 411 — so the proxy must buffer request bodies and forward their

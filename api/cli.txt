@@ -96,6 +96,7 @@ repair-dependencies  mutates
 --public-origin <string>
 --reveal-error-stacks
 --socket <string>
+--trusted-proxy <string>  (repeatable)
 --workspace <string>  (repeatable)
 
 ### health

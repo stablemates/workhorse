@@ -127,20 +127,35 @@ Someone at `203.0.113.7` tries to guess Dana's password.
    again.
 
 Repeated failures temporarily pause login processing for the client that caused them. The server
-owns this limit. It identifies the client by the address the connection came from, not by a proxy
-header, because the client writes those headers itself. A successful login clears that client's
-count.
+owns this limit. By default it identifies the client by the address the connection came from. It
+ignores proxy headers, because the client can write them too. A successful login clears that
+client's count.
 
-Behind a reverse proxy every connection comes from the proxy. All clients of that proxy then share
-one count, and one caller can still pause login for all of them. Separately, the server checks only
-a small number of passwords at the same time, because each check is deliberately expensive.
+Behind a reverse proxy every connection comes from the proxy, so all its clients would share one
+count. Dana's server runs behind a proxy at `10.0.0.2`.
+
+1. **Before starting,** Dana sets `WORKHORSE_DASHBOARD_TRUSTED_PROXIES` to `10.0.0.2`.
+2. **When the caller at `203.0.113.7` sends a login,** it adds its own `X-Forwarded-For` entry
+   naming Dana's address. The proxy appends `203.0.113.7` to the right of that entry.
+3. **On arrival,** the connection comes from a trusted proxy, so the server reads the header. It
+   takes the rightmost address that is not a trusted proxy, `203.0.113.7`, and counts the failure
+   there.
+4. **Meanwhile,** Dana's attempts count under Dana's own address.
+
+The server reads a forwarding header only from a proxy Dana named. A request from any other
+connection keeps that connection's address, whatever its headers say. A malformed entry in the
+setting stops the server at startup instead of being ignored.
+
+Separately, the server checks only a small number of passwords at the same time, because each check
+is deliberately expensive.
 
 <details>
 <summary>Reference: login rate limit</summary>
 
 1. The server keeps at most five login reservations per client in a rolling 60-second window.
-2. The client is the transport peer address. An IPv6 address shares its /64 prefix with its
-   neighbors. A request without an address uses one shared key.
+2. The client is the transport peer address. When the peer is a trusted proxy, the client is the
+   rightmost hop of `X-Forwarded-For` or `Forwarded` that is not a trusted proxy. An IPv6 address
+   shares its /64 prefix with its neighbors. A request without an address uses one shared key.
 3. Each form submission reserves capacity before scrypt begins. Concurrent requests therefore cannot
    bypass the bound.
 4. An invalid submission keeps its reservation and returns the generic `401` page.
@@ -150,8 +165,19 @@ a small number of passwords at the same time, because each check is deliberately
 7. At most `MAX_CONCURRENT_PASSWORD_HASHES` (2) password checks run at once. Another submission
    gets `429` with `Retry-After: 1` and reserves nothing.
 
-The server never trusts `Forwarded` or `X-Forwarded-*` as client identity. `dashboardNodeMiddleware`
-passes the socket address. [ADR 0093](../decisions/0093-key-single-admin-login-throttling-by-transport-peer.md) records this model.
+**Trusted proxies.** The list is empty by default, so `dashboardNodeMiddleware` passes the socket
+address and reads no forwarding header.
+
+- `--trusted-proxy`, repeatable, or the comma-separated `WORKHORSE_DASHBOARD_TRUSTED_PROXIES` names
+  addresses and CIDR ranges. Any flag replaces the whole variable.
+- A trusted proxy's request that carries both `X-Forwarded-For` and `Forwarded`, or neither, keeps
+  the proxy's address. So does a `Forwarded` header whose quoted string never closes.
+- An unparseable hop ends the walk at the trusted proxy that wrote it.
+- A malformed entry, or a non-empty list on a Unix socket listener, stops the server at startup.
+
+[ADR 0093](../decisions/0093-key-single-admin-login-throttling-by-transport-peer.md) and
+[ADR 0094](../decisions/0094-read-the-login-throttle-client-through-trusted-proxies.md) record this
+model.
 
 **Login body.** The login body may be at most `MAX_LOGIN_BODY_BYTES` (4,096 bytes). A larger or
 malformed declared length gets `413` before the form is read. The body must be
@@ -382,7 +408,7 @@ Remote listeners require authentication and a secure public origin.
 - A remote TCP listener without authentication fails before `listen`.
 - An unauthenticated local listener rejects a non-loopback `publicOrigin`.
 - An authenticated remote TCP listener requires an HTTPS `publicOrigin`.
-- `dashboardNodeMiddleware` ignores `Forwarded` and `X-Forwarded-*`.
+- `dashboardNodeMiddleware` ignores `Forwarded` and `X-Forwarded-*` when it builds the request URL.
 
 More detail: [Dashboard: Listener exposure](../architecture/dashboard.md#listener-exposure).
 

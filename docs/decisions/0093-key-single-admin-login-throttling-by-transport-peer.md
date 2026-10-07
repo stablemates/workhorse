@@ -1,6 +1,6 @@
 # ADR 0093: Key single-admin login throttling by the transport peer
 
-- **Status:** Accepted
+- **Status:** Accepted; the rule against reading forwarding headers superseded by [ADR 0094](0094-read-the-login-throttle-client-through-trusted-proxies.md)
 - **Date:** 2026-10-06
 - **Related:** [ADR 0022](0022-built-in-dashboard-authentication.md), [ADR 0032](0032-keep-single-admin-authentication-process-local.md)
 - **Supersedes:** the process-wide login failure window in ADR 0032

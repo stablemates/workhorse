@@ -70,6 +70,13 @@ window (ADR 0093, SM-1168).
 `DashboardHost.handle(request, context?)` accepts an optional `DashboardRequestContext` whose `clientAddress`
 a fetch-native host sets from its own transport (SM-1168).
 
+`workhorse dashboard` accepts a repeatable `--trusted-proxy <address-or-cidr>` and reads
+`WORKHORSE_DASHBOARD_TRUSTED_PROXIES` as a comma-separated list; any flag replaces the whole variable.
+`dashboardNodeMiddleware` and `DashboardCommandOptions` take the same list as `trustedProxies`. For a
+request from a listed proxy, single-admin login throttling counts the rightmost `X-Forwarded-For` or
+`Forwarded` hop that is not a listed proxy, so clients behind one proxy get separate windows. The list
+is empty by default, and a malformed entry stops the listener at startup (ADR 0094, SM-1177).
+
 The dashboard workspace switcher lists only the workspaces `authorize(request, workspace)` grants for the
 request, and an unexpected schema-compatibility failure emits `workhorse.dashboard.compatibility_check_failed`
 (SM-1168).

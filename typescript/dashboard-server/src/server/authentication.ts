@@ -135,7 +135,7 @@ function ipv6GroupValues(part: string): number[] {
 }
 
 /** The eight 16-bit groups of an address that `isIP` already accepted as IPv6. */
-function ipv6Groups(address: string): number[] {
+export function ipv6Groups(address: string): number[] {
   const [head = "", tail] = address.split("::");
   const headGroups = ipv6GroupValues(head);
   if (tail === undefined) return headGroups;
@@ -322,8 +322,9 @@ export function createSingleAdminAuthentication(
       const username = form.get("username") ?? "";
       const password = form.get("password") ?? "";
       const now = Date.now();
-      // The key comes from the transport, never from Forwarded or X-Forwarded-For, which the
-      // client writes itself. One client's failures therefore cannot pause another client's login.
+      // The key comes from the transport, never from a Forwarded or X-Forwarded-For value the
+      // client wrote itself. A Node host reads those headers only from a peer the operator named as
+      // a trusted proxy. One client's failures therefore cannot pause another client's login.
       const client = loginThrottleKey(clientAddress);
       const reservations = currentLoginFailures(client, now);
       if (reservations.length >= MAX_FAILED_LOGINS) {
