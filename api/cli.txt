@@ -558,8 +558,8 @@ interface QueueHealth {
   oldestRetainedAt: RetentionCategoryValues<Date | null>;
   /**
   * Start of the first terminal cleanup pass that ended with a full batch and left eligible rows
-  * behind. Null while terminal cleanup keeps pace. A value older than `rowRetentionLagMs` raises
-  * `terminal-cleanup-backlog`.
+  * behind. Null while terminal cleanup keeps pace. A value older than the
+  * `terminalCleanupBacklogMs` budget raises `terminal-cleanup-backlog`.
   */
   terminalCleanupBacklogSince: Date | null;
   eligibleHistoryPartitions: {
@@ -603,15 +603,18 @@ interface QueueHealthBudgets {
   * watermark, so a stalled rollup turns into unbounded history growth.
   */
   rollupStalledLagMs: number;
-  /**
-  * Grace for row-deleted retention categories before cleanup lag counts as degradation. It also
-  * bounds how long a terminal cleanup backlog may last before `terminal-cleanup-backlog` fires.
-  */
+  /** Grace for row-deleted retention categories before cleanup lag counts as degradation. */
   rowRetentionLagMs: number;
   /** Grace for partition-dropped categories; covers cadence plus a partial boundary day. */
   partitionRetentionLagMs: number;
   /** Completed history days allowed to await deletion before retention counts as behind. */
   eligibleHistoryPartitions: number;
+  /**
+  * How long a terminal cleanup backlog may last before `terminal-cleanup-backlog` fires. A schema
+  * older than version 64 has no such budget and judges the backlog by `rowRetentionLagMs`, so this
+  * reports that value there.
+  */
+  terminalCleanupBacklogMs: number;
 }
 
 interface QueueHealthObservations {

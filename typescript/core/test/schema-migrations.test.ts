@@ -23,6 +23,7 @@ import {
   applySchemaMigrationPlan,
   parseSchemaMigrationMetadata,
   planSchemaContract,
+  splitSqlStatements,
 } from "../src/schema-migrations.js";
 import type { Queryable } from "../src/types.js";
 import { createDatabaseTestHarness } from "./support/db.js";
@@ -164,6 +165,152 @@ async function deregisterContractWorker(workerId: string): Promise<void> {
 async function setSchemaVersion(version: number): Promise<void> {
   await contractDatabase.pool.query("UPDATE workhorse.schema_version SET version = $1", [version]);
 }
+
+/** A statement that removes or renames a released object, which only a contract step may write. */
+const subtractiveStatement =
+  /^\s*(?:DROP\s+(?:TABLE|VIEW|FUNCTION|PROCEDURE|TYPE|DOMAIN|SEQUENCE|SCHEMA)\b|ALTER\s+\w+\s+[\s\S]*?\b(?:DROP\s+(?:COLUMN|CONSTRAINT|DEFAULT|NOT\s+NULL)|RENAME)\b)/im;
+
+const checkReplacement =
+  /^ALTER\s+TABLE\s+(?:ONLY\s+)?[\w."]+\s+DROP\s+CONSTRAINT\s+(\w+)\s*,\s*ADD\s+CONSTRAINT\s+(\w+)\s+CHECK\s*\(([\s\S]*)\)$/i;
+
+/** The index just past the quoted text, the comment, or the dollar-quoted body that starts at `index`. */
+function skipQuoted(sql: string, index: number, quote: string): number {
+  // An E'' string takes backslash escapes; a standard-conforming one doubles the quote.
+  const escaping = quote === "'" && /[Ee]$/.test(sql.slice(0, index));
+  let at = index + 1;
+  while (at < sql.length) {
+    if (escaping && sql[at] === "\\") at += 2;
+    else if (sql[at] === quote && sql[at + 1] === quote) at += 2;
+    else if (sql[at] === quote) return at + 1;
+    else at += 1;
+  }
+  return at;
+}
+
+/**
+ * A statement's code: comments become a space, and string literals and dollar-quoted bodies become
+ * `''`. A dollar-quoted body is data, not statements: a plpgsql function may contain DROP inside the
+ * code it defines. A comment between two keywords would otherwise hide them from the guard.
+ */
+function statementCode(statement: string): string {
+  let code = "";
+  let index = 0;
+  while (index < statement.length) {
+    if (statement.startsWith("--", index)) {
+      const end = statement.indexOf("\n", index);
+      index = end === -1 ? statement.length : end;
+      code += " ";
+    } else if (statement.startsWith("/*", index)) {
+      // PostgreSQL block comments nest.
+      let depth = 0;
+      while (index < statement.length) {
+        if (statement.startsWith("/*", index)) {
+          depth += 1;
+          index += 2;
+        } else if (statement.startsWith("*/", index)) {
+          depth -= 1;
+          index += 2;
+          if (depth === 0) break;
+        } else index += 1;
+      }
+      code += " ";
+    } else if (statement[index] === "'") {
+      index = skipQuoted(statement, index, "'");
+      code += "''";
+    } else if (statement[index] === '"') {
+      const end = skipQuoted(statement, index, '"');
+      code += statement.slice(index, end);
+      index = end;
+    } else {
+      const tag =
+        statement[index] === "$" ? /^\$([A-Za-z_]\w*)?\$/.exec(statement.slice(index)) : null;
+      if (tag === null) {
+        code += statement[index];
+        index += 1;
+      } else {
+        const close = statement.indexOf(tag[0], index + tag[0].length);
+        index = close === -1 ? statement.length : close + tag[0].length;
+        code += "''";
+      }
+    }
+  }
+  return code.trim();
+}
+
+/**
+ * Whether one statement's code replaces a CHECK constraint in place: it drops a constraint and
+ * re-adds one of the same name on the same table, in one ALTER TABLE, as a validated CHECK and
+ * nothing else.
+ *
+ * SM-1197 widened `queue_health_policy_operator_overrides_check`, and PostgreSQL cannot alter a CHECK
+ * expression. A widened CHECK accepts every value it accepted before, so no released caller can
+ * start failing, and the released-artifact rehearsal proves the migrated shape equals a clean
+ * install. The syntax cannot tell a widened CHECK from a narrowed one, so review owns that judgement.
+ * `NOT VALID` is refused, because it is the only way a narrowed CHECK slips past existing rows.
+ */
+function isCheckReplacement(code: string): boolean {
+  const match = checkReplacement.exec(code);
+  if (match === null || match[1] !== match[2]) return false;
+  if (/\bNOT\s+VALID\b/i.test(code)) return false;
+  return !/\b(?:DROP|RENAME)\b/i.test(match[3]!);
+}
+
+/** The statements of a non-contract migration body that remove or rename a released object. */
+function findSubtractiveStatements(body: string): string[] {
+  return splitSqlStatements(body)
+    .map(statementCode)
+    .filter((code) => subtractiveStatement.test(code) && !isCheckReplacement(code))
+    .map((code) => code.replaceAll(/\s+/g, " ").slice(0, 80));
+}
+
+describe("subtractive statement guard", () => {
+  const replacement = `-- Widen the allowed names.
+ALTER TABLE workhorse.policy
+  DROP CONSTRAINT policy_names_check,
+  ADD CONSTRAINT policy_names_check CHECK (names <@ ARRAY['a', 'b']::text[]);`;
+
+  it("accepts a CHECK replaced in place within one statement", () => {
+    expect(findSubtractiveStatements(replacement)).toEqual([]);
+  });
+
+  it.each([
+    ["a bare drop", "ALTER TABLE workhorse.policy DROP CONSTRAINT policy_names_check;"],
+    [
+      "a drop with no matching add",
+      "ALTER TABLE workhorse.policy DROP CONSTRAINT policy_names_check, ADD COLUMN extra integer;",
+    ],
+    [
+      "a re-add under another name",
+      `ALTER TABLE workhorse.policy DROP CONSTRAINT policy_names_check,
+         ADD CONSTRAINT policy_other_check CHECK (names <@ ARRAY['a']::text[]);`,
+    ],
+    [
+      "a drop and re-add in separate statements",
+      `ALTER TABLE workhorse.policy DROP CONSTRAINT policy_names_check;
+       ALTER TABLE workhorse.policy
+         ADD CONSTRAINT policy_names_check CHECK (names <@ ARRAY['a']::text[]);`,
+    ],
+    [
+      "a re-add marked NOT VALID",
+      `ALTER TABLE workhorse.policy DROP CONSTRAINT policy_names_check,
+         ADD CONSTRAINT policy_names_check CHECK (names <@ ARRAY['a']::text[]) NOT VALID;`,
+    ],
+    ["a block comment between keywords", "ALTER TABLE workhorse.policy DROP/**/CONSTRAINT c;"],
+    [
+      "a line comment between keywords",
+      "ALTER TABLE workhorse.policy DROP -- note\n  CONSTRAINT c;",
+    ],
+    ["a statement after a literal that holds --", "SELECT '--'; DROP TABLE workhorse.policy;"],
+    [
+      "a replacement that also drops a column",
+      `ALTER TABLE workhorse.policy DROP CONSTRAINT policy_names_check,
+         ADD CONSTRAINT policy_names_check CHECK (names <@ ARRAY['a']::text[]),
+         DROP COLUMN extra, ADD CONSTRAINT policy_extra_check CHECK (true);`,
+    ],
+  ])("rejects %s", (_case, body) => {
+    expect(findSubtractiveStatements(body)).not.toEqual([]);
+  });
+});
 
 describe("schema migrations", () => {
   beforeAll(async () => {
@@ -445,9 +592,6 @@ describe("schema migrations", () => {
       .filter((file) => file.endsWith(".sql"))
       // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
       .sort();
-    const subtractive =
-      /^\s*(?:DROP\s+(?:TABLE|VIEW|FUNCTION|PROCEDURE|TYPE|DOMAIN|SEQUENCE|SCHEMA)\b|ALTER\s+\w+\s+[\s\S]*?\b(?:DROP\s+(?:COLUMN|CONSTRAINT|DEFAULT|NOT\s+NULL)|RENAME)\b)/im;
-
     const offenders: string[] = [];
     for (const file of migrations) {
       const body = await readFile(path.join(repository, "sql", "migrations", file), "utf8");
@@ -478,13 +622,8 @@ describe("schema migrations", () => {
         continue;
       }
       if (declared.kind === "contract") continue;
-      // A dollar-quoted body is data, not statements: a plpgsql function may legitimately contain
-      // DROP inside the code it defines, and only statements outside those quotes change the shape.
-      const statements = body.replaceAll(/\$([A-Za-z_]\w*)?\$[\s\S]*?\$\1\$/g, "''");
-      for (const statement of statements.split(";")) {
-        if (subtractive.test(statement))
-          offenders.push(`${file}: ${statement.trim().slice(0, 80)}`);
-      }
+      for (const statement of findSubtractiveStatements(body))
+        offenders.push(`${file}: ${statement}`);
     }
     expect(offenders).toEqual([]);
   });
@@ -684,6 +823,57 @@ describe("schema migrations", () => {
     await migrateSchema(releaseDatabase.pool);
 
     await expect(readWorkerClientProtocols(releaseDatabase.pool)).resolves.toEqual([]);
+  });
+
+  it("carries the row retention budget and its override to the terminal cleanup backlog budget", async () => {
+    // Schema 63 judged terminal-cleanup-backlog by row_retention_lag_ms, so migration 0065 starts
+    // the new budget from it and keeps an operator's override of it.
+    await releaseDatabase.pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
+    await releaseDatabase.pool.query(
+      await readFile(path.join(repository, "sql", "releases", "0052.sql"), "utf8"),
+    );
+    await applySchemaMigrationPlan(releaseDatabase.pool, {
+      baselineVersion: WORKHORSE_SCHEMA_BASELINE_VERSION,
+      currentVersion: 63,
+      steps: SCHEMA_MIGRATIONS.filter((step) => step.toVersion <= 63),
+      readStep: (file) => readFile(path.join(repository, "sql", "migrations", file), "utf8"),
+    });
+    await releaseDatabase.pool.query(
+      "SELECT workhorse.sync_queue_health_policy_v1(10000, 1800000, 10800000, 172800000, 2)",
+    );
+    await releaseDatabase.pool.query(
+      `SELECT workhorse.override_queue_health_policy_v1('{"row_retention_lag_ms": 7200000}')`,
+    );
+
+    await migrateSchema(releaseDatabase.pool);
+
+    const policy = async () =>
+      (
+        await releaseDatabase.pool.query<{
+          terminal_cleanup_backlog_ms: number;
+          application_terminal_cleanup_backlog_ms: number;
+          operator_overrides: string[];
+        }>(
+          `SELECT terminal_cleanup_backlog_ms, application_terminal_cleanup_backlog_ms,
+                  operator_overrides
+             FROM workhorse.get_queue_health_policy_v1()`,
+        )
+      ).rows[0];
+    expect(await policy()).toEqual({
+      terminal_cleanup_backlog_ms: 7_200_000,
+      application_terminal_cleanup_backlog_ms: 10_800_000,
+      operator_overrides: ["row_retention_lag_ms", "terminal_cleanup_backlog_ms"],
+    });
+
+    // From then on the two are independent: reverting row retention keeps the backlog override.
+    await releaseDatabase.pool.query(
+      "SELECT workhorse.revert_queue_health_policy_v1(ARRAY['row_retention_lag_ms'])",
+    );
+    expect(await policy()).toEqual({
+      terminal_cleanup_backlog_ms: 7_200_000,
+      application_terminal_cleanup_backlog_ms: 10_800_000,
+      operator_overrides: ["terminal_cleanup_backlog_ms"],
+    });
   });
 
   it("satisfies the SQL protocol fixtures on the pre-release baseline", async () => {

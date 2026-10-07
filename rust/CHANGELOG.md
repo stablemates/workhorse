@@ -13,7 +13,7 @@ adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses 
 ## Unreleased
 
 Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **63**, and the SDK compatibility floor is schema version **54**.
+The final schema version is **64**, and the SDK compatibility floor is schema version **54**.
 Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
 
 A renamed individual child on replay now raises a conflict with the stored and requested names.
@@ -84,6 +84,8 @@ Migration 0061 (`0061-bound-the-scan-cost-of-fast-dead-letters-statistics-and-re
 Migration 0063 (`0063-raise-a-health-reason-for-a-terminal-cleanup-backlog.sql`) changes `evaluate_queue_health_v1`, `prune_terminal_storage_v1`, `dashboard_cron_v1`, and `dashboard_maintenance_state_v1`, and adds `terminal_cleanup_follow_up_delay_ms_v1`. Queue health raises the degraded reason `terminal-cleanup-backlog` once `terminal_cleanup_backlog_since` is older than `row_retention_lag_ms`, so a cleanup that runs saturated while the oldest eligible row stays young no longer reads as healthy. The dashboard's `terminal_storage` routine is due after the same five-second follow-up delay that gates the pass, and the System page lists the new check. `dashboard/v1` adds the reason code to its enum, an additive change (SM-1178). The health document's `status.reasons` can now carry `terminal-cleanup-backlog`; code that switches on reason codes should accept it.
 
 Migration 0064 (`0064-keep-jit-out-of-the-statistics-aggregate.sql`) disables JIT for `aggregate_stats_v1` (SM-1193). A catch-up `rollup_stats_v1` pass overestimated its fast-tier rows by orders of magnitude, and could spend about a second compiling a plan that runs in tens of milliseconds. The live tail of `stat_buckets_v1` behind a lagging rollup compiled its plan the same way. The function's body, signature, and result are unchanged.
+
+Migration 0065 (`0065-give-the-terminal-cleanup-backlog-reason-its-own-health-budget.sql`) gives `terminal-cleanup-backlog` its own budget, so an operator can warn on a saturated terminal cleanup without tightening `retention-lag` (SM-1197). `queue_health_policy` gains `terminal_cleanup_backlog_ms` and `application_terminal_cleanup_backlog_ms`, with a 6 h default. The migration starts each from its row retention counterpart and carries an override of `row_retention_lag_ms` over to the new budget, so existing installations evaluate exactly as before. From then on the two budgets are independent: reverting `row_retention_lag_ms` no longer reverts the backlog budget. `sync_queue_health_policy_v2` seeds all six budgets. `sync_queue_health_policy_v1` is retained with its signature, and a v1 sync no longer moves the backlog budget; use v2 to set it. `override_queue_health_policy_v1` and `revert_queue_health_policy_v1` accept `terminal_cleanup_backlog_ms`, and the health document reports it as `budgets.terminalCleanupBacklogMs`. `Queue::health` returns the new key with schema 64.
 
 ## 0.6.1 — 2026-10-02
 

@@ -37,6 +37,7 @@ RSpec.describe "Queue client operations against PostgreSQL" do
 
     expect(health.dig("status", "level")).to be_a(String)
     expect(health).to have_key("budgets")
+    expect(health.dig("budgets", "terminalCleanupBacklogMs")).to eq(21_600_000)
   end
 
   it "delivers a signal once and reports each status" do

@@ -1,4 +1,7 @@
+import type { QueryResult, QueryResultRow } from "pg";
 import { describe, expect, it } from "vitest";
+import { Queue } from "../src/index.js";
+import type { Queryable } from "../src/types.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { defaultRetentionPolicy, pool, queue } = createIntegrationTestContext(import.meta.url);
@@ -75,6 +78,17 @@ const recordBacklog = async (ageMs: number | null, lastCompletedAgoMs = 0) =>
 const backlogReasons = async () =>
   (await queue.health()).status.reasons.filter(
     (reason) => reason.code === "terminal-cleanup-backlog",
+  );
+
+const overrideHealthPolicy = async (values: Record<string, number>) =>
+  pool.query("SELECT workhorse.override_queue_health_policy_v1($1::jsonb)", [
+    JSON.stringify(values),
+  ]);
+
+// The policy row survives the per-test reset, so a test that overrides it restores the defaults.
+const restoreHealthPolicy = async () =>
+  pool.query(
+    "SELECT workhorse.sync_queue_health_policy_v2(10000, 1800000, 21600000, 172800000, 2, 21600000, true)",
   );
 
 const terminalStorageDue = async () => {
@@ -162,16 +176,18 @@ describe("terminal cleanup pace", () => {
     expect(await queue.pruneTerminalStorage({ now: new Date(now.getTime() + 11_000) })).toEqual([]);
   });
 
-  it("raises terminal-cleanup-backlog once a backlog outlasts the row retention budget", async () => {
-    const { rowRetentionLagMs } = (await queue.health()).budgets;
+  it("raises terminal-cleanup-backlog once a backlog outlasts its budget", async () => {
+    const { rowRetentionLagMs, terminalCleanupBacklogMs } = (await queue.health()).budgets;
+    // The new budget starts at the row retention default, so the reason fires when it did before.
+    expect(terminalCleanupBacklogMs).toBe(rowRetentionLagMs);
     expect(await backlogReasons()).toEqual([]);
 
     // A backlog younger than the budget is routine: a daily release drains within hours.
-    await recordBacklog(rowRetentionLagMs - 60_000);
+    await recordBacklog(terminalCleanupBacklogMs - 60_000);
     expect(await backlogSince()).toBeInstanceOf(Date);
     expect(await backlogReasons()).toEqual([]);
 
-    await recordBacklog(rowRetentionLagMs + 60_000);
+    await recordBacklog(terminalCleanupBacklogMs + 60_000);
     const health = await queue.health();
     const reason = health.status.reasons.find(({ code }) => code === "terminal-cleanup-backlog");
     expect(health.status.level).toBe("degraded");
@@ -182,14 +198,70 @@ describe("terminal cleanup pace", () => {
       code: "terminal-cleanup-backlog",
       severity: "degraded",
       observed: expect.any(Number),
-      budget: rowRetentionLagMs,
+      budget: terminalCleanupBacklogMs,
     });
     expect(Math.abs(reason!.observed - backlogAgeMs)).toBeLessThanOrEqual(1);
-    expect(reason!.observed).toBeGreaterThan(rowRetentionLagMs);
+    expect(reason!.observed).toBeGreaterThan(terminalCleanupBacklogMs);
 
     await recordBacklog(null);
     expect(await backlogSince()).toBeNull();
     expect(await backlogReasons()).toEqual([]);
+  });
+
+  it("judges terminal-cleanup-backlog by its own budget, not row_retention_lag_ms", async () => {
+    try {
+      // A tight backlog budget fires while the row retention budget stays at 6 h.
+      await overrideHealthPolicy({ terminal_cleanup_backlog_ms: 60_000 });
+      await recordBacklog(120_000);
+      const tight = await queue.health();
+      expect(tight.budgets).toMatchObject({
+        rowRetentionLagMs: 21_600_000,
+        terminalCleanupBacklogMs: 60_000,
+      });
+      expect(await backlogReasons()).toEqual([
+        expect.objectContaining({ code: "terminal-cleanup-backlog", budget: 60_000 }),
+      ]);
+
+      // A tight row retention budget no longer moves the backlog reason.
+      await overrideHealthPolicy({
+        row_retention_lag_ms: 60_000,
+        terminal_cleanup_backlog_ms: 21_600_000,
+      });
+      await recordBacklog(7_200_000);
+      expect((await queue.health()).budgets).toMatchObject({
+        rowRetentionLagMs: 60_000,
+        terminalCleanupBacklogMs: 21_600_000,
+      });
+      expect(await backlogReasons()).toEqual([]);
+    } finally {
+      await restoreHealthPolicy();
+    }
+  });
+
+  it("reports the row retention budget as the backlog budget on a schema older than 64", async () => {
+    // Schemas 62 and 63 judge the backlog by row_retention_lag_ms and report no backlog budget.
+    const olderSchema: Queryable = {
+      async query<R extends QueryResultRow>(text: string, values?: readonly unknown[]) {
+        const result = await pool.query<R>(text, values as unknown[]);
+        for (const row of result.rows as Array<{ snapshot?: { budgets?: object } }>) {
+          if (row.snapshot?.budgets === undefined) continue;
+          const { terminalCleanupBacklogMs: _dropped, ...budgets } = row.snapshot.budgets as {
+            terminalCleanupBacklogMs?: number;
+          };
+          row.snapshot.budgets = budgets;
+        }
+        return result as QueryResult<R>;
+      },
+    };
+    try {
+      await overrideHealthPolicy({ row_retention_lag_ms: 3_600_000 });
+      expect((await new Queue(olderSchema).health()).budgets).toMatchObject({
+        rowRetentionLagMs: 3_600_000,
+        terminalCleanupBacklogMs: 3_600_000,
+      });
+    } finally {
+      await restoreHealthPolicy();
+    }
   });
 
   it("shows the dashboard routine as due when the follow-up pass is", async () => {

@@ -111,6 +111,7 @@ def test_psycopg_reads_the_database_health_document(database_url: str) -> None:
     assert health["schema_version"] == MAXIMUM_SCHEMA_VERSION
     assert health["status"] == {"level": "healthy", "reasons": []}
     assert health["budgets"]["promotionLagMs"] > 0  # type: ignore[index,operator]
+    assert health["budgets"]["terminalCleanupBacklogMs"] == 21_600_000  # type: ignore[index]
 
 
 @pytest.mark.asyncio

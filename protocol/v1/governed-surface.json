@@ -1693,6 +1693,7 @@
       "stat_sketch_percentile_v1",
       "stat_window_tier_v1",
       "sync_queue_health_policy_v1",
+      "sync_queue_health_policy_v2",
       "sync_schedule_definitions_internal_v1",
       "terminal_cleanup_follow_up_delay_ms_v1",
       "terminalize_deadline_v1",

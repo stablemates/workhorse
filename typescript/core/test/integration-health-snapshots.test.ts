@@ -402,6 +402,75 @@ describe("health snapshots", () => {
     ).toBe(1);
   });
 
+  it("syncs, overrides, and reverts the terminal cleanup backlog budget on its own", async () => {
+    type PolicyRow = {
+      row_retention_lag_ms: number;
+      terminal_cleanup_backlog_ms: number;
+      application_terminal_cleanup_backlog_ms: number;
+      operator_overrides: string[];
+    };
+    const policy = async (statement: string) =>
+      (await pool.query<{ policy: PolicyRow }>(`SELECT to_jsonb(${statement}) AS policy`)).rows[0]!
+        .policy;
+    const defaults = "10000, 1800000, 21600000, 172800000, 2";
+    try {
+      // v2 seeds the application value and, without an override, the effective one.
+      expect(
+        await policy(`workhorse.sync_queue_health_policy_v2(${defaults}, 3600000)`),
+      ).toMatchObject({
+        terminal_cleanup_backlog_ms: 3_600_000,
+        application_terminal_cleanup_backlog_ms: 3_600_000,
+      });
+      expect((await queue.health()).budgets.terminalCleanupBacklogMs).toBe(3_600_000);
+
+      // A v1 sync writes only its five budgets, row retention included.
+      expect(
+        await policy(
+          `workhorse.sync_queue_health_policy_v1(10000, 1800000, 7200000, 172800000, 2)`,
+        ),
+      ).toMatchObject({
+        row_retention_lag_ms: 7_200_000,
+        terminal_cleanup_backlog_ms: 3_600_000,
+        application_terminal_cleanup_backlog_ms: 3_600_000,
+      });
+
+      // An operator override survives a v2 sync until it is reverted.
+      expect(
+        await policy(
+          `workhorse.override_queue_health_policy_v1('{"terminal_cleanup_backlog_ms": 60000}')`,
+        ),
+      ).toMatchObject({
+        terminal_cleanup_backlog_ms: 60_000,
+        operator_overrides: ["terminal_cleanup_backlog_ms"],
+      });
+      expect(
+        await policy(`workhorse.sync_queue_health_policy_v2(${defaults}, 1800000)`),
+      ).toMatchObject({
+        terminal_cleanup_backlog_ms: 60_000,
+        application_terminal_cleanup_backlog_ms: 1_800_000,
+      });
+      expect(
+        await policy(
+          "workhorse.revert_queue_health_policy_v1(ARRAY['terminal_cleanup_backlog_ms'])",
+        ),
+      ).toMatchObject({ terminal_cleanup_backlog_ms: 1_800_000, operator_overrides: [] });
+
+      // A forced v1 sync clears every override, so it restores the backlog budget too.
+      await policy(
+        `workhorse.override_queue_health_policy_v1('{"terminal_cleanup_backlog_ms": 60000}')`,
+      );
+      expect(
+        await policy(`workhorse.sync_queue_health_policy_v1(${defaults}, true)`),
+      ).toMatchObject({
+        terminal_cleanup_backlog_ms: 1_800_000,
+        application_terminal_cleanup_backlog_ms: 1_800_000,
+        operator_overrides: [],
+      });
+    } finally {
+      await pool.query(`SELECT workhorse.sync_queue_health_policy_v2(${defaults}, 21600000, true)`);
+    }
+  });
+
   it("evaluates database-owned health budgets into machine-readable status reasons", async () => {
     await queue.prepareHistoryPartitions();
     const baseline = await queue.health();
