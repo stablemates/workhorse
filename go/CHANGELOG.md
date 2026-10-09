@@ -72,6 +72,8 @@ Migration 0064 (`0064-keep-jit-out-of-the-statistics-aggregate.sql`) disables JI
 
 Migration 0065 (`0065-give-the-terminal-cleanup-backlog-reason-its-own-health-budget.sql`) gives `terminal-cleanup-backlog` its own budget, so an operator can warn on a saturated terminal cleanup without tightening `retention-lag` (SM-1197). `queue_health_policy` gains `terminal_cleanup_backlog_ms` and `application_terminal_cleanup_backlog_ms`, with a 6 h default. The migration starts each from its row retention counterpart and carries an override of `row_retention_lag_ms` over to the new budget, so existing installations evaluate exactly as before. From then on the two budgets are independent: reverting `row_retention_lag_ms` no longer reverts the backlog budget. `sync_queue_health_policy_v2` seeds all six budgets. `sync_queue_health_policy_v1` is retained with its signature, and a v1 sync no longer moves the backlog budget; use v2 to set it. `override_queue_health_policy_v1` and `revert_queue_health_policy_v1` accept `terminal_cleanup_backlog_ms`, and the health document reports it as `budgets.terminalCleanupBacklogMs`. `Queue.Health` returns the new key with schema 64.
 
+The repository now builds and checks the module with go1.26.9, because seven standard library advisories in `net/http`, `mime/multipart`, and `crypto/tls` are fixed only there. The module still declares `go 1.25.0`, so the supported floor stays Go 1.25. If you build on Go 1.25.x, take the next 1.25 security release when Go publishes one (SM-1206).
+
 ## 0.6.1 — 2026-10-02
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
