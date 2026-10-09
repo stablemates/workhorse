@@ -263,9 +263,12 @@ describe("supported version constants", () => {
       rust: manifest.toolchains.rust,
       uv: manifest.toolchains.uv,
     });
-    expect(
-      manifest.toolchains.go.startsWith(manifest.support.go.minimum.replace(/\.0$/, ".")),
-    ).toBe(true);
+    // The Go pin may run ahead of the floor when only a newer release carries a standard library
+    // fix (SM-1206). The `go` CI lane still runs the floor, because setup-go sets GOTOOLCHAIN=local.
+    const [goMajor, goMinor] = manifest.toolchains.go.split(".").map(Number);
+    const [floorMajor, floorMinor] = manifest.support.go.minimum.split(".").map(Number);
+    expect(goMajor).toBe(floorMajor);
+    expect(goMinor).toBeGreaterThanOrEqual(floorMinor!);
     // `pnpm check` runs the site smoke on this pin, so CI runs it on the same one. Otherwise a
     // Node major that changes URL parsing fails every local check while CI stays green.
     expect(

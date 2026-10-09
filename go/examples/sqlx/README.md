@@ -5,7 +5,7 @@ It uses the existing Workhorse `NewSQLExecutor`; it introduces no adapter packag
 
 ## Pinned baseline and execution
 
-The maintained proof uses sqlx v1.4.0, pgx stdlib v5.11.0, Go 1.25.14, and local PostgreSQL 18.6.
+The maintained proof uses sqlx v1.4.0, pgx stdlib v5.11.0, Go 1.26.9, and local PostgreSQL 18.6.
 The dependency pins live in `go/go.mod` and `go/go.sum`.
 Applications install sqlx themselves; it is not required by Workhorse's core source.
 
