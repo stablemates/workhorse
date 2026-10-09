@@ -6,8 +6,8 @@
     "ruby": "bundle add stablemates-workhorse",
     "rust": "cargo add workhorse",
     "schema": "npm exec --no -- workhorse schema install",
-    "schemaDownload": "curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.6.1/schema.sql",
-    "schemaPinned": "npx --package @stablemates/workhorse@0.6.1 workhorse schema install"
+    "schemaDownload": "curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.7.0/schema.sql",
+    "schemaPinned": "npx --package @stablemates/workhorse@0.7.0 workhorse schema install"
   },
   "support": {
     "activejob": {

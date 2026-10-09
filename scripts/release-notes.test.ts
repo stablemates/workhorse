@@ -164,10 +164,15 @@ describe("0.6.1 release notes", () => {
   });
 });
 
-describe("unreleased schema notes", () => {
+/** The 0.7.0 release: the first entry whose notes cover migrations 0054 through 0065. */
+const minor = "## 0.7.0 — 2026-10-09";
+
+describe("0.7.0 release notes", () => {
   describe.each(changelogs)("%s", (path) => {
+    const section = entry(path, minor);
+
     it("states the current schema, compatibility floor, and migration before rollout", () => {
-      const section = entry(path, "## Unreleased");
+      expect(section).toMatch(/^Requires \*\*schema v54\*\*/m);
       expect(section).toMatch(phrase(`final schema version is **${WORKHORSE_SCHEMA_VERSION}**`));
       expect(section).toMatch(
         phrase(`compatibility floor is schema version **${MINIMUM_SCHEMA_VERSION}**`),
@@ -175,12 +180,22 @@ describe("unreleased schema notes", () => {
       expect(section).toMatch(phrase("Migration 0054"));
       expect(section).toMatch(phrase("Migrate the schema before starting updated processes"));
     });
-  });
-});
 
-describe("unreleased migration coverage", () => {
-  it("names every migration added after the published release", () => {
-    const section = entry("CHANGELOG.md", "## Unreleased");
+    it("links only to files and headings that exist", () => {
+      const broken = links(path, section)
+        .filter(({ file, anchor }) => {
+          if (file === undefined) return false;
+          if (!existsSync(join(root, file))) return true;
+          return anchor !== undefined && file.endsWith(".md") && !anchors(file).has(anchor);
+        })
+        .map(({ target }) => target);
+      expect(broken).toEqual([]);
+    });
+  });
+
+  it("names every migration added after 0.6.1 in the root notes", () => {
+    // 0.6.0 and 0.6.1 shipped schema version 52, so every migration after 0053 is new in 0.7.0.
+    const section = entry("CHANGELOG.md", minor);
     const added = readdirSync(join(root, "sql/migrations"))
       .map((name) => /^(\d{4})-/.exec(name)?.[1])
       .filter((number): number is string => number !== undefined && Number(number) > 53);

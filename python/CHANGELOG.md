@@ -10,7 +10,7 @@ adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses 
 [0.5.0 upgrade steps](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md#050--2026-09-28). The upgrade from 0.5 to 0.6 only adds,
 and so does the upgrade from 0.6 to 0.7.
 
-## Unreleased
+## 0.7.0 — 2026-10-09
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
 
