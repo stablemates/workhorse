@@ -203,3 +203,41 @@ describe("0.7.0 release notes", () => {
     for (const number of added) expect(section, `migration ${number}`).toContain(number);
   });
 });
+
+/** The 0.7.1 release: no migration, re-cut because the npm publish of 0.7.0 stopped partway. */
+const recut = "## 0.7.1 — 2026-10-09";
+
+describe("0.7.1 release notes", () => {
+  it("say why the release exists in the root notes", () => {
+    const section = entry("CHANGELOG.md", recut);
+    expect(section).toMatch(phrase("npm publish of 0.7.0 stopped partway"));
+    expect(section).toMatch(phrase("deprecated in favour of 0.7.1"));
+    expect(section).toMatch(phrase("adds no migration"));
+  });
+
+  describe.each(changelogs)("%s", (path) => {
+    const section = entry(path, recut);
+
+    it("keep the schema version 0.7.0 shipped", () => {
+      expect(section).toMatch(/^Requires \*\*schema v54\*\*/m);
+      expect(section).toMatch(phrase(`final schema version is **${WORKHORSE_SCHEMA_VERSION}**`));
+      expect(entry(path, minor)).toMatch(
+        phrase(`final schema version is **${WORKHORSE_SCHEMA_VERSION}**`),
+      );
+      expect(section).toMatch(
+        phrase(`compatibility floor stays at schema version **${MINIMUM_SCHEMA_VERSION}**`),
+      );
+    });
+
+    it("link only to files and headings that exist", () => {
+      const broken = links(path, section)
+        .filter(({ file, anchor }) => {
+          if (file === undefined) return false;
+          if (!existsSync(join(root, file))) return true;
+          return anchor !== undefined && file.endsWith(".md") && !anchors(file).has(anchor);
+        })
+        .map(({ target }) => target);
+      expect(broken).toEqual([]);
+    });
+  });
+});

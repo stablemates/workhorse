@@ -1,6 +1,6 @@
 {
   "name": "@stablemates/workhorse-knex",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Public beta PostgreSQL Knex provider for Workhorse",
   "homepage": "https://workhorse.run",
   "bugs": {

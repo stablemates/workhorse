@@ -8,6 +8,21 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## 0.7.1 — 2026-10-09
+
+The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
+
+Requires **schema v54** and Python **3.12** or newer.
+
+The Python distribution has no changes in 0.7.1. It releases at 0.7.1 to keep one version across
+the registries ([ADR 0050](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0050-release-0-1-0-without-a-prerelease-suffix.md)).
+The release exists because the npm publish of 0.7.0 stopped partway. The 0.7.0 distribution on
+PyPI is not defective, and 0.7.1 supersedes it.
+
+**A 0.7.0 database needs no migration.** 0.7.1 adds no migration, so the final schema version is
+**64** and the SDK compatibility floor stays at schema version **54**. An installation on 0.6
+follows the [0.7.0 upgrade steps](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md#070--2026-10-09).
+
 ## 0.7.0 — 2026-10-09
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
