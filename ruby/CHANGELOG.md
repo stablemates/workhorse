@@ -3,6 +3,21 @@
 `stablemates-workhorse` gem versions and release notes live here. The gem carries the version the
 other SDKs carry, because every tag names one release of all of them.
 
+## 0.7.1 — 2026-10-09
+
+The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
+
+Requires **schema v54**, Ruby **3.3** or newer, and PostgreSQL **15** or newer.
+
+The gem has no changes in 0.7.1. It releases at 0.7.1 to keep one version across the
+registries ([ADR 0050](../docs/decisions/0050-release-0-1-0-without-a-prerelease-suffix.md)).
+The release exists because the npm publish of 0.7.0 stopped partway.
+The gem never published at 0.7.0, so 0.7.1 is the first release with the 0.7.0 changes below.
+
+**A 0.7.0 database needs no migration.** 0.7.1 adds no migration, so the final schema version is
+**64** and the SDK compatibility floor stays at schema version **54**. An installation on 0.6
+follows the [0.7.0 upgrade steps](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md#070--2026-10-09).
+
 ## 0.7.0 — 2026-10-09
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

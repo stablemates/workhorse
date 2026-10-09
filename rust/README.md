@@ -24,7 +24,7 @@ cargo add serde_json
 Install the schema once, as a deployment step. The application never installs or migrates it.
 
 ```bash
-npx --package @stablemates/workhorse@0.7.0 workhorse schema install
+npx --package @stablemates/workhorse@0.7.1 workhorse schema install
 ```
 
 The machine that runs that deployment step needs Node.js 22 or newer. The application itself needs

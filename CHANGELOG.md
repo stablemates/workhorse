@@ -17,6 +17,26 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 a major line a migration only adds. Breaking changes are always listed with
 upgrade steps.
 
+## 0.7.1 — 2026-10-09
+
+The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
+
+Requires **schema v54**, Node.js **22** or newer, and PostgreSQL **15** or newer.
+
+**0.7.1 exists because the npm publish of 0.7.0 stopped partway.** Five packages published at
+0.7.0: `@stablemates/workhorse`, `@stablemates/workhorse-dashboard-contract`,
+`@stablemates/workhorse-dashboard-server`, `@stablemates/workhorse-dashboard`, and
+`@stablemates/workhorse-drizzle`. They are deprecated in favour of 0.7.1. The knex, kysely, otel,
+prisma, and typeorm packages never published at 0.7.0. The Python 0.7.0 distribution is on PyPI and
+is not defective, and 0.7.1 supersedes it. The Go module, Rust crate, and Ruby gem never published
+at 0.7.0. No package changes its code, so the [0.7.0 notes](#070--2026-10-09) describe what 0.7.1
+ships. Every package releases at 0.7.1 to keep one version across the registries
+([ADR 0050](docs/decisions/0050-release-0-1-0-without-a-prerelease-suffix.md)).
+
+**A 0.7.0 database needs no migration.** 0.7.1 adds no migration, so the final schema version is
+**64** and the SDK compatibility floor stays at schema version **54**. An installation on 0.6
+follows the [0.7.0 upgrade steps](#070--2026-10-09).
+
 ## 0.7.0 — 2026-10-09
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
