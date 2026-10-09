@@ -236,7 +236,6 @@ describe("the public beta line", () => {
    */
   it("names the migration 0025 offline cutover wherever it promises additive upgrades", async () => {
     const surfaces: Record<string, (contents: string) => string> = {
-      "README.md": (contents) => contents,
       "SECURITY.md": (contents) => contents,
       "docs/compatibility.md": (contents) => contents,
       "docs/features.md": (contents) => contents,

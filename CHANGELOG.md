@@ -16,139 +16,289 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 `0.1.0` the schema upgrades in place: every release ships ordered, immutable migrations, and inside
 a major line a migration only adds. Migration 0025 is the one exception: a database from before
 0.5.0 crosses it offline, with the [0.5.0 upgrade steps](#050--2026-09-28). The upgrade from 0.5 to
-0.6 only adds. Breaking changes are always listed with upgrade steps.
+0.6 only adds, and so does the upgrade from 0.6 to 0.7. Breaking changes are always listed with
+upgrade steps.
 
 ## Unreleased
 
-The optional `@stablemates/workhorse-knex` adapter preserves native PostgreSQL statements and parameters on the pinned Knex route.
-The tested Objection recipe shares the model-write transaction with enqueue. Callers retain transaction and resource ownership (SM-1118).
+The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
+This release adds `@stablemates/workhorse-knex`, so ten npm packages now release together.
 
-Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **64**, and the SDK compatibility floor is schema version **54**.
-Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
+Requires **schema v54**, Node.js **22** or newer, and PostgreSQL **15** or newer.
 
-A renamed individual child on replay now raises a conflict with the stored and requested names.
-A second child after joining the retained child in the same handler run still exceeds the child limit (SM-1106).
+### Upgrade steps
 
-Migration 0055 (`0055-fail-durable-replay-conflicts-without-retrying.sql`) adds the terminal failure override.
+**Migrate the schema before starting updated processes.** Migrations 0054 through 0065 only add, so
+the upgrade is a rolling deployment:
 
-Durable checkpoint, timer, child, child-set, and human-decision replay conflicts now fail the task
-on their first occurrence, preserving its current attempt and recording the conflict class.
-Redaction still hides error details. Transient failures, lease loss, child-limit errors, and
-already-waiting signal errors retain their existing behavior. Conflict settlement bypasses the
-worker's retry-delay callback.
+1. Run `workhorse schema migrate`. The final schema version is **64**.
+2. Roll out the 0.7 processes.
 
-**Pending release — fixed:** TypeScript `runChild`, `runChildren`, and `runChildrenAll` join existing
-children after their task type's contract advances. Replay retries a contract conflict with the
-stored versions and rebuilds under those versions when the current contract rejects the payload.
-Changed payloads and child sets still raise `ChildConflictError`. This contract replay fix requires no additional migration.
+The SDK compatibility floor is schema version **54**, which migration 0055 reaches. A 0.7 process
+refuses a schema below version 54 at startup. A 0.6 process keeps working on version 64, so a mixed
+fleet is supported during the rollout. Each migration commits on its own, and each SQL change below
+takes effect when its migration commits.
 
-Migration 0056 (`0056-count-row-retention-lag-from-the-history-pass-that-released-the-row.sql`) changes only `queue_health_v1`. Row retention lag now counts from the scheduled history pass that released the row when that pass came after the row window, so health no longer reports task records and finished results as late after every daily pass (SM-1134).
+**Check a 0.6 TypeScript `retryDelayMs` callback before migration 0055 commits.** That migration
+makes `fail_v1` read a retry delay of -1 as a terminal failure. A 0.6 TypeScript worker sends a
+callback's result unchecked, so a callback that returns -1 fails its task without a retry. A 0.7
+worker throws before `fail_v1` instead (SM-1164). The Python, Go, Rust, and Ruby workers of 0.6
+never send a negative delay.
 
-Migration 0057 (`0057-close-a-released-task-without-attributing-its-unrun-attempt.sql`) changes only `cancel_v1` and `terminalize_deadline_v1`. A full-tier task that a worker without a handler returned through `release_owned_v1` can now be canceled, and deadline recovery terminalizes it instead of rolling back the whole recovery pass. Both close it like never-started work, with no attempt history row (SM-1158).
+**Migration 0059 clears incomplete rate settings.** A per-key rate limit or a budget rate with one
+or two of its three fields null used to pass its CHECK constraint. The migration clears such a
+setting before it adds the stricter constraints. It deletes a budget that the clearing leaves
+without a limit, because a missing budget row imposes no limit. After the migration, PostgreSQL
+rejects a synchronization that writes an incomplete rate setting. To keep a limit the migration
+cleared, complete it in your synchronized definitions and synchronize after the migration.
 
-**Pending release — fixed:** A TypeScript dedicated worker process reports a fatal worker error
-when the worker first observes it. Readiness turns false and the failure deadline starts before
-active handlers drain, so a handler that ignores cancellation no longer keeps `/readyz` at 200 or
-the process alive. The failing worker also stops its maintenance and registration loops at once
-(SM-1161).
+**Accept the new `terminal-cleanup-backlog` health reason.** Queue health can now report it as
+degraded, so code that switches on reason codes should accept it. Its budget,
+`terminal_cleanup_backlog_ms`, starts from your `row_retention_lag_ms` setting, so existing alerts
+evaluate as before. After migration 0065 the two budgets are independent. Set the new one with
+`sync_queue_health_policy_v2` or `override_queue_health_policy_v1`.
 
-**Pending release — fixed:** A producer that never called `syncContracts()` now retries a contract
-mismatch with the contract definition it fetched, instead of failing with "Contract policy changed
-again while retrying enqueue" and aborting the caller's transaction. The Objection recipe, which
-builds a new adapter per transaction, can enqueue a task type whose contract another process
-installed. `@stablemates/workhorse-otel` starts a task's spans from `ROOT_CONTEXT`, so a task without
-a stored trace context no longer joins a span active in the worker, including during fused fast-tier
-dispatch. The `@stablemates/workhorse-drizzle` README documents that a `forTransaction` queue must not
-outlive its transaction (SM-1170).
+**Update `dashboard/v1` clients that read `humanWait.context` from a task listing.** The
+[breaking change](#breaking-changes) below removes it from `dashboard.tasks` and
+`dashboard.tasksCursor` rows. Read it from `dashboard.taskDetail`.
 
-**Behavior change:** `@stablemates/workhorse-dashboard-server` single-admin login throttling now counts
-failures per client address instead of process-wide, and a global bound limits concurrent password hashing.
-The node middleware supplies the socket address; behind a reverse proxy every client still shares the proxy's
-window (ADR 0093, SM-1168).
+**Handler authors: a durable replay conflict now fails its task on the first occurrence.** The
+[behaviour changes](#behaviour-changes) below describe it. A 0.6 worker still retries a conflict
+under the task's retry policy until the 0.6 processes are gone.
 
-`DashboardHost.handle(request, context?)` accepts an optional `DashboardRequestContext` whose `clientAddress`
-a fetch-native host sets from its own transport (SM-1168).
+### Breaking changes
 
-`workhorse dashboard` accepts a repeatable `--trusted-proxy <address-or-cidr>` and reads
-`WORKHORSE_DASHBOARD_TRUSTED_PROXIES` as a comma-separated list; any flag replaces the whole variable.
-`dashboardNodeMiddleware` and `DashboardCommandOptions` take the same list as `trustedProxies`. For a
-request from a listed proxy, single-admin login throttling counts the rightmost `X-Forwarded-For` or
-`Forwarded` hop that is not a listed proxy, so clients behind one proxy get separate windows. The list
-is empty by default, and a malformed entry stops the listener at startup (ADR 0094, SM-1177).
+- **`dashboard/v1`:** `dashboard.tasks` and `dashboard.tasksCursor` rows no longer carry
+  `humanWait.context`. They carry `humanWait.quickAction`, which is `{ label }` or `null`, so
+  polling a listing no longer sends up to 64 KiB of decision context per row.
+  `dashboard.taskDetail` still returns the full context, and the dashboard reads it before
+  confirming a quick action. The break is taken in place under the ADR 0064 exception in
+  [`docs/compatibility.md`](docs/compatibility.md), and the published `openapi.json` changes with
+  it. In the TypeScript packages, `DashboardTaskRow.humanWait` becomes `DashboardTaskRowHumanWait`.
+  `TaskActionTarget.humanWait` becomes `TaskActionHumanWait`, whose `context` is optional (SM-1171).
 
-The dashboard workspace switcher lists only the workspaces `authorize(request, workspace)` grants for the
-request, and an unexpected schema-compatibility failure emits `workhorse.dashboard.compatibility_check_failed`
-(SM-1168).
+### Behaviour changes
 
-**Pending release — fixed:** A TypeScript worker no longer waits without limit while shutting down.
-Closing the reserved heartbeat connection no longer waits for a connect stuck behind an exhausted
-pool, and it releases a client that arrives later. `UNLISTEN` gets 1,000 ms before the listener
-destroys its connection. Checkpoint and progress writes reject `NaN` and the infinities at any
-depth with a `TypeError`, because JSON would store them as `null`. Worker intervals and the metrics
-observer's `intervalMs` reject values above 2,147,483,647 ms, which Node's timers would run every
-millisecond. `ChildTaskOptions` is now exported from the package root (SM-1169).
+Durable execution:
 
-Migration 0058 (`0058-let-terminal-cleanup-keep-pace-and-share-its-budget-across-tiers.sql`) changes `prune_terminal_tasks_v1`, `prune_terminal_storage_v1`, and `queue_health_v1`, and adds two `maintenance_state` columns. Terminal cleanup repeats its batch while each one fills, for up to one second per pass, and a pass that still ends with a full batch makes its follow-up due five seconds later instead of after the five-minute interval. Full-tier and fast-tier tasks share every batch, so neither tier starves the other. The health document reports `terminal_cleanup_backlog_since` while cleanup is behind (SM-1160).
+- Durable checkpoint, timer, child, child-set, and human-decision replay conflicts fail the task on
+  their first occurrence. The worker preserves the current attempt and records the conflict class.
+  Before, a conflict retried under the task's retry policy, and every retry met the same conflict.
+  Redaction still hides error details. Transient failures, lease loss, child-limit errors, and
+  already-waiting signal errors keep their existing behaviour. Conflict settlement bypasses the
+  worker's `retryDelayMs` callback (SM-1107, migration 0055).
+- A renamed individual child on replay raises `ChildConflictError` with the stored and requested
+  names. Its constructor takes an optional `storedChildName`. Before, it raised a child-limit
+  error. A second child after joining the retained child in the same handler run still exceeds the
+  child limit (SM-1106, migration 0054).
+- A `retryDelayMs` callback must return `undefined` or a safe integer from 0 through
+  2,147,483,647. Any other result throws before `fail_v1`. Before, a computed `-1` reached
+  `fail_v1`, which reads it as a terminal failure (SM-1164).
 
-**Pending release — fixed:** A TypeScript `retryDelayMs` callback must return `undefined` or a safe
-integer from 0 through 2,147,483,647. Any other result throws before `fail_v1`. Before, a computed
-`-1` reached `fail_v1`, which reads it as terminal failure, so the task failed on its first attempt
-(SM-1164).
+Worker process:
 
-Migration 0059 (`0059-close-sql-integrity-gaps-in-rate-refill-dependency-edges-and-mixed-batches.sql`) closes five SQL integrity gaps (SM-1165). A rate synchronization refills each changed bucket at the old rate up to one clock reading, and the new rate applies from that reading. The new `rate_limit_policy_per_key_complete_check` and `budget_rate_complete_check` constraints reject a rate setting with one or two null fields. The migration first clears such a setting, and deletes a budget that the clearing leaves without a limit. An update can no longer change a dependency edge's endpoints or outcome policies. A batch with a debounce or throttle member locks every member's prerequisites before its first member runs. `run_task_now_v1` reports `not_scheduled` for a blocked task instead of raising an error.
+- A dedicated worker process reports a fatal worker error when the worker first observes it.
+  Readiness turns false and the failure deadline starts before active handlers drain. A handler
+  that ignores cancellation no longer keeps `/readyz` at 200 or the process alive. The failing
+  worker also stops its maintenance and registration loops at once (SM-1161).
+- The worker measures lease windows and expiry timers on the monotonic clock, so a worker wall clock
+  that runs ahead or jumps backward moves neither. It counts the deadline and attempt timeout from
+  the database time of the claim. It aborts the handler only after `expire_owned_v1` confirms the
+  expiry, and a `not_due` answer keeps the handler running. A claim answer that arrives after its
+  lease window has run out no longer starts the handler (SM-1163).
+- A handler whose deadline or attempt timeout PostgreSQL confirms always sees
+  `DeadlineExceededError` or `ExecutionTimeoutError` as its abort reason. Before, a `stale`
+  heartbeat answer that arrived first aborted it as a lost lease. A real lease loss still aborts
+  with the lease-loss error (SM-1195).
+- Checkpoint and progress writes reject `NaN` and the infinities at any depth with a `TypeError`,
+  because JSON would store them as `null`. Worker intervals and the metrics observer's
+  `intervalMs` reject values above 2,147,483,647 ms, which Node's timers would run every
+  millisecond (SM-1169).
 
-**Pending release — fixed:** The Python and Go `workhorse.handler` spans descend only from the
-task's stored trace context. A task without one starts a new trace instead of joining a span active
-in the worker. The Go handler context keeps the worker context's cancellation and values (SM-1176).
+Maintenance and health:
 
-**Pending release — fixed:** `WorkhorseMetricsObserver` and `registerQueueMetrics` now count
-fast-tier tasks. A fast-tier ready task with a future run time counts as scheduled, as in
-`queue_health_v1`. The fix changes only the `metrics_observer` and `queue_metric_snapshot`
-statements, so it needs no migration. The observer records 0 once for a gauge series that a later
-collection no longer returns, such as a worker group that left a state. The oldest ready age of a
-queue with no ready task is 0. An `onError` reporter that throws or rejects is written to
-`console.error` instead of becoming an unhandled rejection (SM-1166).
+- Terminal cleanup repeats its batch while each one fills, for up to one second per pass. A pass
+  that still ends with a full batch makes its follow-up due five seconds later, not after the
+  five-minute interval. Full-tier and fast-tier tasks share every batch. Expect more cleanup work
+  per pass while a backlog lasts (SM-1160, migration 0058).
+- `tick_v1` runs the expired-lease scan only when no tick ran it within half the shortest
+  maintenance interval of the live registered workers. Promotion and the deadline and timeout scans
+  still run on every tick. A worker that opts out of the registry does not shorten that spacing, so
+  recovery of an expired lease can wait for the spacing plus one interval of the fastest
+  unregistered worker. [Maintenance cadence](docs/architecture/lifecycle.md#maintenance-cadence)
+  explains how to restore the shorter bound (SM-1167, SM-1192, migration 0061).
+- Row retention lag counts from the scheduled history pass that released the row, when that pass
+  came after the row window. Health no longer reports task records and finished results as late
+  after every daily pass (SM-1134, migration 0056).
+- Queue health raises the degraded reason `terminal-cleanup-backlog` once
+  `terminal_cleanup_backlog_since` is older than its budget. `Queue.health()` returns the backlog
+  start as `terminalCleanupBacklogSince` and the budget as `budgets.terminalCleanupBacklogMs`.
+  Against a schema older than 64, it reports `rowRetentionLagMs` there, the budget those schemas
+  apply (SM-1178, SM-1197, migrations 0063 and 0065).
 
-**Pending release — fixed:** The Rust and Ruby `workhorse.handler` spans descend only from the
-task's stored trace context. A task without one starts a new trace instead of joining a span active
-in the worker. Every SDK now parents a handler span this way (SM-1179).
+Administration:
 
-Migration 0060 (`0060-judge-fast-tier-completions-and-cancellation-acknowledgements-after-waits.sql`) judges two fast-tier operations at the time they act (SM-1163). `fast_complete_many_v1` reads the clock again after failing oversized members, so a later member whose lease expired while one of those failures waited no longer completes. `fast_acknowledge_cancel_v1` checks the lease after its row lock, as `acknowledge_cancel_v1` does on the full tier.
+- `run_task_now_v1` reports `not_scheduled` for a blocked task instead of raising an error
+  (SM-1165, migration 0059).
+- A synchronization that changes a rate refills each changed bucket at the old rate up to one clock
+  reading. The new rate applies from that reading (SM-1165, migration 0059).
+- An update can no longer change a dependency edge's endpoints or outcome policies (SM-1165,
+  migration 0059).
+- A full-tier task that a worker without a handler returned through `release_owned_v1` can be
+  canceled. Deadline recovery terminalizes it instead of rolling back the whole recovery pass. Both
+  close it like never-started work, with no attempt history row (SM-1158, migration 0057).
 
-The TypeScript worker measures lease windows and expiry timers on the monotonic clock, so a worker wall clock that runs ahead or jumps backward moves neither. It counts the deadline and attempt timeout from the database time of the claim, and aborts the handler only after `expire_owned_v1` confirms the expiry. A `not_due` answer keeps the handler running and asks again. A claim answer that arrives after its lease window has run out no longer starts the handler (SM-1163).
+Telemetry:
 
-Migration 0061 (`0061-bound-the-scan-cost-of-fast-dead-letters-statistics-and-repeated-ticks.sql`) bounds three reads whose cost grew with table size or fleet size (SM-1167). The new `fast_task_outcome_failed_finished_idx` lets `list_dead_letters_v1` read only failed fast-tier outcomes. `aggregate_stats_v1` no longer materializes fast-tier rows that cannot hold a fact inside its window, so a backlog enqueued earlier stays out of every rollup. `tick_v1` runs the expired-lease scan, which reads every active lease, only when no tick ran it within half the shortest maintenance interval of the live registered workers. It records that run in the new `maintenance_state.lease_recovery_started_at` column. Promotion and the deadline and timeout scans still run on every tick, and while workers keep ticking, expired leases are still recovered within one interval.
+- `WorkhorseMetricsObserver` and `registerQueueMetrics` count fast-tier tasks, so queue gauges rise
+  on an installation that uses the fast tier. A fast-tier ready task with a future run time counts
+  as scheduled, as in `queue_health_v1`. The observer records 0 once for a gauge series that a later
+  collection no longer returns, such as a worker group that left a state. The oldest ready age of a
+  queue with no ready task is 0 (SM-1166).
+- `@stablemates/workhorse-otel` starts a task's spans from `ROOT_CONTEXT`. A task without a stored
+  trace context starts a new trace instead of joining a span active in the worker, including during
+  fused fast-tier dispatch (SM-1170). Every SDK now parents a handler span this way (SM-1176,
+  SM-1179).
 
-A TypeScript handler whose deadline or attempt timeout PostgreSQL confirms now always sees `DeadlineExceededError` or `ExecutionTimeoutError` as its abort reason. A heartbeat could answer `stale` after `expire_owned_v1` committed the expiry and before its answer arrived, and the handler was aborted as a lost lease. A `stale` heartbeat answer now waits for an in-flight expiry answer, and a real lease loss still aborts with the lease-loss error (SM-1195).
+Dashboard:
 
-**Breaking `dashboard/v1` change:** `dashboard.tasks` and `dashboard.tasksCursor` rows no longer
-carry `humanWait.context`. They carry `humanWait.quickAction`, which is `{ label }` or `null`, so
-polling a listing no longer sends up to 64 KiB of decision context per row. `dashboard.taskDetail`
-still returns the full context, and the dashboard reads it before confirming a quick action. The
-break is taken in place under the ADR 0064 exception in `docs/compatibility.md`, and the published
-`openapi.json` changes with it. In the TypeScript packages, `DashboardTaskRow.humanWait` becomes
-`DashboardTaskRowHumanWait`, and `TaskActionTarget.humanWait` becomes `TaskActionHumanWait`, whose
-`context` is optional (SM-1171).
+- Single-admin login throttling in `@stablemates/workhorse-dashboard-server` counts failures per
+  client address instead of process-wide. A global bound limits concurrent password hashing. The
+  node middleware supplies the socket address. Behind a reverse proxy, every client shares the
+  proxy's window until you list the proxy as trusted, as described under
+  [Added](#added) (ADR 0093, SM-1168).
+- The workspace switcher lists only the workspaces `authorize(request, workspace)` grants for the
+  request (SM-1168).
+- Pausing a schedule asks for confirmation, as resuming one already did (SM-1147).
+- The Events pager stops at the last page the server accepts. It offers to continue with older
+  events through a custom range. Event rows keep their table semantics and open through a named
+  button in the Event cell (SM-1171).
+- The Schedules page says how many schedules past the first 50 it does not show (SM-1171).
 
-Migration 0062 (`0062-bound-dashboard-worker-and-task-listings.sql`) adds
-`dashboard_human_wait_quick_action_v1` and changes four dashboard read functions (SM-1171).
-`dashboard_workers_v1` reads its one-hour cutoff once, so a Workers poll prunes attempt history to
-the partitions that can hold that hour instead of reading all of it. `dashboard_cron_v1` adds
-`scheduleCount`, and the Schedules page says how many schedules past the first 50 it does not show.
+### Migrations
 
-**Pending release — fixed:** The Events pager stops at the last page the server accepts and offers
-to continue with older events through a custom range. The activity chart shows loading, error, and
-stale states with a Retry button, and never draws one query's bars under another query's controls.
-Activity series keys no longer collide when group names differ only by `.` and `_`, or a group is
-named `bucket` or `other`. Event rows keep their table semantics and open through a named button in
-the Event cell (SM-1171).
+Migration 0054 is the first since 0.6.1. Each migration only adds, and each takes effect when it
+commits.
 
-Migration 0063 (`0063-raise-a-health-reason-for-a-terminal-cleanup-backlog.sql`) changes `evaluate_queue_health_v1`, `prune_terminal_storage_v1`, `dashboard_cron_v1`, and `dashboard_maintenance_state_v1`, and adds `terminal_cleanup_follow_up_delay_ms_v1`. Queue health raises the degraded reason `terminal-cleanup-backlog` once `terminal_cleanup_backlog_since` is older than `row_retention_lag_ms`, so a cleanup that runs saturated while the oldest eligible row stays young no longer reads as healthy. The dashboard's `terminal_storage` routine is due after the same five-second follow-up delay that gates the pass, and the System page lists the new check. `dashboard/v1` adds the reason code to its enum, an additive change (SM-1178). TypeScript `Queue.health()` returns the backlog start as `terminalCleanupBacklogSince`, and `QueueHealthReasonCode` includes `terminal-cleanup-backlog`.
+- **0054** (`0054-distinguish-a-single-child-rename-from-a-second-child.sql`) adds versioned child
+  functions and the nullable `task_child.last_seen_fence_token` fence marker. Older clients keep
+  their v1 functions (SM-1106).
+- **0055** (`0055-fail-durable-replay-conflicts-without-retrying.sql`) reserves a retry delay of -1
+  in `fail_v1` and `fast_fail_v1` as the terminal failure override. It is the SDK compatibility
+  floor, schema version 54 (SM-1107).
+- **0056** (`0056-count-row-retention-lag-from-the-history-pass-that-released-the-row.sql`) changes
+  only `queue_health_v1`, to count row retention lag from the releasing history pass (SM-1134).
+- **0057** (`0057-close-a-released-task-without-attributing-its-unrun-attempt.sql`) changes only
+  `cancel_v1` and `terminalize_deadline_v1`, to close a released task like never-started work
+  (SM-1158).
+- **0058** (`0058-let-terminal-cleanup-keep-pace-and-share-its-budget-across-tiers.sql`) changes
+  `prune_terminal_tasks_v1`, `prune_terminal_storage_v1`, and `queue_health_v1`. It adds two
+  `maintenance_state` columns, and the health document reports `terminal_cleanup_backlog_since`
+  while cleanup is behind (SM-1160).
+- **0059** (`0059-close-sql-integrity-gaps-in-rate-refill-dependency-edges-and-mixed-batches.sql`)
+  closes five SQL integrity gaps. It adds the `rate_limit_policy_per_key_complete_check` and
+  `budget_rate_complete_check` constraints, after clearing incomplete settings as the upgrade steps
+  describe. It adds a trigger that rejects a dependency edge update. A batch with a debounce or
+  throttle member now locks every member's prerequisites before its first member runs (SM-1165).
+- **0060** (`0060-judge-fast-tier-completions-and-cancellation-acknowledgements-after-waits.sql`)
+  judges two fast-tier operations at the time they act. `fast_complete_many_v1` reads the clock
+  again after failing oversized members, so a later member whose lease expired meanwhile no longer
+  completes. `fast_acknowledge_cancel_v1` checks the lease after its row lock, as
+  `acknowledge_cancel_v1` does on the full tier (SM-1163).
+- **0061** (`0061-bound-the-scan-cost-of-fast-dead-letters-statistics-and-repeated-ticks.sql`)
+  bounds three reads whose cost grew with table size or fleet size. It adds
+  `fast_task_outcome_failed_finished_idx`, so `list_dead_letters_v1` reads only failed fast-tier
+  outcomes. `aggregate_stats_v1` no longer materializes fast-tier rows that cannot hold a fact
+  inside its window. `tick_v1` spaces the expired-lease scan and records each run in the new
+  `maintenance_state.lease_recovery_started_at` column (SM-1167).
+- **0062** (`0062-bound-dashboard-worker-and-task-listings.sql`) adds
+  `dashboard_human_wait_quick_action_v1` and changes four dashboard read functions.
+  `dashboard_workers_v1` reads its one-hour cutoff once, so a Workers poll prunes attempt history
+  to the partitions that can hold that hour. `dashboard_cron_v1` adds `scheduleCount`. The task
+  listings carry `humanWait.quickAction` (SM-1171).
+- **0063** (`0063-raise-a-health-reason-for-a-terminal-cleanup-backlog.sql`) changes
+  `evaluate_queue_health_v1`, `prune_terminal_storage_v1`, `dashboard_cron_v1`, and
+  `dashboard_maintenance_state_v1`, and adds `terminal_cleanup_follow_up_delay_ms_v1`. It raises
+  `terminal-cleanup-backlog`. The dashboard's `terminal_storage` routine is due after the same
+  five-second follow-up delay that gates the pass, and the System page lists the new check.
+  `dashboard/v1` adds the reason code to its enum, an additive change (SM-1178).
+- **0064** (`0064-keep-jit-out-of-the-statistics-aggregate.sql`) disables JIT for
+  `aggregate_stats_v1`. A catch-up `rollup_stats_v1` pass, and the live tail of `stat_buckets_v1`
+  behind a lagging rollup, could spend about a second compiling a plan that runs in tens of
+  milliseconds. The function's body, signature, and result are unchanged (SM-1193).
+- **0065** (`0065-give-the-terminal-cleanup-backlog-reason-its-own-health-budget.sql`) gives
+  `terminal-cleanup-backlog` its own budget, so an operator can warn on a saturated cleanup without
+  tightening `retention-lag`. `queue_health_policy` gains `terminal_cleanup_backlog_ms` and
+  `application_terminal_cleanup_backlog_ms`, with a 6 h default. The migration starts each from its
+  row retention counterpart and carries an override of `row_retention_lag_ms` over. Reverting
+  `row_retention_lag_ms` no longer reverts the backlog budget. `sync_queue_health_policy_v2` seeds
+  all six budgets. `sync_queue_health_policy_v1` keeps its signature and no longer moves the backlog
+  budget. `override_queue_health_policy_v1` and `revert_queue_health_policy_v1` accept
+  `terminal_cleanup_backlog_ms`, and the health document reports `budgets.terminalCleanupBacklogMs`
+  (SM-1197).
 
-Migration 0064 (`0064-keep-jit-out-of-the-statistics-aggregate.sql`) disables JIT for `aggregate_stats_v1` (SM-1193). A catch-up `rollup_stats_v1` pass overestimated its fast-tier rows by orders of magnitude, and could spend about a second compiling a plan that runs in tens of milliseconds. The live tail of `stat_buckets_v1` behind a lagging rollup compiled its plan the same way. The function's body, signature, and result are unchanged.
+### Added
 
-Migration 0065 (`0065-give-the-terminal-cleanup-backlog-reason-its-own-health-budget.sql`) gives `terminal-cleanup-backlog` its own budget, so an operator can warn on a saturated terminal cleanup without tightening `retention-lag` (SM-1197). `queue_health_policy` gains `terminal_cleanup_backlog_ms` and `application_terminal_cleanup_backlog_ms`, with a 6 h default. The migration starts each from its row retention counterpart and carries an override of `row_retention_lag_ms` over to the new budget, so existing installations evaluate exactly as before. From then on the two budgets are independent: reverting `row_retention_lag_ms` no longer reverts the backlog budget. `sync_queue_health_policy_v2` seeds all six budgets. `sync_queue_health_policy_v1` is retained with its signature, and a v1 sync no longer moves the backlog budget; use v2 to set it. `override_queue_health_policy_v1` and `revert_queue_health_policy_v1` accept `terminal_cleanup_backlog_ms`, and the health document reports it as `budgets.terminalCleanupBacklogMs`. TypeScript `QueueHealthBudgets` gains `terminalCleanupBacklogMs`; against a schema older than 64, `Queue.health()` reports `rowRetentionLagMs` there, the budget those schemas apply.
+- `@stablemates/workhorse-knex` is an optional adapter. It preserves native PostgreSQL statements
+  and parameters on the pinned Knex route. The tested Objection recipe shares the model-write
+  transaction with enqueue, and callers keep transaction and resource ownership. Its peer
+  dependencies pin Knex 3.3.0 and `pg` 8.23.1 (SM-1118).
+- `DashboardHost.handle(request, context?)` accepts an optional `DashboardRequestContext`. A
+  fetch-native host sets its `clientAddress` from its own transport (SM-1168).
+- `workhorse dashboard` accepts a repeatable `--trusted-proxy <address-or-cidr>`, and reads
+  `WORKHORSE_DASHBOARD_TRUSTED_PROXIES` as a comma-separated list. Any flag replaces the whole
+  variable. `dashboardNodeMiddleware` and `DashboardCommandOptions` take the same list as
+  `trustedProxies`. For a request from a listed proxy, login throttling counts the rightmost
+  `X-Forwarded-For` or `Forwarded` hop that is not a listed proxy. The list is empty by default,
+  and a malformed entry stops the listener at startup (ADR 0094, SM-1177).
+- An unexpected dashboard schema-compatibility failure emits
+  `workhorse.dashboard.compatibility_check_failed` (SM-1168).
+- `ChildTaskOptions` is exported from the package root (SM-1169). `dashboardPageMax` is exported
+  as the one dashboard page limit (SM-1171).
+
+### Fixed
+
+- `runChild`, `runChildren`, and `runChildrenAll` join existing children after their task type's
+  contract advances. Replay retries a contract conflict with the stored versions. It rebuilds under
+  those versions when the current contract rejects the payload. Changed payloads and child sets
+  still raise `ChildConflictError` (SM-1105).
+- A producer that never called `syncContracts()` retries a contract mismatch with the contract
+  definition it fetched. Before, it failed with "Contract policy changed again while retrying
+  enqueue" and aborted the caller's transaction. The Objection recipe, which builds a new adapter
+  per transaction, can enqueue a task type whose contract another process installed (SM-1170).
+- A worker no longer waits without limit while shutting down. Closing the reserved heartbeat
+  connection no longer waits for a connect stuck behind an exhausted pool, and it releases a client
+  that arrives later. `UNLISTEN` gets 1,000 ms before the listener destroys its connection
+  (SM-1169).
+- A `WorkhorseMetricsObserver` `onError` reporter that throws or rejects is written to
+  `console.error` instead of becoming an unhandled rejection (SM-1166).
+- The dashboard's activity chart shows loading, error, and stale states with a Retry button. It
+  never draws one query's bars under another query's controls. Its series keys no longer collide
+  when group names differ only by `.` and `_`, or when a group is named `bucket` or `other`
+  (SM-1171).
+- The `@stablemates/workhorse-drizzle` README states that a `forTransaction` queue must not outlive
+  its transaction (SM-1170).
+
+### Dependencies
+
+- `@stablemates/workhorse` and the Drizzle, Prisma, TypeORM, and Kysely adapters require `pg`
+  8.23.1 or a later 8.x release.
+
+### Recipes and documentation
+
+- New tested recipes: transactional enqueue with MikroORM through Kysely (SM-1111), signed Stripe
+  invoice acceptance (SM-1117), signed Slack approvals with durable decisions (SM-1120), and
+  durable GitHub issue triage (SM-1121). The integration pages are grouped by category (SM-1142).
+- The site documents expected PlanetScale PostgreSQL compatibility (SM-107).
+- The architecture reference is split into one page per area under
+  [`docs/architecture/`](docs/architecture.md) (SM-1131). The guides are rewritten scenario-first
+  with collapsed reference blocks (SM-1146, SM-1151), and the README and architecture pages gain
+  Mermaid diagrams (SM-1130).
+
+### Demo
+
+- The demo passes each client's address to the dashboard login throttle. Five wrong passwords from
+  one visitor no longer lock every visitor out for a minute (SM-1188).
 
 ## 0.6.1 — 2026-10-02
 

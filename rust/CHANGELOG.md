@@ -8,84 +8,187 @@ one commit.
 Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.1.0` the schema
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses it offline, with the
-[0.5.0 upgrade steps](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md#050--2026-09-28). The upgrade from 0.5 to 0.6 only adds.
+[0.5.0 upgrade steps](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md#050--2026-09-28). The upgrade from 0.5 to 0.6 only adds,
+and so does the upgrade from 0.6 to 0.7.
 
 ## Unreleased
 
-Requires **schema v54**. Migrate the schema before starting updated processes.
-The final schema version is **64**, and the SDK compatibility floor is schema version **54**.
-Migration 0054 adds versioned child functions and a nullable fence marker; older clients keep their v1 functions.
+The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
 
-A renamed individual child on replay now raises a conflict with the stored and requested names.
-A second child after joining the retained child in the same handler run still exceeds the child limit (SM-1106).
+Requires **schema v54**, Rust **1.89** or newer, and PostgreSQL **15** or newer.
 
-Migration 0055 (`0055-fail-durable-replay-conflicts-without-retrying.sql`) adds the terminal failure override.
+### Upgrade steps
 
-Durable checkpoint, timer, child, child-set, and human-decision replay conflicts now fail the task
-on their first occurrence, preserving its current attempt and recording the conflict class.
-Redaction still hides error details. Transient failures, lease loss, child-limit errors, and
-already-waiting signal errors retain their existing behavior. Conflict settlement bypasses the
-worker's retry-delay callback.
+**Migrate the schema before starting updated processes.** Migrations 0054 through 0065 only add, so
+the upgrade is a rolling deployment: run `workhorse schema migrate`, then roll out the 0.7
+processes. The final schema version is **64**. The SDK compatibility floor is schema version
+**54**, which migration 0055 reaches. A 0.7 process refuses a schema below version 54 at startup,
+and a 0.6 process keeps working on version 64. Each migration commits on its own, and each SQL
+change takes effect when its migration commits.
 
-Rust now preserves conflict classes when converting errors into `HandlerError`. The generic
-`From<E>` conversion requires `E: 'static` to inspect its source chain. For an error borrowing local
-data, build `HandlerError::new(error.to_string())` explicitly.
+**Migration 0059 clears incomplete rate settings.** A per-key rate limit or a budget rate with one
+or two of its three fields null used to pass its CHECK constraint. The migration clears such a
+setting, and deletes a budget that the clearing leaves without a limit. After the migration,
+PostgreSQL rejects a synchronization that writes an incomplete rate setting. To keep a limit the
+migration cleared, complete it in your synchronized definitions and synchronize after the
+migration.
 
-Migration 0056 (`0056-count-row-retention-lag-from-the-history-pass-that-released-the-row.sql`) changes only `queue_health_v1`. Row retention lag now counts from the scheduled history pass that released the row when that pass came after the row window, so health no longer reports task records and finished results as late after every daily pass (SM-1134).
+**Accept the new `terminal-cleanup-backlog` health reason.** Queue health can now report it as
+degraded, so code that switches on reason codes should accept it. Its budget,
+`terminal_cleanup_backlog_ms`, starts from your `row_retention_lag_ms` setting, so existing alerts
+evaluate as before. After migration 0065 the two budgets are independent.
 
-**Breaking:** `dashboard::DashboardOptions::audit_actor` is removed. It replaced the verified
-principal's actor on every mutation, so a dashboard could record a service name instead of the
-operator who acted. The dashboard now always records the actor of the returned
-`Authorization::Principal`, as the `dashboard/v1` protocol requires. Delete the field from your
-options; to record a fixed actor, return a `Principal` with that `actor` from `authorize`
-(SM-1152).
+**Update `dashboard/v1` clients that read `humanWait.context` from a task listing.**
+`dashboard.tasks` and `dashboard.tasksCursor` rows carry `humanWait.quickAction` instead, which is
+`{ label }` or `null`. `dashboard.taskDetail` still returns the full context (SM-1171).
 
-Migration 0057 (`0057-close-a-released-task-without-attributing-its-unrun-attempt.sql`) changes only `cancel_v1` and `terminalize_deadline_v1`. A full-tier task that a worker without a handler returned through `release_owned_v1` can now be canceled, and deadline recovery terminalizes it instead of rolling back the whole recovery pass. Both close it like never-started work, with no attempt history row (SM-1158).
+**Handler authors: a durable replay conflict now fails its task on the first occurrence.** The
+behaviour changes below describe it. A 0.6 worker still retries a conflict under the task's retry
+policy until the 0.6 processes are gone.
 
-The worker now measures a handler result as PostgreSQL measures it, `octet_length` of its jsonb
-text, before it sends the completion. A result over the task's `result_max_bytes` fails its attempt
-with `TaskValueSizeLimitError` on both tiers, and the task's retry policy and the worker's
-`retry_delay` apply. Before, `complete_v1` raised, which left a full-tier task active until lease
-recovery. The fast tier's batched completion failed the attempt in PostgreSQL, which skipped
-`retry_delay` (SM-1159).
+### Breaking changes
 
-The dashboard service answers an unexpected schema-compatibility failure with a generic `503` and logs the
-cause through `tracing`, instead of returning the driver error text (SM-1168).
+- `dashboard::DashboardOptions::audit_actor` is removed. It replaced the verified principal's actor
+  on every mutation, so a dashboard could record a service name instead of the operator who acted.
+  The dashboard now always records the actor of the returned `Authorization::Principal`, as the
+  `dashboard/v1` protocol requires. Delete the field from your options. To record a fixed actor,
+  return a `Principal` with that `actor` from `authorize` (SM-1152).
+- `HandlerError` gains private fields, so a struct literal no longer builds one. Use
+  `HandlerError::new` or `HandlerError::named`, then set `stack` or `name` on the result. One field
+  marks an error converted from `Error::Conflict`, and the worker fails the task without a retry
+  only when it is set. Before, the worker read the name, so an application error built with
+  `HandlerError::named("WaitConflictError", …)` failed its task for good (SM-1164).
+- The generic `From<E>` conversion into `HandlerError` requires `E: 'static`, so it can inspect the
+  source chain and keep a conflict's class. For an error that borrows local data, build
+  `HandlerError::new(error.to_string())` explicitly (SM-1107).
+- **`dashboard/v1`:** task listing rows carry `humanWait.quickAction` instead of
+  `humanWait.context`, as the upgrade steps describe. The break is taken in place under the ADR 0064
+  exception in
+  [`docs/compatibility.md`](https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md)
+  (SM-1171).
 
-`HandlerContext::checkpoint` and `HandlerContext::set_progress`, and their
-`BatchHandlerContext` wrappers, now refuse a value that holds `NaN` or an infinity at any depth.
-A checkpoint returns a `HandlerError` and `set_progress` returns `Error::InvalidArgument`, both
-before any write. `serde_json` had stored such a number as `null`, so a `checkpoint::<f64>` failed
-to decode on every retry (SM-1180).
+### Behaviour changes
 
-Migration 0058 (`0058-let-terminal-cleanup-keep-pace-and-share-its-budget-across-tiers.sql`) changes `prune_terminal_tasks_v1`, `prune_terminal_storage_v1`, and `queue_health_v1`, and adds two `maintenance_state` columns. Terminal cleanup repeats its batch while each one fills, for up to one second per pass, and a pass that still ends with a full batch makes its follow-up due five seconds later instead of after the five-minute interval. Full-tier and fast-tier tasks share every batch, so neither tier starves the other. The health document reports `terminal_cleanup_backlog_since` while cleanup is behind (SM-1160).
+Durable execution and workers:
 
-**Breaking:** `HandlerError` gains private fields, so a struct literal no longer builds one. Use
-`HandlerError::new` or `HandlerError::named`, then set `stack` or `name` on the result. One field
-marks an error converted from `Error::Conflict`, and the worker fails the task without a retry only
-when it is set. Before, the worker read the name, so an application error built with
-`HandlerError::named("WaitConflictError", …)` failed its task for good (SM-1164).
+- Durable checkpoint, timer, child, child-set, and human-decision replay conflicts fail the task on
+  their first occurrence. The worker preserves the current attempt and records the conflict class.
+  Before, a conflict retried under the task's retry policy, and every retry met the same conflict.
+  Redaction still hides error details. Transient failures, lease loss, child-limit errors, and
+  already-waiting signal errors keep their existing behaviour. Conflict settlement bypasses the
+  worker's retry-delay callback (SM-1107, migration 0055).
+- A renamed individual child on replay raises a child conflict with the stored and requested names.
+  Before, it raised a child-limit error. A second child after joining the retained child in the same
+  handler run still exceeds the child limit (SM-1106, migration 0054).
+- The worker measures a handler result as PostgreSQL measures it, `octet_length` of its jsonb text,
+  before it sends the completion. A result over the task's `result_max_bytes` fails its attempt with
+  `TaskValueSizeLimitError` on both tiers, and the task's retry policy and the worker's
+  `retry_delay` apply. Before, `complete_v1` raised, which left a full-tier task active until lease
+  recovery. The fast tier's batched completion failed the attempt in PostgreSQL, which skipped
+  `retry_delay` (SM-1159).
+- `HandlerContext::checkpoint` and `HandlerContext::set_progress`, and their `BatchHandlerContext`
+  wrappers, refuse a value that holds `NaN` or an infinity at any depth. A checkpoint returns a
+  `HandlerError`, and `set_progress` returns `Error::InvalidArgument`, both before any write.
+  `serde_json` had stored such a number as `null`, so a `checkpoint::<f64>` failed to decode on
+  every retry (SM-1180).
+- A handler that panics after its `CancelReason::Shutdown` cancellation fails its attempt, as any
+  handler panic does. Before, the worker released the task without charging the attempt (SM-1164).
+- With the `opentelemetry` feature, the `workhorse.handler` span descends only from the task's
+  stored trace context. A task without one starts a new trace instead of joining the current
+  `tracing` span. The `tracing` span still nests under that span, so its log events keep their scope
+  (SM-1179).
 
-**Fixed:** A handler that panics after its `CancelReason::Shutdown` cancellation now fails its
-attempt, as any handler panic does. Before, the worker released the task without charging the
-attempt (SM-1164).
+Dashboard host:
 
-Migration 0059 (`0059-close-sql-integrity-gaps-in-rate-refill-dependency-edges-and-mixed-batches.sql`) closes five SQL integrity gaps (SM-1165). A rate synchronization refills each changed bucket at the old rate up to one clock reading, and the new rate applies from that reading. The new `rate_limit_policy_per_key_complete_check` and `budget_rate_complete_check` constraints reject a rate setting with one or two null fields. The migration first clears such a setting, and deletes a budget that the clearing leaves without a limit. An update can no longer change a dependency edge's endpoints or outcome policies. A batch with a debounce or throttle member locks every member's prerequisites before its first member runs. `run_task_now_v1` reports `not_scheduled` for a blocked task instead of raising an error.
+- The dashboard service answers an unexpected schema-compatibility failure with a generic `503`. It
+  logs the cause through `tracing` instead of returning the driver error text (SM-1168).
 
-**Fixed:** With the `opentelemetry` feature, the `workhorse.handler` span descends only from the
-task's stored trace context. A task without one starts a new trace instead of joining the current
-`tracing` span. The `tracing` span still nests under that span, so its log events keep their scope
-(SM-1179).
+Maintenance, health, and administration, from the SQL changes:
 
-Migration 0060 (`0060-judge-fast-tier-completions-and-cancellation-acknowledgements-after-waits.sql`) judges two fast-tier operations at the time they act (SM-1163). `fast_complete_many_v1` reads the clock again after failing oversized members, so a later member whose lease expired while one of those failures waited no longer completes. `fast_acknowledge_cancel_v1` checks the lease after its row lock, as `acknowledge_cancel_v1` does on the full tier.
+- Terminal cleanup repeats its batch while each one fills, for up to one second per pass. A pass
+  that still ends with a full batch makes its follow-up due five seconds later. Full-tier and
+  fast-tier tasks share every batch (SM-1160, migration 0058).
+- `tick_v1` runs the expired-lease scan only when no tick ran it within half the shortest
+  maintenance interval of the live registered workers. A worker that opts out of the registry with
+  `WorkerOptions::disable_registry` does not shorten that spacing. Recovery of an expired lease can
+  then take longer (SM-1167, SM-1192, migration 0061).
+- Row retention lag counts from the scheduled history pass that released the row, so health no
+  longer reports task records and finished results as late after every daily pass (SM-1134,
+  migration 0056).
+- Queue health raises `terminal-cleanup-backlog` once `terminal_cleanup_backlog_since` is older than
+  its budget (SM-1178, SM-1197, migrations 0063 and 0065).
+- `run_task_now_v1` reports `not_scheduled` for a blocked task instead of raising an error. A rate
+  synchronization refills each changed bucket at the old rate up to one clock reading. An update
+  can no longer change a dependency edge's endpoints or outcome policies (SM-1165, migration 0059).
+- A full-tier task that a worker without a handler released can be canceled, and deadline recovery
+  terminalizes it. Both close it like never-started work (SM-1158, migration 0057).
 
-Migration 0061 (`0061-bound-the-scan-cost-of-fast-dead-letters-statistics-and-repeated-ticks.sql`) bounds three reads whose cost grew with table size or fleet size (SM-1167). The new `fast_task_outcome_failed_finished_idx` lets `list_dead_letters_v1` read only failed fast-tier outcomes. `aggregate_stats_v1` no longer materializes fast-tier rows that cannot hold a fact inside its window, so a backlog enqueued earlier stays out of every rollup. `tick_v1` runs the expired-lease scan, which reads every active lease, only when no tick ran it within half the shortest maintenance interval of the live registered workers. It records that run in the new `maintenance_state.lease_recovery_started_at` column. Promotion and the deadline and timeout scans still run on every tick, and while workers keep ticking, expired leases are still recovered within one interval.
+Dashboard, from the shared browser bundle:
 
-Migration 0063 (`0063-raise-a-health-reason-for-a-terminal-cleanup-backlog.sql`) changes `evaluate_queue_health_v1`, `prune_terminal_storage_v1`, `dashboard_cron_v1`, and `dashboard_maintenance_state_v1`, and adds `terminal_cleanup_follow_up_delay_ms_v1`. Queue health raises the degraded reason `terminal-cleanup-backlog` once `terminal_cleanup_backlog_since` is older than `row_retention_lag_ms`, so a cleanup that runs saturated while the oldest eligible row stays young no longer reads as healthy. The dashboard's `terminal_storage` routine is due after the same five-second follow-up delay that gates the pass, and the System page lists the new check. `dashboard/v1` adds the reason code to its enum, an additive change (SM-1178). The health document's `status.reasons` can now carry `terminal-cleanup-backlog`; code that switches on reason codes should accept it.
+- Pausing a schedule asks for confirmation, as resuming one already did (SM-1147).
+- The Events pager stops at the last page the server accepts and offers older events through a
+  custom range. The activity chart shows loading, error, and stale states with a Retry button
+  (SM-1171).
+- The Schedules page says how many schedules past the first 50 it does not show, and the System
+  page lists the terminal cleanup backlog check (SM-1171, SM-1178).
 
-Migration 0064 (`0064-keep-jit-out-of-the-statistics-aggregate.sql`) disables JIT for `aggregate_stats_v1` (SM-1193). A catch-up `rollup_stats_v1` pass overestimated its fast-tier rows by orders of magnitude, and could spend about a second compiling a plan that runs in tens of milliseconds. The live tail of `stat_buckets_v1` behind a lagging rollup compiled its plan the same way. The function's body, signature, and result are unchanged.
+### Migrations
 
-Migration 0065 (`0065-give-the-terminal-cleanup-backlog-reason-its-own-health-budget.sql`) gives `terminal-cleanup-backlog` its own budget, so an operator can warn on a saturated terminal cleanup without tightening `retention-lag` (SM-1197). `queue_health_policy` gains `terminal_cleanup_backlog_ms` and `application_terminal_cleanup_backlog_ms`, with a 6 h default. The migration starts each from its row retention counterpart and carries an override of `row_retention_lag_ms` over to the new budget, so existing installations evaluate exactly as before. From then on the two budgets are independent: reverting `row_retention_lag_ms` no longer reverts the backlog budget. `sync_queue_health_policy_v2` seeds all six budgets. `sync_queue_health_policy_v1` is retained with its signature, and a v1 sync no longer moves the backlog budget; use v2 to set it. `override_queue_health_policy_v1` and `revert_queue_health_policy_v1` accept `terminal_cleanup_backlog_ms`, and the health document reports it as `budgets.terminalCleanupBacklogMs`. `Queue::health` returns the new key with schema 64.
+Migration 0054 is the first since 0.6.1. Each migration only adds. The
+[root changelog](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md) describes each in
+full.
+
+- **0054** adds versioned child functions and the nullable `task_child.last_seen_fence_token`
+  fence marker. Older clients keep their v1 functions (SM-1106).
+- **0055** reserves a retry delay of -1 in `fail_v1` and `fast_fail_v1` as the terminal failure
+  override. It is the SDK compatibility floor, schema version 54 (SM-1107).
+- **0056** changes `queue_health_v1` to count row retention lag from the releasing history pass
+  (SM-1134).
+- **0057** changes `cancel_v1` and `terminalize_deadline_v1` to close a released task like
+  never-started work (SM-1158).
+- **0058** lets terminal cleanup keep pace and share its batches across tiers, and adds two
+  `maintenance_state` columns (SM-1160).
+- **0059** closes five SQL integrity gaps. It adds `rate_limit_policy_per_key_complete_check`,
+  `budget_rate_complete_check`, and a trigger that rejects a dependency edge update (SM-1165).
+- **0060** judges `fast_complete_many_v1` and `fast_acknowledge_cancel_v1` at the time they act
+  (SM-1163).
+- **0061** adds `fast_task_outcome_failed_finished_idx`, bounds `aggregate_stats_v1`, and spaces the
+  expired-lease scan in `tick_v1` with the new `maintenance_state.lease_recovery_started_at` column
+  (SM-1167).
+- **0062** adds `dashboard_human_wait_quick_action_v1` and bounds four dashboard read functions
+  (SM-1171).
+- **0063** raises the `terminal-cleanup-backlog` health reason and adds
+  `terminal_cleanup_follow_up_delay_ms_v1` (SM-1178).
+- **0064** disables JIT for `aggregate_stats_v1` (SM-1193).
+- **0065** gives `terminal-cleanup-backlog` its own budget in `queue_health_policy`, adds
+  `sync_queue_health_policy_v2`, and keeps `sync_queue_health_policy_v1` (SM-1197).
+
+### Added
+
+- `EnqueueClient` and the `EnqueueTransport` trait let an adapter author run enqueue, contract
+  synchronization, and the compatibility check over a mutable transport, such as a borrowed
+  transaction. `EnqueueQuery`, `EnqueueBind`, `EnqueueColumn`, `EnqueueColumnType`, `EnqueueValue`,
+  and `EnqueueRow` describe each statement and its rows. `Error::Database` carries a driver error
+  with its SQLSTATE and detail. `Queue` keeps its API
+  ([ADR 0086](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0086-separate-rust-enqueue-preparation-from-mutable-transports.md),
+  SM-1123).
+- The optional `sqlx` feature implements `EnqueueTransport` for `sqlx::Transaction<'_, Postgres>`,
+  so an enqueue commits or rolls back with the application's SQLx transaction. It pins SQLx 0.8.6
+  exactly, and `examples/sqlx_transaction.rs` shows it
+  ([ADR 0088](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0088-borrow-sqlx-transactions-for-rust-enqueue.md),
+  SM-1124).
+- `Queue::health` reports the backlog budget as `budgets.terminalCleanupBacklogMs` with schema 64,
+  and `status.reasons` can carry `terminal-cleanup-backlog` (SM-1178, SM-1197).
+
+### Fixed
+
+- A heartbeat response applies only to the claim fence it was sent for. Before, a heartbeat round
+  that returned after a durable parent suspended and resumed under a new fence could cancel the
+  resumed handler. The task then waited for lease recovery (SM-1099).
+
+### Recipes
+
+- A batch handler example shows how batch-handler tasks are enqueued (SM-1135).
 
 ## 0.6.1 — 2026-10-02
 
