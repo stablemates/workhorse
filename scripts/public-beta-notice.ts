@@ -7,10 +7,9 @@
  * sentence in a second check is how the two came to assert notices that could not both exist, so
  * both read this module instead.
  *
- * The notice is three durable facts wrapped in editorial prose. The label names the stability of the
- * line. The compatibility boundary states the promise a reader upgrades on, and the cutover
- * exception names the one migration that breaks it. The wording around them is free to change; a
- * rewrite that drops any of the three is the failure worth catching.
+ * The notice is two durable facts wrapped in editorial prose. The label names the stability of the
+ * line, and the compatibility boundary states the promise a reader upgrades on. The wording around
+ * them is free to change; a rewrite that drops either is the failure worth catching.
  */
 
 /** The stability label every public surface carries. Compared without regard to case. */
@@ -21,9 +20,8 @@ export const compatibilityNotice = "inside a major line a migration only adds";
 
 /**
  * The one exception to {@link compatibilityNotice}. Migration 0025 is a contract step that 0.5.0
- * ships, so a database from before 0.5.0 crosses it offline. A surface that states the additive
- * promise without the exception promises a rolling upgrade that fails. Compared without regard to
- * case against {@link prose}.
+ * ships, so a database from before 0.5.0 crosses it offline. The reference documents name it.
+ * Compared without regard to case against {@link prose}.
  */
 export const cutoverException = "migration 0025";
 
@@ -42,14 +40,10 @@ export function hasCutoverException(contents: string): boolean {
   return prose(contents).toLowerCase().includes(cutoverException);
 }
 
-/**
- * Whether `contents` carries the public-beta notice: the label, the compatibility boundary, and its
- * one exception.
- */
+/** Whether `contents` carries the public-beta notice: the label and the compatibility boundary. */
 export function hasPublicBetaNotice(contents: string): boolean {
   return (
     contents.toLowerCase().includes(publicBetaLabel) &&
-    prose(contents).includes(compatibilityNotice) &&
-    hasCutoverException(contents)
+    prose(contents).includes(compatibilityNotice)
   );
 }

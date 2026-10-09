@@ -89,8 +89,7 @@ only adds.
 
 Migration 0025 is the one exception. It is a contract step that 0.5.0 ships, so a database from
 before 0.5.0 crosses it offline, with the
-[0.5.0 upgrade steps](CHANGELOG.md#050--2026-09-28). The upgrade from 0.5 to
-0.6 is an ordinary rolling deployment again.
+[0.5.0 upgrade steps](CHANGELOG.md#050--2026-09-28).
 
 ## How a fix ships
 

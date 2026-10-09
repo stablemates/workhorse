@@ -14,9 +14,7 @@ process are in [`docs/compatibility.md`](docs/compatibility.md).
 
 Workhorse is a public beta. While the line is `0.x`, any minor release may change behaviour. From
 `0.1.0` the schema upgrades in place: every release ships ordered, immutable migrations, and inside
-a major line a migration only adds. Migration 0025 is the one exception: a database from before
-0.5.0 crosses it offline, with the [0.5.0 upgrade steps](#050--2026-09-28). The upgrade from 0.5 to
-0.6 only adds, and so does the upgrade from 0.6 to 0.7. Breaking changes are always listed with
+a major line a migration only adds. Breaking changes are always listed with
 upgrade steps.
 
 ## 0.7.0 — 2026-10-09
@@ -28,8 +26,7 @@ Requires **schema v54**, Node.js **22** or newer, and PostgreSQL **15** or newer
 
 ### Upgrade steps
 
-**Migrate the schema before starting updated processes.** Migrations 0054 through 0065 only add, so
-the upgrade is a rolling deployment:
+**Migrate the schema before starting updated processes.** The upgrade is a rolling deployment:
 
 1. Run `workhorse schema migrate`. The final schema version is **64**.
 2. Roll out the 0.7 processes.
@@ -177,8 +174,7 @@ Dashboard:
 
 ### Migrations
 
-Migration 0054 is the first since 0.6.1. Each migration only adds, and each takes effect when it
-commits.
+Migration 0054 is the first since 0.6.1. Each migration takes effect when it commits.
 
 - **0054** (`0054-distinguish-a-single-child-rename-from-a-second-child.sql`) adds versioned child
   functions and the nullable `task_child.last_seen_fence_token` fence marker. Older clients keep
