@@ -5,7 +5,7 @@ clean-install artifact once; it never applies a `releases/` artifact after `curr
 
 `releases/<NNNN>.sql` freezes the clean installation a published release shipped, copied from
 `schema/current.sql` at that release's tag. `0006.sql` is 0.2.0, `0009.sql` is 0.2.1,
-`0023.sql` is 0.3.0, `0024.sql` is 0.4.0, `0043.sql` is 0.5.0, and `0052.sql` is 0.6.0. Released artifacts and released migrations are immutable: a schema change
+`0023.sql` is 0.3.0, `0024.sql` is 0.4.0, `0043.sql` is 0.5.0, `0052.sql` is 0.6.0, and `0064.sql` is 0.7.0. Released artifacts and released migrations are immutable: a schema change
 adds an ordered migration step instead. See `docs/schema-lifecycle.md` for the additive migration
 contract.
 

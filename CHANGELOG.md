@@ -19,7 +19,7 @@ a major line a migration only adds. Migration 0025 is the one exception: a datab
 0.6 only adds, and so does the upgrade from 0.6 to 0.7. Breaking changes are always listed with
 upgrade steps.
 
-## Unreleased
+## 0.7.0 — 2026-10-09
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
 This release adds `@stablemates/workhorse-knex`, so ten npm packages now release together.

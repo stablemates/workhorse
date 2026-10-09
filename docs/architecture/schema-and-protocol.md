@@ -2143,7 +2143,7 @@ under the same strict settings before running it.
 | `go`           | `go get github.com/stablemates/workhorse/go`                          |
 | `rust`         | `cargo add workhorse`                                                 |
 | `schema`       | `npm exec --no -- workhorse schema install`                           |
-| `schemaPinned` | `npx --package @stablemates/workhorse@0.6.1 workhorse schema install` |
+| `schemaPinned` | `npx --package @stablemates/workhorse@0.7.0 workhorse schema install` |
 
 The four language commands carry no version. The two schema commands are the deployment tool rather
 than an adoption step. Their version must equal the SDK the application depends on:
