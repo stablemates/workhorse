@@ -388,7 +388,7 @@ before 0.5.0 crosses it offline, with the
 [0.5.0 upgrade steps](../CHANGELOG.md#050--2026-09-28).
 [The fast-tier cutover](schema-lifecycle.md#the-fast-tier-cutover) explains why, and
 [ADR 0077](decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) records
-the decision. The upgrade from 0.5 to 0.6 only adds, so it is an ordinary rolling deployment.
+the decision.
 An installation that runs cold export also stops its exporters across migration 0052, as
 [the current schema policy](schema-lifecycle.md#current-policy) describes.
 
@@ -662,8 +662,7 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
   every version boundary including a major one. Migration 0025 is the one exception: 0.5.0 ships it
   as a contract step that retires protocols 1 through 4. A database from before 0.5.0 therefore
   crosses it offline, with every worker and producer stopped, as
-  [the fast-tier cutover](schema-lifecycle.md#the-fast-tier-cutover) describes. From 0.5 to 0.6 a
-  mixed fleet is supported again.
+  [the fast-tier cutover](schema-lifecycle.md#the-fast-tier-cutover) describes.
 
   See [Retention and removal](#retention-and-removal).
 

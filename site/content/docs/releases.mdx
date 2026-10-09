@@ -27,9 +27,7 @@ alone, and the other lines do not move.
 That single-line policy is affordable because every upgrade is an ordinary rolling deployment. A
 minor adds, a major adds, and the one destructive act is a contract step you run on your own
 schedule. Taking a fix therefore costs a package bump and a `workhorse schema migrate` that only
-adds, which is the same procedure every other release uses. Migration 0025 is the one exception: a
-database from before 0.5.0 crosses it offline, and [Installation](/docs/installation#upgrade-a-04x-database-offline)
-gives its steps. The upgrade from 0.5 to 0.6 only adds.
+adds, which is the same procedure every other release uses.
 
 ## Report a vulnerability privately
 

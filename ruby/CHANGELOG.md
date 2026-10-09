@@ -11,8 +11,7 @@ Requires **schema v54**, Ruby **3.3** or newer, and PostgreSQL **15** or newer.
 
 ### Upgrade steps
 
-**Migrate the schema before starting updated processes.** Migrations 0054 through 0065 only add, so
-the upgrade is a rolling deployment: run `workhorse schema migrate`, then roll out the 0.7
+**Migrate the schema before starting updated processes.** The upgrade is a rolling deployment: run `workhorse schema migrate`, then roll out the 0.7
 processes. The final schema version is **64**. The SDK compatibility floor is schema version
 **54**, which migration 0055 reaches. A 0.7 process refuses a schema below version 54 at startup,
 and a 0.6 process keeps working on version 64. Each migration commits on its own, and each SQL
@@ -107,7 +106,7 @@ Dashboard, from the shared browser bundle:
 
 ### Migrations
 
-Migration 0054 is the first since 0.6.1. Each migration only adds. The
+Migration 0054 is the first since 0.6.1. The
 [root changelog](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md) describes each in
 full.
 

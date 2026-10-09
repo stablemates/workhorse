@@ -7,9 +7,7 @@ one commit.
 
 Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.1.0` the schema
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
-adds. Migration 0025 is the one exception: a database from before 0.5.0 crosses it offline, with the
-[0.5.0 upgrade steps](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md#050--2026-09-28). The upgrade from 0.5 to 0.6 only adds,
-and so does the upgrade from 0.6 to 0.7.
+adds.
 
 ## 0.7.0 — 2026-10-09
 
@@ -19,8 +17,7 @@ Requires **schema v54**, Rust **1.89** or newer, and PostgreSQL **15** or newer.
 
 ### Upgrade steps
 
-**Migrate the schema before starting updated processes.** Migrations 0054 through 0065 only add, so
-the upgrade is a rolling deployment: run `workhorse schema migrate`, then roll out the 0.7
+**Migrate the schema before starting updated processes.** The upgrade is a rolling deployment: run `workhorse schema migrate`, then roll out the 0.7
 processes. The final schema version is **64**. The SDK compatibility floor is schema version
 **54**, which migration 0055 reaches. A 0.7 process refuses a schema below version 54 at startup,
 and a 0.6 process keeps working on version 64. Each migration commits on its own, and each SQL
@@ -134,7 +131,7 @@ Dashboard, from the shared browser bundle:
 
 ### Migrations
 
-Migration 0054 is the first since 0.6.1. Each migration only adds. The
+Migration 0054 is the first since 0.6.1. The
 [root changelog](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md) describes each in
 full.
 

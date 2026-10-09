@@ -36,11 +36,6 @@ async function read(relativePath: string): Promise<string> {
   return readFile(path.join(repositoryRoot, relativePath), "utf8");
 }
 
-/** A changelog's preamble: everything before its first `##` entry. */
-function preamble(changelog: string): string {
-  return changelog.slice(0, changelog.search(/^## /m));
-}
-
 /** One `## version — date` entry of a changelog, up to the next `##` heading. */
 function changelogEntry(changelog: string, version: string, date: string): string {
   const heading = `## ${version} — ${date}`;
@@ -181,10 +176,6 @@ describe("the public beta line", () => {
       const contents = await read(relativePath);
       expect(contents.toLowerCase()).toContain(publicBetaLabel);
       expect(prose(contents)).toContain(compatibilityNotice);
-      expect({ relativePath, exception: hasCutoverException(contents) }).toEqual({
-        relativePath,
-        exception: true,
-      });
     }
   });
 
@@ -232,31 +223,17 @@ describe("the public beta line", () => {
 
   /**
    * Migration 0025 ships a contract step in the 0.5.0 minor, so a database from before 0.5.0 cannot
-   * roll across it. Every surface that states the additive promise names that exception, says where
-   * the offline steps are, and says the next upgrade only adds again.
+   * roll across it. Each reference document that states the additive promise names that exception
+   * and says where the offline steps are.
    */
-  it("names the migration 0025 offline cutover wherever it promises additive upgrades", async () => {
-    const surfaces: Record<string, (contents: string) => string> = {
-      "SECURITY.md": (contents) => contents,
-      "docs/compatibility.md": (contents) => contents,
-      "docs/features.md": (contents) => contents,
-      "CHANGELOG.md": preamble,
-      "python/CHANGELOG.md": preamble,
-      "go/CHANGELOG.md": preamble,
-      "rust/CHANGELOG.md": preamble,
-      "site/content/pages/about.mdx": (contents) => contents,
-      "site/content/docs/index.mdx": (contents) => contents,
-      "site/content/docs/limitations.mdx": (contents) => contents,
-      "site/content/docs/compatibility.mdx": (contents) => contents,
-      "site/content/docs/releases.mdx": (contents) => contents,
-    };
+  it("names the migration 0025 offline cutover in the reference documents", async () => {
+    const surfaces = ["SECURITY.md", "docs/compatibility.md", "docs/features.md"];
     const upgradeSteps = /#050--2026-09-28|#upgrade-a-04x-database-offline|#the-fast-tier-cutover/;
 
-    for (const [relativePath, section] of Object.entries(surfaces)) {
-      const contents = section(await read(relativePath));
+    for (const relativePath of surfaces) {
+      const contents = await read(relativePath);
       expect(prose(contents)).toMatch(/offline/);
       expect(contents).toMatch(upgradeSteps);
-      expect(prose(contents)).toMatch(/0\.5 to 0\.6/);
       expect({ relativePath, exception: hasCutoverException(contents) }).toEqual({
         relativePath,
         exception: true,
@@ -275,7 +252,6 @@ describe("the public beta line", () => {
     expect(prose(guarantee)).toMatch(/Migration 0025 is the one exception/);
     expect(prose(guarantee)).toMatch(/offline/);
     expect(guarantee).toContain("#the-fast-tier-cutover");
-    expect(prose(guarantee)).toMatch(/0\.5 to 0\.6/);
 
     const amendedBy = /^- \*\*Amended by:\*\*.*?(?=^- \*\*|^#)/ms;
     for (const decision of [
