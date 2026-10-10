@@ -2013,6 +2013,10 @@
         "workhorseVersion": {
           "type": "string"
         },
+        "workhorseRevision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{7,64}$"
+        },
         "authentication": {
           "anyOf": [
             {

@@ -534,6 +534,20 @@ did nothing. Verify the revision before deploying, and prefer a deployment path 
 source checkout that is stale or has uncommitted changes rather than one that trusts the operator to
 remember.
 
+Build the demo image with the checkout's commit as the `WORKHORSE_REVISION` build argument:
+
+```sh
+docker build --build-arg WORKHORSE_REVISION="$(git rev-parse HEAD)" .
+```
+
+The dashboard then shows the commit's short hash beside the Workhorse version and links it to the
+commit. A build from `main` keeps the version of the last release, so the hash is what tells a
+visitor which revision serves the demo. It also confirms a deploy published the expected commit. The
+build context excludes `.git`, so the image cannot find the commit itself. The argument must be a
+hexadecimal commit hash; the demo refuses to start on any other value. Without the argument, the
+dashboard shows the version alone. The argument sits after every filesystem layer of the runtime
+stage, so a new commit invalidates none of the cached layers.
+
 ### Dashboard schema
 
 The current build ships Workhorse schema version 64; its packaged migrations carry a version 6

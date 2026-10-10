@@ -291,6 +291,8 @@ export interface CreateDemoApplicationOptions {
   };
   /** Display-only deployment environment label shown in the dashboard header. */
   environment?: string;
+  /** Workhorse source commit the image was built from, shown beside the version. */
+  workhorseRevision?: string;
   operator?: DashboardOperator;
   scheduleController?: ScheduleController;
   queueController?: QueueController;
@@ -1600,6 +1602,7 @@ export function createDemoApplication(
       redactErrorStacks: true,
       auditActor: "local-demo",
       dev: options.dev,
+      ...(options.workhorseRevision ? { workhorseRevision: options.workhorseRevision } : {}),
     });
     app.all("*", async (context) => {
       const request = context.req.raw;

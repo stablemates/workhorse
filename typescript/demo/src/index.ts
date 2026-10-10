@@ -196,6 +196,9 @@ const { app } = createDemoApplication(database, {
   environment,
   operator: createLocalOperator(database),
   publicOrigin: process.env.WORKHORSE_DEMO_PUBLIC_ORIGIN,
+  // The image build bakes this in from its source checkout, which the build context omits. An
+  // image built without it leaves the value empty and shows the version alone.
+  ...(process.env.WORKHORSE_REVISION ? { workhorseRevision: process.env.WORKHORSE_REVISION } : {}),
   queueController: localOperatorControllers.queueController,
   scheduleController: createLocalScheduleController(database),
   ...(adminUsername && adminPasswordHash

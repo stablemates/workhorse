@@ -147,4 +147,10 @@ RUN mkdir logs && chown node:node logs
 USER node
 EXPOSE 3000
 
+# The source commit the dashboard shows beside the version. The build context excludes `.git`, so
+# whoever builds the image passes it; left empty, the dashboard shows the version alone. It comes
+# after every filesystem layer, so a new commit rebuilds none of them.
+ARG WORKHORSE_REVISION=""
+ENV WORKHORSE_REVISION=${WORKHORSE_REVISION}
+
 CMD ["node", "container-entrypoint.mjs"]

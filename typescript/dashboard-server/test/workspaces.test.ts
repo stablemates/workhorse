@@ -180,7 +180,32 @@ describe("dashboard workspaces", () => {
     const html = (await response?.text()) ?? "";
     expect(html).toContain('"workspaces":[]');
     expect(html).toContain('"workspace":null');
+    expect(html).not.toContain("workhorseRevision");
     expect(seen).toEqual([null, null]);
+  });
+
+  it("hands a configured source revision to the application in lowercase", async () => {
+    const host = createDashboardHost({
+      path: "/workhorse",
+      database: fakeDatabase(),
+      authorize: () => true,
+      workhorseRevision: "8D94D3FD",
+      dev,
+    });
+    const response = await get(host, "/workhorse/tasks");
+    const html = (await response?.text()) ?? "";
+    expect(html).toContain(
+      `"workhorseVersion":"${WORKHORSE_VERSION}","workhorseRevision":"8d94d3fd"`,
+    );
+  });
+
+  it("rejects a source revision that is not a commit hash", () => {
+    const base = { database: fakeDatabase(), authorize: () => true, dev };
+    for (const workhorseRevision of ["", "main", "8d94d3", "8d94d3fd-dirty"]) {
+      expect(() => createDashboardHost({ ...base, workhorseRevision })).toThrow(
+        /workhorseRevision/,
+      );
+    }
   });
 
   it("rejects invalid workspace configuration before serving anything", () => {

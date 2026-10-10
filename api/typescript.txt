@@ -1214,7 +1214,7 @@ const DEFAULT_TASK_VALUE_MAX_BYTES = 1048576;
 
 const DEPENDENCY_OPERATIONS_SCAN_LIMIT = 10000;
 
-function Dashboard({ client, auditActor, demoTools, basePath: basePathInput, logoutUrl, workspaces, workspace, workhorseVersion, }: DashboardProps): import("react").JSX.Element;
+function Dashboard({ client, auditActor, demoTools, basePath: basePathInput, logoutUrl, workspaces, workspace, workhorseVersion, workhorseRevision, }: DashboardProps): import("react").JSX.Element;
 
 interface DashboardActivityBucket {
   bucketStart: string;
@@ -1657,6 +1657,13 @@ interface DashboardHostOptions {
   * origin replaces the inbound host.
   */
   allowedHosts?: readonly string[];
+  /**
+  * Git commit of the Workhorse source this host was built from, shown beside the version.
+  *
+  * Set it only when the build is not a published release, such as a deployment of `main`. It must
+  * be a hexadecimal commit hash of 7 to 64 characters; letter case does not matter.
+  */
+  workhorseRevision?: string;
 }
 
 interface DashboardHumanWaitPage {
@@ -1905,6 +1912,8 @@ interface DashboardProps {
   workspace?: string | null;
   /** SDK version displayed by the dashboard. Omit to hide it for direct React embeds. */
   workhorseVersion?: string;
+  /** Workhorse source commit displayed beside the version. Omit for a published release. */
+  workhorseRevision?: string;
 }
 
 interface DashboardQueueController {
@@ -5793,6 +5802,7 @@ const dashboardRuntimeConfigSchema: z.ZodObject<{
   rpcUrl: z.ZodString;
   auditActor: z.ZodString;
   workhorseVersion: z.ZodString;
+  workhorseRevision: z.ZodOptional<z.ZodString>;
   authentication: z.ZodNullable<z.ZodObject<{
     loginUrl: z.ZodString;
     logoutUrl: z.ZodString;

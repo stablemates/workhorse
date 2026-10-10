@@ -1,4 +1,4 @@
-import { Badge, Box, Group, Text, type BoxProps } from "@mantine/core";
+import { Anchor, Badge, Box, Group, Text, type BoxProps } from "@mantine/core";
 const workhorseMarkUrl = new URL("./assets/workhorse-mark.svg", import.meta.url).href;
 const workhorseWordmarkUrl = new URL("./assets/workhorse-wordmark.svg", import.meta.url).href;
 
@@ -26,22 +26,41 @@ export function WorkhorseBrand() {
   );
 }
 
-export function WorkhorseVersion({ version }: { version?: string }) {
+/** Commit pages for the source revision a build names. */
+const workhorseCommitUrl = "https://github.com/stablemates/workhorse/commit/";
+
+export function WorkhorseVersion({ version, revision }: { version?: string; revision?: string }) {
   return (
     <Group w="100%" justify="space-between" gap="xs" wrap="nowrap">
       <Badge variant="light" color="gray" size="xs">
         Public beta
       </Badge>
       {version === undefined ? null : (
-        <Text
-          component="span"
-          size="10px"
-          c="dimmed"
-          ff="monospace"
-          aria-label={`Workhorse version ${version}`}
-        >
-          v{version}
-        </Text>
+        <Group gap={4} wrap="nowrap">
+          <Text
+            component="span"
+            size="10px"
+            c="dimmed"
+            ff="monospace"
+            aria-label={`Workhorse version ${version}`}
+          >
+            v{version}
+          </Text>
+          {revision === undefined ? null : (
+            <Anchor
+              href={`${workhorseCommitUrl}${revision}`}
+              target="_blank"
+              rel="noreferrer"
+              size="10px"
+              c="dimmed"
+              ff="monospace"
+              aria-label={`Workhorse revision ${revision}`}
+              title={revision}
+            >
+              {revision.slice(0, 7)}
+            </Anchor>
+          )}
+        </Group>
       )}
     </Group>
   );

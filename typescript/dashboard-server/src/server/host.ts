@@ -123,6 +123,13 @@ export interface DashboardHostOptions {
    * origin replaces the inbound host.
    */
   allowedHosts?: readonly string[];
+  /**
+   * Git commit of the Workhorse source this host was built from, shown beside the version.
+   *
+   * Set it only when the build is not a published release, such as a deployment of `main`. It must
+   * be a hexadecimal commit hash of 7 to 64 characters; letter case does not matter.
+   */
+  workhorseRevision?: string;
 }
 
 /** One named workspace served by a dashboard host. See `DashboardHostOptions.workspaces`. */
@@ -183,6 +190,17 @@ export interface DashboardHost {
 }
 
 /** Normalize a caller-supplied mount path. `/` and `""` both mean "own the host root". */
+function normalizeWorkhorseRevision(input: string | undefined): string | undefined {
+  if (input === undefined) return undefined;
+  const revision = input.toLowerCase();
+  if (!/^[0-9a-f]{7,64}$/.test(revision)) {
+    throw new TypeError(
+      "workhorseRevision must be a hexadecimal commit hash of 7 to 64 characters",
+    );
+  }
+  return revision;
+}
+
 export function normalizeDashboardPath(input: string): string {
   const path = `/${input}`.replaceAll(/\/+/g, "/").replace(/\/$/, "");
   return path === "/" ? "" : path;
@@ -421,6 +439,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
     throw new TypeError("Configure exactly one of a dashboard database or dashboard workspaces");
   }
   const path = normalizeDashboardPath(options.path ?? "/workhorse");
+  const workhorseRevision = normalizeWorkhorseRevision(options.workhorseRevision);
   const hostAllowed = options.allowedHosts ? createHostCheck(options.allowedHosts) : undefined;
   const assets = dashboardAssetsDirectory();
   const singleAdmin = options.singleAdmin
@@ -559,6 +578,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
         rpcUrl: `${workspace.basePath}/rpc`,
         auditActor: authenticatedActor,
         workhorseVersion: WORKHORSE_VERSION,
+        ...(workhorseRevision === undefined ? {} : { workhorseRevision }),
         authentication: singleAdmin
           ? { loginUrl: `${path}/login`, logoutUrl: `${path}/logout` }
           : null,
