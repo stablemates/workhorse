@@ -28,6 +28,23 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --locked --release -p workhorse-demo-worker \
   && cp target/release/workhorse-rust-demo-worker /opt/workhorse-rust-demo-worker
 
+# The Ruby worker runs on the runtime stage's Alpine Ruby, so its gems install on that same base. The
+# lockfile pins every gem and its checksum. pg's prebuilt musl gem carries libpq, so nothing compiles.
+FROM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS ruby-build
+
+RUN apk add --no-cache ruby ruby-bundler
+WORKDIR /opt/workhorse-ruby
+ARG BUILD_CONCURRENCY=4
+# The Gemfile names the SDK through its gemspec, so the SDK's sources come along. The development
+# group holds the test and Rails gems, which the worker never loads.
+COPY ruby/Gemfile ruby/Gemfile.lock ruby/stablemates-workhorse.gemspec ./
+COPY ruby/lib/ ./lib/
+RUN bundle config set --local frozen true \
+  && bundle config set --local without development \
+  && bundle config set --local path /opt/workhorse-ruby/bundle \
+  && bundle install --jobs ${BUILD_CONCURRENCY} --quiet
+COPY ruby/examples/demo_worker.rb ./
+
 FROM ghcr.io/astral-sh/uv:0.12.23@sha256:61d393e44e249f2e4b526b6c7ddcecce245946826e608e11c93ad4f5bba55b21 AS uv
 
 FROM python:3.14-alpine@sha256:9e9fde4d32eedce0b661d9ab91e826b62dddf28e928c230ec55f1866cac66b01 AS python-build
@@ -110,8 +127,8 @@ ENV PORT=3000
 # grow to 4288 MB. It then defers collection until the container limit is reached first and the
 # kernel kills the process with no message and no stack. The container runs four Node processes —
 # the supervisor, the server, the TypeScript worker, and the staging worker — and each also holds
-# about 80 MiB outside the heap, so four ceilings plus the Python, Go, and Rust workers must fit
-# 1 GiB.
+# about 80 MiB outside the heap, so four ceilings plus the Python, Go, Rust, and Ruby workers must
+# fit 1 GiB.
 ENV NODE_OPTIONS=--max-old-space-size=128
 ENV WORKHORSE_DEMO_MODE=production
 ENV WORKHORSE_DEMO_LOG_DIRECTORY=/opt/workhorse-demo/logs
@@ -122,8 +139,9 @@ COPY --from=build --chown=node:node /opt/workhorse-demo/ ./
 COPY --from=go-build /opt/workhorse-go-demo-worker /usr/local/bin/workhorse-go-demo-worker
 COPY --from=rust-build /opt/workhorse-rust-demo-worker /usr/local/bin/workhorse-rust-demo-worker
 COPY --from=python-build /opt/workhorse-python /opt/workhorse-python
+COPY --from=ruby-build /opt/workhorse-ruby /opt/workhorse-ruby
 COPY --chown=node:node python/examples/demo_worker.py /opt/workhorse-python-worker.py
-RUN apk add --no-cache libpq python3
+RUN apk add --no-cache libpq python3 ruby ruby-bundler
 RUN mkdir logs && chown node:node logs
 
 USER node

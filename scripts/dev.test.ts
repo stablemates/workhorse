@@ -6,9 +6,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 
 // Every command the supervisor starts, so no test reaches a real toolchain on the PATH.
-const supervisedCommands = ["pnpm", "uv", "go", "cargo"];
+const supervisedCommands = ["pnpm", "uv", "go", "cargo", "bundle"];
 // The supervisor starts `pnpm` twice: once for the server and once for the TypeScript worker.
-const supervisedProcessCount = 5;
+const supervisedProcessCount = 6;
 // Longer than the supervisor's own force-kill delay and the wait that follows it.
 const supervisorStopTimeoutMs = 8_000;
 

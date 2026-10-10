@@ -66,9 +66,10 @@ import {
   DEMO_PERSISTENT_RETRY_POLICIES,
   DEMO_PYTHON_QUEUE,
   DEMO_QUEUE,
-  DEMO_RUST_FAST_QUEUE,
   DEMO_RUST_FAST_TIER_QUEUE,
   DEMO_RUST_QUEUE,
+  DEMO_RUBY_FAST_TIER_QUEUE,
+  DEMO_RUBY_QUEUE,
   DEMO_RATE_LIMIT,
   DEMO_RATE_LIMIT_PER_KEY,
   DEMO_RATE_LIMIT_POLICY_NAMESPACE,
@@ -105,6 +106,8 @@ import {
   RECURRING_TASK_TYPE,
   RUST_SEED_NAME,
   RUST_WORKER_SCHEDULE_NAME,
+  RUBY_SEED_NAME,
+  RUBY_WORKER_SCHEDULE_NAME,
   REPORT_TASK_TYPE,
   REPORT_SCHEDULE_NAME,
   REPRESENTATIVE_SEED_NAME,
@@ -681,7 +684,7 @@ function heartbeatSchedule(enabled = true) {
 function languageWorkerSchedule(
   name: string,
   schedule: string,
-  language: "typescript" | "python" | "go" | "rust",
+  language: "typescript" | "python" | "go" | "rust" | "ruby",
   queue: string,
   enabled = true,
 ) {
@@ -953,6 +956,13 @@ export async function syncDemoSchedules(database: Pool): Promise<void> {
       "1-59/4 * * * *",
       "rust",
       DEMO_RUST_QUEUE,
+      true,
+    ),
+    languageWorkerSchedule(
+      RUBY_WORKER_SCHEDULE_NAME,
+      "3-59/4 * * * *",
+      "ruby",
+      DEMO_RUBY_QUEUE,
       true,
     ),
     sharedWorkerSchedule(true),
@@ -1775,7 +1785,29 @@ async function seedRateLimitDemoData(database: DemoDatabase): Promise<string[]> 
   });
 }
 
-type FastTierEntry = (typeof DEMO_FAST_TIER_QUEUES)[number] | typeof DEMO_RUST_FAST_TIER_QUEUE;
+/**
+ * The languages whose workers joined the demo after `FAST_TIER_SEED_NAME` had run, in the order
+ * they joined. Each one has its own seed marker, so a database that ran every earlier step runs
+ * only the new one.
+ */
+const LATE_LANGUAGE_SEEDS = [
+  {
+    seedName: RUST_SEED_NAME,
+    label: "Rust",
+    queue: DEMO_RUST_QUEUE,
+    fastTier: DEMO_RUST_FAST_TIER_QUEUE,
+  },
+  {
+    seedName: RUBY_SEED_NAME,
+    label: "Ruby",
+    queue: DEMO_RUBY_QUEUE,
+    fastTier: DEMO_RUBY_FAST_TIER_QUEUE,
+  },
+] as const;
+
+type FastTierEntry =
+  | (typeof DEMO_FAST_TIER_QUEUES)[number]
+  | (typeof LATE_LANGUAGE_SEEDS)[number]["fastTier"];
 
 function fastTierSchedule(entry: FastTierEntry) {
   const schedule = languageWorkerSchedule(
@@ -1866,37 +1898,39 @@ async function seedFastTierDemoData(database: DemoDatabase): Promise<string[]> {
 }
 
 /**
- * Bring the Rust worker's queues into a demo that already ran `FAST_TIER_SEED_NAME`. The step moves
- * `demo-rust-fast` to the fast tier before it enqueues anything there. It then replaces the
- * fast-tier schedule namespace with every language's schedule, because a sync removes any schedule
- * it does not name.
+ * Bring one late language's queues into a demo that already ran every earlier step. The step moves
+ * the language's fast-tier queue to the fast tier before it enqueues anything there. It then
+ * replaces the fast-tier schedule namespace, because a sync removes any schedule it does not name.
+ * The sync names every language up to this one and no later one: a later language's schedule could
+ * fire into its queue before that language's step moves the queue to the fast tier.
  */
-async function seedRustDemoData(database: DemoDatabase): Promise<string[]> {
+async function seedLateLanguageDemoData(database: DemoDatabase, index: number): Promise<string[]> {
+  const step = LATE_LANGUAGE_SEEDS[index]!;
   return database.transaction(async (transaction) => {
     const marker = await transaction.execute<{ name: string }>(sql`
       INSERT INTO public.workhorse_demo_seed (name)
-      VALUES (${RUST_SEED_NAME})
+      VALUES (${step.seedName})
       ON CONFLICT (name) DO NOTHING
       RETURNING name
     `);
     if (marker.rows.length === 0) return [];
 
     const workhorse = createDrizzleAdapter(transaction, {
-      defaultQueue: DEMO_RUST_QUEUE,
+      defaultQueue: step.queue,
       queueOptions: DEMO_QUEUE_OPTIONS,
     });
-    const entry = DEMO_RUST_FAST_TIER_QUEUE;
-    await workhorse.admin.setQueueTier(DEMO_RUST_FAST_QUEUE, "fast", {
+    const entry = step.fastTier;
+    await workhorse.admin.setQueueTier(entry.queue, "fast", {
       actor: "workhorse-demo-seed",
-      reason: "Show the Rust worker on the fast tier of the demo dashboard",
-      requestId: `${RUST_SEED_NAME}:${DEMO_RUST_FAST_QUEUE}`,
+      reason: `Show the ${step.label} worker on the fast tier of the demo dashboard`,
+      requestId: `${step.seedName}:${entry.queue}`,
     });
-    await workhorse.admin.setQueueHistory(DEMO_RUST_FAST_QUEUE, entry.history);
+    await workhorse.admin.setQueueHistory(entry.queue, entry.history);
 
     const payload = { language: entry.language };
     const taskIds = [
       await workhorse.queue.enqueue(LANGUAGE_WORKER_TASK_TYPE, payload, {
-        queue: DEMO_RUST_QUEUE,
+        queue: step.queue,
         maxAttempts: 1,
         tags: ["demo-test", "language-worker", entry.language],
       }),
@@ -1905,9 +1939,10 @@ async function seedRustDemoData(database: DemoDatabase): Promise<string[]> {
       taskIds.push(await workhorse.queue.enqueue(LANGUAGE_WORKER_TASK_TYPE, payload, options));
     }
 
+    const joined = LATE_LANGUAGE_SEEDS.slice(0, index + 1).map((late) => late.fastTier);
     await workhorse.queue.syncSchedules(
       DEMO_FAST_TIER_SCHEDULE_NAMESPACE,
-      [...DEMO_FAST_TIER_QUEUES, DEMO_RUST_FAST_TIER_QUEUE].map(fastTierSchedule),
+      [...DEMO_FAST_TIER_QUEUES, ...joined].map(fastTierSchedule),
     );
     return taskIds;
   });
@@ -2393,14 +2428,17 @@ export async function seedDemoData(database: DemoDatabase) {
 
   const historicalTaskCount = await seedHistoricalDemoData(database);
   const fastTierTaskIds = await seedFastTierDemoData(database);
-  const rustTaskIds = await seedRustDemoData(database);
+  const lateLanguageTaskIds: string[] = [];
+  for (const index of LATE_LANGUAGE_SEEDS.keys()) {
+    lateLanguageTaskIds.push(...(await seedLateLanguageDemoData(database, index)));
+  }
   const taskIds = [
     ...rateLimitTaskIds,
     ...longRunningTaskIds,
     ...featureShowcaseTaskIds,
     ...representativeSeed.taskIds,
     ...fastTierTaskIds,
-    ...rustTaskIds,
+    ...lateLanguageTaskIds,
   ];
   return {
     seeded: taskIds.length > 0 || historicalTaskCount > 0,

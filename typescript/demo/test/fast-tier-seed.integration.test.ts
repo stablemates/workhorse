@@ -16,6 +16,7 @@ import {
   HISTORICAL_SEED_NAME,
   LONG_RUNNING_SEED_NAME,
   REPRESENTATIVE_SEED_NAME,
+  RUBY_SEED_NAME,
   RUST_SEED_NAME,
   seedDemoData,
 } from "../src/app.js";
@@ -40,11 +41,11 @@ const FAST_QUEUE_NAMES = DEMO_FAST_TIER_QUEUES.map((entry) => entry.queue);
 
 /**
  * Stand in for a deployed demo database: every earlier step already ran, so its marker exists. The
- * later Rust step is marked too, so this file observes the fast-tier step alone.
+ * later Rust and Ruby steps are marked too, so this file observes the fast-tier step alone.
  */
 async function markExistingSeedSteps() {
   await pool.query("INSERT INTO public.workhorse_demo_seed (name) SELECT unnest($1::text[])", [
-    [...EXISTING_SEED_MARKERS, RUST_SEED_NAME],
+    [...EXISTING_SEED_MARKERS, RUST_SEED_NAME, RUBY_SEED_NAME],
   ]);
 }
 
@@ -93,7 +94,7 @@ describe("Workhorse demo fast-tier seed", () => {
       "SELECT name FROM public.workhorse_demo_seed ORDER BY name",
     );
     expect(markers.rows.map((row) => row.name)).toEqual(
-      [...EXISTING_SEED_MARKERS, RUST_SEED_NAME, FAST_TIER_SEED_NAME].toSorted(),
+      [...EXISTING_SEED_MARKERS, RUST_SEED_NAME, RUBY_SEED_NAME, FAST_TIER_SEED_NAME].toSorted(),
     );
 
     const schedules = await pool.query<{ name: string; queue: string; cron: string }>(

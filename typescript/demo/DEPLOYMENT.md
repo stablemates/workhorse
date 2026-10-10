@@ -60,6 +60,15 @@ and slower, not different.
 The demo image installs Python runtime dependencies from the committed `python/uv.lock`. Update that
 lock with uv whenever `python/pyproject.toml` changes; the image build rejects a stale lock.
 
+The demo image runs its Ruby worker on the Alpine `ruby` and `ruby-bundler` packages of the runtime
+stage's base. The `ruby-build` stage starts from that same base image, so its gems match the Ruby that
+runs them. It installs the gems from the committed `ruby/Gemfile.lock` with Bundler's frozen mode,
+which checks each gem against the lockfile's checksum. It skips the development group, so the image
+holds only `pg`, `connection_pool`, `concurrent-ruby`, and `logger`. The `pg` gem is the lockfile's
+prebuilt `x86_64-linux-musl` or `aarch64-linux-musl` build, so the stage compiles nothing. Update the
+lock with Bundler whenever `ruby/Gemfile` or the gemspec changes; the frozen install rejects a stale
+lock.
+
 The demo image carries only what the container runs. `pnpm deploy` copies the files that
 `files` in `typescript/demo/package.json` names, so a new file the container loads at runtime must
 be added there. The demo depends on `@stablemates/workhorse-dashboard-server`, which serves the
@@ -193,7 +202,7 @@ connection stops the Rust worker, and the entry point then stops the container. 
 reaches only a TypeScript worker, so this constraint does not apply to it.
 
 Each demo workspace should have a dedicated role and database. The primary workspace runs TypeScript,
-Python, Go, and Rust workers. When `DATABASE_URL_SECONDARY` is set, both launchers add one dedicated
+Python, Go, Rust, and Ruby workers. When `DATABASE_URL_SECONDARY` is set, both launchers add one dedicated
 TypeScript worker for staging, with two execution slots and its own connection pool. The launcher
 maps the secondary URL to that child process only and sets `WORKHORSE_DEMO_WORKSPACE=staging`.
 The container supervises and drains this worker alongside the primary workers.
@@ -207,7 +216,10 @@ marked `fast-tier-dashboard-v1`. It moves the new, empty queues `demo-fast`, `de
 with no migration and no reset. A later step, marked `fast-tier-rust-dashboard-v1`, does the same for
 the Rust worker. It moves the new, empty queue `demo-rust-fast` to the fast tier, records attempts but
 not claims, and enqueues a small batch there and on `demo-rust`. It then syncs all four fast-tier
-schedules. A primary database that already carries every earlier marker runs this step once. Existing
+schedules. A primary database that already carries every earlier marker runs this step once. A step
+marked `fast-tier-ruby-dashboard-v1` follows it for the Ruby worker. It moves `demo-ruby-fast` to the
+fast tier, records both attempts and claims, and enqueues a small batch there and on `demo-ruby`. It
+then syncs all five fast-tier schedules. Existing
 staging history is retained, and admission policies also govern tasks left by the previous seed.
 Fresh production history includes task-specific customer, email, order, and report context.
 Each URL must resolve from inside the deployed container, so a loopback address on the build machine
@@ -239,8 +251,8 @@ and the kernel kills the process. That kill carries no message and no stack, so 
 unexplained restart rather than as a memory problem.
 
 The container runs four Node processes: the supervisor, the server, the TypeScript worker, and the
-staging worker. Each holds about 80 MiB outside its heap, and the Python, Go, and Rust workers hold
-under 70 MiB together, so four ceilings and that overhead must fit the limit. Changing one value alone
+staging worker. Each holds about 80 MiB outside its heap, and the Python, Go, Rust, and Ruby workers
+hold under 120 MiB together, so four ceilings and that overhead must fit the limit. Changing one value alone
 breaks the pair. A larger limit without a larger ceiling is capacity the demo will not use, and a
 smaller limit without a smaller ceiling restores the silent kill.
 `typescript/demo/src/container-memory.test.ts` reads both files and fails when they disagree.
@@ -254,6 +266,10 @@ that grows that working set reaches the container limit before V8 collects.
 
 The Rust worker's figure came later, from the same limits and both workspaces. Its resident set
 peaked at 5 MiB. The Python worker peaked at 42 MiB and the Go worker at 15 MiB in the same run.
+
+The Ruby worker's figure came from its own container under the same limits. That container ran the
+`ruby-build` stage's gems on the runtime base. It completed 12,000 tasks on `demo-ruby` and
+`demo-shared`, then idled for a minute. Its resident set peaked at 45 MiB, with at most 13 threads.
 
 The demo answers a fixed public surface. `GET /up` and `GET /robots.txt` respond without touching
 the dashboard host. `GET` requests under the dashboard path serve the application shell, and `GET`
@@ -463,7 +479,7 @@ next release on, the ordinary pipeline step applies again.
 The demo host is the soak site for
 [ADR 0056](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0056-set-the-1-0-0-exit-criteria.md)
 Gate 4, which holds the 1.0.0 tag on one database running 30 consecutive days under continuous
-work. It already runs TypeScript, Python, Go, and Rust workers against one PostgreSQL database, so the
+work. It already runs TypeScript, Python, Go, Rust, and Ruby workers against one PostgreSQL database, so the
 evidence is a matter of leaving it alone rather than building anything.
 
 While a soak window is open:

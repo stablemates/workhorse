@@ -5,8 +5,8 @@ This is the end-to-end product demo for Workhorse. It lets you create test tasks
 The demo uses Hono as its web server and Drizzle through Workhorse's ORM adapter. Seed data includes
 a transactionally created order and durable task, and worker-owned scheduling drives recurring work.
 
-**The demo runs each worker in a separate process.** The Hono server and TypeScript, Python, Go, and
-Rust workers share nothing but PostgreSQL. Workers announce themselves in
+**The demo runs each worker in a separate process.** The Hono server and TypeScript, Python, Go,
+Rust, and Ruby workers share nothing but PostgreSQL. Workers announce themselves in
 `workhorse.worker_registry`, the dashboard reads the fleet from there, and operator pause travels
 through SQL. The browser refreshes on a bounded polling interval.
 
@@ -36,8 +36,9 @@ plus one named budget that the main queue and the partner API queue share.
 One deterministic keyed seed exposes deduplication evidence without persisting or displaying the raw
 key. The operator menu also retains an explicit idempotent enqueue path.
 
-Prerequisites are Node.js 22+, pnpm 10+, Go 1.25+, `uv`, workspace dependencies installed with
-`pnpm install`, and PostgreSQL 15+ with the local `workhorse` role described in the root README. No
+Prerequisites are Node.js 22+, pnpm 10+, Go 1.25+, `uv`, Cargo, Ruby 3.3+ with Bundler, workspace
+dependencies installed with `pnpm install`, the Ruby gems installed with `pnpm ruby:install`, and
+PostgreSQL 15+ with the local `workhorse` role described in the root README. No
 PostgreSQL extensions are required; recurring work runs through the workers themselves.
 
 Every demo run writes structured OpenTelemetry logs to
@@ -75,7 +76,7 @@ pnpm demo
 
 The command uses the purpose-guarded development primary and secondary databases, compiles the
 server-side runtime packages, then starts a watched Hono server and dedicated TypeScript, Python,
-Go, and Rust worker processes. Run `pnpm dev:reset` first when every repository database needs a clean
+Go, Rust, and Ruby worker processes. Run `pnpm dev:reset` first when every repository database needs a clean
 schema. Everything is served from `http://workhorse.localhost:43155/`, mounted at `/`; the demo
 intentionally exposes no ad hoc public task API. Set `WORKHORSE_WORKER_POLL_MS` to override the
 workers' 15-second idle polling delay.
@@ -137,19 +138,27 @@ already ran every earlier step. It moves `demo-rust-fast` to the fast tier, reco
 claims, and enqueues a small batch there and on `demo-rust`. It then adds the Rust queue to the
 `workhorse-demo-fast-tier` schedules. The ordinary schedule sync gives `demo-rust` its own recurring task.
 
+The Ruby worker joined after that, so a step marked `fast-tier-ruby-dashboard-v1` follows the Rust step.
+It moves `demo-ruby-fast` to the fast tier, recording attempts and claims, and enqueues a small batch
+there and on `demo-ruby`. It then adds the Ruby queue to the `workhorse-demo-fast-tier` schedules. Each
+of these late steps syncs the schedules of its own language and every earlier one, never a later one.
+A later language's schedule could otherwise fire into its fast-tier queue before that queue's tier
+changes. The ordinary schedule sync gives `demo-ruby` its own recurring task.
+
 Open `http://workhorse.localhost:43155/tasks` for the Mantine operator dashboard. Its full-width
 application shell keeps the header and responsive sidebar in place while browser URLs switch between
 `/tasks`, `/cron`, `/system`, and `/workers`. Task filters are nested under Current Tasks and persist as
 the `filter` query parameter, with pagination persisted as `page`.
 
-The demo runs **four** named worker processes with three execution slots each. The TypeScript
-worker claims application tasks from `demo` and rate-limited work from `partner-api`. Python, Go, and
-Rust claim their runtime-specific tasks from `demo-python`, `demo-go`, and `demo-rust`. Each runtime also
-claims its own fast-tier queue: `demo-fast`, `demo-python-fast`, `demo-go-fast`, and `demo-rust-fast`.
-All four workers also compete
-for `demo-shared`, whose single handler has the same contract in every SDK.
+The demo runs **five** named worker processes with three execution slots each. The TypeScript
+worker claims application tasks from `demo` and rate-limited work from `partner-api`. Python, Go,
+Rust, and Ruby claim their runtime-specific tasks from `demo-python`, `demo-go`, `demo-rust`, and
+`demo-ruby`. Each runtime also claims its own fast-tier queue: `demo-fast`, `demo-python-fast`,
+`demo-go-fast`, `demo-rust-fast`, and `demo-ruby-fast`. All five workers also compete for
+`demo-shared`, whose single handler has the same contract in every SDK.
 
-The production identities begin with `demo-typescript-`, `demo-python-`, `demo-go-`, and `demo-rust-`, so the
+The production identities begin with `demo-typescript-`, `demo-python-`, `demo-go-`, `demo-rust-`, and
+`demo-ruby-`, so the
 Workers page makes the runtime topology explicit while every overlapping deployment process keeps a
 unique lease owner. The dashboard still discovers them entirely through
 PostgreSQL; the mount passes no declared worker list. Worker status is explicit: `busy` owns an active lease,
@@ -167,7 +176,7 @@ at the worker's next registration refresh and any handler already running finish
 The demo declares three slots for each worker. Each worker shares those slots between its owned
 queue or queues and `demo-shared`.
 Core workers may configure an integer from 1 through 100 and publish
-`{ concurrency, activeSlots, draining }` to the registry, but the demo's four-worker shape is for
+`{ concurrency, activeSlots, draining }` to the registry, but the demo's five-worker shape is for
 lifecycle and queue visibility, not a measured throughput comparison. Use the
 `worker-concurrency` lifecycle benchmark against a `_bench` database for invariant-gated concurrency
 evidence, and do not infer performance from the dashboard.
@@ -201,10 +210,10 @@ changes only that occurrence, not the schedule or its next fire.
 Startup synchronizes a namespaced one-minute heartbeat, a five-minute report, a one-minute lightweight
 long-running schedule, the staggered feature-family definitions, and three traffic tiers through
 `Queue.syncSchedules`. Each traffic occurrence runs a `demo.traffic-burst` driver that enqueues a burst
-of `demo.shared-worker` tasks on `demo-shared`, so all four workers drain it. A trickle of 2 to 6 tasks
+of `demo.shared-worker` tasks on `demo-shared`, so all five workers drain it. A trickle of 2 to 6 tasks
 runs every minute, spikes of 40 to 120 tasks land three times an hour, and surges of 200 to 400 tasks
 land six times a day.
-All four workers evaluate due schedules in-process with advisory-lock coordination and SQL-level
+All five workers evaluate due schedules in-process with advisory-lock coordination and SQL-level
 occurrence deduplication. The Schedules view reports the live evaluator count for each namespace.
 Its maintenance rows use `Maintenance` as the destination because workers call those PostgreSQL
 functions directly; they are not tasks sent to a queue. The view distinguishes the application heartbeat from four worker-owned maintenance entries: the fast tick, partition preparation, daily history retention at the configured local time, and terminal/idempotency cleanup. PostgreSQL stores the global IANA maintenance timezone, local retention time, and routine due state. The heartbeat's
@@ -221,7 +230,7 @@ For the deployable production shape, build and start the compiled demo explicitl
 pnpm demo:production
 ```
 
-That path creates the optimized dashboard bundle, then starts the Hono process and all four worker
+That path creates the optimized dashboard bundle, then starts the Hono process and all five worker
 processes without Vite, HMR, or React Grab. It does not reset the database, which makes it suitable
 as the basis for future public deployment work.
 

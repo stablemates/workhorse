@@ -668,10 +668,20 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: 0.12.21 # Pinned to the uv version in mise.toml.
+      # The development demo starts its Ruby worker with `bundle exec`. The demo smoke test runs a
+      # copy of the tracked files, which lacks the ignored `ruby/.bundle/config` naming the bundle
+      # path, so the smoke step names the installed bundle itself.
+      - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
+        with:
+          ruby-version: 3.4.11 # Pinned to the ruby version in mise.toml.
+          working-directory: ruby
+          bundler-cache: true
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:reset:dev-primary
       - run: pnpm build
       - run: pnpm test:demo-smoke:built
+        env:
+          BUNDLE_PATH: ${{ github.workspace }}/ruby/vendor/bundle
       - run: pnpm test:site-smoke:built
 
   required:
