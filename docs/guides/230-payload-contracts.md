@@ -13,9 +13,12 @@ runs it. With a payload contract, the error occurs immediately, in the code that
 ## Check the payload when you enqueue a task
 
 **Example.** The task type `mail.send` sends one email. Its payload must have the field `recipient`.
-Your application has a bug, and it sends `{ "to": "ada@example.com" }`. This payload has no
-`recipient` field. Workhorse does not accept the task, and your code gets an error. Workhorse does
-not save the task.
+Your application has a bug.
+
+1. Your application enqueues `mail.send` with the payload `{ "to": "ada@example.com" }`.
+2. Workhorse compares the payload with the rules. The payload has no `recipient` field.
+3. Workhorse raises `TaskContractValidationError`. Your code gets the error immediately.
+4. Workhorse does not save the task. No worker sees it.
 
 To add a payload contract:
 
@@ -49,12 +52,8 @@ await queue.syncContracts();
 Step 3 saves the rules in PostgreSQL. Then all parts of your application use the same rules. A new
 task uses the version that `currentVersion` names, and the task keeps that version.
 
-If the data does not obey the rules, Workhorse raises `TaskContractValidationError`. The error shows
-the task type and the version. It also shows if the payload or the result failed. The error does not
-contain the bad data.
-
-Workhorse also checks the result. If the handler returns a bad result, the attempt fails. Then the
-[retry](110-retries.md) rules apply.
+The error shows the task type and the version. It also shows if the payload or the result failed.
+The error does not contain the bad data.
 
 <details>
 <summary>Reference: contract definitions</summary>
@@ -92,16 +91,28 @@ More detail: [Data model: Contract definitions and policy](../architecture/data-
 
 </details>
 
+## Check the result when a task is complete
+
+**Example.** The rules for `mail.send` say that the result must be an object.
+
+1. A worker runs a `mail.send` task.
+2. The handler returns the text `"sent"`, not an object.
+3. Workhorse compares the result with the rules, and the result fails.
+4. The attempt fails. Workhorse does not record the task as complete.
+5. The [retry](110-retries.md) rules apply, so a worker can run the task again later.
+
+Thus, a bad result does not become a complete task.
+
 ## Change the rules
 
 Each set of rules has a version name, for example `mail-current`. Each task keeps the version that
 Workhorse used when it accepted the task.
 
-A task can wait in the queue while you deploy new code. For example:
+**Example.** A task waits in the queue while you deploy new rules.
 
-1. Workhorse accepts a `mail.send` task with the version `mail-current`.
-2. You deploy the version `mail-v2`.
-3. The handler completes the old task.
+1. At 10:00, Workhorse accepts a `mail.send` task with the version `mail-current`.
+2. At 10:05, you deploy the version `mail-v2`. You set `currentVersion` to `mail-v2`.
+3. At 10:06, a worker runs the old task. The handler returns a result.
 4. Workhorse checks the result with `mail-current`, not with `mail-v2`.
 
 Thus, a new version does not cause old tasks to fail.
@@ -156,14 +167,15 @@ and [Data model: Contract validation at enqueue and completion](../architecture/
 
 PostgreSQL stores each payload and each result, so each one has a maximum size.
 
-- To set the maximum for one queue, use `defaultMaxPayloadBytes` and `defaultMaxResultBytes`.
-- To set the maximum for one version, use `maxPayloadBytes` and `maxResultBytes`.
+- For one queue, set the maximum with `defaultMaxPayloadBytes` and `defaultMaxResultBytes`.
+- For one version, set the maximum with `maxPayloadBytes` and `maxResultBytes`.
 
 If a payload is too large, Workhorse raises `TaskValueSizeLimitError` and does not accept the task.
-If a result is too large, the attempt fails.
+If a result is too large, the attempt fails and the retry rules apply.
 
 PostgreSQL cannot store some characters, for example the NUL character. If a result contains one of
-these characters, the attempt fails. In all of these cases, the worker continues to run.
+these characters, the attempt fails too. In all of these cases, the worker continues to run other
+tasks.
 
 <details>
 <summary>Reference: size limits and storable results</summary>
@@ -204,15 +216,19 @@ More detail: [Data model: Value size limits](../architecture/data-model.md#value
 A payload can contain a secret, for example an access token. The handler needs the secret. The
 people who look at the dashboard do not need it.
 
+**Example.** The payload of `mail.send` contains the field `accessToken`. The payload contract hides
+this field.
+
+1. A worker runs the task. The handler gets the full payload, with `accessToken`.
+2. An operator opens the task in the dashboard. The dashboard does not show `accessToken`.
+3. The handler fails with an error message that contains the token.
+4. Workhorse replaces the error message with a fixed message. Then it stores the error.
+
+Thus, the token does not appear in the dashboard, in the stored errors, or in traces.
+
 To hide a field of the payload, put its name in `sensitivePayloadKeys`. To hide a field of the
-result, use `sensitiveResultKeys`.
-
-The handler gets the full payload. Task lookup, task lists, dead letters, and the dashboard do not
-show the hidden fields.
-
-An error message can also contain a secret. If a payload contract hides a field, Workhorse replaces
-the error details of a failed attempt with a fixed message. It does this before it stores or traces
-the error.
+result, use `sensitiveResultKeys`. Task lookup, task lists, and dead letters also do not show the
+hidden fields.
 
 <details>
 <summary>Reference: redaction keys</summary>
@@ -234,8 +250,8 @@ More detail: [Data model: Redaction keys](../architecture/data-model.md#redactio
 ## Use only the permitted schema features
 
 Workhorse has SDKs for TypeScript, Python, Go, Rust, and Ruby. All SDKs must get the same answer for
-the same data. Some JSON Schema features give different answers in different languages. Workhorse
-does not permit these features:
+the same data. Some JSON Schema features give different answers in different languages, so
+Workhorse does not permit them:
 
 - `pattern` and `patternProperties`. Each language reads text patterns differently. Check the text
   format in your handler.
