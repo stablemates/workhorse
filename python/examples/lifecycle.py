@@ -9,13 +9,17 @@ from __future__ import annotations
 import sys
 from collections.abc import Callable
 from time import monotonic, sleep
-from typing import Any
+from typing import Any, TypedDict
 from uuid import uuid4
 
 import psycopg
 from psycopg_pool import ConnectionPool
 
 from workhorse import ChildTaskRequest, EnqueueOptions, HandlerContext, Json, Queue, Worker
+
+
+class Order(TypedDict):
+    orderId: str
 
 
 def run_until(condition: Callable[[], bool], *workers: Worker, timeout: float = 2.0) -> None:
@@ -47,9 +51,8 @@ def run(database_url: str) -> None:
             ),
         )
 
-    def process_order(payload: object, context: HandlerContext) -> dict[str, Json]:
-        assert isinstance(payload, dict)
-        prepared = context.checkpoint(
+    def process_order(payload: Order, context: HandlerContext) -> dict[str, Json]:
+        prepared: dict[str, Json] = context.checkpoint(
             "prepare",
             lambda: {"orderId": payload["orderId"], "prepared": True},
         )
