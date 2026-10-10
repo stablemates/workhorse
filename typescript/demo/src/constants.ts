@@ -24,6 +24,7 @@ export const SHARED_WORKER_TASK_TYPE = "demo.shared-worker";
 export const REPORT_TASK_TYPE = "demo.report";
 export const CHILD_STEP_TASK_TYPE = "demo.child-step";
 export const SIGNAL_SENDER_TASK_TYPE = "demo.signal-sender";
+export const TRAFFIC_BURST_TASK_TYPE = "demo.traffic-burst";
 /** One shared boundary name keeps the signal showcase greppable across sender and waiter. */
 export const DEMO_SIGNAL_NAME = "partner-callback";
 export const DEMO_HUMAN_WAIT_NAME = "operator-decision";
@@ -210,6 +211,21 @@ export const RUST_WORKER_SCHEDULE_NAME = "language-worker.rust";
 export const SHARED_WORKER_SCHEDULE_NAME = "shared-worker";
 export const REPORT_SCHEDULE_NAME = "demo.report";
 export const LONG_RUNNING_SCHEDULE_NAME = "demo.long-running";
+/**
+ * Traffic tiers that give the demo an uneven daily load.
+ *
+ * Each occurrence runs one `demo.traffic-burst` driver on the TypeScript worker. The driver fans
+ * out a burst of shared-worker tasks onto `demo-shared`, so every language worker drains it. A
+ * steady trickle runs every minute, spikes land three times an hour, and surges land six times a
+ * day. The burst size varies per occurrence between `minSize` and `maxSize`. Together the tiers
+ * add about 14,800 tasks a day to the roughly 9,500 the other schedules produce.
+ */
+export const DEMO_TRAFFIC_TIERS = [
+  { name: "traffic.trickle", tier: "trickle", schedule: "* * * * *", minSize: 2, maxSize: 6 },
+  { name: "traffic.spike", tier: "spike", schedule: "7,26,48 * * * *", minSize: 40, maxSize: 120 },
+  { name: "traffic.surge", tier: "surge", schedule: "38 1-23/4 * * *", minSize: 200, maxSize: 400 },
+] as const;
+export type DemoTrafficTier = (typeof DEMO_TRAFFIC_TIERS)[number]["tier"];
 /**
  * The demo always asks for the documented 24 hour retention window so a repeated submission is
  * still recognised across a demo session and an operator can see one stable retention claim.

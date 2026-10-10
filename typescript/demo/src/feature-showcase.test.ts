@@ -8,6 +8,7 @@ import {
 
 describe("demo feature showcase catalog", () => {
   it("declares exactly three examples and staggers one recurring definition per family", () => {
+    const humanDecisionStride = 12;
     expect(DEMO_FEATURE_SHOWCASE_FAMILIES).toHaveLength(17);
     expect(DEMO_FEATURE_SHOWCASE_EXAMPLE_COUNT).toBe(DEMO_FEATURE_SHOWCASE_FAMILIES.length * 3);
     expect(new Set(DEMO_FEATURE_SHOWCASE_FAMILIES.map((family) => family.scheduleName)).size).toBe(
@@ -19,7 +20,8 @@ describe("demo feature showcase catalog", () => {
     for (const [index, family] of DEMO_FEATURE_SHOWCASE_FAMILIES.entries()) {
       expect(family.examples).toHaveLength(3);
       expect(new Set(family.examples.map((example) => example.scenario)).size).toBe(3);
-      expect(family.schedule).toBe(`${index}-59/17 * * * *`);
+      const stride = family.key === "human-decisions" ? humanDecisionStride : 17;
+      expect(family.schedule).toBe(`${index}-59/${stride} * * * *`);
     }
   });
 

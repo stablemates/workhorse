@@ -57,7 +57,10 @@ import {
   RETRY_TASK_TYPE,
   SIGNAL_SENDER_TASK_TYPE,
   SHARED_WORKER_TASK_TYPE,
+  DEMO_SHARED_QUEUE,
   TIMING_TASK_TYPE,
+  TRAFFIC_BURST_TASK_TYPE,
+  type DemoTrafficTier,
 } from "./constants.js";
 import type { DemoDatabase } from "./database.js";
 
@@ -107,6 +110,34 @@ export function sharedWorkerTask(payload: Json, attempt: number) {
     throw new Error("Shared worker requires a source");
   }
   return { source: payload.source, runtime: "node", attempt };
+}
+
+interface TrafficBurstPayload {
+  [key: string]: Json;
+  tier: DemoTrafficTier;
+  minSize: number;
+  maxSize: number;
+}
+
+/** Pick a stable burst size per driver task so each occurrence of a tier differs from the last. */
+function trafficBurstSize(taskId: string, minSize: number, maxSize: number): number {
+  let hash = 0;
+  for (const character of taskId) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  return minSize + (hash % (maxSize - minSize + 1));
+}
+
+/** Build the shared-worker requests one traffic driver enqueues in a single batch. */
+export function trafficBurstRequests(
+  driverTaskId: string,
+  payload: TrafficBurstPayload,
+): EnqueueRequest[] {
+  const size = trafficBurstSize(driverTaskId, payload.minSize, payload.maxSize);
+  return Array.from({ length: size }, (_, member) => ({
+    type: SHARED_WORKER_TASK_TYPE,
+    payload: { source: "traffic-burst", tier: payload.tier, member },
+    options: { queue: DEMO_SHARED_QUEUE, maxAttempts: 1 },
+    tags: ["traffic", payload.tier],
+  }));
 }
 
 /** Build one handler-originated showcase payload with every optional field explicitly null. */
@@ -287,6 +318,10 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
   });
   worker.handle(SHARED_WORKER_TASK_TYPE, async (payload, { task }) => {
     return sharedWorkerTask(payload, task.attempt);
+  });
+  worker.handle<TrafficBurstPayload>(TRAFFIC_BURST_TASK_TYPE, async (payload, { task }) => {
+    const taskIds = await queue.enqueueMany(trafficBurstRequests(task.id, payload));
+    return { tier: payload.tier, enqueued: taskIds.length };
   });
   const featureShowcaseHandler: Handler<DemoFeaturePayload> = async (payload, context) => {
     const variant =
