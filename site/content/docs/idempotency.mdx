@@ -13,14 +13,14 @@ problem, covered at the end of this page.
 
 ## One invoice, two clicks, one task
 
-> **Example.** Invoice `7781` is ready to capture. Your API handler enqueues `invoice.capture` with
-> the idempotency key `capture:7781` in the scope `invoice-capture`. The user double-clicks, so the
-> handler runs twice.
->
-> 1. **At 0 ms** the first request arrives. No task holds the key, so Workhorse creates a task and
->    binds the key to it. The result is `accepted`, with a new `taskId`.
-> 2. **At 40 ms** the second request arrives with the same key and the same content. Workhorse finds
->    the binding and returns the same `taskId`. The outcome is `replayed`.
+**Example.** Invoice `7781` is ready to capture. Your API handler enqueues `invoice.capture` with
+the idempotency key `capture:7781` in the scope `invoice-capture`. The user double-clicks, so the
+handler runs twice.
+
+1. **At 0 ms** the first request arrives. No task holds the key, so Workhorse creates a task and
+   binds the key to it. The result is `accepted`, with a new `taskId`.
+2. **At 40 ms** the second request arrives with the same key and the same content. Workhorse finds
+   the binding and returns the same `taskId`. The outcome is `replayed`.
 
 The second request created nothing: no task, no event, no queue placement, no notification. It only
 reported which task already owns the key.

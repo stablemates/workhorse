@@ -10,18 +10,18 @@ Common examples include a database connection budget or a tenant API limit.
 
 ## A durable dispatch budget
 
-> **Example.** The queue `mail` sends email through a provider that allows ten open connections, and
-> at most three for any one tenant. Four workers run with plenty of free slots between them. The
-> deployment stores a policy for `mail`: ten active tasks, and three per `concurrencyKey`.
->
-> 1. **At 0 s** the queue holds six ready tasks for `tenant-a`, four for `tenant-b`, and two keyless
->    tasks.
-> 2. **At once** the workers claim. Workhorse admits three `tenant-a` tasks, three `tenant-b` tasks,
->    and both keyless tasks. Eight tasks are active.
-> 3. **Still at 0 s** the queue has room for two more, but every remaining task belongs to a full
->    key. They stay ready, however many worker slots are free.
-> 4. **At 4 s** one `tenant-a` task completes. Its key now has room, so Workhorse admits the next
->    `tenant-a` task.
+**Example.** The queue `mail` sends email through a provider that allows ten open connections, and
+at most three for any one tenant. Four workers run with plenty of free slots between them. The
+deployment stores a policy for `mail`: ten active tasks, and three per `concurrencyKey`.
+
+1. **At 0 s** the queue holds six ready tasks for `tenant-a`, four for `tenant-b`, and two keyless
+   tasks.
+2. **At once** the workers claim. Workhorse admits three `tenant-a` tasks, three `tenant-b` tasks,
+   and both keyless tasks. Eight tasks are active.
+3. **Still at 0 s** the queue has room for two more, but every remaining task belongs to a full
+   key. They stay ready, however many worker slots are free.
+4. **At 4 s** one `tenant-a` task completes. Its key now has room, so Workhorse admits the next
+   `tenant-a` task.
 
 The policy held because PostgreSQL decided each admission, not the workers.
 `Queue.syncConcurrencyPolicies` stores desired policies in PostgreSQL. Workers do not need matching

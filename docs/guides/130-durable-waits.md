@@ -11,8 +11,8 @@ of tasks at once, and a sleeping handler holds one of those slots while it does 
 
 ## One order, one wait, two workers
 
-> **Example.** A handler places an order, waits two hours for payment to settle, and then confirms
-> the order.
+**Example.** A handler places an order, waits two hours for payment to settle, and then confirms the
+order.
 
 ```ts
 const handler = async (payload, ctx) => {

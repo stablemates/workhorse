@@ -8,18 +8,17 @@ with every accepted task.
 
 ## Rejecting a malformed payload
 
-> **Example.** The task type `mail.send` needs a `recipient` string. A producer has a bug and sends
-> `{ "recipient": 42 }`.
->
-> 1. **At startup** the application calls `queue.syncContracts()`. PostgreSQL stores the contract
->    version `mail-current` and selects it for new `mail.send` tasks.
-> 2. **At enqueue** the queue validates `{ "recipient": 42 }` against `mail-current`. The value is
->    not a string, so the queue throws. Nothing is written: no task, no event.
-> 3. **Later** a correct payload is accepted. The task records `mail-current` as its contract
->    version.
-> 4. **At completion** the handler returns a string instead of an object. The worker validates the
->    result before it records completion. The result is invalid, so the attempt fails and follows
->    the normal [retry](110-retries.md) path.
+**Example.** The task type `mail.send` needs a `recipient` string. A producer has a bug and sends
+`{ "recipient": 42 }`.
+
+1. **At startup** the application calls `queue.syncContracts()`. PostgreSQL stores the contract
+   version `mail-current` and selects it for new `mail.send` tasks.
+2. **At enqueue** the queue validates `{ "recipient": 42 }` against `mail-current`. The value is
+   not a string, so the queue throws. Nothing is written: no task, no event.
+3. **Later** a correct payload is accepted. The task records `mail-current` as its contract version.
+4. **At completion** the handler returns a string instead of an object. The worker validates the
+   result before it records completion. The result is invalid, so the attempt fails and follows the
+   normal [retry](110-retries.md) path.
 
 `QueueOptions.contracts` groups JSON Schema documents under each task type. New tasks receive
 `currentVersion`, while PostgreSQL retains older documents for tasks accepted by an earlier deploy.

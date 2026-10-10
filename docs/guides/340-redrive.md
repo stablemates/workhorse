@@ -13,11 +13,11 @@ the failed tasks, one task or one filtered batch at a time.
 
 ## Dead letters
 
-> **Example.** On Monday the payment provider is down for an hour. On queue `payments`, task
-> `charge-4711` runs out of attempts during the outage. Workhorse does not delete it. The task
-> becomes a failed outcome with its last error attached. On Tuesday you open the list of failed
-> tasks for `payments`. `charge-4711` is there, beside every other task that failed. The newest
-> failures come first.
+**Example.** On Monday the payment provider is down for an hour. On queue `payments`, task
+`charge-4711` runs out of attempts during the outage. Workhorse does not delete it. The task becomes
+a failed outcome with its last error attached. On Tuesday you open the list of failed tasks for
+`payments`. `charge-4711` is there, beside every other task that failed. The newest failures come
+first.
 
 Most queues call this the dead letter queue. In Workhorse it is just the set of failed tasks. You
 can filter it and page through it to see what has accumulated.

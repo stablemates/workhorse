@@ -9,20 +9,20 @@ Losing it only costs latency, because polling stays the correctness mechanism.
 
 ## What breaks under transaction pooling?
 
-> **Example.** An app called `shop` reaches PostgreSQL through PgBouncer in transaction mode.
-> Transaction pooling hands a client a different server session for each transaction. This is what
-> one order does.
->
-> 1. **The order.** A request handler opens a transaction, inserts order `order-42`, and enqueues
->    `order.fulfill` inside it. PgBouncer keeps one server session for the whole transaction. The
->    commit writes the order and the task together.
-> 2. **The claim.** A worker claims the task. That statement runs on whichever server session
->    PgBouncer lends it.
-> 3. **The heartbeat and the completion.** Later statements for the same task run on other server
->    sessions. Nothing breaks, because the lease and fence token live in the task's runtime row, not
->    in a session.
-> 4. **The migration.** A deployment step migrates the schema through the same pooler. Each step is
->    one script that opens and commits its own transaction. Its lock ends with that transaction.
+**Example.** An app called `shop` reaches PostgreSQL through PgBouncer in transaction mode.
+Transaction pooling hands a client a different server session for each transaction. This is what one
+order does.
+
+1. **The order.** A request handler opens a transaction, inserts order `order-42`, and enqueues
+   `order.fulfill` inside it. PgBouncer keeps one server session for the whole transaction. The
+   commit writes the order and the task together.
+2. **The claim.** A worker claims the task. That statement runs on whichever server session
+   PgBouncer lends it.
+3. **The heartbeat and the completion.** Later statements for the same task run on other server
+   sessions. Nothing breaks, because the lease and fence token live in the task's runtime row, not
+   in a session.
+4. **The migration.** A deployment step migrates the schema through the same pooler. Each step is
+   one script that opens and commits its own transaction. Its lock ends with that transaction.
 
 Anything that lives on a session, such as a `LISTEN`, a session-level advisory lock, or a `SET`,
 breaks under transaction pooling. It either stops working or leaks onto a server session that the

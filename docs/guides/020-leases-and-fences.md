@@ -5,24 +5,24 @@ guarantees it, because almost every other rule in Workhorse depends on it.
 
 ## One task, a frozen worker, and a late write
 
-> **Example.** Worker A runs an invoice task. Partway through, A's machine freezes. Later it comes
-> back and tries to mark the task complete. This is what happens.
->
-> 1. **At 0 s — the claim.** Worker A has a free slot and asks for work. Workhorse gives it the
->    invoice task and stamps three things on the task's runtime row: A's worker id, an expiry at 30
->    s, and fence token 41. Worker A now holds a **lease**: it owns the task until 30 s.
-> 2. **At 10 s and 20 s — heartbeats.** While the handler runs, worker A tells PostgreSQL on a timer
->    that it is still working. Each accepted heartbeat moves the expiry later. After the heartbeat
->    at 20 s, the lease runs until 50 s.
-> 3. **At 25 s — the freeze.** Worker A's machine stops responding. The handler stops, and so do the
->    heartbeats. Nothing tells the database. It only notices, later, that the expiry has passed.
-> 4. **At 50 s — the lease expires.** Shortly after, a background pass called recovery finds the
->    abandoned row and puts the task back in the queue for another attempt.
-> 5. **At about 52 s — a new owner.** Worker B claims the task. The new claim gets a **new, higher
->    fence token**: 57, because other claims happened in between.
-> 6. **At 90 s — the late write.** Worker A's machine recovers. Its handler finishes and tries to
->    mark the task complete. The write carries fence token 41. The row now says 57, so PostgreSQL
->    refuses the write. Worker A cannot touch the attempt that replaced it.
+**Example.** Worker A runs an invoice task. Partway through, A's machine freezes. Later it comes
+back and tries to mark the task complete. This is what happens.
+
+1. **At 0 s — the claim.** Worker A has a free slot and asks for work. Workhorse gives it the
+   invoice task and stamps three things on the task's runtime row: A's worker id, an expiry at 30 s,
+   and fence token 41. Worker A now holds a **lease**: it owns the task until 30 s.
+2. **At 10 s and 20 s — heartbeats.** While the handler runs, worker A tells PostgreSQL on a timer
+   that it is still working. Each accepted heartbeat moves the expiry later. After the heartbeat at
+   20 s, the lease runs until 50 s.
+3. **At 25 s — the freeze.** Worker A's machine stops responding. The handler stops, and so do the
+   heartbeats. Nothing tells the database. It only notices, later, that the expiry has passed.
+4. **At 50 s — the lease expires.** Shortly after, a background pass called recovery finds the
+   abandoned row and puts the task back in the queue for another attempt.
+5. **At about 52 s — a new owner.** Worker B claims the task. The new claim gets a **new, higher
+   fence token**: 57, because other claims happened in between.
+6. **At 90 s — the late write.** Worker A's machine recovers. Its handler finishes and tries to mark
+   the task complete. The write carries fence token 41. The row now says 57, so PostgreSQL refuses
+   the write. Worker A cannot touch the attempt that replaced it.
 
 Without step 6 there would be chaos: a task marked succeeded while a second copy still runs it.
 

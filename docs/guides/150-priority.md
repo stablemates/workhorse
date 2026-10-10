@@ -7,16 +7,15 @@ Existing callers keep FIFO behavior because Workhorse supplies the default.
 
 ## One urgent reminder jumps the line
 
-> **Example.** Queue `billing` sends invoice reminders. Fifty ordinary reminders are ready at the
-> default priority, and every worker slot is busy with earlier reminders.
->
-> 1. **At 0 s** the fifty ordinary reminders wait in the order they became ready.
-> 2. **At 2 s** your app enqueues a reminder for an overdue invoice with an urgent priority. It is
->    ready at once.
-> 3. **At 3 s** a worker slot frees up, and the worker asks for work. PostgreSQL hands it the urgent
->    reminder, not the oldest ordinary one.
-> 4. **At 4 s** another slot frees up. No urgent work is left, so the oldest ordinary reminder
->    starts.
+**Example.** Queue `billing` sends invoice reminders. Fifty ordinary reminders are ready at the
+default priority, and every worker slot is busy with earlier reminders.
+
+1. **At 0 s** the fifty ordinary reminders wait in the order they became ready.
+2. **At 2 s** your app enqueues a reminder for an overdue invoice with an urgent priority. It is
+   ready at once.
+3. **At 3 s** a worker slot frees up, and the worker asks for work. PostgreSQL hands it the urgent
+   reminder, not the oldest ordinary one.
+4. **At 4 s** another slot frees up. No urgent work is left, so the oldest ordinary reminder starts.
 
 PostgreSQL considers higher values first when a worker asks for ready work. Tasks with the same
 value keep their FIFO order. Priority changes which value leads without reordering peers.
