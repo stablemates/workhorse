@@ -251,12 +251,16 @@ Organize each page around what the reader wants to do.
 `docs/guides/210-enqueue-idempotency.md` and `docs/guides/230-payload-contracts.md` show the shape.
 Older guides move to it when they next change.
 
-- Open the page with one purpose sentence, then the first section's short example and its code.
-- Name each section after a reader task, such as "Validate a payload". Put the most common task
-  first and rare edge cases last.
-- Give a later section a concrete case only when its rule is hard to follow without one. Keep the
-  case to a few sentences, or a short numbered sequence when timing matters. State the rule after
-  it.
+- Open the page with context: what the subject is and why it is important. Then start the first
+  section with its example and its code.
+- Name each section after a reader task, such as "Check the payload when you enqueue a task". Put
+  the most common task first and rare edge cases last.
+- Add an example to a section only when the section describes events in a sequence or a
+  surprising result. Do not add an example to a section that only describes a setting.
+- Start an example with a bold `**Example.**`, then write numbered steps. Write one event in each
+  step. Use a maximum of five steps. If an example needs more steps, divide the section.
+- Use one example task for the full page, so the reader learns one set of names.
+- Give the rule after the example.
 - Keep internals out of the main text. SQL function names, cache behavior, size measurement, error
   codes, and per-language error classes belong in the reference block or on the architecture page.
 - Use plain words and no analogies. An analogy gives a term a second meaning.

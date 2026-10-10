@@ -1,7 +1,5 @@
 # How do I stop a repeated request from enqueueing a second task?
 
-<!-- scenario-names: order-123 -->
-
 Sometimes your application sends the same enqueue request two times. For example, a user clicks a
 button two times, or a webhook provider sends the same event again. Enqueue idempotency makes sure
 that Workhorse creates only one task for these requests. The second request gets the task that the
@@ -9,10 +7,16 @@ first request created.
 
 ## Prevent a duplicate task
 
-**Example.** Invoice `7781` is ready for capture. Your API endpoint enqueues the task type
-`invoice.capture` with the idempotency key `capture:7781` in the scope `invoice-capture`. The user
-clicks two times, so the endpoint runs two times. Workhorse creates the task for the first request.
-For the second request, Workhorse creates nothing and returns the same `taskId`.
+**Example.** Invoice `7781` is ready for capture. The user clicks "Pay" two times, so your API
+endpoint runs two times.
+
+1. The first request enqueues `invoice.capture` with the key `capture:7781` in the scope
+   `invoice-capture`.
+2. Workhorse creates the task and binds the key to it.
+3. The second request arrives with the same key and the same data.
+4. Workhorse finds the key. It creates nothing and returns the same `taskId`.
+
+To use enqueue idempotency, give an `idempotency` key when you enqueue a task.
 
 ```ts
 const taskId = await queue.enqueue(
@@ -30,7 +34,7 @@ invoice number or the webhook delivery ID. Do not use a timestamp or a random va
 are different for each request, so Workhorse cannot find a duplicate.
 
 If two app servers send the same request at the same time, PostgreSQL lets one request bind the
-key. The other request waits. Then it gets the same task.
+key. The other request waits, and then it gets the same task.
 
 <details>
 <summary>Reference: options and replay</summary>
@@ -60,11 +64,8 @@ More detail: [Data model: Fingerprint and replay](../architecture/data-model.md#
 
 ## Keep the keys of different features apart
 
-A key is unique in its scope. If you do not give a scope, Workhorse uses the scope `default`.
-
-For example, the email feature and the warehouse feature both use the key `order-123` for different
-tasks. Both use the scope `default`. Thus, the second request gets a conflict error, and Workhorse
-does not create its task.
+A key is unique in its scope. If you do not give a scope, Workhorse uses the scope `default`. Thus,
+two features that use the same key in the scope `default` can collide.
 
 To prevent this, give each feature its own `scope`. Use the scope `default` only if each key
 already contains the name of its feature.
@@ -123,9 +124,14 @@ More detail: [Task lifecycle: Enqueue results](../architecture/lifecycle.md#enqu
 
 Each key has a time limit. `ttlMs` sets this limit.
 
-- Before the time limit, a repeated request gets the original task. This is also true after the task
-  is complete.
-- After the time limit, the same request creates a new task.
+**Example.** The key `capture:7781` has the default time limit of one day.
+
+1. At 0 h, the first request creates the task.
+2. At 1 min, a worker completes the task.
+3. At 3 h, a client sends the request again. The key is still active, so the client gets the
+   original task.
+4. At 25 h, the client sends the request again. The key is no longer active, so Workhorse creates a
+   new task.
 
 A repeated request does not make the time limit longer. Set `ttlMs` to the longest time in which a
 client can repeat a request. For example, use the redelivery period of your webhook provider.
@@ -148,9 +154,15 @@ More detail: [Data model: Key exposure and expiry](../architecture/data-model.md
 ## Do not use one key for different data
 
 Workhorse records the first request: its queue, its task type, its payload, and its options. Each
-later request with the same key must be the same. If the payload or an option is different,
-Workhorse raises a conflict error. The original task does not change, and Workhorse does not create
-a second task.
+later request with the same key must be the same.
+
+**Example.** A bug changes the payload of a repeated request.
+
+1. The first request for `capture:7781` creates a task.
+2. Two seconds later, a client sends the request again with a different payload.
+3. Workhorse compares the second request with the first request. The payloads are different.
+4. Workhorse raises a conflict error. The original task does not change, and Workhorse does not
+   create a second task.
 
 The conflict error stops the full enqueue statement. If you enqueue in your own transaction, the
 transaction fails too. The error shows the existing task and the fields that are different.
@@ -213,13 +225,19 @@ More detail: [Data model: Key exposure and expiry](../architecture/data-model.md
 ## Make the handler safe to run again
 
 Enqueue idempotency prevents duplicate tasks. It does not make sure that a task runs only one time.
-Workhorse runs each task [at least one time](030-delivery-guarantees.md). If a worker stops during an attempt,
-another worker runs the same task after the [lease](020-leases-and-fences.md) expires.
+Workhorse runs each task [at least one time](030-delivery-guarantees.md).
 
-If a repeated external action can cause a problem, give the external system its own idempotency key.
-Use the task ID or a business ID. `HandlerContext.checkpoint` can also skip a part of the handler
-that is complete. But a crash can occur after the external action and before the checkpoint. Then
-the action can occur again. Only the idempotency key of the external system prevents this.
+**Example.** The handler of `invoice.capture` charges a card.
+
+1. A worker runs the task, and the handler charges the card.
+2. The worker stops before it records the task as complete.
+3. The [lease](020-leases-and-fences.md) of the worker expires.
+4. Another worker runs the same task, and the handler charges the card again.
+
+To prevent a second charge, give the payment provider its own idempotency key. Use the task ID or
+the invoice number. `HandlerContext.checkpoint` can also skip a part of the handler that is
+complete. But a crash can occur after the charge and before the checkpoint. Only the idempotency key
+of the payment provider prevents a second charge in this case.
 
 ## Next
 
