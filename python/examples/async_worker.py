@@ -8,9 +8,14 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from typing import TypedDict
 from uuid import uuid4
 
 from workhorse import AsyncHandlerContext, AsyncQueue, AsyncWorker, Json
+
+
+class Measurement(TypedDict):
+    value: int
 
 
 async def run(database_url: str, driver: str) -> None:
@@ -18,8 +23,7 @@ async def run(database_url: str, driver: str) -> None:
     queue_name = f"python-async-worker-{driver}-{suffix}"
     task_type = f"async.worker-{driver}-{suffix}"
 
-    async def handler(payload: object, _context: AsyncHandlerContext) -> dict[str, Json]:
-        assert isinstance(payload, dict)
+    async def handler(payload: Measurement, _context: AsyncHandlerContext) -> dict[str, Json]:
         return {"driver": driver, "value": payload["value"]}
 
     if driver == "psycopg":

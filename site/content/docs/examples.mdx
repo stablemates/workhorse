@@ -175,8 +175,14 @@ idempotency key built from the task ID, because a checkpoint alone cannot stop a
   <Tab value="Python">
     ```python verify
     from datetime import datetime
+    from typing import TypedDict
 
     from workhorse import HandlerContext, Json, Worker
+
+
+    class Trial(TypedDict):
+        to: str
+        followUpAt: str
 
 
     # Stand-ins for a mail provider. A real send passes the key to the provider's
@@ -190,12 +196,9 @@ idempotency key built from the task ID, because a checkpoint alone cannot stop a
 
 
     def register_trial_handler(worker: Worker) -> None:
-        def trial_lifecycle(payload: object, context: HandlerContext) -> dict[str, Json]:
-            assert isinstance(payload, dict)
+        def trial_lifecycle(payload: Trial, context: HandlerContext) -> dict[str, Json]:
             to = payload["to"]
             follow_up_at = payload["followUpAt"]
-            assert isinstance(to, str) and isinstance(follow_up_at, str)
-
             context.checkpoint(
                 "welcome",
                 lambda: send_welcome(to, idempotency_key=f"welcome:{context.task.id}"),
@@ -389,6 +392,8 @@ namespace fires it.
   </Tab>
   <Tab value="Python">
     ```python verify
+    from typing import TypedDict
+
     import psycopg
     from psycopg_pool import ConnectionPool
 
@@ -402,8 +407,11 @@ namespace fires it.
     )
 
 
-    def generate_invoices(payload: object, _context: HandlerContext) -> dict[str, Json]:
-        assert isinstance(payload, dict)
+    class InvoiceRun(TypedDict):
+        scope: str
+
+
+    def generate_invoices(payload: InvoiceRun, _context: HandlerContext) -> dict[str, Json]:
         return {"generated": True, "scope": payload["scope"]}
 
 
@@ -919,7 +927,13 @@ handler cancellation primitive.
   </Tab>
   <Tab value="Python">
     ```python verify
+    from typing import TypedDict
+
     from workhorse import HandlerContext, Json, Queue, Worker
+
+
+    class Export(TypedDict):
+        parts: list[str]
 
 
     def upload_part(part: str) -> None:
@@ -933,12 +947,8 @@ handler cancellation primitive.
             reason="customer withdrew the order",
         )
 
-        def build_export(payload: object, context: HandlerContext) -> dict[str, Json]:
-            assert isinstance(payload, dict)
-            parts = payload["parts"]
-            assert isinstance(parts, list)
-            for part in parts:
-                assert isinstance(part, str)
+        def build_export(payload: Export, context: HandlerContext) -> dict[str, Json]:
+            for part in payload["parts"]:
                 context.cancellation.raise_if_cancelled()
                 upload_part(part)
             return {"exported": True}
@@ -1104,9 +1114,26 @@ durable timer, then wait for an idempotent signal.
   </Tab>
   <Tab value="Python">
     ```python verify
-    from typing import Protocol
+    from typing import Protocol, TypedDict, cast
 
     from workhorse import ChildTaskRequest, EnqueueOptions, HandlerContext, Json, Worker
+
+
+    class AgentRun(TypedDict):
+        prompt: str
+        conversationId: str
+
+
+    class Tool(TypedDict):
+        id: str
+
+
+    class Plan(TypedDict):
+        tools: list[Tool]
+
+
+    class Approval(TypedDict):
+        approved: bool
 
 
     class Model(Protocol):
@@ -1114,46 +1141,33 @@ durable timer, then wait for an idempotent signal.
 
 
     def register_agent(worker: Worker, model: Model, cooldown_ms: int) -> None:
-        def run_agent(payload: object, context: HandlerContext) -> dict[str, Json]:
-            assert isinstance(payload, dict)
-            prompt = payload["prompt"]
-            conversation_id = payload["conversationId"]
-            assert isinstance(prompt, str) and isinstance(conversation_id, str)
-
+        def run_agent(payload: AgentRun, context: HandlerContext) -> dict[str, Json]:
             plan = context.checkpoint(
                 "plan",
                 lambda: model.plan(
-                    prompt,
+                    payload["prompt"],
                     idempotency_key=f"plan:{context.task.id}",
                 ),
             )
-            assert isinstance(plan, dict)
-            raw_tools = plan["tools"]
-            assert isinstance(raw_tools, list)
-            children: list[ChildTaskRequest] = []
-            for raw_tool in raw_tools:
-                assert isinstance(raw_tool, dict)
-                tool_id = raw_tool["id"]
-                assert isinstance(tool_id, str)
-                children.append(
+
+            tools = context.run_children_all(
+                [
                     ChildTaskRequest(
-                        name=tool_id,
+                        name=tool["id"],
                         type="agent.tool",
-                        payload=raw_tool,
+                        payload=cast(Json, tool),
                         options=EnqueueOptions(
                             queue="tools",
-                            concurrency_key=conversation_id,
+                            concurrency_key=payload["conversationId"],
                         ),
                     )
-                )
+                    for tool in cast(Plan, plan)["tools"]
+                ]
+            )
 
-            tools = context.run_children_all(children)
             context.sleep("model-cooldown", cooldown_ms)
-            approval = context.wait_for_signal("approval")
-            assert isinstance(approval, dict)
-            approved = approval["approved"]
-            assert isinstance(approved, bool)
-            return {"plan": plan, "tools": tools, "approved": approved}
+            approval = cast(Approval, context.wait_for_signal("approval"))
+            return {"plan": plan, "tools": tools, "approved": approval["approved"]}
 
         worker.handle("agent.run", run_agent)
     ```

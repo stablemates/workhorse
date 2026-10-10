@@ -33,18 +33,23 @@ const worker = new Worker(queue, { concurrency: 4 }).handle(
 
 await worker.run();`,
 
-  heroPython: `import psycopg
+  heroPython: `from typing import TypedDict
+
+import psycopg
 from psycopg_pool import ConnectionPool
 
 from workhorse import HandlerContext, Json, Queue, Worker
+
+
+class Welcome(TypedDict):
+    to: str
 
 
 def run(database_url: str) -> None:
     with psycopg.connect(database_url) as connection:
         Queue(connection).enqueue("email.welcome", {"to": "ada@example.com"})
 
-    def welcome(payload: object, _context: HandlerContext) -> dict[str, Json]:
-        assert isinstance(payload, dict)
+    def welcome(payload: Welcome, _context: HandlerContext) -> dict[str, Json]:
         return {"deliveredTo": payload["to"]}
 
     with ConnectionPool(
@@ -261,7 +266,14 @@ end`,
   return { chargeId: charge.id };
 });`,
 
-  checkpointsPython: `from workhorse import HandlerContext, Json, Worker
+  checkpointsPython: `from typing import TypedDict
+
+from workhorse import HandlerContext, Json, Worker
+
+
+class Invoice(TypedDict):
+    amount: int
+    email: str
 
 
 def charge_card(amount: int) -> dict[str, Json]:
@@ -273,14 +285,10 @@ def render_invoice(charge_id: Json) -> dict[str, Json]:
 
 
 def register_invoice(worker: Worker) -> None:
-    def issue(payload: object, context: HandlerContext) -> dict[str, Json]:
-        assert isinstance(payload, dict)
-        amount, email = payload["amount"], payload["email"]
-        assert isinstance(amount, int) and isinstance(email, str)
-        charge = context.checkpoint("charge", lambda: charge_card(amount))
-        assert isinstance(charge, dict)
+    def issue(payload: Invoice, context: HandlerContext) -> dict[str, Json]:
+        charge = context.checkpoint("charge", lambda: charge_card(payload["amount"]))
         pdf = context.checkpoint("render", lambda: render_invoice(charge["id"]))
-        print("email", email, pdf)
+        print("email", payload["email"], pdf)
         return {"chargeId": charge["id"]}
 
     worker.handle("invoice.issue", issue)`,
@@ -375,16 +383,14 @@ end`,
   sleepPython: `from workhorse import HandlerContext, Json, Worker
 
 
-def place_order(payload: object) -> dict[str, Json]:
-    assert isinstance(payload, dict)
+def place_order(payload: Json) -> dict[str, Json]:
     return {"payload": payload}
 
 
 def register_settlement(worker: Worker) -> None:
-    def settle(payload: object, context: HandlerContext) -> dict[str, Json]:
+    def settle(payload: Json, context: HandlerContext) -> dict[str, Json]:
         order = context.checkpoint("place", lambda: place_order(payload))
         context.sleep("settlement-window", 60 * 60 * 1000)
-        assert isinstance(order, dict)
         return {"order": order, "confirmed": True}
 
     worker.handle("order.settle", settle)`,
@@ -937,8 +943,7 @@ def configure_checkout(queue: Queue, worker: Worker, order_id: str) -> None:
         ),
     )
 
-    def fulfill(order: object, context: HandlerContext) -> dict[str, Json]:
-        assert isinstance(order, dict)
+    def fulfill(order: Json, context: HandlerContext) -> dict[str, Json]:
         receipt = context.run_child("charge", "payment.capture", order)
         return {"receipt": receipt}
 
@@ -1149,18 +1154,29 @@ await queue.sendSignal(taskId, "security-scan", scanResult, {
   requestedBy: "security-scanner",
 });`,
 
-  externalWaitsPython: `from workhorse import HandlerContext, Json, Queue, Worker
+  externalWaitsPython: `from typing import TypedDict, cast
+
+from workhorse import HandlerContext, Json, Queue, Worker
+
+
+class Release(TypedDict):
+    id: str
+
+
+class Review(TypedDict):
+    approved: bool
 
 
 def configure_release(worker: Worker) -> None:
-    def publish(release: object, context: HandlerContext) -> dict[str, Json]:
-        assert isinstance(release, dict)
+    def publish(release: Release, context: HandlerContext) -> dict[str, Json]:
         scan = context.wait_for_signal("security-scan")
-        review = context.wait_for_human(
-            "release-approval",
-            {"releaseId": release["id"], "scan": scan},
+        review = cast(
+            Review,
+            context.wait_for_human(
+                "release-approval",
+                {"releaseId": release["id"], "scan": scan},
+            ),
         )
-        assert isinstance(review, dict)
         return {"published": review["approved"]}
 
     worker.handle("release.publish", publish)
@@ -1352,12 +1368,17 @@ await queue.cancel(taskId, {
   reason: "customer withdrew the request",
 });`,
 
-  cancellationPython: `from workhorse import HandlerContext, Json, Queue, Worker
+  cancellationPython: `from typing import TypedDict
+
+from workhorse import HandlerContext, Json, Queue, Worker
+
+
+class Export(TypedDict):
+    rows: list[Json]
 
 
 def configure_export(queue: Queue, worker: Worker, task_id: str) -> None:
-    def export(payload: object, context: HandlerContext) -> dict[str, Json]:
-        assert isinstance(payload, dict) and isinstance(payload["rows"], list)
+    def export(payload: Export, context: HandlerContext) -> dict[str, Json]:
         for row in payload["rows"]:
             context.cancellation.raise_if_cancelled()
             print("upload", row)
@@ -1892,6 +1913,7 @@ export default defineWorkerProcess({
 });`,
 
   deployPython: `import os
+from typing import TypedDict
 
 import psycopg
 from psycopg_pool import ConnectionPool
@@ -1899,8 +1921,11 @@ from psycopg_pool import ConnectionPool
 from workhorse import HandlerContext, Json, Worker, run_worker_process
 
 
-def send_email(payload: object, _context: HandlerContext) -> dict[str, Json]:
-    assert isinstance(payload, dict)
+class Email(TypedDict):
+    to: str
+
+
+def send_email(payload: Email, _context: HandlerContext) -> dict[str, Json]:
     return {"deliveredTo": payload["to"]}
 
 
