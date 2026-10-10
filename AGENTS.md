@@ -73,9 +73,8 @@ request comments instead.
 
 ## Write commit messages and pull request descriptions as documentation
 
-Commit messages and pull request descriptions follow the sentence rules under "For either
-documentation layer". They use the terms `CONTEXT.md` defines and follow "Keep benchmark comparisons
-private".
+Commit messages and pull request descriptions follow "Write in Simplified Technical English". They
+use the terms `CONTEXT.md` defines and follow "Keep benchmark comparisons private".
 
 A commit message has no Markdown headings, because the squash merge copies it into `git log` on
 `main`. The subject is the `SM-*` identifier and an imperative summary, about 72 characters long.
@@ -248,11 +247,18 @@ Every guide uses the same shape: a title phrased as the reader's question, a sho
 and why, the explanation, a verified example when useful, a `## Next` block with two or three sibling
 links, and the single reference link. `000-start-here.md` is an index and keeps its own shape.
 
-Write the explanation scenario-first:
+Organize each page around what the reader wants to do.
+`docs/guides/210-enqueue-idempotency.md` and `docs/guides/230-payload-contracts.md` show the shape.
+Older guides move to it when they next change.
 
-- Open each section that explains behavior with one concrete case told in time order. Name the
-  queue, key, or task, and walk through what happens step by step. State the general rule after the
-  case.
+- Open the page with one purpose sentence, then the first section's short example and its code.
+- Name each section after a reader task, such as "Validate a payload". Put the most common task
+  first and rare edge cases last.
+- Give a later section a concrete case only when its rule is hard to follow without one. Keep the
+  case to a few sentences, or a short numbered sequence when timing matters. State the rule after
+  it.
+- Keep internals out of the main text. SQL function names, cache behavior, size measurement, error
+  codes, and per-language error classes belong in the reference block or on the architecture page.
 - Use plain words and no analogies. An analogy gives a term a second meaning.
 - Mark the first scenario of each guide and of each site page that opens with one. Start its first
   paragraph with a bold `**Example.**`, so a reader landing on the page knows its names are
@@ -272,18 +278,47 @@ Write the explanation scenario-first:
   "What this means for you" or "What this does not do", needs neither a scenario nor a reference
   block. It may state no behavior that the guide does not explain elsewhere.
 
-For either documentation layer:
+## Write in Simplified Technical English
 
-- Keep one idea per sentence and stay under 25 words where practical. A contrast between two
-  things is one idea.
-- Avoid noun clusters longer than three words.
-- Put the condition first. An imperative may put its condition last.
-- Name the actor. Workhorse performs a state transition and gives a product-wide guarantee; the
-  worker performs process behavior. Say PostgreSQL only when the point is that the database, not the
-  worker, holds the authority.
-- Explain what a mechanism is for before explaining how it works. This holds per guide: state the
-  purpose once, early, and a later section may be pure mechanism.
-- Give each term one meaning and one part of speech.
-- Use the terms `CONTEXT.md` defines; it is the vocabulary source.
-  `scripts/glossary-avoid-words.test.ts` flags its avoided words under `docs/`, apart from the
-  senses `scripts/glossary-allowlist.json` names.
+All text for this project uses ASD-STE100 Simplified Technical English (STE). This rule applies to
+the documentation layers, the site, commit messages, pull request descriptions, Linear issues and
+comments, and agent replies to a person. Code, identifiers, and quoted output do not change.
+
+STE makes the text easy to read for a person who is new to Workhorse. It also makes the text easy
+to translate. `site/content/docs/contracts.mdx` and `docs/guides/230-payload-contracts.md` show the
+style.
+
+Give context first:
+
+- Start each page, section, or reply with one or two sentences of context. Say what the subject is
+  and why it is important. Then say how it works.
+- Define a term when you use it for the first time. Use one short sentence.
+- Do not use analogies. An analogy gives a term a second meaning.
+
+Write each sentence for one purpose:
+
+- Write one topic in each sentence.
+- Use a maximum of 20 words in an instruction and 25 words in a description.
+- Use a maximum of six sentences in a paragraph.
+- Use the active voice. Name the actor. Workhorse does a state transition and gives a product-wide
+  guarantee. The worker does process behavior. Say PostgreSQL only when the database, not the
+  worker, has the authority.
+- Use the present tense. Do not use "will" for a fact.
+- Put the condition first: "If the payload is too large, Workhorse rejects the task."
+- Use "must" for a requirement. Use "can" for a possibility.
+- Do not use noun clusters of more than three words.
+
+Write instructions as procedures:
+
+- Write an instruction in the imperative. Write one action in each instruction.
+- If the reader must do actions in sequence, write numbered steps.
+- Write a warning or a limit as a separate sentence, near the step that it applies to.
+
+Use simple, consistent words:
+
+- Use common words. For example, use "use", not "utilize", and "start", not "initiate".
+- Give each word one meaning and one part of speech.
+- Do not use phrasal verbs or idioms when a simple verb is available.
+- Use the terms that `CONTEXT.md` defines. `scripts/glossary-avoid-words.test.ts` flags its avoided
+  words under `docs/`, apart from the senses that `scripts/glossary-allowlist.json` names.
+- Write "payload contract" in full, because `CONTEXT.md` gives "contract step" a different meaning.

@@ -2,38 +2,35 @@
 
 <!-- scenario-names: order-123 -->
 
-A user double-clicks "Place order". Your API handler runs twice. Two tasks get enqueued, and the
-customer gets two confirmation emails. Enqueue idempotency stops the second task from being created
-at all.
+Sometimes your application sends the same enqueue request two times. For example, a user clicks a
+button two times, or a webhook provider sends the same event again. Enqueue idempotency makes sure
+that Workhorse creates only one task for these requests. The second request gets the task that the
+first request created.
 
-## One order, two clicks, one task
+## Prevent a duplicate task
 
-**Example.** Order `7781` is placed. Your API handler enqueues a confirmation email with the
-idempotency key `order-confirmation:7781`. The user double-clicks, so the handler runs twice.
-
-1. **At 0 ms** the first request arrives. No task holds the key, so Workhorse creates a task and
-   binds the key to it. The result is `accepted`, with a new `taskId`.
-2. **At 40 ms** the second request arrives with the same key and the same content. Workhorse finds
-   the binding and returns the same `taskId`. The outcome is `replayed`.
-
-The second request created nothing: no task, no event, no notification. It only reported which task
-already owns the key.
+**Example.** Invoice `7781` is ready for capture. Your API endpoint enqueues the task type
+`invoice.capture` with the idempotency key `capture:7781` in the scope `invoice-capture`. The user
+clicks two times, so the endpoint runs two times. Workhorse creates the task for the first request.
+For the second request, Workhorse creates nothing and returns the same `taskId`.
 
 ```ts
-const result = await queue.enqueueWithResult(
-  "send-order-confirmation",
-  { orderId },
-  { idempotency: { key: `order-confirmation:${orderId}` } },
+const taskId = await queue.enqueue(
+  "invoice.capture",
+  { invoiceId },
+  {
+    queue: "billing",
+    idempotency: { key: `capture:${invoiceId}`, scope: "invoice-capture" },
+  },
 );
 ```
 
-PostgreSQL decides which request wins. Suppose two app servers send the request at the same moment.
-PostgreSQL lets one of them bind the key, and the other waits for it. The waiting request then finds
-the binding and replays it.
+To choose a key, use the identity of the operation that must occur one time. For example, use the
+invoice number or the webhook delivery ID. Do not use a timestamp or a random value. These values
+are different for each request, so Workhorse cannot find a duplicate.
 
-The key is yours to choose. Build it from something stable in your domain: an order id, an invoice
-number, a webhook delivery id. A timestamp or a random value makes every request unique, so it
-catches no duplicate.
+If two app servers send the same request at the same time, PostgreSQL lets one request bind the
+key. The other request waits. Then it gets the same task.
 
 <details>
 <summary>Reference: options and replay</summary>
@@ -61,25 +58,16 @@ More detail: [Data model: Fingerprint and replay](../architecture/data-model.md#
 
 </details>
 
-## Scopes keep keys apart
+## Keep the keys of different features apart
 
-Two features each build the key `order-123`. One sends the confirmation email, and the other
-updates the warehouse. Neither passes a scope.
+A key is unique in its scope. If you do not give a scope, Workhorse uses the scope `default`.
 
-1. **At 0 ms** the email feature enqueues with the key `order-123`. No task holds the key, so the
-   result is `accepted`.
-2. **At 5 ms** the warehouse feature enqueues with the same key, but a different task type and
-   payload. Both requests share the default scope. Workhorse finds the binding, sees a different
-   request, and raises a conflict error. The warehouse feature gets no task.
+For example, the email feature and the warehouse feature both use the key `order-123` for different
+tasks. Both use the scope `default`. Thus, the second request gets a conflict error, and Workhorse
+does not create its task.
 
-Pass a `scope` to keep them in separate namespaces:
-
-```ts
-{ idempotency: { key: `order-${orderId}`, scope: "confirmation-email" } }
-```
-
-A key is unique within its scope. If you omit the scope, the request uses a shared default scope.
-That suits keys that already carry their own prefix.
+To prevent this, give each feature its own `scope`. Use the scope `default` only if each key
+already contains the name of its feature.
 
 <details>
 <summary>Reference: scope and key hash</summary>
@@ -93,17 +81,19 @@ More detail: [Data model: Key and limits](../architecture/data-model.md#key-and-
 
 </details>
 
-## Reading the enqueue outcome
+## Find out if a request was a duplicate
 
-In the story, both clicks got the same `taskId`. Only the outcome told them apart: `accepted` for
-the first click and `replayed` for the second. Log the outcome when you want to count duplicates.
+`Queue.enqueue` returns only the task ID. To find out if Workhorse created a new task, use
+`Queue.enqueueWithResult`. Its `outcome` is `accepted` for a new task and `replayed` for a duplicate
+request. The other outcomes are for [debounce](215-debounce.md) and [throttle](217-throttle.md).
 
-`Queue.enqueueWithResult` returns an `EnqueueResult`. Its `taskId` identifies the task that
-Workhorse kept. Its `outcome` explains what PostgreSQL did with this request. Three of the outcomes
-belong to other keyed modes: [debounce](215-debounce.md) and [throttle](217-throttle.md).
-
-Use `Queue.enqueue` when the task ID is enough. It returns the same `taskId` and hides the outcome.
-Use `Queue.enqueueWithResult` when logs, metrics, or application behavior need the reason.
+```ts
+const result = await queue.enqueueWithResult(
+  "invoice.capture",
+  { invoiceId },
+  { idempotency: { key, scope: "invoice-capture" } },
+);
+```
 
 <details>
 <summary>Reference: enqueue outcomes</summary>
@@ -129,19 +119,16 @@ More detail: [Task lifecycle: Enqueue results](../architecture/lifecycle.md#enqu
 
 </details>
 
-## Keys expire
+## Set how long a key stays active
 
-The order key used the default retention window. Here is what happens to it over a day.
+Each key has a time limit. `ttlMs` sets this limit.
 
-1. **At 0 h** the first request is `accepted`. The binding expires at 24 h.
-2. **At 1 min** a worker sends the email, and the task succeeds.
-3. **At 3 h** a client retries the request. The task has finished, but the binding is still alive,
-   so the request is `replayed` with the original `taskId`.
-4. **At 25 h** the same request arrives again. The binding has expired, so Workhorse creates a new
-   task and binds the key to it.
+- Before the time limit, a repeated request gets the original task. This is also true after the task
+  is complete.
+- After the time limit, the same request creates a new task.
 
-A replay does not extend the window. The expiry is fixed when the key is first bound. Keys catch
-accidental duplicates within a bounded period. They do not reserve a name forever.
+A repeated request does not make the time limit longer. Set `ttlMs` to the longest time in which a
+client can repeat a request. For example, use the redelivery period of your webhook provider.
 
 <details>
 <summary>Reference: expiry and release</summary>
@@ -158,26 +145,15 @@ More detail: [Data model: Key exposure and expiry](../architecture/data-model.md
 
 </details>
 
-## Sending different data under the same key
+## Do not use one key for different data
 
-Go back to order `7781`.
+Workhorse records the first request: its queue, its task type, its payload, and its options. Each
+later request with the same key must be the same. If the payload or an option is different,
+Workhorse raises a conflict error. The original task does not change, and Workhorse does not create
+a second task.
 
-1. **At 0 ms** the first request is `accepted`. Workhorse records a fingerprint of that request.
-2. **At 2 s** a client sends the request again, but a bug changed the payload. The key is the same,
-   the content is not.
-3. **Right after** Workhorse compares the request with the stored fingerprint. The payload differs,
-   so Workhorse raises a conflict error. The task from 0 ms keeps its payload, and no second task
-   exists.
-
-That is not a duplicate; it is a mistake. So Workhorse raises a conflict error, and neither request
-silently wins.
-
-Workhorse records a fingerprint of the accepted request: the queue, the type, the payload, the tags,
-the attempt budget, the retry policy, and more. A later request with the same key must match it. An
-identical request is the normal replay case and returns the existing `taskId`.
-
-The conflict aborts the whole statement. If you enqueue inside your own transaction, the transaction
-fails too. The error lists which fields differ.
+The conflict error stops the full enqueue statement. If you enqueue in your own transaction, the
+transaction fails too. The error shows the existing task and the fields that are different.
 
 <details>
 <summary>Reference: fingerprint and conflict</summary>
@@ -212,18 +188,11 @@ More detail: [Data model: Fingerprint and replay](../architecture/data-model.md#
 
 </details>
 
-## Your raw key is never stored
+## Keep keys private
 
-Go back to order `7781`.
-
-1. **At 0 ms** Workhorse binds the key `order-confirmation:7781`. It stores a hash of the key, not
-   the key itself.
-2. **Later** an operator opens the task in the dashboard. Its `enqueued` event shows a short preview
-   of the key and a digest.
-
-Workhorse stores only a hash of the key. Errors, events, and the dashboard show a short preview and
-a digest, not the key itself. So you can build keys from internal identifiers without exposing them
-on an operator's screen.
+Workhorse does not store the key. It stores a hash of the key. Events, errors, and the dashboard
+show only a short preview and a digest of the key. Thus, you can make a key from an internal
+identifier, and the people who look at the dashboard do not see its full value.
 
 <details>
 <summary>Reference: key preview and digest</summary>
@@ -241,11 +210,16 @@ More detail: [Data model: Key exposure and expiry](../architecture/data-model.md
 
 </details>
 
-## What this does not do
+## Make the handler safe to run again
 
-Idempotency stops duplicate _tasks_. It does not make your handler run exactly once. Execution is
-still [at-least-once](030-delivery-guarantees.md), so one task can run twice after a crash. These
-are different problems, and you often need both fixes.
+Enqueue idempotency prevents duplicate tasks. It does not make sure that a task runs only one time.
+Workhorse runs each task [at least one time](030-delivery-guarantees.md). If a worker stops during an attempt,
+another worker runs the same task after the [lease](020-leases-and-fences.md) expires.
+
+If a repeated external action can cause a problem, give the external system its own idempotency key.
+Use the task ID or a business ID. `HandlerContext.checkpoint` can also skip a part of the handler
+that is complete. But a crash can occur after the external action and before the checkpoint. Then
+the action can occur again. Only the idempotency key of the external system prevents this.
 
 ## Next
 
