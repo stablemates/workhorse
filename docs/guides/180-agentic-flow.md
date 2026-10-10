@@ -9,24 +9,25 @@ the model calls and the tools.
 
 ## One conversation, from plan to approval
 
-An `agent.loop` task answers a prompt for conversation `conv-12`. It plans with a model, runs two
-tool tasks, cools down, and waits for a reviewer to approve the answer.
-
-1. **The plan.** Worker A claims the task. The `plan` checkpoint calls the model and stores the
-   plan under the name `plan`.
-2. **The tools.** `HandlerContext.runChildrenAll` creates two [child tasks](170-child-tasks.md),
-   `research` and `calculate`, on a tool queue. The parent blocks, and worker A's slot is free.
-3. **The release.** Tool workers run both children. Both succeed, so Workhorse releases the parent.
-4. **The first replay.** Worker B runs the handler from its entry point. The `plan` checkpoint
-   returns the stored plan without calling the model. `runChildrenAll` returns the stored tool
-   results. The handler then reaches `HandlerContext.sleep`, and the task pauses on a
-   [durable timer](130-durable-waits.md).
-5. **The second replay.** The cooldown ends. A worker replays the handler again, passes every
-   earlier boundary, and reaches `HandlerContext.waitForSignal`. The task pauses again.
-6. **The approval.** The reviewer's app calls `Queue.sendSignal` with the signal `approval`. The
-   task becomes ready, as the [signal contract](135-signals.md) describes.
-7. **The last replay.** A worker replays the handler once more. `waitForSignal` returns the
-   approval, and the handler finishes the answer.
+> **Example.** An `agent.loop` task answers a prompt for conversation `conv-12`. It plans with a
+> model, runs two tool tasks, cools down, and waits for a reviewer to approve the answer.
+>
+> 1. **The plan.** Worker A claims the task. The `plan` checkpoint calls the model and stores the
+>    plan under the name `plan`.
+> 2. **The tools.** `HandlerContext.runChildrenAll` creates two [child tasks](170-child-tasks.md),
+>    `research` and `calculate`, on a tool queue. The parent blocks, and worker A's slot is free.
+> 3. **The release.** Tool workers run both children. Both succeed, so Workhorse releases the
+>    parent.
+> 4. **The first replay.** Worker B runs the handler from its entry point. The `plan` checkpoint
+>    returns the stored plan without calling the model. `runChildrenAll` returns the stored tool
+>    results. The handler then reaches `HandlerContext.sleep`, and the task pauses on a [durable
+>    timer](130-durable-waits.md).
+> 5. **The second replay.** The cooldown ends. A worker replays the handler again, passes every
+>    earlier boundary, and reaches `HandlerContext.waitForSignal`. The task pauses again.
+> 6. **The approval.** The reviewer's app calls `Queue.sendSignal` with the signal `approval`. The
+>    task becomes ready, as the [signal contract](135-signals.md) describes.
+> 7. **The last replay.** A worker replays the handler once more. `waitForSignal` returns the
+>    approval, and the handler finishes the answer.
 
 The handler ran four times, but the model planned once and each tool ran once. Each boundary
 released the lease instead of keeping an in-memory continuation. So the loop survived every worker

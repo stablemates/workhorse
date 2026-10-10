@@ -13,13 +13,13 @@ execution state, so it rejects checkpoints and waits.
 
 ## Save completed stages with checkpoints
 
-An order handler charges a card and then creates a shipment.
-
-1. **At 0 s** a worker claims the task for attempt 1. The `charge` checkpoint finds no stored
-   value, so it charges the card. Workhorse stores the JSON result under the name `charge`.
-2. **At 1 s** the shipment call fails, and the handler throws.
-3. **On the retry** a worker calls the handler from the top. The `charge` checkpoint finds the
-   stored value and returns it without charging again. Only the `shipment` operation runs.
+> **Example.** An order handler charges a card and then creates a shipment.
+>
+> 1. **At 0 s** a worker claims the task for attempt 1. The `charge` checkpoint finds no stored
+>    value, so it charges the card. Workhorse stores the JSON result under the name `charge`.
+> 2. **At 1 s** the shipment call fails, and the handler throws.
+> 3. **On the retry** a worker calls the handler from the top. The `charge` checkpoint finds the
+>    stored value and returns it without charging again. Only the `shipment` operation runs.
 
 `HandlerContext.checkpoint` looks for a stored value under its name. The first activation runs the
 operation and stores the result under the current fenced lease. Every later activation returns the

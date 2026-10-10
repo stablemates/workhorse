@@ -10,15 +10,16 @@ cleanup must never destroy evidence that something else still needs.
 
 ## One maintenance pass, five routines
 
-A fleet runs only Go workers. Each worker offers the slow maintenance pass about once a minute.
-
-1. **At 02:59** a worker offers the pass. PostgreSQL runs only the routines that are due. The
-   [statistics rollup](320-statistics.md), the background pass that summarizes history into
-   buckets, is due, because a minute has passed since its last run.
-2. **At 03:00** another worker offers the pass. The rollup runs again. The daily history retention
-   routine is now due, so PostgreSQL runs it after the rollup.
-3. **A moment later** a third worker offers the pass. The routines have just run and are not due
-   again, so this pass does no work.
+> **Example.** A fleet runs only Go workers. Each worker offers the slow maintenance pass about once
+> a minute.
+>
+> 1. **At 02:59** a worker offers the pass. PostgreSQL runs only the routines that are due. The
+>    [statistics rollup](320-statistics.md), the background pass that summarizes history into
+>    buckets, is due, because a minute has passed since its last run.
+> 2. **At 03:00** another worker offers the pass. The rollup runs again. The daily history retention
+>    routine is now due, so PostgreSQL runs it after the rollup.
+> 3. **A moment later** a third worker offers the pass. The routines have just run and are not due
+>    again, so this pass does no work.
 
 Every worker runtime offers the same pass through `run_maintenance_v1`. PostgreSQL orders the
 routines: statistics, partition preparation, retention, terminal cleanup, and registry cleanup. Each

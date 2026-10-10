@@ -9,19 +9,19 @@ the window closes.
 
 ## One account, four triggers, two digests
 
-Your app sends each account a digest email of recent activity. Every activity event asks for a
-digest, but the account should get at most one digest per ten minutes. So every event sends the
-same request: send a digest for `acct-7`, with key `acct-7` and a ten-minute window.
-
-1. **At 0 min** the first event arrives. Workhorse creates a task, and the window for `acct-7`
-   runs until 10 min. The result is `accepted`, with a new `taskId`. The task is ready at once.
-2. **At 2 min** a second event arrives. The window is open, so Workhorse creates nothing. It returns
-   the same `taskId` with the outcome `coalesced`.
-3. **At 3 min** a worker sends the digest, and the task succeeds.
-4. **At 7 min** a third event arrives. The task has already finished, but the window is still open,
-   so this request is also `coalesced`. A finished task does not reopen the window.
-5. **At 12 min** a fourth event arrives. The window closed at 10 min, so Workhorse creates a new
-   task with a new `taskId`. Its window runs until 22 min.
+> **Example.** Your app sends each account a digest email of recent activity. Every activity event
+> asks for a digest, but the account should get at most one digest per ten minutes. So every event
+> sends the same request: send a digest for `acct-7`, with key `acct-7` and a ten-minute window.
+>
+> 1. **At 0 min** the first event arrives. Workhorse creates a task, and the window for `acct-7`
+>    runs until 10 min. The result is `accepted`, with a new `taskId`. The task is ready at once.
+> 2. **At 2 min** a second event arrives. The window is open, so Workhorse creates nothing. It
+>    returns the same `taskId` with the outcome `coalesced`.
+> 3. **At 3 min** a worker sends the digest, and the task succeeds.
+> 4. **At 7 min** a third event arrives. The task has already finished, but the window is still
+>    open, so this request is also `coalesced`. A finished task does not reopen the window.
+> 5. **At 12 min** a fourth event arrives. The window closed at 10 min, so Workhorse creates a new
+>    task with a new `taskId`. Its window runs until 22 min.
 
 Four requests produced two digests, one per window. Every coalesced result carries the `taskId` of
 the request that opened the window.

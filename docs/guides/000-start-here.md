@@ -11,6 +11,9 @@ the task goes with it. There's no window where one committed and the other didn'
 These guides explain how the system works and why it's built this way. Each section opens with
 one concrete case, told step by step, and then states the general rule.
 
+Each guide opens with an example marked **Example**. Its queues, tasks, and tenants are invented.
+Its times and counts are illustration, unless a Reference block states them as defaults.
+
 Exact limits, defaults, and identifiers sit in collapsed **Reference** blocks under each section.
 Each block links the section of [`architecture.md`](../architecture.md) that owns those facts.
 That reference stays the precise source. Read a guide to understand something; read the reference

@@ -7,17 +7,18 @@ repeats. Everything else in this guide is detail on top of that loop.
 
 ## One worker, eight slots
 
-A worker named `mailer-1` serves two queues, `email` and `billing`. Its `concurrency` is 8, so it
-has eight slots. One slot runs one task.
-
-1. **At start** all eight slots are free. The worker sends one claim to `email` for eight tasks.
-   PostgreSQL returns eight. Every slot is now busy, and each task holds its own lease.
-2. **A moment later** one email task finishes, and one slot frees up. No claim is out, so the worker
-   sends a claim for one task. The worker rotates across its queues, so this claim goes to `billing`.
-3. **While that claim is still out** two more email tasks finish. Two slots are free beyond the one
-   the first claim reserved. That is enough for a second claim, so the worker sends one to `email`
-   for two tasks. Two claims are now in flight.
-4. **Throughout**, one heartbeat timer renews every running lease in a single batch.
+> **Example.** A worker named `mailer-1` serves two queues, `email` and `billing`. Its `concurrency`
+> is 8, so it has eight slots. One slot runs one task.
+>
+> 1. **At start** all eight slots are free. The worker sends one claim to `email` for eight tasks.
+>    PostgreSQL returns eight. Every slot is now busy, and each task holds its own lease.
+> 2. **A moment later** one email task finishes, and one slot frees up. No claim is out, so the
+>    worker sends a claim for one task. The worker rotates across its queues, so this claim goes to
+>    `billing`.
+> 3. **While that claim is still out** two more email tasks finish. Two slots are free beyond the
+>    one the first claim reserved. That is enough for a second claim, so the worker sends one to
+>    `email` for two tasks. Two claims are now in flight.
+> 4. **Throughout**, one heartbeat timer renews every running lease in a single batch.
 
 A busy worker does not wait for one claim to return before it sends the next. When enough slots free
 up, it sends another claim while the first is still out. That keeps slots full without one round

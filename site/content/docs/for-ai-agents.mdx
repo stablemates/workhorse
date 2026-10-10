@@ -10,15 +10,16 @@ survive review, and how to confirm the task settled.
 
 ## Read the Markdown, not the HTML
 
-An agent is asked to add Workhorse to a Python order service. This is how it finds what to read.
-
-1. **It fetches the index.** `/llms.txt` is a compact map of every page, grouped like the sidebar.
-   It names this page as the place to start.
-2. **It fetches this page with `Accept: text/markdown`.** The page URL answers with its Markdown
-   twin. The twin shows every language at once, because it expands each language tab inline. The
-   Python example is there, next to the others.
-3. **It follows a link to the enqueue page by appending `.md`.** The URL `/docs/enqueue.md` fetches
-   the same twin without negotiation.
+> **Example.** An agent is asked to add Workhorse to a Python order service. This is how it finds
+> what to read.
+>
+> 1. **It fetches the index.** `/llms.txt` is a compact map of every page, grouped like the sidebar.
+>    It names this page as the place to start.
+> 2. **It fetches this page with `Accept: text/markdown`.** The page URL answers with its Markdown
+>    twin. The twin shows every language at once, because it expands each language tab inline. The
+>    Python example is there, next to the others.
+> 3. **It follows a link to the enqueue page by appending `.md`.** The URL `/docs/enqueue.md`
+>    fetches the same twin without negotiation.
 
 Every documentation page has a Markdown twin, and both routes reach it. Read the twin, not the HTML
 page. The HTML page shows one language, because its language tabs collapse to whichever tab is

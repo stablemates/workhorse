@@ -14,15 +14,16 @@ Two independent rules decide what each runtime can do.
 
 ## Which runtimes can do what?
 
-A shop runs its checkout on Vercel Functions and wants an `order.fulfill` task for each order.
-
-1. **The checkout route runs on the Node.js runtime.** It opens a `pg` connection, so it can enqueue
-   with `@stablemates/workhorse`.
-2. **A product page runs on the Edge runtime.** It cannot use the published client, because the
-   Edge runtime lacks the Node.js networking APIs that `pg` needs. If that page must enqueue, the
-   shop moves its route to the Node.js runtime.
-3. **Neither runtime can host the worker.** Neither gives the shop a continuous process that keeps
-   renewing leases between requests. The shop runs the worker elsewhere.
+> **Example.** A shop runs its checkout on Vercel Functions and wants an `order.fulfill` task for
+> each order.
+>
+> 1. **The checkout route runs on the Node.js runtime.** It opens a `pg` connection, so it can
+>    enqueue with `@stablemates/workhorse`.
+> 2. **A product page runs on the Edge runtime.** It cannot use the published client, because the
+>    Edge runtime lacks the Node.js networking APIs that `pg` needs. If that page must enqueue, the
+>    shop moves its route to the Node.js runtime.
+> 3. **Neither runtime can host the worker.** Neither gives the shop a continuous process that keeps
+>    renewing leases between requests. The shop runs the worker elsewhere.
 
 The same split holds on other platforms. A Node.js function on Vercel, AWS Lambda, or a Cloud Run
 service can enqueue, and can do it transactionally. A Cloudflare Workers isolate or a Vercel Edge

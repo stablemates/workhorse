@@ -7,12 +7,13 @@ Everything about how cancellation works in Workhorse follows from that one fact.
 
 ## If the task hasn't started
 
-An `export-report` task is scheduled to run in 10 minutes. At 2 minutes, an operator cancels it.
-
-1. The application calls `queue.cancel(taskId)`. `cancel_v1` locks the task's runtime row.
-2. The task is `scheduled`, so no worker holds it. Workhorse deletes the runtime row and writes a
-   `canceled` outcome in the same transaction.
-3. The call returns the status `canceled`. Nothing ever ran, so Workhorse records no attempt.
+> **Example.** An `export-report` task is scheduled to run in 10 minutes. At 2 minutes, an operator
+> cancels it.
+>
+> 1. The application calls `queue.cancel(taskId)`. `cancel_v1` locks the task's runtime row.
+> 2. The task is `scheduled`, so no worker holds it. Workhorse deletes the runtime row and writes a
+>    `canceled` outcome in the same transaction.
+> 3. The call returns the status `canceled`. Nothing ever ran, so Workhorse records no attempt.
 
 A task in `ready` settles the same way. So does a task that is
 [waiting on a timer](130-durable-waits.md), because no worker holds it either. One difference: if

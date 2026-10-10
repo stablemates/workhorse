@@ -9,14 +9,14 @@ ready tasks, runs your handlers, and records each result. This page covers every
 
 ## Register handlers and run
 
-A worker serves the queues `email` and `billing`.
-
-1. **At startup** the process registers a handler for `email.send` with `Worker.handle`, then calls
-   `run`.
-2. **A task arrives.** The worker claims an `email.send` task and calls the handler with its payload
-   and a `HandlerContext`.
-3. **The handler returns** `{ deliveredTo }`. Workhorse stores that JSON value as the task's result,
-   and the task succeeds.
+> **Example.** A worker serves the queues `email` and `billing`.
+>
+> 1. **At startup** the process registers a handler for `email.send` with `Worker.handle`, then
+>    calls `run`.
+> 2. **A task arrives.** The worker claims an `email.send` task and calls the handler with its
+>    payload and a `HandlerContext`.
+> 3. **The handler returns** `{ deliveredTo }`. Workhorse stores that JSON value as the task's
+>    result, and the task succeeds.
 
 `Worker.handle` binds a task type to an async function. Registration chains, so one worker can serve
 many types. Each handler receives the payload and a `HandlerContext`. It returns a JSON result that

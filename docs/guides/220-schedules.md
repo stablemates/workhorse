@@ -8,16 +8,16 @@ no separate scheduler process to deploy or keep alive.
 
 ## Declaring schedules
 
-The billing service runs two schedules in the namespace `billing`: `nightly-invoice-run` and
-`weekly-cleanup`. Here is what three deploys do to them.
-
-1. **Deploy 1** lists both definitions. Workhorse creates both, and each waits for its next
-   occurrence after the deploy.
-2. **Deploy 2** lists only `nightly-invoice-run`. Workhorse leaves it unchanged and disables
-   `weekly-cleanup`. The row stays, so the tasks it fired in the past still point at a definition.
-3. **Deploy 3** lists both again, with a new cron expression for `nightly-invoice-run`. Workhorse
-   enables `weekly-cleanup` again and updates the nightly definition. Each changed definition gets
-   a new revision.
+> **Example.** The billing service runs two schedules in the namespace `billing`:
+> `nightly-invoice-run` and `weekly-cleanup`. Here is what three deploys do to them.
+>
+> 1. **Deploy 1** lists both definitions. Workhorse creates both, and each waits for its next
+>    occurrence after the deploy.
+> 2. **Deploy 2** lists only `nightly-invoice-run`. Workhorse leaves it unchanged and disables
+>    `weekly-cleanup`. The row stays, so the tasks it fired in the past still point at a definition.
+> 3. **Deploy 3** lists both again, with a new cron expression for `nightly-invoice-run`. Workhorse
+>    enables `weekly-cleanup` again and updates the nightly definition. Each changed definition gets
+>    a new revision.
 
 You do not create schedules one at a time. You declare the full set you want, and Workhorse makes
 the database match:

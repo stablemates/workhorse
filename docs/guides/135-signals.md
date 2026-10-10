@@ -7,8 +7,8 @@ worker slot until an application or authenticated operator supplies a named JSON
 
 ## One order, one approval
 
-A task publishes order `ord-381`, but only after an external review service approves it. The
-handler asks for a signal named `approval`. The review service answers some hours later.
+> **Example.** A task publishes order `ord-381`, but only after an external review service approves
+> it. The handler asks for a signal named `approval`. The review service answers some hours later.
 
 ```ts
 const approval = await ctx.waitForSignal<{ approved: boolean }>("approval");

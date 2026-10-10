@@ -13,22 +13,22 @@ Rust's `Worker::handle_batch`, or Ruby's `Worker#handle_batch`.
 
 ## Twenty-seven emails, two provider calls
 
-Your app sends a welcome email to each of 27 new users. The email provider accepts up to twenty
-messages in one request. A worker serves the queue `email` with 32 slots. It registers the batch
-handler below for `email.send`, with a group size of twenty and a linger of 50 ms. A group can never
-be larger than the worker's slot count.
-
-1. **At 0 ms the app enqueues 27 tasks.** Each task is an ordinary `email.send` task with one
-   address.
-2. **Shortly after, the worker claims all 27.** It claims through the normal claim path, so each
-   task gets its own lease and fence token and fills one slot.
-3. **The first twenty claimed tasks form a full group.** The worker dispatches a full group at once.
-   It sorts the twenty by priority and calls the handler with twenty items. The handler sends them in
-   one provider request.
-4. **The other seven tasks form a partial group.** The worker holds them and starts the linger timer
-   when the first of them arrives.
-5. **At about 50 ms the linger ends.** No more `email.send` tasks have arrived, so the worker
-   dispatches the partial group of seven. A second provider request sends them.
+> **Example.** Your app sends a welcome email to each of 27 new users. The email provider accepts up
+> to twenty messages in one request. A worker serves the queue `email` with 32 slots. It registers
+> the batch handler below for `email.send`, with a group size of twenty and a linger of 50 ms. A
+> group can never be larger than the worker's slot count.
+>
+> 1. **At 0 ms the app enqueues 27 tasks.** Each task is an ordinary `email.send` task with one
+>    address.
+> 2. **Shortly after, the worker claims all 27.** It claims through the normal claim path, so each
+>    task gets its own lease and fence token and fills one slot.
+> 3. **The first twenty claimed tasks form a full group.** The worker dispatches a full group at
+>    once. It sorts the twenty by priority and calls the handler with twenty items. The handler
+>    sends them in one provider request.
+> 4. **The other seven tasks form a partial group.** The worker holds them and starts the linger
+>    timer when the first of them arrives.
+> 5. **At about 50 ms the linger ends.** No more `email.send` tasks have arrived, so the worker
+>    dispatches the partial group of seven. A second provider request sends them.
 
 Twenty-seven tasks produced two provider requests instead of 27.
 

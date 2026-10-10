@@ -13,14 +13,14 @@ and per-tenant limits rather than data separation.
 
 ## Isolated tenancy: one database per tenant
 
-Your product serves two hospitals, `north` and `south`. Their records may not share a table, so
-each hospital gets its own database with the Workhorse schema installed.
-
-1. **At setup** you install the schema into the `north` database and into the `south` database.
-2. **At run time** one worker fleet points at `north`, and a second fleet points at `south`. Each
-   worker binds to one database, so no worker ever sees both hospitals' tasks.
-3. **On a deploy** you run `workhorse schema migrate` twice, once per database. Each database
-   upgrades on its own.
+> **Example.** Your product serves two hospitals, `north` and `south`. Their records may not share a
+> table, so each hospital gets its own database with the Workhorse schema installed.
+>
+> 1. **At setup** you install the schema into the `north` database and into the `south` database.
+> 2. **At run time** one worker fleet points at `north`, and a second fleet points at `south`. Each
+>    worker binds to one database, so no worker ever sees both hospitals' tasks.
+> 3. **On a deploy** you run `workhorse schema migrate` twice, once per database. Each database
+>    upgrades on its own.
 
 Tasks, queues, schedules, policies, budgets, retention, and the dashboard are separate because the
 databases are. Nothing in the schema has to know about tenants.
