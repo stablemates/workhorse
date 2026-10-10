@@ -13,6 +13,14 @@ export const dashboardRuntimeConfigSchema = z.strictObject({
   auditActor: z.string(),
   /** Published version of the SDK serving this browser application. */
   workhorseVersion: z.string(),
+  /**
+   * Git commit of the Workhorse source the serving build came from. Absent for a published release,
+   * whose version already names its source.
+   */
+  workhorseRevision: z
+    .string()
+    .regex(/^[0-9a-f]{7,64}$/)
+    .optional(),
   /** Built-in authentication routes. Null when the embedding host owns authorization. */
   authentication: z.strictObject({ loginUrl: z.string(), logoutUrl: z.string() }).nullable(),
   /** Enables the task-seeding menu. Only hosts that intentionally supply fixtures should set it. */

@@ -1081,11 +1081,12 @@ type DashboardWorkersPage struct {
 }
 
 type DashboardRuntimeConfig struct {
-	BasePath         string `json:"basePath"`
-	RPCURL           string `json:"rpcUrl"`
-	AuditActor       string `json:"auditActor"`
-	WorkhorseVersion string `json:"workhorseVersion"`
-	Authentication   *struct {
+	BasePath          string  `json:"basePath"`
+	RPCURL            string  `json:"rpcUrl"`
+	AuditActor        string  `json:"auditActor"`
+	WorkhorseVersion  string  `json:"workhorseVersion"`
+	WorkhorseRevision *string `json:"workhorseRevision,omitempty"`
+	Authentication    *struct {
 		LoginURL  string `json:"loginUrl"`
 		LogoutURL string `json:"logoutUrl"`
 	} `json:"authentication"`

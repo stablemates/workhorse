@@ -1316,6 +1316,7 @@ class DashboardRuntimeConfig(TypedDict, total=False):
     rpcUrl: Required[str]
     auditActor: Required[str]
     workhorseVersion: Required[str]
+    workhorseRevision: NotRequired[str]
     authentication: Required[DashboardRuntimeConfigAuthentication | None]
     demoTools: Required[bool]
     workspaces: Required[list[DashboardRuntimeConfigWorkspacesItem]]

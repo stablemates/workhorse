@@ -28,6 +28,8 @@ export interface DashboardProps {
   workspace?: string | null;
   /** SDK version displayed by the dashboard. Omit to hide it for direct React embeds. */
   workhorseVersion?: string;
+  /** Workhorse source commit displayed beside the version. Omit for a published release. */
+  workhorseRevision?: string;
 }
 export function Dashboard({
   client,
@@ -38,6 +40,7 @@ export function Dashboard({
   workspaces = [],
   workspace = null,
   workhorseVersion = undefined,
+  workhorseRevision = undefined,
 }: DashboardProps) {
   const basePath = normalizeBasePath(basePathInput);
   return (
@@ -52,6 +55,7 @@ export function Dashboard({
             workspaces={workspaces}
             workspace={workspace}
             workhorseVersion={workhorseVersion}
+            workhorseRevision={workhorseRevision}
           />
         </DropdownActivityProvider>
       </RefreshBlockerProvider>
