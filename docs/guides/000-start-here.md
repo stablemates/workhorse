@@ -8,8 +8,8 @@ The immediate benefit: you can enqueue a task in the same transaction as your bu
 Insert the order and enqueue "send confirmation email" together, and if the order rolls back
 the task goes with it. There's no window where one committed and the other didn't.
 
-These guides explain how the system works and why it's built this way. Each section opens with
-one concrete case, told step by step, and then states the general rule.
+These guides explain how the system works and why it's built this way. Each guide opens with one
+concrete case, and then states the general rule.
 
 Each guide opens with an example marked **Example**. Its queues, tasks, and tenants are invented.
 Its times and counts are illustration, unless a Reference block states them as defaults.
