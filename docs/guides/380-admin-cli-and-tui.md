@@ -11,13 +11,14 @@ nothing you learn in one is wrong in the other.
 
 ## Looking around is always safe
 
-At 02:00 an on-call engineer is paged: payments on queue `billing` are failing. They open a shell on
-the bastion host.
-
-1. They run `admin failures --queue billing` and get an aligned table of the newest failures.
-2. They want the task ids for a script, so they add `--json`. The output is the same object the
-   TypeScript operator API returns.
-3. Nothing they ran changed the queue, so they did not need to name the database or confirm anything.
+> **Example.** At 02:00 an on-call engineer is paged: payments on queue `billing` are failing. They
+> open a shell on the bastion host.
+>
+> 1. They run `admin failures --queue billing` and get an aligned table of the newest failures.
+> 2. They want the task ids for a script, so they add `--json`. The output is the same object the
+>    TypeScript operator API returns.
+> 3. Nothing they ran changed the queue, so they did not need to name the database or confirm
+>    anything.
 
 The inspection commands are `admin tasks`, `admin task`, `admin timeline`, `admin checkpoints`,
 `admin waits`, `admin external-waits`, `admin failures`, `admin queues`, `admin schedules`,

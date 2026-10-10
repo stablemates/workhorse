@@ -7,20 +7,20 @@ each new request replace that task's payload until the task runs.
 
 ## One document, three edits, one task
 
-A user edits document `doc-42`. Your app wants to rebuild the search index for it, but only once the
-user stops typing. So every edit sends the same request: rebuild `doc-42`, with key `doc-42` and a
-quiet period of two seconds.
-
-1. **At 0 s** the user saves revision 1. Workhorse creates a task and schedules it for 2 s. The
-   result is `accepted`, with a new `taskId`.
-2. **At 1 s** the user saves revision 2. A task for `doc-42` is still waiting, so Workhorse replaces
-   its payload with revision 2. The quiet period starts again, so the task now runs at 3 s. The
-   result is `replaced`, with the same `taskId`.
-3. **At 2.5 s** the user saves revision 3. Workhorse replaces the payload again and moves the run
-   time to 4.5 s.
-4. **At 4.5 s** the user has stopped typing, and the task is due. Shortly after, promotion, a
-   regular background pass that moves due tasks to `ready`, makes it ready. A worker picks it up
-   and indexes revision 3.
+> **Example.** A user edits document `doc-42`. Your app wants to rebuild the search index for it,
+> but only once the user stops typing. So every edit sends the same request: rebuild `doc-42`, with
+> key `doc-42` and a quiet period of two seconds.
+>
+> 1. **At 0 s** the user saves revision 1. Workhorse creates a task and schedules it for 2 s. The
+>    result is `accepted`, with a new `taskId`.
+> 2. **At 1 s** the user saves revision 2. A task for `doc-42` is still waiting, so Workhorse
+>    replaces its payload with revision 2. The quiet period starts again, so the task now runs at 3
+>    s. The result is `replaced`, with the same `taskId`.
+> 3. **At 2.5 s** the user saves revision 3. Workhorse replaces the payload again and moves the run
+>    time to 4.5 s.
+> 4. **At 4.5 s** the user has stopped typing, and the task is due. Shortly after, promotion, a
+>    regular background pass that moves due tasks to `ready`, makes it ready. A worker picks it up
+>    and indexes revision 3.
 
 Three requests produced one task and one rebuild, and the rebuild used the latest revision. Every
 request got the same `taskId` back, so your app can track the work without knowing about the

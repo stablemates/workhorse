@@ -8,16 +8,17 @@ of the rest of the system.
 
 ## One task, from enqueue to outcome
 
-An application enqueues a `resize-image` task on the `media` queue. A worker runs it once, and it
-succeeds. This is what each table holds along the way.
-
-1. **Enqueue.** Workhorse inserts a `task` row with a new id and the accepted definition. In the
-   same transaction it inserts a `task_runtime` row in state `ready`. No `task_outcome` row exists.
-2. **Claim.** A worker claims the task. The same `task_runtime` row changes to `active`, and it now
-   names the worker that owns it. The `task` row does not change.
-3. **Completion.** The handler returns. In one transaction, Workhorse deletes the `task_runtime`
-   row and inserts a `task_outcome` row with state `succeeded` and the result.
-4. **Afterwards.** The `task` row and the `task_outcome` row stay. Nothing updates either again.
+> **Example.** An application enqueues a `resize-image` task on the `media` queue. A worker runs it
+> once, and it succeeds. This is what each table holds along the way.
+>
+> 1. **Enqueue.** Workhorse inserts a `task` row with a new id and the accepted definition. In the
+>    same transaction it inserts a `task_runtime` row in state `ready`. No `task_outcome` row
+>    exists.
+> 2. **Claim.** A worker claims the task. The same `task_runtime` row changes to `active`, and it
+>    now names the worker that owns it. The `task` row does not change.
+> 3. **Completion.** The handler returns. In one transaction, Workhorse deletes the `task_runtime`
+>    row and inserts a `task_outcome` row with state `succeeded` and the result.
+> 4. **Afterwards.** The `task` row and the `task_outcome` row stay. Nothing updates either again.
 
 Each table has one purpose:
 

@@ -12,19 +12,19 @@ PostgreSQL-only.
 
 ## A day is the unit
 
-You turned export on, and an exporter process named `archiver-1` runs every hour. Follow the history
-your tasks wrote on 14 September.
-
-1. **During 14 September (UTC).** Tasks run and fail and retry. Workhorse writes their events to
-   `task_event` and their closed attempts to `attempt_history`.
-2. **At midnight UTC.** The day closes. It cannot be exported yet. The statistics rollup, the
-   background pass that summarizes history, has not passed the day yet.
-3. **A few minutes later.** The rollup passes midnight. The day is now exportable.
-4. **At the next run.** `archiver-1` claims the 14 September segment of `task_event`. It reads the
-   day's rows and writes one compressed file of JSON lines. Beside it, it writes a small manifest.
-   Then it marks the segment complete.
-5. **When the retention window ends.** Retention may now delete 14 September from PostgreSQL. The
-   export store still holds it.
+> **Example.** You turned export on, and an exporter process named `archiver-1` runs every hour.
+> Follow the history your tasks wrote on 14 September.
+>
+> 1. **During 14 September (UTC).** Tasks run and fail and retry. Workhorse writes their events to
+>    `task_event` and their closed attempts to `attempt_history`.
+> 2. **At midnight UTC.** The day closes. It cannot be exported yet. The statistics rollup, the
+>    background pass that summarizes history, has not passed the day yet.
+> 3. **A few minutes later.** The rollup passes midnight. The day is now exportable.
+> 4. **At the next run.** `archiver-1` claims the 14 September segment of `task_event`. It reads the
+>    day's rows and writes one compressed file of JSON lines. Beside it, it writes a small manifest.
+>    Then it marks the segment complete.
+> 5. **When the retention window ends.** Retention may now delete 14 September from PostgreSQL. The
+>    export store still holds it.
 
 Each day of each history relation becomes one segment. A segment is one compressed file with one
 row per event or attempt, every column kept. Its manifest records the row count, the byte length,

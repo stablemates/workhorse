@@ -8,13 +8,13 @@ at all.
 
 ## One order, two clicks, one task
 
-Order `7781` is placed. Your API handler enqueues a confirmation email with the idempotency key
-`order-confirmation:7781`. The user double-clicks, so the handler runs twice.
-
-1. **At 0 ms** the first request arrives. No task holds the key, so Workhorse creates a task and
-   binds the key to it. The result is `accepted`, with a new `taskId`.
-2. **At 40 ms** the second request arrives with the same key and the same content. Workhorse finds
-   the binding and returns the same `taskId`. The outcome is `replayed`.
+> **Example.** Order `7781` is placed. Your API handler enqueues a confirmation email with the
+> idempotency key `order-confirmation:7781`. The user double-clicks, so the handler runs twice.
+>
+> 1. **At 0 ms** the first request arrives. No task holds the key, so Workhorse creates a task and
+>    binds the key to it. The result is `accepted`, with a new `taskId`.
+> 2. **At 40 ms** the second request arrives with the same key and the same content. Workhorse finds
+>    the binding and returns the same `taskId`. The outcome is `replayed`.
 
 The second request created nothing: no task, no event, no notification. It only reported which task
 already owns the key.

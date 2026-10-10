@@ -8,15 +8,16 @@ solves discovery first, then walks one integration end to end.
 
 ## Read the Markdown, not the HTML
 
-An agent is asked to add Workhorse to a Python order service. This is how it finds what to read.
-
-1. **It fetches the index.** `/llms.txt` is a compact map of every page, grouped like the sidebar.
-   It names the agent page as the place to start.
-2. **It fetches the agent page with `Accept: text/markdown`.** The page's own URL answers with its
-   Markdown twin. The twin shows every language at once, because it expands each language tab
-   inline. The Python example is there, next to the others.
-3. **It follows a link to the enqueue page by appending `.md`.** That fetches the same twin without
-   negotiation.
+> **Example.** An agent is asked to add Workhorse to a Python order service. This is how it finds
+> what to read.
+>
+> 1. **It fetches the index.** `/llms.txt` is a compact map of every page, grouped like the sidebar.
+>    It names the agent page as the place to start.
+> 2. **It fetches the agent page with `Accept: text/markdown`.** The page's own URL answers with its
+>    Markdown twin. The twin shows every language at once, because it expands each language tab
+>    inline. The Python example is there, next to the others.
+> 3. **It follows a link to the enqueue page by appending `.md`.** That fetches the same twin
+>    without negotiation.
 
 Every documentation page has a Markdown twin, and both routes reach it. A second index holds the
 whole corpus in a single response. It is large, and worth fetching only when a change crosses

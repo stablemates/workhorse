@@ -8,18 +8,18 @@ Mixing them up is the usual source of confusion.
 
 ## A deadline covers the whole task
 
-A `send-match-reminder` task must reach fans before kickoff at 20:00. It is enqueued at 18:00 with
-`deadline` set to 20:00 and an exponential retry policy.
-
-1. **At 18:00 — attempt 1.** The push provider is down, and the handler throws. The retry policy
-   schedules attempt 2.
-2. **Until 19:40 — more failures.** Attempts 2 and 3 fail the same way. Each wait is longer than
-   the one before, so attempt 4 is scheduled for 20:05.
-3. **At 20:00 — the deadline passes.** The task is `scheduled`, and no worker holds it. The clock
-   keeps running anyway.
-4. **Shortly after 20:00 — the end.** A worker's regular maintenance pass finds the passed deadline.
-   Workhorse finishes the task as failed, with evidence that the deadline caused it. Attempt 4
-   never runs, even though the attempt budget had room for it.
+> **Example.** A `send-match-reminder` task must reach fans before kickoff at 20:00. It is enqueued
+> at 18:00 with `deadline` set to 20:00 and an exponential retry policy.
+>
+> 1. **At 18:00 — attempt 1.** The push provider is down, and the handler throws. The retry policy
+>    schedules attempt 2.
+> 2. **Until 19:40 — more failures.** Attempts 2 and 3 fail the same way. Each wait is longer than
+>    the one before, so attempt 4 is scheduled for 20:05.
+> 3. **At 20:00 — the deadline passes.** The task is `scheduled`, and no worker holds it. The clock
+>    keeps running anyway.
+> 4. **Shortly after 20:00 — the end.** A worker's regular maintenance pass finds the passed
+>    deadline. Workhorse finishes the task as failed, with evidence that the deadline caused it.
+>    Attempt 4 never runs, even though the attempt budget had room for it.
 
 `deadline` is a wall-clock moment after which the task is pointless. It is an actual instant, such
 as the cutoff for a delivery run, not an execution budget.

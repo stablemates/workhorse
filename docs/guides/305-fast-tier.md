@@ -8,16 +8,16 @@ You choose it per queue, and you give up a defined set of features in return.
 
 ## Every task pays for durable execution
 
-Queue `emails` sends a welcome email per signup. Each handler calls the mail provider, returns
-within a few milliseconds, and never pauses. On an ordinary queue, one email task still writes this
-record:
-
-1. **Claim.** A worker claims the task. Workhorse updates the task's runtime row and appends a
-   `claimed` event.
-2. **Completion.** The handler returns. Workhorse deletes the runtime row, writes the task's outcome
-   row, appends an event, and writes an attempt row that closes the attempt.
-3. **Retry.** If the provider had failed, the retry would have updated the runtime row, appended an
-   event, and written an attempt row as well.
+> **Example.** Queue `emails` sends a welcome email per signup. Each handler calls the mail
+> provider, returns within a few milliseconds, and never pauses. On an ordinary queue, one email
+> task still writes this record:
+>
+> 1. **Claim.** A worker claims the task. Workhorse updates the task's runtime row and appends a
+>    `claimed` event.
+> 2. **Completion.** The handler returns. Workhorse deletes the runtime row, writes the task's
+>    outcome row, appends an event, and writes an attempt row that closes the attempt.
+> 3. **Retry.** If the provider had failed, the retry would have updated the runtime row, appended
+>    an event, and written an attempt row as well.
 
 That record is what lets a task checkpoint, sleep, wait for a signal, or spawn children. It is how
 a task can suspend for days and resume on another worker. The welcome email never suspends, so its

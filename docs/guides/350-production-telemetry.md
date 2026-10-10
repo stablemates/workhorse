@@ -45,15 +45,15 @@ More detail: [Telemetry: Telemetry provider contract](../architecture/telemetry.
 
 ## Follow a task from enqueue to execution
 
-A web request signs up a user. The handler enqueues task `welcome-email` with a run time ten minutes
-later. A worker in another process runs it.
-
-1. **At 0 min — the enqueue.** The request is inside an HTTP server span. The TypeScript queue
-   creates an enqueue span under it. PostgreSQL stores that span's W3C trace context beside the
-   payload. The payload your handler will receive does not change.
-2. **At 10 min — the claim.** A worker claims the task. The claim returns the stored context.
-3. **The handler.** Before it creates the handler span, the worker restores the stored context as
-   the parent. The handler span joins the original trace.
+> **Example.** A web request signs up a user. The handler enqueues task `welcome-email` with a run
+> time ten minutes later. A worker in another process runs it.
+>
+> 1. **At 0 min — the enqueue.** The request is inside an HTTP server span. The TypeScript queue
+>    creates an enqueue span under it. PostgreSQL stores that span's W3C trace context beside the
+>    payload. The payload your handler will receive does not change.
+> 2. **At 10 min — the claim.** A worker claims the task. The claim returns the stored context.
+> 3. **The handler.** Before it creates the handler span, the worker restores the stored context as
+>    the parent. The handler span joins the original trace.
 
 In your backend, one trace now shows the HTTP request, the enqueue, and the handler run ten minutes
 later in another process.

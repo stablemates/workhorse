@@ -8,21 +8,22 @@ parent gives up its lease while it waits, so it does not occupy a worker slot.
 
 ## Run the child from a handler
 
-A checkout handler for order `ord-9` must charge a card before it can finish. The charge runs as
-its own task, on the `payments` queue, so a payments worker can handle it.
-
-1. **The call.** Worker A claims the `orders.checkout` task for `ord-9`. The handler calls
-   `HandlerContext.runChild` with the name `charge`, the type `payments.charge`, and a payload.
-2. **The handoff.** In one transaction, PostgreSQL creates the child task, links it to the parent
-   under the name `charge`, and moves the parent to `blocked`. The parent loses its owner, and the
-   child enters the `payments` queue. The handler stops at `runChild`, and worker A's slot is free.
-3. **The child runs.** A payments worker claims the child and charges the card. The child succeeds
-   with a receipt.
-4. **The release.** The child's success releases the parent. Worker B claims the parent with a new
-   [fence token](/docs/workers).
-5. **The replay.** Worker B calls the handler from its entry point. The repeated `runChild` call
-   sees the same name and the same request. It returns the stored receipt instead of creating
-   another task, and the handler returns.
+> **Example.** A checkout handler for order `ord-9` must charge a card before it can finish. The
+> charge runs as its own task, on the `payments` queue, so a payments worker can handle it.
+>
+> 1. **The call.** Worker A claims the `orders.checkout` task for `ord-9`. The handler calls
+>    `HandlerContext.runChild` with the name `charge`, the type `payments.charge`, and a payload.
+> 2. **The handoff.** In one transaction, PostgreSQL creates the child task, links it to the parent
+>    under the name `charge`, and moves the parent to `blocked`. The parent loses its owner, and the
+>    child enters the `payments` queue. The handler stops at `runChild`, and worker A's slot is
+>    free.
+> 3. **The child runs.** A payments worker claims the child and charges the card. The child succeeds
+>    with a receipt.
+> 4. **The release.** The child's success releases the parent. Worker B claims the parent with a new
+>    [fence token](/docs/workers).
+> 5. **The replay.** Worker B calls the handler from its entry point. The repeated `runChild` call
+>    sees the same name and the same request. It returns the stored receipt instead of creating
+>    another task, and the handler returns.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">

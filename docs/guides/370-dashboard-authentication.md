@@ -8,15 +8,16 @@ session through `authorize`.
 
 ## Turn on the built-in login
 
-An operator, Dana, runs `workhorse dashboard` on a host behind `https://ops.example.com`.
-
-1. **Before starting,** Dana sets `WORKHORSE_DASHBOARD_USERNAME` to `dana` and
-   `WORKHORSE_DASHBOARD_PASSWORD_HASH` to a versioned password hash. In a container Dana mounts each
-   value as a secret file and sets the matching `_FILE` variable instead.
-2. **At startup,** the server reads the hash. It never sees the plaintext password in its
-   configuration.
-3. **At login,** Dana types the password into the login form. The browser sends it to the
-   TLS-protected server, which compares it against the hash without storing the plaintext value.
+> **Example.** An operator, Dana, runs `workhorse dashboard` on a host behind
+> `https://ops.example.com`.
+>
+> 1. **Before starting,** Dana sets `WORKHORSE_DASHBOARD_USERNAME` to `dana` and
+>    `WORKHORSE_DASHBOARD_PASSWORD_HASH` to a versioned password hash. In a container Dana mounts
+>    each value as a secret file and sets the matching `_FILE` variable instead.
+> 2. **At startup,** the server reads the hash. It never sees the plaintext password in its
+>    configuration.
+> 3. **At login,** Dana types the password into the login form. The browser sends it to the
+>    TLS-protected server, which compares it against the hash without storing the plaintext value.
 
 The login page follows the browser's light or dark color scheme. After login, the dashboard header
 shows the authenticated administrator and provides a sign-out action.

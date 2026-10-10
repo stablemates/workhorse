@@ -7,14 +7,15 @@ activity and shared PostgreSQL state. This guide explains how to collect and int
 
 ## Runtime metrics happen automatically
 
-A TypeScript service registers telemetry at startup and runs a worker for queue `exports`.
-
-1. **The enqueue.** The app enqueues a `pdf.render` task. Workhorse adds one to
-   `workhorse.tasks.enqueued` for queue `exports` and type `pdf.render`.
-2. **The claim.** A worker claims it. Workhorse adds one to `workhorse.tasks.claimed` and records
-   how long the claim statement took.
-3. **The run.** The handler succeeds. Workhorse records one handler activation with outcome
-   `succeeded`, its duration, and one `workhorse.tasks.completed`.
+> **Example.** A TypeScript service registers telemetry at startup and runs a worker for queue
+> `exports`.
+>
+> 1. **The enqueue.** The app enqueues a `pdf.render` task. Workhorse adds one to
+>    `workhorse.tasks.enqueued` for queue `exports` and type `pdf.render`.
+> 2. **The claim.** A worker claims it. Workhorse adds one to `workhorse.tasks.claimed` and records
+>    how long the claim statement took.
+> 3. **The run.** The handler succeeds. Workhorse records one handler activation with outcome
+>    `succeeded`, its duration, and one `workhorse.tasks.completed`.
 
 No metric names the task. Your backend sees counts and timings per queue and task type.
 

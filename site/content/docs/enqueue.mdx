@@ -18,16 +18,16 @@ Rust worker drivers remain unchanged.
 
 ## Enqueue immediate or delayed work
 
-An app server handles one request that needs two tasks.
-
-1. **At 0 s** it enqueues `email.send` without a run time. Workhorse places the task in `ready`,
-   and a worker can claim it at once.
-2. **Also at 0 s** it enqueues `invoice.remind` on the `billing` queue, with `runAt` set three days
-   ahead. Workhorse places that task in `scheduled`.
-3. **Three days later** the run time passes. Promotion, a regular background pass, moves the task
-   to `ready`.
-4. **At that moment** an operator has paused `billing`. The task stays ready until the queue
-   resumes, and a worker claims it then.
+> **Example.** An app server handles one request that needs two tasks.
+>
+> 1. **At 0 s** it enqueues `email.send` without a run time. Workhorse places the task in `ready`,
+>    and a worker can claim it at once.
+> 2. **Also at 0 s** it enqueues `invoice.remind` on the `billing` queue, with `runAt` set three
+>    days ahead. Workhorse places that task in `scheduled`.
+> 3. **Three days later** the run time passes. Promotion, a regular background pass, moves the task
+>    to `ready`.
+> 4. **At that moment** an operator has paused `billing`. The task stays ready until the queue
+>    resumes, and a worker claims it then.
 
 `queue.enqueue(type, payload, options?)` turns a type and JSON payload into a durable task and
 returns its ID. `runAt` is a not-before boundary, not an appointment. If someone pauses the queue,

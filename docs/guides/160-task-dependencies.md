@@ -7,8 +7,8 @@ Use them when downstream work would be invalid or wasteful before its inputs fin
 
 ## One import, one notification
 
-Your app imports a contact list and then notifies the user. The notification must not go out
-before the import is done.
+> **Example.** Your app imports a contact list and then notifies the user. The notification must not
+> go out before the import is done.
 
 ```ts
 const importId = await queue.enqueue("contacts.import", { source: "upload" });

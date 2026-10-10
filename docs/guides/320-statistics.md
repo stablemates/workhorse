@@ -7,13 +7,14 @@ explains why that is harder than it sounds, and how Workhorse answers it at a bo
 
 ## Why counting raw history fails
 
-An operator keeps the dashboard open, and it refreshes the hourly failure count every few seconds.
-
-1. **On day one** the event log holds a few thousand rows. Counting them is quick.
-2. **On day thirty** the log holds millions of rows. Each refresh counts far more rows, and the
-   query slows down.
-3. **During an incident** traffic spikes, the log grows faster, and more people open the dashboard.
-   The count is most expensive exactly when the operator needs it most.
+> **Example.** An operator keeps the dashboard open, and it refreshes the hourly failure count every
+> few seconds.
+>
+> 1. **On day one** the event log holds a few thousand rows. Counting them is quick.
+> 2. **On day thirty** the log holds millions of rows. Each refresh counts far more rows, and the
+>    query slows down.
+> 3. **During an incident** traffic spikes, the log grows faster, and more people open the
+>    dashboard. The count is most expensive exactly when the operator needs it most.
 
 Counting the raw event log on every request works on day one and gets slower every day, because the
 log only grows. A dashboard that refreshes on its own would cost more the busier the system is.

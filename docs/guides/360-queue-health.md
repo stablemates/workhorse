@@ -9,13 +9,13 @@ the queue has exceeded comes with a machine-readable reason.
 
 ## One statement, one instant
 
-Imagine a health report built from two separate queries. Worker A crashed, and its lease on task
-`invoice-7` has expired.
-
-1. **At 0 ms** the report counts expired leases. It finds one: `invoice-7`.
-2. **At 3 ms** recovery, the background pass that returns expired leases to the queue, puts
-   `invoice-7` back in `ready`.
-3. **At 5 ms** the report counts tasks by state. `invoice-7` now shows up as ready.
+> **Example.** Imagine a health report built from two separate queries. Worker A crashed, and its
+> lease on task `invoice-7` has expired.
+>
+> 1. **At 0 ms** the report counts expired leases. It finds one: `invoice-7`.
+> 2. **At 3 ms** recovery, the background pass that returns expired leases to the queue, puts
+>    `invoice-7` back in `ready`.
+> 3. **At 5 ms** the report counts tasks by state. `invoice-7` now shows up as ready.
 
 The report now claims an expired lease next to state counts that already include its recovery.
 Nothing is wrong with the queue, but the report says something is.
