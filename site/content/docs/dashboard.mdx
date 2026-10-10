@@ -15,16 +15,16 @@ administrator login.
 
 ## What it shows
 
-> **Example.** An operator filters the task listing to failed tasks and pages forward twice.
->
-> 1. **Each page** loads through Previous and Next controls. Opening a page does not count every
->    matching historical task.
-> 2. **The URL** carries the filters and the navigation cursor. The operator shares it with a
->    colleague, who sees the same position.
-> 3. **The operator opens a task, then presses Back.** The browser restores the saved position. A
->    sidebar task link instead starts a fresh page.
-> 4. **Meanwhile a task changes state.** It can move between pages, because browsing holds no
->    snapshot across requests.
+**Example.** An operator filters the task listing to failed tasks and pages forward twice.
+
+1. **Each page** loads through Previous and Next controls. Opening a page does not count every
+   matching historical task.
+2. **The URL** carries the filters and the navigation cursor. The operator shares it with a
+   colleague, who sees the same position.
+3. **The operator opens a task, then presses Back.** The browser restores the saved position. A
+   sidebar task link instead starts a fresh page.
+4. **Meanwhile a task changes state.** It can move between pages, because browsing holds no
+   snapshot across requests.
 
 Older links with a page number still work.
 

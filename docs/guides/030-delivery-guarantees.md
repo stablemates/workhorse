@@ -7,18 +7,18 @@ once. This guide explains why a handler can run twice, and what to do about it.
 
 ## One email, sent twice
 
-> **Example.** A `send-welcome-email` task asks a mail provider to send one email. The worker uses
-> the default lease. This is what happens on a bad day.
->
-> 1. **At 0 s — attempt 1.** Worker A claims the task and calls the handler. The handler asks the
->    provider to send the email.
-> 2. **At 1 s — the email goes out.** The provider accepts the request and sends the email.
-> 3. **At 2 s — the crash.** Worker A's process dies before it records that the task succeeded.
->    Nothing in the database knows the email was sent.
-> 4. **At about 30 s — recovery.** The lease expires. Recovery, a regular background pass that
->    returns tasks with expired leases, puts the task back for another attempt.
-> 5. **Shortly after — attempt 2.** Worker B claims the task and calls the handler. The email goes
->    out a second time.
+**Example.** A `send-welcome-email` task asks a mail provider to send one email. The worker uses the
+default lease. This is what happens on a bad day.
+
+1. **At 0 s — attempt 1.** Worker A claims the task and calls the handler. The handler asks the
+   provider to send the email.
+2. **At 1 s — the email goes out.** The provider accepts the request and sends the email.
+3. **At 2 s — the crash.** Worker A's process dies before it records that the task succeeded.
+   Nothing in the database knows the email was sent.
+4. **At about 30 s — recovery.** The lease expires. Recovery, a regular background pass that
+   returns tasks with expired leases, puts the task back for another attempt.
+5. **Shortly after — attempt 2.** Worker B claims the task and calls the handler. The email goes out
+   a second time.
 
 No queue can close the gap between steps 2 and 3. The mail provider and your database are two
 separate systems, and nothing makes them commit as one. A queue that promises exactly-once delivery

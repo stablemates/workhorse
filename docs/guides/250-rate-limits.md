@@ -10,20 +10,20 @@ new work begins, even when earlier work finishes immediately.
 
 ## One provider, fifty tasks, ten starts a second
 
-> **Example.** Queue `provider-api` calls a payment provider that accepts about ten new requests per
-> second. The queue's rate-limit policy adds ten tokens per second and keeps at most five after an
-> idle period. Each task start consumes one token. This is a token bucket: time refills it at the
-> sustained rate, and the burst value caps how many tokens it holds.
->
-> 1. **Before 0 s** the queue has been idle for a minute. The bucket refilled, but it holds only
->    five tokens, because the burst caps it.
-> 2. **At 0 s** your app enqueues 50 tasks. Workers claim five at once and spend all five tokens.
-> 3. **From 0 s on** the other 45 tasks stay `ready`. PostgreSQL refills a token every tenth of a
->    second, and each refilled token lets a claim start one more task.
-> 4. **At about 0.2 s** three of the first five tasks finish. Finishing returns no token, so the
->    next start still waits for the next refill.
-> 5. **At about 4.5 s** the last of the 50 tasks has started. After the first five, starts never ran
->    faster than ten per second.
+**Example.** Queue `provider-api` calls a payment provider that accepts about ten new requests per
+second. The queue's rate-limit policy adds ten tokens per second and keeps at most five after an
+idle period. Each task start consumes one token. This is a token bucket: time refills it at the
+sustained rate, and the burst value caps how many tokens it holds.
+
+1. **Before 0 s** the queue has been idle for a minute. The bucket refilled, but it holds only five
+   tokens, because the burst caps it.
+2. **At 0 s** your app enqueues 50 tasks. Workers claim five at once and spend all five tokens.
+3. **From 0 s on** the other 45 tasks stay `ready`. PostgreSQL refills a token every tenth of a
+   second, and each refilled token lets a claim start one more task.
+4. **At about 0.2 s** three of the first five tasks finish. Finishing returns no token, so the
+   next start still waits for the next refill.
+5. **At about 4.5 s** the last of the 50 tasks has started. After the first five, starts never ran
+   faster than ten per second.
 
 The bucket measures starts, not work in progress. A task that succeeds, fails, waits, or loses its
 lease gets no refund. A retry is a new start, so it consumes a token just like the first attempt.

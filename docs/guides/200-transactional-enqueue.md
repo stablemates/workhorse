@@ -12,15 +12,15 @@ together. There is no outbox table to build and no window where only one exists.
 
 ## One account, one task, one commit
 
-> **Example.** A signup request creates account `acc-7` and asks for an `account.created` task.
->
-> 1. **The transaction opens.** The app server begins a transaction and inserts the `acc-7` row.
-> 2. **The enqueue.** The app server enqueues `account.created` through the same transaction.
->    Workhorse writes the task's rows in that transaction. No worker can see them yet, because they
->    are not committed.
-> 3. **The commit.** The app server commits. The account row and the task become visible at the same
->    moment. PostgreSQL delivers the wake-up notification to listening workers only now, and a
->    worker claims the task.
+**Example.** A signup request creates account `acc-7` and asks for an `account.created` task.
+
+1. **The transaction opens.** The app server begins a transaction and inserts the `acc-7` row.
+2. **The enqueue.** The app server enqueues `account.created` through the same transaction.
+   Workhorse writes the task's rows in that transaction. No worker can see them yet, because they
+   are not committed.
+3. **The commit.** The app server commits. The account row and the task become visible at the same
+   moment. PostgreSQL delivers the wake-up notification to listening workers only now, and a worker
+   claims the task.
 
 Now take the same request, but a later statement fails after step 2. The app server rolls back.
 PostgreSQL discards the account row and the task together. No worker ever sees the task, so no email

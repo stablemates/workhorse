@@ -254,10 +254,9 @@ Write the explanation scenario-first:
   queue, key, or task, and walk through what happens step by step. State the general rule after the
   case.
 - Use plain words and no analogies. An analogy gives a term a second meaning.
-- Mark the first scenario of each guide and of each site page that opens with one. Put it in a
-  blockquote whose first words are `**Example.**`, so a reader landing on the page knows its names
-  are invented. Quote the setup and its numbered steps, and leave the general rule outside.
-  `scripts/guide-examples.test.ts` enforces the marker.
+- Mark the first scenario of each guide and of each site page that opens with one. Start its first
+  paragraph with a bold `**Example.**`, so a reader landing on the page knows its names are
+  invented. Add no other styling. `scripts/guide-examples.test.ts` enforces the marker.
 - Treat scenario numbers as illustration. Use relative times such as "at 2 s" when the gaps matter,
   and a clock time only when a fixed moment matters. When a scenario uses a real default, its
   reference block states that default.

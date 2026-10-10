@@ -6,11 +6,11 @@ import { describe, expect, it } from "vitest";
 import { repositoryRoot } from "./packages.js";
 
 // A guide opens with a concrete scenario whose queues, tasks, and tenants are invented. A reader
-// who lands on the page cannot tell that from the prose alone, so the first scenario sits in a
-// blockquote that starts with `**Example.**`. The site page that mirrors the guide carries the same
-// marker. The CLAUDE.md section on writing documentation states the rule.
+// who lands on the page cannot tell that from the prose alone, so the first scenario starts with
+// a bold `**Example.**`. The site page that mirrors the guide carries the same marker. The CLAUDE.md
+// section on writing documentation states the rule.
 
-const marker = "> **Example.**";
+const marker = "**Example.**";
 
 // Site pages that a guide maps to but that open with navigation rather than a scenario.
 const pagesWithoutOpeningScenario = new Map([

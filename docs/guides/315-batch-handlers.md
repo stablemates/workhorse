@@ -11,21 +11,21 @@ it `Worker.handle_batch`.
 
 ## Seven emails, two provider calls
 
-> **Example.** Your app sends a welcome email to each of seven new users. The email provider accepts
-> up to five messages in one request. A worker serves the queue `email` with ten slots, and it
-> registers a batch handler for `email.send` with a group size of five and a linger of 200 ms.
->
-> 1. **At 0 ms the app enqueues seven tasks.** Each task is an ordinary `email.send` task with one
->    address. The producer cannot tell that a batch handler will run them.
-> 2. **Shortly after, the worker claims all seven.** It claims through the normal claim path, so
->    each task gets its own lease and fence token and fills one slot.
-> 3. **The first five claimed tasks form a full group.** The worker dispatches a full group at once.
->    It sorts the five by priority and calls the handler with five items. The handler sends them in
->    one provider request.
-> 4. **The other two tasks form a partial group.** The worker holds them and starts the linger timer
->    when the first of them arrives.
-> 5. **At about 200 ms the linger ends.** No more `email.send` tasks have arrived, so the worker
->    dispatches the partial group of two. A second provider request sends them.
+**Example.** Your app sends a welcome email to each of seven new users. The email provider accepts
+up to five messages in one request. A worker serves the queue `email` with ten slots, and it
+registers a batch handler for `email.send` with a group size of five and a linger of 200 ms.
+
+1. **At 0 ms the app enqueues seven tasks.** Each task is an ordinary `email.send` task with one
+   address. The producer cannot tell that a batch handler will run them.
+2. **Shortly after, the worker claims all seven.** It claims through the normal claim path, so each
+   task gets its own lease and fence token and fills one slot.
+3. **The first five claimed tasks form a full group.** The worker dispatches a full group at once.
+   It sorts the five by priority and calls the handler with five items. The handler sends them in
+   one provider request.
+4. **The other two tasks form a partial group.** The worker holds them and starts the linger timer
+   when the first of them arrives.
+5. **At about 200 ms the linger ends.** No more `email.send` tasks have arrived, so the worker
+   dispatches the partial group of two. A second provider request sends them.
 
 Seven tasks produced two provider requests instead of seven.
 

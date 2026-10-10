@@ -5,22 +5,22 @@ covers how Workhorse schedules the next attempt, how long it waits, and when it 
 
 ## One charge, four attempts
 
-> **Example.** A task charges a card through a payment provider, and the provider is having an
-> outage. The task was enqueued with a budget of four attempts and an exponential retry policy: wait
-> 30 seconds after the first failure, double the wait after each failure, and never wait longer than
-> ten minutes.
->
-> 1. **At 0 s — attempt 1.** The provider returns an error, and the handler throws. Attempt 1 is
->    below the budget of four, so PostgreSQL schedules attempt 2 for 30 seconds later. The task goes
->    back to `scheduled`, not straight to `ready`.
-> 2. **At about 30 s — attempt 2.** The provider fails again. The wait doubles, so attempt 3 is
->    scheduled about 60 seconds later.
-> 3. **At about 90 s — attempt 3.** This time the worker crashes during the call. About half a
->    minute later its lease expires, and recovery returns the task. Recovery uses the same policy as
->    a thrown error, so attempt 4 waits 120 seconds.
-> 4. **At about 4 min — attempt 4.** The provider fails once more. Four attempts have now run, and
->    the budget is used up. Workhorse stops retrying. It deletes the task's runtime row and writes a
->    failed outcome.
+**Example.** A task charges a card through a payment provider, and the provider is having an outage.
+The task was enqueued with a budget of four attempts and an exponential retry policy: wait 30
+seconds after the first failure, double the wait after each failure, and never wait longer than ten
+minutes.
+
+1. **At 0 s — attempt 1.** The provider returns an error, and the handler throws. Attempt 1 is
+   below the budget of four, so PostgreSQL schedules attempt 2 for 30 seconds later. The task goes
+   back to `scheduled`, not straight to `ready`.
+2. **At about 30 s — attempt 2.** The provider fails again. The wait doubles, so attempt 3 is
+   scheduled about 60 seconds later.
+3. **At about 90 s — attempt 3.** This time the worker crashes during the call. About half a
+   minute later its lease expires, and recovery returns the task. Recovery uses the same policy as
+   a thrown error, so attempt 4 waits 120 seconds.
+4. **At about 4 min — attempt 4.** The provider fails once more. Four attempts have now run, and the
+   budget is used up. Workhorse stops retrying. It deletes the task's runtime row and writes a
+   failed outcome.
 
 The waits grew because each failure suggested the provider needed more time. Retrying at once would
 only have used up the attempts faster.
