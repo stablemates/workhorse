@@ -63,6 +63,16 @@ const processes = [
       WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-rust",
     },
   },
+  {
+    name: "Ruby worker",
+    command: "ruby",
+    arguments: ["-rbundler/setup", "/opt/workhorse-ruby/demo_worker.rb"],
+    environment: {
+      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-ruby",
+      // The image's Bundler configuration beside this Gemfile names the locked gems' directory.
+      BUNDLE_GEMFILE: "/opt/workhorse-ruby/Gemfile",
+    },
+  },
 ];
 
 if (process.env.DATABASE_URL_SECONDARY) {

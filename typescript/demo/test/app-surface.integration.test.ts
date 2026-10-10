@@ -35,6 +35,7 @@ import {
   DEMO_RATE_LIMIT_POLICY_NAMESPACE,
   DEMO_RATE_LIMIT_QUEUE,
   DEMO_RATE_LIMIT_SEED_TASKS,
+  DEMO_RUBY_QUEUE,
   DEMO_RUST_QUEUE,
   DEMO_SCHEDULE_NAMESPACE,
   DEMO_SEED_IDEMPOTENCY_KEY,
@@ -53,6 +54,7 @@ import {
   LONG_RUNNING_SCHEDULE_NAME,
   PYTHON_WORKER_SCHEDULE_NAME,
   REPORT_SCHEDULE_NAME,
+  RUBY_WORKER_SCHEDULE_NAME,
   RUST_WORKER_SCHEDULE_NAME,
   seedDemoData,
   SHARED_WORKER_SCHEDULE_NAME,
@@ -311,6 +313,13 @@ describe("Workhorse demo", () => {
           configured_enabled: true,
         },
         {
+          schedule_name: RUBY_WORKER_SCHEDULE_NAME,
+          cron_expression: "3-59/4 * * * *",
+          task_type: LANGUAGE_WORKER_TASK_TYPE,
+          queue_name: DEMO_RUBY_QUEUE,
+          configured_enabled: true,
+        },
+        {
           schedule_name: RUST_WORKER_SCHEDULE_NAME,
           cron_expression: "1-59/4 * * * *",
           task_type: LANGUAGE_WORKER_TASK_TYPE,
@@ -450,7 +459,7 @@ describe("Workhorse demo", () => {
 
     const seeded = await seedDemoData(database);
     expect(seeded).toMatchObject({ seeded: true, historicalTaskCount: 362 });
-    expect(seeded.taskIds).toHaveLength(103);
+    expect(seeded.taskIds).toHaveLength(108);
     expect(await seedDemoData(database)).toEqual({
       seeded: false,
       taskIds: [],
@@ -462,13 +471,13 @@ describe("Workhorse demo", () => {
            FROM (
              -- Throttled acceptance runs inside a SQL exception block, so those rows carry
              -- subtransaction xids of the same showcase transaction rather than its top-level id.
-             -- The fast-tier and Rust steps commit in their own transactions, like the long-running
-             -- step.
+             -- The fast-tier, Rust, and Ruby steps commit in their own transactions, like the
+             -- long-running step.
              SELECT xmin::text AS version FROM workhorse.task
                WHERE id = ANY($1::uuid[])
                  AND task_type NOT IN ('demo.long-running', 'demo.keyed-throttle')
                  AND NOT 'fast-tier' = ANY(tags)
-                 AND queue_name <> 'demo-rust'
+                 AND queue_name NOT IN ('demo-rust', 'demo-ruby')
              UNION ALL SELECT xmin::text FROM public.workhorse_demo_order
             UNION ALL SELECT xmin::text FROM public.workhorse_demo_seed
                WHERE name = 'default-dashboard-v8'
@@ -483,7 +492,7 @@ describe("Workhorse demo", () => {
     ).toMatchObject({ rows: [{ count: 1 }] });
     expect(await pool.query("SELECT count(*)::integer AS count FROM workhorse.task")).toMatchObject(
       {
-        rows: [{ count: 465 }],
+        rows: [{ count: 470 }],
       },
     );
     const blockedTasks = await dashboardClient(app).dashboard.tasks({
@@ -746,12 +755,12 @@ describe("Workhorse demo", () => {
       ],
     });
     const client = dashboardClient(app);
-    // The fast-tier and Rust seeds add three due tasks and one delayed task per language, and the
-    // Rust seed adds one due full-tier task.
+    // The fast-tier, Rust, and Ruby seeds add three due tasks and one delayed task per language, and
+    // the Rust and Ruby seeds each add one due full-tier task.
     await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
-      all: 465,
-      scheduled: 14,
-      queued: 75,
+      all: 470,
+      scheduled: 15,
+      queued: 79,
       completed: 350,
       discarded: 21,
       retried: 22,
@@ -792,13 +801,13 @@ describe("Workhorse demo", () => {
     });
     await expect(
       client.dashboard.tasks({ filter: "all", page: 1, pageSize: 25, count: "exact" }),
-    ).resolves.toMatchObject({ count: "exact", total: 465 });
-    // The fast-tier and Rust seeds add three due tasks and one delayed task per language, and the
-    // Rust seed adds one due full-tier task.
+    ).resolves.toMatchObject({ count: "exact", total: 470 });
+    // The fast-tier, Rust, and Ruby seeds add three due tasks and one delayed task per language, and
+    // the Rust and Ruby seeds each add one due full-tier task.
     await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
-      all: 465,
-      scheduled: 14,
-      queued: 75,
+      all: 470,
+      scheduled: 15,
+      queued: 79,
       completed: 350,
       discarded: 21,
     });
@@ -810,6 +819,8 @@ describe("Workhorse demo", () => {
         "demo-fast",
         "demo-go-fast",
         "demo-python-fast",
+        "demo-ruby",
+        "demo-ruby-fast",
         "demo-rust",
         "demo-rust-fast",
         "emails",
@@ -838,7 +849,7 @@ describe("Workhorse demo", () => {
       await client.dashboard.tasks({ filter: "scheduled", page: 1, pageSize: 25 }),
     ).toMatchObject({
       filter: "scheduled",
-      total: 14,
+      total: 15,
       tasks: expect.arrayContaining([expect.objectContaining({ state: "scheduled" })]),
     });
     await expect(
@@ -954,6 +965,8 @@ describe("Workhorse demo", () => {
       "demo-fast",
       "demo-go-fast",
       "demo-python-fast",
+      "demo-ruby",
+      "demo-ruby-fast",
       "demo-rust",
       "demo-rust-fast",
       "emails",

@@ -73,6 +73,16 @@ const commands: Array<{
       WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-rust",
     },
   },
+  {
+    command: "bundle",
+    arguments: ["exec", "ruby", "ruby/examples/demo_worker.rb"],
+    env: {
+      ...process.env,
+      BUNDLE_GEMFILE: "ruby/Gemfile",
+      WORKHORSE_DEMO_MODE: mode,
+      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-ruby",
+    },
+  },
 ];
 
 if (process.env.DATABASE_URL_SECONDARY) {

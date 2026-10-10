@@ -193,11 +193,7 @@
           "reason": "The demo runs no Rust worker, so there is no Rust demo-worker example."
         }
       },
-      "ruby": {
-        "exclusion": {
-          "reason": "The demo runs no Ruby worker, so there is no Ruby demo-worker example."
-        }
-      }
+      "ruby": { "file": "ruby/examples/demo_worker.rb" }
     },
     "agentic-flow": {
       "typescript": { "file": "typescript/examples/agentic-flow.mjs" },

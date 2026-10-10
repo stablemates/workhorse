@@ -170,7 +170,7 @@ describe("Workhorse demo", () => {
       const page = await client.dashboard.workers();
       expect(page.workers.map((worker) => worker.activeTasks).reduce((a, b) => a + b, 0)).toBe(1);
       expect(page.workers).toHaveLength(DEMO_WORKER_CONCURRENCY.length);
-      expect(page.workers.map((worker) => worker.concurrency)).toEqual([3, 3, 3, 3]);
+      expect(page.workers.map((worker) => worker.concurrency)).toEqual([3, 3, 3, 3, 3]);
       for (const worker of page.workers) {
         expect(worker).toMatchObject({ registered: true, draining: false });
         expect(worker.activeSlots).not.toBeNull();

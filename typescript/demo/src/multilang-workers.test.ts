@@ -9,6 +9,8 @@ import {
   DEMO_PYTHON_QUEUE,
   DEMO_QUEUE,
   DEMO_RATE_LIMIT_QUEUE,
+  DEMO_RUBY_FAST_QUEUE,
+  DEMO_RUBY_QUEUE,
   DEMO_RUST_FAST_QUEUE,
   DEMO_RUST_QUEUE,
   DEMO_SHARED_QUEUE,
@@ -35,30 +37,58 @@ describe("multilanguage demo worker topology", () => {
     expect(imageTag).toBe(channel);
   });
 
+  it("installs the Ruby worker's gems on the runtime stage's base and Ruby", async () => {
+    const dockerfile = await readFile(resolve("Dockerfile"), "utf8");
+    const base = (stage: string) =>
+      new RegExp(`^FROM (\\S+) AS ${stage}$`, "m").exec(dockerfile)?.[1];
+
+    expect(base("ruby-build")).toMatch(/^node:\d+-alpine@sha256:[0-9a-f]{64}$/);
+    expect(base("ruby-build")).toBe(base("runtime"));
+    expect(dockerfile).toContain("bundle config set --local frozen true");
+    expect(dockerfile).toMatch(/^RUN apk add --no-cache .*\bruby ruby-bundler$/m);
+  });
+
   it("declares one equal-capacity worker in each runtime", () => {
-    expect(DEMO_WORKER_CONCURRENCY).toEqual([3, 3, 3, 3]);
+    expect(DEMO_WORKER_CONCURRENCY).toEqual([3, 3, 3, 3, 3]);
     expect([
       DEMO_QUEUE,
       DEMO_RATE_LIMIT_QUEUE,
       DEMO_PYTHON_QUEUE,
       DEMO_GO_QUEUE,
       DEMO_RUST_QUEUE,
+      DEMO_RUBY_QUEUE,
       DEMO_SHARED_QUEUE,
-    ]).toEqual(["demo", "partner-api", "demo-python", "demo-go", "demo-rust", "demo-shared"]);
+    ]).toEqual([
+      "demo",
+      "partner-api",
+      "demo-python",
+      "demo-go",
+      "demo-rust",
+      "demo-ruby",
+      "demo-shared",
+    ]);
     expect(LANGUAGE_WORKER_TASK_TYPE).toBe("demo.language-worker");
     expect(SHARED_WORKER_TASK_TYPE).toBe("demo.shared-worker");
   });
 
-  it("packages and supervises the Python, Go, and Rust workers", async () => {
-    const [dockerfile, entrypoint, developmentLauncher, pythonWorker, goWorker, rustWorker] =
-      await Promise.all([
-        readFile(resolve("Dockerfile"), "utf8"),
-        readFile(resolve("typescript/demo/container-entrypoint.mjs"), "utf8"),
-        readFile(resolve("scripts/dev.ts"), "utf8"),
-        readFile(resolve("python/examples/demo_worker.py"), "utf8"),
-        readFile(resolve("go/examples/demo-worker/main.go"), "utf8"),
-        readFile(resolve("rust/demo-worker/src/lib.rs"), "utf8"),
-      ]);
+  it("packages and supervises the Python, Go, Rust, and Ruby workers", async () => {
+    const [
+      dockerfile,
+      entrypoint,
+      developmentLauncher,
+      pythonWorker,
+      goWorker,
+      rustWorker,
+      rubyWorker,
+    ] = await Promise.all([
+      readFile(resolve("Dockerfile"), "utf8"),
+      readFile(resolve("typescript/demo/container-entrypoint.mjs"), "utf8"),
+      readFile(resolve("scripts/dev.ts"), "utf8"),
+      readFile(resolve("python/examples/demo_worker.py"), "utf8"),
+      readFile(resolve("go/examples/demo-worker/main.go"), "utf8"),
+      readFile(resolve("rust/demo-worker/src/lib.rs"), "utf8"),
+      readFile(resolve("ruby/examples/demo_worker.rb"), "utf8"),
+    ]);
 
     expect(dockerfile).toContain("FROM golang:1.25-alpine@sha256:");
     expect(dockerfile).toContain("FROM python:3.14-alpine@sha256:");
@@ -73,9 +103,12 @@ describe("multilanguage demo worker topology", () => {
     expect(entrypoint).toContain("workhorse-python-worker.py");
     expect(entrypoint).toContain('"/usr/local/bin/workhorse-rust-demo-worker"');
     expect(entrypoint).toContain('"workhorse-demo-worker-rust"');
+    expect(entrypoint).toContain('"/opt/workhorse-ruby/demo_worker.rb"');
+    expect(entrypoint).toContain('"workhorse-demo-worker-ruby"');
     expect(developmentLauncher).toContain('"./examples/demo-worker"');
     expect(developmentLauncher).toContain('"python/examples/demo_worker.py"');
     expect(developmentLauncher).toContain('"-p", "workhorse-demo-worker"');
+    expect(developmentLauncher).toContain('"ruby/examples/demo_worker.rb"');
     expect(pythonWorker).toContain('SCHEDULE_NAMESPACE = "workhorse-demo"');
     expect(pythonWorker).toContain(
       `FAST_TIER_SCHEDULE_NAMESPACE = "${DEMO_FAST_TIER_SCHEDULE_NAMESPACE}"`,
@@ -115,6 +148,19 @@ describe("multilanguage demo worker topology", () => {
     expect(pythonWorker).toContain('return mode == "development"');
     expect(goWorker).toContain("compatibility.Code != workhorse.SchemaNotInstalled");
     expect(goWorker).toContain('case "development":');
+    expect(rubyWorker).toContain('SCHEDULE_NAMESPACE = "workhorse-demo"');
+    expect(rubyWorker).toContain(
+      `FAST_TIER_SCHEDULE_NAMESPACE = "${DEMO_FAST_TIER_SCHEDULE_NAMESPACE}"`,
+    );
+    expect(rubyWorker).toContain(`RUBY_QUEUE = "${DEMO_RUBY_QUEUE}"`);
+    expect(rubyWorker).toContain(`RUBY_FAST_QUEUE = "${DEMO_RUBY_FAST_QUEUE}"`);
+    expect(rubyWorker).toContain(`SHARED_QUEUE = "${DEMO_SHARED_QUEUE}"`);
+    expect(rubyWorker).toContain("queues: [RUBY_QUEUE, SHARED_QUEUE, RUBY_FAST_QUEUE]");
+    expect(rubyWorker).toContain(
+      "schedule_namespaces: [SCHEDULE_NAMESPACE, FAST_TIER_SCHEDULE_NAMESPACE]",
+    );
+    expect(rubyWorker).toContain("e.code == :schema_not_installed");
+    expect(rubyWorker).toContain('mode == "development"');
   });
 
   it("enforces the shared handler contract in TypeScript", () => {

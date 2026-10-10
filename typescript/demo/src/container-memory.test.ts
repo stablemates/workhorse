@@ -26,10 +26,10 @@ const NODE_PROCESSES = 4;
 const NON_HEAP_MIB_PER_NODE_PROCESS = 80;
 
 /**
- * Resident set of the Python, Go, and Rust demo workers together. Their peaks under the deployment
- * limits measured 42 MiB, 15 MiB, and 5 MiB.
+ * Resident set of the Python, Go, Rust, and Ruby demo workers together. Their peaks under the
+ * deployment limits measured 42 MiB, 15 MiB, 5 MiB, and 45 MiB.
  */
-const OTHER_RUNTIME_MIB = 70;
+const OTHER_RUNTIME_MIB = 120;
 
 function dockerfileRuntimeStage(dockerfile: string): string {
   const runtime = dockerfile.indexOf("AS runtime");
