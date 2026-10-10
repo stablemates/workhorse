@@ -84,6 +84,7 @@ import {
   DEMO_SEED_IDEMPOTENCY_KEY,
   DEMO_SEED_IDEMPOTENCY_SCOPE,
   DEMO_SHARED_QUEUE,
+  DEMO_TRAFFIC_TIERS,
   DEMO_TIMING_HANDLER_MS,
   DEMO_TIMING_POLICY_TIMEOUT_MS,
   DEMO_TIMING_TIMEOUT_MS,
@@ -109,6 +110,7 @@ import {
   REPRESENTATIVE_SEED_NAME,
   RETRY_TASK_TYPE,
   SHARED_WORKER_TASK_TYPE,
+  TRAFFIC_BURST_TASK_TYPE,
   SHARED_WORKER_SCHEDULE_NAME,
   TIMING_TASK_TYPE,
   TYPESCRIPT_WORKER_SCHEDULE_NAME,
@@ -739,6 +741,25 @@ function longRunningSchedule(enabled = true) {
   } as const;
 }
 
+function trafficSchedules() {
+  return DEMO_TRAFFIC_TIERS.map(
+    ({ name, schedule, tier, minSize, maxSize }) =>
+      ({
+        name,
+        schedule,
+        catchupPolicy: "latest",
+        enabled: true,
+        task: {
+          type: TRAFFIC_BURST_TASK_TYPE,
+          queue: DEMO_QUEUE,
+          payload: { tier, minSize, maxSize },
+          maxAttempts: 1,
+          tags: ["traffic", tier],
+        },
+      }) as const,
+  );
+}
+
 function featureShowcaseSchedules(enabledByName: ReadonlyMap<string, boolean>) {
   return DEMO_FEATURE_SHOWCASE_FAMILIES.map((family) => ({
     name: family.scheduleName,
@@ -938,6 +959,7 @@ export async function syncDemoSchedules(database: Pool): Promise<void> {
     reportSchedule(true),
     longRunningSchedule(true),
     ...featureShowcaseSchedules(new Map()),
+    ...trafficSchedules(),
   ]);
 }
 

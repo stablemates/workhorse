@@ -589,7 +589,8 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
     title: "Human decisions",
     description: "Suspended handlers waiting for a bounded operator decision.",
     scheduleName: "showcase.human-decisions",
-    schedule: "11-59/17 * * * *",
+    // A shorter stride than the other families keeps more decisions waiting on the dashboard.
+    schedule: "11-59/12 * * * *",
     recurringMaxAttempts: 1,
     examples: [
       {

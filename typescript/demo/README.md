@@ -199,7 +199,11 @@ not authorization, and the demo does not claim exactly-once external effects. Ca
 changes only that occurrence, not the schedule or its next fire.
 
 Startup synchronizes a namespaced one-minute heartbeat, a five-minute report, a one-minute lightweight
-long-running schedule, and the staggered feature-family definitions through `Queue.syncSchedules`.
+long-running schedule, the staggered feature-family definitions, and three traffic tiers through
+`Queue.syncSchedules`. Each traffic occurrence runs a `demo.traffic-burst` driver that enqueues a burst
+of `demo.shared-worker` tasks on `demo-shared`, so all four workers drain it. A trickle of 2 to 6 tasks
+runs every minute, spikes of 40 to 120 tasks land three times an hour, and surges of 200 to 400 tasks
+land six times a day.
 All four workers evaluate due schedules in-process with advisory-lock coordination and SQL-level
 occurrence deduplication. The Schedules view reports the live evaluator count for each namespace.
 Its maintenance rows use `Maintenance` as the destination because workers call those PostgreSQL

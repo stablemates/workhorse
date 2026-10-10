@@ -42,6 +42,7 @@ import {
   DEMO_SHARED_QUEUE,
   DEMO_TIMING_POLICY_TIMEOUT_MS,
   DEMO_TIMING_TIMEOUT_MS,
+  DEMO_TRAFFIC_TIERS,
   DEMO_WORKER_POLL_MS,
   DURABLE_TIMER_TASK_TYPE,
   GO_WORKER_SCHEDULE_NAME,
@@ -60,6 +61,7 @@ import {
   syncDemoConcurrencyPolicies,
   syncDemoRateLimitPolicies,
   syncDemoSchedules,
+  TRAFFIC_BURST_TASK_TYPE,
   TYPESCRIPT_WORKER_SCHEDULE_NAME,
 } from "../src/app.js";
 import { DEMO_AUDIT_RETENTION_ROWS_PER_PASS, pruneDemoAudit } from "../src/audit-retention.js";
@@ -336,6 +338,13 @@ describe("Workhorse demo", () => {
           queue_name: DEMO_QUEUE,
           configured_enabled: true,
         })).toSorted((left, right) => left.schedule_name.localeCompare(right.schedule_name)),
+        ...DEMO_TRAFFIC_TIERS.map((tier) => ({
+          schedule_name: tier.name,
+          cron_expression: tier.schedule,
+          task_type: TRAFFIC_BURST_TASK_TYPE,
+          queue_name: DEMO_QUEUE,
+          configured_enabled: true,
+        })).toSorted((left, right) => left.schedule_name.localeCompare(right.schedule_name)),
       ],
     });
   });
@@ -383,6 +392,53 @@ describe("Workhorse demo", () => {
         1000,
       );
       expect((await adapter.admin.getTask(seed.taskIds[2]!))?.currentAttempt).toBe(2);
+    } finally {
+      await worker.stop();
+      await run;
+    }
+  });
+
+  it("runs a traffic driver that fans a burst out to the shared queue", async () => {
+    const tier = DEMO_TRAFFIC_TIERS[2];
+    const adapter = createDrizzleAdapter(database, {
+      defaultQueue: DEMO_QUEUE,
+      queueOptions: DEMO_QUEUE_OPTIONS,
+    });
+    const driverId = await adapter.queue.enqueue(
+      TRAFFIC_BURST_TASK_TYPE,
+      { tier: tier.tier, minSize: tier.minSize, maxSize: tier.maxSize },
+      { maxAttempts: 1 },
+    );
+    const definition = createDemoWorkerDefinition(database, adapter.queue, {
+      concurrency: 1,
+      workerId: "test-traffic",
+      pollMs: 20,
+      registryIntervalMs: 100,
+      maintenanceIntervalMs: 100,
+      scheduleNamespaces: [],
+    });
+    const worker = adapter.createWorker(definition.options);
+    definition.configure(worker);
+    const run = worker.run();
+    try {
+      const driver = await waitFor(
+        () => adapter.admin.getTask<{ enqueued: number }>(driverId),
+        (task) => task?.state === "succeeded",
+        1000,
+      );
+      const enqueued = driver!.result!.enqueued;
+      expect(enqueued).toBeGreaterThanOrEqual(tier.minSize);
+      expect(enqueued).toBeLessThanOrEqual(tier.maxSize);
+      expect(
+        (
+          await pool.query(
+            `SELECT count(*)::int AS count FROM workhorse.task
+              WHERE queue_name = $1 AND task_type = $2
+                AND payload->>'source' = 'traffic-burst' AND tags @> ARRAY['surge']`,
+            [DEMO_SHARED_QUEUE, SHARED_WORKER_TASK_TYPE],
+          )
+        ).rows,
+      ).toEqual([{ count: enqueued }]);
     } finally {
       await worker.stop();
       await run;
