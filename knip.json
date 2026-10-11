@@ -14,10 +14,7 @@
       "ignoreDependencies": ["@vitest/coverage-v8"]
     },
     "dashboard/app": {
-      "entry": ["browser/react-grab.ts", "src/browser.tsx"],
-      "vite": {
-        "config": []
-      }
+      "entry": ["browser/react-grab.ts", "src/browser.tsx"]
     },
     "typescript/core": {
       "entry": ["src/cli/benchmark.ts", "src/cli/reset-db.ts", "src/cli/workhorse.ts"],
@@ -48,6 +45,7 @@
       "ignoreDependencies": ["typeorm"]
     },
     "site": {
+      "entry": ["vite.config.ts"],
       "vite": {
         "config": []
       }

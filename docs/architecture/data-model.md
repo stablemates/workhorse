@@ -1262,7 +1262,7 @@ and recounts their edges under the lock.
 - Each repaired row appends one `dependency_counter_repaired` event with `source` `repair`.
 - Both settlements go through `settle_dependents_v1`.
 - The repair returns `(task_id, recorded_pending_prerequisites,
-pending_edges, action)` with `action` `recounted`, `released`, or `rejected`.
+  pending_edges, action)` with `action` `recounted`, `released`, or `rejected`.
 - No routine calls either function.
 
 #### Governed drift repair (schema version 40)

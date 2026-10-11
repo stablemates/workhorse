@@ -418,7 +418,7 @@ state, and policy provenance. Thus a caller can mount it in a process that runs 
 
 - Mounting requires only a database connection.
 - Policy mutation additionally requires `operator.mode
-=== "writable"` and a `DashboardSettingsController`.
+  === "writable"` and a `DashboardSettingsController`.
 - Every call that mutates a policy carries an actor, a reason, a request ID, and an occurrence time
   that the server assigns.
 

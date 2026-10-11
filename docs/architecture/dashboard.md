@@ -1017,7 +1017,7 @@ these steps:
 1. It resolves the pool with `connectionPoolOf`.
 2. It borrows one connection.
 3. It runs the read inside `BEGIN READ
-ONLY` after `set_config('statement_timeout', timeoutMs, true)`, so the bound ends with the
+   ONLY` after `set_config('statement_timeout', timeoutMs, true)`, so the bound ends with the
    transaction.
 
 If PostgreSQL cancels a read with SQLSTATE `57014`, the read throws `DashboardReadTimeoutError`.

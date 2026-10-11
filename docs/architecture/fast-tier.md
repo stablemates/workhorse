@@ -406,7 +406,7 @@ handles oversized results in these steps:
    `result_max_bytes`.
 2. It passes each one, in task ID order, to `fast_fail_v1` with a null retry delay and the error
    `{"name": "TaskValueSizeLimitError", "message": "<task_type> result exceeds its configured size
-limit", "stack": null}`.
+   limit", "stack": null}`.
 3. The task's retry policy then schedules another attempt or finishes it as failed.
 4. The function leaves those tasks out of the returned IDs.
 5. Since migration 0060 (schema version 59), it then reads the clock again
@@ -431,7 +431,7 @@ this path only through a bug.
 Completion and heartbeat lock rows in one shared order:
 
 - Before the `DELETE`, `fast_complete_many_v1` locks the caller's rows with `SELECT ... ORDER BY
-task_id FOR UPDATE`, filtered on `task_id = ANY (p_task_ids)` and `worker_id = p_worker_id`.
+  task_id FOR UPDATE`, filtered on `task_id = ANY (p_task_ids)` and `worker_id = p_worker_id`.
 - `fast_heartbeat_many_v1` takes `FOR NO KEY UPDATE` locks in the same order before its `UPDATE`.
 - The full-tier `heartbeat_many_v1` branch takes the same ordered `FOR NO KEY UPDATE` lock on
   `task_runtime` before its `UPDATE`.
@@ -741,7 +741,7 @@ The Go worker splits its slots the same way.
 
 - `WorkerOptions.Cohorts` is an integer from 1 through `Concurrency`.
 - `NewWorker` rejects any other explicit value with `worker cohorts must be between
-1 and the concurrency`. Zero selects `defaultDispatchCohorts(concurrency, spareConnections)`,
+  1 and the concurrency`. Zero selects `defaultDispatchCohorts(concurrency, spareConnections)`,
   which uses the TypeScript rule.
 - `spareConnections` is the pool's `MaxConns`, minus 1 for the listener unless `PollingOnly` is
   set, minus 1 for the heartbeat connection unless `SharedHeartbeats` is set.

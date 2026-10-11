@@ -136,7 +136,7 @@ Besides RPC, a backend serves three surfaces under `{basePath}`:
 - Every other owned path answers the bundle's `index.html` with two placeholders filled
   (`renderDashboardHtml` in `typescript/dashboard-server/src/server/html.ts`): the runtime
   configuration script `window.workhorseDashboard = { basePath, rpcUrl, auditActor,
-authentication, demoTools, workspaces, workspace }` (`DashboardRuntimeConfig`), and optional
+  authentication, demoTools, workspaces, workspace }` (`DashboardRuntimeConfig`), and optional
   host-owned module tags. `authentication` is null when the host owns authorization; otherwise it
   names the mounted `loginUrl` and `logoutUrl`, and the application redirects there when RPC
   answers 401.
