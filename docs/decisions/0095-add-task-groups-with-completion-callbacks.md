@@ -2,6 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-11
+- **Amended by:** [ADR 0096](0096-count-task-group-outcomes-in-counter-shards.md) replaces the single
+  group counter with counter shards. Its lock rules replace the counter rules in "Order of group
+  changes", and it replaces the counter consequence about the hot-group benchmark.
 - **Related:** [ADR 0030](0030-distinguish-suspensions-gates-and-child-joins.md),
   [ADR 0051](0051-lead-with-durable-job-queue.md),
   [ADR 0055](0055-the-1-0-0-schema-boundary-adds-no-migration.md),
