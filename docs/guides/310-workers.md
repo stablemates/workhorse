@@ -1,38 +1,96 @@
 # How does a worker run my tasks?
 
-<!-- scenario-names: invoice.render, worker_pool, prepare_delivery, deliver, mailer-1, email, billing -->
+<!-- scenario-names: mailer-1, email, billing, email.send, invoice.render, worker_pool, deliver, prepare_delivery -->
 
-A worker is a loop. It asks the database for a task, runs the handler, records the result, and
-repeats. Everything else in this guide is detail on top of that loop.
+A worker is a loop in your process that runs your tasks. It claims a task from PostgreSQL, runs the
+handler for the task type, and records the result. Then it claims the next task.
 
-## One worker, eight slots
+The worker controls how many tasks run at the same time and how fast new tasks start. It also
+controls what happens to running tasks when the process stops. This guide shows how to start a
+worker, size it, stop it, and watch it.
 
-**Example.** A worker named `mailer-1` serves two queues, `email` and `billing`. Its `concurrency`
-is 8, so it has eight slots. One slot runs one task.
+## Register a handler and run the worker
 
-1. **At start** all eight slots are free. The worker sends one claim to `email` for eight tasks.
-   PostgreSQL returns eight. Every slot is now busy, and each task holds its own lease.
-2. **A moment later** one email task finishes, and one slot frees up. No claim is out, so the worker
-   sends a claim for one task. The worker rotates across its queues, so this claim goes to `billing`.
-3. **While that claim is still out** two more email tasks finish. Two slots are free beyond the one
-   the first claim reserved. That is enough for a second claim, so the worker sends one to `email`
-   for two tasks. Two claims are now in flight.
-4. **Throughout**, one heartbeat timer renews every running lease in a single batch.
+**Example.** A worker named `mailer-1` serves the queues `email` and `billing`.
 
-A busy worker does not wait for one claim to return before it sends the next. When enough slots free
-up, it sends another claim while the first is still out. That keeps slots full without one round
-trip per task.
+1. At start, the process registers a handler for the task type `email.send` with `Worker.handle`.
+   Then it calls `run`.
+2. An app enqueues an `email.send` task, and the worker claims it.
+3. The worker calls the handler with the payload and a `HandlerContext`.
+4. The handler returns `{ deliveredTo }`. Workhorse stores this JSON value as the result of the
+   task, and the task succeeds.
+
+Thus, `Worker.handle` connects one task type to one async function. The call returns the worker, so
+you can chain calls and serve many task types with one worker.
+
+```ts
+const worker = new Worker(queue, {
+  queues: ["email", "billing"],
+  concurrency: workerConcurrency,
+});
+worker.handle("email.send", async (payload: { to: string }, ctx) => {
+  await mailer.send(payload.to, { signal: ctx.signal });
+  return { deliveredTo: payload.to };
+});
+await worker.run();
+```
+
+`run` claims and runs tasks until you stop the worker. To connect its lifetime to your process,
+give an `AbortSignal` to `worker.run(signal)`. `runOnce` runs one claim-and-run pass and returns
+whether it found a task. Use `runOnce` in tests and scripts.
+
+The `HandlerContext` holds the claimed task, its `AbortSignal`, checkpoints, durable waits, and
+progress. Each write through the context carries the current
+[fence token](020-leases-and-fences.md), the number that proves which claim owns the task. Thus,
+handler code cannot write as an old owner after another worker owns the task.
+
+<details>
+<summary>Reference: handlers and run methods</summary>
+
+| Call                 | Behavior                                                                  |
+| -------------------- | ------------------------------------------------------------------------- |
+| `Worker.handle`      | Binds one task type to a handler. Returns the worker, so calls chain.     |
+| `worker.run(signal)` | Claims and runs tasks until the `AbortSignal` aborts or the worker stops. |
+| `runOnce`            | Runs one claim-and-run pass and returns whether it found work.            |
+
+A handler receives the payload and a `HandlerContext`. Its JSON return value becomes the `result`
+of the task. A thrown error fails the attempt, and the task retries while attempts remain.
+
+More detail: [Task lifecycle: Worker concurrency and lifecycle](../architecture/lifecycle.md#worker-concurrency-and-lifecycle).
+
+</details>
+
+## Fill the worker slots
+
+The `concurrency` option sets the number of slots of a worker. One slot runs one task. The worker
+keeps its slots full with as few claims as possible.
+
+**Example.** `mailer-1` has a `concurrency` of 8, so it has eight slots.
+
+1. At start, all eight slots are free. The worker sends one claim to `email` for eight tasks, and
+   PostgreSQL returns eight. Each task holds its own [lease](020-leases-and-fences.md).
+2. One `email` task finishes. No claim is in flight, so the worker sends a claim for one task. The
+   worker rotates across its queues, so this claim goes to `billing`.
+3. Two more `email` tasks finish while that claim is in flight. Now enough slots are free for a
+   second claim, so the worker sends a claim to `email` for two tasks.
+4. During all of these steps, one heartbeat timer renews all leases of the worker in one batch.
+
+Thus, a busy worker does not wait for one claim to return before it sends the next claim. It sends
+another claim when enough slots are free. This keeps the slots full without one round trip for each
+task.
 
 The worker never claims more tasks than it has free slots, because each claimed task holds a lease.
-It stops asking when its slots are full or the queue has nothing left. PostgreSQL still checks every
-task in a claim on its own, so ordering and admission policies apply to each one.
+It stops claiming when its slots are full or its queues are empty. PostgreSQL checks each task in a
+claim separately, so ordering and admission policies apply to each task.
 
 In TypeScript, Python, and Go, a task stays in the heartbeat batch after its handler returns, until
-its final write is done. A Rust task leaves the batch when its handler returns. Every task still has
-its own abort signal and final write, so cancellation and settlement stay independent.
+its final write is done. In Rust, a task leaves the batch when its handler returns. Each task has
+its own abort signal and its own final write. Thus, the cancellation and the result of one task do
+not depend on another task.
 
-Concurrency here is per worker. More workers add more slots. Use a
-[concurrency policy](240-concurrency-policies.md) when the fleet must share one durable budget.
+`concurrency` applies to one worker. Each added worker adds slots. If the fleet must share one budget
+of running tasks, use a [concurrency policy](240-concurrency-policies.md). If the fleet must share
+one start rate, use a [rate limit](250-rate-limits.md).
 
 <details>
 <summary>Reference: slots and claims</summary>
@@ -46,146 +104,96 @@ Concurrency here is per worker. More workers add more slots. Use a
 | Go         | `WorkerOptions.Concurrency` | 1 to 100 | 1       |
 
 **Claim rules.** Each claim calls `claim_many_v1` for a number of slots. A claim in flight reserves
-its limit, so free slots are `concurrency` minus running handlers minus reserved slots.
+its limit, so the free slots are `concurrency` minus the running handlers minus the reserved slots.
 
 1. With no claim in flight, any free slot starts a claim for all free slots.
-2. With a claim in flight, another starts only when free slots reach `ceil(concurrency / 4)`. At
-   most four claims are therefore in flight.
+2. With a claim in flight, another claim starts only when the free slots reach
+   `ceil(concurrency / 4)`. Thus, at most four claims are in flight.
 3. The queue cursor advances after every claim attempt.
-4. Tasks that a claim returns after `stop`, `pause`, or an error still run, because each holds a
-   lease.
+4. Tasks that a claim returns after `stop`, `pause`, or an error still run, because each task holds
+   a lease.
 
 The shared runtime fixture pins, at concurrency 8, the claim limits 8, 1, and 2 with two claims in
 flight.
 
-**Heartbeats.** One round per worker sends every active lease through `heartbeat_many_v1`. Rounds
-never overlap.
+**Heartbeats.** One round for each worker sends every active lease through `heartbeat_many_v1`.
+Rounds never overlap.
 
-More detail: [Task lifecycle: Dispatch loop](../architecture/lifecycle.md#dispatch-loop) and [Task lifecycle: Worker options](../architecture/lifecycle.md#worker-options).
+`claim_v1` is the same call as `claim_many_v1` with a limit of 1.
+
+More detail: [Task lifecycle: Dispatch loop](../architecture/lifecycle.md#dispatch-loop), [Task lifecycle: Worker options](../architecture/lifecycle.md#worker-options), and [Task lifecycle: Claim](../architecture/lifecycle.md#claim).
 
 </details>
 
-## Choosing queues
+## Serve several queues from one worker
 
-`mailer-1` serves `email` and `billing` under one identity and one slot budget. Suppose `email`
-always has work waiting, and one `billing` task arrives.
+One worker can serve several queues with one identity and one budget of slots. The worker rotates
+across its queues, so a busy queue cannot hide the tasks of another queue.
 
-1. **The worker claims from `email`.** The queue cursor then moves on.
-2. **Its next claim goes to `billing`.** The `billing` task gets a slot even though `email` never
-   empties.
+**Example.** `mailer-1` serves `email` and `billing`. The `email` queue always has ready tasks. One
+`billing` task arrives.
 
-The worker rotates across its configured queues, so work in one queue does not disappear behind a
-continuously busy sibling. The Python example builds this worker as an `AsyncWorker`. Its handler
-uses a checkpoint, which [Cancelling a Python async handler](#cancelling-a-python-async-handler)
-explains. The TypeScript example shows only the queue option.
+1. The worker claims from `email`. Then it moves its queue cursor to the next queue.
+2. The next claim goes to `billing`. The `billing` task gets a slot, although `email` is never
+   empty.
 
-```python
-async def deliver(payload, context):
-    prepared = await context.checkpoint("prepare", prepare_delivery)
-    return await send_message(payload, prepared)
+Thus, each queue of the worker gets claims in turn.
 
-async with asyncpg.create_pool(database_url) as worker_pool:
-    worker = AsyncWorker.from_asyncpg(worker_pool, queues=("email", "billing"))
-    worker.handle("email.send", deliver)
-    await worker.run()
-```
+Give `queue` for one queue name or `queues` for several names. If you give neither option, the
+worker uses the default queue of the queue client. A [batch handler](315-batch-handlers.md) receives
+tasks from one queue at a time.
 
-```ts
-const worker = new Worker(queue, {
-  queues: ["email", "billing"],
-});
-```
+Put queues that share handlers and operational policy in one worker with several slots. Add a second
+worker if the tasks need a different lease, retry override, schedule namespace, or set of handlers.
 
-Use `queue` for one name or `queues` for several. If you omit both, the worker uses the queue
-client's default. A [batch handler](315-batch-handlers.md) still receives tasks from only one queue
-at a time.
-
-A worker discovers each queue's [tier](305-fast-tier.md) on its own, so a fast-tier queue needs no
-worker option. On the fast tier, a busy worker in any language splits its slots into
-[cohorts](305-fast-tier.md#workers-need-no-configuration) that complete separately.
+A worker finds the [tier](305-fast-tier.md) of each queue itself. Thus, a fast-tier queue needs no
+worker option. On the fast tier, a busy worker in each language divides its slots into
+[cohorts](305-fast-tier.md#run-workers-with-no-tier-configuration), which complete separately.
 
 <details>
 <summary>Reference: queue set</summary>
 
-- `WorkerOptions.queues` takes one or more non-empty queue names. Duplicates collapse to one entry,
-  in first-occurrence order.
+- `WorkerOptions.queues` takes one or more non-empty queue names. Duplicate names collapse to one
+  entry, in first-occurrence order.
 - `WorkerOptions.queue` takes a single name.
-- Supplying both throws. Python raises `ValueError`.
-- Omitting both uses `WorkerQueueApi.defaultQueue`.
+- If you supply both options, the constructor throws. Python raises `ValueError`.
+- If you supply neither option, the worker uses `WorkerQueueApi.defaultQueue`.
 
-One worker identity, pause state, and `concurrency` budget cover the whole queue set.
+One worker identity, one pause state, and one `concurrency` budget cover the whole queue set.
 
 More detail: [Task lifecycle: Queue set](../architecture/lifecycle.md#queue-set).
 
 </details>
 
-## Tasks this worker cannot run
+## Wait for work without constant polling
 
-A claim does not filter by task type. So a worker can be handed a task whose type it has no handler
-for. That is normal during a deploy that replaces workers one at a time.
+An idle worker must find new tasks quickly, but it must not query the database all the time.
+PostgreSQL notifications wake the worker, and a slow poll is the fallback.
 
-1. **Release 2 starts.** One new worker runs it, and it enqueues the new type `invoice.render`.
-2. **An old worker claims that task.** It runs release 1, which has no handler for `invoice.render`.
-3. **The old worker hands the claim straight back.** Workhorse returns the task to its queue as
-   `ready`. The attempt count stays the same.
-4. **The new worker claims the task** and runs it as attempt 1.
+**Example.** `mailer-1` finished all its tasks, and both of its queues are empty.
 
-Failing the task instead would spend an attempt on a worker that never ran anything. A task allowed
-a single attempt would then be dead-lettered without ever running.
+1. The worker becomes idle and listens for `workhorse_tasks` notifications.
+2. An app commits an enqueue to `email`. PostgreSQL sends a notification that names `email`.
+3. The worker wakes. Its last claim found no task, so it waits a short random delay. Then it claims
+   the task.
 
-The hand-back is fenced like every other owned write. A worker whose lease PostgreSQL no longer
-recognizes cannot return a task that another worker is already running.
+Thus, one enqueue does not make all idle workers query at the same time. A busy worker does not wait
+the random delay, and it claims at once. A dependency release sends a notification for each
+completion, so a delay on each claim slows a busy worker.
 
-A pass that only handed claims back counts as an empty one. The worker then waits before asking
-again. So a type that no deployed worker handles is re-checked on the polling cadence, not in a loop.
+A notification is only a hint. The state in the database is the authority. If the listener
+connection fails, the worker can lose a notification. Then the worker finds the task at its next
+fallback poll. Thus, a lost notification can delay a claim, but the task does not stay unclaimed.
+After a listener failure, the worker connects the listener again.
 
-<details>
-<summary>Reference: owned release</summary>
+If the worker has no listener, each empty check makes the next wait longer, up to a limit. The wait
+returns to its start value when a claim finds a task. In TypeScript, `pollMs` sets the fallback
+poll.
 
-`release_owned_v1(task, worker, fence)` locks the matching unexpired active row. Then:
-
-- it answers `cancel_requested` when a cancellation is pending;
-- it delegates to `expire_owned_v1` when `deadline_at` or `attempt_timeout_at` has passed;
-- it answers `stale` when PostgreSQL no longer recognizes the fence.
-
-Otherwise it:
-
-1. Sets the row to `ready` with a new `sequence`. `current_attempt` does not change.
-2. Clears `worker_id`, `fence_token`, `acquired_at`, `heartbeat_at`, `expires_at`, `wait_name`,
-   `attempt_timeout_at`, and `error`.
-3. Adds the time the lease was held to `execution_used_ms`.
-4. Notifies `workhorse_tasks`.
-5. Appends a `released` event with `worker_id` and `fence_token`.
-
-It writes no `attempt_history` row, because the attempt is not closed. A claim counts as empty when
-it returns no row, or only rows it released.
-
-More detail: [Task lifecycle: Owned release](../architecture/lifecycle.md#owned-release).
-
-</details>
-
-## Waiting without constant polling
-
-`mailer-1` has finished every task, and both queues are empty.
-
-1. **The worker goes idle.** It listens for `workhorse_tasks` notifications.
-2. **An app commits an enqueue to `email`.** PostgreSQL sends a notification naming `email`.
-3. **The worker wakes.** Its last claim found nothing, so it waits a small random delay, then claims.
-   The delay keeps one enqueue from making every idle process query at the same instant.
-4. **Suppose the listener's connection had dropped** and the notification was lost. The worker still
-   checks on its fallback poll, so the task waits a little longer but is not stranded.
-
-The notification is only a hint. Database state stays authoritative: a missing notification can
-delay a claim, but it cannot strand a task. After a dropped listener, the worker reconnects.
-
-A busy worker skips the random delay and claims at once. A dependency release notifies on every
-completion, so the delay would otherwise slow every claim. Without a listener, consecutive empty
-checks back off to a cap and reset as soon as a claim succeeds.
-
-Each worker receives only its own queues' wake hints. Promotion, a regular background pass that moves
-due tasks to `ready`, notifies each affected queue separately, and so does recovery. Work on one
-queue therefore does not wake workers assigned to another. A notification wakes dispatch without
-changing the cadence of maintenance or registration.
+Each worker gets wake hints only for its own queues. Promotion, a regular background pass that moves
+due tasks to `ready`, notifies each affected queue separately. [Recovery](020-leases-and-fences.md)
+does the same. Thus, tasks on one queue do not wake the workers of another queue. A notification
+wakes the claim loop only. It does not change the timing of maintenance or registration.
 
 TypeScript, Go, and Ruby workers that share a database pool also share one listener connection. A
 Python or Rust worker holds its own.
@@ -203,10 +211,10 @@ Python or Rust worker holds its own.
 | No listener, starting wait                    | 250 ms                                     |
 | TypeScript `runOnce()`                        | 250 ms; never opens a listener             |
 
-- A payload naming a configured queue, or `*`, wakes the worker.
+- A payload that names a configured queue, or `*`, wakes the worker.
 - `promote_v1`, `run_task_now_v1`, `recover_expired_v1`, `sync_concurrency_policies_v1`, and
-  `sync_rate_limit_policies_v1` notify once per affected queue.
-- A failed listener reconnects after exponential delays from 100 ms to 5,000 ms, and every reconnect
+  `sync_rate_limit_policies_v1` notify once for each affected queue.
+- A failed listener reconnects after exponential delays from 100 ms to 5,000 ms. Every reconnect
   wakes its subscribers.
 - A pool with a capacity of 1 stays polling-only. Go `WorkerOptions.PollingOnly` turns the listener
   off for a transaction-mode pooler.
@@ -215,115 +223,55 @@ More detail: [Operations and CLI: Polling cadence](../architecture/operations.md
 
 </details>
 
-## Python workers and their pool
+## Run workers in their own process
 
-In the example, the app opens `worker_pool` and hands it to the worker.
+Queue depth and HTTP traffic seldom need the same number of processes. Thus, run your workers in
+their own process, separate from your web app.
 
-1. **During the run**, the worker borrows a pool connection for each claim and lifecycle statement
-   and returns it afterwards.
-2. **For the whole run**, it also
-   [reserves its own heartbeat and listener connections](390-connection-pooling.md#how-do-i-budget-connections)
-   from that pool. Size the pool for them.
-3. **When `run` returns**, the worker leaves the pool open. The `async with` block then closes it.
+**Example.** `mailer-1` runs in its own process, separate from the web app.
 
-Your code creates the pool and owns it. Close it only after `run` returns, because the worker never
-closes the pool it was given.
-
-Python supplies the same core loop through the synchronous `Worker` and the asynchronous
-`AsyncWorker`. Both rotate across queues, bound concurrent slots, and drain active work after `stop`.
-Each claimed task renews its lease and delivers ownership signals through its context's cancellation
-token. Both workers can listen for notifications and offer recurring namespaces for PostgreSQL to
-evaluate. Python's `handle_batch` follows the grouping contract in
-[315-batch-handlers.md](315-batch-handlers.md).
-
-`AsyncWorker.from_psycopg` takes a Psycopg `AsyncConnectionPool`, and `AsyncWorker.from_asyncpg`
-takes an asyncpg `Pool`. Its handlers and durable context methods are awaitable.
-
-<details>
-<summary>Reference: async worker pool</summary>
-
-| Factory                    | Pool                          |
-| -------------------------- | ----------------------------- |
-| `AsyncWorker.from_psycopg` | Psycopg `AsyncConnectionPool` |
-| `AsyncWorker.from_asyncpg` | asyncpg `Pool`                |
-
-- The worker borrows one connection per statement and returns it afterwards.
-- Unless `shared_heartbeats` is set, it reserves one pool connection for heartbeat rounds for the
-  whole run.
-- The listener holds another pool connection while it listens.
-- Psycopg connections must use `autocommit=True`. Otherwise the worker raises `ValueError`.
-- `AsyncWorker` never closes the pool it was given.
-
-More detail: [Schema and SQL protocol: Pool connections](../architecture/schema-and-protocol.md#pool-connections).
-
-</details>
-
-## Cancelling a Python async handler
-
-The handler `deliver` from the example calls `context.checkpoint("prepare", prepare_delivery)`.
-Something cancels the asyncio task that awaits the checkpoint.
-
-1. **If the cancellation arrives while `prepare_delivery` still runs**, the checkpoint cancels the
-   operation and waits for its cleanup. Nothing is saved, so a later attempt runs
-   `prepare_delivery` again.
-2. **If the cancellation arrives after `prepare_delivery` returned**, its save may already be under
-   way. The worker waits for that save instead of undoing it. The handler sees `CancelledError`, and
-   a later attempt replays the saved value without calling `prepare_delivery`.
-
-A cancelled await therefore never proves that no checkpoint exists. It also does not undo the
-operation's effects on other systems.
-
-The operation runs in a copy of the handler's context. It sees the handler's context variables and
-current OpenTelemetry span.
-
-Cancelling the task that awaits `AsyncWorker.run()` or `run_once()` asks the worker to drain. A
-repeated cancellation does not cut that drain short. The call re-raises `CancelledError` only after
-active handlers finish and the notification connection is released. Keep the pool and event loop open
-until then. Task cancellation is not the process runner's second signal, which exits without
-waiting.
-
-<details>
-<summary>Reference: checkpoint cancellation</summary>
-
-**Before the operation returns**
-
-- `checkpoint` stops the tracked task before `operation` is called, or cancels it while it runs.
-- It waits for the task's cleanup.
-- If `operation` absorbs the cancellation and returns a value, the tracked task raises
-  `asyncio.CancelledError` instead.
-- No row is stored in `workhorse.task_checkpoint`.
-
-**After the operation returns**
-
-- The core sends `save_checkpoint_v1`, and `_await_bridge_call` waits for that call before it
-  re-raises.
-- The row may commit. A later attempt replays its value.
-- `save_checkpoint_v1` checks the worker, fence, lease expiry, deadline, attempt timeout, and
-  `cancel_requested_at`. Asyncio cancellation is not one of its conditions.
-
-**Context.** `checkpoint` copies the caller's `contextvars` context, and the tracked task runs in
-that copy. Changes inside `operation` stay inside it.
-
-More detail: [Schema and SQL protocol: Cancelling a checkpoint](../architecture/schema-and-protocol.md#cancelling-a-checkpoint).
-
-</details>
-
-## Running workers in their own process
-
-Worker `mailer-1` runs in its own process, separate from the web app.
-
-1. **At 09:00** HTTP traffic triples. The operator scales the web app to six processes and leaves
-   the worker process as it is.
-2. **At 09:30** the `email` queue backs up. The operator starts a second worker process. The web app
-   does not change.
-3. **At 10:00** a deploy restarts the worker process. The web app keeps serving requests while the
+1. At 09:00, HTTP traffic increases to three times its usual level. The operator scales the web app
+   to six processes. The worker process does not change.
+2. At 09:30, many tasks wait in the `email` queue. The operator starts a second worker process. The
+   web app does not change.
+3. At 10:00, a deploy restarts the worker process. The web app continues to serve requests while the
    new worker process starts.
 
-The recommended deployment is a dedicated worker process, separate from your web app. The process
-owns its database connections, its workers, signal handling, and shutdown.
+Thus, each side scales and restarts alone, and web requests continue during a worker restart. The
+worker process owns its database connections, its workers, optional probes, signal handling, and
+shutdown.
 
-Keep workers outside your web server, because queue depth and HTTP traffic rarely need the same
-number of processes. A worker can then restart without taking down web ingress.
+In TypeScript, `defineWorkerProcess` describes the adapter and the workers. The `workhorse worker`
+CLI loads the compiled definition and adds signal handling and supervision.
+
+```ts
+export default defineWorkerProcess({
+  adapter: () => createWorkhorseAdapter(adapterOptions),
+  workers: [
+    {
+      options: { queues: ["email", "billing"], concurrency: workerConcurrency },
+      configure(worker) {
+        worker.handle("email.send", sendEmail);
+      },
+    },
+  ],
+});
+```
+
+Compile the definition before the CLI imports it. The CLI does not install a TypeScript loader.
+
+The other SDKs give the same process boundary:
+
+- A Go app creates the boundary with `signal.NotifyContext`. Then it gives that context to
+  `Worker.Run`.
+- A Rust app calls `run_worker_process`, which drains the worker on `SIGINT` or `SIGTERM`. To
+  control the boundary yourself, give a shutdown future to `Worker::run`.
+- A Ruby app calls `Stablemates::Workhorse.run_worker_process`. It drains the worker on `SIGINT` or
+  `SIGTERM` within `shutdown_grace`. To control the boundary yourself, call `Worker#run` on a
+  thread, and call `Worker#stop` from your own signal handling.
+
+In Go and Rust, a handler panic becomes a recorded failure of the attempt. In Ruby, an exception
+from a handler does the same. In each case, the worker process continues to run later tasks.
 
 <details>
 <summary>Reference: process entry points</summary>
@@ -335,39 +283,45 @@ number of processes. A worker can then restart without taking down web ingress.
 | Python     | `run_worker_process(worker, *, shutdown_timeout_ms, force_exit)`                  |
 | Go         | A context from `signal.NotifyContext`, passed to `Worker.Run`                     |
 | Rust       | `run_worker_process(&worker)`                                                     |
+| Ruby       | `Stablemates::Workhorse.run_worker_process(worker)`, bounded by `shutdown_grace`  |
 
-The optional TypeScript probe listener reports liveness while running or draining. It reports
-readiness only while the process accepts claims.
+The optional TypeScript probe listener reports liveness while the process runs or drains. It
+reports readiness only while the process accepts claims.
 
 More detail: [Operations and CLI: Worker process lifecycle](../architecture/operations.md#worker-process-lifecycle).
 
 </details>
 
-## Shutting down cleanly
+## Shut down a worker cleanly
 
-A deploy sends `SIGTERM` to a TypeScript worker process that runs three tasks.
+A deploy stops worker processes. A clean shutdown lets running tasks finish, and it loses no task.
 
-1. **At 0 s** the process stops claiming new work at once. The three tasks keep running, and their
-   leases keep renewing.
-2. **At 4 s** two tasks finish and write their results.
-3. **The third handler ignores its abort signal** and keeps going.
-4. **At the drain deadline** the process exits anyway. The third task is still marked active, so its
-   lease expires and [recovery](020-leases-and-fences.md) gives it to another worker.
+**Example.** A deploy sends `SIGTERM` to the TypeScript process of `mailer-1`. The process runs
+three `email.send` tasks.
 
-If all three had finished before the deadline, connections would close after the last one settled.
+1. At 0 s, the process stops claiming new tasks. The three tasks continue to run, and their leases
+   continue to renew.
+2. At 4 s, two tasks finish and write their results.
+3. The third handler ignores its abort signal and continues to run.
+4. At the drain deadline, the process exits. The third task is still active, so its lease expires.
+   Then [recovery](020-leases-and-fences.md) gives the task to another worker.
 
-A few consequences are worth knowing:
+If all three tasks finish before the deadline, the process closes its connections after the last
+final write. A second signal makes the process exit at once, without the drain.
 
-- A claim already in flight may still land after shutdown starts. The worker drains that task
-  properly rather than abandoning it.
-- The drain deadline is configurable. A handler that ignores its abort signal does not get to block a
-  deploy forever.
-- A hard kill leaves tasks marked active. That is fine: their leases expire and recovery picks them
-  up. Nothing is lost; it is just slower.
-- Shutting down does **not** cancel tasks. It stops running them here, so something else can.
+Thus, these rules apply to a shutdown:
 
-Python processes get the same boundary by passing their configured `Worker` to
-`run_worker_process`. Keep the connection context outside that call, so it closes after the drain.
+- A claim that is in flight can return after the shutdown starts. The worker drains that task and
+  does not abandon it.
+- You can configure the drain deadline. Thus, a handler that ignores its abort signal cannot block
+  a deploy indefinitely.
+- A hard kill leaves tasks active. Their leases expire, and recovery makes the tasks available again.
+  No task is lost, but recovery takes more time.
+- A shutdown does not cancel tasks. The process stops running them, so another worker can run them.
+
+A Python process gets the same boundary when it gives its configured `Worker` to
+`run_worker_process`. Keep the connection context outside that call, so the connections close
+after the drain.
 
 <details>
 <summary>Reference: shutdown deadline</summary>
@@ -387,8 +341,8 @@ Python processes get the same boundary by passing their configured `Worker` to
 | Missed deadline                | Code 1                                                           |
 | Unexpected worker-loop failure | Stops sibling workers, applies the same drain, fails the process |
 
-Python's second signal calls `force_exit` with 128 plus the signal number: 130 for `SIGINT`, 143 for
-`SIGTERM`. A missed deadline calls `force_exit(1)`.
+The second signal to a Python process calls `force_exit` with 128 plus the signal number: 130 for
+`SIGINT`, 143 for `SIGTERM`. A missed deadline calls `force_exit(1)`.
 
 The first signal marks readiness false and calls `stop()` on every worker. Active handlers and their
 heartbeat batch continue. Process termination never writes a durable task cancellation.
@@ -397,40 +351,52 @@ More detail: [Operations and CLI: Shutdown deadline and failure](../architecture
 
 </details>
 
-## Shutdown in Go and Rust
+## Shut down a Go or Rust worker
 
-A Go worker runs two tasks when its `Run` context ends. One claim is still in flight.
+A Go or Rust worker stops when its caller tells it to stop. A grace period limits the time that the
+worker waits for running handlers.
 
-1. **The grace period starts at once.** It starts when `Run` stops, before `Run` waits for the claim.
-2. **The claim returns in time.** Its task still runs.
-3. **One handler ignores its cancellation.** At the deadline, `Run` cancels it and gives it a short
-   window to unwind.
-4. **`Run` returns `ErrShutdownIncomplete`.** The handler still runs inside the process, but its
-   lease stops renewing. Recovery can rerun the task elsewhere.
+**Example.** `mailer-1` is a Go worker. It runs two tasks when its `Run` context ends, and one claim
+is in flight.
 
-`Run` returning is not the process exiting. Go applications pass a context from
-`signal.NotifyContext` to `Worker.Run`. The grace period also starts when a lifecycle error stops
-the run. The deadline bounds every shutdown step, including a claim still in flight. A claim the
-deadline cuts short may hold a lease it never returned, and that lease expires so recovery picks the
-task up. A handler cancelled at the deadline does not turn a clean shutdown into an error. When that
-handler returns an error, the worker hands its task back to the queue without charging an attempt.
-When it returns a value instead, the worker completes its task. A handler panic fails that attempt,
-while the worker stays alive to serve later tasks.
+1. The grace period starts at once. It starts when `Run` stops, before `Run` waits for the claim.
+2. The claim returns in time, and its task runs.
+3. One handler ignores its cancellation. At the deadline, `Run` cancels the handler and gives it a
+   short time to unwind.
+4. `Run` returns `ErrShutdownIncomplete`. The handler continues to run in the process, but its lease
+   does not renew. Recovery can run the task again on another worker.
 
-A Rust worker starts its grace period as soon as `Worker::run` observes its shutdown future. The same
-deadline bounds a claim in flight and the registry update that marks the worker draining. A short
-cleanup window after it bounds deregistration and the release of the heartbeat connection. A locked
-registry row or a stalled heartbeat cannot hold `run`.
+Thus, when `Run` returns, the process does not exit. A Go app gives a context from
+`signal.NotifyContext` to `Worker.Run`, and `WorkerOptions.ShutdownGracePeriod` sets the grace
+period.
+
+The grace period also starts when a lifecycle error stops the run. The deadline applies to each
+shutdown step. This includes a claim in flight and the registry update that marks the worker as
+draining. If the deadline stops a claim, that claim can hold a lease that it did not return.
+Recovery takes that task after the lease expires.
+
+A handler that the deadline cancels does not make a clean shutdown an error:
+
+- If the handler returns an error, the worker returns its task to the queue and charges no attempt.
+- If the handler returns a value, the worker completes its task.
+- If the handler panics, the panic fails that attempt. The worker continues to serve later tasks.
+
+A Rust worker starts its grace period, `shutdown_grace_period`, when `Worker::run` sees its shutdown
+future. The same deadline applies to a claim in flight and to the registry update that marks the
+worker as draining. After the deadline, a short cleanup window applies to deregistration and to the
+release of the heartbeat connection. Thus, a locked registry row or a stalled heartbeat cannot keep
+`run` from returning.
 
 <details>
 <summary>Reference: Go shutdown grace period</summary>
 
 When `ShutdownGracePeriod` expires, `Run` acts in this order:
 
-1. It cancels every handler still executing.
+1. It cancels every handler that still runs.
 2. It allows 250 ms for those handlers to unwind.
-3. It stops renewing the leases of whatever still runs.
-4. It returns an error matching `ErrShutdownIncomplete`, naming how many it abandoned.
+3. It stops renewing the leases of the handlers that still run.
+4. It returns an error that matches `ErrShutdownIncomplete` and names how many handlers it
+   abandoned.
 
 - The deadline cancels an in-flight claim, a fused completion claim, and the draining registration
   refresh.
@@ -451,51 +417,110 @@ More detail: [Schema and SQL protocol: Shutdown grace period](../architecture/sc
 
 - The deadline is fixed when the dispatcher observes `shutdown`. Claims in flight, the draining
   `register_worker_v1` refresh, and running handlers all spend from it.
-- A claim still pending at the deadline is dropped. Any task it claimed stays leased until recovery.
-- Handlers still running when grace ends see `CancelReason::Shutdown` and get 250 ms to unwind.
+- A claim that is still pending at the deadline is dropped. Any task it claimed stays leased until
+  recovery.
+- Handlers that still run when grace ends see `CancelReason::Shutdown` and get 250 ms to unwind.
 - A handler that returns an error after that cancellation charges no attempt. `release_owned_v1`
   returns its task to the queue. A panic still fails the attempt.
-- `run` abandons any that outlive that window and returns `Error::ShutdownIncomplete`.
-- The cleanup window covers stopping the registry loop and listener, `deregister_worker_v1`, and the
-  heartbeat connection release. It ends 1 s after the later of the deadline and the end of the drain.
+- `run` abandons the handlers that outlive that window and returns `Error::ShutdownIncomplete`.
+- The cleanup window covers the stop of the registry loop and the listener, `deregister_worker_v1`,
+  and the release of the heartbeat connection. It ends 1 s after the later of the deadline and the
+  end of the drain.
 
 More detail: [Schema and SQL protocol: Shutdown](../architecture/schema-and-protocol.md#shutdown) and [Schema and SQL protocol: Cleanup window](../architecture/schema-and-protocol.md#cleanup-window).
 
 </details>
 
-## The worker registry
+## Pause, stop, and drain a worker
 
-A deploy replaces workers one at a time, so for a while two builds run at once. One worker behaves
-differently, and an operator wants to know why.
+A pause stops new claims for a time, and the running tasks finish. Your code can pause a worker, and
+an operator can pause it from outside the process. The two pauses are separate.
 
-1. **Every few seconds, each worker writes its registry row,** as workers do by default. The row
-   holds its id, queues, schedule namespaces, concurrency, and how many slots are busy.
-2. **The row also says what the worker is**: which client library it runs, at which version, and
-   which protocol it speaks.
-3. **The operator opens the Workers page.** The odd worker still reports the old version.
+**Example.** An operator pauses `mailer-1` from the dashboard while a downstream service is under
+repair.
 
-That is how a dashboard can show a fleet it does not host. Process memory cannot answer "which
-workers are alive" once workers are deployed separately. TypeScript, Python, Go, Rust, and Ruby
-workers all write this row by default. An older worker may report none of the three identity
-fields. The registry then records that it reported nothing, rather than guessing.
+1. Workhorse stores the pause in the database, on the row of the worker in `worker_registry`.
+2. At its next registry refresh, the worker reads the pause and stops claiming. Its running tasks
+   finish.
+3. The code of the worker calls `Worker.resume`. The operator pause stays in effect.
+4. After a deploy, the process restarts. The new process starts without a pause.
+
+Thus, two different controls use the word "pause":
+
+- **Local.** In TypeScript and Python, `Worker.pause` stops this worker from claiming, and active
+  handlers finish. `Worker.resume` lets the worker claim again, and `Worker.isPaused` reads the
+  effective state. A Ruby worker has the same `pause` and `resume` methods.
+- **Operator.** `Admin.setWorkerPaused` stores the pause in `worker_registry`. A dashboard, or
+  `workhorse admin pause-worker` in the [terminal](380-admin-cli-and-tui.md), can then pause a
+  process that it does not host. TypeScript, Python, Go, Rust, and Ruby workers read the pause at
+  their next registry refresh.
+
+A local resume cannot clear an operator pause. If it could, the fleet could undo a pause that an
+operator sets from a dashboard. But an operator pause applies only to the process that it names. A
+restarted process starts without it.
+
+`Worker.stop` drains the worker. The worker takes no new claims, and active handlers run to
+completion. Then `run` returns. On `SIGTERM`, the worker process stops its workers for you.
+
+A pause is cooperative, as [cancellation](120-cancellation.md) is. Tasks that already run continue
+to completion. If work must stop durably and stay stopped after worker restarts, pause the queue
+with `Admin.pauseQueue`, not the worker.
+
+<details>
+<summary>Reference: operator pause</summary>
+
+- `admin pause-worker` and `admin resume-worker` write `worker_registry.paused` through
+  `Admin.setWorkerPaused`. An unregistered worker ID exits 1 with `is not registered`.
+- `set_worker_paused_v1` validates `paused_by` (1 to 200 characters), `paused_reason` (1 to 2,000
+  characters), and the request ID (1 to 512 UTF-8 bytes).
+- Each worker start announces a new `instance_id`. `register_worker_v1` keeps the pause only while
+  that instance continues to refresh. A new instance of the same worker ID clears the pause.
+- A worker cannot write `paused`, and an operator cannot write the runtime columns.
+
+More detail: [Data model: Pause scope](../architecture/data-model.md#pause-scope), [Data model: Pause ownership](../architecture/data-model.md#pause-ownership), and [Operations and CLI: Worker pause](../architecture/operations.md#worker-pause).
+
+</details>
+
+## Read fleet state carefully
+
+Each worker writes a registry row in PostgreSQL. Operator views read these rows, so they can show a
+fleet of workers in other processes. The rows show recent state, not live state.
+
+**Example.** A deploy replaces workers one at a time, so two builds run at the same time for a
+period. One worker behaves differently, and an operator wants to know why.
+
+1. By default, each worker writes its registry row every few seconds. The row holds the ID, queues,
+   schedule namespaces, `concurrency`, and number of busy slots of the worker.
+2. The row also identifies the client library of the worker, its version, and its protocol version.
+3. The operator opens the Workers page. The odd worker still reports the old version.
+
+Thus, a dashboard can show a fleet that it does not host. Process memory cannot tell which workers
+are alive when workers run in separate deployments. `Worker.runtimeState` reads only the local
+process state of a TypeScript worker. The dashboard and `Admin.listWorkers` read the registry that
+each worker refreshes. The slot counts in the registry are recent observations, not live reads.
+
+TypeScript, Python, Go, Rust, and Ruby workers all write this row by default. A worker on an older
+SDK can report none of the three identity fields. Then the registry records that the worker
+reported nothing. It does not guess. `workhorse schema status --json` counts the live workers by
+their reported protocol. Producers never register, so these counts describe only workers.
 
 Each SDK lets a worker opt out of the registry. An opted-out worker writes no row, so operator
-surfaces cannot see it. Its maintenance interval also never shortens the spacing of the
-expired-lease scan, which drives [recovery](020-leases-and-fences.md). While registered workers keep
-ticking, a lease that expires can wait up to the maintenance interval of the fastest registered
-worker before recovery. Other recovery work can delay it further.
+views cannot see it. Its maintenance interval also never makes the expired-lease scan more frequent.
+That scan starts [recovery](020-leases-and-fences.md). While registered workers continue their
+maintenance, an expired lease can wait up to the maintenance interval of the fastest registered
+worker. Other recovery work can delay it more.
 
-The namespace list answers a different question from the queue list. Queues control which tasks a
-worker can claim. Schedule namespaces control which recurring definitions it can evaluate.
+Queues control which tasks a worker can claim. Schedule namespaces control which recurring
+definitions the worker can evaluate. The Workers page shows both. Claims never read the registry, so
+the registry cannot slow dispatch.
 
-`claim_v1` never reads this registry, so the registry cannot slow dispatch down.
+If a worker dies, it stops its refresh. The dashboard reports it as offline when its row becomes
+stale, and automatic maintenance removes the row later. The tasks of that worker are not lost. Their
+leases expire, and recovery makes the tasks available again.
 
-A worker that dies stops refreshing, and the dashboard reports it offline once its row goes stale.
-Automatic maintenance eventually removes that row. Slot counts are therefore a recent snapshot, not
-a live read.
-
-Registration failures do not stop dispatch. A worker keeps the last remote pause it received, so a
-temporary database error cannot silently resume claims that an operator stopped.
+A registration error does not stop dispatch. The worker keeps the last operator pause that it read
+until a later refresh succeeds. Thus, a temporary database error cannot restart claims that an
+operator stopped.
 
 <details>
 <summary>Reference: registration</summary>
@@ -513,62 +538,190 @@ temporary database error cannot silently resume claims that an operator stopped.
 | Python     | `registry_interval_ms`             | 5 s     | `0`                               |
 | Go         | `WorkerOptions.RegistryInterval`   | 5 s     | `WorkerOptions.DisableRegistry`   |
 | Rust       | `WorkerOptions::registry_interval` | 5 s     | `WorkerOptions::disable_registry` |
-| Ruby       | `registry_interval:`               | 5 s     | `disable_registry: true`          |
+| Ruby       | `registry_interval:` in seconds    | 5 s     | `disable_registry: true`          |
 
 **Client identity.** All three fields are nullable. Each SDK stamps its own `sdk_language`
 (`typescript`, `python`, `go`, `rust`, `ruby`) and package version. A refresh overwrites all three.
+
+**Claims.** `claim_v1` and the other claim functions never read `worker_registry`.
 
 **Removal.** Graceful shutdown calls `deregister_worker_v1`. `run_maintenance_v1` calls
 `prune_worker_registry_v1` with a one-minute maximum age.
 
 **Opt-out.** An opted-out worker writes no `worker_registry` row. `tick_v1` spaces the expired-lease
-scan by half the shortest maintenance interval among live registered workers, so an opted-out
-worker never shortens that spacing. While registered workers keep ticking, recovery follows a
-lease's expiry by at most one interval of the fastest registered worker. That bound holds only
-while recovery reaches the scan. When other recovery work fills the limit, the scan waits for a
-later tick. With no live registered worker, every tick runs the scan.
+scan by half the shortest maintenance interval among live registered workers. Thus, an opted-out
+worker never shortens that spacing. While registered workers continue to tick, recovery follows the
+expiry of a lease by at most one interval of the fastest registered worker. That bound holds only
+while recovery reaches the scan. If other recovery work fills the limit, the scan waits for a later
+tick. With no live registered worker, every tick runs the scan.
 
 More detail: [Data model: `worker_registry`](../architecture/data-model.md#worker_registry) and [Task lifecycle: Maintenance cadence](../architecture/lifecycle.md#maintenance-cadence).
 
 </details>
 
-## Pausing
+## Return a task that the worker cannot run
 
-An operator pauses `mailer-1` from the dashboard while a downstream service is under repair.
+A claim does not filter by task type. Thus, a worker can get a task that has no handler in that
+worker. This is normal during a deploy that replaces workers one at a time.
 
-1. **The pause is stored in the database**, on the worker's registry row.
-2. **On its next registry refresh** the worker reads the pause and stops claiming. Its running tasks
-   finish.
-3. **The worker's own code calls `Worker.resume`.** The operator pause stays in force.
-4. **The process restarts** after a deploy. The new process starts fresh and unpaused.
+**Example.** A deploy replaces the workers that serve `billing`.
 
-Two different things share the word "pause":
+1. Release 2 starts on one new worker. The new release enqueues a task of the new type
+   `invoice.render`.
+2. An old worker claims that task. Its release 1 has no handler for `invoice.render`.
+3. The old worker returns the task at once. Workhorse puts the task back in its queue as `ready`,
+   and the attempt number does not change.
+4. The new worker claims the task and runs it as attempt 1.
 
-- **Local.** TypeScript and Python code can call `Worker.pause`. Claims stop, and running tasks
-  finish.
-- **Operator.** Someone pauses the worker from the dashboard, or runs `admin pause-worker` in the
-  [terminal](380-admin-cli-and-tui.md). That is stored in the database, and the worker picks it up
-  on its next refresh.
+Thus, a return uses no attempt. If the old worker failed the task, it used an attempt with no
+handler run. A task with one attempt then fails, and its handler never runs.
 
-The split matters. A worker cannot clear an operator pause by calling `Worker.resume`. Otherwise
-pausing a fleet from a dashboard would be undone by the fleet itself. But an operator pause lasts
-only as long as that process does.
+The return is fenced, as every owned write is. A worker whose lease PostgreSQL no longer accepts
+cannot return a task that another worker runs.
 
-Pause is cooperative, like [cancellation](120-cancellation.md). Tasks already running run to
-completion. If you need work to stop _durably_, pause the queue, not the worker.
+A pass that only returned tasks counts as an empty pass. The worker then waits before it claims
+again. Thus, if no deployed worker handles a type, the workers check the task again at the poll
+interval, not in a tight loop.
 
 <details>
-<summary>Reference: operator pause</summary>
+<summary>Reference: owned release</summary>
 
-- `admin pause-worker` and `admin resume-worker` write `worker_registry.paused` through
-  `Admin.setWorkerPaused`. An unregistered worker id exits 1 with `is not registered`.
-- `set_worker_paused_v1` validates `paused_by` (1 to 200 characters), `paused_reason` (1 to 2,000
-  characters), and the request ID (1 to 512 UTF-8 bytes).
-- Each worker start announces a fresh `instance_id`. `register_worker_v1` keeps the pause only while
-  that instance keeps refreshing. A new instance of the same worker id clears it.
-- A worker may not write `paused`, and an operator may not write the runtime columns.
+`release_owned_v1(task, worker, fence)` locks the matching unexpired active row. Then:
 
-More detail: [Data model: Pause scope](../architecture/data-model.md#pause-scope), [Data model: Pause ownership](../architecture/data-model.md#pause-ownership), and [Operations and CLI: Worker pause](../architecture/operations.md#worker-pause).
+- it answers `cancel_requested` when a cancellation is pending;
+- it delegates to `expire_owned_v1` when `deadline_at` or `attempt_timeout_at` has passed;
+- it answers `stale` when PostgreSQL no longer recognizes the fence.
+
+Otherwise it:
+
+1. Sets the row to `ready` with a new `sequence`. `current_attempt` does not change.
+2. Clears `worker_id`, `fence_token`, `acquired_at`, `heartbeat_at`, `expires_at`, `wait_name`,
+   `attempt_timeout_at`, and `error`.
+3. Adds the time that the worker held the lease to `execution_used_ms`.
+4. Notifies `workhorse_tasks`.
+5. Appends a `released` event with `worker_id` and `fence_token`.
+
+It writes no `attempt_history` row, because the attempt is not closed. A claim counts as empty when
+it returns no row, or only rows that it released.
+
+More detail: [Task lifecycle: Owned release](../architecture/lifecycle.md#owned-release).
+
+</details>
+
+## Give a Python worker its connection pool
+
+A Python worker uses a connection pool that your code creates. Your code owns the pool, so it must
+size the pool and close it.
+
+**Example.** The app opens `worker_pool` with asyncpg and gives it to `AsyncWorker.from_asyncpg`.
+The handler `deliver` serves `email.send`.
+
+```python
+async def deliver(payload, context):
+    prepared = await context.checkpoint("prepare", prepare_delivery)
+    return await send_email(payload, prepared)
+
+async with asyncpg.create_pool(database_url) as worker_pool:
+    worker = AsyncWorker.from_asyncpg(worker_pool, queues=("email", "billing"))
+    worker.handle("email.send", deliver)
+    await worker.run()
+```
+
+1. During the run, the worker borrows a pool connection for each claim and lifecycle statement and
+   returns it afterwards.
+2. For the whole run, the worker also
+   [reserves its own heartbeat and listener connections](390-connection-pooling.md#how-do-i-budget-connections)
+   from that pool. Size the pool for them.
+3. When `run` returns, the worker leaves the pool open. Then the `async with` block closes it.
+
+Thus, close the pool only after `run` returns. The worker never closes the pool it was given.
+
+Python has the same core loop in the synchronous `Worker` and the asynchronous `AsyncWorker`. Both
+rotate across queues, limit the number of slots, and drain active handlers after `stop`. Both use
+the same core for claims, heartbeats, batches, final writes, telemetry, and drain. Each claimed task
+renews its lease and gets ownership signals through the cancellation token of its context. Both
+workers can listen for notifications and offer recurring schedule namespaces for PostgreSQL to
+evaluate. `handle_batch` follows the grouping rules in [batch handlers](315-batch-handlers.md).
+
+`Worker` takes a Psycopg `ConnectionPool`. `AsyncWorker.from_psycopg` takes a Psycopg
+`AsyncConnectionPool`, and `AsyncWorker.from_asyncpg` takes an asyncpg `Pool`. The handlers and
+context methods of `AsyncWorker` are awaitable.
+
+<details>
+<summary>Reference: async worker pool</summary>
+
+| Factory                    | Pool                          |
+| -------------------------- | ----------------------------- |
+| `AsyncWorker.from_psycopg` | Psycopg `AsyncConnectionPool` |
+| `AsyncWorker.from_asyncpg` | asyncpg `Pool`                |
+
+- The worker borrows one connection for each statement and returns it afterwards.
+- Unless `shared_heartbeats` is set, the worker reserves one pool connection for heartbeat rounds
+  for the whole run.
+- The listener holds another pool connection while it listens.
+- Psycopg connections must use `autocommit=True`. Otherwise the worker raises `ValueError`.
+- `AsyncWorker` never closes the pool it was given.
+
+More detail: [Schema and SQL protocol: Pool connections](../architecture/schema-and-protocol.md#pool-connections).
+
+</details>
+
+## Cancel a Python async handler
+
+An asyncio cancellation can reach a handler while a checkpoint runs or saves. The result depends on
+the time at which the cancellation arrives.
+
+**Example.** The handler `deliver` calls `context.checkpoint("prepare", prepare_delivery)`. Then an
+asyncio cancellation reaches the task that awaits the checkpoint.
+
+- If the cancellation arrives while `prepare_delivery` runs, the checkpoint cancels the operation
+  and waits for its cleanup. Workhorse saves nothing, so a later attempt runs `prepare_delivery`
+  again. This is also true if the operation catches the cancellation and returns a value.
+- If the cancellation arrives after `prepare_delivery` returns, its save may already be under way.
+  The worker waits for that save and does not undo it. The handler gets `CancelledError`. A later
+  attempt replays the saved value and does not call `prepare_delivery`.
+
+Thus, a cancelled await never proves that no checkpoint exists. It also does not undo the
+operation's effects on other systems.
+
+Each awaitable context method runs its call on a separate thread. A cancelled handler waits for
+that call to return before the cancellation reaches the handler. The operation runs in a copy of
+the context of the handler. It sees the context variables and the current OpenTelemetry span of the
+handler.
+
+If you cancel the task that awaits `AsyncWorker.run()` or `run_once()`, the worker starts to drain.
+A second cancellation does not stop that drain early. The call raises `CancelledError` again only
+after active handlers finish and the worker releases its notification connection. Keep the pool and
+the event loop open until then. This task cancellation is different from the second signal to the
+process runner, which exits without a wait.
+
+<details>
+<summary>Reference: checkpoint cancellation</summary>
+
+**Before the operation returns**
+
+- `checkpoint` stops the tracked task before `operation` is called, or cancels it while it runs.
+- It waits for the cleanup of the task.
+- If `operation` absorbs the cancellation and returns a value, the tracked task raises
+  `asyncio.CancelledError` instead.
+- No row is stored in `workhorse.task_checkpoint`.
+
+**After the operation returns**
+
+- The core sends `save_checkpoint_v1`, and `_await_bridge_call` waits for that call before it
+  re-raises.
+- The row may commit. A later attempt replays its value.
+- `save_checkpoint_v1` checks the worker, fence, lease expiry, deadline, attempt timeout, and
+  `cancel_requested_at`. Asyncio cancellation is not one of its conditions.
+
+**Bridge threads.** Each awaitable context method runs its synchronous call on a bridge thread. The
+thread cannot be interrupted, so a cancelled caller waits for the call to return before it
+re-raises `asyncio.CancelledError`.
+
+**Context.** `checkpoint` copies the `contextvars` context of the caller, and the tracked task runs
+in that copy. Changes inside `operation` stay inside it.
+
+More detail: [Schema and SQL protocol: Cancelling a checkpoint](../architecture/schema-and-protocol.md#cancelling-a-checkpoint) and [Schema and SQL protocol: Cancelling an awaitable call](../architecture/schema-and-protocol.md#cancelling-an-awaitable-call).
 
 </details>
 
