@@ -290,13 +290,15 @@ filter by task type. Thus a version 1 worker can claim a task that it has no han
 
 1. A version 1 worker claims an `order.ship-v2` task. It has no handler for that type.
 2. The worker gives the task back to the queue. The attempt stays the same.
-3. The worker backs off before it claims again. The task stays ready.
+3. The release wakes the listening version 1 workers. After a short random delay, a version 1
+   worker can claim the task and give it back again.
 4. A version 2 worker claims the task and runs it.
 
-Thus the task runs, but later than necessary. The worker logs `workhorse.handler.missing` for each
-release. Each release uses a slot of an old worker. The time
-for which an old worker held the task counts against the execution timeout of the task. A new queue
-keeps the old workers away from the new tasks.
+Thus the task runs, but later than necessary. Until a version 2 worker claims the task, version 1
+workers can claim and give it back many times. They do not wait for the poll interval between
+these claims. The worker logs `workhorse.handler.missing` for each release. Each release uses a
+slot of an old worker. The time for which an old worker held the task counts against the
+execution timeout of the task. A new queue keeps the old workers away from the new tasks.
 
 <details>
 <summary>Reference: a claim without a handler</summary>
@@ -305,8 +307,12 @@ keeps the old workers away from the new tasks.
 - `release_owned_v1` sets the task to `ready` without a change to `current_attempt`. It adds the
   elapsed lease to `execution_used_ms` and appends a `released` event.
 - If each claim of a pass had no handler, the pass counts as empty for the poll backoff.
+- `release_owned_v1` notifies `workhorse_tasks`. In `Worker.run()` and the run loop of each other
+  SDK, that notification ends the empty wait of a listening worker. The next claim then waits a
+  random delay from 0 through 50 ms, not the poll interval.
+- A worker without an active listener waits for its poll backoff between these claims.
 
-More detail: [Task lifecycle: Owned release](../architecture/lifecycle.md#owned-release).
+More detail: [Task lifecycle: Owned release](../architecture/lifecycle.md#owned-release) and [Operations: Polling cadence](../architecture/operations.md#polling-cadence).
 
 </details>
 
