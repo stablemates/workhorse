@@ -3,41 +3,42 @@ title: Can I use Workhorse from a serverless app?
 description: Decide where a serverless app can enqueue Workhorse tasks and where the worker process must run.
 ---
 
-Yes, if the request runtime can use a supported Workhorse client and reach PostgreSQL. Run the
-worker separately unless the platform gives it a continuous process.
+A serverless app runs your code for each request or event, and the platform controls the process.
+Your app can enqueue tasks from a Node.js serverless runtime. A Workhorse worker needs a continuous
+process, so you must usually run it in a different place.
 
-Two independent rules decide what each runtime can do. Check them in this order, because a runtime
-can pass the database rule and still be unable to run a worker.
+Two independent rules decide what a runtime can do. Check them in this order, because a runtime can
+obey the database rule and still be unable to run a worker.
 
-1. **Process lifetime:** A Workhorse worker is a continuous process. It holds a PostgreSQL pool,
-   renews leases, sends heartbeats, and drains after a termination signal. A request or event
-   invocation does not own that lifecycle, so it cannot host the worker loop.
-2. **Database connectivity:** An enqueue producer needs a supported Workhorse client and a
-   PostgreSQL session. Node.js functions can use the `Pool` exported by `@stablemates/workhorse`.
-   An edge runtime may need a platform transport. Transport support alone does not make the
-   published Node.js package compatible with that runtime.
+1. **Process lifetime:** A worker is a continuous process. It holds a PostgreSQL pool, renews
+   leases, sends heartbeats, and drains after a termination signal. A request or event invocation
+   does not control that lifecycle, so it cannot host a worker.
+2. **Database connectivity:** A producer is the code that enqueues tasks. It needs a supported
+   Workhorse client and a PostgreSQL session. A Node.js function can use the `Pool` that
+   `@stablemates/workhorse` exports. An edge runtime can need a platform transport. Transport
+   support does not make the published Node.js package compatible with that runtime.
 
-## Which runtimes can do what?
+## Check what each runtime can do
 
-**Example.** A shop runs its checkout on Vercel Functions and wants an `order.fulfill` task for each
-order.
+**Example.** A shop runs its checkout on Vercel Functions. The shop wants an `order.fulfill` task
+for each order.
 
-1. **The checkout route runs on the Node.js runtime.** It opens a `pg` connection, so it can enqueue
+1. The checkout route runs on the Node.js runtime. The route opens a `pg` connection and enqueues
    with `@stablemates/workhorse`.
-2. **A product page runs on the Edge runtime.** It cannot use the published client, because the
-   Edge runtime lacks the Node.js networking APIs that `pg` needs. If that page must enqueue, the
-   shop moves its route to the Node.js runtime.
-3. **Neither runtime can host the worker.** Neither gives the shop a continuous process that keeps
-   renewing leases between requests. The shop runs the worker elsewhere.
+2. A product page runs on the Edge runtime. The page cannot use the published client, because the
+   Edge runtime does not have the Node.js networking APIs that `pg` needs.
+3. The shop moves the product page to the Node.js runtime, because the page must enqueue.
+4. Neither runtime gives the shop a continuous process that renews leases between requests. The
+   shop runs the worker in a different place.
 
-The same split holds on other platforms. A Node.js function on Vercel, AWS Lambda, or a Cloud Run
-service can enqueue, and can do it transactionally. A Cloudflare Workers isolate or a Vercel Edge
-function cannot use the published client. Only a runtime with a persistent process, such as a Cloud
-Run worker pool, can host a worker.
+The same rules apply on other platforms. A Node.js function on Vercel, AWS Lambda, or a Cloud Run
+service can enqueue in the same transaction as its data. A Cloudflare Workers isolate or a Vercel
+Edge function cannot use the published client. Only a runtime with a continuous process, such as a
+Cloud Run worker pool, can host a worker.
 
-"Enqueue" here means a package that Workhorse publishes today. A fetch-based or HTTP database
-driver may reach PostgreSQL from another isolate. It does not implement the `Queryable` contract or
-Workhorse's versioned SQL behavior.
+On this page, "enqueue" means enqueue with a package that Workhorse publishes today. A fetch-based
+or HTTP database driver can connect to PostgreSQL from another isolate. That driver does not
+implement the `Queryable` contract or the versioned SQL behavior of Workhorse.
 
 <details>
 <summary>Reference: runtime matrix</summary>
@@ -51,30 +52,34 @@ Workhorse's versioned SQL behavior.
 | Cloud Run service     | Node.js in request mode | Yes, transactionally         | No            | Keep the worker outside the request lifecycle.                                          |
 | Cloud Run worker pool | Node.js container       | Yes                          | Yes           | Run the dedicated Workhorse process as a persistent instance.                           |
 
-AWS explains that
-[Lambda owns and may replace execution environments](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtime-environment.html).
-A function can still reuse a database connection while an environment remains warm. On Cloud Run,
-request-based CPU allocation and instance scaling cannot own a continuous worker loop. Vercel's
-[Edge supported API list](https://vercel.com/docs/functions/runtimes/edge#edge-runtime-supported-apis)
-omits the Node.js APIs that `pg` and `@stablemates/workhorse` require.
+- `@stablemates/workhorse` exports the node-postgres `Pool` as its default connection
+  implementation.
+- AWS states that
+  [Lambda owns and can replace execution environments](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtime-environment.html).
+  A function can reuse a database connection while an environment stays warm.
+- On Cloud Run, request-based CPU allocation and instance scaling cannot own a continuous worker
+  loop.
+- The
+  [Edge supported API list](https://vercel.com/docs/functions/runtimes/edge#edge-runtime-supported-apis)
+  of Vercel omits the Node.js APIs that `pg` and `@stablemates/workhorse` require.
 
-The repository's PostgreSQL integration suite covers the Node.js transaction path used by Vercel
-Functions, Lambda, and Cloud Run. Provider runtime documentation supplies the lifecycle
+The PostgreSQL integration suite of the repository covers the Node.js transaction path that Vercel
+Functions, Lambda, and Cloud Run use. Provider runtime documentation supplies the lifecycle
 boundaries. The matrix was verified on 2026-08-18.
 
-More detail: [Compatibility and support boundary: Serverless and edge runtimes](https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md#serverless-and-edge-runtimes).
+More detail: [Compatibility and support boundary: Serverless and edge runtimes](https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md#serverless-and-edge-runtimes),
+[Overview: Connections and clients](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#connections-and-clients).
 
 </details>
 
-## Why does Vercel Node work normally?
+## Enqueue in the same transaction on Vercel Node.js
 
-The checkout route from the example writes an order and enqueues its task.
+**Example.** The checkout route writes order `order-42` and enqueues its task.
 
-1. The route takes a `pg` client and opens a transaction.
-2. It inserts order `order-42`.
-3. It passes the same client to `Queue.enqueue` for `order.fulfill`.
-4. It commits. PostgreSQL writes the order and the task together. If the insert had failed, the
-   rollback would have removed both.
+1. The route borrows a `pg` client from the pool and opens a transaction.
+2. The route inserts order `order-42`.
+3. The route passes the same client to `Queue.enqueue` for an `order.fulfill` task.
+4. The route commits. PostgreSQL writes the order and the task together.
 
 ```ts
 const client = await pool.connect();
@@ -91,85 +96,51 @@ try {
 }
 ```
 
-The Vercel Node.js runtime is ordinary supported Node.js for this purpose. It can open a `pg`
-connection like any Node.js process, and Vercel documents `pg` pools directly.
+If the insert fails, the route rolls back. PostgreSQL then keeps neither the order nor the task.
+The Vercel Node.js runtime opens a `pg` connection as any Node.js process does.
 [Transactional enqueue](/docs/enqueue) shows the full pattern.
 
-The platform may manage idle pool clients when it suspends the function. That pool lifecycle does
+The platform can release idle pool clients when it suspends the function. This pool lifecycle does
 not change the transaction boundary.
 
 <details>
 <summary>Reference: transaction handover and pool management</summary>
 
-- `Queue.enqueue` takes the caller's transaction client as its fourth argument. The task then
+- `Queue.enqueue` takes the transaction client of the caller as its fourth argument. The task then
   commits or rolls back with the business write.
+- Vercel documents `pg` pools for its Node.js runtime.
 - On Vercel Fluid Compute, call
   [`attachDatabasePool`](https://vercel.com/docs/functions/functions-api-reference/vercel-functions-package#attachdatabasepool)
-  after creating the pool. Vercel can then release idle clients before it suspends the function.
+  after you create the pool. Vercel can then release idle clients before it suspends the function.
 
 More detail: [Task lifecycle: Batch write order](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#batch-write-order).
 
 </details>
 
-## What does Hyperdrive change?
+## Run the worker in a continuous process
 
-Suppose the shop moves the checkout route to Cloudflare Workers.
-
-1. The route binds Cloudflare Hyperdrive and connects through `pg`. A query reaches PostgreSQL.
-2. The route then imports `@stablemates/workhorse`. That package supports Node.js, not the Workers
-   runtime, so the route has no supported way to enqueue.
-3. Cloudflare ties execution to an invocation and may cancel work after the response. So the route
-   cannot host a worker either.
-
-Hyperdrive solves the transport problem and manages connections on the Cloudflare side. It does not
-turn Cloudflare Workers into a supported producer or worker host. Workhorse therefore does not
-publish a Cloudflare enqueue client today. A Node.js producer is the supported path.
-
-<details>
-<summary>Reference: Hyperdrive verification</summary>
-
-Cloudflare documents `pg` as its recommended PostgreSQL driver through
-[Hyperdrive](https://developers.cloudflare.com/hyperdrive/examples/connect-to-postgres/). The
-documented path uses a current `pg`, the `nodejs_compat` flag, and the connection string exposed by
-the Hyperdrive binding. Cloudflare's
-[TCP documentation](https://developers.cloudflare.com/workers/runtime-apis/tcp-sockets/) confirms
-that Hyperdrive carries the PostgreSQL wire protocol and manages connection pooling.
-
-A Wrangler 4.124 local Worker used `nodejs_compat`, the repository's `pg` dependency, and a local
-Hyperdrive binding. It ran `SELECT 1` against the worktree test database and returned
-`{ "connected": true }`.
-
-That test covers the Workers runtime and the PostgreSQL transport. Local Hyperdrive does not enable
-Cloudflare's managed pooling or cache.
-
-Cloudflare's [runtime limits](https://developers.cloudflare.com/workers/platform/limits/) allow a
-long HTTP response while the caller remains connected. Cloudflare may cancel work after the
-response or a client disconnect. Runtime updates also impose a drain window.
-
-More detail: [Compatibility and support boundary: Serverless and edge runtimes](https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md#serverless-and-edge-runtimes).
-
-</details>
-
-## Where does the worker run?
-
-The shop keeps its checkout on Vercel and runs `workhorse worker` on a Cloud Run worker pool.
+**Example.** The shop keeps its checkout on Vercel. The shop runs `workhorse worker` on a Cloud Run
+worker pool.
 
 1. A checkout request commits order `order-42` and its `order.fulfill` task.
-2. The worker, connected to the same PostgreSQL database, claims the task and runs the handler.
-3. During a deployment, the platform sends the old instance a termination signal. The worker stops
-   claiming, lets active handlers finish within a bounded drain, then exits.
+2. The worker connects to the same PostgreSQL database, claims the task, and runs the handler.
+3. During a deployment, the platform sends a termination signal to the old instance.
+4. The old worker stops claims and lets active handlers finish within a bounded drain.
+5. The old worker exits.
 
-The web tier and the worker tier only need access to the same PostgreSQL database. Keep request
-handlers on the serverless platform. Run `workhorse worker` in compute that owns a continuous
-process. That can be a VM, a Kubernetes deployment, an ECS/Fargate service, or a
+The web tier and the worker tier need access only to the same PostgreSQL database. Keep request
+handlers on the serverless platform. Run `workhorse worker` on compute that keeps a continuous
+process. That compute can be a virtual machine, a [Kubernetes deployment](/docs/kubernetes), an ECS
+or Fargate service, or a
 [Cloud Run worker pool](https://docs.cloud.google.com/run/docs/overview/what-is-cloud-run#services-jobs-worker-pools).
-Give that worker a pool with room for its dedicated connections.
-[Connection poolers](/docs/pgbouncer) explains the budget and the opt-out for a pool that cannot
-spare them.
 
-Use [Worker processes](/docs/worker-processes) for the process definition, probes, termination
-signals, and drain contract. Use [Deployment and operations](/docs/operations) to size pools,
-observe the separate worker tier, and operate the shared database boundary.
+Give the worker a pool with space for its dedicated connections.
+[Connection poolers](/docs/pgbouncer) explains the budget. It also explains the opt-out
+for a pool that cannot give those connections.
+
+[Worker processes](/docs/worker-processes) explains the process definition, probes, termination signals, and drain.
+[Deployment and operations](/docs/operations) explains how to observe the separate worker
+tier.
 
 <details>
 <summary>Reference: worker process lifecycle</summary>
@@ -196,11 +167,52 @@ More detail: [Operations and CLI: Worker process lifecycle](https://github.com/s
 
 </details>
 
+## Use a Node.js producer instead of Cloudflare Workers
+
+Cloudflare Hyperdrive is a Cloudflare service that connects a Workers isolate to PostgreSQL. It
+does not make Cloudflare Workers a supported producer.
+
+**Example.** The shop moves the checkout route to Cloudflare Workers.
+
+1. The route binds Hyperdrive and connects through `pg`. A query gets to PostgreSQL.
+2. The route imports `@stablemates/workhorse`. That package supports Node.js, not the Workers
+   runtime. The route has no supported way to enqueue.
+3. Cloudflare can cancel work after the response, so the route cannot host a worker.
+
+Hyperdrive solves the transport problem and manages connections on the Cloudflare side. It does not
+make Cloudflare Workers a supported producer or worker host. Workhorse does not publish a
+Cloudflare enqueue client today. Use a Node.js producer.
+
+<details>
+<summary>Reference: Hyperdrive verification</summary>
+
+Cloudflare documents `pg` as its recommended PostgreSQL driver through
+[Hyperdrive](https://developers.cloudflare.com/hyperdrive/examples/connect-to-postgres/). The
+documented path uses a current `pg`, the `nodejs_compat` flag, and the connection string that the
+Hyperdrive binding exposes. The
+[TCP documentation](https://developers.cloudflare.com/workers/runtime-apis/tcp-sockets/) of
+Cloudflare confirms that Hyperdrive carries PostgreSQL connections and manages connection pooling.
+
+A Wrangler 4.124 local Worker used `nodejs_compat`, the `pg` dependency of the repository, and a
+local Hyperdrive binding. It ran `SELECT 1` against the worktree test database and returned
+`{ "connected": true }`.
+
+That test covers the Workers runtime and the PostgreSQL transport. Local Hyperdrive does not enable
+the managed pooling or cache of Cloudflare.
+
+The [runtime limits](https://developers.cloudflare.com/workers/platform/limits/) of Cloudflare allow
+a long HTTP response while the caller stays connected. Cloudflare can cancel work after the
+response or after a client disconnect. Runtime updates also impose a drain window.
+
+More detail: [Compatibility and support boundary: Serverless and edge runtimes](https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md#serverless-and-edge-runtimes).
+
+</details>
+
 ## Next
 
 - [Transactional enqueue](/docs/enqueue) — commit the task with the business write
-- [Worker processes](/docs/worker-processes) — run handlers in continuous compute
-- [Compatibility](/docs/compatibility) — check the supported runtime and database matrix
+- [Worker processes](/docs/worker-processes) — run handlers in a continuous process
+- [Connection poolers](/docs/pgbouncer) — budget the connections of the worker
 
 ---
 

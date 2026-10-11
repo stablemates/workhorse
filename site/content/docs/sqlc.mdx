@@ -1,27 +1,17 @@
 ---
 title: sqlc (Go)
-description: Use generated application queries and Workhorse in one caller-owned pgx transaction.
+description: Use the queries that sqlc generates and Workhorse enqueue in one pgx transaction that the caller owns.
 ---
 
-sqlc generates your business queries; Workhorse accepts tasks through its existing Go executor.
-Both can use the same transaction without an outbox or another adapter package.
-This page is a tested recipe appendix to [transactional enqueue](/docs/enqueue), which owns commit and rollback guidance.
+sqlc is a tool that generates Go code for your business queries. Workhorse accepts tasks through its
+existing Go executor. The generated queries and Workhorse can use the same transaction, so you need
+no outbox and no other adapter package. This page is a tested recipe. The
+[transactional enqueue](/docs/enqueue) page owns the general commit and rollback rules.
 
-## Use the tested baseline
+## Give the same transaction to sqlc and Workhorse
 
-The maintained example pins sqlc **v1.31.1**, pgx **v5.11.0**, and the **pgx/v5** generation mode.
-The local real-database proof uses Go **1.26.9** and PostgreSQL **18.6**.
-The repository's existing Go CI suite discovers and typechecks the generated queries with the recipe.
-This is not a new Workhorse package or certification of a PostgreSQL provider.
-
-The business inputs are `go/examples/sqlc/schema.sql`, `queries.sql`, and `sqlc.yaml`.
-The checked-in output under `generated/` contains only application queries, never generated Workhorse protocol calls.
-Workhorse still uses its own maintained SQL catalogue and enqueue validation.
-
-## Bind both callers to the same transaction
-
-sqlc's generated `Queries.WithTx(tx)` selects the transaction instead of the original pool.
-Pass that exact `pgx.Tx` to `NewPGXExecutor` too.
+The generated `Queries.WithTx(tx)` method of sqlc uses the transaction instead of the original pool.
+Give the same `pgx.Tx` to `NewPGXExecutor`.
 
 ```go
 tx, err := pool.Begin(ctx)
@@ -43,33 +33,60 @@ if _, err := queue.Enqueue(ctx, "order.accepted", map[string]any{
 return tx.Commit(ctx)
 ```
 
-The [runnable example](https://github.com/stablemates/workhorse/tree/main/go/examples/sqlc) supplies imports, parameters, and setup instructions.
-Apply its business schema to an explicitly disposable database with Workhorse already installed before running its CLI.
-The fixed example UUID makes a repeated run fail unless the business schema is fresh.
+The [runnable example](https://github.com/stablemates/workhorse/tree/main/go/examples/sqlc) supplies
+the imports, the parameters, and the setup instructions. Before you run its CLI, apply its business
+schema to a disposable database. That database must already have the Workhorse schema. The example
+uses a fixed UUID, so a second run fails unless the business schema is new.
 
-The caller owns lifecycle and pool return. Workhorse does not begin, commit, roll back, or close the borrowed transaction.
-Return every enqueue error, including client-side contract failures that leave PostgreSQL usable.
-Do not keep a transaction-bound queue or generated `Queries` after its transaction ends.
-Do not call the original pool's queries inside the atomic operation.
+## Own the transaction in your code
 
-## Preserve savepoint and cancellation boundaries
+Your code owns the transaction lifecycle and the return of the connection to the pool. Workhorse
+does not begin, commit, roll back, or close the transaction that it borrows.
 
-The fixture tests explicit nested PostgreSQL savepoints on the same transaction.
-An inner rollback removes the inner business row and task; the outer transaction can continue.
-Releasing both savepoints still leaves their writes subject to the outer rollback.
-An ordinary SQL error requires rollback to a savepoint or rollback of the transaction before more queries.
+- Return each enqueue error before the commit. This includes client-side payload contract
+  failures, which do not abort the PostgreSQL transaction.
+- Do not keep a transaction-bound queue or generated `Queries` after the transaction ends.
+- Do not call the queries of the original pool inside the atomic operation.
 
-A context cancelled before dispatch is tested without executor-owned rollback.
-An in-flight cancellation is different: pgx may abort the transaction or discard its connection.
-The caller rolls back and uses a fresh transaction; the recipe does not promise savepoint recovery after wire cancellation.
-Use an uncancelled context for owner cleanup.
+## Roll back an inner write with a savepoint
 
-Run workers in a separate process with their own pool and heartbeat connections.
-Generated request-side queries are not a worker executor replacement.
+A savepoint is a named point inside a transaction. You can roll back to it and keep the outer
+transaction. The fixture tests explicit nested PostgreSQL savepoints on the same transaction.
 
-## Reproduce generation and proof
+If you roll back to the inner savepoint, PostgreSQL removes the inner business row and its task.
+The outer transaction can continue. If you release both savepoints, the outer rollback still
+removes their writes. After an ordinary SQL error, roll back to a savepoint or roll back the
+transaction before you send more queries.
 
-From a configured repository checkout:
+## Recover after a cancelled context
+
+The effect of a cancelled context depends on when the cancellation occurs.
+
+- If the context is cancelled before the query starts, the fixture shows that the executor does not
+  roll back the transaction.
+- If the context is cancelled while a query runs, pgx can abort the transaction or discard its
+  connection.
+
+**Example.** A lock blocks an enqueue, and the request context is cancelled.
+
+1. Your code writes the order and starts the enqueue.
+2. The enqueue waits for a lock.
+3. The context is cancelled while the enqueue waits.
+4. Your code rolls back the transaction. PostgreSQL removes the order and the task.
+5. Your code repeats the operation in a new transaction, and the new transaction succeeds.
+
+After a cancellation during a query, roll back and use a new transaction. The recipe does not
+promise recovery to a savepoint after the wire protocol cancels a query. Use a context that is not
+cancelled for the rollback.
+
+## Run workers in a separate process
+
+Run workers in a separate process with their own pool and their own heartbeat connections. Generated
+request-side queries do not replace a worker executor.
+
+## Generate the queries and run the fixture
+
+From a configured repository checkout, run these commands:
 
 ```sh
 pnpm go:sqlc:generate
@@ -78,23 +95,72 @@ WORKHORSE_REQUIRE_DATABASE=1 pnpm exec tsx scripts/with-env.ts \
   go -C go test -count=1 -v ./examples/sqlc
 ```
 
-Generation downloads the official release archive pinned by version and platform SHA256, then verifies the binary version.
-Check mode regenerates in a temporary directory and compares file names and exact bytes without rewriting the checkout.
-Linux and macOS on amd64 and arm64 are supported by this command; a cold run requires GitHub access and `tar`.
-The existing static CI lane runs the drift check once per change. The generator adds no SDK runtime dependency.
+The business inputs are `go/examples/sqlc/schema.sql`, `queries.sql`, and `sqlc.yaml`. The output in
+`generated/` is checked in. It contains only application queries, never generated Workhorse protocol
+calls. Workhorse still uses its own maintained SQL catalogue and its own enqueue validation.
+
+The generate command downloads the official sqlc release archive and verifies it. The check command
+generates the code again in a temporary directory and compares it with the checkout. It does not
+change the checkout. The static CI lane runs the check one time for each change. The generator adds
+no runtime dependency to the SDK.
 
 The fixture installs both schemas in an isolated scratch database and runs the actual CLI.
-It checks backend PID, transaction identity, task `xmin`, independent invisibility, joint commit/rollback, and lifecycle ownership.
-Native UUID, JSONB, nullable text and enqueue reasons, ordered batches, and structured errors are covered too.
-The native driver exposes `P1001`; `Queue` translates it into `EnqueueIdempotencyConflictError` and its structured details.
-Ordinary `22012` and aborted-transaction `25P02` errors retain their native SQLSTATE.
-A scratch-only lock blocks a real enqueue to prove cancellation, joint rollback, and fresh-transaction recovery.
 
-Only pgx/v5 generation with the pinned types is tested, not sqlc's `database/sql` output or custom type overrides.
-Other generators, drivers, providers, and poolers need their own proof.
+<details>
+<summary>Reference: tested baseline, generation, and fixture coverage</summary>
 
-## Sources and next steps
+| Component              | Version or mode                    |
+| ---------------------- | ---------------------------------- |
+| sqlc                   | **v1.31.1**                        |
+| pgx                    | **v5.11.0**                        |
+| sqlc generation mode   | **pgx/v5** (`sql_package: pgx/v5`) |
+| Go (local run)         | **1.26.9**                         |
+| PostgreSQL (local run) | **18.6**                           |
+
+The Go CI suite of the repository finds the recipe and type-checks the generated queries with it.
+The recipe is not a new Workhorse package. It does not certify a PostgreSQL provider.
+
+**Generation.**
+
+- `pnpm go:sqlc:generate` downloads the official release archive. It pins the archive by version and
+  by the SHA256 for each platform. Then it verifies the version of the binary.
+- `pnpm go:sqlc:check` generates in a temporary directory. It compares the file names and the exact
+  bytes and does not rewrite the checkout.
+- Supported platforms: Linux and macOS, on amd64 and arm64. A run without a cache needs GitHub
+  access and `tar`.
+
+**Fixture coverage.**
+
+- backend PID, transaction identity, and the task `xmin`
+- invisibility to an independent connection, joint commit and rollback, and lifecycle ownership
+- native UUID, JSONB, nullable text, nullable enqueue reasons, ordered batches, and structured
+  errors
+- The native driver exposes `P1001`. `Queue` translates it into `EnqueueIdempotencyConflictError`
+  with its structured details.
+- Ordinary `22012` errors and aborted-transaction `25P02` errors keep their native SQLSTATE.
+- A lock in the scratch database blocks a real enqueue. This proves cancellation, joint rollback,
+  and recovery in a new transaction.
+
+**Not tested.** The `database/sql` output of sqlc, custom type overrides, other generators, other
+drivers, providers, and poolers. Each needs its own proof.
+
+More detail: [Schema and protocol: Module and executors](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#module-and-executors),
+[Schema and protocol: Enqueue results and errors](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#enqueue-results-and-errors).
+
+</details>
+
+## Sources
 
 - [Official sqlc v1.31.1 release](https://github.com/sqlc-dev/sqlc/releases/tag/v1.31.1)
   and [tagged transaction guidance](https://github.com/sqlc-dev/sqlc/blob/v1.31.1/docs/howto/transactions.md).
-- [Go sqlx](/docs/go-sqlx), [transactional enqueue](/docs/enqueue), and [dedicated worker processes](/docs/worker-processes).
+
+## Next
+
+- [Go sqlx](/docs/go-sqlx) — the same recipe with `database/sql`
+- [Enqueue and transactions](/docs/enqueue) — understand the transaction guarantee
+- [Dedicated worker processes](/docs/worker-processes) — run workers outside requests
+
+---
+
+Exact executor and transaction ownership:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#module-and-executors).

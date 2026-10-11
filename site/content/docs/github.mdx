@@ -1,50 +1,75 @@
 ---
 title: GitHub issue triage
-description: Accept signed issue deliveries durably, apply a desired label, and recover missed deliveries explicitly.
+description: Accept signed GitHub issue deliveries in one transaction, add a triage label in a worker, and recover missed deliveries with explicit commands.
 ---
 
-This recipe turns a GitHub App's `issues.opened` delivery into a durably accepted Workhorse task.
-The receiver stores its inbox row and enqueues on the same PostgreSQL connection before returning `202`.
-A dedicated worker ensures that the issue has a configured triage label.
+This recipe receives `issues.opened` deliveries from a GitHub App and adds a triage label to each
+new issue. GitHub can send a delivery again, and GitHub does not retry a failed delivery. The recipe
+stores each delivery durably and gives you explicit commands to recover missed deliveries.
 
-**Documented recipe, not a package or live-provider verification.**
-The maintained [TypeScript example](https://github.com/stablemates/workhorse/blob/main/typescript/examples/github-triage.ts) runs against PostgreSQL and mocked authenticated GitHub APIs in CI.
-No test changes a real repository, registers an app, creates a token, or requests a real redelivery.
+**This is a documented recipe. It is not a package, and it is not verified against the live
+provider.** The maintained
+[TypeScript example](https://github.com/stablemates/workhorse/blob/main/typescript/examples/github-triage.ts)
+runs in CI against PostgreSQL and mocked authenticated GitHub APIs. No test changes a real
+repository, registers an app, creates a token, or requests a real redelivery.
 
-## Configure one explicit scope
+## Follow one delivery to the label
 
-Use a GitHub App installed on the one repository this receiver permits.
-Subscribe to **Issues**, choose JSON payloads, enable HTTPS with certificate verification, and configure a high-entropy webhook secret.
-Set these environment variables through your own credential store, never committed files:
+The recipe uses a receiver process and a worker process. Each delivery goes through these steps:
 
-| Variable                            | Meaning                                                                          |
-| ----------------------------------- | -------------------------------------------------------------------------------- |
-| `DATABASE_URL`                      | The application database where Workhorse is already installed                    |
-| `GITHUB_APP_ID`                     | The app identity for this configured webhook secret                              |
-| `GITHUB_INSTALLATION_ID`            | The permitted installation ID                                                    |
-| `GITHUB_REPOSITORY_ID`              | The permitted immutable repository ID                                            |
-| `GITHUB_OWNER`, `GITHUB_REPOSITORY` | The expected repository path and signed `repository.full_name`                   |
-| `GITHUB_TRIAGE_LABEL`               | An existing label this policy adds once to each eligible issue                   |
-| `GITHUB_WEBHOOK_SECRET`             | The configured HMAC secret                                                       |
-| `GITHUB_INSTALLATION_TOKEN`         | A short-lived installation token restricted to that repository                   |
-| `GITHUB_APP_JWT`                    | A separately managed, short-lived app JWT for delivery inspection and redelivery |
-| `PORT`                              | Receiver loopback port; defaults to `3001`                                       |
+1. The receiver verifies the signature over the raw body.
+2. The receiver checks the repository, the installation, and the issue identity in the body.
+3. In one transaction, the receiver writes an inbox row and an intent row, and it enqueues a
+   `github.ensure-label` task.
+4. The receiver replies `202` only after the transaction commits.
+5. The worker adds the configured label if the issue does not have it. Then it records the change.
 
-The worker needs **Issues: write**, which includes reading issues and adding labels.
-Do not grant Contents write, organization administration, or unrelated repository access.
-The recovery script uses app authentication, not the worker's installation token.
-GitHub requires a JWT for `/app/hook/deliveries`, its delivery details, and its redelivery endpoint.
-Repository-hook APIs have different authorization requirements; this recipe does not use them.
+## Configure one GitHub App for one repository
 
-Workhorse does not mint or refresh these credentials.
-The `GitHubApi` constructor accepts an asynchronous credential provider for a production token manager.
-The runnable CLI reads environment credentials; restart it when those short-lived values expire.
-Token expiry, authorization errors, and rate limits fail visibly instead of marking recovery complete.
+1. Install a GitHub App on the one repository that this receiver permits.
+2. Subscribe the app to **Issues**.
+3. Select JSON payloads.
+4. Enable HTTPS with certificate verification.
+5. Configure a webhook secret with high entropy.
 
-## Run separate processes
+Set the environment variables through your own credential store. Never put them in committed files.
 
-Install the Workhorse schema using the [installation instructions](/docs/installation) before creating the application tables.
-From this repository, after dependency installation and runtime build, run:
+| Variable                            | Meaning                                                                 |
+| ----------------------------------- | ----------------------------------------------------------------------- |
+| `DATABASE_URL`                      | The application database that has the Workhorse schema                  |
+| `GITHUB_APP_ID`                     | The app identity for this webhook secret                                |
+| `GITHUB_INSTALLATION_ID`            | The permitted installation ID                                           |
+| `GITHUB_REPOSITORY_ID`              | The permitted repository ID, which does not change                      |
+| `GITHUB_OWNER`, `GITHUB_REPOSITORY` | The expected repository path and the signed `repository.full_name`      |
+| `GITHUB_TRIAGE_LABEL`               | A label that exists. The worker adds it one time to each eligible issue |
+| `GITHUB_WEBHOOK_SECRET`             | The HMAC secret of the webhook                                          |
+| `GITHUB_INSTALLATION_TOKEN`         | An installation token with a short life, limited to that repository     |
+| `GITHUB_APP_JWT`                    | An app JWT with a short life, for delivery inspection and redelivery    |
+| `PORT`                              | The loopback port of the receiver. The default is `3001`                |
+
+## Give each process only the permissions that it needs
+
+The worker needs **Issues: write**. This permission lets the worker read issues and add labels. Do
+not grant Contents write, organization administration, or access to other repositories.
+
+The recovery command uses app authentication, not the installation token of the worker. GitHub
+requires a JWT for `/app/hook/deliveries`, for its delivery details, and for its redelivery
+endpoint. The repository-hook APIs have different authorization rules. This recipe does not use
+them.
+
+Workhorse does not create or refresh these credentials. For a production token manager, give the
+`GitHubApi` constructor an asynchronous credential provider. The CLI of the example reads the
+credentials from the environment. When those credentials expire, restart the CLI.
+
+If a token expires, the authorization fails, or GitHub applies a rate limit, the command fails
+with an error. It does not mark the recovery as complete.
+
+## Run the receiver and the worker as separate processes
+
+1. Install the Workhorse schema. The [installation instructions](/docs/installation) tell you how.
+2. In this repository, install the dependencies and build the runtime.
+3. Run `setup` to create the application tables.
+4. Run the receiver and the worker, each in its own process.
 
 ```bash
 pnpm exec tsx scripts/with-env.ts tsx --tsconfig typescript/core/tsconfig.typecheck.json typescript/examples/github-triage.ts setup
@@ -52,132 +77,294 @@ pnpm exec tsx scripts/with-env.ts tsx --tsconfig typescript/core/tsconfig.typech
 pnpm exec tsx scripts/with-env.ts tsx --tsconfig typescript/core/tsconfig.typecheck.json typescript/examples/github-triage.ts worker
 ```
 
-Run the receiver and worker in separate processes.
-The receiver serves only `POST /github` on loopback; your existing HTTPS ingress must proxy it without altering the body.
-For an application copy, install `@stablemates/workhorse`; the example imports that published package directly.
-This example adds no SDK integration package or third-party HTTP dependency.
-These commands are operator setup instructions, not permission to change a live repository or deploy this project.
+The receiver serves only `POST /github` on loopback. Your HTTPS ingress must send requests to it
+without changes to the body.
 
-## Authenticate the body, then accept durably
+In a copy for your application, install `@stablemates/workhorse`. The example imports that published
+package directly. The example adds no SDK integration package and no third-party HTTP dependency.
 
-`verifyGitHubSignature` uses HMAC-SHA256 over the exact received bytes.
-It validates the signature format and compares equal-length digests using Node's `timingSafeEqual`.
-The fixture includes GitHub's published `Hello, World!` signature vector and a Unicode body.
-Never reserialize JSON before verification.
+These commands are setup instructions for an operator. They do not give permission to change a live
+repository or to deploy this project.
 
-The authenticated body must contain the configured repository ID, repository name, and installation ID.
-The receiver accepts only valid issue identities; pull requests are outside this recipe.
-Signed unknown actions return `204` without creating triage work.
-Bad signatures return `401`; wrong body scopes return `403`.
-Malformed supported requests return `400`.
+## Verify the signature over the raw body
 
-**The body signature does not independently authenticate `X-GitHub-Event` or `X-GitHub-Delivery`.**
-The event header is a routing hint checked against this receiver's `issues` contract, not authorization.
-A changed GUID cannot authorize a new business effect.
-The signed `action` and immutable issue identity determine eligibility.
-GitHub's HMAC has no freshness timestamp; a captured valid body can be replayed.
-Secret custody, TLS, scope checks, and the persistent operation identity are therefore all required.
+`verifyGitHubSignature` calculates HMAC-SHA256 over the exact bytes that the receiver gets. It
+checks the format of the signature. Then it compares the two digests with `timingSafeEqual` from
+Node. Never serialize the JSON again before the verification.
 
-The application owns two tables outside the Workhorse schema:
+The authenticated body must contain the configured repository ID, repository name, and installation
+ID. The receiver accepts only issues. Pull requests are outside this recipe.
 
-| Table                  | Authority                                                                                                                                   |
+The test fixture includes the `Hello, World!` signature vector that GitHub publishes, and a body
+with Unicode text.
+
+<details>
+<summary>Reference: receiver replies</summary>
+
+| Request                                                      | Reply |
+| ------------------------------------------------------------ | ----- |
+| Accepted and committed                                       | `202` |
+| Signed, in scope, with an action other than `opened`         | `204` |
+| Malformed request, wrong event header, or a pull request     | `400` |
+| Bad signature                                                | `401` |
+| Repository or installation outside the configured scope      | `403` |
+| Other route                                                  | `404` |
+| Same delivery GUID with different body bytes                 | `409` |
+| Body larger than `1048576` bytes                             | `413` |
+| Database error, or the `8000`-millisecond budget has expired | `503` |
+
+More detail: [`github-triage.ts`](https://github.com/stablemates/workhorse/blob/main/typescript/examples/github-triage.ts).
+
+</details>
+
+## Do not use the delivery headers as authorization
+
+The body signature does not authenticate the `X-GitHub-Event` header or the `X-GitHub-Delivery`
+header. The receiver uses the event header only to route the request. It checks that the header
+names the `issues` event, but this check gives no authorization.
+
+A changed GUID cannot authorize a new business effect. The signed `action` and the issue identity,
+which does not change, decide if an issue is eligible.
+
+The HMAC of GitHub has no timestamp. Thus, an attacker can send a captured valid body again. For
+this reason, the recipe needs all of these protections:
+
+- custody of the secret
+- TLS
+- the scope checks
+- the persistent identity of the operation
+
+## Store the delivery and the task in one transaction
+
+**Example.** Issue `5` opens in the repository `fixture/issues`. The configured label is `triage`.
+
+1. GitHub sends a delivery with one GUID. The receiver writes the inbox row and the intent row, and
+   it enqueues one `github.ensure-label` task.
+2. The same signed body arrives again with a different GUID.
+3. The receiver writes a second inbox row. It finds the intent row for issue `5` and `triage`.
+4. The receiver enqueues no second task. Both inbox rows point to the first task.
+
+The application owns two tables outside the Workhorse schema: `github_triage.inbox` and
+`github_triage.intent`. The two tables and the enqueue share one transaction. Thus, another session
+sees no row before the commit. If the enqueue fails, the transaction removes the inbox row and the
+intent row too.
+
+Each task carries only `{ inboxId }`. It carries no webhook payload and no credential. If a GUID
+arrives again with different bytes, the receiver replies `409`. This is also true when the changed
+body has a valid new signature.
+
+<details>
+<summary>Reference: application tables</summary>
+
+| Table                  | Contents                                                                                                                                    |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `github_triage.inbox`  | UUID reference, app/installation/repository scope, delivery GUID, SHA256 body digest, source, issue ID/number, task ID, and acceptance time |
-| `github_triage.intent` | One desired-label operation per scope, immutable issue ID, and label; canonical inbox reference, task ID, and application receipt           |
+| `github_triage.intent` | One desired-label operation for each scope, issue ID, and label; the canonical inbox reference, task ID, and application receipt            |
 
-Both tables and the enqueue share one transaction.
-Each task carries only `{ inboxId }`, not a webhook payload or credential.
-An independent observer sees neither write before commit.
-A failed enqueue rolls back the inbox and intent too.
-A replay of a GUID with different bytes returns `409`, even if the changed body has a valid new signature.
+More detail: [`github-triage.ts`](https://github.com/stablemates/workhorse/blob/main/typescript/examples/github-triage.ts).
 
-The persistent intent protects repeated deliveries with different unsigned GUIDs.
-The queue's idempotency key expires after `86400000` milliseconds; it is secondary protection, not the inbox's retention policy.
-Per-issue `concurrencyKey` coordinates handlers and does not deduplicate enqueue.
-Keep the inbox and intent for the whole supported replay/reconciliation lifetime.
-There is no automatic application-table pruning in this recipe.
-If task history is removed, these rows intentionally retain its task reference; duplicates do not silently create replacement tasks.
-Operators must inspect and redrive exhausted tasks separately through Workhorse's audited administration APIs.
+</details>
 
-## Acknowledge after commit, not after the label API
+## Keep the inbox and the intent rows
 
-As checked on **October 3, 2026**, GitHub.com documents a **10-second** acknowledgment deadline.
-The GHES **3.19** documentation specifies **30 seconds**; verify the deployed server version rather than transferring that limit to GitHub.com.
-The receiver caps bodies at `1048576` bytes and request receipt at `5000` milliseconds.
-It returns a non-success response if its overall `8000`-millisecond budget expires.
-PostgreSQL statements and lock waits are bounded locally, and the CLI bounds pool connection acquisition.
-These limits are safeguards, not a measured Internet latency guarantee.
+The intent row protects the issue from deliveries that repeat with different unsigned GUIDs. The
+idempotency key of the enqueue expires after 24 hours. It is a second protection. It is not the
+retention policy of the inbox.
 
-Only committed acceptance earns `202`.
-If the connection disappears after commit, the next redelivery finds the same inbox and task.
-If the receiver's budget expires during a transaction, the caller may see `503` even if that transaction later commits.
-Treat that outcome as uncertain and retry through the durable ledger, never assume failure means no acceptance.
+The per-issue `concurrencyKey` coordinates handlers. It does not prevent a duplicate enqueue.
+
+Keep the inbox and intent rows for as long as a replay or a reconciliation can occur. The recipe
+does not delete rows from the application tables. If Workhorse removes the task history, these rows
+keep their task reference. A duplicate delivery does not create a replacement task.
+
+If a task exhausts its attempts, an operator must inspect it and redrive it. Use the audited
+administration APIs of Workhorse for this.
+
+<details>
+<summary>Reference: enqueue options</summary>
+
+| Option           | Value                                                                                    |
+| ---------------- | ---------------------------------------------------------------------------------------- |
+| `idempotency`    | Key `<app ID>/<installation ID>/<repository ID>/<issue ID>/<label>`; `ttlMs: 86_400_000` |
+| `concurrencyKey` | `<app ID>/<installation ID>/<repository ID>/issue/<issue ID>`                            |
+| `maxAttempts`    | `5`                                                                                      |
+| `retryPolicy`    | Fixed, `1_000` ms                                                                        |
+
+More detail: [Data model: Key and limits](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#key-and-limits), [Data model: Concurrency key](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#concurrency-key).
+
+</details>
+
+## Reply after the commit, not after the label request
+
+The receiver replies `202` only after the acceptance commits. If the connection closes after the
+commit, the next redelivery finds the same inbox row and task.
+
+If the budget of the receiver expires during a transaction, the receiver can reply `503`. That
+transaction can still commit later. Thus, a `503` does not prove that the receiver did not accept
+the delivery. Treat the result as uncertain. Retry through the durable inbox.
+
+The receiver limits the body size, the time to receive the request, and the time for the full
+request. PostgreSQL limits the time of statements and of lock waits. The CLI limits the time to get
+a pool connection. These limits are safeguards. They do not guarantee a latency on the Internet.
+
+<details>
+<summary>Reference: acknowledgment deadlines and limits</summary>
+
+As checked on **October 3, 2026**:
+
+- GitHub.com documents a **10-second** acknowledgment deadline.
+- The GHES **3.19** documentation specifies **30 seconds**. Verify the version of your server. Do
+  not apply that limit to GitHub.com.
+
+| Limit                       | Value                   |
+| --------------------------- | ----------------------- |
+| Body                        | `1048576` bytes         |
+| Request receipt             | `5000` milliseconds     |
+| Full request budget         | `8000` milliseconds     |
+| Statement and lock timeout  | 4 seconds and 3 seconds |
+| Pool connection acquisition | 1 second                |
+
+More detail: [`github-triage.ts`](https://github.com/stablemates/workhorse/blob/main/typescript/examples/github-triage.ts).
+
+</details>
 
 ## Recover recent deliveries explicitly
 
-**GitHub does not automatically retry failed webhook deliveries.**
-Schedule your own delivery inspection using the operator's existing scheduler.
-Run `recover` with a current app JWT; it follows cursor pagination and inspects each selected delivery's authenticated body before requesting redelivery.
-It checks the repository, installation, event, action, GUID, and delivery age.
-GitHub documents the same `X-GitHub-Delivery` GUID on redelivery.
-The numeric delivery ID selects the REST endpoint; it is not the receiver's inbox identity.
+**GitHub does not retry a failed webhook delivery automatically.** Use the scheduler of your
+operator to start the delivery inspection.
 
-GitHub's [redelivery page](https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/redelivering-webhooks), rechecked on **October 3, 2026**, says **3 days**.
-The earlier October 2 review found a **7-day** summary and **3-day** explanation; that ambiguity did not establish a longer retention guarantee.
-This recipe conservatively attempts only failures from the preceding **3 days**, including that boundary.
-It does not assume a longer API retention guarantee from the summary.
-No retry is requested for deliveries outside that window.
+1. Get a current app JWT.
+2. Run the `recover` command.
 
-The recovery code uses separate app credentials and rejects pagination links outside the configured API origin or collection.
-It refuses redirects and bounds pagination to `100` pages and requests to `5000` milliseconds.
-Exceeding a bound raises an error, not a successful partial-recovery receipt.
-Record recovery attempts externally and monitor errors; `202` from redelivery means requested, not locally accepted or processed.
-Repeated recovery runs may request the same delivery again; persistent acceptance protects the effect.
+The command follows the cursor pagination. For each selected delivery, it inspects the
+authenticated body before it requests a redelivery. It checks the repository, the installation, the
+event, the action, the GUID, and the age of the delivery.
 
-## Reconcile resources after a longer outage
+GitHub documents that a redelivery uses the same `X-GitHub-Delivery` GUID. The numeric delivery ID
+selects the REST endpoint. It is not the inbox identity of the receiver.
 
-Delivery history cannot recover an arbitrarily long outage.
-Run `reconcile` with the scoped installation token to scan current **open** issues, including all paginated results within its bound.
-It first verifies the repository's immutable ID through the authenticated API and excludes pull requests.
-It stores normalized resource references through the same PostgreSQL inbox/intent/enqueue transaction.
-It does not fabricate a signed webhook or pretend that historical event order is available.
+The [redelivery page](https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/redelivering-webhooks)
+of GitHub says **3 days**. The recipe attempts only failures from the last **3 days**, and it
+includes the boundary. It requests no redelivery for an older delivery.
 
-This policy applies the triage label to every currently open issue in that repository, including older issues.
-Closed issues and historical transitions are not reconstructed.
-After an operator intentionally removes a label from an already receipted issue, reconciliation does not undo that decision.
-An ongoing label controller or another policy version is a separate business outcome.
-Full scans need a repository size that fits the pagination bound; larger repositories need a reviewed partitioned reconciliation plan.
+The recovery code uses separate app credentials. It refuses pagination links outside the configured
+API origin or collection. It also refuses redirects. If the code exceeds a limit, it raises an
+error. It does not record a partial recovery as a success.
 
-## Recover external success before its receipt
+Record the recovery attempts outside the recipe, and monitor the errors. A `202` from the
+redelivery endpoint means only that GitHub received the request. It does not mean that the receiver
+accepted or processed the delivery. Two recovery runs can request the same delivery again. The
+persistent acceptance protects the effect.
 
-The worker verifies the repository and issue identity again before any effect.
-It reads current labels and adds only the missing configured label using GitHub's additive labels endpoint.
-It does not replace unrelated labels or create duplicate comments.
-After external success, it records `applied_at` and a named Workhorse checkpoint.
+<details>
+<summary>Reference: recovery limits</summary>
 
-If the process disappears after GitHub succeeds but before the receipt or checkpoint, a new worker reads the current label state.
-It can complete the receipt without another label request when the label is already present.
-Repeated additive requests remain possible under stale reads or uncertain API responses; no external exactly-once guarantee is claimed.
-A removed label, deleted issue, changed repository path, revoked installation, or exhausted task needs operator judgment.
-Workhorse fencing protects its checkpoint writes, not a remote API call already in flight.
+- The redelivery page was checked again on **October 3, 2026**. An earlier review on October 2 found
+  a **7-day** summary and a **3-day** explanation. That difference does not establish a longer
+  retention guarantee, so the recipe uses 3 days.
+- Pagination stops at `100` pages.
+- Each request stops at `5000` milliseconds.
+- The command skips a delivery that has a `2xx` status code, and a GUID that it already attempted.
 
-Secret rotation behavior for in-flight and redelivered historical payloads is not established by the cited signature documentation.
-The recipe verifies exactly one configured secret and tests that a different secret fails.
-Do not guess whether GitHub signs a historical redelivery with an old or current secret.
-Test rotation with an authorized disposable app before designing an overlap policy; do not retain old secrets indefinitely.
+More detail: [`github-triage.ts`](https://github.com/stablemates/workhorse/blob/main/typescript/examples/github-triage.ts).
 
-## Verification and boundaries
+</details>
 
-Run `pnpm build:runtime:dev`, `pnpm test:integration:github --maxWorkers=3`, and the existing `pnpm npm:test:unit` scope.
-CI discovers the database fixture once through its existing `*-integration.test.ts` classification.
-The existing packed-consumer discovery executes the example's offline `--verify` mode under Node type stripping and published SDK packages.
-Signature and recovery tests run once in the existing npm unit scope.
-The example has its own TypeScript typecheck inclusion and language-coverage mapping; other languages do not claim a maintained GitHub receiver.
+## Reconcile open issues after a longer outage
 
-The proof covers concurrent duplicates, altered headers and scopes, changed-body reuse, rollback, invisibility, lost acknowledgment, expired queue keys, paginated recovery, long-outage reconciliation, and external-success-before-receipt recovery.
-Mocked API results establish application behavior, not GitHub availability, live permissions, token rotation, or GHES compatibility.
-The API client defaults to GitHub.com and REST version `2026-03-10`.
-Its configurable HTTPS base can represent GHES `/api/v3/`, but that server's supported API version and behavior require separate verification.
+The delivery history cannot recover an outage of any length. After a longer outage, run the
+`reconcile` command with the installation token. The command scans the current **open** issues, and
+it reads all pages within its pagination limit.
+
+1. The command verifies the immutable ID of the repository through the authenticated API.
+2. It skips pull requests.
+3. It stores a normalized reference for each issue through the same inbox, intent, and enqueue
+   transaction.
+
+The command does not make a fake signed webhook. It does not reconstruct the historical order of
+events.
+
+This policy adds the triage label to each issue that is open now, also to older issues. It does not
+reconstruct closed issues or historical transitions. If an operator removes the label from an issue
+that has a receipt, reconciliation does not add the label again. A label controller that runs all
+the time, or a different policy version, is a different business outcome.
+
+A full scan works only if the repository fits in the pagination limit. For a larger repository,
+make a partitioned reconciliation plan and have it reviewed.
+
+## Recover a label that GitHub added before the receipt
+
+The worker verifies the repository and the issue identity again before it makes a change. It reads
+the current labels. It adds only the configured label, if it is missing, with the additive labels
+endpoint of GitHub. It does not replace other labels, and it does not create comments.
+
+After GitHub accepts the change, the worker records `applied_at`. Workhorse stores the result of the
+`desired-label-v1` checkpoint. A checkpoint is a named piece of handler code whose result Workhorse
+stores, so a later run does not run that code again.
+
+**Example.** The worker adds `triage` to issue `5`.
+
+1. GitHub adds the label.
+2. The worker process stops before it records `applied_at` and before Workhorse stores the
+   checkpoint.
+3. Workhorse runs the task again on a new worker.
+4. The new worker reads the labels and finds `triage`. It sends no label request and records the
+   receipt.
+
+A stale read or an uncertain API response can still cause a second additive request. The recipe
+does not claim that the external effect occurs exactly one time. Workhorse fencing protects its own
+checkpoint writes. It does not protect a call to a remote API that is in progress.
+
+These cases need the judgment of an operator:
+
+- a label that someone removed
+- a deleted issue
+- a changed repository path
+- a revoked installation
+- a task that exhausted its attempts
+
+## Test a secret rotation before you depend on it
+
+The cited signature documentation does not say which secret GitHub uses for an in-flight delivery
+or for a redelivery of a historical payload during a rotation. The recipe verifies exactly one
+configured secret. Its tests show that a different secret fails.
+
+Do not guess if GitHub signs a historical redelivery with the old secret or the current secret.
+Before you design an overlap policy, test the rotation with an authorized disposable app. Do not
+keep old secrets for an unlimited time.
+
+## Run the recipe tests
+
+1. Run `pnpm build:runtime:dev`.
+2. Run `pnpm test:integration:github --maxWorkers=3`.
+3. Run the existing `pnpm npm:test:unit` scope.
+
+CI finds the database test one time, through the existing `*-integration.test.ts` classification.
+The existing packed-consumer test runs the offline `--verify` mode of the example. It uses Node type
+stripping and the published SDK packages. The signature tests and the recovery tests run one time,
+in the existing npm unit scope.
+
+The example has its own TypeScript typecheck entry and its own language coverage mapping. No other
+language has a maintained GitHub receiver.
+
+The tests cover these cases:
+
+- concurrent duplicates
+- changed headers and scopes
+- reuse of a GUID with a changed body
+- rollback and invisibility before the commit
+- a lost acknowledgment
+- expired queue keys
+- paginated recovery
+- reconciliation after a long outage
+- recovery after an external success before the receipt
+
+The mocked API results show the behavior of the application. They do not show the availability of
+GitHub, live permissions, token rotation, or GHES compatibility.
+
+The API client uses GitHub.com and REST version `2026-03-10` by default. You can set the HTTPS base
+to the GHES `/api/v3/` path. You must separately verify the API version and the behavior of that
+server.
 
 ## Official references
 
@@ -189,4 +376,8 @@ Its configurable HTTPS base can represent GHES `/api/v3/`, but that server's sup
 - [Additive labels and token permissions](https://docs.github.com/en/rest/issues/labels#add-labels-to-an-issue)
 - [Resource issue listing, including pull requests](https://docs.github.com/en/rest/issues/issues#list-repository-issues)
 
-Continue with [idempotency](/docs/idempotency), [dedicated workers](/docs/worker-processes), and [retries](/docs/retries).
+## Next
+
+- [Idempotent enqueue](/docs/idempotency) — return the same task for a repeated request
+- [Worker processes](/docs/worker-processes) — run the worker in its own process
+- [Retries](/docs/retries) — control how Workhorse runs a failed task again

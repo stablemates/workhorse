@@ -1,27 +1,26 @@
 ---
 title: TypeORM
-description: Adapt a TypeORM data source and enqueue tasks through transactional entity managers.
+description: Enqueue a Workhorse task through the transactional entity manager of TypeORM, in the same transaction as your entity writes.
 ---
 
-Your application already writes through TypeORM. When a request saves an entity and enqueues a
-follow-up task, those two writes must commit together — a task for a row that rolled back is a bug,
-and a committed row with no task is a silent gap. `@stablemates/workhorse-typeorm` closes that gap: it converts
-TypeORM data sources and transactional entity managers into the core `Queryable` protocol, so
-`Queue.enqueue` runs inside the same transaction as your entity writes.
+The `@stablemates/workhorse-typeorm` package connects Workhorse to TypeORM. With it, your
+application enqueues a task in the same transaction as its entity writes. The entity and the task
+then commit together, or neither commits.
 
-Workhorse keeps its schema lifecycle outside TypeORM migrations. TypeORM owns your entities;
-Workhorse owns its versioned SQL functions.
+This prevents two errors. Without a shared transaction, a task can exist for a row that rolled back.
+Also, a row can commit and its task can be lost, and no error shows this. TypeORM owns your entities.
+Workhorse owns its own schema and its versioned SQL functions.
 
 ## Create the adapter
 
-Install the integration beside TypeORM.
+Install the integration together with TypeORM.
 
 ```bash
 pnpm add @stablemates/workhorse-typeorm typeorm
 ```
 
-Pass an initialized data source to `createTypeOrmAdapter`. The close callback is optional because
-the adapter does not destroy caller-owned data sources by default.
+Give an initialized data source to `createTypeOrmAdapter`. The `close` callback is optional. By
+default, the adapter does not destroy a data source that the caller owns.
 
 ```ts
 import { createTypeOrmAdapter } from "@stablemates/workhorse-typeorm";
@@ -31,15 +30,15 @@ const workhorse = createTypeOrmAdapter(dataSource, {
 });
 ```
 
-The returned `WorkhorseAdapter` exposes `database`, `queue`, `admin`, `forTransaction`,
-`adminForTransaction`, `createWorker`, and `close` — one stable surface for request handlers,
-operator tools, and worker processes.
+The adapter is a `WorkhorseAdapter`. It has `database`, `queue`, `admin`, `forTransaction`,
+`adminForTransaction`, `createWorker`, and `close`. Your request handlers, operator tools, and
+worker processes use this one adapter.
 
-## Enqueue inside a transaction
+## Enqueue a task in a TypeORM transaction
 
-This is the pattern the adapter exists for. Call `forTransaction` with the callback's entity
-manager. The queue sends its SQL through that manager, so the task follows the surrounding commit or
-rollback.
+Call `forTransaction` with the entity manager that TypeORM gives to your callback. The queue that it
+returns sends its SQL through that entity manager. Thus the task commits or rolls back with your
+entity writes.
 
 ```ts
 await dataSource.transaction(async (manager) => {
@@ -50,30 +49,72 @@ await dataSource.transaction(async (manager) => {
 });
 ```
 
-If the callback throws, TypeORM rolls back both writes. Nothing outside the transaction ever sees a
-half-committed pair. The adapter's default queue remains outside that transaction — use it for
-enqueues that stand alone.
+If the callback throws an error, TypeORM rolls back the account and the task. Other connections do
+not see the account or the task before the commit.
 
-## Workers use the data source's pool
+To enqueue a task that is not part of a transaction, use `workhorse.queue`. This queue does not join
+the transaction of the caller.
 
-When the data source initializes, TypeORM's Postgres driver creates a node-postgres pool as
-`dataSource.driver.master`. Workers take their heartbeat connection and their `LISTEN/NOTIFY`
-connection from it, so initialize the data source before you create a worker. The pool must allow
-room for both connections plus claims; TypeORM's `extra.max` sets its size. An integration test
-pins that accessor, because TypeORM does not document it.
+## Initialize the data source before you create a worker
 
-Database execution failures become `TypeOrmQueryError`, which retains the statement, original
-cause, and PostgreSQL driver code. Typed Workhorse conflicts — idempotency, checkpoint, and wait
-errors — remain their core error classes.
+When the data source initializes, the PostgreSQL driver of TypeORM creates a node-postgres pool. The
+worker takes its heartbeat connection and its listen connection from this pool. A listen connection
+waits for notifications about new tasks. Thus, initialize the data source before you create a
+worker.
 
-## Keep resource ownership explicit
+The pool must have space for these two connections and for the claims of the worker. Use the
+TypeORM option `extra.max` to set the size of the pool.
 
-Unless you supply `close`, the adapter leaves the data source initialized. Add that hook only when
-the adapter owns the data source, because `adapter.close` may run during process shutdown or failed
-startup.
+<details>
+<summary>Reference: worker connections</summary>
 
-Install the Workhorse schema with the core deployment tools. TypeORM migrations should not manage
-Workhorse's versioned SQL functions — the schema is a versioned protocol, not application entities.
+- The pool is `dataSource.driver.master`. TypeORM's `PostgresDriver` creates it on `initialize()`.
+- The adapter finds the pool when a worker is constructed, not when you create the adapter.
+- TypeORM does not document `driver.master`. An integration test pins this accessor.
+- `TypeOrmAdapterOptions` has no `pool` option.
+- A dedicated heartbeat connection needs a pool of at least 3 connections. If the pool is smaller,
+  the worker does not start unless you set `sharedHeartbeats`.
+
+More detail: [Overview: ORM adapters](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#orm-adapters),
+[Overview: Connection budgets per language](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#connection-budgets-per-language).
+
+</details>
+
+## Handle database errors
+
+If a database statement fails, the adapter throws `TypeOrmQueryError`. The error keeps the
+statement, the original error, and the error code of the PostgreSQL driver.
+
+Typed Workhorse conflicts keep their core error classes. Examples are idempotency, checkpoint, and
+wait conflicts.
+
+<details>
+<summary>Reference: errors</summary>
+
+| `TypeOrmQueryError` field | Content                                                |
+| ------------------------- | ------------------------------------------------------ |
+| `statement`               | The SQL statement.                                     |
+| `code`                    | The SQLSTATE that PostgreSQL reported, or `undefined`. |
+| `cause`                   | The original error.                                    |
+
+- `TypeOrmQueryError` extends `QueryError`. It does not copy parameter values into its message.
+- The code search follows `driverError` and `cause`.
+
+More detail: [Overview: Prisma and TypeORM queryables](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#prisma-and-typeorm-queryables).
+
+</details>
+
+## Close the data source that the adapter owns
+
+If you do not give a `close` callback, the adapter leaves the data source initialized. Give this
+callback only when the adapter owns the data source. `adapter.close` can run when the process stops
+or when startup fails.
+
+## Install the Workhorse schema with the Workhorse tools
+
+Install the Workhorse schema with the deployment tools of the core package. Do not let TypeORM
+migrations manage the Workhorse SQL functions. The Workhorse schema is a versioned protocol, not a
+set of application entities.
 
 ## Next
 

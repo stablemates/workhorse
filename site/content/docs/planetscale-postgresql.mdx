@@ -1,40 +1,66 @@
 ---
 title: Can I use Workhorse with PlanetScale PostgreSQL?
-description: Expected compatibility through standard PostgreSQL drivers, with connection and permission considerations.
+description: Connect Workhorse to PlanetScale PostgreSQL through the standard PostgreSQL drivers, with the correct connections and permissions.
 ---
 
-**Yes, PlanetScale PostgreSQL should work with Workhorse.**
-PlanetScale provides a PostgreSQL service, and Workhorse uses standard PostgreSQL drivers and SQL.
-Use the existing SDK for your language; no PlanetScale adapter is needed.
-This is expected compatibility, not a claim that Workhorse has been tested against PlanetScale.
-It applies to PlanetScale's regular PostgreSQL service, not MySQL/Vitess or Neki.
+**Yes, PlanetScale PostgreSQL is expected to work with Workhorse.** PlanetScale supplies a
+PostgreSQL service, and Workhorse uses standard PostgreSQL drivers and SQL. Use the existing SDK for
+your language. You do not need a PlanetScale adapter.
 
-## Connection considerations
+This statement is expected compatibility. It does not claim a Workhorse test against PlanetScale. It
+applies to the regular PostgreSQL service of PlanetScale, not to MySQL/Vitess or Neki.
 
-Follow PlanetScale's [PostgreSQL connection instructions](https://planetscale.com/docs/postgres/connecting) to obtain credentials for the writable primary.
+To get credentials for the writable primary, follow the
+[PostgreSQL connection instructions](https://planetscale.com/docs/postgres/connecting) of
+PlanetScale.
 
-- **Schema setup:** use a direct primary connection on port `5432`.
-  PlanetScale recommends direct connections for DDL and schema changes.
-  Workhorse manages its own schema separately from your application migrations.
-- **Worker:** run a dedicated worker process with a direct primary connection pool.
-  Direct connections preserve the session needed for `LISTEN` wake hints.
-- **Application:** direct connections or PlanetScale's transaction-mode PgBouncer on port `6432` can serve application transactions.
-  When a business write and enqueue must commit together, pass the same transaction connection to Workhorse.
-  Do not depend on `LISTEN` or session-level state through transaction pooling.
-- **TLS and credentials:** verify the server certificate and hostname, and keep credentials in your secret store.
-  PlanetScale requires TLS and documents `sslmode=verify-full` for libpq clients.
-  Use equivalent certificate verification in your driver; do not disable it.
-- **Permissions:** use an authorized schema owner for installation and migrations.
-  Data-read and data-write grants alone do not permit schema creation or DDL.
-  Workers also perform maintenance, so ensure their role has the required permissions.
+## Install the schema through a direct primary connection
 
-PlanetScale documents these details in its [PgBouncer guide](https://planetscale.com/docs/postgres/connecting/pgbouncer),
-[connection quickstart](https://planetscale.com/docs/postgres/connecting/quickstart) and
-[role documentation](https://planetscale.com/docs/postgres/connecting/roles).
-Those sources were reviewed on **2026-10-02**; the catalog date records that documentation review, not a provider test.
+Use a direct primary connection on port `5432` for the schema setup. PlanetScale recommends direct
+connections for DDL and schema changes. Workhorse manages its own schema, separately from the
+migrations of your application.
+
+## Give the worker a direct primary connection pool
+
+Run a dedicated worker process with a direct primary connection pool. A direct connection keeps the
+session that the `LISTEN` wake hints need.
+
+## Connect the application directly or through PgBouncer
+
+The application can use direct connections. It can also use the transaction-mode PgBouncer of
+PlanetScale on port `6432`.
+
+- If a business write and its enqueue must commit together, give Workhorse the same transaction
+  connection.
+- Through transaction pooling, do not depend on `LISTEN` or on session-level state.
+
+## Verify TLS and keep the credentials secret
+
+PlanetScale requires TLS. For libpq clients, it documents `sslmode=verify-full`.
+
+1. Verify the server certificate and the hostname.
+2. Use an equivalent certificate check in your driver. Do not turn off the check.
+3. Keep the credentials in your secret store.
+
+## Use roles with the correct permissions
+
+Use an authorized schema owner to install and migrate the schema. Read and write grants on the data
+do not permit schema creation or DDL. Workers also do maintenance, so make sure that their role has
+the necessary permissions.
+
+## Know the source of these statements
+
+PlanetScale documents these details in its
+[PgBouncer guide](https://planetscale.com/docs/postgres/connecting/pgbouncer),
+[connection quickstart](https://planetscale.com/docs/postgres/connecting/quickstart), and
+[role documentation](https://planetscale.com/docs/postgres/connecting/roles). A person reviewed
+those sources on **2026-10-02**. The catalog date records that review of the documentation. It does
+not record a provider test.
 
 ## Next
 
-- [Install Workhorse](/docs/installation) covers supported PostgreSQL versions and schema setup.
-- [Enqueue in a transaction](/docs/enqueue) explains sharing your business transaction.
-- [Connection poolers](/docs/pgbouncer) describes Workhorse's pooling and polling behavior.
+- [Install Workhorse](/docs/installation) covers the supported PostgreSQL versions and the schema
+  setup.
+- [Enqueue in a transaction](/docs/enqueue) explains how to share your business transaction.
+- [Connection poolers](/docs/pgbouncer) describes how Workhorse behaves behind a pooler and how it
+  polls.
