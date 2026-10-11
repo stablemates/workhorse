@@ -3,17 +3,20 @@ title: Examples
 description: Seven end-to-end patterns, from transactional enqueue to a durable agentic flow.
 ---
 
-Documentation explains one concept at a time; real code combines several. This page shows seven
-complete patterns you can adapt directly. Every snippet uses the governed surfaces as shipped — the
-concept guides linked from each pattern explain the behavior behind it.
+Each documentation page explains one feature. Real application code uses many features together.
+This page shows seven complete patterns. Each pattern solves one common problem, and you can change
+it for your application. Each example uses only governed surfaces. A governed surface is a part of
+Workhorse that SemVer covers. Each pattern links the pages that explain its features.
 
-## Transactional enqueue in an API route
+## Enqueue a task in the transaction of an API route
 
-The problem: a request creates an order and must guarantee a fulfillment task — but only if the
-order commits. Enqueue through the open transaction, and the task and the order share one commit or
-one rollback. In TypeScript, pass the transaction client as the last argument to `enqueue`. In
-Python, Go, Rust, and Ruby, build the `Queue` on the open transaction or on the connection that holds
-it.
+An API request creates an order. The order needs a fulfillment task, but only if the order commits.
+To get this result, enqueue the task in the transaction that inserts the order. Then the task and
+the order commit together, or they roll back together.
+
+- In TypeScript, give the transaction client as the last argument to `enqueue`.
+- In Python, Go, Rust, and Ruby, make the `Queue` on the open transaction, or on the connection
+  that holds it.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -143,16 +146,20 @@ it.
   </Tab>
 </Tabs>
 
-If the insert fails, no task exists. If the enqueue fails, no order exists. There is no window where
-one is visible without the other. TypeScript applications using Drizzle, Prisma, TypeORM, or Kysely
-get the same guarantee through the adapter package's `forTransaction` boundary.
+If the insert fails, no task exists. If the enqueue fails, no order exists. At no time can a reader
+see one without the other. A TypeScript application that uses Drizzle, Prisma, TypeORM, or Kysely
+gets the same guarantee. It uses the `forTransaction` boundary of the adapter package.
 
-## Multi-stage handler with checkpoints and a durable sleep
+## Send two emails a week apart with checkpoints and a durable sleep
 
-The problem: a trial signup should send a welcome email now and a follow-up in seven days, and
-neither email may reach the reader twice. Checkpoints make each send a restart boundary; the durable
-sleep releases the worker slot for the whole week. Each send also gives the mail provider an
-idempotency key built from the task ID, because a checkpoint alone cannot stop a repeated send.
+A trial signup sends a welcome email now and a follow-up email in seven days. The reader must not
+get an email two times. A checkpoint is a named piece of handler code. Workhorse stores its result,
+so a later run of the handler does not run the code again.
+
+- Put each send in a checkpoint.
+- Wait with a durable sleep. The task uses no worker slot during the week.
+- Give the mail provider an idempotency key that you make from the task ID. A checkpoint alone
+  cannot stop a repeated send.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -348,22 +355,30 @@ idempotency key built from the task ID, because a checkpoint alone cannot stop a
   </Tab>
 </Tabs>
 
-The sleep stores a named timer, drops the lease, and parks the task in `scheduled` — no worker slot
-is held for seven days. When the timer is due, a worker runs the handler from the top; the saved
-`welcome` checkpoint returns its stored value instead of sending again.
+The sleep stores a named timer, and the worker releases the task. The task waits in the state
+`scheduled`, and it uses no worker slot for seven days. When the timer ends, a worker runs the
+handler again from the start. The `welcome` checkpoint returns its stored value and does not send
+again.
 
-A checkpoint saves its value only after the send returns. Suppose the process dies after the
-provider accepts the welcome email but before the `welcome` checkpoint commits. The next attempt
-finds no saved value and sends again. The key `welcome:<task ID>` is the same on every attempt, so
-the provider can drop that second send. Without such a key, the email can arrive twice.
-[Protect an external call that a checkpoint cannot protect](/docs/concepts#protect-an-external-call-that-a-checkpoint-cannot-protect) explains this
-window.
+A checkpoint saves its value only after the send returns. Thus, a crash at the wrong time can
+repeat a send.
 
-## Nightly task synced on deploy
+**Example.** The process stops between the send and the save.
 
-The problem: an invoice run must happen every night at 03:00 with no separate scheduler service.
-Declare the schedule in code and synchronize it during deployment; any worker watching the
-namespace fires it.
+1. The handler sends the welcome email, and the provider accepts it.
+2. The process stops before the `welcome` checkpoint saves its value.
+3. The next attempt finds no saved value, so it sends the email again.
+4. The key `welcome:<task ID>` is the same on each attempt, so the provider drops the second send.
+
+Without the key, the reader can get the email two times.
+[Protect an external call that a checkpoint cannot protect](/docs/concepts#protect-an-external-call-that-a-checkpoint-cannot-protect)
+explains this case.
+
+## Run a nightly task from a schedule that you sync at deployment
+
+An invoice run must occur each night at 03:00. You do not want a separate scheduler service. Write
+the schedule in your code, and sync it during the deployment. Each worker that watches the
+namespace of the schedule can start the task.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -542,15 +557,16 @@ namespace fires it.
   </Tab>
 </Tabs>
 
-Competing workers cannot double-fire: each occurrence has a durable key from its namespace, name,
-and planned time, so PostgreSQL converges every racing call on one task. Removing the definition
-from the array disables it on the next deploy — code stays the owner of intent.
+Two workers cannot start the same occurrence two times. Each occurrence has a durable key: the
+namespace, the name, and the planned time. If many workers try at the same time, PostgreSQL makes
+one task. If you remove the definition from the array, the next deployment disables the schedule.
+Thus, your code controls which schedules exist.
 
-## Webhook idempotency
+## Make one task for each webhook event
 
-The problem: payment providers redeliver webhooks, and each delivery must produce exactly one task.
-Build the idempotency key from the provider's event ID; a replayed delivery returns the original
-task instead of creating another.
+A payment provider can send the same webhook event more than one time. Each event must make exactly
+one task. Make the idempotency key from the event ID of the provider. A repeated delivery then
+returns the first task and does not make a new task.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -687,18 +703,28 @@ task instead of creating another.
   </Tab>
 </Tabs>
 
-An equivalent replay returns the same task ID with no new task, event, or notification — the route
-stays safely retryable end to end. If a request reuses the key with a _different_ payload,
-TypeScript and Python throw `EnqueueIdempotencyConflictError`; Go returns the matching typed error;
-Rust returns `Error::EnqueueIdempotencyConflict`; Ruby raises `EnqueueIdempotencyConflictError`.
-No SDK silently drops the difference. The handler still runs at least once, so keep its external
-effects idempotent too.
+An equal repeated request returns the same task ID. It makes no new task, event, or notification.
+Thus, the provider can safely retry the route.
 
-## Incident redrive script
+If a request uses the key again with a _different_ payload, each SDK gives an error:
 
-The problem: a provider outage dead-lettered a batch of tasks, the provider has recovered, and an
-operator needs to replay exactly those failures — safely, and only once. Dry-run first, then reuse
-one incident request ID across pages so a crashed script can rerun without duplicating work.
+- TypeScript and Python throw `EnqueueIdempotencyConflictError`.
+- Go returns the matching typed error.
+- Rust returns `Error::EnqueueIdempotencyConflict`.
+- Ruby raises `EnqueueIdempotencyConflictError`.
+
+No SDK ignores the difference. The handler still runs at least one time, and sometimes more. Thus,
+its external effects must also be safe to repeat.
+
+## Redrive the failed tasks of an incident
+
+A provider outage moved many tasks to the dead letters. A dead letter is a task that failed
+permanently. The provider works again, and an operator must redrive each of those tasks one time.
+A redrive makes a new task from a failed task. Like each task, the new task runs at least one time.
+
+1. Do a dry run first.
+2. Use one request ID for the incident on all pages. Then, if the script crashes, you can run it
+   again without duplicate work.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -894,16 +920,16 @@ one incident request ID across pages so a crashed script can rerun without dupli
   </Tab>
 </Tabs>
 
-Each redrive creates a fresh task that copies the queue, type, payload, and retry policy; the failed
-source stays unchanged as evidence, and each result identifies both source and target. Repeating a
-page under the same request ID returns the existing targets, so the script is safe to rerun after a
-crash.
+Each redrive creates a new task. The new task copies the queue, the type, the payload, and the
+retry policy. The failed task stays unchanged as evidence. Each result names the failed task and
+the new task. If you repeat a page with the same request ID, Workhorse returns the existing new
+tasks. Thus, you can safely run the script again after a crash.
 
-## Cooperative cancellation
+## Cancel a task that is running
 
-The problem: a customer withdraws an order while its export task is running. Handler execution
-cannot be preempted safely, so cancellation is a durable request each SDK delivers through its
-handler cancellation primitive.
+A customer cancels an order while its export task runs. A worker cannot safely stop a handler at an
+arbitrary point. Thus, a cancellation is a durable request. Each SDK gives the request to the
+handler. The handler must check for the request and stop.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -1076,17 +1102,30 @@ handler cancellation primitive.
   </Tab>
 </Tabs>
 
-If the task has not started, PostgreSQL cancels it immediately with no invented attempt history. If
-it is active, the worker's heartbeat delivers the request. TypeScript aborts `context.signal`,
-Python cancels `context.cancellation`, Go cancels the handler's standard context, Rust reports
-it through `context.cancellation()`, and Ruby reports it through `context.cancellation`. A handler that ignores that request loses its lease eventually,
-and recovery materializes the cancellation instead of retrying.
+If no worker runs the task, Workhorse cancels it immediately. For example, the task waits in the
+queue or in a durable wait. A task that never started gets no attempt history.
 
-## Durable agentic flow
+If a worker runs the task, the heartbeat of the worker gets the request. Then each SDK tells the
+handler:
 
-The problem: a model plans work, several tools run independently, and execution must survive a
-deploy while waiting for approval. Checkpoint the model call, join tools as child tasks, cross a
-durable timer, then wait for an idempotent signal.
+- TypeScript aborts `context.signal`.
+- Python cancels `context.cancellation`.
+- Go cancels the standard context of the handler.
+- Rust reports the request through `context.cancellation()`.
+- Ruby reports the request through `context.cancellation`.
+
+If a handler ignores the request, the worker loses the task after some time. Then Workhorse records
+the cancellation and does not retry the task.
+
+## Build a durable agent loop
+
+A model plans the work, and many tools run independently. The loop waits for an approval, and it
+must continue after a deployment.
+
+1. Put the model call in a checkpoint.
+2. Run the tools as child tasks, and wait for all of them.
+3. Wait on a durable timer.
+4. Wait for an approval signal, which the application sends with an idempotency key.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -1360,16 +1399,20 @@ durable timer, then wait for an idempotent signal.
   </Tab>
 </Tabs>
 
-Every boundary releases the lease and restarts the handler later, so names and child requests must
-stay stable across replay. The repository's `typescript/examples/agentic-flow.mjs` demonstrates the
-whole lifecycle; run it with `pnpm example:agentic-flow` against an installed Workhorse database.
+At each wait, the worker releases the task, and later the handler starts again from the start.
+Thus, the names and the child requests must stay the same each time the handler runs.
 
-Python consumers can run `python/examples/lifecycle.py` for retry, checkpoint, timer, child, signal,
-and human-decision boundaries. Go consumers can run `go/examples/orchestration/main.go` for child,
-signal, and human-decision boundaries. Rust consumers can run `rust/examples/orchestration.rs` for
-child, signal, and human-decision boundaries. Ruby consumers can run `ruby/examples/orchestration.rb`
-for the same boundaries. Every release lane verifies the public package
-imports.
+The repository has complete examples for each language:
+
+- `typescript/examples/agentic-flow.mjs` shows the full loop. Run it with
+  `pnpm example:agentic-flow` on a database that has the Workhorse schema.
+- `python/examples/lifecycle.py` shows a retry, a checkpoint, a timer, a child task, a signal, and
+  a human decision.
+- `go/examples/orchestration/main.go` shows a child task, a signal, and a human decision.
+- `rust/examples/orchestration.rs` shows a child task, a signal, and a human decision.
+- `ruby/examples/orchestration.rb` shows the same steps as the Rust example.
+
+Each release lane checks the imports of the public package.
 
 ## Next
 
