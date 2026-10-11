@@ -483,19 +483,36 @@ def execute_lease_loss_fixture(
         lease_ms=fixture["leaseMs"],
         heartbeat_ms=fixture["heartbeatMs"],
     ).handle(fixture["taskType"], handler)
+    # A heartbeat locks the task's runtime row, and recovery skips a locked row. A heartbeat that
+    # started just after the expiry would make the recovery below find no lease. Hold every
+    # heartbeat until the recovery ends, as the Go fixture does. The first heartbeat after that
+    # finds the recovered task and reports the lease as stale. If a full lease passes first, the
+    # worker's lease watchdog ends the attempt with the same error and writes nothing.
+    recovery_ended = Event()
+    open_heartbeat_executor = worker._heartbeat_executor_factory
+    assert open_heartbeat_executor is not None
+
+    def open_held_heartbeat_executor() -> tuple[Any, Callable[[], None]]:
+        executor, close = open_heartbeat_executor()
+        return HeldHeartbeats(executor, recovery_ended), close
+
+    worker._heartbeat_executor_factory = open_held_heartbeat_executor
     run_results: list[bool] = []
     thread = run_in_thread(lambda: run_results.append(worker.run_once()), errors)
-    assert started.wait(timeout=5)
-    connection.execute(
-        "UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 ms' "
-        "WHERE task_id = %s",
-        (task_id,),
-    )
-    recovered = connection.execute(
-        "SELECT rows_affected FROM workhorse.recover_expired_telemetry_v1(%s, %s)",
-        (100, 0),
-    ).fetchone()
-    assert recovered == (1,)
+    try:
+        assert started.wait(timeout=5)
+        connection.execute(
+            "UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 ms' "
+            "WHERE task_id = %s",
+            (task_id,),
+        )
+        recovered = connection.execute(
+            "SELECT rows_affected FROM workhorse.recover_expired_telemetry_v1(%s, %s)",
+            (100, 0),
+        ).fetchone()
+        assert recovered == (1,)
+    finally:
+        recovery_ended.set()
     join(thread)
     assert errors == []
     assert fixture["expectedRunOutcome"] == "processed"
@@ -506,6 +523,22 @@ def execute_lease_loss_fixture(
     assert set(rejected_writes.values()) == {fixture["expectedRejectedWriteError"]}
     assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
     assert_attempt_outcomes(connection, task_id, [fixture["expectedAttemptOutcome"]])
+
+
+class HeldHeartbeats:
+    """Send each heartbeat on the worker's own heartbeat executor after the test releases it.
+
+    The heartbeat waits before it reaches PostgreSQL, so it holds no row lock while it waits.
+    """
+
+    def __init__(self, executor: Any, released: Event) -> None:
+        self._executor = executor
+        self._released = released
+
+    def rows(self, statement: DriverStatement, parameters: Any = ()) -> list[Mapping[str, object]]:
+        if statement is STATEMENTS.heartbeat_many:
+            assert self._released.wait(timeout=5), "held heartbeat was never released"
+        return self._executor.rows(statement, parameters)
 
 
 def execute_heartbeat_fixture(
