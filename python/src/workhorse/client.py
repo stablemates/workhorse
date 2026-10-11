@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
+from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 
 from ._compatibility import (
     AsyncCachedCompatibilityCheck as _AsyncCachedCompatibilityCheck,
     CachedCompatibilityCheck as _CachedCompatibilityCheck,
+    SyncRowExecutor as _SyncRowExecutor,
     assert_async_compatible as _assert_async_compatible,
     assert_sync_compatible as _assert_sync_compatible,
 )
@@ -37,10 +39,25 @@ from ._fenced_write import (
 )
 from ._protocol import (
     encode_request_values as _encode_request_values,
-    serialize_request_values as _serialize_request_values,
+    serialize_request as _serialize_request,
     serialize_schedules as _serialize_schedules,
 )
-from ._statements import STATEMENTS as _STATEMENTS
+from ._statements import MAX_BATCH_SIZE as _MAX_BATCH_SIZE, STATEMENTS as _STATEMENTS
+from ._task_groups import (
+    ADD as _ADD_TASK_GROUP_MEMBERS,
+    CREATE as _CREATE_TASK_GROUP,
+    FOR_TASK as _TASK_GROUP_FOR_TASK,
+    GET as _GET_TASK_GROUP,
+    LIST_MEMBERS as _LIST_TASK_GROUP_MEMBERS,
+    SEAL as _SEAL_TASK_GROUP,
+    callback_requests as _callback_requests,
+    encode_callbacks as _encode_callbacks,
+    member_page as _member_page,
+    member_parameters as _member_parameters,
+    one_task_group as _one_task_group,
+    optional_task_group as _optional_task_group,
+    task_group_link as _task_group_link,
+)
 from ._telemetry import inject_trace_context as _inject_trace_context
 from .errors import (
     HumanWaitIdempotencyConflictError,
@@ -65,7 +82,13 @@ from .types import (
     RateLimitPolicyDefinition,
     ScheduleDefinition,
     SignalDeliveryResult,
+    TaskGroup,
+    TaskGroupBlockResult,
+    TaskGroupBuilder,
+    TaskGroupLink,
+    TaskGroupMemberPage,
     TaskTypeContracts,
+    _validate_task_group_add,
 )
 
 if TYPE_CHECKING:
@@ -88,6 +111,17 @@ class Queue:
         self._contract_validators: dict[tuple[str, str], Any] = {}
         self._contracts = _ContractCache()
         self._contracts_enabled = False
+
+    @classmethod
+    def _from_executor(cls, executor: _SyncRowExecutor, default_queue: str = "default") -> Queue:
+        instance = cls.__new__(cls)
+        instance._executor = cast(_SyncExecutor, executor)
+        instance.default_queue = default_queue
+        instance._compatibility = _CachedCompatibilityCheck(executor)
+        instance._contract_validators = {}
+        instance._contracts = _ContractCache()
+        instance._contracts_enabled = False
+        return instance
 
     def enqueue(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> str:
         return self.enqueue_with_result(type, payload, options).task_id
@@ -129,6 +163,25 @@ class Queue:
     def enqueue_many_with_results(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]:
         if not requests:
             return []
+        if len(requests) > _MAX_BATCH_SIZE:
+            raise ValueError(f"enqueue_many accepts at most {_MAX_BATCH_SIZE} requests")
+        return _results(
+            self._submit_requests(
+                requests,
+                lambda encoded, _values: self._executor.rows(_STATEMENTS.enqueue_many, (encoded,)),
+            )
+        )
+
+    def _submit_requests(
+        self,
+        requests: Sequence[EnqueueRequest],
+        submit: Callable[[str, list[dict[str, Json]]], list[_Row]],
+    ) -> list[_Row]:
+        """Serialize ``requests`` under their contracts, submit them, and return the rows.
+
+        ``submit`` receives the encoded batch and the serialized values. On a contract mismatch,
+        PostgreSQL enqueued nothing: the client reloads the named contracts and submits once more.
+        """
         self._compatibility.assert_compatible()
         # An operator can select a version the cached definition rejects after sync_contracts().
         # That payload never reaches enqueue_many_v1, so a type reloads before the queue reports
@@ -138,9 +191,11 @@ class Queue:
         # load, so later items of this call validate against the definition this call read.
         definitions: dict[str, _Row | None] = {}
         for _attempt in range(2):
-            values = _serialize_request_values(
-                requests, self.default_queue, _inject_trace_context()
-            )
+            trace_context = _inject_trace_context()
+            values = [
+                _serialize_request(request, self.default_queue, trace_context)
+                for request in requests
+            ]
             for request, value in zip(requests, values, strict=True):
                 if request.type in definitions:
                     definition = definitions[request.type]
@@ -167,14 +222,13 @@ class Queue:
                             value,
                             self._contract_validators,
                         )
-            payload = _encode_request_values(values)
             try:
-                rows = self._executor.rows(_STATEMENTS.enqueue_many, (payload,))
+                rows = submit(_encode_request_values(values), values)
             except Exception as error:
                 _raise_translated(error)
             stale_types = _contract_mismatch(rows)
             if stale_types is None:
-                return _results(rows)
+                return rows
             for task_type in stale_types:
                 loaded.add(task_type)
                 definitions[task_type] = self._reload_contract(task_type)
@@ -329,6 +383,122 @@ class Queue:
         )
         return _human_result(row, task_id, name)
 
+    def create_task_group(
+        self,
+        *,
+        on_finish: EnqueueRequest | None = None,
+        on_success: EnqueueRequest | None = None,
+        on_failure: EnqueueRequest | None = None,
+    ) -> TaskGroup:
+        """Create an open task group (ADR 0095).
+
+        Add tasks with ``add_to_task_group``, then seal the group with ``seal_task_group``. When
+        the group is sealed and every member task is finished, Workhorse enqueues the callbacks
+        that the result selects. Each callback is an enqueue request without enqueue idempotency,
+        debounce, or throttle.
+        """
+        group, _tasks = self._create_task_group((on_finish, on_success, on_failure), [], False)
+        return group
+
+    @contextmanager
+    def task_group(
+        self,
+        *,
+        on_finish: EnqueueRequest | None = None,
+        on_success: EnqueueRequest | None = None,
+        on_failure: EnqueueRequest | None = None,
+    ) -> Iterator[TaskGroupBuilder]:
+        """Create a task group, add the tasks the block collects, and seal the group.
+
+        One statement does all three when the block exits without an error, so they share one
+        transaction. A group with no tasks finishes at the seal. ``builder.result`` holds the
+        group and the enqueue results after the block.
+        """
+        callbacks = _callback_requests(on_finish, on_success, on_failure)
+        builder = TaskGroupBuilder()
+        yield builder
+        group, tasks = self._create_task_group(
+            (on_finish, on_success, on_failure), builder._requests, True, callbacks
+        )
+        builder._result = TaskGroupBlockResult(group, tuple(tasks))
+
+    def _create_task_group(
+        self,
+        callbacks: tuple[EnqueueRequest | None, EnqueueRequest | None, EnqueueRequest | None],
+        requests: Sequence[EnqueueRequest],
+        seal: bool,
+        checked: list[tuple[str, EnqueueRequest]] | None = None,
+    ) -> tuple[TaskGroup, list[EnqueueResult]]:
+        requested = checked if checked is not None else _callback_requests(*callbacks)
+        group_ids: list[object] = []
+
+        def submit(_encoded: str, values: list[dict[str, Json]]) -> list[_Row]:
+            members = _encode_request_values(values[: len(requests)])
+            document = _encode_callbacks(requested, values[len(requests) :])
+            rows = self._executor.rows(_CREATE_TASK_GROUP, (document, members, seal))
+            group_ids[:] = [rows[0]["group_id"]] if rows else []
+            return rows
+
+        # A contract mismatch of a member or a callback creates nothing, and the retry serializes
+        # the callbacks again under the contract versions the mismatch refreshed.
+        rows = self._submit_requests([*requests, *(request for _key, request in requested)], submit)
+        if not group_ids or group_ids[0] is None:
+            raise RuntimeError("PostgreSQL created no task group")
+        group_id = str(group_ids[0])
+        group = self.get_task_group(group_id)
+        if group is None:
+            raise RuntimeError(f"Task group {group_id} disappeared after its creation")
+        return group, _results([row for row in rows if row["ordinal"] is not None])
+
+    def add_to_task_group(
+        self, group_id: str, requests: Sequence[EnqueueRequest]
+    ) -> list[EnqueueResult]:
+        """Enqueue up to 1,000 tasks as members of an open group.
+
+        A sealed group accepts tasks only from a running member task, through its handler context.
+        """
+        return self._add_to_task_group(group_id, requests, None)
+
+    def _add_to_task_group(
+        self,
+        group_id: str,
+        requests: Sequence[EnqueueRequest],
+        member: tuple[str, str, int] | None,
+    ) -> list[EnqueueResult]:
+        _validate_task_group_add(requests)
+        if not requests:
+            return []
+        task_id, worker_id, fence_token = member or (None, None, None)
+        return _results(
+            self._submit_requests(
+                requests,
+                lambda encoded, _values: self._executor.rows(
+                    _ADD_TASK_GROUP_MEMBERS, (group_id, encoded, task_id, worker_id, fence_token)
+                ),
+            )
+        )
+
+    def seal_task_group(self, group_id: str) -> TaskGroup:
+        """Seal an open group. Sealing a sealed or finished group changes nothing."""
+        self._compatibility.assert_compatible()
+        return _one_task_group(
+            self._executor.rows(_SEAL_TASK_GROUP, (group_id,)), "workhorse.seal_task_group_v1"
+        )
+
+    def get_task_group(self, group_id: str) -> TaskGroup | None:
+        return _optional_task_group(self._executor.rows(_GET_TASK_GROUP, (group_id,)))
+
+    def list_task_group_members(
+        self, group_id: str, *, after: int = 0, limit: int = 100
+    ) -> TaskGroupMemberPage:
+        """Read the member tasks of a group in the order they joined, one page at a time."""
+        parameters = _member_parameters(group_id, after, limit)
+        return _member_page(self._executor.rows(_LIST_TASK_GROUP_MEMBERS, parameters), limit)
+
+    def find_task_group(self, task_id: str) -> TaskGroupLink | None:
+        """The group a task is a member of, or whose callback the task is."""
+        return _task_group_link(self._executor.rows(_TASK_GROUP_FOR_TASK, (task_id,)))
+
 
 class AsyncQueue:
     """Asynchronous enqueue client over a caller-owned Psycopg or asyncpg connection."""
@@ -401,6 +571,25 @@ class AsyncQueue:
     ) -> list[EnqueueResult]:
         if not requests:
             return []
+        if len(requests) > _MAX_BATCH_SIZE:
+            raise ValueError(f"enqueue_many accepts at most {_MAX_BATCH_SIZE} requests")
+        return _results(
+            await self._submit_requests(
+                requests,
+                lambda encoded, _values: self._executor.rows(_STATEMENTS.enqueue_many, (encoded,)),
+            )
+        )
+
+    async def _submit_requests(
+        self,
+        requests: Sequence[EnqueueRequest],
+        submit: Callable[[str, list[dict[str, Json]]], Awaitable[list[_Row]]],
+    ) -> list[_Row]:
+        """Serialize ``requests`` under their contracts, submit them, and return the rows.
+
+        ``submit`` receives the encoded batch and the serialized values. On a contract mismatch,
+        PostgreSQL enqueued nothing: the client reloads the named contracts and submits once more.
+        """
         await self._compatibility.assert_compatible()
         # An operator can select a version the cached definition rejects after sync_contracts().
         # That payload never reaches enqueue_many_v1, so a type reloads before the queue reports
@@ -410,9 +599,11 @@ class AsyncQueue:
         # load, so later items of this call validate against the definition this call read.
         definitions: dict[str, _Row | None] = {}
         for _attempt in range(2):
-            values = _serialize_request_values(
-                requests, self.default_queue, _inject_trace_context()
-            )
+            trace_context = _inject_trace_context()
+            values = [
+                _serialize_request(request, self.default_queue, trace_context)
+                for request in requests
+            ]
             for request, value in zip(requests, values, strict=True):
                 if request.type in definitions:
                     definition = definitions[request.type]
@@ -439,14 +630,13 @@ class AsyncQueue:
                             value,
                             self._contract_validators,
                         )
-            payload = _encode_request_values(values)
             try:
-                rows = await self._executor.rows(_STATEMENTS.enqueue_many, (payload,))
+                rows = await submit(_encode_request_values(values), values)
             except Exception as error:
                 _raise_translated(error)
             stale_types = _contract_mismatch(rows)
             if stale_types is None:
-                return _results(rows)
+                return rows
             for task_type in stale_types:
                 loaded.add(task_type)
                 definitions[task_type] = await self._reload_contract(task_type)
@@ -606,6 +796,126 @@ class AsyncQueue:
             "workhorse.complete_human_wait_v1",
         )
         return _human_result(row, task_id, name)
+
+    async def create_task_group(
+        self,
+        *,
+        on_finish: EnqueueRequest | None = None,
+        on_success: EnqueueRequest | None = None,
+        on_failure: EnqueueRequest | None = None,
+    ) -> TaskGroup:
+        """Create an open task group (ADR 0095).
+
+        Add tasks with ``add_to_task_group``, then seal the group with ``seal_task_group``. When
+        the group is sealed and every member task is finished, Workhorse enqueues the callbacks
+        that the result selects. Each callback is an enqueue request without enqueue idempotency,
+        debounce, or throttle.
+        """
+        group, _tasks = await self._create_task_group(
+            (on_finish, on_success, on_failure), [], False
+        )
+        return group
+
+    @asynccontextmanager
+    async def task_group(
+        self,
+        *,
+        on_finish: EnqueueRequest | None = None,
+        on_success: EnqueueRequest | None = None,
+        on_failure: EnqueueRequest | None = None,
+    ) -> AsyncIterator[TaskGroupBuilder]:
+        """Create a task group, add the tasks the block collects, and seal the group.
+
+        One statement does all three when the block exits without an error, so they share one
+        transaction. A group with no tasks finishes at the seal. ``builder.result`` holds the
+        group and the enqueue results after the block.
+        """
+        callbacks = _callback_requests(on_finish, on_success, on_failure)
+        builder = TaskGroupBuilder()
+        yield builder
+        group, tasks = await self._create_task_group(
+            (on_finish, on_success, on_failure), builder._requests, True, callbacks
+        )
+        builder._result = TaskGroupBlockResult(group, tuple(tasks))
+
+    async def _create_task_group(
+        self,
+        callbacks: tuple[EnqueueRequest | None, EnqueueRequest | None, EnqueueRequest | None],
+        requests: Sequence[EnqueueRequest],
+        seal: bool,
+        checked: list[tuple[str, EnqueueRequest]] | None = None,
+    ) -> tuple[TaskGroup, list[EnqueueResult]]:
+        requested = checked if checked is not None else _callback_requests(*callbacks)
+        group_ids: list[object] = []
+
+        async def submit(_encoded: str, values: list[dict[str, Json]]) -> list[_Row]:
+            members = _encode_request_values(values[: len(requests)])
+            document = _encode_callbacks(requested, values[len(requests) :])
+            rows = await self._executor.rows(_CREATE_TASK_GROUP, (document, members, seal))
+            group_ids[:] = [rows[0]["group_id"]] if rows else []
+            return rows
+
+        # A contract mismatch of a member or a callback creates nothing, and the retry serializes
+        # the callbacks again under the contract versions the mismatch refreshed.
+        rows = await self._submit_requests(
+            [*requests, *(request for _key, request in requested)], submit
+        )
+        if not group_ids or group_ids[0] is None:
+            raise RuntimeError("PostgreSQL created no task group")
+        group_id = str(group_ids[0])
+        group = await self.get_task_group(group_id)
+        if group is None:
+            raise RuntimeError(f"Task group {group_id} disappeared after its creation")
+        return group, _results([row for row in rows if row["ordinal"] is not None])
+
+    async def add_to_task_group(
+        self, group_id: str, requests: Sequence[EnqueueRequest]
+    ) -> list[EnqueueResult]:
+        """Enqueue up to 1,000 tasks as members of an open group.
+
+        A sealed group accepts tasks only from a running member task, through its handler context.
+        """
+        return await self._add_to_task_group(group_id, requests, None)
+
+    async def _add_to_task_group(
+        self,
+        group_id: str,
+        requests: Sequence[EnqueueRequest],
+        member: tuple[str, str, int] | None,
+    ) -> list[EnqueueResult]:
+        _validate_task_group_add(requests)
+        if not requests:
+            return []
+        task_id, worker_id, fence_token = member or (None, None, None)
+        return _results(
+            await self._submit_requests(
+                requests,
+                lambda encoded, _values: self._executor.rows(
+                    _ADD_TASK_GROUP_MEMBERS, (group_id, encoded, task_id, worker_id, fence_token)
+                ),
+            )
+        )
+
+    async def seal_task_group(self, group_id: str) -> TaskGroup:
+        """Seal an open group. Sealing a sealed or finished group changes nothing."""
+        await self._compatibility.assert_compatible()
+        return _one_task_group(
+            await self._executor.rows(_SEAL_TASK_GROUP, (group_id,)), "workhorse.seal_task_group_v1"
+        )
+
+    async def get_task_group(self, group_id: str) -> TaskGroup | None:
+        return _optional_task_group(await self._executor.rows(_GET_TASK_GROUP, (group_id,)))
+
+    async def list_task_group_members(
+        self, group_id: str, *, after: int = 0, limit: int = 100
+    ) -> TaskGroupMemberPage:
+        """Read the member tasks of a group in the order they joined, one page at a time."""
+        parameters = _member_parameters(group_id, after, limit)
+        return _member_page(await self._executor.rows(_LIST_TASK_GROUP_MEMBERS, parameters), limit)
+
+    async def find_task_group(self, task_id: str) -> TaskGroupLink | None:
+        """The group a task is a member of, or whose callback the task is."""
+        return _task_group_link(await self._executor.rows(_TASK_GROUP_FOR_TASK, (task_id,)))
 
 
 def _raise_translated(error: Exception) -> NoReturn:

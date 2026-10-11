@@ -25,6 +25,7 @@ from workhorse import (
     DependencyTerminalPolicy,
     EnqueueNonReplaceableReason,
     EnqueueOptions,
+    EnqueueRequest,
     EnqueueResult,
     HandlerContext,
     Idempotency,
@@ -32,6 +33,8 @@ from workhorse import (
     Queue,
     RateLimit,
     RateLimitPolicyDefinition,
+    TaskGroup,
+    TaskGroupLink,
     Worker,
     assert_schema_compatible,
     assert_schema_compatible_asyncpg,
@@ -71,6 +74,44 @@ def sync_policies(connection: psycopg.Connection[Any]) -> None:
         [BudgetDefinition("vendor-api", max_active=3, rate=RateLimit(10, 1_000, 20))],
     )
     queue.list_budgets(["vendor-api"])
+
+
+def sync_task_groups(connection: psycopg.Connection[Any]) -> TaskGroup | None:
+    queue = Queue(connection)
+    report = EnqueueRequest("import.report", {"importId": 7})
+    with queue.task_group(on_finish=report) as builder:
+        builder.add([EnqueueRequest("import.row", {"row": 1})])
+    group = builder.result.group
+    page = queue.list_task_group_members(group.id, limit=100)
+    assert page.next_after is None or page.next_after > 0
+    admin = Admin(connection)
+    admin.repair_task_group_drift(AdminAudit("operator", "recount", "incident-43"))
+    return admin.cancel_task_group(group.id, AdminAudit("operator", "stop", "incident-44"))
+
+
+async def async_task_groups(queue: AsyncQueue) -> TaskGroup:
+    async with queue.task_group(on_failure=EnqueueRequest("import.failed", None)) as builder:
+        builder.add([EnqueueRequest("import.row", {"row": 1})])
+    open_group = await queue.create_task_group()
+    await queue.add_to_task_group(open_group.id, [EnqueueRequest("import.row", {"row": 2})])
+    return await queue.seal_task_group(builder.result.group.id)
+
+
+def task_group_handler(payload: Json, context: HandlerContext) -> Json:
+    link: TaskGroupLink | None = context.task_group.get()
+    if link is not None and link.role == "member":
+        context.task_group.add([EnqueueRequest("import.row", payload)])
+    return None if link is None else link.group.counts.total
+
+
+async def async_task_group_handler(payload: Json, context: AsyncHandlerContext) -> Json:
+    link = await context.task_group.get()
+    if link is not None and link.role == "member":
+        added: list[EnqueueResult] = await context.task_group.add(
+            [EnqueueRequest("import.row", payload)]
+        )
+        return len(added)
+    return None
 
 
 def sync_admin(connection: psycopg.Connection[Any]) -> str | None:

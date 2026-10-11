@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from threading import Event, Lock
-from typing import Literal, TypedDict, TypeVar, cast
+from typing import Any, Literal, TypedDict, TypeVar, cast
 
 type Json = bool | int | float | str | list["Json"] | dict[str, "Json"] | None
 type QueueHealth = dict[str, Json]
@@ -350,6 +350,227 @@ class HumanWaitCompletionResult:
     completed_by: str | None
 
 
+MAX_TASK_GROUP_MEMBERS = 100_000
+"""The largest number of member tasks one task group holds (ADR 0095)."""
+MAX_TASK_GROUP_PAGE_SIZE = 1_000
+"""The largest number of member tasks or events one task group read returns."""
+MAX_TASK_GROUP_DRIFT_LIMIT = 10_000
+"""The largest number of drifted groups one drift read or repair examines."""
+_MAX_TASK_GROUP_ADD = 1_000
+
+type TaskGroupState = Literal["open", "sealed", "finished"]
+"""``open`` accepts tasks. ``sealed`` accepts tasks only from a running member task.
+
+``finished`` means every member task is finished and the callbacks are enqueued.
+"""
+type TaskGroupResult = Literal["succeeded", "failed"]
+type TaskGroupCallbackKind = Literal["on_finish", "on_success", "on_failure"]
+type TaskGroupMemberOutcome = Literal["succeeded", "failed", "canceled"]
+type TaskGroupRole = Literal["member", "callback"]
+type TaskGroupEventType = Literal[
+    "created",
+    "sealed",
+    "canceled",
+    "finished",
+    "callback_enqueued",
+    "callback_failed",
+    "counter_repaired",
+]
+type TaskGroupRepairAction = Literal["recounted", "finished"]
+type TaskGroupRefusal = Literal["sealed", "finished", "canceled", "not_running_member"]
+
+
+@dataclass(frozen=True)
+class TaskGroupCounts:
+    total: int
+    succeeded: int
+    failed: int
+    canceled: int
+    pending: int
+
+
+@dataclass(frozen=True)
+class TaskGroupCallback:
+    """A requested callback, and the task the finished group enqueued for it."""
+
+    kind: TaskGroupCallbackKind
+    # None until the group finishes, and None for the callback that the result does not select.
+    task_id: str | None
+
+
+@dataclass(frozen=True)
+class TaskGroup:
+    id: str
+    state: TaskGroupState
+    result: TaskGroupResult | None
+    counts: TaskGroupCounts
+    created_at: datetime
+    sealed_at: datetime | None
+    finished_at: datetime | None
+    canceled_at: datetime | None
+    canceled_by: str | None
+    cancel_reason: str | None
+    callbacks: tuple[TaskGroupCallback, ...]
+
+
+@dataclass(frozen=True)
+class TaskGroupMember:
+    # One-based order in which the member joined its group.
+    position: int
+    task_id: str
+    # queue, type, and state are None after a purge or retention deletes the task.
+    queue: str | None
+    type: str | None
+    state: TaskState | None
+    # The outcome the group counted, or None while the member is pending.
+    outcome: TaskGroupMemberOutcome | None
+    added_at: datetime
+    counted_at: datetime | None
+
+
+@dataclass(frozen=True)
+class TaskGroupMemberPage:
+    members: tuple[TaskGroupMember, ...]
+    # The ``after`` value of the next page, or None on the last page.
+    next_after: int | None
+
+
+@dataclass(frozen=True)
+class TaskGroupLink:
+    """The group of a running task, as its handler sees it through ``ctx.task_group``."""
+
+    role: TaskGroupRole
+    # The kind of callback, for a callback task.
+    callback: TaskGroupCallbackKind | None
+    group: TaskGroup
+
+
+@dataclass(frozen=True)
+class TaskGroupEvent:
+    id: str
+    type: TaskGroupEventType
+    details: Json
+    occurred_at: datetime
+
+
+@dataclass(frozen=True)
+class TaskGroupBlockResult:
+    group: TaskGroup
+    # One result for each added request, in order.
+    tasks: tuple[EnqueueResult, ...]
+
+
+class TaskGroupBuilder:
+    """Collects the tasks of the ``task_group`` block form.
+
+    The block creates, adds, and seals the group in one statement when it exits without an error.
+    ``result`` holds the group and the enqueue results after that.
+    """
+
+    def __init__(self) -> None:
+        self._requests: list[EnqueueRequest] = []
+        self._result: TaskGroupBlockResult | None = None
+
+    def add(self, requests: Sequence[EnqueueRequest]) -> None:
+        """Collect up to 1,000 requests. The block holds at most 100,000 requests."""
+        if self._result is not None:
+            raise RuntimeError("the task group block has already created its group")
+        _validate_task_group_add(requests)
+        if len(self._requests) + len(requests) > MAX_TASK_GROUP_MEMBERS:
+            raise ValueError(f"a task group holds at most {MAX_TASK_GROUP_MEMBERS} tasks")
+        self._requests.extend(requests)
+
+    @property
+    def result(self) -> TaskGroupBlockResult:
+        if self._result is None:
+            raise RuntimeError("the task group block has not created its group yet")
+        return self._result
+
+
+def _validate_task_group_add(requests: Sequence[EnqueueRequest]) -> None:
+    if len(requests) > _MAX_TASK_GROUP_ADD:
+        raise ValueError(f"a task group add accepts at most {_MAX_TASK_GROUP_ADD} tasks")
+    for request in requests:
+        if request.options.debounce is not None or request.options.throttle is not None:
+            raise ValueError("a task group add cannot use debounce or throttle")
+
+
+@dataclass(frozen=True)
+class TaskGroupRecordedCounts:
+    """The counters a group row records."""
+
+    total: int
+    succeeded: int
+    failed: int
+    canceled: int
+
+
+@dataclass(frozen=True)
+class TaskGroupDrift:
+    """One group whose counters disagree with its member outcomes, or that should have finished."""
+
+    group_id: str
+    state: TaskGroupState
+    recorded: TaskGroupRecordedCounts
+    # The counts the member outcomes give.
+    counted: TaskGroupCounts
+    action: TaskGroupRepairAction
+
+
+@dataclass(frozen=True)
+class TaskGroupRepair:
+    group_id: str
+    recorded_pending: int
+    pending: int
+    action: TaskGroupRepairAction
+
+
+@dataclass(frozen=True)
+class TaskGroupContext:
+    """Task group operations of one handler activation (ADR 0095)."""
+
+    _get: Callable[[], TaskGroupLink | None] = field(repr=False)
+    _add: Callable[[Sequence[EnqueueRequest]], list[EnqueueResult]] = field(repr=False)
+
+    def get(self) -> TaskGroupLink | None:
+        """Read the group this task is a member of, or whose callback this task is.
+
+        Returns None for a task with no group. The activation reads it one time and keeps it.
+        """
+        return self._get()
+
+    def add(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]:
+        """Add up to 1,000 tasks to the group of this member task, under its fenced lease.
+
+        A running member task can add tasks after the seal, until its group is canceled.
+        """
+        return self._add(requests)
+
+
+@dataclass(frozen=True)
+class AsyncTaskGroupContext:
+    """Async task group operations of one handler activation (ADR 0095)."""
+
+    _get: Callable[[], Awaitable[TaskGroupLink | None]] = field(repr=False)
+    _add: Callable[[Sequence[EnqueueRequest]], Awaitable[list[EnqueueResult]]] = field(repr=False)
+
+    async def get(self) -> TaskGroupLink | None:
+        """Read the group this task is a member of, or whose callback this task is."""
+        return await self._get()
+
+    async def add(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]:
+        """Add up to 1,000 tasks to the group of this member task, under its fenced lease."""
+        return await self._add(requests)
+
+
+def _task_groups_unsupported(*_arguments: object) -> Any:
+    raise TypeError("This handler context does not support task groups")
+
+
+async def _async_task_groups_unsupported(*_arguments: object) -> Any:
+    raise TypeError("This handler context does not support task groups")
+
+
 @dataclass(frozen=True)
 class HandlerContext:
     task: ClaimedTask
@@ -368,6 +589,17 @@ class HandlerContext:
         repr=False
     )
     _run_children_all: Callable[[Sequence[ChildTaskRequest]], dict[str, Json]] = field(repr=False)
+    _get_task_group: Callable[[], TaskGroupLink | None] = field(
+        default=_task_groups_unsupported, repr=False
+    )
+    _add_to_task_group: Callable[[Sequence[EnqueueRequest]], list[EnqueueResult]] = field(
+        default=_task_groups_unsupported, repr=False
+    )
+
+    @property
+    def task_group(self) -> TaskGroupContext:
+        """The task group of this task, as a member task or as a callback task (ADR 0095)."""
+        return TaskGroupContext(self._get_task_group, self._add_to_task_group)
 
     def get_checkpoint(self, name: str) -> TaskCheckpoint | None:
         return self._get_checkpoint(name)
@@ -444,6 +676,17 @@ class AsyncHandlerContext:
     _run_children_all: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, Json]]] = field(
         repr=False
     )
+    _get_task_group: Callable[[], Awaitable[TaskGroupLink | None]] = field(
+        default=_async_task_groups_unsupported, repr=False
+    )
+    _add_to_task_group: Callable[[Sequence[EnqueueRequest]], Awaitable[list[EnqueueResult]]] = (
+        field(default=_async_task_groups_unsupported, repr=False)
+    )
+
+    @property
+    def task_group(self) -> AsyncTaskGroupContext:
+        """The task group of this task, as a member task or as a callback task (ADR 0095)."""
+        return AsyncTaskGroupContext(self._get_task_group, self._add_to_task_group)
 
     async def get_checkpoint(self, name: str) -> TaskCheckpoint | None:
         return await self._get_checkpoint(name)
@@ -585,10 +828,14 @@ class ScheduleDefinition:
 
 
 __all__ = [
+    "MAX_TASK_GROUP_DRIFT_LIMIT",
+    "MAX_TASK_GROUP_MEMBERS",
+    "MAX_TASK_GROUP_PAGE_SIZE",
     "AsyncBatchHandlerContext",
     "AsyncBatchHandlerItem",
     "AsyncCancellationToken",
     "AsyncHandlerContext",
+    "AsyncTaskGroupContext",
     "BatchFailed",
     "BatchHandlerContext",
     "BatchHandlerItem",
@@ -633,6 +880,27 @@ __all__ = [
     "SignalDeliveryStatus",
     "TaskCheckpoint",
     "TaskContractVersion",
+    "TaskGroup",
+    "TaskGroupBlockResult",
+    "TaskGroupBuilder",
+    "TaskGroupCallback",
+    "TaskGroupCallbackKind",
+    "TaskGroupContext",
+    "TaskGroupCounts",
+    "TaskGroupDrift",
+    "TaskGroupEvent",
+    "TaskGroupEventType",
+    "TaskGroupLink",
+    "TaskGroupMember",
+    "TaskGroupMemberOutcome",
+    "TaskGroupMemberPage",
+    "TaskGroupRecordedCounts",
+    "TaskGroupRefusal",
+    "TaskGroupRepair",
+    "TaskGroupRepairAction",
+    "TaskGroupResult",
+    "TaskGroupRole",
+    "TaskGroupState",
     "TaskProgress",
     "TaskState",
     "TaskTypeContracts",

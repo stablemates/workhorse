@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import Literal
+from typing import Literal, cast
+
+from .types import MAX_TASK_GROUP_MEMBERS
 
 CompatibilityCode = Literal[
     "schema-not-installed",
@@ -285,9 +287,96 @@ class FastTierUnsupportedError(WorkhorseError):
         super().__init__(f"Fast-tier queue {queue} does not support {feature}")
 
 
+class TaskGroupClosedError(WorkhorseError):
+    """The task group does not accept tasks: it is sealed, finished, or canceled (``P1008``).
+
+    ``reason`` is ``sealed``, ``finished``, ``canceled``, or ``not_running_member``.
+    """
+
+    def __init__(self, details: Mapping[str, object]) -> None:
+        self.details = details
+        self.group_id = str(details["groupId"])
+        self.state = str(details["state"])
+        self.reason = str(details["reason"])
+        super().__init__(f"Task group {self.group_id} does not accept tasks ({self.reason})")
+
+
+class TaskGroupLimitExceededError(WorkhorseError):
+    """An add would take the task group above its member limit (``P1009``)."""
+
+    def __init__(self, details: Mapping[str, object]) -> None:
+        self.details = details
+        self.group_id = str(details["groupId"])
+        self.limit = cast(int, details["limit"])
+        self.total = cast(int, details["total"])
+        self.requested = cast(int, details["requested"])
+        super().__init__(
+            f"Task group {self.group_id} holds {self.total} tasks and accepts at most {self.limit}"
+        )
+
+
+class TaskGroupMembershipConflictError(WorkhorseError):
+    """Enqueue idempotency returned a task that is not a member of the task group (``P1010``).
+
+    ``member_of`` names the group the existing task belongs to, or is None.
+    """
+
+    def __init__(self, details: Mapping[str, object]) -> None:
+        self.details = details
+        self.group_id = str(details["groupId"])
+        self.task_id = str(details["taskId"])
+        self.ordinal = cast(int, details["ordinal"])
+        member_of = details["memberOf"]
+        self.member_of = None if member_of is None else str(member_of)
+        super().__init__(
+            f"Enqueue idempotency returned task {self.task_id}, which is not a member of task "
+            f"group {self.group_id}"
+        )
+
+
+# The details a task group error carries when PostgreSQL sent DETAIL text this client cannot read.
+_TASK_GROUP_FALLBACK_DETAILS: dict[str, dict[str, object]] = {
+    "P1008": {"groupId": "unknown", "state": "finished", "reason": "finished"},
+    "P1009": {"groupId": "unknown", "limit": MAX_TASK_GROUP_MEMBERS, "total": 0, "requested": 0},
+    "P1010": {"groupId": "unknown", "taskId": "unknown", "ordinal": 0, "memberOf": None},
+}
+
+
+def _valid_task_group_details(sqlstate: str, details: Mapping[str, object]) -> bool:
+    def integer(name: str) -> bool:
+        value = details.get(name)
+        return isinstance(value, int) and not isinstance(value, bool)
+
+    def text(name: str) -> bool:
+        return isinstance(details.get(name), str)
+
+    if sqlstate == "P1008":
+        return text("groupId") and text("state") and text("reason")
+    if sqlstate == "P1009":
+        return text("groupId") and integer("limit") and integer("total") and integer("requested")
+    return (
+        text("groupId")
+        and text("taskId")
+        and integer("ordinal")
+        and "memberOf" in details
+        and (details["memberOf"] is None or text("memberOf"))
+    )
+
+
+def _task_group_error(sqlstate: str, details: Mapping[str, object]) -> WorkhorseError:
+    if not _valid_task_group_details(sqlstate, details):
+        # A copy, so a caller that changes error.details cannot change a later fallback.
+        details = dict(_TASK_GROUP_FALLBACK_DETAILS[sqlstate])
+    if sqlstate == "P1008":
+        return TaskGroupClosedError(details)
+    if sqlstate == "P1009":
+        return TaskGroupLimitExceededError(details)
+    return TaskGroupMembershipConflictError(details)
+
+
 def _translate_database_error(error: Exception) -> WorkhorseError | None:
     sqlstate = getattr(error, "sqlstate", None) or getattr(error, "code", None)
-    if sqlstate not in {"P1001", "P1003", "P1005", "P1007"}:
+    if sqlstate not in {"P1001", "P1003", "P1005", "P1007", "P1008", "P1009", "P1010"}:
         return None
     diagnostic = getattr(error, "diag", None)
     raw_detail = getattr(diagnostic, "message_detail", None) or getattr(error, "detail", None)
@@ -301,6 +390,8 @@ def _translate_database_error(error: Exception) -> WorkhorseError | None:
             pass
     elif isinstance(raw_detail, Mapping):
         details = raw_detail
+    if sqlstate in _TASK_GROUP_FALLBACK_DETAILS:
+        return _task_group_error(sqlstate, details)
     if sqlstate == "P1001":
         return EnqueueIdempotencyConflictError(details)
     if sqlstate == "P1005":
@@ -348,6 +439,9 @@ __all__ = [
     "StaleLeaseError",
     "TaskContractUnavailableError",
     "TaskContractValidationError",
+    "TaskGroupClosedError",
+    "TaskGroupLimitExceededError",
+    "TaskGroupMembershipConflictError",
     "TaskValueSizeLimitError",
     "WaitConflictError",
     "WaitLeaseLostError",
