@@ -1,27 +1,37 @@
 ---
 title: SQLAlchemy
-description: Join synchronous and asynchronous Psycopg transactions through SQLAlchemy's enlisted driver connection.
+description: Enqueue a Workhorse task on the Psycopg connection that a synchronous or asynchronous SQLAlchemy transaction already uses.
 ---
 
-Your application already writes through SQLAlchemy. Enqueue on its enlisted Psycopg connection
-so the application write and task commit together, without a second pool or transaction owner.
+Your application writes through SQLAlchemy. To enqueue a task in the same transaction, use the
+Psycopg connection that SQLAlchemy already uses for that transaction. The application write and the
+task then commit together. You do not need a second pool or a second transaction owner.
 
-This is a tested recipe, not an ORM adapter package. SQLAlchemy owns transaction completion,
-savepoints, and pool return. Workhorse keeps its schema lifecycle outside your ORM migrations.
+This page describes a tested recipe, not an ORM adapter package. SQLAlchemy owns the transaction
+completion, the savepoints, and the return of the connection to the pool. Install the Workhorse
+schema outside your ORM migrations.
 
-## Choose the driver
+## Choose the Psycopg dialect
 
-For synchronous SQLAlchemy, use its Psycopg dialect with `Queue`. For asynchronous SQLAlchemy,
-install `SQLAlchemy[asyncio]` and Psycopg, then use its `postgresql+psycopg` dialect with `AsyncQueue`.
+For synchronous SQLAlchemy, use the Psycopg dialect with `Queue`. For asynchronous SQLAlchemy, do
+these steps:
 
-The [enqueue page](/docs/enqueue#enqueue-in-an-asynchronous-sqlalchemy-transaction) owns the accessor,
-session flush, serialized-use, lifetime, installation, and tested-version guidance.
-It also links the runnable example and continuously collected integration fixture.
+1. Install `SQLAlchemy[asyncio]` and Psycopg.
+2. Use the `postgresql+psycopg` dialect with `AsyncQueue`.
 
-SQLAlchemy's asyncpg dialect is **not supported** by this recipe. Executable tests reproduce
-lazy transaction startup and JSON codec incompatibilities. See the
-[asyncpg boundary](/docs/enqueue#do-not-use-the-asyncpg-dialect-of-sqlalchemy) before choosing that dialect.
-Workhorse's independently owned asyncpg connections and pools remain supported.
+The [enqueue page](/docs/enqueue#enqueue-in-an-asynchronous-sqlalchemy-transaction) gives the full
+recipe. It tells you which accessor to use, when to flush the session, and how to use the connection
+in sequence. It also gives the lifetime rules, the installation, and the tested versions. It links
+the runnable example and the integration fixture that CI collects.
+
+## Do not use the asyncpg dialect
+
+This recipe does **not** support the asyncpg dialect of SQLAlchemy. Tests show two problems. The
+dialect starts its physical transaction late, and its JSON codecs are not compatible with Workhorse.
+Read the [asyncpg limit](/docs/enqueue#do-not-use-the-asyncpg-dialect-of-sqlalchemy) before you
+choose that dialect.
+
+Workhorse continues to support asyncpg connections and pools that you own independently.
 
 ## Next
 

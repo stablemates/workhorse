@@ -3,27 +3,39 @@ title: How do I deploy Workhorse on Kubernetes?
 description: Apply a schema Job, worker Deployment, and dashboard Service with correct drain and connection budgets.
 ---
 
-Run Workhorse as ordinary Kubernetes workloads. Workhorse publishes reference manifests, not a
-Helm chart, operator, or custom resource definition, so your deployment system remains responsible
-for images, Secrets, ingress, authentication, and resource sizing.
+Kubernetes can run Workhorse as ordinary workloads: one schema Job, one worker Deployment, and one
+dashboard Deployment with its Service. This page gives reference manifests that drain workers
+correctly and keep the dashboard internal. Workhorse does not publish a Helm chart, an operator,
+or a custom resource definition.
 
-Every manifest on this page was applied to a k3s v1.34.1+k3s1 cluster on 2026-09-12. They use only
+Your deployment system controls images, Secrets, ingress, authentication, and resource sizing.
+The manifests on this page were applied to a k3s v1.34.1+k3s1 cluster on 2026-09-12. They use only
 standard `batch/v1`, `apps/v1`, and `v1` resources.
 
-Replace `registry.example.com/acme/workhorse-app:1.2.3` with one immutable application image. It
-must contain the Workhorse CLI and `/app/dist/workhorse.worker.js`, the compiled worker definition
-from the [worker process guide](/docs/worker-processes).
+## Prepare one application image
+
+Replace `registry.example.com/acme/workhorse-app:1.2.3` with one immutable application image. The
+image must contain the Workhorse CLI. It must also contain `/app/dist/workhorse.worker.js`, the
+compiled worker definition from [Worker processes](/docs/worker-processes).
+
+The worker definition must start the probe listener on port 9090. Set its `hostname` to `0.0.0.0`,
+because the default `127.0.0.1` does not accept probes from Kubernetes.
 
 ## Supply secrets by reference
 
-Create two Secrets through your secret manager or deployment system. `workhorse-database` provides
-the `url` key. `workhorse-dashboard-auth` provides `username` and `password-hash`. The manifests
-only refer to those keys; no credential belongs in Git or in a command line.
+Create two Secrets with your secret manager or deployment system.
+
+- `workhorse-database` supplies the `url` key.
+- `workhorse-dashboard-auth` supplies the `username` and `password-hash` keys.
+
+The manifests only refer to these keys. Do not put a credential in Git or on a command line.
 
 ## Run the schema Job first
 
-Use a versioned Job name because a Job's Pod template is immutable. The Job runs from the release
-image, migrates once, and verifies compatibility before any new process starts.
+The schema Job migrates the schema one time from the release image. Then it verifies that the
+release accepts the schema. This step occurs before a new worker or dashboard process starts.
+
+Give each release a new Job name, because the Pod template of a Job is immutable.
 
 ```yaml title="workhorse-schema-job.yaml"
 apiVersion: batch/v1
@@ -71,16 +83,17 @@ kubectl wait --for=condition=Complete job/workhorse-schema-migrate-1-2-3 --timeo
 kubectl logs job/workhorse-schema-migrate-1-2-3
 ```
 
-If the Job fails, stop the release. Do not put migration in every worker's init container, because
-that turns one deliberate deployment step into concurrent migration attempts.
+If the Job fails, stop the release. Do not migrate in the init container of each worker. That
+change makes one deliberate deployment step into concurrent migration attempts.
 
 ## Deploy the worker tier
 
-Two replicas avoid making one Pod the only worker process, but replica count also multiplies task
-concurrency and database pools. Set it from your availability and capacity requirements.
+This Deployment runs two worker replicas, so one Pod is not the only worker process. Each replica
+adds task concurrency and a database pool. Set the replica count from your availability and
+capacity requirements.
 
-The resource requests below are scheduling placeholders, not sizing claims. Replace them with
-values measured for your handlers.
+The resource requests below only help Kubernetes schedule the Pods. They are not sizing advice.
+Replace them with values that you measure for your handlers.
 
 ```yaml title="workhorse-worker.yaml"
 apiVersion: apps/v1
@@ -149,19 +162,23 @@ spec:
               memory: 256Mi
 ```
 
-`/readyz` returns 200 only while workers can claim. It changes to 503 as soon as drain begins.
-`/livez` stays at 200 while handlers drain; it reports process lifecycle rather than database,
-queue, or handler health.
+`/readyz` returns 200 only while the workers can claim tasks. It returns 503 when the drain starts.
+`/livez` returns 200 while handlers drain. It reports the process lifecycle, not the health of the
+database, the queue, or a handler.
 
-The 120-second Pod grace exceeds the 110-second Workhorse deadline. Kubernetes otherwise defaults
-to 30 seconds and sends `SIGKILL` when the grace expires, which would cut this drain short. A
-`preStop` hook consumes the same budget, so this example omits one.
+Make the Pod grace period longer than the Workhorse shutdown deadline. This manifest sets a grace
+period of 120 seconds and a deadline of 110 seconds. The Kubernetes default grace period is 30
+seconds. When the grace period ends, Kubernetes sends `SIGKILL`, so the default stops this drain
+too early. A `preStop` hook uses the same grace period, so this manifest has no hook.
 
 ## Keep the dashboard internal
 
-The dashboard Deployment binds beyond loopback, so the standalone CLI requires authentication.
-This manifest reads its credentials from the Secret and exposes only an internal `ClusterIP`
-Service. Point your own authenticated HTTPS ingress at the Service and change `--public-origin`.
+The dashboard Deployment binds beyond loopback, so the standalone CLI requires authentication. This
+manifest reads the credentials from the Secret. It exposes the dashboard only through an internal
+`ClusterIP` Service.
+
+1. Point your authenticated HTTPS ingress at the Service.
+2. Change `--public-origin` to your public HTTPS origin.
 
 ```yaml title="workhorse-dashboard.yaml"
 apiVersion: apps/v1
@@ -260,29 +277,45 @@ spec:
       protocol: TCP
 ```
 
-Keep one standalone dashboard replica because its built-in sessions are process-local. If your
-application embeds the dashboard, use shared application authorization before scaling it out.
+Keep one standalone dashboard replica, because its sessions exist only in that process. If your
+application embeds the dashboard, use shared application authorization before you add replicas.
 
-## Count connections before replicas
+## Count connections before you add replicas
 
-Let `R` be worker replicas and `P` be each node-postgres pool maximum. The tier can open `R × P`
-client connections. Notification-assisted dispatch reserves one connection inside every pool.
-Unless `sharedHeartbeats` is set, heartbeats reserve another, so `R` replicas leave at most
-`R × (P - 2)` worker-pool slots for queries.
+Let `R` be the number of worker replicas. Let `P` be the maximum of each node-postgres pool. The
+worker tier can open `R × P` client connections.
 
-Two replicas with `max: 10` can open 20 client connections. Two can remain on `LISTEN` and two on
-heartbeats, leaving 16 for claims, handlers, and maintenance. Add dashboard, producer, and migration pools
-before comparing the total with your database or pooler's client limit.
+- Notification-assisted dispatch reserves one connection in each pool for `LISTEN`.
+- Heartbeats reserve one more connection in each pool, unless you set `sharedHeartbeats`.
+- So `R` replicas leave at most `R × (P - 2)` worker-pool slots for queries.
 
-Transaction-mode PgBouncer keeps queue operations correct but breaks the session behind `LISTEN`.
-Use direct PostgreSQL or session-mode PgBouncer for the notification pool, or disable notifications
-and use bounded polling. Supavisor has the same boundary: transaction mode breaks `LISTEN`, while
-session or native mode preserves it. Supavisor recommends native or direct mode for migrations.
+**Example.** Two worker replicas each use a pool with `max: 10`.
 
-## Roll forward, then roll back processes
+1. The worker tier can open 20 client connections.
+2. Two connections stay on `LISTEN`, one in each replica.
+3. Two connections stay on heartbeats, one in each replica.
+4. 16 connections remain for claims, handlers, and maintenance.
 
-Apply the Job first and wait for success. Then apply both Deployments from the same image and wait
-for their rollouts.
+Add the dashboard, producer, and migration pools to this total. Then compare the total with the
+client limit of your database or pooler.
+
+Transaction-mode PgBouncer keeps queue operations correct, but it breaks the session that `LISTEN`
+needs. Do one of these steps:
+
+- Connect the notification pool directly to PostgreSQL.
+- Connect the notification pool through session-mode PgBouncer.
+- Turn off notifications and use bounded polling.
+
+Supavisor has the same boundary. Transaction mode breaks `LISTEN`, but session mode and native mode
+keep it. Supavisor recommends native mode or direct mode for migrations.
+
+## Roll forward, then roll back only the processes
+
+Use this order for a release:
+
+1. Apply the schema Job and wait until it succeeds.
+2. Apply both Deployments with the same image.
+3. Wait until both rollouts are complete.
 
 ```sh
 kubectl apply -f workhorse-worker.yaml
@@ -291,8 +324,8 @@ kubectl rollout status deployment/workhorse-worker
 kubectl rollout status deployment/workhorse-dashboard
 ```
 
-If a rollout fails after migration, undo the Deployment revision. Do not reverse the schema
-migration: migrations within a major release only add, so the previous release accepts the newer
+If a rollout fails after the migration, undo the Deployment revision. Do not reverse the schema
+migration. Migrations within a major release only add, so the previous release accepts the newer
 schema.
 
 ```sh
@@ -302,14 +335,14 @@ kubectl rollout status deployment/workhorse-worker
 kubectl rollout status deployment/workhorse-dashboard
 ```
 
-`workhorse schema migrate` stops before contract steps. Apply one separately only after every old
-worker and producer has left the fleet.
+`workhorse schema migrate` stops before a contract step. Apply a contract step separately, and only
+after every old worker and producer has left the fleet.
 
 ## Test the manifests locally
 
-Run `pnpm test:kubernetes` with Docker, k3d, and kubectl available. The command applies the YAML
-above to a disposable k3s cluster and checks migration, dashboard access, worker probes, and a
-graceful task drain. It removes the cluster and fixture images when the test ends.
+Run `pnpm test:kubernetes` on a computer with Docker, k3d, and kubectl. The test applies the YAML
+on this page to a temporary k3s cluster. It checks the migration, dashboard access, worker probes,
+and a graceful task drain. When the test ends, it removes the cluster and the fixture images.
 
 ## Next
 

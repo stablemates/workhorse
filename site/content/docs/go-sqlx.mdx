@@ -1,39 +1,18 @@
 ---
 title: Go sqlx
-description: Join a Go sqlx transaction through its underlying database/sql transaction.
+description: Enqueue a Workhorse task in a Go sqlx transaction through its underlying database/sql transaction.
 ---
 
-Go's `github.com/jmoiron/sqlx` adds query helpers around `database/sql`.
-Its transaction exposes the same `*sql.Tx` that Workhorse's existing `NewSQLExecutor` accepts.
-This is **Go sqlx, not Rust SQLx**. It is a tested recipe, not a new package or Rust compatibility claim.
-For the shared ownership contract, read [transactional enqueue](/docs/enqueue).
+Go's `github.com/jmoiron/sqlx` adds query helpers to `database/sql`. Its transaction contains the
+same `*sql.Tx` that the existing `NewSQLExecutor` of Workhorse accepts. Thus your business write and
+your task can commit together. This page is about **Go sqlx, not Rust SQLx**. It is a tested recipe,
+not a new package and not a claim about Rust. The [transactional enqueue](/docs/enqueue) page owns
+the shared ownership rules.
 
-## Use the tested driver and versions
+## Enqueue a task in a sqlx transaction
 
-The maintained fixture pins Go sqlx **v1.4.0** and pgx stdlib **v5.11.0**.
-The local proof uses Go **1.26.9** and PostgreSQL **18.6**.
-The existing Go CI suite compiles and runs the fixture; no additional integration suite is needed.
-Other sqlx drivers, providers, and poolers are not certified by this local proof.
-
-Applications add `github.com/jmoiron/sqlx` themselves and register pgx stdlib with its blank import.
-The recipe's dependency is in the repository's Go module; Workhorse's core source does not import sqlx.
-
-```go
-import (
-	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/jmoiron/sqlx"
-)
-```
-
-Open the database with `sqlx.Open("pgx", databaseURL)`.
-Apply the companion `go/examples/sqlc/schema.sql` business migration to a disposable database where Workhorse is already installed.
-The two examples use the same application table to compare transaction behavior.
-Neither owns Workhorse's schema lifecycle.
-
-## Borrow tx.Tx without rewriting protocol SQL
-
-`BeginTxx` returns a `*sqlx.Tx`. Its embedded `Tx` field is the underlying `*sql.Tx`.
-Use sqlx's query helpers for business writes and pass `tx.Tx` directly to Workhorse.
+`BeginTxx` returns a `*sqlx.Tx`. Its embedded `Tx` field is the underlying `*sql.Tx`. Use the query
+helpers of sqlx for business writes. Give `tx.Tx` directly to Workhorse.
 
 ```go
 tx, err := database.BeginTxx(ctx, nil)
@@ -55,50 +34,126 @@ if _, err := queue.Enqueue(ctx, "order.accepted", map[string]any{"orderId": orde
 return tx.Commit()
 ```
 
-Do not wrap the executor with sqlx `Named`, `Rebind`, or a query formatter.
-Workhorse already supplies PostgreSQL positional parameters through pgx stdlib.
-Do not enqueue through `database.DB`: it can acquire another connection and commit independently.
-The [runnable example](https://github.com/stablemates/workhorse/tree/main/go/examples/sqlx) includes the complete setup and error path.
+The [runnable example](https://github.com/stablemates/workhorse/tree/main/go/examples/sqlx) contains
+the complete setup and the error path.
 
-The application owns commit, rollback, savepoints, and database shutdown.
-Return client-side validation errors as well as database errors before commit.
-Never retain the queue after its transaction ends, and never lend a request transaction to a worker.
-Run a dedicated worker with its own pgx pool.
+## Set up the driver and the business table
 
-## Use PostgreSQL savepoints and bounded cancellation
+Add `github.com/jmoiron/sqlx` to your application. Register pgx stdlib with its blank import. The
+recipe dependency is in the Go module of the repository. The core source of Workhorse does not
+import sqlx.
 
-sqlx does not supply a nested transaction abstraction in this recipe.
-Use explicit PostgreSQL savepoints on `tx`; the fixture exercises two nested levels.
-Inner rollback removes both inner writes, while releasing a savepoint never commits the outer transaction.
-After an ordinary SQL error, the caller rolls back to a savepoint before continuing.
+```go
+import (
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jmoiron/sqlx"
+)
+```
 
-Keep the context passed to `BeginTxx` alive until commit or rollback.
-If that context is cancelled, `database/sql`, not Workhorse, rolls back the transaction.
-The proof separately tests a pre-cancelled query and cancellation while a real enqueue waits on a database lock.
-For in-flight cancellation, the caller discards the transaction and uses a fresh one.
-Do not assume the connection remains usable or promise savepoint recovery after wire cancellation.
+Open the database with `sqlx.Open("pgx", databaseURL)`. Apply the business migration
+`go/examples/sqlc/schema.sql` from the companion sqlc example to a disposable database. That database
+must already have the Workhorse schema. The two examples use the same application table, so you can
+compare their transaction behavior. Neither example owns the Workhorse schema lifecycle.
 
-## Run the maintained proof
+## Send Workhorse statements without changes
 
-From a configured checkout:
+Workhorse supplies PostgreSQL positional parameters through pgx stdlib. Do not change its SQL.
+
+- Do not wrap the executor with the sqlx `Named` or `Rebind` helpers.
+- Do not wrap the executor with a query formatter.
+- Do not enqueue through `database.DB`. It can get another connection and commit independently.
+
+## Own the transaction in your application
+
+Your application owns commit, rollback, savepoints, and database shutdown.
+
+- Return client-side validation errors and database errors before the commit.
+- Do not keep the queue after its transaction ends.
+- Do not give a request transaction to a worker.
+- Run a dedicated worker with its own pgx pool.
+
+## Roll back an inner write with a savepoint
+
+In this recipe, sqlx does not supply a nested transaction feature. Use explicit PostgreSQL
+savepoints on `tx`. A savepoint is a named point inside a transaction. You can roll back to it and
+keep the outer transaction. The fixture tests two nested levels.
+
+If you roll back an inner savepoint, PostgreSQL removes both inner writes. A released savepoint
+never commits the outer transaction. After an ordinary SQL error, roll back to a savepoint before
+you continue.
+
+## Keep the context alive until the commit
+
+Keep the context that you give to `BeginTxx` alive until the commit or the rollback. If that context
+is cancelled, `database/sql` rolls back the transaction. Workhorse does not do this rollback.
+
+The fixture tests two cases separately. In the first case, the context is cancelled before the
+query starts. In the second case, a real enqueue waits for a database lock and the context is
+cancelled.
+
+If a cancellation occurs while a query runs, discard the transaction and use a new one. Do not
+expect the connection to stay usable. The recipe does not promise recovery to a savepoint after the
+wire protocol cancels a query.
+
+## Run the maintained fixture
+
+From a configured checkout, run this command:
 
 ```sh
 WORKHORSE_REQUIRE_DATABASE=1 pnpm exec tsx scripts/with-env.ts \
   go -C go test -count=1 -v ./examples/sqlx
 ```
 
-The fixture creates and drops an isolated scratch database, installs both schemas, and runs the actual CLI.
-It proves matching backend PID/transaction identity/task `xmin`, independent invisibility, joint commit/rollback, and executor lifecycle ownership.
-The proof also covers JSONB, UUID, nullable text and enqueue reasons, batch order, nested savepoints, cancellation, and fresh-transaction recovery.
-pgx stdlib preserves native SQLSTATE errors; `Queue` translates `P1001` into its structured idempotency-conflict diagnosis.
-Ordinary `22012` and aborted-transaction `25P02` errors remain native `*pgconn.PgError` values.
+The fixture creates and drops an isolated scratch database. It installs both schemas and runs the
+actual CLI. The Go CI suite of the repository compiles and runs the fixture, so no additional
+integration suite is necessary.
 
-For manual execution, follow the example README and run its fixed UUID once against a fresh disposable business schema.
-No maintained proof here targets lib/pq, another sqlx driver, Rust SQLx, a hosted provider, or a pooler.
+To run the example manually, follow the example README. The example uses a fixed UUID, so run it one
+time against a new disposable business schema.
 
-## Sources and next steps
+<details>
+<summary>Reference: tested versions and fixture coverage</summary>
+
+| Component              | Version     |
+| ---------------------- | ----------- |
+| Go sqlx                | **v1.4.0**  |
+| pgx stdlib             | **v5.11.0** |
+| Go (local run)         | **1.26.9**  |
+| PostgreSQL (local run) | **18.6**    |
+
+The fixture proves:
+
+- the same backend PID, transaction identity, and task `xmin`
+- invisibility to an independent connection, joint commit and rollback, and executor lifecycle
+  ownership
+- JSONB, UUID, nullable text, nullable enqueue reasons, batch order, nested savepoints,
+  cancellation, and recovery in a new transaction
+
+pgx stdlib keeps native SQLSTATE errors. `Queue` translates `P1001` into its structured idempotency
+conflict error. Ordinary `22012` errors and aborted-transaction `25P02` errors stay native
+`*pgconn.PgError` values.
+
+No maintained proof targets lib/pq, another sqlx driver, Rust SQLx, a hosted provider, or a pooler.
+This local proof does not certify other sqlx drivers, providers, or poolers.
+
+More detail: [Schema and protocol: Module and executors](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#module-and-executors),
+[Schema and protocol: Enqueue results and errors](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#enqueue-results-and-errors).
+
+</details>
+
+## Sources
 
 - [Tagged sqlx v1.4.0 transaction type](https://github.com/jmoiron/sqlx/blob/v1.4.0/sqlx.go)
   and [BeginTxx ownership](https://github.com/jmoiron/sqlx/blob/v1.4.0/sqlx_context.go).
 - [Tagged pgx v5.11.0 stdlib](https://github.com/jackc/pgx/blob/v5.11.0/stdlib/sql.go).
-- [sqlc (Go)](/docs/sqlc), [transactional enqueue](/docs/enqueue), and [dedicated worker processes](/docs/worker-processes).
+
+## Next
+
+- [sqlc (Go)](/docs/sqlc) — the same recipe with generated pgx queries
+- [Enqueue and transactions](/docs/enqueue) — understand the transaction guarantee
+- [Dedicated worker processes](/docs/worker-processes) — run workers outside requests
+
+---
+
+Exact executor and transaction ownership:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#module-and-executors).
