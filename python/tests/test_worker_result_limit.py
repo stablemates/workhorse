@@ -47,7 +47,8 @@ def jsonb_refuses(encoded: str) -> bool:
 class Settlements:
     """Answer claims from a backlog and record every completion and failure the worker sends.
 
-    Like complete_v1, the scripted completion raises for a result over the task's limit or one that
+    Every heartbeat lease is accepted, so only the worker's own checks can end an attempt. Like
+    complete_v1, the scripted completion raises for a result over the task's limit or one that
     jsonb refuses, so a worker that sends one stops with that error.
     """
 
@@ -90,6 +91,13 @@ class Settlements:
             with self._lock:
                 self.failed[str(parameters[0])] = json.loads(str(parameters[3]))
             return [{"state": "failed"}]
+        if statement is STATEMENTS.heartbeat_many:
+            # The heartbeat thread can renew a lease at once when a task starts just after the
+            # previous one ends. A missing row reads as a stale lease, so accept every lease the
+            # way PostgreSQL accepts a live one.
+            leases = json.loads(str(parameters[1]))
+            assert isinstance(leases, list)
+            return [{"task_id": lease["taskId"], "status": "accepted"} for lease in leases]
         return []
 
     def _take(self, limit: int) -> list[dict[str, object]]:

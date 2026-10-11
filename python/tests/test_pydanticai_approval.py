@@ -595,10 +595,12 @@ async def test_recipe_rejects_native_repaired_deferred_request(
 async def test_active_framework_run_stops_with_queue_authority(
     database_url: str, async_psycopg_pool: Any, stop: str
 ) -> None:
+    # The execution timeout starts at the claim, so a short one can end the attempt before the run
+    # reaches the model on a slow host. A long one cannot, and the test ends it after entry below.
     task_id = enqueue(
         database_url,
         EnqueueOptions(
-            max_attempts=1, execution_timeout_ms=100 if stop == "execution-timeout" else None
+            max_attempts=1, execution_timeout_ms=60_000 if stop == "execution-timeout" else None
         ),
     )
     entered = asyncio.Event()
@@ -621,9 +623,26 @@ async def test_active_framework_run_stops_with_queue_authority(
     if stop == "cancel":
         with psycopg.connect(database_url) as connection:
             assert Queue(connection).cancel(task_id).status == "cancel_requested"
+    else:
+        # The timeout is now due in PostgreSQL. The next heartbeat reports it, and the worker ends
+        # the attempt as a timeout.
+        with psycopg.connect(database_url) as connection:
+            updated = connection.execute(
+                "UPDATE workhorse.task_runtime SET attempt_timeout_at = clock_timestamp() "
+                "WHERE task_id = %s AND state = 'active'",
+                (task_id,),
+            )
+            assert updated.rowcount == 1
     assert await asyncio.wait_for(activation, timeout=5)
     assert canceled.is_set()
-    assert outcome(database_url, task_id)[0] == ("canceled" if stop == "cancel" else "failed")
+    settled = outcome(database_url, task_id)
+    assert settled is not None
+    state, _result, error = settled
+    assert (state, error["name"]) == (
+        ("canceled", "CancellationRequested")
+        if stop == "cancel"
+        else ("failed", "ExecutionTimeout")
+    )
     assert credit(database_url) == 0
     assert await recipe.reconcile_terminal(database_url, task_id) in {"canceled", "failed"}
 
