@@ -1,22 +1,27 @@
 ---
 title: Priority
-description: Run urgent ready tasks before ordinary work in the same queue while peers keep FIFO order.
+description: Run urgent ready tasks before ordinary work in the same queue. Tasks with the same priority keep FIFO order.
 ---
 
-Set `EnqueueOptions.priority` when some ready tasks should start before others in the same queue.
-Existing callers keep FIFO behavior, because Workhorse supplies the default.
+Some tasks in a queue are more urgent than others. For example, a reminder for an overdue invoice
+must not wait behind routine reminders. Priority lets an urgent ready task start before the other
+ready tasks in its queue. If you do not set a priority, the tasks of a queue start in FIFO order,
+which is the order in which they became ready.
 
-## One urgent reminder jumps the line
+## Run an urgent task first
 
 **Example.** Queue `billing` sends invoice reminders. Fifty ordinary reminders are ready at the
-default priority, and every worker slot is busy with earlier reminders.
+default priority. All worker slots run earlier reminders.
 
-1. **At 0 s** the fifty ordinary reminders wait in the order they became ready.
-2. **At 2 s** your app enqueues a reminder for an overdue invoice with an urgent priority. It is
-   ready at once.
-3. **At 3 s** a worker slot frees up, and the worker asks for work. PostgreSQL hands it the urgent
-   reminder, not the oldest ordinary one.
-4. **At 4 s** another slot frees up. No urgent work is left, so the oldest ordinary reminder starts.
+1. At 0 s, the fifty ordinary reminders wait in the order in which they became ready.
+2. At 2 s, your app enqueues a reminder for an overdue invoice with an urgent priority. The
+   reminder is ready immediately.
+3. At 3 s, a worker slot becomes free, and the worker asks for work. The worker gets the urgent
+   reminder, not the oldest ordinary reminder.
+4. At 4 s, another slot becomes free. No urgent reminder is ready, so the worker gets the oldest
+   ordinary reminder.
+
+To set a priority, give `EnqueueOptions.priority` when you enqueue the task.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -56,11 +61,15 @@ default priority, and every worker slot is busy with earlier reminders.
   </Tab>
 </Tabs>
 
-PostgreSQL considers higher values first when a worker asks for ready work. Tasks with the same
-value keep their FIFO order. Priority changes which value leads without reordering peers.
+When a worker asks for work, PostgreSQL gives it the ready task with the highest priority. Tasks
+with the same priority keep their FIFO order. Thus, priority does not change the order of tasks that
+have the same value.
 
-Priority only orders tasks that are ready. The earlier reminders that were already running in step
-1 keep running. A task with a future `runAt` waits for that time first.
+Priority sets the order of ready tasks only. In step 1, the earlier reminders continue to run. A
+task with a future `runAt` waits until that time, and then its priority applies.
+
+The priority values in the example belong to your application, not to Workhorse. Workhorse accepts
+any integer in the allowed range.
 
 <details>
 <summary>Reference: priority values and claim order</summary>
@@ -69,96 +78,27 @@ Priority only orders tasks that are ready. The earlier reminders that were alrea
 | ------------------------- | ---------------------------------------------------------- |
 | `EnqueueOptions.priority` | An integer from 0 to 100 (`MAX_TASK_PRIORITY`). Default 0. |
 
-Claim orders ready rows by:
+Higher values dispatch first. Claim orders ready rows by:
 
 1. `priority`, descending;
 2. `sequence`, the FIFO ready sequence, ascending;
 3. `task_id`.
 
 `task_runtime_ready_idx` on `(queue_name, priority DESC, sequence, task_id) WHERE state = 'ready'`
-serves that order.
+serves that order. A task with a future `runAt` is `scheduled`, not `ready`, so claim does not read
+it until promotion makes it ready.
 
 More detail: [Data model: Priority, payload reads, and retry policy](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#priority-payload-reads-and-retry-policy).
 
 </details>
 
-## Urgent work can starve ordinary work
+## Set priority on a recurring schedule
 
-Go back to queue `billing`. Now suppose urgent reminders keep arriving faster than the workers
-finish them.
+A recurring schedule can create tasks at a set priority. For example, an hourly `overdue-invoices`
+schedule can create scan tasks at a background priority.
 
-1. **From 10 s** your app enqueues a new urgent reminder every second.
-2. **At 11 s** a slot frees up. An urgent reminder is ready, so it wins.
-3. **At 12 s, 13 s, and onward** the same thing happens at every free slot.
-4. **For as long as the stream lasts** the fifty ordinary reminders keep waiting.
-
-Priority is strict. Workhorse does not age waiting tasks, and it does not reserve capacity for lower
-priorities.
-
-If ordinary work must always make progress, put it on a separate queue. Give that queue its own
-workers or [capacity policy](/docs/concurrency-policies). Priority only chooses among tasks that
-compete inside one queue.
-
-<details>
-<summary>Reference: starvation</summary>
-
-- Priority dispatch has no aging or fair-share control.
-- A sustained stream of higher-priority ready work can starve lower-priority rows in the same queue.
-
-More detail: [Task lifecycle: Admission policies](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#admission-policies).
-
-</details>
-
-## Priority follows the task
-
-The urgent reminder from step 2 fails on its first attempt, because the mail provider is down.
-
-1. **At 3 s** the attempt fails. PostgreSQL schedules a [retry](/docs/retries) for later. The task
-   keeps its urgent priority.
-2. **At 33 s** the retry is due. Promotion, a regular background pass that moves due tasks to
-   `ready`, makes it ready again. It is still urgent, so it still leads the ordinary reminders. It
-   takes a new place in the FIFO order, behind any urgent work that became ready before it.
-
-PostgreSQL stores priority with the stable task identity. Delays, retries,
-[durable waits](/docs/durable-execution), and manual promotion keep the same value, because those
-transitions continue the same task.
-
-[Cancellation](/docs/cancellation) changes the task's state without changing its priority. Lookup
-and lifecycle history therefore keep showing the value that controlled dispatch.
-
-[Redrive](/docs/dead-letters) creates a new task but copies the source priority. Urgent failed work
-therefore does not become ordinary work when an operator sends it through the queue again.
-
-<details>
-<summary>Reference: priority across transitions</summary>
-
-- `task.priority` holds the accepted value. `task_runtime.priority` copies it so claim can stay on
-  the ready index.
-- Retry, recovery, durable waits, and promotion keep the value while they move the same row between
-  live states.
-- Promotion, a retry, and an accepted signal delivery each assign a new value from
-  `ready_sequence_seq` when they make the task ready.
-- A pending [debounce](/docs/debounce) replacement replaces both values in one transaction.
-- `redrive_v1` copies queue, type, priority, payload, and the other accepted settings into the new
-  task.
-
-More detail: [Data model: Priority and attempts](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#priority-and-attempts).
-
-</details>
-
-## Set priority at enqueue
-
-Go back to queue `billing`. Your app sends the overdue reminder from the first section with an
-urgent priority, as the example above does. It also syncs an hourly `overdue-invoices` schedule
-whose scans run at a background priority. Each hour, `fireSchedule` creates a scan task, and the
-task receives that stored priority.
-
-Pass the value when you enqueue the task. Recurring definitions accept the same field on
-`ScheduledTask`. Every occurrence receives the stored priority when `fireSchedule` creates its
-task, so scheduled work enters the ordinary priority order.
-
-The example's priority value belongs to the application, not to Workhorse. Workhorse accepts any
-integer in the allowed range.
+To set the priority, give `ScheduledTask.priority` when you sync the schedule. Each hour, Workhorse
+creates a scan task with that stored priority.
 
 <details>
 <summary>Reference: where priority is accepted</summary>
@@ -170,27 +110,61 @@ integer in the allowed range.
 | Go                        | `EnqueueOptions.Priority`, `ScheduledTask.Priority` | 0 to 100, default 0 |
 | Python, Rust, Ruby        | `priority`                                          | 0 to 100, default 0 |
 
-- `enqueue_batch_v1` rejects the whole batch when any member's priority is outside the range.
-- `fire_schedule_v1` copies the definition's stored priority into each occurrence task.
+- `enqueue_batch_v1` rejects the whole batch when the priority of any member is outside the range.
+- `fire_schedule_v1` copies the stored priority of the definition into each occurrence task.
+  `Queue.fireSchedule` and the schedule tick both use it.
 
 More detail: [Task lifecycle: Batch validation](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#batch-validation).
 
 </details>
 
-## Priority works inside admission rules
+## Keep urgent work from starving ordinary work
 
-Queue `billing` now has a [concurrency policy](/docs/concurrency-policies) that lets two tasks for
-one customer run at once. Customer `cust-8` already has two reminders running.
+Priority is strict. If urgent tasks arrive faster than the workers complete them, the ordinary
+tasks in the same queue do not start.
 
-1. **At 0 s** an urgent reminder for `cust-8` becomes ready. An ordinary reminder for `cust-9` is
-   also ready.
-2. **At 1 s** a worker asks for work. The urgent reminder leads, but `cust-8` has no free capacity.
-   PostgreSQL passes over it, and the worker gets the ordinary reminder for `cust-9`.
-3. **At 20 s** one of the `cust-8` reminders finishes. The next claim hands out the urgent reminder.
+**Example.** Queue `billing` has fifty ordinary reminders that are ready. From 10 s, your app
+enqueues one urgent reminder each second. The workers complete fewer than one reminder each second.
 
-Priority does not bypass queue pauses, concurrency policies, [rate limits](/docs/rate-limits), or
-other admission rules. It orders the tasks that PostgreSQL may admit after those rules apply. A task
-that a rule holds back stays ready and keeps its place.
+1. At 11 s, a worker slot becomes free. An urgent reminder is ready, so the worker gets it.
+2. At 12 s, a slot becomes free again. The worker gets the next urgent reminder.
+3. While urgent reminders continue to arrive, the fifty ordinary reminders do not start.
+
+Workhorse does not increase the priority of a task that waits. It does not keep capacity for lower
+priorities.
+
+If ordinary work must always continue, put it in a separate queue. Give that queue its own workers
+or its own [concurrency policy](/docs/concurrency-policies). Priority sets the order of tasks in one
+queue only.
+
+<details>
+<summary>Reference: starvation</summary>
+
+- Priority dispatch has no aging or fair-share control.
+- A sustained stream of higher-priority ready work can starve lower-priority rows in the same queue.
+
+More detail: [Task lifecycle: Admission policies](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#admission-policies).
+
+</details>
+
+## Use priority with concurrency policies and rate limits
+
+Priority does not bypass the admission rules of a queue. An admission rule decides if a ready task
+can start now. Queue pauses, concurrency policies, [rate limits](/docs/rate-limits), and budgets
+are admission rules.
+
+**Example.** Queue `billing` has a [concurrency policy](/docs/concurrency-policies) that lets two
+tasks for one customer run at the same time. Two reminders for customer `cust-8` run now.
+
+1. At 0 s, an urgent reminder for `cust-8` becomes ready. An ordinary reminder for `cust-9` is also
+   ready.
+2. At 1 s, a worker asks for work. The urgent reminder is first, but `cust-8` has no free capacity.
+3. Workhorse skips the urgent reminder, and the worker gets the ordinary reminder for `cust-9`.
+4. At 20 s, one of the `cust-8` reminders completes. The next worker that asks for work gets the
+   urgent reminder.
+
+Priority sets the order of the tasks that the admission rules let start. If a rule holds back a
+task, the task stays ready and keeps its place.
 
 <details>
 <summary>Reference: priority and the policy window</summary>
@@ -205,15 +179,56 @@ More detail: [Task lifecycle: Key limits and the policy window](https://github.c
 
 </details>
 
-## Seeing priority in the dashboard
+## Keep urgent work urgent after a retry
 
-Suppose the System page shows two priority groups for `billing`. The oldest urgent task is a few
-seconds old. The oldest ordinary task has waited ten minutes. That is the starvation from the
-earlier section, made visible to an operator.
+Workhorse stores the priority with the task. A task keeps its priority when it moves between states.
 
-The System page groups each queue's ready work by priority and shows the oldest task in each group.
-The dashboard can also sort tasks with the highest priority first. It shows a non-default priority
-beside each task and the stored value in task details.
+**Example.** The urgent reminder from the first section fails on its first attempt, because the
+mail provider is down.
+
+1. At 3 s, the attempt fails. Workhorse schedules a [retry](/docs/retries). The task keeps its
+   urgent priority.
+2. At 33 s, the retry is due, and Workhorse makes the task ready again.
+3. The task is still urgent, so it starts before the ordinary reminders. It starts after the urgent
+   reminders that became ready before it.
+
+A delay, a retry, a [durable wait](/docs/durable-execution), and an operator request to run the task
+now keep the same priority. These transitions continue the same task.
+
+[Cancellation](/docs/cancellation) changes the state of the task, but not its priority. Thus, task
+lookup and the task history show the priority that controlled dispatch.
+
+[Redrive](/docs/dead-letters) creates a new task with the priority of the source task. Thus, failed
+urgent work stays urgent when an operator sends it through the queue again.
+
+<details>
+<summary>Reference: priority across transitions</summary>
+
+- `task.priority` holds the accepted value. `task_runtime.priority` copies it so claim can stay on
+  the ready index.
+- Retry, recovery, durable waits, and promotion keep the value while they move the same row between
+  live states.
+- Promotion, a retry, an accepted signal delivery, and `run_task_now_v1` each assign a new value
+  from `ready_sequence_seq` when they make the task ready.
+- `run_task_now_v1` does not change the priority.
+- A pending [debounce](/docs/debounce) replacement replaces both values in one transaction.
+- `redrive_v1` copies queue, type, priority, payload, and the other accepted settings into the new
+  task.
+
+More detail: [Data model: Priority and attempts](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#priority-and-attempts) and [Data model: Running a task now](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#running-a-task-now).
+
+</details>
+
+## Find starved work in the dashboard
+
+The dashboard shows the priority of tasks, so an operator can find work that waits too long.
+
+The System page groups the ready tasks of each queue by priority. It shows the age of the oldest
+task in each group. For example, the oldest urgent task in `billing` is a few seconds old. The
+oldest ordinary task is ten minutes old. This shows that urgent work starves the ordinary work.
+
+The task list can sort tasks with the highest priority first. Each task row shows a priority above
+the default. Task details show the stored priority.
 
 <details>
 <summary>Reference: dashboard priority surfaces</summary>
@@ -222,21 +237,22 @@ beside each task and the stored value in task details.
   The default sort is `updated`.
 - The `priority` sort orders by priority descending, then `updated_at` descending, then task
   identity descending.
+- A task row shows the priority as `P<n>` when it is above the default.
 - `dashboard_system_v1` groups ready rows by `queue_name` and `priority`. Each
   `DashboardSystemQueueRow.priorityBacklog` entry returns `priority`, `ready`, and `oldestReadyMs`,
   ordered by priority descending.
 
-More detail: [Task lifecycle: System page](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#system-page).
+More detail: [Task lifecycle: System page](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#system-page) and [Dashboard: Task listing](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#task-listing).
 
 </details>
 
 ## Next
 
-- [Task dependencies](/docs/task-dependencies) — release blocked work into priority dispatch
-- [Concurrency policies](/docs/concurrency-policies) — reserve capacity with separate queues
-- [Retries](/docs/retries) — run another attempt without changing rank
+- [Task dependencies](/docs/task-dependencies) — send released work into priority dispatch
+- [Concurrency policies](/docs/concurrency-policies) — keep capacity with separate queues
+- [Retries](/docs/retries) — run another attempt at the same priority
 
 ---
 
-Exact priority bounds and dispatch rules:
+Exact priority limits and dispatch rules:
 [architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#claim).

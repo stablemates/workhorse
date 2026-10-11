@@ -70,7 +70,7 @@ options that Workhorse already enforces:
 
 The claim passes over a tenant at its cap only within a bounded window of the oldest ready tasks.
 If one tenant's waiting backlog fills that whole window, the claim reaches no other tenant's work.
-[Avoiding a blocked queue](240-concurrency-policies.md#avoiding-a-blocked-queue) covers that case.
+[Avoiding a blocked queue](240-concurrency-policies.md#keep-a-full-key-from-blocking-other-work) covers that case.
 
 ```ts
 const tenant = "acme";
