@@ -1,6 +1,6 @@
 # ADR 0095: Add task groups with completion callbacks
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-11
 - **Related:** [ADR 0030](0030-distinguish-suspensions-gates-and-child-joins.md),
   [ADR 0051](0051-lead-with-durable-job-queue.md),
