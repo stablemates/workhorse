@@ -3,19 +3,22 @@ title: Objection
 description: Commit an Objection model write and a Workhorse task in one Knex transaction.
 ---
 
-Commit an Objection model write and its task together.
-Objection accepts Knex transactions; use the [Knex adapter](/docs/knex), not another package.
+Objection is an ORM that runs on Knex. This recipe commits an Objection model write and its task
+together in one Knex transaction. Objection accepts Knex transactions, so use the
+[Knex adapter](/docs/knex). You do not need another package.
 
-## Setup and model write
+## Install the packages
 
-The tested baseline is Objection 3.1.5, Knex 3.3.0, and pg 8.23.1.
-The Knex package joins the next Workhorse release; use its workspace package until publication.
+The tested versions are Objection 3.1.5, Knex 3.3.0, and pg 8.23.1.
 
 ```bash
 pnpm add @stablemates/workhorse @stablemates/workhorse-knex objection@3.1.5 knex@3.3.0 pg@8.23.1
 ```
 
-Migrate application tables separately from Workhorse's schema; qualify their names to stay outside it.
+## Commit a model write and a task together
+
+Migrate your application tables separately from the Workhorse schema. Give each table name its
+schema, such as `public.account`, so that the table stays outside the Workhorse schema.
 
 ```ts
 import knex from "knex";
@@ -39,30 +42,66 @@ await database.transaction(async (transaction) => {
 await database.destroy();
 ```
 
-Pass the callback's exact `transaction` to `Model.query(transaction)` and `forTransaction(transaction)`.
-Captured pool queues escape it. The caller owns completion and Knex shutdown; bare adapter close controls neither.
+Give the `transaction` of the callback to `Model.query(transaction)` and to
+`forTransaction(transaction)`. Other connections do not see the account or the task before the
+commit. If the transaction rolls back, the IDs that it returned identify no row and no task.
 
-## Rollback, savepoints, and hooks
+Your application commits or rolls back the transaction, and it destroys Knex. If you do not give a
+`close` callback, `adapter.close()` does neither of these.
 
-Callback or later model-write failures roll back both writes, including returned enqueues.
-Knex nests through savepoints: inner rollback removes its pair; outer rollback also removes released inner writes.
-Independent connections see neither half before commit; IDs remain provisional.
+## Keep the pool queue out of the transaction
 
-In model hooks, use the context's `transaction`, never a captured pool binding.
-Await enqueue and propagate failures. The fixture's throwing `$afterInsert` rolls back both writes.
-Knex response-transformation hooks are unsupported; the adapter requires native object rows.
+The default queue of the adapter, `workhorse.queue`, uses the Knex pool. It does not join your
+transaction.
 
-The [maintained recipe](https://github.com/stablemates/workhorse/blob/main/typescript/examples/objection.ts)
-runs in a real PostgreSQL fixture in the existing TypeScript database CI lane.
-Objection errors retain their own `nativeError`; adapter failures expose SQLSTATE through `KnexQueryError.code` and preserve `cause`.
-Other versions, drivers, custom parsers, and patched query execution are not certified by this recipe.
+**Example.** A callback enqueues through the default queue by mistake.
 
-## Dedicated workers
+1. The callback inserts an account through `Account.query(transaction)`.
+2. The callback enqueues a task through `workhorse.queue`.
+3. The pool queue commits the task immediately on another connection.
+4. The callback throws an error, and Knex rolls back the account.
+5. The task stays, but its account does not exist.
 
-Workers need a separate process, compatible node-postgres pool, and core `Queue`, never a request process or Objection/Knex transaction session.
-The application owns models and Knex; workers own their pool and shutdown.
+In the callback, enqueue only through `forTransaction(transaction)`.
 
-A worker module can use the core adapter without loading Objection or Knex:
+## Roll back the model write and the task together
+
+If the callback throws an error, Knex rolls back both writes. A later model write that fails also
+rolls back both writes, together with the tasks that the transaction enqueued.
+
+A nested Knex transaction uses a savepoint.
+
+**Example.** An outer transaction writes account A, and an inner transaction writes account B.
+
+1. The outer transaction inserts account A and enqueues its task.
+2. The inner transaction inserts account B, enqueues its task, and throws an error.
+3. Knex rolls back to the savepoint. Account B and its task are removed.
+4. The outer transaction commits. Account A and its task commit.
+
+If the outer transaction rolls back, Knex also removes the writes of an inner transaction that
+completed.
+
+## Enqueue from a model hook
+
+In a model hook, use the `transaction` of the hook context. Do not use a pool queue that you kept
+from outside the hook. Await the enqueue. If the enqueue fails, let the error leave the hook. In the
+fixture, an `$afterInsert` hook that throws an error rolls back both writes.
+
+The adapter does not support the response transformation hooks of Knex. It requires native object
+rows.
+
+## Handle errors
+
+Objection errors keep their own `nativeError`. Adapter failures throw `KnexQueryError`. This error
+gives the SQLSTATE in `code` and keeps the original error in `cause`.
+
+## Run workers in a separate process
+
+Run workers in a separate process with their own node-postgres pool and the core `Queue`. Do not run
+them in a request process. Do not give them an Objection or Knex transaction session. Your
+application owns the models and Knex. The workers own their pool and its shutdown.
+
+A worker module can use the core adapter. It does not need to load Objection or Knex.
 
 ```ts
 import { createWorkhorseAdapter, defineWorkerProcess, Pool } from "@stablemates/workhorse";
@@ -84,8 +123,15 @@ export default defineWorkerProcess({
 });
 ```
 
-Use the same installed Workhorse database and application schema with a separately owned pool.
-The fixture's worker cannot claim uncommitted tasks and handles them after commit.
+Connect the pool to the same database, which has the Workhorse schema and your application schema.
+In the fixture, the worker cannot claim a task before the commit. It handles the task after the
+commit.
+
+## Run the tested recipe
+
+The [maintained recipe](https://github.com/stablemates/workhorse/blob/main/typescript/examples/objection.ts)
+runs against a real PostgreSQL fixture in the TypeScript database lane of CI. This recipe does not
+certify other versions, other drivers, custom parsers, or patched query execution.
 
 ## Next
 

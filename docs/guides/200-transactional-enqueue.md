@@ -152,7 +152,7 @@ A worker takes a connection pool, not a connection.
 Python's `Worker` takes a Psycopg `ConnectionPool` whose connections use autocommit mode.
 `AsyncWorker.from_psycopg` and `AsyncWorker.from_asyncpg` take the matching async pools. The worker borrows a connection for each
 statement and then returns it. The worker also [keeps some pool connections for
-itself](390-connection-pooling.md#how-do-i-budget-connections). Make the pool large enough for these
+itself](390-connection-pooling.md#budget-the-connections-that-each-worker-holds). Make the pool large enough for these
 connections.
 
 Your enqueue code can borrow a connection from the same pool. Open the transaction on the borrowed

@@ -1,67 +1,74 @@
 ---
 title: Can I use Workhorse with my web framework?
-description: Three decisions a framework changes, and the one question that answers each for any framework.
+description: Make the three decisions that a web framework changes, with one question that answers each decision for any framework.
 ---
 
-Workhorse publishes no framework packages, and that is a decision rather than a gap. A framework
-changes three things about how you wire Workhorse in, and none of them needs a package. Work
-through them in this order, because the first one decides your deployment shape and the other two
-are local to one file. A Rails application can also keep its job classes through the Ruby gem's
-[Active Job adapter](/docs/active-job).
+When you add Workhorse to a web application, you make three decisions. They are where the worker
+runs, where your code gets the `Queue`, and how you mount the dashboard. None of these needs a
+framework package, so Workhorse publishes none. Make the three decisions in the order of this page.
+The first decision sets the shape of your deployment. The other two change only one file each.
 
-## 1. Your web process does not run the worker
+A Rails application can also keep its job classes through the
+[Active Job adapter](/docs/active-job) of the Ruby gem.
 
-A Workhorse worker is a continuous process. It holds a PostgreSQL pool, renews leases, sends
-heartbeats, and drains after a termination signal. A web framework owns a request lifecycle, not
-that one.
+## Run the worker in its own process
 
-Run workers as their own process, through `defineWorkerProcess`, `startWorkerProcess`, or the
-`workhorse worker` command. [Worker processes](/docs/worker-processes.md) owns the shape.
+A Workhorse worker is a continuous process. It holds a PostgreSQL pool, renews leases, and sends
+heartbeats. After a termination signal, it drains its tasks. A web framework controls the lifecycle
+of a request, not the lifecycle of a worker.
 
-This is not a style preference. If web replicas start workers, then scaling for HTTP traffic
-silently multiplies worker capacity and database connections, and a deploy that drains HTTP drains
-your queue with it.
+Run each worker as its own process. Use `defineWorkerProcess`, `startWorkerProcess`, or the
+`workhorse worker` command. [Worker processes](/docs/worker-processes) shows the shape of the
+process.
 
-## 2. Enqueue through the framework's own dependency injection
+This rule is not a style preference. If web replicas start workers, these problems occur:
 
-A `Queue` is an ordinary object built over a database handle. Provide it the way your framework
-already provides everything else: a module-scoped constant, a container binding, a request-scoped
-provider, a plugin decoration.
+- When you scale the web tier for HTTP traffic, you also multiply the worker capacity and the
+  database connections. Nothing tells you about it.
+- When a deploy drains HTTP traffic, it also drains your queue.
 
-The rule that matters is not where the `Queue` comes from. It is that the enqueue must join the
-transaction that writes your application's data, so a rolled-back request leaves no task behind.
-[Enqueue](/docs/enqueue.md) owns that, and each [ORM adapter](/docs/integrations.md) owns how its
-transaction type reaches the queue.
+## Get the queue from the dependency injection of your framework
 
-## 3. Mounting the dashboard has exactly two shapes
+A `Queue` is an ordinary object over a database handle. Supply it the same way that your framework
+supplies other objects. For example, use a module-scoped constant, a container binding, a
+request-scoped provider, or a plugin decoration.
 
-Ask one question about your route handler: **does it receive a Fetch `Request`, or a Node
-`req`/`res` pair?**
+The source of the `Queue` is not important. The important rule is the transaction: the enqueue must
+use the transaction that writes the data of your application. Then a request that rolls back leaves
+no task. [Enqueue](/docs/enqueue) explains this rule. Each [ORM adapter](/docs/integrations) shows
+how its transaction type gets to the queue.
 
-- **A Fetch `Request`.** Call `host.handle(request)` and fall through when it resolves to `null`.
-- **A Node `req`/`res` pair.** Wrap the same host in `dashboardNodeMiddleware(host)`, which passes
-  requests it does not own to `next()` untouched.
+## Mount the dashboard in one of two shapes
 
-That question answers itself for a framework nobody has written about, which is why this page asks
-it instead of listing vendors. [Dashboard](/docs/dashboard.md) owns both shapes and names the
-frameworks already checked against each.
+To mount the dashboard, ask one question about your route handler: **does it receive a Fetch
+`Request`, or a Node `req`/`res` pair?**
 
-A framework that adapts between the two — Fastify reaching Connect middleware through
-`@fastify/middie`, or a Node framework layered on a Fetch server — uses whichever object its
-handler actually receives, not whichever one the framework advertises.
+- **A Fetch `Request`.** Call `host.handle(request)`. If the call resolves to `null`, continue to
+  your next route.
+- **A Node `req`/`res` pair.** Wrap the same host in `dashboardNodeMiddleware(host)`. The middleware
+  passes each request that it does not own to `next()` without a change.
 
-## Why there is no package to install
+This question has an answer for every framework. This includes a framework that no page describes.
+Thus this page asks the question and does not list vendors. [Dashboard](/docs/dashboard) explains both
+shapes and names the frameworks that were checked with each shape.
 
-Framework packages once combined request-scoped queue access with worker startup and shutdown. The
-lifecycle half encouraged the mistake in decision 1. The request half was a package wrapping a
-dependency injection call that every framework already does better.
+Some frameworks convert between the two shapes. For example, Fastify gets Connect middleware through
+`@fastify/middie`, and some Node frameworks run on a Fetch server. Use the object that your handler
+receives, not the object that the framework advertises.
 
-So a framework needs a page here only when its request adapter is unusual. If you have found one
-that the two shapes above do not cover, that is worth reporting; it is the only thing on this page
-that could be incomplete.
+## Use the core package, not a framework package
+
+Framework packages once combined two parts: queue access in a request, and worker startup and
+shutdown. The lifecycle part encouraged the mistake that
+[Run the worker in its own process](#run-the-worker-in-its-own-process) prevents. The request part
+was a package around a dependency injection call. Each framework already does that call better.
+
+Thus a framework needs its own page only if its request adapter is unusual. If you find an adapter
+that the two dashboard shapes do not cover, report it. It is the only part of this page that can be
+incomplete.
 
 ## Next
 
-- [Worker processes](/docs/worker-processes.md) — run the worker where its lifecycle fits
-- [Enqueue](/docs/enqueue.md) — join the transaction that writes your data
-- [Dashboard](/docs/dashboard.md) — mount the operator interface in either shape
+- [Worker processes](/docs/worker-processes) — run the worker where its lifecycle fits
+- [Enqueue](/docs/enqueue) — use the transaction that writes your data
+- [Dashboard](/docs/dashboard) — mount the operator interface in either shape

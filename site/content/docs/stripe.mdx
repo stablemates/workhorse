@@ -1,27 +1,26 @@
 ---
 title: "Stripe webhooks: process invoice.paid events reliably with Workhorse"
-description: Receive signed Stripe invoice.paid webhooks, store each event and its task in one PostgreSQL transaction, and grant an entitlement once in a separate worker.
+description: Receive signed Stripe invoice.paid webhooks, store each event and its task in one transaction, and grant one entitlement for each invoice.
 ---
 
 This recipe receives Stripe `invoice.paid` webhooks and grants a local entitlement for each paid
-invoice. It is a complete TypeScript example that you can copy into your application. It is not a
-Stripe package.
+invoice. A webhook can arrive two times, and a worker can stop at any point. The recipe makes each
+step safe to repeat, so a customer never gets two credits for one invoice.
 
-Webhooks need care for two reasons. First, Stripe can send the same event again after your endpoint
-accepted it. Second, a worker can stop after it grants the entitlement but before Workhorse records
-that the task is complete. The recipe makes each step safe to repeat, so a customer never gets two
-credits for one invoice.
-
-The source is
+The recipe is a complete TypeScript example that you can copy into your application. It is not a
+Stripe package. The source is
 [`typescript/examples/stripe-invoice-paid.ts`](https://github.com/stablemates/workhorse/blob/main/typescript/examples/stripe-invoice-paid.ts).
 
-## How the recipe works
+## Follow one event from Stripe to the credit
 
-1. The HTTP receiver verifies the Stripe signature.
+The recipe uses two processes: an HTTP receiver and a worker. Each event goes through these steps:
+
+1. The receiver verifies the Stripe signature.
 2. In one transaction, the receiver writes an inbox row for the event and enqueues a
-   `stripe.invoice-paid` task. It replies `200` only after the transaction commits.
-3. A separate worker process reads the inbox row. In one transaction, it records the invoice in a
-   ledger and adds one credit to the customer.
+   `stripe.invoice-paid` task.
+3. The receiver replies `200` only after the transaction commits.
+4. The worker reads the inbox row. In one transaction, it records the invoice in a ledger and adds
+   one credit to the customer.
 
 Neither process calls the Stripe API, and neither process changes your Stripe account.
 
@@ -30,7 +29,7 @@ entitlement. It is not a subscription lifecycle or a financial ledger. An `invoi
 also describe an invoice that was marked paid outside Stripe. Define your own eligibility rules
 before you use the sample.
 
-## Requirements
+## Check the requirements
 
 - A Node.js version that Workhorse supports. [Compatibility](/docs/compatibility) lists them. The
   stripe-node SDK alone accepts Node 20, but Workhorse does not.
@@ -71,56 +70,79 @@ export DATABASE_URL='postgres://localhost/your_isolated_database'
 node stripe-invoice-paid.ts worker
 ```
 
-The receiver listens on `127.0.0.1:4242`. Set `PORT` to use a different port. Its only route is
+The receiver listens on `127.0.0.1:4242`. To use a different port, set `PORT`. The only route is
 `POST /stripe/invoice-paid`. In Stripe, subscribe the endpoint to `invoice.paid` only.
 
 To expose the receiver to the internet, put it behind your own HTTPS reverse proxy. The proxy must
 also limit connections and request rates.
 
-## Verify the signature
+## Verify the Stripe signature before you enqueue
 
 The receiver reads the raw request body and gives it to `stripe.webhooks.constructEvent`. Do not put
-a JSON parser or other body middleware before this route. A changed body fails the signature check.
+a JSON parser or other body middleware before this route. If a middleware changes the body, the
+signature check fails.
 
-The SDK rejects a signature that is older than 300 seconds. Keep the server clock correct, and do
-not turn off this check.
+The SDK rejects a signature that is older than 300 seconds. Keep the server clock correct. Do not
+disable this check.
 
-`STRIPE_WEBHOOK_SECRETS` holds one endpoint signing secret, or two secrets separated by a comma
-while you rotate them. These are not API keys. Keep them in a secret store, and never put them in
-logs or task payloads.
+`STRIPE_WEBHOOK_SECRETS` holds one endpoint signing secret. While you rotate the secret, it holds two
+secrets with a comma between them. These secrets are not API keys. Keep them in a secret store. Never
+put them in logs or task payloads.
 
-After the signature check, the receiver checks the account and the mode. The receiver replies:
+After the signature check, the receiver checks the account and the mode. If the event is for a
+different account or mode, the receiver replies `403`. If the receiver replies `503`, Stripe can
+send the event again.
 
-| Request                                                     | Reply          |
-| ----------------------------------------------------------- | -------------- |
-| Accepted and committed                                      | `200 accepted` |
-| Signed event of a different type                            | `200 ignored`  |
-| Bad or old signature, different API version, malformed data | `400`          |
-| Signed event for a different account or mode                | `403`          |
-| Other route                                                 | `404`          |
-| Same event ID with different normalized references          | `409`          |
-| Body too large                                              | `413`          |
-| Database error, or too many requests                        | `503`          |
+<details>
+<summary>Reference: receiver replies</summary>
 
-A `503` lets Stripe send the event again.
+| Request                                                                   | Reply          |
+| ------------------------------------------------------------------------- | -------------- |
+| Accepted and committed                                                    | `200 accepted` |
+| Signed event of a different type                                          | `200 ignored`  |
+| Bad or old signature, different API version, malformed data, no signature | `400`          |
+| Signed event for a different account or mode                              | `403`          |
+| Other route                                                               | `404`          |
+| Request not complete in 5 seconds                                         | `408`          |
+| Same event ID with different normalized references                        | `409`          |
+| Body too large                                                            | `413`          |
+| Database error, or too many requests                                      | `503`          |
 
-## Store the event and the task together
+More detail: [`stripe-invoice-paid.ts`](https://github.com/stablemates/workhorse/blob/main/typescript/examples/stripe-invoice-paid.ts).
 
-`acceptInvoiceInTransaction` inserts an inbox row with a unique key of account, mode, and event ID.
+</details>
+
+## Store the event and the task in one transaction
+
+**Example.** Stripe sends event `evt_offline` for invoice `in_offline` of customer `cus_offline`.
+
+1. The receiver inserts an inbox row and enqueues one `stripe.invoice-paid` task in one transaction.
+2. The transaction commits, but the connection fails before Stripe gets the reply.
+3. Stripe sends `evt_offline` again.
+4. The receiver finds the committed inbox row. It enqueues no second task.
+
+`acceptInvoiceInTransaction` inserts the inbox row with a unique key of account, mode, and event ID.
 It enqueues the task on the same PostgreSQL client, with `new Queue(transaction, "stripe-invoices")`.
-The inbox row and the task commit together, or neither commits.
+Thus, the inbox row and the task commit together, or neither commits.
 
 The task payload is `{ inboxId }` only. The inbox keeps the event, invoice, customer, account, and
 mode references. It does not keep the raw body, names, emails, addresses, payment details, metadata,
 or line items. The references still identify customers, so limit who can read the table.
 
-If Stripe sends the same event again, the receiver finds the inbox row and does not enqueue a second
-task. This is also true when the connection fails after the commit: the next delivery finds the
-committed row.
+## Grant the entitlement one time
 
-## Grant the entitlement once
+**Example.** The worker runs the task for invoice `in_offline`.
 
-The recipe prevents duplicates at three points:
+1. The worker writes the ledger row, adds one credit, and marks the inbox row in one transaction.
+2. The transaction commits.
+3. The worker stops before Workhorse records that the task is complete.
+4. Workhorse runs the task again. The worker finds the ledger row and adds no credit.
+
+The recipe prevents duplicates at three points. Each point has its own unique key. If two different
+events describe the same invoice, Workhorse runs two tasks, but the ledger grants only one credit.
+
+<details>
+<summary>Reference: unique keys</summary>
 
 | Point              | Unique key                  | What it prevents                      |
 | ------------------ | --------------------------- | ------------------------------------- |
@@ -128,27 +150,35 @@ The recipe prevents duplicates at three points:
 | Enqueue            | Event ID, kept for 24 hours | Two tasks when the enqueue is retried |
 | Entitlement ledger | Account, mode, invoice ID   | Two credits for one invoice           |
 
-The worker writes the ledger row, adds the credit, and marks the inbox row in one transaction. If
-the worker stops after that commit, the next run finds the ledger row and adds no credit. Two
-different events for the same invoice make two tasks, but only one credit.
+The enqueue key uses the scope `stripe:<account>:live` or `stripe:<account>:test` and
+`ttlMs: 86_400_000`.
+
+More detail: [Data model: Key and limits](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#key-and-limits).
+
+</details>
+
+## Keep the inbox and the ledger rows
 
 The enqueue key expires after 24 hours. The inbox and the ledger do not expire. Do not delete
 pending inbox rows or ledger rows. If you delete them, a later delivery can grant a second credit.
 
-## Limits
+## Know the limits of the recipe
 
 - **Event types.** The recipe accepts Connect snapshot events only. It rejects events without an
   `account`, thin events, other API versions, and an expanded or missing `customer`.
-- **No calls to Stripe.** Workhorse runs a task at least once. A local unique key protects the local
-  credit only. If you add a call to an external system, give that call its own idempotency key.
+- **No calls to Stripe.** Workhorse runs a task at least one time. A local unique key protects the
+  local credit only. If you add a call to an external system, give that call its own idempotency key.
 - **Event order.** Stripe does not send events in order. The handler does not need any other event
   before `invoice.paid`.
-- **Missed events.** Stripe retries live deliveries for up to three days. After a longer outage,
-  compare your invoice records with Stripe. The recipe does not do this for you.
+- **Missed events.** Stripe retries live deliveries for a maximum of three days. After a longer
+  outage, compare your invoice records with Stripe. The recipe does not do this for you.
 - **Failed tasks.** Use the [dead-letter and redrive tools](/docs/dead-letters). A new delivery of
   the event does not retry a failed task.
 
-The sample uses these fixed limits. Change them together with your proxy limits.
+The sample uses fixed limits. If you change them, change your proxy limits too.
+
+<details>
+<summary>Reference: fixed limits</summary>
 
 | Limit                                 | Value                               |
 | ------------------------------------- | ----------------------------------- |
@@ -163,7 +193,11 @@ The sample uses these fixed limits. Change them together with your proxy limits.
 | Worker concurrency                    | 2                                   |
 | Task attempts and retry delay         | 5 attempts, 1 second                |
 
-## How this recipe is tested
+More detail: [`stripe-invoice-paid.ts`](https://github.com/stablemates/workhorse/blob/main/typescript/examples/stripe-invoice-paid.ts).
+
+</details>
+
+## Run the recipe tests
 
 This recipe is **documented**. Workhorse publishes no Stripe package. In this repository,
 `pnpm test:stripe-webhooks` runs the recipe against a test PostgreSQL database. The tests cover:

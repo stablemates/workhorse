@@ -1,23 +1,20 @@
 ---
 title: Django
-description: Commit a business write and task acceptance through Django's own Psycopg connection.
+description: Commit a business write and its task together through the Psycopg connection that Django already uses.
 ---
 
-When a request changes business data, its task should not survive a rollback or disappear after a
-commit. Inside `transaction.atomic(using=alias)`, Workhorse can enqueue through the connection
-Django already enlisted. Django commits or rolls back both writes together.
+When a request changes business data, its task must commit and roll back with that data. Workhorse
+can enqueue through the connection that Django already uses inside
+`transaction.atomic(using=alias)`. Then Django commits both writes together, or rolls back both.
 
-This is a maintained recipe using the optional installed Django seam, not the Django Tasks interface. Requests enqueue;
-[separate worker processes](/docs/worker-processes) execute handlers.
-For decorated tasks, use the bounded [Django Tasks backend](/docs/django-tasks).
+This page is a maintained recipe. It uses the optional `workhorse.django` module, not the Django
+Tasks interface. Requests enqueue tasks, and [separate worker processes](/docs/worker-processes) run
+the handlers. For decorated tasks, use the bounded [Django Tasks backend](/docs/django-tasks).
 
-## Set up the selected database
+## Install Django with Psycopg 3
 
-The repository fixture pins Django **6.1.1** and Psycopg **3.3.6**. It runs on Workhorse's supported
-Python and PostgreSQL versions, starting with Python **3.12** and PostgreSQL **15**.
-Django is optional; typing dependencies remain development-only. Installing ordinary Workhorse does
-not install Django. The recipe requires Django's `django.db.backends.postgresql` backend with
-Psycopg 3. A project using psycopg2 cannot pass its connection to `Queue`.
+The recipe requires the `django.db.backends.postgresql` backend of Django with Psycopg 3. If your
+project uses psycopg2, it cannot give its connection to `Queue`.
 
 In your Django environment, install the tested framework and driver:
 
@@ -25,19 +22,37 @@ In your Django environment, install the tested framework and driver:
 pip install 'Django==6.1.1' 'psycopg[binary]==3.3.6' 'stablemates-workhorse[django]'
 ```
 
-Configure a database alias, such as `business`, through Django's `DATABASES` setting. Install the
-[Workhorse schema](/docs/installation) in that same PostgreSQL database through Workhorse's schema
-commands, outside request handling. Django keeps ownership of its application migrations.
+Then set up the database:
 
-All business writes must select the same alias. For an ORM model, use
-`Order.objects.using(alias).create(...)`. For SQL, use `connections[alias].cursor()`.
-Opening a second connection to the same database does not join the transaction.
+1. Configure a database alias, such as `business`, in the `DATABASES` setting of Django.
+2. Install the [Workhorse schema](/docs/installation) in that same PostgreSQL database. Use the
+   schema commands of Workhorse, outside request handling.
 
-## Enqueue inside the atomic block
+Django continues to own the migrations of your application.
 
-The maintained recipe lives in `python/examples/django_enqueue.py`. Its helper is centralized in
-the optional installed `workhorse.django` module. It requires `using`
-explicitly, checks Django's thread and transaction state, and returns an `EnqueueResult`:
+<details>
+<summary>Reference: tested versions</summary>
+
+| Item       | Value                                                                              |
+| ---------- | ---------------------------------------------------------------------------------- |
+| Django     | 6.1.1, pinned by the repository fixture. The `django` extra allows `>=6.1.1,<6.2`. |
+| Psycopg    | 3.3.6, pinned by the repository fixture                                            |
+| Python     | The supported versions of Workhorse, from 3.12                                     |
+| PostgreSQL | The supported versions of Workhorse, from 15                                       |
+
+- Django is optional. An ordinary Workhorse installation does not install Django.
+- The typing dependencies for Django are development-only.
+- The backend must be `django.db.backends.postgresql` with Psycopg 3. psycopg2 is not supported.
+
+More detail: [ADR 0087: Keep the Django Tasks backend bounded by atomic acceptance](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0087-bounded-django-tasks-backend.md) and [Compatibility: Supported versions](https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md#supported-versions).
+
+</details>
+
+## Enqueue a task inside the atomic block
+
+Call `enqueue_in_atomic` from the `workhorse.django` module inside the atomic block. The helper
+requires an explicit `using` alias. It returns an `EnqueueResult`. The maintained recipe is in
+`python/examples/django_enqueue.py`.
 
 ```python
 from django.db import connections, transaction
@@ -54,43 +69,92 @@ with transaction.atomic(using=alias):
     result = enqueue_in_atomic("order.fulfill", {"order_id": order_id}, using=alias)
 ```
 
-The helper constructs `Queue(connections[alias].connection)` for that enqueue only. It neither
-opens another connection nor retains the queue. Django owns commit, rollback, savepoints,
-autocommit, thread affinity, closing, and any pool return. Never enter the borrowed connection's
-context manager, call its lifecycle methods, or cache a queue across requests or atomic blocks.
+The helper makes `Queue(connections[alias].connection)` for this one enqueue. It does not open a
+different connection, and it does not keep the queue. Django owns the commit, the rollback, the
+savepoints, autocommit, thread affinity, and the close of the connection. Django also returns the
+connection to a pool, if one exists.
 
-An enqueue can be the transaction's first statement. Until the outer transaction commits, a
-different connection sees neither the business row nor its task. An inner savepoint rollback
-removes its writes while preserving earlier outer writes. Releasing a savepoint does not commit.
+Do not change the lifecycle of the borrowed connection:
 
-An `EnqueueResult` records acceptance within the current transaction, not proof of commit. The
-task ID becomes unusable if Django subsequently rolls back. Idempotent replays preserve their
-original task ID and structured outcome; conflicting payloads raise
-`EnqueueIdempotencyConflictError`.
+- Do not enter the context manager of the connection.
+- Do not call its lifecycle methods.
+- Do not keep a queue for more than one request or more than one atomic block.
 
-### Outside-atomic policy
+The enqueue can be the first statement of the transaction. Until the outer transaction commits, a
+different connection cannot see the business row or its task. If an inner savepoint rolls back,
+PostgreSQL removes the writes of that savepoint. The earlier writes of the outer transaction stay.
+A savepoint release does not commit.
 
-`enqueue_in_atomic()` rejects calls outside `transaction.atomic(using=alias)`, including a manually
-disabled autocommit setting. An atomic block on a different alias does not authorize enqueue.
-Broken or closed atomic connections are also rejected; the helper does not repair or reopen them.
+**Example.** A request accepts order 7 and enqueues its task. Then a later statement fails.
 
-Ordinary `Queue` supports autocommit enqueue, but that is deliberately not this recipe. A committed
-business write and a later standalone enqueue cannot roll back together.
+1. The request opens `transaction.atomic(using="business")`.
+2. The request inserts order 7 and calls `enqueue_in_atomic`. It gets an `EnqueueResult` with a
+   task ID.
+3. A later statement in the block raises an error.
+4. Django rolls back the transaction. PostgreSQL removes the order row and the task.
+5. The task ID from step 2 now identifies no task.
 
-### Catch errors outside the block
+An `EnqueueResult` shows that Workhorse accepted the task in the current transaction. It does not
+show that the transaction committed. If Django rolls back, the task ID becomes unusable.
 
-Workhorse executes through the raw Psycopg connection, not Django's cursor wrapper. Unexpected
-database errors therefore remain Psycopg exceptions rather than Django exceptions. Workhorse's
-known protocol rejections retain their structured error classes and original database cause.
+If you replay an idempotent enqueue, you get the original task ID and the original outcome. If the
+replay has a different payload, Workhorse raises `EnqueueIdempotencyConflictError`.
 
-Let either kind of error escape the relevant atomic block. Catch it outside that block so Django
-can roll back. To preserve earlier outer writes, catch outside an inner atomic block instead.
-Do not swallow raw errors and continue querying inside a broken transaction. Raw execution bypasses
-Django's error bookkeeping; Django cannot promise its usual broken-transaction checks there.
+<details>
+<summary>Reference: what `enqueue_in_atomic` checks</summary>
 
-## Async callers keep the transaction synchronous
+`enqueue_in_atomic(task_type, payload, *, using, options=None)` checks these conditions in this
+order, then calls `Queue(connection).enqueue_with_result`:
 
-Wrap the **whole** synchronous business-write and enqueue function, not its individual calls:
+1. `validate_thread_sharing()` passes for the Django connection.
+2. The connection is in an atomic block, and autocommit is off. If not, it raises
+   `TransactionManagementError`.
+3. The raw connection is a `psycopg.Connection`. If not, it raises `TypeError`.
+4. The connection is open, and it did not close in the transaction. If not, it raises
+   `TransactionManagementError`.
+5. `validate_no_broken_transaction()` passes.
+
+More detail: [ADR 0087: Keep the Django Tasks backend bounded by atomic acceptance](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0087-bounded-django-tasks-backend.md).
+
+</details>
+
+## Use the same alias for all writes
+
+The guarantee applies only to writes on the connection of the selected alias. Thus each business
+write must select the same alias as the enqueue:
+
+- For an ORM model, use `Order.objects.using(alias).create(...)`.
+- For SQL, use `connections[alias].cursor()`.
+
+A second connection to the same database does not join the transaction.
+
+`enqueue_in_atomic()` rejects a call outside `transaction.atomic(using=alias)`. It also rejects a
+call where you turned off autocommit manually without an atomic block. An atomic block on a
+different alias does not permit the enqueue. The helper also rejects a broken or closed atomic
+connection. It does not repair or open the connection again.
+
+An ordinary `Queue` can enqueue in autocommit mode, but this recipe does not do that. A business
+write that already committed cannot roll back with a later standalone enqueue.
+
+## Catch errors outside the atomic block
+
+Workhorse runs its SQL through the raw Psycopg connection, not through the cursor wrapper of
+Django. Thus an unexpected database error stays a Psycopg exception, not a Django exception. A known
+protocol rejection of Workhorse keeps its structured error class and its original database cause.
+
+1. Let the error leave the atomic block.
+2. Catch the error outside that block, so that Django can roll back.
+3. To keep the earlier writes of the outer transaction, catch the error outside an inner atomic
+   block.
+
+Do not ignore a raw error and continue to query in a broken transaction. Raw execution does not use
+the error bookkeeping of Django. Thus Django cannot do its usual checks for a broken transaction
+there.
+
+## Call the helper from async code
+
+Keep the transaction synchronous. Wrap the **whole** synchronous function that writes the business
+data and enqueues the task. Do not wrap its calls one by one.
 
 ```python
 from asgiref.sync import sync_to_async
@@ -100,53 +164,78 @@ from application.django_enqueue import create_order
 result = await sync_to_async(create_order, thread_sensitive=True)(order_id, using="business")
 ```
 
-The runnable recipe also exposes `create_order_async()` with this boundary. Do not pass the Django
-wrapper, raw connection, or queue between threads. This is not an async transaction API or an
-`AsyncQueue` adapter. Follow Django's connection policy for ASGI requests; the helper does not
-close connections or install request lifecycle hooks.
+The runnable recipe also has `create_order_async()` with this boundary. Do not pass the Django
+wrapper, the raw connection, or the queue to a different thread.
 
-## Atomic acceptance is not post-commit ordering
+This is not an async transaction API, and it is not an `AsyncQueue` adapter. For ASGI requests,
+follow the connection policy of Django. The helper does not close connections, and it does not
+install request lifecycle hooks.
 
-`transaction.on_commit()` runs a callback only after the business transaction has committed.
-If enqueue then fails, the callback cannot roll back the business write. It orders publication but
-does not make task acceptance atomic. This recipe enqueues before commit on the enlisted connection.
+## Enqueue before the commit, not in `on_commit`
 
-With `ATOMIC_REQUESTS`, the selected request transaction may be the enclosing atomic block.
-The explicit alias must still match. Middleware and streaming response iteration are outside that
-request transaction; do not assume they inherit it. Otherwise, open an explicit atomic block.
+`transaction.on_commit()` runs a callback only after the business transaction commits. If the
+enqueue then fails, the callback cannot roll back the business write. Thus `on_commit` controls the
+sequence, but it does not make the task acceptance atomic. This recipe enqueues on the connection
+of the transaction, before the commit.
 
-For multiple databases, the guarantee covers only the selected alias's connection and PostgreSQL
-transaction. It does not cover writes on another alias or a separate Workhorse database. Route the
-corresponding worker to that database. Workhorse does not add a distributed transaction.
+## Use the recipe with `ATOMIC_REQUESTS` or several databases
 
-Handlers execute later, outside the request transaction. Their external effects still need
-idempotency. This recipe supplies neither Django Tasks result semantics nor Celery API compatibility.
+With `ATOMIC_REQUESTS`, the request transaction of the selected alias can be the atomic block of
+the enqueue. The explicit alias must still match. Middleware and the iteration of a streaming
+response run outside that request transaction. Do not expect them to use it. In other cases, open
+an explicit atomic block.
+
+If you use several databases, the guarantee covers only the connection and the PostgreSQL
+transaction of the selected alias. It does not cover writes on a different alias or on a separate
+Workhorse database. Connect the worker for these tasks to the database of the selected alias.
+Workhorse does not add a distributed transaction.
+
+## Make the handlers safe to run again
+
+Handlers run later, outside the request transaction. Their external effects still need
+idempotency. This recipe does not give the result semantics of Django Tasks. It does not give
+compatibility with the Celery API.
 
 ## Run and verify the recipe
 
-For the standalone example, create this application table in the selected database:
+To run the standalone example, do these steps:
 
-```sql
-CREATE TABLE django_orders (id bigint PRIMARY KEY, note text NOT NULL);
-```
+1. Create this application table in the selected database:
 
-Set `DJANGO_SETTINGS_MODULE` to your application's settings. After installing Workhorse's schema
-and the table, run the checked-out example with an unused order ID:
+   ```sql
+   CREATE TABLE django_orders (id bigint PRIMARY KEY, note text NOT NULL);
+   ```
 
-```sh
-DJANGO_SETTINGS_MODULE=application.settings \
-  python python/examples/django_enqueue.py --using business --order-id 1
-```
+2. Install the Workhorse schema in the same database.
+3. Set `DJANGO_SETTINGS_MODULE` to the settings of your application.
+4. Run the example from the checkout with an unused order ID:
 
-From a configured repository checkout, run `pnpm python:test:django`. The fixture creates and
-drops scratch databases derived from that checkout's test database. It uses a real Django model,
-the runnable example, and an independent observer. It verifies physical connection and transaction
-identity, both enqueue orders, commit, rollback, savepoints, raw and structured errors, connection
-reuse, async commit and rollback, and absence of borrowed-connection lifecycle calls.
+   ```sh
+   DJANGO_SETTINGS_MODULE=application.settings \
+     python python/examples/django_enqueue.py --using business --order-id 1
+   ```
 
-The existing Python CI job runs `pnpm python:test`, which collects this entire fixture without
-exclusions. CI runs the language suite once per change; `pnpm python:test:django` is the focused
-local command, not a second CI run.
+To run the tests, run `pnpm python:test:django` from a configured repository checkout. The fixture
+creates scratch databases from the test database of that checkout, and drops them after the tests.
+It uses a real Django model, the runnable example, and an independent observer.
+
+The Python CI job runs `pnpm python:test`. That command collects this full fixture with no
+exclusions. CI runs the language suite one time for each change. `pnpm python:test:django` is the
+focused local command, not a second CI run.
+
+<details>
+<summary>Reference: what the fixture verifies</summary>
+
+- The physical connection and the transaction identity
+- Both enqueue sequences, commit, rollback, and savepoints
+- Raw errors and structured errors
+- Connection reuse
+- Async commit and async rollback
+- No calls to the lifecycle of the borrowed connection
+
+More detail: [ADR 0087: Keep the Django Tasks backend bounded by atomic acceptance](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0087-bounded-django-tasks-backend.md).
+
+</details>
 
 ### Upstream contracts
 
@@ -158,6 +247,7 @@ local command, not a second CI run.
 
 ## Next
 
-- [Enqueue and transactions](/docs/enqueue) explains durable acceptance and enqueue options.
-- [Worker processes](/docs/worker-processes) separates request and execution lifecycles.
-- [Idempotency](/docs/idempotency) defines replay and external-effect boundaries.
+- [Enqueue and transactions](/docs/enqueue) explains durable acceptance and the enqueue options.
+- [Worker processes](/docs/worker-processes) separates the request lifecycle from the worker
+  lifecycle.
+- [Idempotency](/docs/idempotency) explains replays and the limits of external effects.

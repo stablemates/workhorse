@@ -3,14 +3,14 @@ title: "Prisma: enqueue background tasks in the same transaction"
 description: Enqueue Workhorse tasks inside Prisma interactive transactions, so your data and your tasks commit together.
 ---
 
-The `@stablemates/workhorse-prisma` package connects Workhorse to Prisma Client. You enqueue a task
-inside a Prisma interactive transaction. Your data and the task then commit together, or neither
-commits.
+The `@stablemates/workhorse-prisma` package connects Workhorse to Prisma Client. With it, your
+application enqueues a task inside a Prisma interactive transaction. Your data and the task then
+commit together, or neither commits.
 
 This prevents two errors. Without a shared transaction, a task can exist for a row that rolled back.
 Also, a row can commit and its task can be lost.
 
-## Requirements
+## Check the requirements
 
 - Prisma Client 6.
 - PostgreSQL as the Prisma data source.
@@ -56,7 +56,7 @@ If the callback throws an error, Prisma rolls back the account and the task.
 
 To enqueue a task without a transaction, use `workhorse.queue.enqueue`.
 
-## Run the worker
+## Run the worker in its own process
 
 Run workers in their own process, not in your web server. A worker needs a node-postgres pool,
 because Prisma does not give one. The worker uses this pool for its heartbeat and for wake-up
@@ -96,28 +96,61 @@ export default defineWorkerProcess({
 });
 ```
 
-Start the process with `workhorse worker --config <compiled file>`. `workhorse init` writes this file
-for you when it finds Prisma. [Worker processes](/docs/worker-processes) tells you more.
+Start the process with `workhorse worker --config <compiled file>`. If `workhorse init` finds
+Prisma, it writes this file for you. [Worker processes](/docs/worker-processes) tells you more.
 
 If you cannot give a pool, set `sharedHeartbeats` on the worker. The worker then sends heartbeats
 through Prisma and polls for new tasks.
 
-## Limits
+<details>
+<summary>Reference: worker connections</summary>
 
-- **Schema migrations.** Prisma migrations do not manage the Workhorse schema. Install and upgrade it
-  with the Workhorse tools.
-- **Client lifetime.** The adapter does not disconnect your Prisma client. Supply `close` only when
-  the adapter owns the client.
-- **Errors.** A failed database call becomes a `PrismaQueryError`. It keeps the SQL statement, the
-  original error as `cause`, and the PostgreSQL error code as `code`. Workhorse conflicts, such as an
-  idempotency conflict, keep their own error classes.
+- `createPrismaAdapter` accepts the option `pool`.
+- A dedicated heartbeat connection needs a pool of at least 3 connections. If the pool is smaller,
+  the worker does not start unless you set `sharedHeartbeats`.
 
-## How this integration is tested
+More detail: [Overview: ORM adapters](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#orm-adapters),
+[Overview: Connection budgets per language](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#connection-budgets-per-language).
 
-This integration is **verified**. Continuous integration runs the Workhorse adapter conformance suite
-against Prisma on every change. To run it in this repository, use
-`pnpm test:database:typescript typescript/adapter-conformance/test/conformance.test.ts typescript/adapter-conformance/test/integration.test.ts`. The suite opens real transactions in PostgreSQL. The
+</details>
+
+## Handle database errors
+
+If a database call fails, the adapter throws a `PrismaQueryError`. The error keeps the SQL
+statement, the original error as `cause`, and the PostgreSQL error code as `code`. Workhorse
+conflicts, such as an idempotency conflict, keep their own error classes.
+
+<details>
+<summary>Reference: errors</summary>
+
+- `PrismaQueryError` extends `QueryError`. It does not copy parameter values into its message.
+- The code search prefers `meta.code` over the outer raw-query code of Prisma, such as `P2010`.
+
+More detail: [Overview: Prisma and TypeORM queryables](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#prisma-and-typeorm-queryables).
+
+</details>
+
+## Close the client that the adapter owns
+
+The adapter does not disconnect your Prisma client. Give a `close` callback only when the adapter
+owns the client.
+
+## Install the Workhorse schema with the Workhorse tools
+
+Prisma migrations do not manage the Workhorse schema. Install and upgrade the schema with the
+Workhorse tools.
+
+## Run the integration tests
+
+This integration is **verified**. Continuous integration runs the Workhorse adapter conformance
+suite against Prisma on every change. The suite opens real transactions in PostgreSQL. The
 [integrations list](/docs/integrations) shows the Prisma version that the tests use.
+
+To run the suite in this repository, use this command:
+
+```bash
+pnpm test:database:typescript typescript/adapter-conformance/test/conformance.test.ts typescript/adapter-conformance/test/integration.test.ts
+```
 
 ## Next
 

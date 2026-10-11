@@ -1,10 +1,10 @@
 ---
 title: "Workhorse integrations: ORMs, web frameworks, hosting, and recipes"
-description: Use Workhorse with your ORM, web framework, host, or connection pooler, with the setup, an example, and the limits for each.
+description: Find the Workhorse page for your ORM, web framework, host, or connection pooler, with its setup, an example, and its limits.
 ---
 
-Workhorse keeps its queue in PostgreSQL, so it works with the database tools you already use. This
-page lists every tool that has a Workhorse page. Find your tool, then open its page.
+Workhorse keeps its queue in PostgreSQL, so it works with the database tools that you already use.
+This page lists every tool that has a Workhorse page. Find your tool, then open its page.
 
 ## Find your tool
 
@@ -24,7 +24,7 @@ If you move from another task queue, read [Migrate to Workhorse](/docs/migrate).
 
 <IntegrationCatalog />
 
-## How each integration is tested
+## Know how each integration is tested
 
 Each entry has one of two tiers. The tier tells you what proves that the page is still correct.
 
@@ -40,11 +40,11 @@ Neither tier means that the vendor of the tool tests Workhorse.
 ## What all integrations have in common
 
 Workhorse needs one thing from your database tool: a way to run a parameterized SQL query. Workhorse
-calls this the `Queryable` protocol. Each integration converts the database or transaction object
-that your code already has.
+calls this the `Queryable` protocol. Each integration converts the database object or the
+transaction object that your code already has.
 
-When you give Workhorse your open transaction, `enqueue` writes the task in that transaction. If the
-transaction rolls back, the task is not saved. Workhorse never opens a transaction for you.
+If you give Workhorse your open transaction, `enqueue` writes the task in that transaction. If the
+transaction rolls back, PostgreSQL removes the task too. Workhorse never opens a transaction for you.
 
 Workers always run in their own process. No integration starts a worker in a web request.
 

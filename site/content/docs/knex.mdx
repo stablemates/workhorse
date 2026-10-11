@@ -1,19 +1,23 @@
 ---
 title: Knex
-description: Enqueue through the same PostgreSQL Knex transaction as your application write.
+description: Enqueue a Workhorse task through the same PostgreSQL Knex transaction as your application write.
 ---
 
-The optional `@stablemates/workhorse-knex` adapter commits application writes and enqueue together through your exact Knex transaction.
-Knex owns completion, savepoints, and connections.
+The optional `@stablemates/workhorse-knex` adapter connects Workhorse to Knex on PostgreSQL. With
+it, your application write and your task commit together through your Knex transaction, or neither
+commits. Knex continues to own the transaction completion, the savepoints, and the connections.
 
-## Install and create the adapter
+## Create the adapter
 
-This package joins the next Workhorse release. Until publication, use its source workspace package.
-Tests pin Knex 3.3.0 and pg 8.23.1; other releases are unverified.
+Install the adapter together with the tested versions of Knex and node-postgres. The tests pin Knex
+3.3.0 and pg 8.23.1. Workhorse does not verify other versions.
 
 ```bash
 pnpm add @stablemates/workhorse @stablemates/workhorse-knex knex@3.3.0 pg@8.23.1
 ```
+
+Give the Knex instance to `createKnexAdapter`. Then enqueue through `forTransaction` in a Knex
+transaction.
 
 ```ts
 import knex from "knex";
@@ -29,38 +33,80 @@ await database.transaction(async (transaction) => {
 await database.destroy();
 ```
 
-The default queue uses the pool. In a transaction, use `forTransaction(transaction)` or `knexQueryable(transaction)`.
-IDs remain provisional; independent connections see neither write before commit.
-Nested transactions use savepoints. Completed handles reject queries, never borrow another connection.
-Workhorse does not check a supplied transaction's database against the base executor.
+## Enqueue a task in a Knex transaction
 
-## Keep the supported boundary explicit
+In a transaction, use `forTransaction(transaction)` or `knexQueryable(transaction)`. The default
+queue, `workhorse.queue`, uses the Knex pool and does not join your transaction.
 
-Use only PostgreSQL with `client: "pg"`. Install Workhorse's schema outside Knex migrations.
-`knexQueryable` restores native SQL and `$N` through public `raw` and `options`.
-Database tests cover literals, comments, dollar quotes, JSON operators, repeated binds, and out-of-order binds.
-There is no interpolation, connection extraction, or lexical compiler.
+Other connections do not see the account or the task before the commit. If the transaction rolls
+back, the IDs that it returned identify no row and no task. A nested Knex transaction uses a
+savepoint.
 
-`postProcessResponse` hooks are rejected, even when added later.
-Only one native result with object rows is accepted; multi-statement and transformed results fail.
-Custom clients, monkey patches, and query-mutating listeners are uncertified.
-Values use pg's default parsers, including `Date` timestamps.
-Synthetic metadata sets `rowCount` to the row count, `command` to empty, `oid` to zero, and `fields` to empty.
-`KnexQueryError` preserves `cause`, `statement`, and SQLSTATE `code`.
-Typed Workhorse conflicts remain their core error classes.
+The adapter does not check that a transaction comes from the Knex instance of the adapter. Give it
+the transaction that does your application write.
 
-## Keep workers and resources separate
+## Do not keep a transaction queue after the transaction
 
-The adapter destroys Knex only through an explicit `close`; supply it only for adapter-owned resources.
-Transaction adapters never complete transactions.
-Worker processes own separate compatible node-postgres pools and use core `Queue`.
-Never borrow a transaction session or extract Knex's internal pool.
-When workers use this adapter, supply an explicit compatible pg pool for heartbeats and listeners; ordinary queries still use Knex.
-Without that pool, startup requires the explicit `sharedHeartbeats` opt-out.
+After a Knex transaction completes, Knex rejects each query through its handle. The adapter does not
+borrow another connection for that query. Thus an enqueue through a kept transaction queue fails
+with `KnexQueryError`.
+
+## Use only the pg client of Knex
+
+The adapter supports only PostgreSQL with `client: "pg"`. It sends the original SQL and its `$N`
+parameters through the public `raw` and `options` methods of Knex. It does not interpolate values,
+take connections from Knex, or parse SQL itself.
+
+The adapter rejects a `postProcessResponse` hook, also when you add the hook later. It accepts only
+one native result with object rows. A multi-statement result or a transformed result fails. Values
+use the default parsers of pg, so a timestamp becomes a `Date`.
+
+Workhorse does not certify custom clients, monkey patches, or listeners that change queries.
+
+<details>
+<summary>Reference: native query route and results</summary>
+
+- `knexQueryable` sends each statement through
+  `raw(statement).options({ text: statement, values: [...values] })`.
+- The native `text` option restores the SQL after Knex rewrites question marks.
+- Database tests cover literals, comments, dollar quotes, JSON operators, repeated binds, and
+  out-of-order binds.
+- The adapter checks for `client: "pg"` and for no `postProcessResponse` at adaptation and before
+  every execution.
+- The result metadata is synthetic: `rowCount` is the row count, `command` is empty, `oid` is zero,
+  and `fields` is empty.
+- `KnexQueryError` keeps `cause`, `statement`, and the SQLSTATE in `code`.
+- Typed Workhorse conflicts keep their core error classes.
+
+More detail: [Overview: Knex queryable and Objection recipe](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#knex-queryable-and-objection-recipe),
+[Overview: What an adapter must guarantee](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#what-an-adapter-must-guarantee).
+
+</details>
+
+## Run workers with their own pool
+
+Worker processes own a separate node-postgres pool and use the core `Queue`. Do not give a worker a
+transaction session. Do not take the internal pool of Knex.
+
+If a worker uses this adapter, give a compatible pg pool as the `pool` option. The worker uses this
+pool for its heartbeats and its listen connection. Ordinary queries continue to use Knex. If you do
+not give the pool, the worker starts only when you set `sharedHeartbeats`.
+
+## Close the Knex instance that the adapter owns
+
+The adapter destroys Knex only through a `close` callback that you give. Give this callback only
+when the adapter owns the resources. An adapter for a transaction never commits or rolls back that
+transaction.
+
+## Install the Workhorse schema outside Knex migrations
+
+Install the Workhorse schema with the Workhorse tools, not with a Knex migration.
+
+## Run the integration tests
 
 The [maintained fixture](https://github.com/stablemates/workhorse/blob/main/typescript/adapter-conformance/test/knex-integration.test.ts)
-and shared suite run in the existing TypeScript database CI lane.
-They prove this pinned PostgreSQL route, not other drivers or hosted providers.
+and the shared suite run in the TypeScript database lane of CI. They prove this pinned PostgreSQL
+route. They do not prove other drivers or hosted providers.
 
 ## Next
 

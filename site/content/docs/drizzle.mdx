@@ -1,26 +1,26 @@
 ---
 title: Drizzle
-description: Adapt a node-postgres Drizzle database and enqueue tasks inside caller-owned transactions.
+description: Enqueue a Workhorse task in the same node-postgres Drizzle transaction as your application write.
 ---
 
-Your application already writes through Drizzle. When a request inserts an account and enqueues a
-follow-up task, those two writes must commit together — a task for a row that rolled back is a bug,
-and a committed row with no task is a silent gap. `@stablemates/workhorse-drizzle` closes that gap: it converts
-Drizzle's database and transaction objects into the core `Queryable` protocol, so `Queue.enqueue`
-runs inside the same transaction as your Drizzle writes.
+The `@stablemates/workhorse-drizzle` package connects Workhorse to Drizzle ORM on node-postgres.
+With it, your application enqueues a task in the same transaction as its Drizzle writes. The row and
+the task then commit together, or neither commits.
 
-Workhorse stays outside your Drizzle migration graph and keeps its own schema lifecycle. Drizzle
-owns your tables; Workhorse owns its versioned SQL functions.
+This prevents two errors. Without a shared transaction, a task can exist for a row that rolled back.
+Also, a row can commit and its task can be lost, and no error shows this. Drizzle owns your tables.
+Workhorse owns its own schema and its versioned SQL functions.
 
 ## Create the adapter
 
-Install the integration beside the Drizzle and node-postgres packages your application uses.
+Install the integration together with the Drizzle and node-postgres packages that your application
+uses.
 
 ```bash
 pnpm add @stablemates/workhorse-drizzle drizzle-orm pg
 ```
 
-Pass the Drizzle database to `createDrizzleAdapter`.
+Give the Drizzle database to `createDrizzleAdapter`.
 
 ```ts
 import { createDrizzleAdapter } from "@stablemates/workhorse-drizzle";
@@ -35,15 +35,15 @@ const workhorse = createDrizzleAdapter(db, {
 });
 ```
 
-The returned `WorkhorseAdapter` exposes `database`, `queue`, `admin`, `forTransaction`,
-`adminForTransaction`, `createWorker`, and `close`. It gives worker processes and operator tools
-one stable surface without adding Drizzle to core.
+The adapter is a `WorkhorseAdapter`. It has `database`, `queue`, `admin`, `forTransaction`,
+`adminForTransaction`, `createWorker`, and `close`. Your request handlers, operator tools, and
+worker processes use this one adapter. The core package of Workhorse does not depend on Drizzle.
 
-## Enqueue inside a Drizzle transaction
+## Enqueue a task in a Drizzle transaction
 
-This is the pattern the adapter exists for. Call `forTransaction` with the transaction object. The
-returned `Queue` sends its SQL through that transaction, so the task follows the surrounding commit
-or rollback.
+Call `forTransaction` with the transaction object that Drizzle gives to your callback. The queue
+that it returns sends its SQL through that transaction. Thus the task commits or rolls back with
+your Drizzle writes.
 
 ```ts
 await db.transaction(async (tx) => {
@@ -54,18 +54,32 @@ await db.transaction(async (tx) => {
 });
 ```
 
-If the callback throws, Drizzle rolls back both the account and the task. Nothing outside the
-transaction ever sees a half-committed pair. A queue created from the adapter's default `queue`
-property remains outside that caller transaction — use it for enqueues that stand alone.
+If the callback throws an error, Drizzle rolls back the account and the task. Other connections do
+not see the account or the task before the commit.
 
-Use the queue from `forTransaction(tx)` only inside the callback. Drizzle tells the adapter nothing
-when a transaction ends, so a queue kept past that point still works. Its next enqueue either
-commits on its own or joins whichever transaction borrowed the released connection.
+To enqueue a task that is not part of a transaction, use `workhorse.queue`. This queue does not join
+the transaction of the caller.
+
+## Keep the transaction queue inside the callback
+
+Drizzle does not tell the adapter when a transaction ends. Thus a queue from `forTransaction(tx)`
+does not fail after the transaction. It continues to use the connection that the transaction used.
+
+**Example.** A callback keeps its transaction queue in a variable after the callback returns.
+
+1. The callback enqueues a task through `workhorse.forTransaction(tx)`, and Drizzle commits.
+2. Drizzle returns the connection to the pool.
+3. Another request starts a Drizzle transaction on the same connection.
+4. Your code enqueues a task through the kept queue. The task joins the new transaction.
+5. The new transaction rolls back, so the task of step 4 is lost.
+
+Use the queue from `forTransaction(tx)` only inside the callback. If no other transaction uses the
+connection, an enqueue through a kept queue commits by itself.
 
 ## Create workers from the same adapter
 
-`workhorse.createWorker` uses the adapter's default queue and database connection, so a worker
-process needs no second wiring path.
+`workhorse.createWorker` uses the default queue and the database connection of the adapter. Thus a
+worker process does not need a second configuration.
 
 ```ts
 const worker = workhorse.createWorker();
@@ -73,21 +87,65 @@ worker.handle("account.created", handleAccountCreated);
 await worker.run();
 ```
 
-Use `drizzleQueryable` directly when you need a custom `Queue` but do not want the adapter
-lifecycle.
+The worker takes its heartbeat connection and its listen connection from the node-postgres pool of
+Drizzle. A listen connection waits for notifications about new tasks.
 
-Database execution failures become `DrizzleQueryError`, which retains the SQL statement, PostgreSQL
-code when available, and original cause. Typed Workhorse conflicts — idempotency, checkpoint, and
-wait errors — remain their core error classes, so your handling code never needs to unwrap them.
+<details>
+<summary>Reference: worker connections</summary>
 
-## Keep resource ownership explicit
+- `createDrizzleAdapter` finds the node-postgres pool through `$client` of the Drizzle database.
+- `DrizzleAdapterOptions` has no `pool` option.
+- A dedicated heartbeat connection needs a pool of at least 3 connections. If the pool is smaller,
+  the worker does not start unless you set `sharedHeartbeats`.
 
-Unless you supply `close`, the adapter leaves caller-owned resources open. Add that hook only when
-the adapter owns the pool, because `adapter.close` may run during process shutdown or failed
-startup. If your application created the pool for other work, keep closing it yourself.
+More detail: [Overview: ORM adapters](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#orm-adapters),
+[Overview: Connection budgets per language](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#connection-budgets-per-language).
 
-Install the Workhorse schema with the core deployment tools. Drizzle should not generate or migrate
-Workhorse's versioned SQL functions — the schema is a versioned protocol, not application tables.
+</details>
+
+## Build a queue without the adapter
+
+If you need your own `Queue` but not the adapter, use `drizzleQueryable`. It converts a Drizzle
+database or transaction into the `Queryable` interface of the core package. A `Queue` accepts this
+interface.
+
+## Handle database errors
+
+If a database statement fails, the adapter throws `DrizzleQueryError`. The error keeps the SQL
+statement, the PostgreSQL error code if there is one, and the original error.
+
+Typed Workhorse conflicts keep their core error classes. Examples are idempotency, checkpoint, and
+wait conflicts. Thus your code does not need to unwrap them.
+
+<details>
+<summary>Reference: errors and statements</summary>
+
+| `DrizzleQueryError` field | Content                                                |
+| ------------------------- | ------------------------------------------------------ |
+| `statement`               | The SQL statement.                                     |
+| `code`                    | The SQLSTATE that PostgreSQL reported, or `undefined`. |
+| `cause`                   | The original error.                                    |
+
+- `DrizzleQueryError` extends `QueryError`.
+- `drizzleQueryable` rebuilds each statement as a Drizzle `SQL` value. A `$N` with no matching value
+  raises `RangeError`, not `DrizzleQueryError`.
+
+More detail: [Overview: What an adapter must guarantee](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#what-an-adapter-must-guarantee),
+[Overview: Drizzle queryable](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#drizzle-queryable).
+
+</details>
+
+## Close the pool that the adapter owns
+
+The adapter does not close the resources of the caller unless you give a `close` callback. Give
+this callback only when the adapter owns the pool. `adapter.close` can run when the process stops or
+when startup fails. If your application created the pool for other work, close the pool yourself.
+
+## Install the Workhorse schema with the Workhorse tools
+
+Install the Workhorse schema with the deployment tools of the core package. Do not let Drizzle
+generate or migrate the Workhorse SQL functions. The Workhorse schema is a versioned protocol, not a
+set of application tables. Workhorse is not part of your Drizzle migration graph.
 
 ## Next
 

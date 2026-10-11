@@ -1,28 +1,28 @@
 ---
 title: Kysely
-description: Adapt a Kysely database and enqueue tasks inside caller-owned transactions.
+description: Enqueue a Workhorse task in the same Kysely transaction as your application write.
 ---
 
-Your application already writes through Kysely. When a request inserts a row and enqueues a
-follow-up task, those two writes must commit together — a task for a row that rolled back is a bug,
-and a committed row with no task is a silent gap. `@stablemates/workhorse-kysely` closes that gap: it converts
-Kysely databases and transactions into the core `Queryable` protocol, so `Queue.enqueue` runs
-inside the same transaction as your Kysely writes.
+The `@stablemates/workhorse-kysely` package connects Workhorse to Kysely. With it, your application
+enqueues a task in the same transaction as its Kysely writes. The row and the task then commit
+together, or neither commits.
 
-Workhorse keeps its schema lifecycle outside Kysely migrations. Kysely owns your tables; Workhorse
-owns its versioned SQL functions.
+This prevents two errors. Without a shared transaction, a task can exist for a row that rolled back.
+Also, a row can commit and its task can be lost, and no error shows this. Kysely owns your tables.
+Workhorse owns its own schema and its versioned SQL functions.
 
 ## Create the adapter
 
-Install the integration beside Kysely and node-postgres.
+Install the integration together with Kysely and node-postgres.
 
 ```bash
 pnpm add @stablemates/workhorse-kysely kysely pg
 ```
 
-Pass the database to `createKyselyAdapter`. Kysely's `PostgresDialect` already holds a
-node-postgres pool but keeps it private. If the same process runs workers, pass that pool as
-`pool`. Workers take their heartbeat connection and their `LISTEN/NOTIFY` connection from it.
+Give the Kysely database to `createKyselyAdapter`. The `PostgresDialect` of Kysely holds a
+node-postgres pool, but Kysely does not make this pool available. If the same process runs workers,
+give that pool as the `pool` option. The worker takes its heartbeat connection and its listen
+connection from this pool. A listen connection waits for notifications about new tasks.
 
 ```ts
 import { createKyselyAdapter } from "@stablemates/workhorse-kysely";
@@ -41,15 +41,15 @@ const workhorse = createKyselyAdapter(database, {
 });
 ```
 
-The returned `WorkhorseAdapter` exposes `database`, `queue`, `admin`, `forTransaction`,
-`adminForTransaction`, `createWorker`, and `close` — one stable surface for request handlers,
-operator tools, and worker processes.
+The adapter is a `WorkhorseAdapter`. It has `database`, `queue`, `admin`, `forTransaction`,
+`adminForTransaction`, `createWorker`, and `close`. Your request handlers, operator tools, and
+worker processes use this one adapter.
 
-## Enqueue inside a transaction
+## Enqueue a task in a Kysely transaction
 
-This is the pattern the adapter exists for. Call `forTransaction` with the transaction passed to
-the callback. The queue executes its compiled SQL through that transaction, so the task follows the
-surrounding commit or rollback.
+Call `forTransaction` with the transaction that Kysely gives to your callback. The queue that it
+returns runs its compiled SQL through that transaction. Thus the task commits or rolls back with
+your Kysely writes.
 
 ```ts
 await database.transaction().execute(async (transaction) => {
@@ -65,23 +65,65 @@ await database.transaction().execute(async (transaction) => {
 });
 ```
 
-If the callback throws, Kysely rolls back both writes. Nothing outside the transaction ever sees a
-half-committed pair. The adapter's default queue remains outside that transaction — use it for
-enqueues that stand alone.
+If the callback throws an error, Kysely rolls back the account and the task. Other connections do
+not see the account or the task before the commit.
 
-## Keep resource ownership explicit
+To enqueue a task that is not part of a transaction, use `workhorse.queue`. This queue does not join
+the transaction of the caller.
 
-The adapter does not destroy a caller-owned database unless `close` is configured. Add that hook
-only when the adapter owns the database, because `adapter.close` may run during process shutdown or
-failed startup. Without `pool`, a worker refuses to start unless you set `sharedHeartbeats`. It
-then sends heartbeats through Kysely's queries and dispatches by bounded polling.
+## Run a worker without a pool
 
-Database execution failures become `KyselyQueryError`, which retains the statement, original cause,
-and PostgreSQL error code. Typed Workhorse conflicts — idempotency, checkpoint, and wait errors —
-remain their core error classes.
+If you do not give `pool`, a worker does not start unless you set `sharedHeartbeats`. With this
+setting, the worker sends its heartbeats through the queries of Kysely. It then finds new tasks by
+bounded polling.
 
-Install the Workhorse schema with the core deployment tools rather than a Kysely migration — the
-schema is a versioned protocol, not application tables.
+<details>
+<summary>Reference: worker connections</summary>
+
+- `createKyselyAdapter` accepts the option `pool`. Give the pool that `PostgresDialect` uses.
+- A dedicated heartbeat connection needs a pool of at least 3 connections. If the pool is smaller,
+  the worker does not start unless you set `sharedHeartbeats`.
+
+More detail: [Overview: ORM adapters](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#orm-adapters),
+[Overview: What an adapter must guarantee](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#what-an-adapter-must-guarantee).
+
+</details>
+
+## Handle database errors
+
+If a database statement fails, the adapter throws `KyselyQueryError`. The error keeps the
+statement, the original error, and the PostgreSQL error code.
+
+Typed Workhorse conflicts keep their core error classes. Examples are idempotency, checkpoint, and
+wait conflicts.
+
+<details>
+<summary>Reference: errors and statements</summary>
+
+| `KyselyQueryError` field | Content                                                |
+| ------------------------ | ------------------------------------------------------ |
+| `statement`              | The SQL statement.                                     |
+| `code`                   | The SQLSTATE that PostgreSQL reported, or `undefined`. |
+| `cause`                  | The original error.                                    |
+
+- `KyselyQueryError` extends `QueryError`.
+- `kyselyQueryable` builds a `CompiledQuery.raw` from the statement and its values. It then calls
+  `executeQuery` on a `Kysely` database or a `Transaction`.
+
+More detail: [Overview: Kysely queryable](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#kysely-queryable).
+
+</details>
+
+## Close the database that the adapter owns
+
+The adapter does not destroy a database that the caller owns unless you give a `close` callback.
+Give this callback only when the adapter owns the database. `adapter.close` can run when the process
+stops or when startup fails.
+
+## Install the Workhorse schema with the Workhorse tools
+
+Install the Workhorse schema with the deployment tools of the core package, not with a Kysely
+migration. The Workhorse schema is a versioned protocol, not a set of application tables.
 
 ## Next
 

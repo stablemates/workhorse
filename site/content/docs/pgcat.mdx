@@ -1,14 +1,17 @@
 ---
 title: Can I run Workhorse behind PgCat?
-description: PgCat carries every Workhorse operation in both pool modes, but never delivers LISTEN notifications asynchronously.
+description: Run every Workhorse operation behind PgCat in both pool modes, and know that PgCat never delivers a LISTEN notification on its own.
 ---
 
-Yes — Workhorse is correct behind PgCat in `pool_mode = "session"` and `pool_mode =
-"transaction"`, because every statement is self-contained and every lock is transaction-scoped.
-Two PgCat behaviors shape the deployment: notifications are never pushed asynchronously, and pools
-are named statically in `pgcat.toml`.
+PgCat is a PostgreSQL connection pooler. Workhorse works correctly behind PgCat in
+`pool_mode = "session"` and in `pool_mode = "transaction"`. Each Workhorse statement is
+self-contained, and each Workhorse lock is transaction-scoped. Two behaviors of PgCat change your
+deployment:
 
-## The matrix
+- PgCat never pushes a notification to an idle client.
+- `pgcat.toml` names each pool statically.
+
+## Check which operations work in each pool mode
 
 | Operation                                              | Session mode                  | Transaction mode               |
 | ------------------------------------------------------ | ----------------------------- | ------------------------------ |
@@ -20,29 +23,98 @@ are named statically in `pgcat.toml`.
 | Session-level advisory locks                           | Yes                           | Unsafe — no exclusion, leaks   |
 | Session state (`SET`, `PREPARE`, temporary tables)     | Yes                           | Unsafe — leaks between clients |
 
-## Wake hints never arrive on their own
+<details>
+<summary>Reference: verification</summary>
 
-PgCat accepts `LISTEN workhorse_tasks` in both modes, then buffers the notification until the
-listening client sends another query — which an idle worker never does. The wake hint is dead in
-every PgCat mode, not just transaction mode, and nothing errors: the worker believes it is
-listening while dispatch runs on the fallback poll. Polling is the correctness mechanism, so tasks
-still run; wake-up is slower.
+- `typescript/core/test/integration-pooling.test.ts` runs PgCat in `pool_mode = session` and in
+  `pool_mode = transaction` as separate lanes.
+- The schema rows cover `installSchema`, `migrateSchema`, and `contractSchema`.
+- The advisory lock rows cover every SQL `pg_(try_)advisory_xact_lock` and the session-level
+  `pg_advisory_lock`/`pg_advisory_unlock`.
+- The rows were verified on 2026-09-11 against PgCat 1.2.0 and PostgreSQL 18.6.
 
-To keep wake hints, give the worker a pool that reaches PostgreSQL directly or through session-mode
-PgBouncer. The Prisma and Kysely adapters take a `pool` for exactly this; Drizzle and TypeORM use
-the ORM's own pool.
+More detail: [Compatibility: PostgreSQL connection poolers](https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md#postgresql-connection-poolers).
 
-## Static pool names
+</details>
 
-PgCat routes on the pool name in `pgcat.toml`, not on the real database name alone. A client URL's
-database name must match a configured `[pools.<name>]` entry, and each entry names the database it
-routes to — PgCat cannot forward a database it was not configured for, unlike PgBouncer's wildcard
-entries. Name the pool after the database it serves.
+## Give the worker a direct pool to keep wake hints
 
-## What is unsafe
+A wake hint is a PostgreSQL notification that tells an idle worker about a new task. Behind PgCat,
+wake hints do not arrive in either pool mode.
 
-Session-level advisory locks — `pg_advisory_lock`, not the transaction-scoped forms Workhorse uses —
-stop excluding across clients under transaction pooling, because each statement may land on a
-different server session and a grant outlives the client that took it. Any `SET` left behind lands
-on the next client to borrow that backend. The dead listener connection still counts against PgCat's
-client cap and, except in Rust, against the client pool.
+**Example.** A worker listens for wake hints through PgCat, and the queue is empty.
+
+1. The worker sends `LISTEN workhorse_tasks`. PgCat accepts it, and no error occurs.
+2. The worker waits. It sends no query.
+3. Your application enqueues a task, and PostgreSQL sends a notification.
+4. PgCat buffers the notification until the worker sends a different query. The idle worker never
+   sends one.
+5. The fallback poll of the worker finds the task and runs it.
+
+The worker reports that it listens, but the fallback poll does all the dispatch. Polling is the
+mechanism that makes Workhorse correct, so all tasks still run. Only the wake-up is slower.
+
+To keep wake hints, give the worker a pool that connects to PostgreSQL directly or through
+session-mode PgBouncer. The Prisma and Kysely adapters take a `pool` for this purpose. Drizzle and
+TypeORM use the pool of the ORM.
+
+<details>
+<summary>Reference: listener behavior</summary>
+
+- PgCat, in either pool mode, relays a buffered notification only with the result of the next query
+  of the client.
+- `Queue.supportsTaskNotifications()` and the `isListening()` of the subscription still report the
+  capability.
+- `TypeOrmAdapterOptions` and `DrizzleAdapterOptions` omit `pool`.
+
+More detail: [Overview: `LISTEN` notifications](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#listen-notifications) and [Compatibility: PostgreSQL connection poolers](https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md#postgresql-connection-poolers).
+
+</details>
+
+## Name each pool after its database
+
+PgCat routes a connection by the pool name in `pgcat.toml`, not only by the real database name.
+The database name in a client URL must match a configured `[pools.<name>]` entry. Each entry names
+the database that it routes to. PgCat cannot forward a database that you did not configure. In this
+respect PgCat is different from the wildcard entries of PgBouncer. Name each pool after the
+database that it serves.
+
+## Do not use session state under transaction pooling
+
+Under transaction pooling, each statement can go to a different server session. Thus session state
+is unsafe:
+
+- A session-level advisory lock stops the exclusion between clients. Workhorse uses only the
+  transaction-scoped forms.
+- A grant of a session-level lock stays after the client that took it.
+- A `SET` that a client leaves applies to the next client that borrows that backend.
+
+The listener connection that receives no notifications still counts against the client limit of
+PgCat. Except in Rust, it also counts against the client pool.
+
+<details>
+<summary>Reference: locks and connection budget</summary>
+
+- The session-level lock functions are `pg_advisory_lock`, `pg_advisory_unlock`, and
+  `pg_try_advisory_lock`.
+- Every Workhorse advisory lock is transaction-scoped: `pg_advisory_xact_lock`,
+  `pg_try_advisory_xact_lock`, and `pg_advisory_xact_lock_shared`. This includes the
+  schema-migration lock.
+- The Rust worker opens its listener with `notifications::listen` from
+  `WorkerOptions::listen_config`, outside the pool. The other languages take the listener connection
+  from the pool.
+
+More detail: [Overview: Advisory locks](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#advisory-locks) and [Overview: Connection budgets per language](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#connection-budgets-per-language).
+
+</details>
+
+## Next
+
+- [Connection poolers](/docs/pgbouncer) — how Workhorse behaves behind PgBouncer
+- [Worker processes](/docs/worker-processes) — run the worker with its own pool
+- [Compatibility](/docs/compatibility) — the supported runtimes and PostgreSQL versions
+
+---
+
+Exact pooler behavior and the test lanes:
+[compatibility reference](https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md#postgresql-connection-poolers).

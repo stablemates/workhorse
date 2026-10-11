@@ -1,27 +1,44 @@
 ---
 title: Django Tasks
-description: Keep decorated Django tasks while Workhorse supplies atomic acceptance and dedicated execution.
+description: Keep your decorated Django tasks, accept each task in the business transaction, and run it in a dedicated Workhorse worker.
 ---
 
-Django applications can keep `@task` and `.enqueue()` while Workhorse executes tasks in a separate
-worker process. Business writes and task acceptance share Django's PostgreSQL transaction.
-This backend implements a bounded submission and execution contract, not complete Django result storage.
+Django Tasks is the task interface of Django: you decorate a function with `@task` and call
+`.enqueue()`. The Workhorse backend lets a Django application keep that interface. The task commits
+in the same PostgreSQL transaction as your business writes. A separate worker process runs it. The
+backend gives a bounded contract for submission and execution. It does not store Django results.
 
-## Install and configure
+## Install the backend
 
-The optional `workhorse.django` module ships in the Python distribution. Installing ordinary
-Workhorse neither installs nor imports Django. Install the extra in your Django application's environment:
+The optional `workhorse.django` module is part of the Python distribution. An ordinary Workhorse
+installation does not install or import Django. Install the extra in the environment of your Django
+application:
 
 ```sh
 pip install 'stablemates-workhorse[django]' 'psycopg[binary]==3.3.6'
 ```
 
-The fixture pins Django **6.1.1**, Psycopg **3.3.6** and asgiref **3.12.1**. The extra constrains
-Django to `>=6.1.1,<6.2`. The backend requires Psycopg 3, not psycopg2, on Workhorse's supported
-Python and PostgreSQL versions. Install the [Workhorse schema](/docs/installation) separately in
-the same database. Django continues to own its application migrations.
+The backend requires Psycopg 3, not psycopg2. Install the [Workhorse schema](/docs/installation)
+separately, in the same database. Django continues to own the migrations of your application.
 
-Configure the backend alias separately from the database alias. No database router chooses it implicitly:
+<details>
+<summary>Reference: tested versions</summary>
+
+| Item       | Value                                                          |
+| ---------- | -------------------------------------------------------------- |
+| Django     | 6.1.1, pinned by the fixture. The extra allows `>=6.1.1,<6.2`. |
+| Psycopg    | 3.3.6, pinned by the fixture                                   |
+| asgiref    | 3.12.1, pinned by the fixture                                  |
+| Python     | The supported versions of Workhorse                            |
+| PostgreSQL | The supported versions of Workhorse                            |
+
+More detail: [ADR 0087: Keep the Django Tasks backend bounded by atomic acceptance](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0087-bounded-django-tasks-backend.md) and [Compatibility: Supported versions](https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md#supported-versions).
+
+</details>
+
+## Configure the backend
+
+Give the backend its database alias explicitly. No database router selects the alias for you.
 
 ```python
 TASKS = {
@@ -37,11 +54,9 @@ TASKS = {
 }
 ```
 
-`DATABASES["business"]` must select Django's PostgreSQL Psycopg backend. `TASK_PATHS` is a nonempty
-allowlist of importable, decorated, module-level tasks. `QUEUES` must contain nonempty names;
-`MAX_ATTEMPTS` must be an integer from **1** through **100** and defaults to **25**.
-All configured paths must resolve at worker startup.
-Keep task modules free of request handling or worker startup side effects.
+`DATABASES["business"]` must select the PostgreSQL Psycopg backend of Django. `TASK_PATHS` is an
+allowlist: it names each task that the backend can run. Each path must be an importable, decorated,
+module-level task. All configured paths must resolve when the worker starts.
 
 ```python
 from django.tasks import task
@@ -51,10 +66,30 @@ def greet(name: str, *, punctuation: str = "!") -> dict[str, str]:
     return {"greeting": f"Hello, {name}{punctuation}"}
 ```
 
-The maintained `python/examples/django_tasks.py` supplies the same task and a separate worker entrypoint.
-Configure its allowlist as `django_tasks.greet` when running the repository example.
+Keep the task modules free of side effects such as request handling or worker startup. The
+maintained example `python/examples/django_tasks.py` has the same task and a separate worker entry
+point. To run the repository example, configure its allowlist as `django_tasks.greet`.
 
-## Submit inside the selected atomic block
+<details>
+<summary>Reference: backend options</summary>
+
+| Setting          | Rule                                                                 |
+| ---------------- | -------------------------------------------------------------------- |
+| `QUEUES`         | A nonempty list of nonempty queue names. Defaults to `["default"]`.  |
+| `DATABASE_ALIAS` | Required. A nonempty string.                                         |
+| `TASK_PATHS`     | Required. A nonempty list of unique dotted paths to decorated tasks. |
+| `MAX_ATTEMPTS`   | An integer from 1 through 100. Defaults to 25.                       |
+
+An invalid setting raises `ImproperlyConfigured`. The backend enqueues each task with the task type
+`django.tasks.<backend alias>`.
+
+More detail: [ADR 0087: Keep the Django Tasks backend bounded by atomic acceptance](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0087-bounded-django-tasks-backend.md).
+
+</details>
+
+## Enqueue a task inside the atomic block
+
+Call `.enqueue()` inside `transaction.atomic(using=DATABASE_ALIAS)`.
 
 ```python
 from django.db import transaction
@@ -65,28 +100,52 @@ with transaction.atomic(using="business"):
     accepted = greet.using(queue_name="urgent").enqueue("Ada", punctuation="?")
 ```
 
-The backend uses the same guarded connection seam as the [Django enqueue recipe](/docs/django).
-It never commits, closes, retains a queue or starts a second transaction. Standalone submissions must
-also enter `transaction.atomic(using=DATABASE_ALIAS)`. An atomic block on another alias is insufficient.
-`on_commit()` is not an atomic acceptance substitute.
+The backend uses the same guarded connection as the [Django enqueue recipe](/docs/django). It never
+commits, never closes the connection, never keeps a queue, and never starts a second transaction. A
+standalone submission must also be inside `transaction.atomic(using=DATABASE_ALIAS)`. An atomic
+block on a different alias is not sufficient. `on_commit()` does not replace atomic acceptance.
 
-Arguments are normalized using Django's JSON rules, then checked for finite JSON values and string
-object keys. Tuples become lists and UTF-8 bytes become strings. Unsupported objects, invalid call
-signatures, nonfinite numbers and unregistered tasks fail before acceptance.
+`.using(queue_name=...)` selects an allowed Workhorse queue. `.using(backend=...)` selects a
+different configured backend. That backend must allow the same task path and map its own database
+alias explicitly. No task can change the retry limits through `.using()`.
 
-The returned object is Django's genuine `TaskResult`: `READY`, the Workhorse task ID, normalized
-arguments and submission time, with no attempts, worker IDs or errors. It proves acceptance within
-the current transaction, not commit. A rollback can invalidate its ID. Outer rollback also removes
-tasks from released inner savepoints.
+## Pass arguments that convert to JSON
 
-`.using(queue_name=...)` selects an allowed Workhorse queue. `.using(backend=...)` selects another
-configured backend, which must allow the same task path and explicitly map its own database alias.
-No task may override retry limits through `.using()`.
+The backend converts the arguments with the JSON rules of Django. Then it checks for finite JSON
+values and string object keys. A tuple becomes a list, and UTF-8 bytes become a string.
+
+The enqueue fails before acceptance in these cases:
+
+- an argument is an unsupported object;
+- the arguments do not match the signature of the function;
+- a number is not finite;
+- the task is not registered.
+
+## Read the returned `TaskResult` as acceptance, not commit
+
+`.enqueue()` returns a genuine Django `TaskResult`. Its status is `READY`. It has the Workhorse
+task ID, the converted arguments, and the submission time. It has no attempts, worker IDs, or
+errors.
+
+**Example.** A request submits `greet` in an inner atomic block, and then the outer block fails.
+
+1. The request opens the outer block `transaction.atomic(using="business")`.
+2. The request opens an inner atomic block and calls `greet.enqueue("Ada")`. It gets a `TaskResult`
+   with a task ID.
+3. The inner block ends, and Django releases its savepoint.
+4. A later statement in the outer block fails, and Django rolls back the outer block.
+5. PostgreSQL removes the task. The task ID from step 2 now identifies no task.
+
+A `TaskResult` shows that Workhorse accepted the task in the current transaction. It does not show
+that the transaction committed.
 
 ## Run a dedicated worker
 
-In a separate process, initialize Django before importing the application's tasks. Open a worker
-pool against the same database that `DATABASE_ALIAS` selects:
+Run the worker in a separate process. Do these steps in that process:
+
+1. Initialize Django before you import the tasks of the application.
+2. Open a worker pool on the database that `DATABASE_ALIAS` selects.
+3. Bind the backend to the worker, then run the worker.
 
 ```python
 import django
@@ -103,7 +162,8 @@ with ConnectionPool(database_url, min_size=3, max_size=3,
     worker.run()
 ```
 
-The example's importable worker entrypoint accepts `--database-url`, `--backend` and `--once`:
+The importable worker entry point of the example accepts `--database-url`, `--backend`, and
+`--once`:
 
 ```sh
 PYTHONPATH=python/examples DJANGO_SETTINGS_MODULE=application.settings \
@@ -111,40 +171,78 @@ PYTHONPATH=python/examples DJANGO_SETTINGS_MODULE=application.settings \
   --database-url "$DATABASE_URL" --once
 ```
 
-`bind_worker()` resolves only configured decorated tasks. During execution, an envelope selects a
-registered task without importing its payload's path. Unknown paths, wrong backend/queue identities
-and invalid envelopes fail as Workhorse attempts. Never start this worker from a request, Django
-startup hook, or web-process thread. [Worker processes](/docs/worker-processes) own the runtime.
+`bind_worker()` resolves only the configured decorated tasks. During execution, an envelope selects
+a registered task. The envelope is the JSON payload that names the backend, the queue, the task
+path, and the arguments. The worker does not import the path from the payload. If the path is
+unknown, if the backend or queue does not match, or if the envelope is invalid, the attempt fails.
 
-## Retries and unsupported results
+Never start this worker from a request, from a Django startup hook, or from a thread of the web
+process. [Worker processes](/docs/worker-processes) explains the runtime.
 
-Workhorse retries raised exceptions up to the backend's `MAX_ATTEMPTS`. Native Workhorse retry
-scheduling controls the delay. Each attempt calls the function from its beginning; after exhaustion,
-Workhorse records final failure. Handlers need idempotent external effects for at-least-once delivery.
-Changing registered task implementations across deployments affects later attempts.
+<details>
+<summary>Reference: envelope</summary>
 
-The bridge discards return values. Its initial Django result stays `READY` even after success or
-failure. `get_result()`, `aget_result()`, `refresh()` and `arefresh()` raise `NotImplementedError`.
-No process-local cache substitutes for durable results. Inspect native Workhorse task outcomes and
-operator surfaces instead; those are not Django `TaskResult` objects.
+The envelope has exactly these keys: `version`, `backend`, `path`, `queue`, `args`, and `kwargs`.
 
-`supports_get_result`, `supports_priority`, `supports_defer` and `supports_async_task` remain false.
-Nondefault priorities, `run_after`, coroutine handlers and `takes_context=True` are rejected.
-Inherited `.aenqueue()` submits through Django's thread-sensitive synchronous adapter. It neither
-creates an async transaction nor enables coroutine handlers. Wrap the **whole** business operation
-and atomic block with `sync_to_async(..., thread_sensitive=True)`, as the Django recipe demonstrates.
+- `version` must be the integer 1.
+- `backend` must be the alias of the bound backend.
+- `path` must be in the registry that `bind_worker()` built from `TASK_PATHS`.
+- `queue` must be in `QUEUES` and must be equal to the queue of the task.
+- `args` must be a list. `kwargs` must be an object with string keys.
 
-Named checkpoints, durable waits, signals, child tasks, progress, cancellation context, per-task
-retry policies, idempotency and other coordination options remain native-only. Use a native
-Workhorse handler when those capabilities matter.
+If a check fails, the handler raises `InvalidTask`.
 
-## Verification
+More detail: [ADR 0087: Keep the Django Tasks backend bounded by atomic acceptance](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0087-bounded-django-tasks-backend.md).
 
-`pnpm python:test:django-tasks` runs the focused backend fixture. `pnpm python:test:django` preserves
-all parent connection, error, lifecycle and transaction proofs through the extracted seam.
-Both use per-test scratch databases, including an independent worker subprocess and installed
-wheel/source-distribution consumers with and without Django. CI collects these fixtures through
-`pnpm python:test` once per change, including pull requests targeting the Django foundation branch.
+</details>
 
-The contract follows the released [Django 6.1 Tasks documentation](https://docs.djangoproject.com/en/6.1/topics/tasks/)
-and [Django 6.1.1 backend source](https://github.com/django/django/blob/6.1.1/django/tasks/backends/base.py).
+## Make each task safe to run again
+
+Workhorse retries a raised exception up to the `MAX_ATTEMPTS` of the backend. The native retry
+schedule of Workhorse controls the delay. Each attempt calls the function from its start. After the
+last attempt, Workhorse records the final failure.
+
+Delivery is at least once, so the external effects of each task must be idempotent. If you change
+the code of a registered task in a deployment, the later attempts use the new code.
+
+## Read task outcomes in Workhorse, not in Django
+
+The backend discards return values. The first Django result stays `READY` after success and after
+failure. `get_result()`, `aget_result()`, `refresh()`, and `arefresh()` raise
+`NotImplementedError`. No process-local cache replaces durable results.
+
+To see what happened to a task, use the native Workhorse task outcomes and operator surfaces. These
+are not Django `TaskResult` objects.
+
+## Know what the backend does not support
+
+`supports_get_result`, `supports_priority`, `supports_defer`, and `supports_async_task` stay false.
+The backend rejects nondefault priorities, `run_after`, coroutine handlers, and
+`takes_context=True`.
+
+`.aenqueue()` comes from Django. It submits through the thread-sensitive synchronous adapter of
+Django. It does not make an async transaction, and it does not permit coroutine handlers. Wrap the
+**whole** business operation and its atomic block with `sync_to_async(..., thread_sensitive=True)`.
+The [Django recipe](/docs/django) shows this.
+
+These features stay native-only: named checkpoints, durable waits, signals, child tasks, progress,
+cancellation context, per-task retry policies, idempotency, and other coordination options. If you
+need them, use a native Workhorse handler.
+
+## Run the tests
+
+`pnpm python:test:django-tasks` runs the focused backend fixture. `pnpm python:test:django` keeps
+all the connection, error, lifecycle, and transaction tests of the shared guarded connection. Both
+use scratch databases for each test. They include an independent worker subprocess, and installed
+wheel and source-distribution consumers with Django and without Django. CI collects these fixtures
+through `pnpm python:test` one time for each change.
+
+The contract follows the released
+[Django 6.1 Tasks documentation](https://docs.djangoproject.com/en/6.1/topics/tasks/) and the
+[Django 6.1.1 backend source](https://github.com/django/django/blob/6.1.1/django/tasks/backends/base.py).
+
+## Next
+
+- [Django](/docs/django) — enqueue through the connection of the atomic block without Django Tasks
+- [Worker processes](/docs/worker-processes) — run the worker outside the web process
+- [Idempotency](/docs/idempotency) — make repeated work safe
