@@ -129,6 +129,20 @@ here.
 If a change affects the public deployment contract, runtime configuration, image publishing, host
 prerequisites, or deployment procedure, update `typescript/demo/DEPLOYMENT.md` in the same commit.
 
+## Expect canceled CI runs on main
+
+CI costs money for each run. Maintainers and agents cancel CI runs on `main` to decrease that cost.
+CI cancels an older run automatically only on a pull request, so each push to `main` starts a full
+run.
+
+- A canceled CI run on `main` is not a failure. Do not report it as a failure.
+- Do not start a canceled run on `main` again, and do not wait for it.
+- Use the checks of the pull request before the merge as the CI evidence for a merged change.
+- If you merge a pull request and expect to merge more pull requests soon, you can cancel the CI
+  run that the merge starts on `main`. Use `gh run cancel` with the ID of that run.
+- Cancel only runs of the `CI` workflow on `main`. Never cancel a pull request run or a release
+  workflow run, because a canceled publish can leave a release incomplete.
+
 ## Keep benchmark comparisons private
 
 Until a maintainer decides to publish benchmarks, never name a benchmark competitor in this
