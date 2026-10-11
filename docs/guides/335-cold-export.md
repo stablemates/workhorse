@@ -2,41 +2,45 @@
 
 <!-- scenario-names: archiver-1, archiver-2 -->
 
-Retention deletes events and attempts after a bounded window. That suits a database whose purpose is
-dispatch. It does not suit an auditor who asks in March what happened to a task in January. Cold
-export answers that question without stretching retention. Workhorse copies each finished day of
-history to an export store you own, and only then lets retention delete it.
+Retention deletes events and attempts after a limited window. This window suits a database that
+dispatches work. But an auditor can ask in March what happened to a task in January. Cold export
+copies each finished UTC day of history to an export store, and only then lets retention delete
+the day. An export store is storage that you own, such as an object store.
 
-Export is off by default. With it off, nothing in this guide runs and Workhorse remains
-PostgreSQL-only.
+Cold export is off by default. If it is off, nothing on this page runs, and Workhorse uses only
+PostgreSQL.
 
-## A day is the unit
+## Export one UTC day at a time
 
-**Example.** You turned export on, and an exporter process named `archiver-1` runs every hour.
-Follow the history your tasks wrote on 14 September.
+**Example.** You turn on cold export. An exporter named `archiver-1` runs each hour. An exporter is
+a program that you run to copy history to the export store. Follow the history that your tasks write
+on 14 September.
 
-1. **During 14 September (UTC).** Tasks run and fail and retry. Workhorse writes their events to
-   `task_event` and their closed attempts to `attempt_history`.
-2. **At midnight UTC.** The day closes. It cannot be exported yet. The statistics rollup, the
-   background pass that summarizes history, has not passed the day yet.
-3. **A few minutes later.** The rollup passes midnight. The day is now exportable.
-4. **At the next run.** `archiver-1` claims the 14 September segment of `task_event`. It reads the
-   day's rows and writes one compressed file of JSON lines. Beside it, it writes a small manifest.
-   Then it marks the segment complete.
-5. **When the retention window ends.** Retention may now delete 14 September from PostgreSQL. The
-   export store still holds it.
+1. During 14 September UTC, tasks run and fail. Workhorse writes their events to `task_event` and
+   their closed attempts to `attempt_history`.
+2. At midnight UTC, the day ends. The statistics rollup, the routine that summarizes history, has
+   not summarized the day. Thus the day is not ready for export.
+3. Some minutes later, the rollup passes midnight. The day is now ready for export.
+4. At its next run, `archiver-1` copies the 14 September segment of `task_event` to the export
+   store. Then it marks the segment complete.
+5. When the retention window of the day ends, retention can delete 14 September from PostgreSQL.
+   The export store keeps the day.
 
-Each day of each history relation becomes one segment. A segment is one compressed file with one
-row per event or attempt, every column kept. Its manifest records the row count, the byte length,
-and a checksum of the file as stored. A day with no rows gets only the manifest.
+A segment is one day of one history table. The exporter writes each segment as one compressed file
+of JSON lines. The file has one line for each row of the table, with all columns. A row is an event,
+an attempt, or a fast-tier outcome. A manifest file
+next to it records the row count, the byte length, and a checksum of the stored file. If a day has
+no rows, the exporter writes only the manifest.
 
-A [fast-tier queue](305-fast-tier.md) writes little history. Export therefore treats its outcome
-rows as a third relation, `fast_task_outcome`. Workhorse groups those rows by the day each task
+A [fast-tier queue](305-fast-tier.md) writes little history. Thus cold export treats its outcome
+rows as a third table, `fast_task_outcome`. Workhorse puts each outcome row in the day when its task
 finished.
 
-Workhorse exports a day only after the day closed and the rollup passed it. The rollup watermark
-already decides when deletion is safe. Export follows the same rule, so it always runs ahead of
-deletion. See [320-statistics.md](320-statistics.md).
+Workhorse permits the export of a day only after the day ends and the rollup passes it. The rollup
+watermark also decides when retention can delete a day. Thus the export always comes before the
+deletion. [320-statistics.md](320-statistics.md) explains the rollup watermark. Workhorse also keeps
+one export watermark for each table. The export watermark is the start of the oldest day that is
+not exported.
 
 <details>
 <summary>Reference: datasets and the export gate</summary>
@@ -68,26 +72,117 @@ More detail: [Data model: Export gate](../architecture/data-model.md#export-gate
 
 </details>
 
-## The ledger lives in PostgreSQL
+## Run an exporter
 
-Suppose `archiver-1` stops on 20 September, because its host was retired and nobody moved it.
+**Example.** An operator turns on cold export just before the first run of `archiver-1`.
 
-1. **On 20 September.** The last complete segment of `task_event` is 19 September. The watermark,
-   the start of the oldest day not yet exported, is 20 September.
-2. **Over the next days.** New days close, but nobody exports them. The watermark stays at
-   20 September.
-3. **When 20 September leaves the retention window.** Retention would delete the day, but the
-   watermark is not past it. Retention keeps the day.
-4. **Every day after.** Retention holds one more day. The retention lag in
-   [queue health](360-queue-health.md) grows, and that is how you notice.
+1. Immediately, retention starts to wait for the export watermark.
+2. At the hourly run, `archiver-1` claims the oldest day that is not exported. It reads the day,
+   writes the file and its manifest, and completes the segment.
+3. Then the export store refuses a write, and `archiver-1` reports the failure.
+4. The next claim of `archiver-1` gets the same day again.
 
-Workhorse records every segment in its own schema: which day, whether it is complete, which exporter
-holds it, the object name, the checksum, and any error. It also keeps one watermark per relation.
-The watermark advances only across contiguous complete days, so it can never skip a hole.
+The exporter is not a routine. Workers never connect to your export store, and dispatch never waits
+for an export. Workhorse supplies the ledger and the four SQL functions that an exporter calls. The
+ledger is the record of segments in PostgreSQL. You run the exporter where you want, on the schedule
+that you want. More than one exporter can run at the same time. This release does not include an
+exporter.
 
-That ledger is the interlock. While export is enabled, history retention does not delete a day at or
-above the watermark. An exporter that stops holds history rather than leaving the export store
-incomplete.
+Turn on cold export one time, from a deployment or from an operator session:
+
+```ts
+import { Pool, Queue } from "@stablemates/workhorse";
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const queue = new Queue(pool);
+
+// One time. The export starts at the oldest day that PostgreSQL still holds.
+await queue.setColdExportPolicy({ enabled: true });
+console.log(await queue.getColdExportStatus());
+```
+
+Turn on cold export only when an exporter is ready to run. From that time, retention waits for the
+export watermark. If no exporter runs, Workhorse keeps history without a limit. The retention lag in
+queue health increases until you turn off cold export or run an exporter.
+
+An exporter repeats these calls:
+
+1. Claim the next day.
+2. Read the day in pages, in the order of the row identity.
+3. Write the file and its manifest to the export store.
+4. Complete the segment with the checksum and the counts.
+
+If the write fails, report the failure. The next claim then gets the same day again.
+
+```sql
+SELECT * FROM workhorse.claim_cold_export_segment_v1('task_event', 'archiver-1', 3600000);
+SELECT * FROM workhorse.read_cold_export_rows_v1(
+  'task_event', '2026-09-14T00:00Z', '2026-09-15T00:00Z', NULL, NULL, 5000);
+SELECT workhorse.complete_cold_export_segment_v1(
+  'task_event', '2026-09-14T00:00Z', 1,
+  'workhorse/task_event/2026/09/14/task_event-2026-09-14.ndjson.gz',
+  'workhorse/task_event/2026/09/14/task_event-2026-09-14.manifest.json',
+  '<hex sha-256 of the object as stored>', 123456, 5000);
+```
+
+`queue.getColdExportStatus()` shows the export watermark of each table and the newest day that is
+ready for export. It also shows the segment that an exporter holds and the last error.
+
+An export store can be any storage that writes one object under a name. The export store and its
+provider own encryption at rest, access control, and write-once rules. Workhorse has no key of its
+own.
+
+<details>
+<summary>Reference: exporter contract and status</summary>
+
+An exporter runs these steps:
+
+1. It claims one day of one dataset.
+2. It reads the day in `read_cold_export_rows_v1` pages of 1 through 100,000 rows.
+3. It writes one gzipped JSON-lines object, named as below.
+4. It writes a `.manifest.json` beside the object, with the row count, byte length, and hex SHA-256
+   of the object as stored.
+5. It completes the segment with those values, or calls `fail_cold_export_segment_v1`.
+
+| Object key pattern                                                         |
+| -------------------------------------------------------------------------- |
+| `<prefix>/<dataset>/<YYYY>/<MM>/<DD>/<dataset>-<YYYY>-<MM>-<DD>.ndjson.gz` |
+
+**Status.** `Queue.getColdExportStatus()` wraps `get_cold_export_status_v1()`. It returns `enabled`,
+`updatedAt`, and per dataset:
+
+| Field               | Meaning                                                      |
+| ------------------- | ------------------------------------------------------------ |
+| `exportedThrough`   | The watermark. Every day below it has a complete segment.    |
+| `exportableThrough` | The newest day boundary a segment may end at.                |
+| `completeSegments`  | Count of complete segments.                                  |
+| `exporting`         | `{ segmentStart, attempts }` of a held or abandoned segment. |
+| `lastError`         | The newest stored error.                                     |
+
+More detail: [Data model: Exporter contract](../architecture/data-model.md#exporter-contract).
+
+</details>
+
+## Find an exporter that stopped
+
+**Example.** `archiver-1` stops on 20 September. Its host was removed, and nobody moved the
+exporter.
+
+1. On 20 September, the last complete segment of `task_event` is 19 September. The export watermark
+   is 20 September.
+2. On the next days, new days end, but no exporter copies them. The watermark stays at 20 September.
+3. Then 20 September passes its retention window. The watermark is not past the day, so retention
+   keeps it.
+4. Each day after that, retention keeps one more day. The retention lag in
+   [queue health](360-queue-health.md) increases, and you see the problem.
+
+Workhorse records each segment in the ledger: the day, the status, the exporter that holds it, the
+object name, the checksum, and any error. The watermark moves forward only across complete days
+with no gap between them. Thus it cannot skip a missing day.
+
+While cold export is on, history retention does not delete a day at or after the export watermark.
+Thus an exporter that stops keeps history in PostgreSQL. It does not leave a gap in the export
+store.
 
 <details>
 <summary>Reference: ledger and retention clamp</summary>
@@ -118,26 +213,27 @@ More detail: [Data model: Retention clamp](../architecture/data-model.md#retenti
 
 </details>
 
-## Resume is free
+## Recover after an exporter crashes
 
-`archiver-1` claims 14 September with a one-hour lease and starts the upload. Halfway through, its
-process crashes.
+A lease is the time that one exporter holds a segment. While the lease is active, no other exporter
+can claim a day of that table.
 
-1. **At 0 min.** The claim opens the segment with attempt 1 and leases it to `archiver-1`.
-2. **At 20 min.** `archiver-1` crashes. Part of the object may already be in the store.
-3. **At 60 min.** The lease lapses. Until then, no other exporter can claim this relation.
-4. **At 70 min.** `archiver-2` claims. It gets the same day with attempt 2. It writes the object again
-   under the same name, with the same bytes, and completes the segment as attempt 2.
-5. **At 90 min.** `archiver-1` restarts and tries to complete the segment as attempt 1. The ledger
-   refuses, because attempt 2 now holds the day.
+**Example.** `archiver-1` claims 14 September with a one-hour lease and starts the upload.
 
-The same day always produces the same object. The object name comes from the segment identity, and
-rows are read in a fixed order. So a second export overwrites a partial upload with the full one.
-Nothing about the store needs to be transactional.
+1. At 0 min, the claim opens the segment as attempt 1 and leases it to `archiver-1`.
+2. At 20 min, `archiver-1` crashes. Part of the file can already be in the export store.
+3. At 60 min, the lease expires. At 70 min, `archiver-2` claims the same day as attempt 2.
+4. `archiver-2` writes the same file under the same name, and completes the segment.
+5. At 90 min, `archiver-1` restarts and tries to complete the segment as attempt 1. The ledger
+   refuses, because attempt 2 holds the day.
 
-A crash cannot corrupt the ledger either. Each claim leases the day and counts the attempt. Only the
-attempt that holds the lease can mark the day complete. An exporter that fails cleanly reports the
-failure, which releases the lease at once, so the next claim hands out the same day again.
+The same day always gives the same file. The file name comes from the segment, and the exporter
+reads the rows in a fixed order. Thus a second export replaces a partial upload with the full file.
+The export store does not need transactions.
+
+A crash also cannot damage the ledger. Each claim leases the day and counts the attempt. Only the
+attempt that holds the lease can mark the day complete. If an exporter reports a failure, Workhorse
+releases the lease immediately. The next claim then gets the same day again.
 
 <details>
 <summary>Reference: segment functions</summary>
@@ -172,59 +268,155 @@ More detail: [Data model: Segment functions](../architecture/data-model.md#segme
 
 </details>
 
-## A day is a UTC day
+## Read an export
 
-An exporter session uses the time zone `America/New_York`. On 8 March 2026, New York moves its
-clocks forward an hour. Earlier releases handled that day like this:
+**Example.** In March, an auditor asks how many events of each type the tasks wrote in September.
+Retention has deleted September from PostgreSQL, but `archiver-1` exported each day.
 
-1. **The claim.** The segment starts at 8 March 00:00 UTC. The claim added one calendar day in the
-   session time zone. The segment therefore ended at 8 March 23:00 UTC, an hour short.
-2. **The next claim.** The next segment started at 8 March 23:00 UTC, off midnight. Its UTC date was
-   also 8 March, so it had the same object name.
-3. **The upload.** The exporter wrote the second segment under that name. It overwrote the object of
-   the first, and the export store lost most of 8 March.
+1. The operator uses DuckDB on the September files of `task_event`, and groups the lines by event
+   type.
+2. The auditor then asks about one task. The operator loads 14 September into a scratch table and
+   queries it with PostgreSQL.
 
-A day that turns the clocks back made a segment an hour too long instead. Either way, later
-segments started off midnight.
+This version has no query that reads PostgreSQL and the export store together. Read the export
+store with a tool that reads JSON lines. Or load a day into a scratch schema for a PostgreSQL query.
+A scratch schema is a schema that you make only for this work.
 
-A segment now always starts at a UTC midnight and lasts one UTC day, whatever the session time
-zone.
+Do not load an export into the live `workhorse` schema. Retention deletes the rows again, and the
+statistics count them two times.
 
-The schema upgrade that adds this rule repairs a damaged ledger. Before you run it, stop every
-exporter and let each finish its object and manifest uploads. Keep export enabled, so retention
-still waits for the export. The repair fences an earlier exporter out of the ledger. It cannot stop
-an upload already in flight, and that upload would overwrite the corrected day's object with the
-old range.
+With DuckDB:
 
-The upgrade first waits for any running retention pass, and no pass deletes history until the
-repair commits. A pass that read the old watermark therefore cannot delete history the repair
-wants to export again. An exporter that claims or completes a day during the upgrade waits for it
-too.
+```sql
+SELECT event_type, count(*)
+  FROM read_ndjson_auto('/mnt/archive/workhorse/task_event/2026/09/*/*.ndjson.gz')
+ GROUP BY event_type;
+```
 
-When a relation lost a completed day to a short or long segment, Workhorse moves its watermark back.
-It goes to the first day that segment may have overwritten. The exporter then writes those days
-again. Retention reads the watermark, so it keeps those days until the export has copied them.
+With PostgreSQL, decompress the file and load each line as one `jsonb` value into a scratch table.
+The quote byte and the delimiter byte below never occur in JSON. Thus `COPY` keeps each line
+complete:
 
-Each damaged segment is then made one UTC day:
+```sh
+gunzip -c task_event-2026-09-14.ndjson.gz \
+  | psql "$DATABASE_URL" -c "COPY archive.task_event_lines (line) FROM STDIN \
+      WITH (FORMAT csv, QUOTE E'\x01', DELIMITER E'\x02')"
+```
 
-- A segment that starts at a UTC midnight and lies at or after the new watermark becomes one UTC day
-  and is exported again. Its attempt count rises, so the exporter that held it before cannot
+Then get columns from the lines with `jsonb` operators. Each line holds one source row. Its keys are
+the column names at the time of the export.
+
+<details>
+<summary>Reference: export contents and restore</summary>
+
+- Each line is the `record` that `read_cold_export_rows_v1` returned: the `to_jsonb` of one row.
+- Rows arrive in `(occurred_at, id)` order. For `fast_task_outcome`, the order is
+  `(finished_at, task_id)`.
+- An empty day completes with a null object key and a manifest only.
+- ADR 0068 promises no hot and cold query through the dashboard or the operator API. It makes
+  loading an export into the live `workhorse` schema unsupported, because retention would delete it
+  again and statistics would count it twice.
+
+More detail: [Data model: Segment functions](../architecture/data-model.md#segment-functions) and [ADR 0068: Export cold history behind the rollup watermark](../decisions/0068-export-cold-history-behind-the-rollup-watermark.md).
+
+</details>
+
+## Turn off cold export
+
+If you turn off cold export, retention uses only its windows again. If you turn it on later, the
+export starts at the oldest day that PostgreSQL still holds.
+
+**Example.** You turn off cold export on 1 October.
+
+1. Retention immediately uses its windows again.
+2. The next passes delete the days that the export kept.
+3. On 20 October, you turn on cold export again. PostgreSQL no longer holds those days.
+4. Workhorse moves the export watermark forward to the oldest day that PostgreSQL still holds.
+
+Workhorse does not record empty segments for days that had rows before.
+
+<details>
+<summary>Reference: policy functions</summary>
+
+`Queue.setColdExportPolicy({ enabled, from? })` wraps `set_cold_export_policy_v1(p_enabled, p_from)`
+and emits the `workhorse.cold_export_policy.synchronized` log event.
+
+Enabling seeds each dataset without a watermark at one of these days:
+
+- the UTC day of `p_from`, when given;
+- otherwise `cold_export_oldest_history_day_internal_v1`, the UTC day of the oldest retained row;
+- the current UTC day, when the dataset is empty.
+
+Rules:
+
+- A `p_from` that differs from an existing watermark raises `already started`. The start never
+  moves.
+- `p_from` with `p_enabled = false` raises.
+- Re-enabling advances a watermark that fell below the oldest retained day.
+
+More detail: [Data model: Policy functions](../architecture/data-model.md#policy-functions).
+
+</details>
+
+<a id="a-day-is-a-utc-day"></a>
+
+## Repair segments that are not one UTC day
+
+A segment always starts at a UTC midnight and lasts one UTC day. The time zone of the session has no
+effect. Earlier releases did not obey this rule on a day with a clock change.
+
+**Example.** An exporter session uses the time zone `America/New_York`. On 8 March 2026, New York
+moves its clocks forward one hour. An earlier release did these steps:
+
+1. A segment started at 8 March 00:00 UTC. The claim added one calendar day in the session time
+   zone, so the segment ended at 8 March 23:00 UTC.
+2. The next segment started at 8 March 23:00 UTC, not at midnight. Its UTC date was also 8 March,
+   so it got the same object name.
+3. The exporter wrote the second segment under that name. It replaced the file of the first
+   segment, and the export store lost most of 8 March.
+
+On a day when the clocks moved back, a segment was one hour too long. In both cases, the later
+segments did not start at midnight.
+
+The schema upgrade that adds the UTC-day rule repairs a damaged ledger. Before you run the upgrade,
+do these steps:
+
+1. Stop each exporter.
+2. Let each exporter finish its file and manifest uploads.
+3. Keep cold export on, so that retention still waits for the export.
+
+The repair removes earlier exporters from the ledger. It cannot stop an upload that is in progress.
+That upload can replace the file of a repaired day with the old range.
+
+The upgrade first waits for a running retention pass. No pass deletes history until the repair
+commits. Thus a pass that read the old watermark cannot delete history that the repair must export
+again. An exporter that claims or completes a day during the upgrade also waits.
+
+If a table lost a complete day to a short or long segment, Workhorse moves its export watermark
+back. The watermark goes to the first day that the segment can have replaced. The exporter then
+writes those days again. Retention reads the watermark, so it keeps those days until the export
+copies them.
+
+Then Workhorse makes each damaged segment one UTC day:
+
+- If a segment starts at a UTC midnight and is at or after the new watermark, it becomes one UTC
+  day. The exporter exports it again. Its attempt count increases, so its earlier exporter cannot
   complete it.
-- Any other segment that is not one UTC day is dropped. Its object stays in your store, but the
-  ledger no longer names it.
+- Workhorse deletes each other segment that is not one UTC day. Its file stays in your export
+  store, but the ledger no longer names it.
 
-The upgrade raises a warning per relation with the count and the range of each kind of change.
+The upgrade gives a warning for each table, with the count and the range of each type of change.
 
-The rewind reaches only history that PostgreSQL still holds. Retention may already have removed
-some of those days. The watermark then stops at the oldest day still present. A second warning
-names the days that cannot be written again. Treat their exported objects as suspect, and restore
-them from another copy if you have one.
+The watermark moves back only to history that PostgreSQL still holds. Retention can already have
+deleted some of those days. Then the watermark stops at the oldest day that remains. A second
+warning names the days that the exporter cannot write again. Do not trust their exported files. If
+you have another copy of them, restore them from it.
 
-Retention can also remove part of a day. The fast tier prunes outcomes one row at a time, so a day
-it already exported may keep only some of its rows. Exporting that day again would overwrite a
-complete object with a smaller one. The rewind therefore also stops after the last completed day
-whose source now holds fewer rows than its exported object recorded. Those days keep their objects,
-and the same warning names them.
+Retention can also delete part of a day. Fast-tier cleanup deletes outcomes one row at a time. Thus
+an exported day can keep only some of its rows in PostgreSQL. A new export of that day replaces a
+complete file with a smaller file. Thus the watermark also stops after the last complete day whose
+source holds fewer rows than its exported file. Those days keep their files, and the same warning
+names them.
 
 <details>
 <summary>Reference: the UTC-day repair (migration 0052)</summary>
@@ -267,178 +459,13 @@ More detail: [Data model: Migration 0052 repair](../architecture/data-model.md#m
 
 </details>
 
-## Running an exporter
-
-Go back to `archiver-1`. An operator enables export just before its first run.
-
-1. **At once** retention starts to wait for the export watermark.
-2. **At the hourly run** `archiver-1` claims the oldest day not yet exported. It reads the day,
-   writes the object and its manifest, and completes the segment.
-3. **Suppose the store refuses the write.** `archiver-1` reports the failure. Its next claim gets
-   the same day again.
-
-The exporter is not a worker routine. Workers never talk to your object store, and dispatch never
-waits for an export. Workhorse ships the ledger and the four functions an exporter drives. The
-exporter itself is a small program you run where you like, on the schedule you like. Several may run
-at once. No exporter ships in this release.
-
-Enable export once from a deployment or an operator session:
-
-```ts
-import { Pool, Queue } from "@stablemates/workhorse";
-
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-const queue = new Queue(pool);
-
-// Once. Export starts at the oldest day still in PostgreSQL.
-await queue.setColdExportPolicy({ enabled: true });
-console.log(await queue.getColdExportStatus());
-```
-
-Do this only when an exporter is ready to run. From that moment, retention waits for the export
-watermark. Enabling export with nothing to drain it holds history indefinitely. The retention lag in
-queue health keeps growing until you disable export or run an exporter.
-
-An exporter loops over four calls. It claims the next day and reads that day in pages ordered by
-identity. It writes the object and its manifest. Then it completes the segment with the checksum
-and counts. If writing fails, it reports the failure, so the next claim hands the same day out
-again:
-
-```sql
-SELECT * FROM workhorse.claim_cold_export_segment_v1('task_event', 'archiver-1', 3600000);
-SELECT * FROM workhorse.read_cold_export_rows_v1(
-  'task_event', '2026-09-14T00:00Z', '2026-09-15T00:00Z', NULL, NULL, 5000);
-SELECT workhorse.complete_cold_export_segment_v1(
-  'task_event', '2026-09-14T00:00Z', 1,
-  'workhorse/task_event/2026/09/14/task_event-2026-09-14.ndjson.gz',
-  'workhorse/task_event/2026/09/14/task_event-2026-09-14.manifest.json',
-  '<hex sha-256 of the object as stored>', 123456, 5000);
-```
-
-`queue.getColdExportStatus()` reports, per relation, the watermark and the newest day that may be
-exported. It also reports the segment currently held and the last error.
-
-A store is anything that writes one object under a name. Encryption at rest, access control, and
-write-once rules belong to that store and its provider. Workhorse holds no key of its own.
-
-<details>
-<summary>Reference: exporter contract and status</summary>
-
-An exporter runs these steps:
-
-1. It claims one day of one dataset.
-2. It reads the day in `read_cold_export_rows_v1` pages of 1 through 100,000 rows.
-3. It writes one gzipped JSON-lines object, named as below.
-4. It writes a `.manifest.json` beside the object, with the row count, byte length, and hex SHA-256
-   of the object as stored.
-5. It completes the segment with those values, or calls `fail_cold_export_segment_v1`.
-
-| Object key pattern                                                         |
-| -------------------------------------------------------------------------- |
-| `<prefix>/<dataset>/<YYYY>/<MM>/<DD>/<dataset>-<YYYY>-<MM>-<DD>.ndjson.gz` |
-
-**Status.** `Queue.getColdExportStatus()` wraps `get_cold_export_status_v1()`. It returns `enabled`,
-`updatedAt`, and per dataset:
-
-| Field               | Meaning                                                      |
-| ------------------- | ------------------------------------------------------------ |
-| `exportedThrough`   | The watermark. Every day below it has a complete segment.    |
-| `exportableThrough` | The newest day boundary a segment may end at.                |
-| `completeSegments`  | Count of complete segments.                                  |
-| `exporting`         | `{ segmentStart, attempts }` of a held or abandoned segment. |
-| `lastError`         | The newest stored error.                                     |
-
-More detail: [Data model: Exporter contract](../architecture/data-model.md#exporter-contract).
-
-</details>
-
-## Turning it off
-
-You disable export on 1 October. Retention returns to its configured windows at once, and the next
-passes delete the days that export was holding. On 20 October you enable export again. By then
-PostgreSQL no longer holds those days. So the watermark moves forward to the oldest day still
-present. Workhorse does not record empty segments for days that once had rows.
-
-<details>
-<summary>Reference: policy functions</summary>
-
-`Queue.setColdExportPolicy({ enabled, from? })` wraps `set_cold_export_policy_v1(p_enabled, p_from)`
-and emits the `workhorse.cold_export_policy.synchronized` log event.
-
-Enabling seeds each dataset without a watermark at one of these days:
-
-- the UTC day of `p_from`, when given;
-- otherwise `cold_export_oldest_history_day_internal_v1`, the UTC day of the oldest retained row;
-- the current UTC day, when the dataset is empty.
-
-Rules:
-
-- A `p_from` that differs from an existing watermark raises `already started`. The start never
-  moves.
-- `p_from` with `p_enabled = false` raises.
-- Re-enabling advances a watermark that fell below the oldest retained day.
-
-More detail: [Data model: Policy functions](../architecture/data-model.md#policy-functions).
-
-</details>
-
-## Reading an export back
-
-In March an auditor asks how many events of each type the tasks wrote in September. Retention has
-already deleted September from PostgreSQL, but `archiver-1` exported every day of it.
-
-1. **The operator counts with DuckDB.** They point it at the September objects of `task_event` and
-   group the lines by event type.
-2. **The auditor then asks about one task.** The operator loads 14 September into a scratch table
-   and queries it with PostgreSQL.
-
-There is no transparent hot-and-cold query in this version. Read the export store with a tool that
-understands JSON lines, or load a day into a scratch schema for a PostgreSQL query. Never load it
-into the live `workhorse` schema. Retention would delete it again, and statistics would count it
-twice.
-
-With DuckDB:
-
-```sql
-SELECT event_type, count(*)
-  FROM read_ndjson_auto('/mnt/archive/workhorse/task_event/2026/09/*/*.ndjson.gz')
- GROUP BY event_type;
-```
-
-With PostgreSQL, decompress and load each line as one `jsonb` value into a scratch table. The quote
-and delimiter bytes below never occur in JSON, so `COPY` keeps every line intact:
-
-```sh
-gunzip -c task_event-2026-09-14.ndjson.gz \
-  | psql "$DATABASE_URL" -c "COPY archive.task_event_lines (line) FROM STDIN \
-      WITH (FORMAT csv, QUOTE E'\x01', DELIMITER E'\x02')"
-```
-
-Then project the lines into columns with `jsonb` operators. Each line holds one source row, keyed
-by the column names it had when it was exported.
-
-<details>
-<summary>Reference: export contents and restore</summary>
-
-- Each line is the `record` that `read_cold_export_rows_v1` returned: the `to_jsonb` of one row.
-- Rows arrive in `(occurred_at, id)` order. For `fast_task_outcome`, the order is
-  `(finished_at, task_id)`.
-- An empty day completes with a null object key and a manifest only.
-- ADR 0068 promises no hot and cold query through the dashboard or the operator API. It makes
-  loading an export into the live `workhorse` schema unsupported, because retention would delete it
-  again and statistics would count it twice.
-
-More detail: [Data model: Segment functions](../architecture/data-model.md#segment-functions) and [ADR 0068: Export cold history behind the rollup watermark](../decisions/0068-export-cold-history-behind-the-rollup-watermark.md).
-
-</details>
-
 ## Next
 
-- [330-retention.md](330-retention.md) — the windows export runs ahead of
-- [320-statistics.md](320-statistics.md) — the watermark that gates both deletion and export
-- [360-queue-health.md](360-queue-health.md) — where a stalled exporter shows up
+- [330-retention.md](330-retention.md) — the windows that the export comes before
+- [320-statistics.md](320-statistics.md) — the watermark that controls deletion and export
+- [360-queue-health.md](360-queue-health.md) — where an exporter that stopped shows
 
 ---
 
-Exact table columns, function signatures, and bounds:
+Exact table columns, function signatures, and limits:
 [`architecture/data-model.md`](../architecture/data-model.md#cold_export_policy-cold_export_dataset-and-cold_export_segment).

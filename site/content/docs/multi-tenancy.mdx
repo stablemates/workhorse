@@ -3,77 +3,43 @@ title: Multi-tenancy
 description: Run many tenants on Workhorse, with one database each or one shared database whose tasks carry the tenant.
 ---
 
-A tenant is a customer, team, or account whose work you must keep fair and bounded, and sometimes
-apart. Workhorse offers two ways to do that, and the difference is who enforces the boundary.
+A tenant is a customer, team, or account whose work must stay fair and bounded. Sometimes the work
+of a tenant must also stay apart from the work of other tenants. Workhorse gives two ways to do
+this, and they differ in who enforces the boundary between tenants.
 
-With **isolated tenancy**, each tenant has its own database, and PostgreSQL enforces the boundary.
-With **shared tenancy**, tenants share one database, and every task carries its tenant as metadata
-that the application keeps consistent. Pick isolated tenancy when a tenant's rows may not sit in
-the same tables as another's. Pick shared tenancy when many tenants need fair share and per-tenant
-limits rather than data separation.
+- With **shared tenancy**, all tenants use one database. Each task carries the identifier of its
+  tenant, and your app keeps that identifier consistent.
+- With **isolated tenancy**, each tenant has its own database. PostgreSQL enforces the boundary.
 
-## Isolated tenancy: one database per tenant
+Use shared tenancy if many tenants need a fair share and limits for each tenant. Use isolated
+tenancy if the rows of one tenant must not be in the same tables as the rows of another tenant.
 
-**Example.** Your product serves two hospitals, `north` and `south`. Their records may not share a
-table, so each hospital gets its own database with the Workhorse schema installed.
+## Give each tenant a fair share of one database
 
-1. **At setup** you install the schema into the `north` database and into the `south` database.
-2. **At run time** one worker fleet points at `north`, and a second fleet points at `south`. Each
-   worker binds to one database, so no worker ever sees both hospitals' tasks.
-3. **On a deploy** you run `workhorse schema migrate` twice, once per database. Each database
-   upgrades on its own.
+**Example.** Queue `reports` serves all customers in one database. The concurrency policy lets the
+queue run 40 reports at the same time, and a maximum of 4 for each tenant. The budget of each tenant
+lets it run a maximum of 8 tasks across all queues.
 
-Tasks, queues, schedules, policies, budgets, retention, and the dashboard are separate because the
-databases are. Nothing in the schema has to know about tenants.
+1. At 09:00, tenant `acme` enqueues 60 monthly reports. Four reports start, and 56 reports wait. The
+   other 36 slots stay free, because `acme` uses all of its 4 slots.
+2. At 09:01, tenant `globex` enqueues 3 reports. The claim skips the waiting `acme` reports, and the
+   3 `globex` reports start immediately.
+3. At 09:02, `acme` enqueues exports on queue `exports`. Its budget, also named `acme`, counts its 4
+   reports too. Four exports start, and the other exports wait.
+4. At 09:05, an operator filters the dashboard task list by the tag `tenant:acme`. The list shows
+   only the work of `acme`.
 
-The cost is operational. Each tenant adds a schema upgrade per deploy and a fleet that holds its own
-connections. Telemetry is separate too: the process resource attributes name the tenant, one fleet
-at a time.
+In a shared database, the tenant is not a column. Your app writes the same tenant identifier into
+three enqueue options. Workhorse already enforces each of these options:
 
-<details>
-<summary>Reference: isolated tenancy</summary>
-
-- PostgreSQL enforces the boundary between databases.
-- Every table, policy, budget, schedule, retention window, and dashboard session is separate.
-- Each database runs `workhorse schema migrate` independently.
-- Each `Worker` binds to one database.
-- In isolated tenancy the process resource attributes identify the tenant, one worker fleet at a
-  time.
-
-More detail: [Overview: Isolated tenancy](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#isolated-tenancy).
-
-</details>
-
-## Shared tenancy: the tenant rides on the task
-
-Queue `reports` serves every customer in one database. The concurrency policy lets the queue run
-forty reports at once, and at most four per tenant. Each tenant's budget caps its active work at
-eight across every queue.
-
-1. **At 09:00** tenant `acme` enqueues 60 monthly reports. Four start, and the other 56 wait.
-   The other 36 slots stay free, because `acme` has used its four.
-2. **At 09:01** tenant `globex` enqueues three reports. They start at once in the free slots. The
-   claim passes over the waiting `acme` reports ahead of them.
-3. **At 09:02** `acme` also enqueues exports on queue `exports`. Its budget, also named `acme`,
-   counts its reports too. Four exports start, and the rest wait while `acme` is at its cap.
-4. **At 09:05** an operator filters the dashboard task list by the tag `tenant:acme` and sees only
-   `acme`'s work.
-
-In a shared database the tenant is not a column. It is the same identifier written to three enqueue
-options that Workhorse already enforces:
-
-- `concurrencyKey` gives the tenant fair share inside a queue. A concurrency policy with
-  `maxActivePerKey` caps how many of one tenant's tasks run at once, and a rate policy with `perKey`
-  gives each tenant its own token bucket. See [concurrency policies](/docs/concurrency-policies)
-  and [rate limits](/docs/rate-limits).
-- `budget` caps one tenant's work across every queue. Synchronize one budget per tenant with
-  `Queue.syncBudgets`, and each task names its tenant's budget.
-- A `tenant:` tag makes the tenant filterable. Dead-letter listing, redrive filters, and the
-  dashboard task list accept a tag filter, so an operator can see one tenant's work at a glance.
-
-The claim passes over a tenant at its cap only within a bounded window of the oldest ready tasks.
-If one tenant's waiting backlog fills that whole window, the claim reaches no other tenant's work.
-[Avoid a blocked queue](/docs/concurrency-policies#keep-a-full-key-from-blocking-other-work) covers that case.
+- `concurrencyKey` gives each tenant a fair share in a queue. A concurrency policy with
+  `maxActivePerKey` sets the maximum number of active tasks for one tenant. A rate policy with
+  `perKey` gives each tenant its own token bucket. See [concurrency policies](/docs/concurrency-policies) and
+  [rate limits](/docs/rate-limits).
+- `budget` sets a limit for one tenant across all queues. Synchronize one budget for each tenant
+  with `Queue.syncBudgets`. Each task names the budget of its tenant.
+- A `tenant:` tag lets an operator filter by tenant. Dead-letter lists, redrive filters, and the
+  dashboard task list accept a tag filter.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -176,19 +142,26 @@ If one tenant's waiting backlog fills that whole window, the claim reaches no ot
   </Tab>
 </Tabs>
 
-Go applications set `ConcurrencyKey`, `Budget`, and `Tags` on `EnqueueOptions` and synchronize
-with `Queue.SyncBudgets`. Python applications set `concurrency_key`, `budget`, and `tags` and
-synchronize with `Queue.sync_budgets` or `AsyncQueue.sync_budgets`. Rust applications set the same
-snake_case fields and synchronize with `Queue::sync_budgets`. Ruby applications pass the same names
-as keywords and synchronize with `Queue#sync_budgets`.
+In Go, set `ConcurrencyKey`, `Budget`, and `Tags` on `EnqueueOptions`, and synchronize with
+`Queue.SyncBudgets`. In Python, set `concurrency_key`, `budget`, and `tags`, and synchronize with
+`Queue.sync_budgets` or `AsyncQueue.sync_budgets`. In Rust, set the same snake_case fields, and synchronize with
+`Queue::sync_budgets`. In Ruby, give the same names as keywords, and synchronize with
+`Queue#sync_budgets`.
 
-A queue groups work for dispatch, not tenants. Tenants share queues, and the key and budget keep
-them fair. A queue per tenant works for a handful of tenants, but it multiplies health rows, worker
-queue lists, and policy rows without adding any isolation.
+If a tenant is at its limit, the claim skips the tasks of that tenant. The claim examines only a
+limited window of the first ready tasks. If the waiting tasks of one tenant fill that whole window,
+the claim finds no task of another tenant.
+[Keep a full key from blocking other work](/docs/concurrency-policies#keep-a-full-key-from-blocking-other-work)
+tells how to prevent this.
 
-A recurring schedule names its tenant through the `concurrencyKey` in its task definition. Schedule
-definitions do not carry tags or a budget yet. A scheduled task therefore has fair share but no
-cross-queue cap, until the handler enqueues follow-up work with the full set.
+Do not make a queue for each tenant. A queue groups work for dispatch, not tenants. Many tenants
+share one queue, and the key and the budget keep the work fair. A queue for each tenant can work for
+a small number of tenants. But each new queue adds health rows, worker queue lists, and policy rows,
+and it adds no isolation.
+
+A recurring schedule names its tenant with the `concurrencyKey` in its task definition. Schedule
+definitions do not carry tags or a budget. Thus, a scheduled task gets a fair share in its queue,
+but no limit across queues. If the handler enqueues more work, give that work all three options.
 
 <details>
 <summary>Reference: the three tenant fields</summary>
@@ -209,9 +182,9 @@ cross-queue cap, until the handler enqueues follow-up work with the full set.
 - The dashboard wire validator accepts at most 20 selected tags.
 - `Admin.listTasks` has no tag filter.
 - The claim inspects at most the first 100 ready rows of the queue, in priority, sequence, and
-  task-identity order. A saturated key's rows stay in that window.
+  task-identity order. The rows of a saturated key stay in that window.
 - `sync_budgets_v1` accepts at most 10,000 definitions per call. On the benchmark host, one budget
-  per tenant cost about 130 microseconds per tenant to synchronize.
+  per tenant costs about 130 microseconds per tenant to synchronize.
 - `schedule_definition` keeps `concurrency_key` and carries neither tags nor a budget.
 - `namespace` on schedules, policies, and budgets names the owning deployment, not a tenant.
 
@@ -219,31 +192,69 @@ More detail: [Overview: Shared tenancy](https://github.com/stablemates/workhorse
 
 </details>
 
+## Keep each tenant in its own database
+
+**Example.** A contract with `acme` says that its records must not share a table with the records of
+another customer. Thus, `acme` and `globex` each get a database with the Workhorse schema.
+
+1. At setup, you install the schema in the `acme` database and in the `globex` database.
+2. At run time, one worker fleet connects to `acme`, and a second fleet connects to `globex`. Each
+   worker connects to one database. Thus, no worker sees the tasks of both tenants.
+3. At each deployment, you run `workhorse schema migrate` two times, one time for each database.
+   Each database upgrades independently.
+
+The databases are separate. Thus, the tasks, queues, schedules, policies, budgets, retention, and
+dashboard of each tenant are separate. The schema does not need to know about tenants.
+
+This model has an operational cost. Each new tenant adds a schema upgrade to each deployment. It
+also adds a worker fleet that holds its own connections. Telemetry is also separate. The process
+resource attributes of each fleet identify its tenant.
+
+<details>
+<summary>Reference: isolated tenancy</summary>
+
+- PostgreSQL enforces the boundary between databases.
+- Every table, policy, budget, schedule, retention window, and dashboard session is separate.
+- Each database runs `workhorse schema migrate` independently.
+- Each `Worker` binds to one database.
+- In isolated tenancy, the process resource attributes identify the tenant, one worker fleet at a
+  time.
+
+More detail: [Overview: Isolated tenancy](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#isolated-tenancy).
+
+</details>
+
 ## What shared tenancy does not do
 
-Your app enqueues a task with `concurrencyKey: "acme"`, but a bug writes the tag `tenant:globex`.
-Workhorse accepts the task. It counts the task against `acme`'s fair share, and an operator who
-filters by `tenant:globex` sees it in `globex`'s list.
+Shared tenancy keeps work fair. It does not make a security boundary.
 
-The boundary is a convention your application keeps. Nothing rejects a task whose key, tag, and
-budget disagree.
+**Example.** Your app enqueues a task with `concurrencyKey: "acme"`. A defect in the app writes the
+tag `tenant:globex` on the same task.
 
-Retention is per installation. Every tenant's history ages under the same windows. A tenant that
-needs its own windows needs its own database.
+1. Workhorse accepts the task.
+2. Workhorse counts the task against the fair share of `acme`.
+3. An operator filters by `tenant:globex` and sees the task in the list of `globex`.
 
-Operator access is not tenant-scoped. An administrator sees every tenant's tasks, and an authorized
-cancel, redrive, or purge acts on any task. A tag filter narrows a view; it does not enforce a
-boundary. Workhorse does not yet scope operator access to a tenant. The
-[limitations](/docs/limitations) page tracks that gap.
+Your app must keep the key, the tag, and the budget of a task consistent. Workhorse does not reject
+a task whose key, tag, and budget do not agree.
 
-Metrics never carry the tenant. Queue and task type bound the cardinality of every counter and
-histogram, and a tag or key would let tenant count multiply the series. A handler that wants the
-tenant on its own spans reads it from the payload.
+Retention applies to the full installation. The history of all tenants uses the same retention
+windows. If a tenant needs different windows, give it its own database.
+
+Operator access applies to all tenants. An administrator sees the tasks of all tenants. An
+authorized cancel, redrive, or purge can change any task. A tag filter makes a view smaller, but it
+does not enforce a boundary. Workhorse does not yet limit operator access to one tenant. The
+[limitations](/docs/limitations) page records this limit.
+
+Metrics do not carry the tenant. The queue and the task type limit the number of series for each
+counter and histogram. A tag or key attribute would make the number of series grow with the number
+of tenants. If a handler must show the tenant on its own spans, it reads the tenant from the
+payload.
 
 <details>
 <summary>Reference: what shared tenancy does not scope</summary>
 
-- No check compares a task's `concurrency_key`, `budget_name`, and tags.
+- No check compares the `concurrency_key`, `budget_name`, and tags of a task.
 - `retention_policy` is a singleton, so retention windows are per installation.
 - No function scopes a read or an operator action to a tenant.
 - Metric attributes never include a key or tag.
@@ -255,19 +266,24 @@ More detail: [Overview: Shared tenancy](https://github.com/stablemates/workhorse
 
 </details>
 
-## Dispatch cost does not grow with tenant count
+## Add tenants without slowing the claim
 
-Queue `reports` holds work for 100,000 tenants. The 40 tenants at the head of the queue are all at
-their per-tenant cap.
+The cost to claim one task does not increase with the number of tenants. Each count that the claim
+does reads only the rows of one tenant.
 
-1. A worker claims. Workhorse counts each head tenant's active tasks through a partial index on the
-   key, so the count never scans other tenants' rows.
-2. The claim passes over the saturated tenants' tasks inside a bounded window of ready tasks.
-3. It admits the first task whose tenant has room.
+**Example.** Queue `reports` holds work for 100,000 tenants. The 40 tenants at the head of the queue
+are all at their limit.
 
-A budget's active tasks are counted the same way, through a partial index on the budget name. So
-admitting one task never scans the other tenants. The tenant cardinality benchmark loads one queue
-with a widening ladder of tenant counts and shows claim latency flat across it.
+1. A worker claims a task.
+2. Workhorse counts the active tasks of each tenant at the head. A partial index on the key lets
+   each count read only the rows of that tenant.
+3. The claim skips the tasks of the full tenants, in a limited window of ready tasks.
+4. The claim starts the first task whose tenant has a free slot.
+
+Workhorse counts the active tasks of a budget in the same way, with a partial index on the budget
+name. Thus, the claim of one task never reads the rows of other tenants. The tenant cardinality
+benchmark loads one queue with more and more tenants. The claim latency stays almost the same at
+each step.
 
 <details>
 <summary>Reference: admission cost and benchmark</summary>
@@ -297,9 +313,10 @@ More detail: [Overview: Admission cost](https://github.com/stablemates/workhorse
 
 ## Next
 
-- [Concurrency policies](/docs/concurrency-policies) — fair share inside a queue and a cap across queues
-- [Rate limits](/docs/rate-limits) — one token bucket per tenant
-- [Maintenance](/docs/maintenance) — the installation-wide retention windows shared tenants live under
+- [Concurrency policies](/docs/concurrency-policies) — set a fair share in a queue and a limit across
+  queues
+- [Rate limits](/docs/rate-limits) — give each tenant its own token bucket
+- [Maintenance](/docs/maintenance) — the retention windows that all shared tenants use
 
 ---
 

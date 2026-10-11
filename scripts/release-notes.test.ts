@@ -52,12 +52,15 @@ function slug(heading: string): string {
     .replace(/ /g, "-");
 }
 
+/** Heading anchors and explicit `<a id>` anchors, which keep an old link valid after a rename. */
 function anchors(path: string): Set<string> {
-  const headings = read(path)
+  const text = read(path);
+  const headings = text
     .split("\n")
     .filter((line) => /^#{1,6} /.test(line))
     .map((line) => slug(line.replace(/^#{1,6} /, "")));
-  return new Set(headings);
+  const explicit = [...text.matchAll(/<a\s+(?:id|name)="([^"]+)"/g)].map((match) => match[1]!);
+  return new Set([...headings, ...explicit]);
 }
 
 /** Markdown link targets, resolved to repository paths where they name this repository. */

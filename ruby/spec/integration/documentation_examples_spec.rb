@@ -196,9 +196,9 @@ RSpec.describe "Documentation examples against PostgreSQL" do
     it "lists and redrives dead letters" do
       source = failed_task
       expect(DocsExamples.dead_letters_list(@admin).items).to eq([])
-      expect(DocsExamples.dead_letters_redrive(@admin, source, actor, id("incident")).status).to eq(:redriven)
+      expect(DocsExamples.dead_letters_redrive(@admin, source).status).to eq(:redriven)
 
-      preview, page = DocsExamples.dead_letters_redrive_many(@admin, actor, id("incident"), 50)
+      preview, page = DocsExamples.dead_letters_redrive_many(@admin)
       expect([preview.results, page.results]).to eq([[], []])
       expect { DocsExamples::ExampleIncident.redrive_incident(@admin) }.to output("0 tasks eligible\n").to_stdout
       LandingExamples::DeadLetters.redrive_billing(@admin)

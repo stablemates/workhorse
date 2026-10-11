@@ -2,33 +2,34 @@
 
 <!-- scenario-names: emails, invoice.send, invoice-7, invoice-7b, welcome-17 -->
 
-A busy queue produces an enormous amount of history. Every state change is an event, and every
-finished attempt is a row. Left alone, those tables become most of your database.
+A busy queue writes a large quantity of history. Each state change writes an event, and each
+finished attempt writes a row. If nothing deletes these rows, they can fill most of your database.
 
-Retention deletes the old rows. Doing that safely is more subtle than a nightly `DELETE`, because
-cleanup must never destroy evidence that something else still needs.
+Retention is the set of rules that decides when Workhorse deletes old rows. Workhorse must not
+delete evidence that other data still needs. Thus retention follows more rules than a nightly
+`DELETE`.
 
-## One maintenance pass, five routines
+## Let the workers run the routines
 
-**Example.** A fleet runs only Go workers. Each worker offers the slow maintenance pass about once a
-minute.
+**Example.** A fleet runs only Go workers. Each worker offers the slow maintenance pass
+approximately one time each minute. A maintenance pass is one call that runs each routine that is
+due.
 
-1. **At 02:59** a worker offers the pass. PostgreSQL runs only the routines that are due. The
-   [statistics rollup](320-statistics.md), the background pass that summarizes history into
-   buckets, is due, because a minute has passed since its last run.
-2. **At 03:00** another worker offers the pass. The rollup runs again. The daily history retention
+1. At 02:59, a worker offers the pass. The [statistics rollup](320-statistics.md), the routine that
+   summarizes history into buckets, is due. Its last run was one minute ago, so PostgreSQL runs it.
+2. At 03:00, another worker offers the pass. The rollup runs again. The daily history retention
    routine is now due, so PostgreSQL runs it after the rollup.
-3. **A moment later** a third worker offers the pass. The routines have just run and are not due
-   again, so this pass does no work.
+3. Some seconds later, a third worker offers the pass. No routine is due, so the pass does no work.
 
-Every worker runtime offers the same pass through `run_maintenance_v1`. PostgreSQL orders the
-routines: statistics, partition preparation, retention, terminal cleanup, and registry cleanup. Each
-routine keeps its own due check and lock. A fleet that runs only Python or Go therefore keeps the same
-evidence and partition guarantees as a TypeScript fleet.
+Each worker runtime offers the same pass. PostgreSQL sets the order of the routines: statistics,
+partition preparation, history retention, terminal cleanup, and registry cleanup. Terminal cleanup
+deletes finished tasks. Each routine has its own due check and its own lock. Thus a fleet that runs
+only Python or Go workers keeps the same evidence and partitions as a TypeScript fleet.
 
-PostgreSQL also keeps a bounded execution history of the maintenance routines. On the dashboard, the
-Schedules page expands each routine into recent outcomes, affected rows, phase timings, and errors.
-Successful idle ticks are omitted, because their latest completion already proves the loop is alive.
+PostgreSQL also keeps a short run history for each routine. On the dashboard, the Schedules page
+shows the recent outcomes of each routine, its affected rows, its phase times, and its errors. The
+page omits successful ticks that changed nothing. The latest completion of the tick already shows
+that the loop runs.
 
 <details>
 <summary>Reference: routines, cadences, and run history</summary>
@@ -70,26 +71,27 @@ More detail: [Data model: `maintenance_policy` and `maintenance_state`](../archi
 
 </details>
 
-## Windows are minimums, not deadlines
+## Set how long Workhorse keeps each kind of data
 
-The event window is 14 days. A task writes an event on day 1 at 10:00 UTC.
+**Example.** The event window is 14 days. A task writes an event on day 1 at 10:00 UTC. The daily
+history pass runs at 03:00 UTC.
 
-1. **On day 15 at 03:00** the daily history pass runs. Its cutoff is the start of day 1, so the
-   day-1 events are still inside the cutoff.
-2. **On day 15 at 10:00** the event is 14 days old. Nothing deletes it yet.
-3. **On day 16 at 03:00** the next pass runs. Its cutoff is the start of day 2. Every event of day 1
-   has now expired, so the pass drops that day.
+1. On day 15 at 03:00, the daily history pass runs. Its cutoff is the start of day 1. The day-1
+   events are not older than the cutoff, so the pass keeps them.
+2. On day 15 at 10:00, the event becomes 14 days old. No routine deletes it yet.
+3. On day 16 at 03:00, the next pass runs. Its cutoff is the start of day 2. All events of day 1
+   are older than the cutoff, so the pass deletes day 1.
 
-The event lived about 14 days and 17 hours, not exactly 14 days.
+The event stays for approximately 14 days and 17 hours, not for exactly 14 days.
 
-You configure how long to keep each category of data: finished tasks, outcomes, events, attempts,
-schedule occurrences, and statistics. Each category has its own default and can be set on its own.
-A category can also opt out of cleanup.
+A window is the minimum time that Workhorse keeps one kind of data. You set a window for each kind:
+finished tasks, outcomes, events, attempts, schedule runs, and statistics. Each kind has its own
+default, and you can set each one separately. You can also turn off cleanup for one kind.
 
-The important word is _minimum_. A window protects everything younger than its cutoff. It does not
-promise that older data disappears promptly. Cleanup runs in bounded batches, works through whole
-days, and skips anything still referenced. Real retention is always somewhat longer than configured,
-because cleanup errs toward keeping evidence.
+A window is a minimum, not a deadline. Workhorse keeps all data that is younger than the cutoff. It
+does not delete older data immediately. Cleanup runs in limited batches, deletes whole days, and
+skips rows that other data still uses. Thus Workhorse always keeps data a little longer than its
+window.
 
 <details>
 <summary>Reference: retention policy</summary>
@@ -130,19 +132,22 @@ More detail: [Data model: `retention_policy`](../architecture/data-model.md#rete
 
 </details>
 
-## Deleting by the day, not by the row
+## Expect cleanup to delete a whole day at a time
 
-Events and attempts are stored in daily partitions. In the example above, the day-1 events sat in
-one partition.
+Workhorse stores events and attempts in daily partitions. A partition is a part of a table. Each
+daily partition holds the rows of one UTC day.
 
-1. **On day 16 at 03:00** the history pass finds that every row in the day-1 partition has expired.
-2. **It drops the whole partition.** That costs about the same whether the day held a hundred rows or
-   ten million.
-3. **Suppose a long query holds a lock on that partition.** Dropping a table needs an exclusive lock.
-   The pass waits only briefly, then gives up on that day rather than queueing behind live traffic
-   and stalling dispatch. The next pass tries again.
+**Example.** The day-1 events of the first example are in one partition.
 
-Cleanup mostly does not delete rows at all. It drops whole days once every row in them has expired.
+1. On day 16 at 03:00, the history pass finds that all rows in the day-1 partition are expired.
+2. The pass drops the full partition. This costs approximately the same for a hundred rows or for
+   ten million rows.
+3. If a long query holds a lock on the partition, the pass cannot get its exclusive lock. The pass
+   waits for a short time and then skips the day. Thus live work does not wait behind the pass.
+4. The next pass tries to drop the day again.
+
+Usually, cleanup does not delete rows one at a time. It drops a whole day when all rows of that day
+are expired.
 
 <details>
 <summary>Reference: partition retention</summary>
@@ -166,17 +171,18 @@ More detail: [Data model: Retention](../architecture/data-model.md#retention-2) 
 
 </details>
 
-## A task outlives its history
+## Keep the task window as long as its history
 
-Every event, attempt, and occurrence points at a task. Suppose an operator sets the task window to
-7 days while events stay for 14.
+Each event, attempt, and schedule run points to its task. If Workhorse deletes the task first, that
+history points to a task that does not exist.
 
-1. **The operator saves the policy.** On day 8 the task row would be deleted.
-2. **Its events would still be there**, pointing at a task that no longer exists.
-3. **So Workhorse rejects the policy.** The save fails, and the old policy stays in force.
+**Example.** An operator sets the task window to 7 days. The event window stays at 14 days.
 
-The task identity is what everything else points at. Its window must therefore be at least as long
-as every window that depends on it.
+1. The operator tries to save the policy.
+2. Workhorse finds that the task row can expire 7 days before its events.
+3. Workhorse rejects the policy. The old policy stays in use.
+
+The task window must be at least as long as each window that depends on it.
 
 <details>
 <summary>Reference: validity rules</summary>
@@ -194,19 +200,21 @@ More detail: [Data model: Validity rules](../architecture/data-model.md#validity
 
 </details>
 
-## Cleanup waits for the rollup
+## Keep the statistics rollup running
 
-Go back to the day-1 event. On day 16 at 03:00 its window has passed, but the statistics rollup
-stalled on day 0.
+Workhorse can rebuild statistics only from raw history. Thus cleanup does not delete history that
+the rollup has not summarized, even if the window permits it. Retention lag is the time that expired
+data waits for deletion.
 
-1. **On day 16 at 03:00** the history pass would drop day 1. The rollup has not summarized day 1
-   yet, so the pass keeps it.
-2. **While the rollup stays stalled**, history piles up and retention lag grows.
-3. **When the rollup catches up**, the next pass drops day 1.
+**Example.** On day 16 at 03:00, the window of the day-1 event has passed. But the statistics
+rollup stopped on day 0.
 
-Statistics can only be rebuilt from raw history. So cleanup never deletes history the rollup has not
-summarized yet, even when the window allows it. See [320-statistics.md](320-statistics.md) for how
-the watermark works.
+1. On day 16 at 03:00, the history pass can delete day 1 by its window. The rollup has not
+   summarized day 1, so the pass keeps it.
+2. While the rollup stays stopped, history increases and retention lag increases.
+3. When the rollup summarizes day 1, the next pass deletes day 1.
+
+[320-statistics.md](320-statistics.md) explains the rollup watermark.
 
 <details>
 <summary>Reference: rollup interlock</summary>
@@ -220,17 +228,22 @@ More detail: [Data model: Retention interlock](../architecture/data-model.md#ret
 
 </details>
 
-## A task with descendants stays
+## Expect a redriven task to stay longer
 
-Task `invoice-7` failed on day 1. An operator [redrove](340-redrive.md) it on day 10. That created a
-new task, `invoice-7b`, linked to `invoice-7` as its descendant.
+A [redrive](340-redrive.md) makes a new task from a failed task. The new task is a descendant of the
+failed task. Workhorse keeps the failed task while its descendant exists, so that the link stays
+complete.
 
-1. **On day 16** `invoice-7` is past every window. Deleting it would break the lineage to
-   `invoice-7b`, so cleanup keeps it.
-2. **In the same pass** cleanup steps past `invoice-7` to the younger eligible tasks behind it. It
-   deletes them as usual. A waiting task never holds up the rest.
-3. **On day 25** `invoice-7b` is past its windows, and cleanup deletes it.
-4. **On a later pass** `invoice-7` has no retained descendant, and cleanup deletes it too.
+**Example.** Task `invoice-7` fails on day 1. On day 10, an operator redrives it. The redrive makes
+the new task `invoice-7b`, a descendant of `invoice-7`.
+
+1. On day 16, `invoice-7` is past all its windows. A deletion breaks the link to `invoice-7b`, so
+   cleanup keeps `invoice-7`.
+2. In the same pass, cleanup skips `invoice-7` and deletes the younger expired tasks as usual.
+3. On day 25, `invoice-7b` is past its windows, and cleanup deletes it.
+4. On a later pass, `invoice-7` has no descendant, and cleanup deletes it.
+
+A kept task does not stop the deletion of other tasks.
 
 <details>
 <summary>Reference: lineage retention</summary>
@@ -246,20 +259,22 @@ More detail: [Data model: Lineage retention](../architecture/data-model.md#linea
 
 </details>
 
-## Fast-tier tasks
+## Expect fast-tier outcomes to follow the history window
 
-Task `welcome-17` runs on the fast-tier queue `emails`. It succeeds on day 1 at 10:00 UTC, and every
-window is 14 days.
+A task on a [fast-tier queue](305-fast-tier.md) usually writes no events or attempts. Its outcome
+row is its only history.
 
-1. **On day 1** Workhorse writes its outcome row. It writes no events or attempts.
-2. **On day 15 at 10:00** the outcome and identity windows have passed. The history pass of that
-   morning has not released day 1, so cleanup keeps the row.
-3. **On day 16 at 03:00** the history pass releases day 1. The next terminal cleanup pass deletes
-   the task, and its outcome row goes with it.
+**Example.** Task `welcome-17` runs on the fast-tier queue `emails`. It succeeds on day 1 at
+10:00 UTC. Each window is 14 days.
 
-A task on a [fast-tier queue](305-fast-tier.md) usually has no events or attempts. Its outcome row
-stands in for its history. Cleanup deletes that row only once both the outcome window and the history
-window have passed, and once the task identity window has too.
+1. On day 1, Workhorse writes the outcome row of the task. It writes no events or attempts.
+2. On day 15 at 10:00, the outcome window and the task window pass. The history pass of that
+   morning did not release day 1, so cleanup keeps the row.
+3. On day 16 at 03:00, the history pass releases day 1.
+4. The next terminal cleanup pass deletes the task and its outcome row.
+
+Cleanup deletes a fast-tier outcome only after three windows pass: the outcome window, the history
+window, and the task window.
 
 <details>
 <summary>Reference: fast-tier outcome retention</summary>
@@ -283,19 +298,21 @@ More detail: [Fast tier: Retention](../architecture/fast-tier.md#retention).
 
 </details>
 
-## Statistics are the exception
+## Keep statistics longer than tasks
 
-A deployment keeps tasks for 14 days and statistics for 365. An `invoice.send` task succeeds on day 1
-and counts in that day's summary.
+Statistics are the only kind of data that can stay longer than its tasks. A summary counts many
+tasks and does not point to one task.
 
-1. **On day 16** cleanup deletes the task and its history, as the earlier sections describe.
-2. **The day summary stays.** It still counts the task in day 1's throughput.
-3. **About a year later** the summary's own window has passed, and cleanup deletes it.
+**Example.** A deployment keeps tasks for 14 days and statistics for 365 days. An `invoice.send`
+task succeeds on day 1. The summary of day 1 counts it.
 
-Summary rows are the one category _not_ bound by "keep the task at least as long". That is
-intentional. A summary describes many tasks rather than pointing at one, so summaries can outlive the
-tasks they summarize. A deployment can keep a year of daily throughput while it keeps two weeks of
-tasks.
+1. On day 16, cleanup deletes the task and its history.
+2. The summary of day 1 stays. It still counts the task in the throughput of day 1.
+3. Approximately one year later, the window of the summary passes, and cleanup deletes it.
+
+Thus a deployment can keep a year of daily throughput and two weeks of tasks. In the statistics
+window, older summaries use larger buckets. Thus a long window keeps totals and wait percentiles
+that can be merged, but not the finest detail.
 
 <details>
 <summary>Reference: statistics retention</summary>
@@ -314,32 +331,34 @@ More detail: [Data model: Bucket retention](../architecture/data-model.md#bucket
 
 </details>
 
-## When cleanup does not keep up
+## Find cleanup that does not keep up
 
-A queue finishes about two million tasks a day. At 03:00 the daily history pass releases a whole day
-of them, so two million tasks become eligible for cleanup at once.
+Cleanup has limits on purpose. Each pass deletes a limited number of tasks, partitions, and rows. If
+new data arrives faster, the tables become larger. Queue health shows this condition before the
+disk is full.
 
-1. **At 03:01** a terminal cleanup pass runs. Every batch fills, so the pass repeats batches until its
-   time budget runs out. Eligible tasks remain, so it records that a backlog began.
-2. **At the next offer** the follow-up pass runs. While a backlog is recorded, the next pass is due
-   seconds after the last one rather than after the full cleanup interval.
-3. **When a pass ends with a batch that is not full**, cleanup has caught up. It clears the backlog
-   record, and the configured interval applies again.
-4. **If completions outrun even that pace**, the backlog record stays set from pass to pass. The
-   oldest eligible task keeps aging. Once the backlog has lasted longer than its budget, queue health
-   reports a terminal cleanup backlog. Once the oldest task has waited too long, it reports retention
-   lag as well.
+**Example.** A queue finishes approximately two million tasks each day. At 03:00, the daily history
+pass releases a full day, so two million tasks are ready for cleanup at the same time.
 
-Full-tier and fast-tier tasks share every batch. A backlog in one tier therefore cannot keep the
-other tier's tasks from being deleted.
+1. At 03:01, a terminal cleanup pass runs. Each batch is full, so the pass runs batches until its
+   time limit. Expired tasks remain, so the pass records the start of a backlog.
+2. While the backlog record exists, the next pass is due after some seconds, not after the full
+   cleanup interval.
+3. If a pass ends with a batch that is not full, the backlog is gone. The pass clears the record,
+   and the usual interval applies again.
+4. If tasks finish faster than cleanup deletes them, the record stays. The oldest expired task
+   becomes older.
+5. When the backlog is older than its limit, queue health reports a terminal cleanup backlog. When
+   the oldest task waits too long, queue health also reports retention lag.
 
-Cleanup is bounded on purpose: a limited number of tasks, partitions, and rows per pass. If the
-incoming rate outruns it, tables grow. This shows up in queue health rather than as a stall: first as
-the backlog record, then as a backlog reason or retention lag. The fix is usually a shorter window rather than a bigger
-batch.
+Full-tier and fast-tier tasks share each batch. Thus a backlog in one tier cannot stop the deletion
+of tasks in the other tier.
 
-Health also reports how many rows sit in the fallback partitions. Those are the default partitions
-that catch rows when partition maintenance falls behind, so that condition cannot stay invisible.
+Queue health shows a slow cleanup in steps: first the backlog record, then a backlog reason or
+retention lag. Usually, a shorter window is a better fix than a larger batch.
+
+Queue health also counts the rows in the default partitions. A default partition holds rows when no
+daily partition exists for them. Thus you can see when partition preparation is late.
 
 <details>
 <summary>Reference: retention health</summary>
@@ -389,19 +408,22 @@ More detail: [Task lifecycle: Retention health](../architecture/lifecycle.md#ret
 
 </details>
 
-## Schedule runs expire between passes
+## Read the lag of schedule runs
 
-Schedule runs are deleted only by the daily history pass. A run passes its window at 04:00 on one
-day. The next pass runs at 03:00 the following day.
+Only the daily history pass deletes schedule runs. Thus an expired schedule run can wait almost one
+day before deletion.
 
-1. **From 04:00 to 03:00 next day** the expired run waits. That is by design, so health does not
-   report it.
-2. **At 03:00** the pass runs and deletes it.
-3. **Suppose that pass never starts.** Its due time is now behind, and expired runs remain. Health
-   reports schedule-run lag once that delay exceeds the lag threshold.
+**Example.** A schedule run passes its window at 04:00. The next history pass runs at 03:00 on the
+next day.
 
-Health therefore judges schedule runs against the daily pass. It reports them when the latest pass
-left late rows behind. It also reports them when the next pass is overdue and expired runs remain.
+1. From 04:00 until 03:00, the expired run waits. This is the usual behavior, so queue health does
+   not report it.
+2. At 03:00, the pass runs and deletes the run.
+3. If that pass does not start, its due time passes and expired runs remain.
+4. When this delay is longer than the lag limit, queue health reports schedule-run lag.
+
+Queue health measures schedule runs against the daily pass. It reports them if the latest pass left
+late rows. It also reports them if the next pass is late and expired runs remain.
 
 <details>
 <summary>Reference: schedule-run lag</summary>
@@ -426,16 +448,17 @@ More detail: [Task lifecycle: Schedule run retention lag](../architecture/lifecy
 
 ## Do not delete tasks yourself
 
-An engineer sees the `task` table grow and deletes every task that finished more than three days
-ago with raw SQL. The event window is 14 days.
+The cleanup routines apply the rules on this page. Raw SQL ignores these rules.
 
-1. **The delete runs.** PostgreSQL cascades it into those tasks' events and attempts.
-2. **A week later** an operator looks for one of those tasks. The task and its events are gone,
-   although the event window promised to keep the events.
+**Example.** An engineer sees that the `task` table becomes large. The event window is 14 days.
 
-It is tempting to write your own `DELETE FROM task WHERE ...`. Do not. The cleanup functions exist to
-enforce the rules above. Raw SQL bypasses them. It cascades into retained history, and it removes
-evidence before statistics can be rebuilt.
+1. With raw SQL, the engineer deletes each task that finished more than three days ago.
+2. PostgreSQL also deletes the events and attempts of those tasks.
+3. One week later, an operator looks for one of those tasks. The task and its events are gone, but
+   the event window promised to keep the events.
+
+Do not write your own `DELETE FROM task WHERE ...`. It deletes the kept history of each task. It can
+also delete evidence before the rollup summarizes it.
 
 <details>
 <summary>Reference: identity deletion</summary>
@@ -453,11 +476,11 @@ More detail: [Data model: Attribution and identity deletion](../architecture/dat
 
 ## Next
 
-- [320-statistics.md](320-statistics.md) — the watermark that gates cleanup
+- [320-statistics.md](320-statistics.md) — the watermark that controls cleanup
 - [340-redrive.md](340-redrive.md) — why some failed tasks stay longer
-- [010-tasks-and-state.md](010-tasks-and-state.md) — which tables hold what
+- [010-tasks-and-state.md](010-tasks-and-state.md) — which tables hold which data
 
 ---
 
-Exact windows, bounds, and health fields:
+Exact windows, limits, and health fields:
 [`architecture/data-model.md`](../architecture/data-model.md#retention_policy).

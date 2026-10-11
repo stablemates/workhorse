@@ -1,49 +1,52 @@
 ---
 title: Maintenance and retention
-description: Workers drive bounded maintenance passes that promote, recover, prepare partitions, and delete old evidence without losing the audit trail. You set the policy and watch for lag.
+description: Workers run the routines that prepare partitions, recover leases, and delete old data. You set the policy and watch for lag.
 ---
 
-A durable queue accumulates: delayed tasks waiting to become ready, leases that expired with their
-workers, history partitions filling up, and evidence that eventually outlives its usefulness. Every
-state change is an event, and every finished attempt is a row. Left alone, those tables become most
-of your database.
+Maintenance is the work that keeps the Workhorse tables in good condition. Delayed tasks must
+become ready, and expired leases must return to the queue. History partitions must exist before
+data arrives. Each state change writes an event, and each finished attempt writes a row. If nothing
+deletes these rows, they can fill most of your database.
 
-Workhorse handles all of it as bounded background work that workers drive automatically. Deleting
-old rows safely is more subtle than a nightly `DELETE`. Cleanup must never destroy evidence that
-something else still needs.
+Workers run all of this work as limited routines. Retention is the set of rules that decides when
+Workhorse deletes old rows. Workhorse must not delete evidence that other data still needs. Thus
+retention follows more rules than a nightly `DELETE`.
 
-## The phases, and how to watch them
+## Let the workers run the routines
 
-**Example.** A fleet runs only Go workers. Each worker offers the slow maintenance pass about once a
-minute.
+**Example.** A fleet runs only Go workers. Each worker offers the slow maintenance pass
+approximately one time each minute. A maintenance pass is one call that runs each routine that is
+due.
 
-1. **At 02:59** a worker offers the pass. PostgreSQL runs only the routines that are due. The
-   [statistics rollup](/docs/operations), the background pass that summarizes history into buckets,
-   is due, because a minute has passed since its last run.
-2. **At 03:00** another worker offers the pass. The rollup runs again. The daily history retention
+1. At 02:59, a worker offers the pass. The [statistics rollup](/docs/operations), the routine that
+   summarizes history into buckets, is due. Its last run was one minute ago, so PostgreSQL runs it.
+2. At 03:00, another worker offers the pass. The rollup runs again. The daily history retention
    routine is now due, so PostgreSQL runs it after the rollup.
-3. **A moment later** a third worker offers the pass. The routines have just run and are not due
-   again, so this pass does no work.
+3. Some seconds later, a third worker offers the pass. No routine is due, so the pass does no work.
 
-TypeScript, Python, Go, Rust, and Ruby workers all offer the same pass through
-`run_maintenance_v1`. PostgreSQL orders the routines: statistics, partition preparation, retention,
-terminal cleanup, and registry cleanup. Each routine keeps its own due check and advisory lock. So
-scaling from one worker to fifty never multiplies destructive work. One worker wins each due
-routine, and the rest get cheap no-ops. A fleet that runs only Python or Go keeps the same evidence
-and partition guarantees as a TypeScript fleet. It needs no TypeScript worker to replenish
-partitions, roll up statistics, retire history, or prune terminal and worker records.
+TypeScript, Python, Go, Rust, and Ruby workers all offer the same pass. PostgreSQL sets the order of
+the routines: statistics, partition preparation, history retention, terminal cleanup, and registry
+cleanup. Terminal cleanup deletes finished tasks. Each routine has its own due check and its own
+lock. Thus a fleet that runs only Python or Go workers keeps the same evidence and partitions as a
+TypeScript fleet.
 
-Each routine is a versioned SQL function that you can also call yourself:
+If you add workers, the destructive work does not increase. For each due routine, one worker runs
+it, and the other workers do no work. A fleet without TypeScript workers still prepares partitions,
+summarizes statistics, deletes history, and deletes old task and worker records.
 
-- `queue.tick` is the fast tick. It promotes due tasks to ready and recovers expired leases.
-- `queue.rollupStatistics` folds raw history into minute summaries, then derives hour and day tiers.
-- `queue.prepareHistoryPartitions` creates future time partitions before data arrives.
-- `queue.retainHistory` retires history the statistics rollup no longer needs.
-- `queue.pruneTerminalStorage` removes expired idempotency bindings, then terminal task bundles.
-- `queue.pruneWorkerRegistry` removes registrations whose processes stopped refreshing them.
+You can also call each routine yourself:
 
-Direct calls are for controlled scripts and tests. In production, the workers already make them. To
-observe each pass, give any worker an `onMaintenance` callback:
+- `queue.tick` is the fast tick. It makes due tasks ready and recovers expired leases.
+- `queue.rollupStatistics` summarizes raw history into minute buckets. Then it makes the hour and
+  day buckets.
+- `queue.prepareHistoryPartitions` makes future time partitions before data arrives.
+- `queue.retainHistory` deletes history that the statistics rollup no longer needs.
+- `queue.pruneTerminalStorage` deletes expired idempotency keys, then finished tasks and their
+  data.
+- `queue.pruneWorkerRegistry` deletes the records of worker processes that stopped.
+
+Use direct calls only in controlled scripts and tests. In production, the workers make these calls.
+To see each pass, give a worker an `onMaintenance` callback:
 
 ```ts
 const worker = new Worker(queue, {
@@ -57,14 +60,14 @@ const worker = new Worker(queue, {
 });
 ```
 
-The `WorkerMaintenanceTelemetry` result names the phase, affected rows, duration, lock outcome, and
-any error. That is enough to chart cleanup throughput in whatever monitoring you already run.
+`WorkerMaintenanceTelemetry` gives the phase, the affected rows, the duration, the lock outcome, and
+any error. With these values, you can show the cleanup throughput in your monitoring system.
 
-PostgreSQL also keeps a bounded execution history of the maintenance routines. On the dashboard,
-the Schedules page expands each routine into recent outcomes, duration, affected rows, phase
-timings, and error details. Slow routines record each eligible execution. The fast tick records
-work and failures but omits successful idle polls, because its latest completion already proves the
-loop is alive.
+PostgreSQL also keeps a short run history for each routine. On the dashboard, the Schedules page
+shows the recent outcomes of each routine, its duration, its affected rows, its phase times, and its
+errors. Slow routines record each run. The fast tick records work and failures. The page omits
+successful ticks that changed nothing. The latest completion of the tick already shows that the
+loop runs.
 
 <details>
 <summary>Reference: routines, poll intervals, and run history</summary>
@@ -96,28 +99,29 @@ More detail: [Data model: `maintenance_policy` and `maintenance_state`](https://
 
 </details>
 
-## Set retention policy
+## Set how long Workhorse keeps each kind of data
 
-The event window is 14 days. A task writes an event on day 1 at 10:00 UTC.
+**Example.** The event window is 14 days. A task writes an event on day 1 at 10:00 UTC. The daily
+history pass runs at 03:00 UTC.
 
-1. **On day 15 at 03:00** the daily history pass runs. Its cutoff is the start of day 1, so the
-   day-1 events are still inside the cutoff.
-2. **On day 15 at 10:00** the event is 14 days old. Nothing deletes it yet.
-3. **On day 16 at 03:00** the next pass runs. Its cutoff is the start of day 2. Every event of day 1
-   has now expired, so the pass drops that day.
+1. On day 15 at 03:00, the daily history pass runs. Its cutoff is the start of day 1. The day-1
+   events are not older than the cutoff, so the pass keeps them.
+2. On day 15 at 10:00, the event becomes 14 days old. No routine deletes it yet.
+3. On day 16 at 03:00, the next pass runs. Its cutoff is the start of day 2. All events of day 1
+   are older than the cutoff, so the pass deletes day 1.
 
-The event lived about 14 days and 17 hours, not exactly 14 days.
+The event stays for approximately 14 days and 17 hours, not for exactly 14 days.
 
-Retention decides how long evidence lives. You configure a window for each category of data:
-finished tasks, outcomes, events, attempts, schedule occurrences, and statistics. Each category has
-its own default and can be set on its own. A category can also opt out of cleanup.
+A window is the minimum time that Workhorse keeps one kind of data. You set a window for each kind:
+finished tasks, outcomes, events, attempts, schedule runs, and statistics. Each kind has its own
+default, and you can set each one separately. You can also turn off cleanup for one kind.
 
-A window is a _minimum_, not a deadline. It protects everything younger than its cutoff. It does
-not promise that older data disappears promptly. Cleanup runs in bounded batches, works through
-whole days, and skips anything still referenced. Real retention is therefore always somewhat longer
-than configured, because cleanup errs toward keeping evidence.
+A window is a minimum, not a deadline. Workhorse keeps all data that is younger than the cutoff. It
+does not delete older data immediately. Cleanup runs in limited batches, deletes whole days, and
+skips rows that other data still uses. Thus Workhorse always keeps data a little longer than its
+window.
 
-`queue.syncRetentionPolicy` stores your application's defaults as a deploy step:
+Use `queue.syncRetentionPolicy` in a deploy step to store the values of your application:
 
 ```ts
 await queue.syncRetentionPolicy({
@@ -130,21 +134,27 @@ await queue.syncRetentionPolicy({
 });
 ```
 
-Suppose an operator shortens the outcome window during an incident with
-`queue.overrideRetentionPolicy`. No deploy is needed. At the next deploy, sync updates only values
-an operator has not overridden, so the incident-time decision stays. After the incident,
-`queue.revertRetentionPolicy` restores the application defaults for the settings the operator names.
-`queue.getRetentionPolicy` shows the effective policy.
+An operator can change a value without a deploy, and the next deploy keeps that change.
 
-Before any destructive change, preview it:
+**Example.** An incident fills the disk with task outcomes.
+
+1. An operator makes the outcome window shorter with `queue.overrideRetentionPolicy`.
+2. At the next deploy, `queue.syncRetentionPolicy` changes only the values that no operator
+   changed. The operator value stays.
+3. After the incident, `queue.revertRetentionPolicy` restores the application value of each setting
+   that the operator names.
+
+`queue.getRetentionPolicy` shows the policy that is in use. Before a change that deletes data,
+preview the change:
 
 ```ts
 const impact = await queue.previewRetentionPolicy({ terminalOutcomeRetentionDays });
 console.log(impact.eligible.terminalTasks, impact.capped.terminalTasks);
 ```
 
-The preview counts currently eligible rows per category. Each count is size-capped with an explicit
-`capped` flag. The dashboard settings page runs the same preview before it applies a change.
+The preview counts the rows that the new policy can delete now, for each kind of data. Each count
+has a limit, and its `capped` flag shows if the count reached the limit. The dashboard settings page
+shows the retention policy and the source of each value. It does not change the retention policy.
 
 <details>
 <summary>Reference: retention policy</summary>
@@ -185,19 +195,22 @@ More detail: [Data model: `retention_policy`](https://github.com/stablemates/wor
 
 </details>
 
-### Deleting by the day, not by the row
+### Expect cleanup to delete a whole day at a time
 
-Events and attempts are stored in daily partitions. In the example above, the day-1 events sat in
-one partition.
+Workhorse stores events and attempts in daily partitions. A partition is a part of a table. Each
+daily partition holds the rows of one UTC day.
 
-1. **On day 16 at 03:00** the history pass finds that every row in the day-1 partition has expired.
-2. **It drops the whole partition.** That costs about the same whether the day held a hundred rows
-   or ten million.
-3. **Suppose a long query holds a lock on that partition.** Dropping a table needs an exclusive
-   lock. The pass waits only briefly, then gives up on that day rather than queueing behind live
-   traffic and stalling dispatch. The next pass tries again.
+**Example.** The day-1 events of the first example are in one partition.
 
-Cleanup mostly does not delete rows at all. It drops whole days once every row in them has expired.
+1. On day 16 at 03:00, the history pass finds that all rows in the day-1 partition are expired.
+2. The pass drops the full partition. This costs approximately the same for a hundred rows or for
+   ten million rows.
+3. If a long query holds a lock on the partition, the pass cannot get its exclusive lock. The pass
+   waits for a short time and then skips the day. Thus live work does not wait behind the pass.
+4. The next pass tries to drop the day again.
+
+Usually, cleanup does not delete rows one at a time. It drops a whole day when all rows of that day
+are expired.
 
 <details>
 <summary>Reference: partition retention</summary>
@@ -221,18 +234,19 @@ More detail: [Data model: Retention](https://github.com/stablemates/workhorse/bl
 
 </details>
 
-### A task outlives its history
+### Keep the task window as long as its history
 
-Every event, attempt, and occurrence points at a task. Suppose an operator sets the task window to
-7 days while events stay for 14.
+Each event, attempt, and schedule run points to its task. If Workhorse deletes the task first, that
+history points to a task that does not exist.
 
-1. **The operator saves the policy.** On day 8 the task row would be deleted.
-2. **Its events would still be there**, pointing at a task that no longer exists.
-3. **So PostgreSQL rejects the policy.** The save fails, and the old policy stays in force.
+**Example.** An operator sets the task window to 7 days. The event window stays at 14 days.
 
-The task identity is what everything else points at. Its window must therefore be at least as long
-as every window that depends on it. PostgreSQL rejects any `RetentionPolicyDefinition` that could
-remove a task's identity before its retained evidence.
+1. The operator tries to save the policy.
+2. Workhorse finds that the task row can expire 7 days before its events.
+3. Workhorse rejects the policy. The old policy stays in use.
+
+The task window must be at least as long as each window that depends on it. Workhorse rejects each
+`RetentionPolicyDefinition` that can delete the task before its kept history.
 
 <details>
 <summary>Reference: validity rules</summary>
@@ -250,19 +264,21 @@ More detail: [Data model: Validity rules](https://github.com/stablemates/workhor
 
 </details>
 
-### Cleanup waits for the rollup
+### Keep the statistics rollup running
 
-Go back to the day-1 event. On day 16 at 03:00 its window has passed, but the statistics rollup
-stalled on day 0.
+Workhorse can rebuild statistics only from raw history. Thus cleanup does not delete history that
+the rollup has not summarized, even if the window permits it. Retention lag is the time that expired
+data waits for deletion.
 
-1. **On day 16 at 03:00** the history pass would drop day 1. The rollup has not summarized day 1
-   yet, so the pass keeps it.
-2. **While the rollup stays stalled**, history piles up and retention lag grows.
-3. **When the rollup catches up**, the next pass drops day 1.
+**Example.** On day 16 at 03:00, the window of the day-1 event has passed. But the statistics
+rollup stopped on day 0.
 
-Statistics can only be rebuilt from raw history. So cleanup never deletes history the rollup has not
-summarized yet, even when the window allows it. [Operations](/docs/operations) explains how the
-rollup watermark works.
+1. On day 16 at 03:00, the history pass can delete day 1 by its window. The rollup has not
+   summarized day 1, so the pass keeps it.
+2. While the rollup stays stopped, history increases and retention lag increases.
+3. When the rollup summarizes day 1, the next pass deletes day 1.
+
+[Operations](/docs/operations) explains the rollup watermark.
 
 <details>
 <summary>Reference: rollup interlock</summary>
@@ -276,21 +292,22 @@ More detail: [Data model: Retention interlock](https://github.com/stablemates/wo
 
 </details>
 
-### A task with descendants stays
+### Expect a redriven task to stay longer
 
-Task `invoice-7` failed on day 1. An operator [redrove](/docs/dead-letters) it on day 10. That
-created a new task, `invoice-7b`, linked to `invoice-7` as its `task_redrive` descendant.
+A [redrive](/docs/dead-letters) makes a new task from a failed task. The new task is a descendant of
+the failed task. Workhorse keeps the failed task while its descendant exists, so that the link stays
+complete. A `task_redrive` row records the link.
 
-1. **On day 16** `invoice-7` is past every window. Deleting it would break the lineage to
-   `invoice-7b`, so cleanup keeps it.
-2. **In the same pass** cleanup steps past `invoice-7` to the younger eligible tasks behind it. It
-   deletes them as usual. A waiting task never holds up the rest.
-3. **On day 25** `invoice-7b` is past its windows, and cleanup deletes it.
-4. **On a later pass** `invoice-7` has no retained descendant, and cleanup deletes it too.
+**Example.** Task `invoice-7` fails on day 1. On day 10, an operator redrives it. The redrive makes
+the new task `invoice-7b`, a descendant of `invoice-7`.
 
-A retained descendant keeps its source identity available for lineage. A retained source does not
-hold up cleanup. Terminal pruning steps past it to eligible younger tasks, including the descendant
-that releases it.
+1. On day 16, `invoice-7` is past all its windows. A deletion breaks the link to `invoice-7b`, so
+   cleanup keeps `invoice-7`.
+2. In the same pass, cleanup skips `invoice-7` and deletes the younger expired tasks as usual.
+3. On day 25, `invoice-7b` is past its windows, and cleanup deletes it.
+4. On a later pass, `invoice-7` has no descendant, and cleanup deletes it.
+
+A kept task does not stop the deletion of other tasks.
 
 <details>
 <summary>Reference: lineage retention</summary>
@@ -306,20 +323,22 @@ More detail: [Data model: Lineage retention](https://github.com/stablemates/work
 
 </details>
 
-### Fast-tier tasks
+### Expect fast-tier outcomes to follow the history window
 
-Task `welcome-17` runs on the fast-tier queue `emails`. It succeeds on day 1 at 10:00 UTC, and every
-window is 14 days.
+A task on a [fast-tier queue](/docs/fast-tier) usually writes no events or attempts. Its outcome row
+is its only history.
 
-1. **On day 1** Workhorse writes its outcome row. It writes no events or attempts.
-2. **On day 15 at 10:00** the outcome and identity windows have passed. The history pass of that
-   morning has not released day 1, so cleanup keeps the row.
-3. **On day 16 at 03:00** the history pass releases day 1. The next terminal cleanup pass deletes
-   the task, and its outcome row goes with it.
+**Example.** Task `welcome-17` runs on the fast-tier queue `emails`. It succeeds on day 1 at
+10:00 UTC. Each window is 14 days.
 
-A task on a [fast-tier queue](/docs/fast-tier) usually has no events or attempts. Its outcome row
-stands in for its history. Cleanup deletes that row only once both the outcome window and the
-history window have passed, and once the task identity window has too.
+1. On day 1, Workhorse writes the outcome row of the task. It writes no events or attempts.
+2. On day 15 at 10:00, the outcome window and the task window pass. The history pass of that
+   morning did not release day 1, so cleanup keeps the row.
+3. On day 16 at 03:00, the history pass releases day 1.
+4. The next terminal cleanup pass deletes the task and its outcome row.
+
+Cleanup deletes a fast-tier outcome only after three windows pass: the outcome window, the history
+window, and the task window.
 
 <details>
 <summary>Reference: fast-tier outcome retention</summary>
@@ -343,22 +362,21 @@ More detail: [Fast tier: Retention](https://github.com/stablemates/workhorse/blo
 
 </details>
 
-### Statistics are the exception
+### Keep statistics longer than tasks
 
-A deployment keeps tasks for 14 days and statistics for 365. An `invoice.send` task succeeds on
-day 1 and counts in that day's summary.
+Statistics are the only kind of data that can stay longer than its tasks. A summary counts many
+tasks and does not point to one task.
 
-1. **On day 16** cleanup deletes the task and its history, as the earlier sections describe.
-2. **The day summary stays.** It still counts the task in day 1's throughput.
-3. **About a year later** the summary's own window has passed, and cleanup deletes it.
+**Example.** A deployment keeps tasks for 14 days and statistics for 365 days. An `invoice.send`
+task succeeds on day 1. The summary of day 1 counts it.
 
-Summary rows are the one category _not_ bound by "keep the task at least as long". That is
-intentional. A summary describes many tasks rather than pointing at one, so summaries can outlive
-the tasks they summarize. A deployment can keep a year of daily throughput while it keeps two weeks
-of tasks.
+1. On day 16, cleanup deletes the task and its history.
+2. The summary of day 1 stays. It still counts the task in the throughput of day 1.
+3. Approximately one year later, the window of the summary passes, and cleanup deletes it.
 
-Inside the statistics window, older summaries use coarser buckets. Long windows therefore keep
-totals and mergeable wait percentiles without retaining the finest detail forever.
+Thus a deployment can keep a year of daily throughput and two weeks of tasks. In the statistics
+window, older summaries use larger buckets. Thus a long window keeps totals and wait percentiles
+that can be merged, but not the finest detail.
 
 <details>
 <summary>Reference: statistics retention</summary>
@@ -379,17 +397,18 @@ More detail: [Data model: Bucket retention](https://github.com/stablemates/workh
 
 ### Do not delete tasks yourself
 
-An engineer sees the `task` table grow. With raw SQL, they delete every task that finished more
-than three days ago. The event window is 14 days.
+The cleanup routines apply the rules on this page. Raw SQL ignores these rules.
 
-1. **The delete runs.** PostgreSQL cascades it into those tasks' events and attempts.
-2. **A week later** an operator looks for one of those tasks. The task and its events are gone,
-   although the event window promised to keep the events.
+**Example.** An engineer sees that the `task` table becomes large. The event window is 14 days.
 
-Delete terminal data through the retention functions rather than deleting `task` rows directly. The
-cleanup functions exist to enforce the rules above. Direct deletion bypasses them. It cascades into
-retained history, so it can remove evidence before the configured windows expire or statistics
-consume it.
+1. With raw SQL, the engineer deletes each task that finished more than three days ago.
+2. PostgreSQL also deletes the events and attempts of those tasks.
+3. One week later, an operator looks for one of those tasks. The task and its events are gone, but
+   the event window promised to keep the events.
+
+Do not write your own `DELETE FROM task WHERE ...`. It deletes the kept history of each task. It can
+also delete evidence before the rollup summarizes it. Use the retention policy to delete finished
+tasks.
 
 <details>
 <summary>Reference: identity deletion</summary>
@@ -405,25 +424,26 @@ More detail: [Data model: Attribution and identity deletion](https://github.com/
 
 </details>
 
-## Set maintenance cadence
+## Set when the routines run
 
-A deploy step calls `queue.syncMaintenancePolicy` with the deployment's time zone and a local time
-for the daily history pass.
+The database stores one maintenance schedule for the full fleet. It holds an IANA time zone and a
+local time for the daily history pass. It also holds the interval, the group limit, and the
+recompute window of the statistics rollup.
 
-1. **During an incident** an operator moves the history pass to a quieter hour with
-   `queue.overrideMaintenancePolicy`. The dashboard settings page shows that value as
-   operator-owned.
-2. **At the next deploy** sync stores the application values again. It leaves the overridden time
-   in force.
-3. **After the incident** `queue.revertMaintenancePolicy` restores the application default for that
+**Example.** A deploy step calls `queue.syncMaintenancePolicy` with the time zone of the deployment
+and a local time for the daily history pass.
+
+1. During an incident, an operator moves the history pass to a quieter hour with
+   `queue.overrideMaintenancePolicy`. The dashboard settings page shows that value as an operator
+   override.
+2. At the next deploy, the sync stores the application values again. The operator value stays.
+3. After the incident, `queue.revertMaintenancePolicy` restores the application value of that
    setting.
 
-The database stores one set of scheduling defaults for the whole fleet. It includes an IANA time
-zone and a local wall-clock time for the daily history retention pass. It also holds the statistics
-rollup interval, group limit, and recompute window. Setting the rollup interval to zero opts the
-whole fleet out of statistics. Overrides and reverts follow the same model as retention, and the
-dashboard settings page shows each value's source. Workers check eligibility at different moments,
-but the database owns the shared due state. Extra replicas change nothing.
+If you set the rollup interval to zero, the full fleet stops the statistics rollup. Overrides and
+reverts work as they do for retention. The dashboard settings page shows the source of each value.
+Workers check the schedule at different times, but the database owns the shared due state. Thus
+more replicas do not change the schedule.
 
 <details>
 <summary>Reference: maintenance policy</summary>
@@ -448,34 +468,37 @@ More detail: [Data model: `maintenance_policy` and `maintenance_state`](https://
 
 </details>
 
-## Detect lag before it hurts
+## Find cleanup that does not keep up
 
-A queue finishes about two million tasks a day. At 03:00 the daily history pass releases a whole day
-of them, so two million tasks become eligible for cleanup at once.
+Cleanup has limits on purpose. Each pass deletes a limited number of tasks, partitions, and rows. If
+new data arrives faster, the tables become larger. Queue health shows this condition before the
+disk is full.
 
-1. **At 03:01** a terminal cleanup pass runs. Every batch fills, so the pass repeats batches until its
-   time budget runs out. Eligible tasks remain, so it records that a backlog began.
-2. **At the next offer** the follow-up pass runs. While a backlog is recorded, the next pass is due
-   seconds after the last one rather than after the full cleanup interval.
-3. **When a pass ends with a batch that is not full**, cleanup has caught up. It clears the backlog
-   record, and the configured interval applies again.
-4. **If completions outrun even that pace**, the backlog record stays set from pass to pass. The
-   oldest eligible task keeps aging. Once the backlog has lasted longer than its budget, queue health
-   reports a terminal cleanup backlog. Once the oldest task has waited too long, it reports retention
-   lag as well.
+**Example.** A queue finishes approximately two million tasks each day. At 03:00, the daily history
+pass releases a full day, so two million tasks are ready for cleanup at the same time.
 
-Full-tier and fast-tier tasks share every batch. A backlog in one tier therefore cannot keep the
-other tier's tasks from being deleted.
+1. At 03:01, a terminal cleanup pass runs. Each batch is full, so the pass runs batches until its
+   time limit. Expired tasks remain, so the pass records the start of a backlog.
+2. While the backlog record exists, the next pass is due after some seconds, not after the full
+   cleanup interval.
+3. If a pass ends with a batch that is not full, the backlog is gone. The pass clears the record,
+   and the usual interval applies again.
+4. If tasks finish faster than cleanup deletes them, the record stays. The oldest expired task
+   becomes older.
+5. When the backlog is older than its limit, queue health reports a terminal cleanup backlog. When
+   the oldest task waits too long, queue health also reports retention lag.
 
-Cleanup that silently stalls becomes a full disk weeks later. Cleanup is bounded on purpose: a
-limited number of tasks, partitions, and rows per pass. If the incoming rate outruns it, tables
-grow. This shows up in queue health rather than as a stall: first as the backlog record, then as
-a backlog reason or retention lag. The fix is usually a shorter window rather than a bigger batch.
+Full-tier and fast-tier tasks share each batch. Thus a backlog in one tier cannot stop the deletion
+of tasks in the other tier.
 
-`queue.health` budgets exactly this. A stalled statistics rollup, late retention, or a missing
-history partition each produces a `status.reasons` entry with a stable code. Health also reports
-how many rows sit in the fallback partitions. Those are the default partitions that catch rows when
-partition maintenance falls behind, so that condition cannot stay invisible.
+Queue health shows a slow cleanup in steps: first the backlog record, then a backlog reason or
+retention lag. Usually, a shorter window is a better fix than a larger batch.
+
+Queue health also counts the rows in the default partitions. A default partition holds rows when no
+daily partition exists for them. Thus you can see when partition preparation is late.
+
+Use `queue.health` to find these conditions. A stopped statistics rollup, late retention, and a
+missing history partition each add an entry to `status.reasons`. Each entry has a stable code:
 
 ```ts
 const health = await queue.health();
@@ -541,20 +564,23 @@ More detail: [Task lifecycle: Retention health](https://github.com/stablemates/w
 
 </details>
 
-### Schedule runs expire between passes
+### Read the lag of schedule runs
 
-Only the daily history pass deletes schedule runs. A run passes its window at 04:00 on one day. The
-next pass runs at 03:00 the following day.
+Only the daily history pass deletes schedule runs. Thus an expired schedule run can wait almost one
+day before deletion.
 
-1. **From 04:00 to 03:00 next day** the expired run waits. That is by design, so health does not
-   report it.
-2. **At 03:00** the pass runs and deletes it.
-3. **Suppose that pass never starts.** Its due time is now behind, and expired runs remain. Health
-   reports schedule-run lag once that delay exceeds the lag threshold.
+**Example.** A schedule run passes its window at 04:00. The next history pass runs at 03:00 on the
+next day.
 
-Health therefore judges schedule runs against the daily pass. Workhorse reports late schedule runs
-when the latest pass left late rows behind. It also reports them when the next pass is overdue and
-expired runs remain. `retentionLagMs` still shows the raw time past the window.
+1. From 04:00 until 03:00, the expired run waits. This is the usual behavior, so queue health does
+   not report it.
+2. At 03:00, the pass runs and deletes the run.
+3. If that pass does not start, its due time passes and expired runs remain.
+4. When this delay is longer than the lag limit, queue health reports schedule-run lag.
+
+Queue health measures schedule runs against the daily pass. It reports them if the latest pass left
+late rows. It also reports them if the next pass is late and expired runs remain. `retentionLagMs`
+still shows the full time after the window.
 
 <details>
 <summary>Reference: schedule-run lag</summary>
@@ -577,19 +603,21 @@ More detail: [Task lifecycle: Schedule run retention lag](https://github.com/sta
 
 </details>
 
-### Export metrics continuously
+### Send queue metrics to OpenTelemetry
 
-A service runs three replicas, and each replica starts its own metrics observer.
+Workhorse can send its metrics to OpenTelemetry without a poll from your code. One metrics observer
+for each database collects the database-wide gauges.
 
-1. **At each collection** all three observers read the same queues from the same database.
-2. **The metrics backend** receives every queue-depth gauge three times.
+**Example.** A service runs three replicas, and each replica starts its own metrics observer.
 
-For continuous export rather than polling, Workhorse emits OpenTelemetry metrics. In TypeScript,
-core stays silent until a telemetry provider is registered, even when your application configures
-an SDK. Configure the SDK first, then call `registerOpenTelemetry()` from
-`@stablemates/workhorse-otel` once during startup; [OpenTelemetry](/docs/operations#opentelemetry)
-covers the setup. Database-wide gauges, such as queue depth, ready-work age, expired leases, and
-fleet capacity, come from a dedicated observer:
+1. At each collection, the three observers read the same queues from the same database.
+2. The metrics backend receives each queue-depth gauge three times.
+
+In TypeScript, core stays silent until a telemetry provider is registered, even if your application
+configures an SDK. Configure the SDK first. Then call `registerOpenTelemetry()` from
+`@stablemates/workhorse-otel` one time during startup. [OpenTelemetry](/docs/operations#opentelemetry)
+shows the setup. A dedicated observer collects the database-wide gauges: queue depth, the age of
+ready work, expired leases, and fleet capacity.
 
 ```ts
 import { WorkhorseMetricsObserver } from "@stablemates/workhorse";
@@ -605,9 +633,9 @@ observer.stop();
 unregisterTelemetry();
 ```
 
-Run exactly one observer per database, beside a long-lived service. Every replica sees the same
-queues, so multiple observers export duplicate gauges. `registerQueueMetrics` and
-`queue.queueMetricSnapshot` are the lower-level pieces if you integrate by hand.
+Run exactly one observer for each database, next to a long-lived service. Each replica sees the
+same queues, so more observers send the same gauges more than one time. For a manual integration,
+use the lower-level `registerQueueMetrics` and `queue.queueMetricSnapshot`.
 
 <details>
 <summary>Reference: metrics observer</summary>
@@ -629,38 +657,44 @@ More detail: [Telemetry: Metrics observer](https://github.com/stablemates/workho
 
 ## Export history before retention deletes it
 
-Retention is the right window for a database whose purpose is dispatch. It is the wrong window for
-an auditor who asks in March what happened to a task in January. Cold export answers that question
-without stretching retention. Workhorse copies each finished UTC day of history to an export store
-you own, and only then lets retention delete it. Export is off by default. With it off, nothing in
-this section runs and Workhorse remains PostgreSQL-only.
+Retention deletes events and attempts after a limited window. This window suits a database that
+dispatches work. But an auditor can ask in March what happened to a task in January. Cold export
+copies each finished UTC day of history to an export store, and only then lets retention delete
+the day. An export store is storage that you own, such as an object store.
 
-### A day is the unit
+Cold export is off by default. If it is off, nothing in this section runs, and Workhorse uses only
+PostgreSQL.
 
-You turned export on, and an exporter process named `archiver-1` runs every hour. Follow the history
-your tasks wrote on 14 September.
+### Export one UTC day at a time
 
-1. **During 14 September (UTC).** Tasks run and fail and retry. Workhorse writes their events to
-   `task_event` and their closed attempts to `attempt_history`.
-2. **At midnight UTC.** The day closes. It cannot be exported yet. The statistics rollup has not
-   passed the day yet.
-3. **A few minutes later.** The rollup passes midnight. The day is now exportable.
-4. **At the next run.** `archiver-1` claims the 14 September segment of `task_event`. It reads the
-   day's rows and writes one compressed file of JSON lines. Beside it, it writes a small manifest.
-   Then it marks the segment complete.
-5. **When the retention window ends.** Retention may now delete 14 September from PostgreSQL. The
-   export store still holds it.
+**Example.** You turn on cold export. An exporter named `archiver-1` runs each hour. An exporter is
+a program that you run to copy history to the export store. Follow the history that your tasks write
+on 14 September.
 
-Each day of each history relation becomes one segment. A segment is one compressed file with one
-row per event or attempt, every column kept. Its manifest records the row count, the byte length,
-and a checksum of the file as stored. A day with no rows gets only the manifest.
+1. During 14 September UTC, tasks run and fail. Workhorse writes their events to `task_event` and
+   their closed attempts to `attempt_history`.
+2. At midnight UTC, the day ends. The statistics rollup has not summarized the day. Thus the day is
+   not ready for export.
+3. Some minutes later, the rollup passes midnight. The day is now ready for export.
+4. At its next run, `archiver-1` copies the 14 September segment of `task_event` to the export
+   store. Then it marks the segment complete.
+5. When the retention window of the day ends, retention can delete 14 September from PostgreSQL.
+   The export store keeps the day.
 
-A [fast-tier](/docs/fast-tier) queue writes little history. Export therefore treats its outcome rows
-as a third relation, `fast_task_outcome`. Workhorse groups those rows by the day each task finished.
+A segment is one day of one history table. The exporter writes each segment as one compressed file
+of JSON lines. The file has one line for each row of the table, with all columns. A row is an event,
+an attempt, or a fast-tier outcome. A manifest file
+next to it records the row count, the byte length, and a checksum of the stored file. If a day has
+no rows, the exporter writes only the manifest.
 
-Workhorse exports a day only after the day closed and the rollup passed it. The rollup watermark
-already decides when deletion is safe. Export follows the same rule, so it always runs ahead of
-deletion.
+A [fast-tier](/docs/fast-tier) queue writes little history. Thus cold export treats its outcome rows
+as a third table, `fast_task_outcome`. Workhorse puts each outcome row in the day when its task
+finished.
+
+Workhorse permits the export of a day only after the day ends and the rollup passes it. The rollup
+watermark also decides when retention can delete a day. Thus the export always comes before the
+deletion. Workhorse also keeps one export watermark for each table. The export watermark is the
+start of the oldest day that is not exported.
 
 <details>
 <summary>Reference: datasets and the export gate</summary>
@@ -692,26 +726,117 @@ More detail: [Data model: Export gate](https://github.com/stablemates/workhorse/
 
 </details>
 
-### The ledger lives in PostgreSQL
+### Run an exporter
 
-Suppose `archiver-1` stops on 20 September, because its host was retired and nobody moved it.
+**Example.** An operator turns on cold export just before the first run of `archiver-1`.
 
-1. **On 20 September.** The last complete segment of `task_event` is 19 September. The watermark,
-   the start of the oldest day not yet exported, is 20 September.
-2. **Over the next days.** New days close, but nobody exports them. The watermark stays at
-   20 September.
-3. **When 20 September leaves the retention window.** Retention would delete the day, but the
-   watermark is not past it. Retention keeps the day.
-4. **Every day after.** Retention holds one more day. The retention lag in
-   [queue health](/docs/queue-health) grows, and that is how you notice.
+1. Immediately, retention starts to wait for the export watermark.
+2. At the hourly run, `archiver-1` claims the oldest day that is not exported. It reads the day,
+   writes the file and its manifest, and completes the segment.
+3. Then the export store refuses a write, and `archiver-1` reports the failure.
+4. The next claim of `archiver-1` gets the same day again.
 
-Workhorse records every segment in its own schema: which day, whether it is complete, which exporter
-holds it, the object name, the checksum, and any error. It also keeps one watermark per relation.
-The watermark advances only across contiguous complete days, so it can never skip a hole.
+The exporter is not a routine. Workers never connect to your export store, and dispatch never waits
+for an export. Workhorse supplies the ledger and the four SQL functions that an exporter calls. The
+ledger is the record of segments in PostgreSQL. You run the exporter where you want, on the schedule
+that you want. More than one exporter can run at the same time. This release does not include an
+exporter.
 
-That ledger is the interlock. While export is enabled, history retention never deletes a day at or
-above the export watermark. An exporter that falls behind holds history instead of leaving a hole
-in the export store.
+Turn on cold export one time, from a deployment or from an operator session:
+
+```ts
+import { Pool, Queue } from "@stablemates/workhorse";
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const queue = new Queue(pool);
+
+// One time. The export starts at the oldest day that PostgreSQL still holds.
+await queue.setColdExportPolicy({ enabled: true });
+console.log(await queue.getColdExportStatus());
+```
+
+Turn on cold export only when an exporter is ready to run. From that time, retention waits for the
+export watermark. If no exporter runs, Workhorse keeps history without a limit. The retention lag in
+queue health increases until you turn off cold export or run an exporter.
+
+An exporter repeats these calls:
+
+1. Claim the next day.
+2. Read the day in pages, in the order of the row identity.
+3. Write the file and its manifest to the export store.
+4. Complete the segment with the SHA-256 checksum and the counts.
+
+If the write fails, report the failure. The next claim then gets the same day again.
+
+```sql
+SELECT * FROM workhorse.claim_cold_export_segment_v1('task_event', 'archiver-1', 3600000);
+SELECT * FROM workhorse.read_cold_export_rows_v1(
+  'task_event', '2026-09-14T00:00Z', '2026-09-15T00:00Z', NULL, NULL, 5000);
+SELECT workhorse.complete_cold_export_segment_v1(
+  'task_event', '2026-09-14T00:00Z', 1,
+  'workhorse/task_event/2026/09/14/task_event-2026-09-14.ndjson.gz',
+  'workhorse/task_event/2026/09/14/task_event-2026-09-14.manifest.json',
+  '<hex sha-256 of the object as stored>', 123456, 5000);
+```
+
+`queue.getColdExportStatus()` shows the export watermark of each table and the newest day that is
+ready for export. It also shows the segment that an exporter holds and the last error.
+
+An export store can be any storage that writes one object under a name. The export store and its
+provider own encryption at rest, access control, and write-once rules. Workhorse has no key of its
+own.
+
+<details>
+<summary>Reference: exporter contract and status</summary>
+
+An exporter runs these steps:
+
+1. It claims one day of one dataset.
+2. It reads the day in `read_cold_export_rows_v1` pages of 1 through 100,000 rows.
+3. It writes one gzipped JSON-lines object, named as below.
+4. It writes a `.manifest.json` beside the object, with the row count, byte length, and hex SHA-256
+   of the object as stored.
+5. It completes the segment with those values, or calls `fail_cold_export_segment_v1`.
+
+| Object key pattern                                                         |
+| -------------------------------------------------------------------------- |
+| `<prefix>/<dataset>/<YYYY>/<MM>/<DD>/<dataset>-<YYYY>-<MM>-<DD>.ndjson.gz` |
+
+**Status.** `Queue.getColdExportStatus()` wraps `get_cold_export_status_v1()`. It returns `enabled`,
+`updatedAt`, and per dataset:
+
+| Field               | Meaning                                                      |
+| ------------------- | ------------------------------------------------------------ |
+| `exportedThrough`   | The watermark. Every day below it has a complete segment.    |
+| `exportableThrough` | The newest day boundary a segment may end at.                |
+| `completeSegments`  | Count of complete segments.                                  |
+| `exporting`         | `{ segmentStart, attempts }` of a held or abandoned segment. |
+| `lastError`         | The newest stored error.                                     |
+
+More detail: [Data model: Exporter contract](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#exporter-contract).
+
+</details>
+
+### Find an exporter that stopped
+
+**Example.** `archiver-1` stops on 20 September. Its host was removed, and nobody moved the
+exporter.
+
+1. On 20 September, the last complete segment of `task_event` is 19 September. The export watermark
+   is 20 September.
+2. On the next days, new days end, but no exporter copies them. The watermark stays at 20 September.
+3. Then 20 September passes its retention window. The watermark is not past the day, so retention
+   keeps it.
+4. Each day after that, retention keeps one more day. The retention lag in
+   [queue health](/docs/queue-health) increases, and you see the problem.
+
+Workhorse records each segment in the ledger: the day, the status, the exporter that holds it, the
+object name, the checksum, and any error. The watermark moves forward only across complete days
+with no gap between them. Thus it cannot skip a missing day.
+
+While cold export is on, history retention does not delete a day at or after the export watermark.
+Thus an exporter that stops keeps history in PostgreSQL. It does not leave a gap in the export
+store.
 
 <details>
 <summary>Reference: ledger and retention clamp</summary>
@@ -742,26 +867,27 @@ More detail: [Data model: Retention clamp](https://github.com/stablemates/workho
 
 </details>
 
-### Resume is free
+### Recover after an exporter crashes
 
-`archiver-1` claims 14 September with a one-hour lease and starts the upload. Halfway through, its
-process crashes.
+A lease is the time that one exporter holds a segment. While the lease is active, no other exporter
+can claim a day of that table.
 
-1. **At 0 min.** The claim opens the segment with attempt 1 and leases it to `archiver-1`.
-2. **At 20 min.** `archiver-1` crashes. Part of the object may already be in the store.
-3. **At 60 min.** The lease lapses. Until then, no other exporter can claim this relation.
-4. **At 70 min.** `archiver-2` claims. It gets the same day with attempt 2. It writes the object
-   again under the same name, with the same bytes, and completes the segment as attempt 2.
-5. **At 90 min.** `archiver-1` restarts and tries to complete the segment as attempt 1. The ledger
-   refuses, because attempt 2 now holds the day.
+**Example.** `archiver-1` claims 14 September with a one-hour lease and starts the upload.
 
-The same day always produces the same object. Object names derive from the segment identity, and
-rows are read in a fixed order. So a crashed export resumes by rewriting the same object, and the
-full upload overwrites a partial one. Nothing about the store needs to be transactional.
+1. At 0 min, the claim opens the segment as attempt 1 and leases it to `archiver-1`.
+2. At 20 min, `archiver-1` crashes. Part of the file can already be in the export store.
+3. At 60 min, the lease expires. At 70 min, `archiver-2` claims the same day as attempt 2.
+4. `archiver-2` writes the same file under the same name, and completes the segment.
+5. At 90 min, `archiver-1` restarts and tries to complete the segment as attempt 1. The ledger
+   refuses, because attempt 2 holds the day.
 
-A crash cannot corrupt the ledger either. Each claim leases the day and counts the attempt. Only the
-attempt that holds the lease can mark the day complete. An exporter that fails cleanly reports the
-failure, which releases the lease at once, so the next claim hands out the same day again.
+The same day always gives the same file. The file name comes from the segment, and the exporter
+reads the rows in a fixed order. Thus a second export replaces a partial upload with the full file.
+The export store does not need transactions.
+
+A crash also cannot damage the ledger. Each claim leases the day and counts the attempt. Only the
+attempt that holds the lease can mark the day complete. If an exporter reports a failure, Workhorse
+releases the lease immediately. The next claim then gets the same day again.
 
 <details>
 <summary>Reference: segment functions</summary>
@@ -796,59 +922,153 @@ More detail: [Data model: Segment functions](https://github.com/stablemates/work
 
 </details>
 
-### A day is a UTC day
+### Read an export
 
-An exporter session uses the time zone `America/New_York`. On 8 March 2026, New York moves its
-clocks forward an hour. Earlier releases handled that day like this:
+**Example.** In March, an auditor asks how many events of each type the tasks wrote in September.
+Retention has deleted September from PostgreSQL, but `archiver-1` exported each day.
 
-1. **The claim.** The segment starts at 8 March 00:00 UTC. The claim added one calendar day in the
-   session time zone. The segment therefore ended at 8 March 23:00 UTC, an hour short.
-2. **The next claim.** The next segment started at 8 March 23:00 UTC, off midnight. Its UTC date was
-   also 8 March, so it had the same object name.
-3. **The upload.** The exporter wrote the second segment under that name. It overwrote the object of
-   the first, and the export store lost most of 8 March.
+1. The operator uses DuckDB on the September files of `task_event`, and groups the lines by event
+   type.
+2. The auditor then asks about one task. The operator loads 14 September into a scratch table and
+   queries it with PostgreSQL.
 
-A day that turns the clocks back made a segment an hour too long instead. Either way, later
-segments started off midnight.
+This version has no query that reads PostgreSQL and the export store together. Read the export
+store with a tool that reads JSON lines. Or load a day into a scratch schema for a PostgreSQL query.
+A scratch schema is a schema that you make only for this work.
 
-A segment now always starts at a UTC midnight and lasts one UTC day, whatever the session time
-zone.
+Do not load an export into the live `workhorse` schema. Retention deletes the rows again, and the
+statistics count them two times.
 
-The schema upgrade that adds this rule repairs a damaged ledger. Before you run it, stop every
-exporter and let each finish its object and manifest uploads. Keep export enabled, so retention
-still waits for the export. The repair fences an earlier exporter out of the ledger. It cannot stop
-an upload already in flight, and that upload would overwrite the corrected day's object with the
-old range.
+With DuckDB:
 
-The upgrade first waits for any running retention pass, and no pass deletes history until the
-repair commits. A pass that read the old watermark therefore cannot delete history the repair
-wants to export again. An exporter that claims or completes a day during the upgrade waits for it
-too.
+```sql
+SELECT event_type, count(*)
+  FROM read_ndjson_auto('/mnt/archive/workhorse/task_event/2026/09/*/*.ndjson.gz')
+ GROUP BY event_type;
+```
 
-When a relation lost a completed day to a short or long segment, Workhorse moves its watermark back.
-It goes to the first day that segment may have overwritten. The exporter then writes those days
-again. Retention reads the watermark, so it keeps those days until the export has copied them.
+With PostgreSQL, decompress the file and load each line as one `jsonb` value into a scratch table.
+The quote byte and the delimiter byte below never occur in JSON. Thus `COPY` keeps each line
+complete:
 
-Each damaged segment is then made one UTC day:
+```sh
+gunzip -c task_event-2026-09-14.ndjson.gz \
+  | psql "$DATABASE_URL" -c "COPY archive.task_event_lines (line) FROM STDIN \
+      WITH (FORMAT csv, QUOTE E'\x01', DELIMITER E'\x02')"
+```
 
-- A segment that starts at a UTC midnight and lies at or after the new watermark becomes one UTC day
-  and is exported again. Its attempt count rises, so the exporter that held it before cannot
+Then get columns from the lines with `jsonb` operators. Each line holds one source row. Its keys are
+the column names at the time of the export.
+
+<details>
+<summary>Reference: export contents and restore</summary>
+
+- Each line is the `record` that `read_cold_export_rows_v1` returned: the `to_jsonb` of one row.
+- Rows arrive in `(occurred_at, id)` order. For `fast_task_outcome`, the order is
+  `(finished_at, task_id)`.
+- An empty day completes with a null object key and a manifest only.
+- ADR 0068 promises no hot and cold query through the dashboard or the operator API. It makes
+  loading an export into the live `workhorse` schema unsupported, because retention would delete it
+  again and statistics would count it twice.
+
+More detail: [Data model: Segment functions](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#segment-functions).
+
+</details>
+
+### Turn off cold export
+
+If you turn off cold export, retention uses only its windows again. If you turn it on later, the
+export starts at the oldest day that PostgreSQL still holds.
+
+**Example.** You turn off cold export on 1 October.
+
+1. Retention immediately uses its windows again.
+2. The next passes delete the days that the export kept.
+3. On 20 October, you turn on cold export again. PostgreSQL no longer holds those days.
+4. Workhorse moves the export watermark forward to the oldest day that PostgreSQL still holds.
+
+Workhorse does not record empty segments for days that had rows before.
+
+<details>
+<summary>Reference: policy functions</summary>
+
+`Queue.setColdExportPolicy({ enabled, from? })` wraps `set_cold_export_policy_v1(p_enabled, p_from)`
+and emits the `workhorse.cold_export_policy.synchronized` log event.
+
+Enabling seeds each dataset without a watermark at one of these days:
+
+- the UTC day of `p_from`, when given;
+- otherwise `cold_export_oldest_history_day_internal_v1`, the UTC day of the oldest retained row;
+- the current UTC day, when the dataset is empty.
+
+Rules:
+
+- A `p_from` that differs from an existing watermark raises `already started`. The start never
+  moves.
+- `p_from` with `p_enabled = false` raises.
+- Re-enabling advances a watermark that fell below the oldest retained day.
+
+More detail: [Data model: Policy functions](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#policy-functions).
+
+</details>
+
+### Repair segments that are not one UTC day
+
+A segment always starts at a UTC midnight and lasts one UTC day. The time zone of the session has no
+effect. Earlier releases did not obey this rule on a day with a clock change.
+
+**Example.** An exporter session uses the time zone `America/New_York`. On 8 March 2026, New York
+moves its clocks forward one hour. An earlier release did these steps:
+
+1. A segment started at 8 March 00:00 UTC. The claim added one calendar day in the session time
+   zone, so the segment ended at 8 March 23:00 UTC.
+2. The next segment started at 8 March 23:00 UTC, not at midnight. Its UTC date was also 8 March,
+   so it got the same object name.
+3. The exporter wrote the second segment under that name. It replaced the file of the first
+   segment, and the export store lost most of 8 March.
+
+On a day when the clocks moved back, a segment was one hour too long. In both cases, the later
+segments did not start at midnight.
+
+The schema upgrade that adds the UTC-day rule repairs a damaged ledger. Before you run the upgrade,
+do these steps:
+
+1. Stop each exporter.
+2. Let each exporter finish its file and manifest uploads.
+3. Keep cold export on, so that retention still waits for the export.
+
+The repair removes earlier exporters from the ledger. It cannot stop an upload that is in progress.
+That upload can replace the file of a repaired day with the old range.
+
+The upgrade first waits for a running retention pass. No pass deletes history until the repair
+commits. Thus a pass that read the old watermark cannot delete history that the repair must export
+again. An exporter that claims or completes a day during the upgrade also waits.
+
+If a table lost a complete day to a short or long segment, Workhorse moves its export watermark
+back. The watermark goes to the first day that the segment can have replaced. The exporter then
+writes those days again. Retention reads the watermark, so it keeps those days until the export
+copies them.
+
+Then Workhorse makes each damaged segment one UTC day:
+
+- If a segment starts at a UTC midnight and is at or after the new watermark, it becomes one UTC
+  day. The exporter exports it again. Its attempt count increases, so its earlier exporter cannot
   complete it.
-- Any other segment that is not one UTC day is dropped. Its object stays in your store, but the
-  ledger no longer names it.
+- Workhorse deletes each other segment that is not one UTC day. Its file stays in your export
+  store, but the ledger no longer names it.
 
-The upgrade raises a warning per relation with the count and the range of each kind of change.
+The upgrade gives a warning for each table, with the count and the range of each type of change.
 
-The rewind reaches only history that PostgreSQL still holds. Retention may already have removed
-some of those days. The watermark then stops at the oldest day still present. A second warning
-names the days that cannot be written again. Treat their exported objects as suspect, and restore
-them from another copy if you have one.
+The watermark moves back only to history that PostgreSQL still holds. Retention can already have
+deleted some of those days. Then the watermark stops at the oldest day that remains. A second
+warning names the days that the exporter cannot write again. Do not trust their exported files. If
+you have another copy of them, restore them from it.
 
-Retention can also remove part of a day. The fast tier prunes outcomes one row at a time, so a day
-it already exported may keep only some of its rows. Exporting that day again would overwrite a
-complete object with a smaller one. The rewind therefore also stops after the last completed day
-whose source now holds fewer rows than its exported object recorded. Those days keep their objects,
-and the same warning names them.
+Retention can also delete part of a day. Fast-tier cleanup deletes outcomes one row at a time. Thus
+an exported day can keep only some of its rows in PostgreSQL. A new export of that day replaces a
+complete file with a smaller file. Thus the watermark also stops after the last complete day whose
+source holds fewer rows than its exported file. Those days keep their files, and the same warning
+names them.
 
 <details>
 <summary>Reference: the UTC-day repair (migration 0052)</summary>
@@ -891,140 +1111,13 @@ More detail: [Data model: Migration 0052 repair](https://github.com/stablemates/
 
 </details>
 
-### Running an exporter
-
-Go back to `archiver-1`. An operator enables export just before its first run.
-
-1. **At once** retention starts to wait for the export watermark.
-2. **At the hourly run** `archiver-1` claims the oldest day not yet exported. It reads the day,
-   writes the object and its manifest, and completes the segment.
-3. **Suppose the store refuses the write.** `archiver-1` reports the failure. Its next claim gets
-   the same day again.
-
-The exporter is not a worker routine. Workers never talk to your object store, and dispatch never
-waits for an export. Workhorse ships the ledger and the four SQL functions an exporter drives. The
-exporter itself is a small program you run where you like, on the schedule you like. Several may
-run at once. No exporter ships in this release.
-
-Enable export only once an exporter is ready to run. From that moment, retention waits for the
-export watermark. Enabling export with nothing to drain it holds history indefinitely. The
-retention lag in queue health keeps growing until you disable export or run an exporter.
-
-```ts
-await queue.setColdExportPolicy({ enabled: true });
-console.log(await queue.getColdExportStatus());
-```
-
-An exporter loops over four calls. It claims the next day and reads that day in pages ordered by
-identity. It writes the object and its manifest. Then it completes the segment with a SHA-256
-checksum and counts. If writing fails, it reports the failure, so the next claim hands the same day
-out again.
-
-`queue.getColdExportStatus()` reports, per relation, the watermark and the newest day that may be
-exported. It also reports the segment currently held and the last error.
-
-A store is anything that writes one object under a name. Encryption at rest, access control, and
-write-once rules belong to that store and its provider. Workhorse holds no key of its own.
-
-<details>
-<summary>Reference: exporter contract and status</summary>
-
-An exporter runs these steps:
-
-1. It claims one day of one dataset.
-2. It reads the day in `read_cold_export_rows_v1` pages of 1 through 100,000 rows.
-3. It writes one gzipped JSON-lines object, named as below.
-4. It writes a `.manifest.json` beside the object, with the row count, byte length, and hex SHA-256
-   of the object as stored.
-5. It completes the segment with those values, or calls `fail_cold_export_segment_v1`.
-
-| Object key pattern                                                         |
-| -------------------------------------------------------------------------- |
-| `<prefix>/<dataset>/<YYYY>/<MM>/<DD>/<dataset>-<YYYY>-<MM>-<DD>.ndjson.gz` |
-
-**Status.** `Queue.getColdExportStatus()` wraps `get_cold_export_status_v1()`. It returns `enabled`,
-`updatedAt`, and per dataset:
-
-| Field               | Meaning                                                      |
-| ------------------- | ------------------------------------------------------------ |
-| `exportedThrough`   | The watermark. Every day below it has a complete segment.    |
-| `exportableThrough` | The newest day boundary a segment may end at.                |
-| `completeSegments`  | Count of complete segments.                                  |
-| `exporting`         | `{ segmentStart, attempts }` of a held or abandoned segment. |
-| `lastError`         | The newest stored error.                                     |
-
-More detail: [Data model: Exporter contract](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#exporter-contract).
-
-</details>
-
-### Turning it off
-
-You disable export on 1 October. Retention returns to its configured windows at once, and the next
-passes delete the days that export was holding. On 20 October you enable export again. By then
-PostgreSQL no longer holds those days. So the watermark moves forward to the oldest day still
-present. Workhorse does not record empty segments for days that once had rows.
-
-<details>
-<summary>Reference: policy functions</summary>
-
-`Queue.setColdExportPolicy({ enabled, from? })` wraps `set_cold_export_policy_v1(p_enabled, p_from)`
-and emits the `workhorse.cold_export_policy.synchronized` log event.
-
-Enabling seeds each dataset without a watermark at one of these days:
-
-- the UTC day of `p_from`, when given;
-- otherwise `cold_export_oldest_history_day_internal_v1`, the UTC day of the oldest retained row;
-- the current UTC day, when the dataset is empty.
-
-Rules:
-
-- A `p_from` that differs from an existing watermark raises `already started`. The start never
-  moves.
-- `p_from` with `p_enabled = false` raises.
-- Re-enabling advances a watermark that fell below the oldest retained day.
-
-More detail: [Data model: Policy functions](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#policy-functions).
-
-</details>
-
-### Reading an export back
-
-In March an auditor asks how many events of each type the tasks wrote in September. Retention has
-already deleted September from PostgreSQL, but `archiver-1` exported every day of it.
-
-1. **The operator counts with DuckDB.** They point it at the September objects of `task_event` and
-   group the lines by event type.
-2. **The auditor then asks about one task.** The operator loads 14 September into a scratch table
-   and queries it with PostgreSQL.
-
-There is no transparent hot-and-cold query in this version. Read the export store with a JSON-lines
-tool such as DuckDB. For a PostgreSQL query, decompress the day and `COPY` each line as one `jsonb`
-value into a scratch schema. Then project the lines into columns with `jsonb` operators. Never load
-an export into the live `workhorse` schema. Retention would delete it again, and statistics would
-count it twice.
-
-<details>
-<summary>Reference: export contents and restore</summary>
-
-- Each line is the `record` that `read_cold_export_rows_v1` returned: the `to_jsonb` of one row.
-- Rows arrive in `(occurred_at, id)` order. For `fast_task_outcome`, the order is
-  `(finished_at, task_id)`.
-- An empty day completes with a null object key and a manifest only.
-- ADR 0068 promises no hot and cold query through the dashboard or the operator API. It makes
-  loading an export into the live `workhorse` schema unsupported, because retention would delete it
-  again and statistics would count it twice.
-
-More detail: [Data model: Segment functions](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#segment-functions).
-
-</details>
-
 ## Next
 
-- [Worker processes](/docs/worker-processes) — the runtime that drives maintenance
-- [Queries and timelines](/docs/queries) — health budgets and the wider read model
-- [Dead letters and redrive](/docs/dead-letters) — lineage that can delay cleanup
+- [Worker processes](/docs/worker-processes) — the runtime that runs maintenance
+- [Queries and timelines](/docs/queries) — health limits and the full read model
+- [Dead letters and redrive](/docs/dead-letters) — the redrive links that can delay cleanup
 
 ---
 
-Exact maintenance phases, retention constraints, work bounds, and health fields:
+Exact maintenance phases, retention rules, work limits, and health fields:
 [architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#retention_policy).
