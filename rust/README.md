@@ -155,6 +155,8 @@ unpublished. `workhorse` is the one crate ADR 0074 publishes.
 - `HandlerContext` in `src/context.rs`, `src/waits.rs`, and `src/children.rs` gives a handler
   checkpoints, durable sleeps, signal and human waits, child tasks, and progress. A wait that has not
   resolved suspends the task, and the worker releases it without settling.
+- `src/task_groups.rs` holds task groups (ADR 0095): the `Queue` and `Admin` calls and
+  `HandlerContext::task_group`.
 
 `Queue` follows the Python client's signatures where the ADR sketch is shorter. The policy and
 budget sync methods take a namespace and a `prune` flag and return the stored rows. `cancel` takes an
@@ -171,7 +173,8 @@ The integration tests in `rust/tests/` load the shared `protocol/v1` fixtures.
 
 The PostgreSQL tests in `rust/tests/postgres.rs`, `rust/tests/enqueue_postgres.rs`,
 `rust/tests/client_postgres.rs`, `rust/tests/admin_postgres.rs`, `rust/tests/worker_postgres.rs`,
-`rust/tests/durable_postgres.rs`, and `rust/tests/protocol_conformance.rs` exercise the real
+`rust/tests/durable_postgres.rs`, `rust/tests/task_groups_postgres.rs`, and
+`rust/tests/protocol_conformance.rs` exercise the real
 `workhorse` adapter. Each one creates a scratch database from `DATABASE_URL_TEST`, installs
 `sql/schema/current.sql`, and drops the database afterward.
 `pnpm db:sweep` finds any scratch database that a failed teardown leaves behind.

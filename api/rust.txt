@@ -573,6 +573,12 @@ pub workhorse::Error::ShutdownIncomplete::abandoned: usize
 pub workhorse::Error::SignalIdempotencyConflict
 pub workhorse::Error::SignalIdempotencyConflict::name: alloc::string::String
 pub workhorse::Error::SignalIdempotencyConflict::task_id: uuid::Uuid
+pub workhorse::Error::TaskGroupClosed
+pub workhorse::Error::TaskGroupClosed::details: alloc::boxed::Box<workhorse::TaskGroupClosedDetails>
+pub workhorse::Error::TaskGroupLimitExceeded
+pub workhorse::Error::TaskGroupLimitExceeded::details: alloc::boxed::Box<workhorse::TaskGroupLimitDetails>
+pub workhorse::Error::TaskGroupMembershipConflict
+pub workhorse::Error::TaskGroupMembershipConflict::details: alloc::boxed::Box<workhorse::TaskGroupMembershipConflictDetails>
 pub workhorse::Error::UnexpectedStatus
 pub workhorse::Error::UnexpectedStatus::operation: workhorse::Operation
 pub workhorse::Error::UnexpectedStatus::status: alloc::string::String
@@ -628,6 +634,7 @@ impl core::marker::Unpin for workhorse::HumanWaitCompletionStatus
 impl core::panic::unwind_safe::RefUnwindSafe for workhorse::HumanWaitCompletionStatus
 impl core::panic::unwind_safe::UnwindSafe for workhorse::HumanWaitCompletionStatus
 #[non_exhaustive] pub enum workhorse::Operation
+pub workhorse::Operation::AddToTaskGroup
 pub workhorse::Operation::Cancel
 pub workhorse::Operation::Checkpoint
 pub workhorse::Operation::Claim
@@ -806,6 +813,196 @@ impl core::marker::Sync for workhorse::SignalDeliveryStatus
 impl core::marker::Unpin for workhorse::SignalDeliveryStatus
 impl core::panic::unwind_safe::RefUnwindSafe for workhorse::SignalDeliveryStatus
 impl core::panic::unwind_safe::UnwindSafe for workhorse::SignalDeliveryStatus
+pub enum workhorse::TaskGroupCallbackKind
+pub workhorse::TaskGroupCallbackKind::OnFailure
+pub workhorse::TaskGroupCallbackKind::OnFinish
+pub workhorse::TaskGroupCallbackKind::OnSuccess
+impl workhorse::TaskGroupCallbackKind
+pub fn workhorse::TaskGroupCallbackKind::as_str(self) -> &'static str
+impl core::clone::Clone for workhorse::TaskGroupCallbackKind
+pub fn workhorse::TaskGroupCallbackKind::clone(&self) -> workhorse::TaskGroupCallbackKind
+impl core::cmp::Eq for workhorse::TaskGroupCallbackKind
+impl core::cmp::PartialEq for workhorse::TaskGroupCallbackKind
+pub fn workhorse::TaskGroupCallbackKind::eq(&self, other: &workhorse::TaskGroupCallbackKind) -> bool
+impl core::fmt::Debug for workhorse::TaskGroupCallbackKind
+pub fn workhorse::TaskGroupCallbackKind::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for workhorse::TaskGroupCallbackKind
+pub fn workhorse::TaskGroupCallbackKind::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for workhorse::TaskGroupCallbackKind
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupCallbackKind
+impl serde_core::ser::Serialize for workhorse::TaskGroupCallbackKind
+pub fn workhorse::TaskGroupCallbackKind::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for workhorse::TaskGroupCallbackKind
+pub fn workhorse::TaskGroupCallbackKind::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for workhorse::TaskGroupCallbackKind
+impl core::marker::Send for workhorse::TaskGroupCallbackKind
+impl core::marker::Sync for workhorse::TaskGroupCallbackKind
+impl core::marker::Unpin for workhorse::TaskGroupCallbackKind
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupCallbackKind
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupCallbackKind
+pub enum workhorse::TaskGroupEventType
+pub workhorse::TaskGroupEventType::CallbackEnqueued
+pub workhorse::TaskGroupEventType::CallbackFailed
+pub workhorse::TaskGroupEventType::Canceled
+pub workhorse::TaskGroupEventType::CounterRepaired
+pub workhorse::TaskGroupEventType::Created
+pub workhorse::TaskGroupEventType::Finished
+pub workhorse::TaskGroupEventType::Sealed
+impl workhorse::TaskGroupEventType
+pub fn workhorse::TaskGroupEventType::as_str(self) -> &'static str
+impl core::clone::Clone for workhorse::TaskGroupEventType
+pub fn workhorse::TaskGroupEventType::clone(&self) -> workhorse::TaskGroupEventType
+impl core::cmp::Eq for workhorse::TaskGroupEventType
+impl core::cmp::PartialEq for workhorse::TaskGroupEventType
+pub fn workhorse::TaskGroupEventType::eq(&self, other: &workhorse::TaskGroupEventType) -> bool
+impl core::fmt::Debug for workhorse::TaskGroupEventType
+pub fn workhorse::TaskGroupEventType::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for workhorse::TaskGroupEventType
+pub fn workhorse::TaskGroupEventType::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for workhorse::TaskGroupEventType
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupEventType
+impl serde_core::ser::Serialize for workhorse::TaskGroupEventType
+pub fn workhorse::TaskGroupEventType::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for workhorse::TaskGroupEventType
+pub fn workhorse::TaskGroupEventType::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for workhorse::TaskGroupEventType
+impl core::marker::Send for workhorse::TaskGroupEventType
+impl core::marker::Sync for workhorse::TaskGroupEventType
+impl core::marker::Unpin for workhorse::TaskGroupEventType
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupEventType
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupEventType
+pub enum workhorse::TaskGroupMemberOutcome
+pub workhorse::TaskGroupMemberOutcome::Canceled
+pub workhorse::TaskGroupMemberOutcome::Failed
+pub workhorse::TaskGroupMemberOutcome::Succeeded
+impl workhorse::TaskGroupMemberOutcome
+pub fn workhorse::TaskGroupMemberOutcome::as_str(self) -> &'static str
+impl core::clone::Clone for workhorse::TaskGroupMemberOutcome
+pub fn workhorse::TaskGroupMemberOutcome::clone(&self) -> workhorse::TaskGroupMemberOutcome
+impl core::cmp::Eq for workhorse::TaskGroupMemberOutcome
+impl core::cmp::PartialEq for workhorse::TaskGroupMemberOutcome
+pub fn workhorse::TaskGroupMemberOutcome::eq(&self, other: &workhorse::TaskGroupMemberOutcome) -> bool
+impl core::fmt::Debug for workhorse::TaskGroupMemberOutcome
+pub fn workhorse::TaskGroupMemberOutcome::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for workhorse::TaskGroupMemberOutcome
+pub fn workhorse::TaskGroupMemberOutcome::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for workhorse::TaskGroupMemberOutcome
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupMemberOutcome
+impl serde_core::ser::Serialize for workhorse::TaskGroupMemberOutcome
+pub fn workhorse::TaskGroupMemberOutcome::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for workhorse::TaskGroupMemberOutcome
+pub fn workhorse::TaskGroupMemberOutcome::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for workhorse::TaskGroupMemberOutcome
+impl core::marker::Send for workhorse::TaskGroupMemberOutcome
+impl core::marker::Sync for workhorse::TaskGroupMemberOutcome
+impl core::marker::Unpin for workhorse::TaskGroupMemberOutcome
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupMemberOutcome
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupMemberOutcome
+pub enum workhorse::TaskGroupRepairAction
+pub workhorse::TaskGroupRepairAction::Finished
+pub workhorse::TaskGroupRepairAction::Recounted
+impl workhorse::TaskGroupRepairAction
+pub fn workhorse::TaskGroupRepairAction::as_str(self) -> &'static str
+impl core::clone::Clone for workhorse::TaskGroupRepairAction
+pub fn workhorse::TaskGroupRepairAction::clone(&self) -> workhorse::TaskGroupRepairAction
+impl core::cmp::Eq for workhorse::TaskGroupRepairAction
+impl core::cmp::PartialEq for workhorse::TaskGroupRepairAction
+pub fn workhorse::TaskGroupRepairAction::eq(&self, other: &workhorse::TaskGroupRepairAction) -> bool
+impl core::fmt::Debug for workhorse::TaskGroupRepairAction
+pub fn workhorse::TaskGroupRepairAction::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for workhorse::TaskGroupRepairAction
+pub fn workhorse::TaskGroupRepairAction::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for workhorse::TaskGroupRepairAction
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupRepairAction
+impl serde_core::ser::Serialize for workhorse::TaskGroupRepairAction
+pub fn workhorse::TaskGroupRepairAction::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for workhorse::TaskGroupRepairAction
+pub fn workhorse::TaskGroupRepairAction::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for workhorse::TaskGroupRepairAction
+impl core::marker::Send for workhorse::TaskGroupRepairAction
+impl core::marker::Sync for workhorse::TaskGroupRepairAction
+impl core::marker::Unpin for workhorse::TaskGroupRepairAction
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupRepairAction
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupRepairAction
+pub enum workhorse::TaskGroupResult
+pub workhorse::TaskGroupResult::Failed
+pub workhorse::TaskGroupResult::Succeeded
+impl workhorse::TaskGroupResult
+pub fn workhorse::TaskGroupResult::as_str(self) -> &'static str
+impl core::clone::Clone for workhorse::TaskGroupResult
+pub fn workhorse::TaskGroupResult::clone(&self) -> workhorse::TaskGroupResult
+impl core::cmp::Eq for workhorse::TaskGroupResult
+impl core::cmp::PartialEq for workhorse::TaskGroupResult
+pub fn workhorse::TaskGroupResult::eq(&self, other: &workhorse::TaskGroupResult) -> bool
+impl core::fmt::Debug for workhorse::TaskGroupResult
+pub fn workhorse::TaskGroupResult::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for workhorse::TaskGroupResult
+pub fn workhorse::TaskGroupResult::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for workhorse::TaskGroupResult
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupResult
+impl serde_core::ser::Serialize for workhorse::TaskGroupResult
+pub fn workhorse::TaskGroupResult::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for workhorse::TaskGroupResult
+pub fn workhorse::TaskGroupResult::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for workhorse::TaskGroupResult
+impl core::marker::Send for workhorse::TaskGroupResult
+impl core::marker::Sync for workhorse::TaskGroupResult
+impl core::marker::Unpin for workhorse::TaskGroupResult
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupResult
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupResult
+pub enum workhorse::TaskGroupRole
+pub workhorse::TaskGroupRole::Callback
+pub workhorse::TaskGroupRole::Member
+impl workhorse::TaskGroupRole
+pub fn workhorse::TaskGroupRole::as_str(self) -> &'static str
+impl core::clone::Clone for workhorse::TaskGroupRole
+pub fn workhorse::TaskGroupRole::clone(&self) -> workhorse::TaskGroupRole
+impl core::cmp::Eq for workhorse::TaskGroupRole
+impl core::cmp::PartialEq for workhorse::TaskGroupRole
+pub fn workhorse::TaskGroupRole::eq(&self, other: &workhorse::TaskGroupRole) -> bool
+impl core::fmt::Debug for workhorse::TaskGroupRole
+pub fn workhorse::TaskGroupRole::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for workhorse::TaskGroupRole
+pub fn workhorse::TaskGroupRole::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for workhorse::TaskGroupRole
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupRole
+impl serde_core::ser::Serialize for workhorse::TaskGroupRole
+pub fn workhorse::TaskGroupRole::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for workhorse::TaskGroupRole
+pub fn workhorse::TaskGroupRole::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for workhorse::TaskGroupRole
+impl core::marker::Send for workhorse::TaskGroupRole
+impl core::marker::Sync for workhorse::TaskGroupRole
+impl core::marker::Unpin for workhorse::TaskGroupRole
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupRole
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupRole
+pub enum workhorse::TaskGroupState
+pub workhorse::TaskGroupState::Finished
+pub workhorse::TaskGroupState::Open
+pub workhorse::TaskGroupState::Sealed
+impl workhorse::TaskGroupState
+pub fn workhorse::TaskGroupState::as_str(self) -> &'static str
+impl core::clone::Clone for workhorse::TaskGroupState
+pub fn workhorse::TaskGroupState::clone(&self) -> workhorse::TaskGroupState
+impl core::cmp::Eq for workhorse::TaskGroupState
+impl core::cmp::PartialEq for workhorse::TaskGroupState
+pub fn workhorse::TaskGroupState::eq(&self, other: &workhorse::TaskGroupState) -> bool
+impl core::fmt::Debug for workhorse::TaskGroupState
+pub fn workhorse::TaskGroupState::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for workhorse::TaskGroupState
+pub fn workhorse::TaskGroupState::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for workhorse::TaskGroupState
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupState
+impl serde_core::ser::Serialize for workhorse::TaskGroupState
+pub fn workhorse::TaskGroupState::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for workhorse::TaskGroupState
+pub fn workhorse::TaskGroupState::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for workhorse::TaskGroupState
+impl core::marker::Send for workhorse::TaskGroupState
+impl core::marker::Sync for workhorse::TaskGroupState
+impl core::marker::Unpin for workhorse::TaskGroupState
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupState
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupState
 pub enum workhorse::TaskState
 pub workhorse::TaskState::Active
 pub workhorse::TaskState::Blocked
@@ -933,6 +1130,13 @@ pub async fn workhorse::Admin<E>::resume_queue(&self, queue: &str, audit: &workh
 pub async fn workhorse::Admin<E>::set_queue_history(&self, queue: &str, record_attempts: core::option::Option<bool>, record_claims: core::option::Option<bool>) -> core::result::Result<workhorse::QueueHistory, workhorse::Error>
 pub async fn workhorse::Admin<E>::set_queue_tier(&self, queue: &str, tier: workhorse::QueueTier, audit: &workhorse::AdminAudit) -> core::result::Result<workhorse::QueueTier, workhorse::Error>
 pub async fn workhorse::Admin<E>::set_worker_paused(&self, worker_id: &str, paused: bool, audit: &workhorse::AdminAudit) -> core::result::Result<core::option::Option<workhorse::WorkerPauseResult>, workhorse::Error>
+impl<E: workhorse::Executor> workhorse::Admin<E>
+pub async fn workhorse::Admin<E>::cancel_task_group(&self, group_id: uuid::Uuid, audit: &workhorse::AdminAudit) -> core::result::Result<core::option::Option<workhorse::TaskGroup>, workhorse::Error>
+pub async fn workhorse::Admin<E>::get_task_group(&self, group_id: uuid::Uuid) -> core::result::Result<core::option::Option<workhorse::TaskGroup>, workhorse::Error>
+pub async fn workhorse::Admin<E>::list_task_group_drift(&self, limit: u32) -> core::result::Result<alloc::vec::Vec<workhorse::TaskGroupDrift>, workhorse::Error>
+pub async fn workhorse::Admin<E>::list_task_group_events(&self, group_id: uuid::Uuid, limit: u32) -> core::result::Result<alloc::vec::Vec<workhorse::TaskGroupEvent>, workhorse::Error>
+pub async fn workhorse::Admin<E>::list_task_group_members(&self, group_id: uuid::Uuid, query: workhorse::TaskGroupMemberQuery) -> core::result::Result<workhorse::TaskGroupMemberPage, workhorse::Error>
+pub async fn workhorse::Admin<E>::repair_task_group_drift(&self, audit: &workhorse::AdminAudit, limit: u32) -> core::result::Result<alloc::vec::Vec<workhorse::TaskGroupRepair>, workhorse::Error>
 impl<E> !core::marker::Freeze for workhorse::Admin<E>
 impl<E> core::marker::Send for workhorse::Admin<E>
 impl<E> core::marker::Sync for workhorse::Admin<E>
@@ -966,6 +1170,7 @@ pub async fn workhorse::BatchHandlerContext::checkpoint<T, F, Fut>(&self, name: 
 pub async fn workhorse::BatchHandlerContext::get_progress<T: serde_core::de::DeserializeOwned>(&self) -> core::result::Result<core::option::Option<T>, workhorse::Error>
 pub async fn workhorse::BatchHandlerContext::set_progress<T: serde_core::ser::Serialize>(&self, progress: &T) -> core::result::Result<(), workhorse::Error>
 pub fn workhorse::BatchHandlerContext::task(&self) -> &workhorse::ClaimedTask
+pub fn workhorse::BatchHandlerContext::task_group(&self) -> workhorse::TaskGroupContext<'_>
 impl core::clone::Clone for workhorse::BatchHandlerContext
 pub fn workhorse::BatchHandlerContext::clone(&self) -> workhorse::BatchHandlerContext
 impl core::fmt::Debug for workhorse::BatchHandlerContext
@@ -1582,6 +1787,8 @@ pub async fn workhorse::HandlerContext::sleep(&self, name: &str, duration: core:
 pub async fn workhorse::HandlerContext::sleep_until(&self, name: &str, wake_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> core::result::Result<(), workhorse::Error>
 pub async fn workhorse::HandlerContext::wait_for_human<C: serde_core::ser::Serialize, T: serde_core::de::DeserializeOwned>(&self, name: &str, context: &C, timeout: core::option::Option<core::time::Duration>) -> core::result::Result<workhorse::HumanOutcome<T>, workhorse::Error>
 pub async fn workhorse::HandlerContext::wait_for_signal<T: serde_core::de::DeserializeOwned>(&self, name: &str, timeout: core::option::Option<core::time::Duration>) -> core::result::Result<workhorse::SignalOutcome<T>, workhorse::Error>
+impl workhorse::HandlerContext
+pub fn workhorse::HandlerContext::task_group(&self) -> workhorse::TaskGroupContext<'_>
 impl core::clone::Clone for workhorse::HandlerContext
 pub fn workhorse::HandlerContext::clone(&self) -> workhorse::HandlerContext
 impl core::fmt::Debug for workhorse::HandlerContext
@@ -1769,6 +1976,14 @@ impl core::panic::unwind_safe::UnwindSafe for workhorse::PurgeConflictDetails
 pub struct workhorse::Queue<E: workhorse::Executor>
 impl workhorse::Queue<tokio_postgres::client::Client>
 pub async fn workhorse::Queue<tokio_postgres::client::Client>::connect(url: &str, default_queue: impl core::convert::Into<alloc::string::String>) -> core::result::Result<Self, workhorse::Error>
+impl<E: workhorse::Executor> workhorse::Queue<E>
+pub async fn workhorse::Queue<E>::add_to_task_group(&self, group_id: uuid::Uuid, requests: alloc::vec::Vec<workhorse::EnqueueRequest>) -> core::result::Result<alloc::vec::Vec<workhorse::EnqueueResult>, workhorse::Error>
+pub async fn workhorse::Queue<E>::create_task_group(&self, callbacks: workhorse::TaskGroupCallbacks) -> core::result::Result<workhorse::TaskGroup, workhorse::Error>
+pub async fn workhorse::Queue<E>::find_task_group(&self, task_id: uuid::Uuid) -> core::result::Result<core::option::Option<workhorse::TaskGroupLink>, workhorse::Error>
+pub async fn workhorse::Queue<E>::get_task_group(&self, group_id: uuid::Uuid) -> core::result::Result<core::option::Option<workhorse::TaskGroup>, workhorse::Error>
+pub async fn workhorse::Queue<E>::list_task_group_members(&self, group_id: uuid::Uuid, query: workhorse::TaskGroupMemberQuery) -> core::result::Result<workhorse::TaskGroupMemberPage, workhorse::Error>
+pub async fn workhorse::Queue<E>::seal_task_group(&self, group_id: uuid::Uuid) -> core::result::Result<workhorse::TaskGroup, workhorse::Error>
+pub async fn workhorse::Queue<E>::task_group(&self, callbacks: workhorse::TaskGroupCallbacks, requests: alloc::vec::Vec<workhorse::EnqueueRequest>) -> core::result::Result<workhorse::TaskGroupBlockResult, workhorse::Error>
 impl<E: workhorse::Executor> workhorse::Queue<E>
 pub async fn workhorse::Queue<E>::assert_compatible(&self) -> core::result::Result<(), workhorse::Error>
 pub async fn workhorse::Queue<E>::cancel(&self, task_id: uuid::Uuid, requested_by: core::option::Option<&str>, reason: core::option::Option<&str>) -> core::result::Result<workhorse::CancelResult, workhorse::Error>
@@ -1962,6 +2177,340 @@ impl core::marker::Sync for workhorse::TaskCheckpoint
 impl core::marker::Unpin for workhorse::TaskCheckpoint
 impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskCheckpoint
 impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskCheckpoint
+pub struct workhorse::TaskGroup
+pub workhorse::TaskGroup::callbacks: alloc::vec::Vec<workhorse::TaskGroupCallback>
+pub workhorse::TaskGroup::cancel_reason: core::option::Option<alloc::string::String>
+pub workhorse::TaskGroup::canceled_at: core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
+pub workhorse::TaskGroup::canceled_by: core::option::Option<alloc::string::String>
+pub workhorse::TaskGroup::counts: workhorse::TaskGroupCounts
+pub workhorse::TaskGroup::created_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub workhorse::TaskGroup::finished_at: core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
+pub workhorse::TaskGroup::id: uuid::Uuid
+pub workhorse::TaskGroup::result: core::option::Option<workhorse::TaskGroupResult>
+pub workhorse::TaskGroup::sealed_at: core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
+pub workhorse::TaskGroup::state: workhorse::TaskGroupState
+impl core::clone::Clone for workhorse::TaskGroup
+pub fn workhorse::TaskGroup::clone(&self) -> workhorse::TaskGroup
+impl core::cmp::PartialEq for workhorse::TaskGroup
+pub fn workhorse::TaskGroup::eq(&self, other: &workhorse::TaskGroup) -> bool
+impl core::fmt::Debug for workhorse::TaskGroup
+pub fn workhorse::TaskGroup::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for workhorse::TaskGroup
+impl core::marker::Freeze for workhorse::TaskGroup
+impl core::marker::Send for workhorse::TaskGroup
+impl core::marker::Sync for workhorse::TaskGroup
+impl core::marker::Unpin for workhorse::TaskGroup
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroup
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroup
+pub struct workhorse::TaskGroupBlockResult
+pub workhorse::TaskGroupBlockResult::group: workhorse::TaskGroup
+pub workhorse::TaskGroupBlockResult::tasks: alloc::vec::Vec<workhorse::EnqueueResult>
+impl core::clone::Clone for workhorse::TaskGroupBlockResult
+pub fn workhorse::TaskGroupBlockResult::clone(&self) -> workhorse::TaskGroupBlockResult
+impl core::cmp::PartialEq for workhorse::TaskGroupBlockResult
+pub fn workhorse::TaskGroupBlockResult::eq(&self, other: &workhorse::TaskGroupBlockResult) -> bool
+impl core::fmt::Debug for workhorse::TaskGroupBlockResult
+pub fn workhorse::TaskGroupBlockResult::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupBlockResult
+impl core::marker::Freeze for workhorse::TaskGroupBlockResult
+impl core::marker::Send for workhorse::TaskGroupBlockResult
+impl core::marker::Sync for workhorse::TaskGroupBlockResult
+impl core::marker::Unpin for workhorse::TaskGroupBlockResult
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupBlockResult
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupBlockResult
+pub struct workhorse::TaskGroupCallback
+pub workhorse::TaskGroupCallback::kind: workhorse::TaskGroupCallbackKind
+pub workhorse::TaskGroupCallback::task_id: core::option::Option<uuid::Uuid>
+impl core::clone::Clone for workhorse::TaskGroupCallback
+pub fn workhorse::TaskGroupCallback::clone(&self) -> workhorse::TaskGroupCallback
+impl core::cmp::Eq for workhorse::TaskGroupCallback
+impl core::cmp::PartialEq for workhorse::TaskGroupCallback
+pub fn workhorse::TaskGroupCallback::eq(&self, other: &workhorse::TaskGroupCallback) -> bool
+impl core::fmt::Debug for workhorse::TaskGroupCallback
+pub fn workhorse::TaskGroupCallback::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupCallback
+impl core::marker::Freeze for workhorse::TaskGroupCallback
+impl core::marker::Send for workhorse::TaskGroupCallback
+impl core::marker::Sync for workhorse::TaskGroupCallback
+impl core::marker::Unpin for workhorse::TaskGroupCallback
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupCallback
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupCallback
+pub struct workhorse::TaskGroupCallbacks
+pub workhorse::TaskGroupCallbacks::on_failure: core::option::Option<workhorse::EnqueueRequest>
+pub workhorse::TaskGroupCallbacks::on_finish: core::option::Option<workhorse::EnqueueRequest>
+pub workhorse::TaskGroupCallbacks::on_success: core::option::Option<workhorse::EnqueueRequest>
+impl core::clone::Clone for workhorse::TaskGroupCallbacks
+pub fn workhorse::TaskGroupCallbacks::clone(&self) -> workhorse::TaskGroupCallbacks
+impl core::default::Default for workhorse::TaskGroupCallbacks
+pub fn workhorse::TaskGroupCallbacks::default() -> workhorse::TaskGroupCallbacks
+impl core::fmt::Debug for workhorse::TaskGroupCallbacks
+pub fn workhorse::TaskGroupCallbacks::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for workhorse::TaskGroupCallbacks
+impl core::marker::Send for workhorse::TaskGroupCallbacks
+impl core::marker::Sync for workhorse::TaskGroupCallbacks
+impl core::marker::Unpin for workhorse::TaskGroupCallbacks
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupCallbacks
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupCallbacks
+pub struct workhorse::TaskGroupClosedDetails
+pub workhorse::TaskGroupClosedDetails::group_id: alloc::string::String
+pub workhorse::TaskGroupClosedDetails::reason: alloc::string::String
+pub workhorse::TaskGroupClosedDetails::state: alloc::string::String
+impl core::clone::Clone for workhorse::TaskGroupClosedDetails
+pub fn workhorse::TaskGroupClosedDetails::clone(&self) -> workhorse::TaskGroupClosedDetails
+impl core::cmp::Eq for workhorse::TaskGroupClosedDetails
+impl core::cmp::PartialEq for workhorse::TaskGroupClosedDetails
+pub fn workhorse::TaskGroupClosedDetails::eq(&self, other: &workhorse::TaskGroupClosedDetails) -> bool
+impl core::default::Default for workhorse::TaskGroupClosedDetails
+pub fn workhorse::TaskGroupClosedDetails::default() -> Self
+impl core::fmt::Debug for workhorse::TaskGroupClosedDetails
+pub fn workhorse::TaskGroupClosedDetails::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupClosedDetails
+impl<'de> serde_core::de::Deserialize<'de> for workhorse::TaskGroupClosedDetails
+pub fn workhorse::TaskGroupClosedDetails::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for workhorse::TaskGroupClosedDetails
+impl core::marker::Send for workhorse::TaskGroupClosedDetails
+impl core::marker::Sync for workhorse::TaskGroupClosedDetails
+impl core::marker::Unpin for workhorse::TaskGroupClosedDetails
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupClosedDetails
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupClosedDetails
+pub struct workhorse::TaskGroupContext<'a>
+impl workhorse::TaskGroupContext<'_>
+pub async fn workhorse::TaskGroupContext<'_>::add(&self, requests: alloc::vec::Vec<workhorse::EnqueueRequest>) -> core::result::Result<alloc::vec::Vec<workhorse::EnqueueResult>, workhorse::Error>
+pub async fn workhorse::TaskGroupContext<'_>::get(&self) -> core::result::Result<core::option::Option<workhorse::TaskGroupLink>, workhorse::Error>
+impl<'a> core::clone::Clone for workhorse::TaskGroupContext<'a>
+pub fn workhorse::TaskGroupContext<'a>::clone(&self) -> workhorse::TaskGroupContext<'a>
+impl<'a> core::fmt::Debug for workhorse::TaskGroupContext<'a>
+pub fn workhorse::TaskGroupContext<'a>::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for workhorse::TaskGroupContext<'a>
+impl<'a> core::marker::Freeze for workhorse::TaskGroupContext<'a>
+impl<'a> core::marker::Send for workhorse::TaskGroupContext<'a>
+impl<'a> core::marker::Sync for workhorse::TaskGroupContext<'a>
+impl<'a> core::marker::Unpin for workhorse::TaskGroupContext<'a>
+impl<'a> !core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupContext<'a>
+impl<'a> !core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupContext<'a>
+pub struct workhorse::TaskGroupCounts
+pub workhorse::TaskGroupCounts::canceled: u32
+pub workhorse::TaskGroupCounts::failed: u32
+pub workhorse::TaskGroupCounts::pending: u32
+pub workhorse::TaskGroupCounts::succeeded: u32
+pub workhorse::TaskGroupCounts::total: u32
+impl core::clone::Clone for workhorse::TaskGroupCounts
+pub fn workhorse::TaskGroupCounts::clone(&self) -> workhorse::TaskGroupCounts
+impl core::cmp::Eq for workhorse::TaskGroupCounts
+impl core::cmp::PartialEq for workhorse::TaskGroupCounts
+pub fn workhorse::TaskGroupCounts::eq(&self, other: &workhorse::TaskGroupCounts) -> bool
+impl core::default::Default for workhorse::TaskGroupCounts
+pub fn workhorse::TaskGroupCounts::default() -> workhorse::TaskGroupCounts
+impl core::fmt::Debug for workhorse::TaskGroupCounts
+pub fn workhorse::TaskGroupCounts::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for workhorse::TaskGroupCounts
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupCounts
+impl core::marker::Freeze for workhorse::TaskGroupCounts
+impl core::marker::Send for workhorse::TaskGroupCounts
+impl core::marker::Sync for workhorse::TaskGroupCounts
+impl core::marker::Unpin for workhorse::TaskGroupCounts
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupCounts
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupCounts
+pub struct workhorse::TaskGroupDrift
+pub workhorse::TaskGroupDrift::action: workhorse::TaskGroupRepairAction
+pub workhorse::TaskGroupDrift::counted: workhorse::TaskGroupCounts
+pub workhorse::TaskGroupDrift::group_id: uuid::Uuid
+pub workhorse::TaskGroupDrift::recorded: workhorse::TaskGroupRecordedCounts
+pub workhorse::TaskGroupDrift::state: workhorse::TaskGroupState
+impl core::clone::Clone for workhorse::TaskGroupDrift
+pub fn workhorse::TaskGroupDrift::clone(&self) -> workhorse::TaskGroupDrift
+impl core::cmp::Eq for workhorse::TaskGroupDrift
+impl core::cmp::PartialEq for workhorse::TaskGroupDrift
+pub fn workhorse::TaskGroupDrift::eq(&self, other: &workhorse::TaskGroupDrift) -> bool
+impl core::fmt::Debug for workhorse::TaskGroupDrift
+pub fn workhorse::TaskGroupDrift::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupDrift
+impl core::marker::Freeze for workhorse::TaskGroupDrift
+impl core::marker::Send for workhorse::TaskGroupDrift
+impl core::marker::Sync for workhorse::TaskGroupDrift
+impl core::marker::Unpin for workhorse::TaskGroupDrift
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupDrift
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupDrift
+pub struct workhorse::TaskGroupEvent
+pub workhorse::TaskGroupEvent::details: serde_json::value::Value
+pub workhorse::TaskGroupEvent::event_type: workhorse::TaskGroupEventType
+pub workhorse::TaskGroupEvent::id: uuid::Uuid
+pub workhorse::TaskGroupEvent::occurred_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+impl core::clone::Clone for workhorse::TaskGroupEvent
+pub fn workhorse::TaskGroupEvent::clone(&self) -> workhorse::TaskGroupEvent
+impl core::cmp::PartialEq for workhorse::TaskGroupEvent
+pub fn workhorse::TaskGroupEvent::eq(&self, other: &workhorse::TaskGroupEvent) -> bool
+impl core::fmt::Debug for workhorse::TaskGroupEvent
+pub fn workhorse::TaskGroupEvent::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupEvent
+impl core::marker::Freeze for workhorse::TaskGroupEvent
+impl core::marker::Send for workhorse::TaskGroupEvent
+impl core::marker::Sync for workhorse::TaskGroupEvent
+impl core::marker::Unpin for workhorse::TaskGroupEvent
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupEvent
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupEvent
+pub struct workhorse::TaskGroupLimitDetails
+pub workhorse::TaskGroupLimitDetails::group_id: alloc::string::String
+pub workhorse::TaskGroupLimitDetails::limit: i64
+pub workhorse::TaskGroupLimitDetails::requested: i64
+pub workhorse::TaskGroupLimitDetails::total: i64
+impl core::clone::Clone for workhorse::TaskGroupLimitDetails
+pub fn workhorse::TaskGroupLimitDetails::clone(&self) -> workhorse::TaskGroupLimitDetails
+impl core::cmp::Eq for workhorse::TaskGroupLimitDetails
+impl core::cmp::PartialEq for workhorse::TaskGroupLimitDetails
+pub fn workhorse::TaskGroupLimitDetails::eq(&self, other: &workhorse::TaskGroupLimitDetails) -> bool
+impl core::default::Default for workhorse::TaskGroupLimitDetails
+pub fn workhorse::TaskGroupLimitDetails::default() -> Self
+impl core::fmt::Debug for workhorse::TaskGroupLimitDetails
+pub fn workhorse::TaskGroupLimitDetails::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupLimitDetails
+impl<'de> serde_core::de::Deserialize<'de> for workhorse::TaskGroupLimitDetails
+pub fn workhorse::TaskGroupLimitDetails::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for workhorse::TaskGroupLimitDetails
+impl core::marker::Send for workhorse::TaskGroupLimitDetails
+impl core::marker::Sync for workhorse::TaskGroupLimitDetails
+impl core::marker::Unpin for workhorse::TaskGroupLimitDetails
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupLimitDetails
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupLimitDetails
+pub struct workhorse::TaskGroupLink
+pub workhorse::TaskGroupLink::callback: core::option::Option<workhorse::TaskGroupCallbackKind>
+pub workhorse::TaskGroupLink::group: workhorse::TaskGroup
+pub workhorse::TaskGroupLink::role: workhorse::TaskGroupRole
+impl core::clone::Clone for workhorse::TaskGroupLink
+pub fn workhorse::TaskGroupLink::clone(&self) -> workhorse::TaskGroupLink
+impl core::cmp::PartialEq for workhorse::TaskGroupLink
+pub fn workhorse::TaskGroupLink::eq(&self, other: &workhorse::TaskGroupLink) -> bool
+impl core::fmt::Debug for workhorse::TaskGroupLink
+pub fn workhorse::TaskGroupLink::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupLink
+impl core::marker::Freeze for workhorse::TaskGroupLink
+impl core::marker::Send for workhorse::TaskGroupLink
+impl core::marker::Sync for workhorse::TaskGroupLink
+impl core::marker::Unpin for workhorse::TaskGroupLink
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupLink
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupLink
+pub struct workhorse::TaskGroupMember
+pub workhorse::TaskGroupMember::added_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub workhorse::TaskGroupMember::counted_at: core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
+pub workhorse::TaskGroupMember::outcome: core::option::Option<workhorse::TaskGroupMemberOutcome>
+pub workhorse::TaskGroupMember::position: u32
+pub workhorse::TaskGroupMember::queue: core::option::Option<alloc::string::String>
+pub workhorse::TaskGroupMember::state: core::option::Option<workhorse::TaskState>
+pub workhorse::TaskGroupMember::task_id: uuid::Uuid
+pub workhorse::TaskGroupMember::task_type: core::option::Option<alloc::string::String>
+impl core::clone::Clone for workhorse::TaskGroupMember
+pub fn workhorse::TaskGroupMember::clone(&self) -> workhorse::TaskGroupMember
+impl core::cmp::PartialEq for workhorse::TaskGroupMember
+pub fn workhorse::TaskGroupMember::eq(&self, other: &workhorse::TaskGroupMember) -> bool
+impl core::fmt::Debug for workhorse::TaskGroupMember
+pub fn workhorse::TaskGroupMember::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupMember
+impl core::marker::Freeze for workhorse::TaskGroupMember
+impl core::marker::Send for workhorse::TaskGroupMember
+impl core::marker::Sync for workhorse::TaskGroupMember
+impl core::marker::Unpin for workhorse::TaskGroupMember
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupMember
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupMember
+pub struct workhorse::TaskGroupMemberPage
+pub workhorse::TaskGroupMemberPage::members: alloc::vec::Vec<workhorse::TaskGroupMember>
+pub workhorse::TaskGroupMemberPage::next_after: core::option::Option<u32>
+impl core::clone::Clone for workhorse::TaskGroupMemberPage
+pub fn workhorse::TaskGroupMemberPage::clone(&self) -> workhorse::TaskGroupMemberPage
+impl core::cmp::PartialEq for workhorse::TaskGroupMemberPage
+pub fn workhorse::TaskGroupMemberPage::eq(&self, other: &workhorse::TaskGroupMemberPage) -> bool
+impl core::fmt::Debug for workhorse::TaskGroupMemberPage
+pub fn workhorse::TaskGroupMemberPage::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupMemberPage
+impl core::marker::Freeze for workhorse::TaskGroupMemberPage
+impl core::marker::Send for workhorse::TaskGroupMemberPage
+impl core::marker::Sync for workhorse::TaskGroupMemberPage
+impl core::marker::Unpin for workhorse::TaskGroupMemberPage
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupMemberPage
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupMemberPage
+pub struct workhorse::TaskGroupMemberQuery
+pub workhorse::TaskGroupMemberQuery::after: u32
+pub workhorse::TaskGroupMemberQuery::limit: u32
+impl core::clone::Clone for workhorse::TaskGroupMemberQuery
+pub fn workhorse::TaskGroupMemberQuery::clone(&self) -> workhorse::TaskGroupMemberQuery
+impl core::cmp::Eq for workhorse::TaskGroupMemberQuery
+impl core::cmp::PartialEq for workhorse::TaskGroupMemberQuery
+pub fn workhorse::TaskGroupMemberQuery::eq(&self, other: &workhorse::TaskGroupMemberQuery) -> bool
+impl core::default::Default for workhorse::TaskGroupMemberQuery
+pub fn workhorse::TaskGroupMemberQuery::default() -> Self
+impl core::fmt::Debug for workhorse::TaskGroupMemberQuery
+pub fn workhorse::TaskGroupMemberQuery::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for workhorse::TaskGroupMemberQuery
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupMemberQuery
+impl core::marker::Freeze for workhorse::TaskGroupMemberQuery
+impl core::marker::Send for workhorse::TaskGroupMemberQuery
+impl core::marker::Sync for workhorse::TaskGroupMemberQuery
+impl core::marker::Unpin for workhorse::TaskGroupMemberQuery
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupMemberQuery
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupMemberQuery
+pub struct workhorse::TaskGroupMembershipConflictDetails
+pub workhorse::TaskGroupMembershipConflictDetails::group_id: alloc::string::String
+pub workhorse::TaskGroupMembershipConflictDetails::member_of: core::option::Option<alloc::string::String>
+pub workhorse::TaskGroupMembershipConflictDetails::ordinal: i64
+pub workhorse::TaskGroupMembershipConflictDetails::task_id: alloc::string::String
+impl core::clone::Clone for workhorse::TaskGroupMembershipConflictDetails
+pub fn workhorse::TaskGroupMembershipConflictDetails::clone(&self) -> workhorse::TaskGroupMembershipConflictDetails
+impl core::cmp::Eq for workhorse::TaskGroupMembershipConflictDetails
+impl core::cmp::PartialEq for workhorse::TaskGroupMembershipConflictDetails
+pub fn workhorse::TaskGroupMembershipConflictDetails::eq(&self, other: &workhorse::TaskGroupMembershipConflictDetails) -> bool
+impl core::default::Default for workhorse::TaskGroupMembershipConflictDetails
+pub fn workhorse::TaskGroupMembershipConflictDetails::default() -> Self
+impl core::fmt::Debug for workhorse::TaskGroupMembershipConflictDetails
+pub fn workhorse::TaskGroupMembershipConflictDetails::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupMembershipConflictDetails
+impl<'de> serde_core::de::Deserialize<'de> for workhorse::TaskGroupMembershipConflictDetails
+pub fn workhorse::TaskGroupMembershipConflictDetails::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for workhorse::TaskGroupMembershipConflictDetails
+impl core::marker::Send for workhorse::TaskGroupMembershipConflictDetails
+impl core::marker::Sync for workhorse::TaskGroupMembershipConflictDetails
+impl core::marker::Unpin for workhorse::TaskGroupMembershipConflictDetails
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupMembershipConflictDetails
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupMembershipConflictDetails
+pub struct workhorse::TaskGroupRecordedCounts
+pub workhorse::TaskGroupRecordedCounts::canceled: u32
+pub workhorse::TaskGroupRecordedCounts::failed: u32
+pub workhorse::TaskGroupRecordedCounts::succeeded: u32
+pub workhorse::TaskGroupRecordedCounts::total: u32
+impl core::clone::Clone for workhorse::TaskGroupRecordedCounts
+pub fn workhorse::TaskGroupRecordedCounts::clone(&self) -> workhorse::TaskGroupRecordedCounts
+impl core::cmp::Eq for workhorse::TaskGroupRecordedCounts
+impl core::cmp::PartialEq for workhorse::TaskGroupRecordedCounts
+pub fn workhorse::TaskGroupRecordedCounts::eq(&self, other: &workhorse::TaskGroupRecordedCounts) -> bool
+impl core::default::Default for workhorse::TaskGroupRecordedCounts
+pub fn workhorse::TaskGroupRecordedCounts::default() -> workhorse::TaskGroupRecordedCounts
+impl core::fmt::Debug for workhorse::TaskGroupRecordedCounts
+pub fn workhorse::TaskGroupRecordedCounts::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for workhorse::TaskGroupRecordedCounts
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupRecordedCounts
+impl core::marker::Freeze for workhorse::TaskGroupRecordedCounts
+impl core::marker::Send for workhorse::TaskGroupRecordedCounts
+impl core::marker::Sync for workhorse::TaskGroupRecordedCounts
+impl core::marker::Unpin for workhorse::TaskGroupRecordedCounts
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupRecordedCounts
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupRecordedCounts
+pub struct workhorse::TaskGroupRepair
+pub workhorse::TaskGroupRepair::action: workhorse::TaskGroupRepairAction
+pub workhorse::TaskGroupRepair::group_id: uuid::Uuid
+pub workhorse::TaskGroupRepair::pending: u32
+pub workhorse::TaskGroupRepair::recorded_pending: u32
+impl core::clone::Clone for workhorse::TaskGroupRepair
+pub fn workhorse::TaskGroupRepair::clone(&self) -> workhorse::TaskGroupRepair
+impl core::cmp::Eq for workhorse::TaskGroupRepair
+impl core::cmp::PartialEq for workhorse::TaskGroupRepair
+pub fn workhorse::TaskGroupRepair::eq(&self, other: &workhorse::TaskGroupRepair) -> bool
+impl core::fmt::Debug for workhorse::TaskGroupRepair
+pub fn workhorse::TaskGroupRepair::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for workhorse::TaskGroupRepair
+impl core::marker::Freeze for workhorse::TaskGroupRepair
+impl core::marker::Send for workhorse::TaskGroupRepair
+impl core::marker::Sync for workhorse::TaskGroupRepair
+impl core::marker::Unpin for workhorse::TaskGroupRepair
+impl core::panic::unwind_safe::RefUnwindSafe for workhorse::TaskGroupRepair
+impl core::panic::unwind_safe::UnwindSafe for workhorse::TaskGroupRepair
 pub struct workhorse::TaskListCursor
 pub workhorse::TaskListCursor::created_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
 pub workhorse::TaskListCursor::signature: alloc::string::String
@@ -2401,6 +2950,9 @@ impl core::panic::unwind_safe::UnwindSafe for workhorse::WorkerRegistryEntry
 pub const workhorse::CLIENT_PROTOCOL_VERSION: i32
 pub const workhorse::MAX_ENQUEUE_BATCH_SIZE: usize
 pub const workhorse::MAX_SCHEMA_VERSION: i32
+pub const workhorse::MAX_TASK_GROUP_DRIFT_LIMIT: u32
+pub const workhorse::MAX_TASK_GROUP_MEMBERS: i32
+pub const workhorse::MAX_TASK_GROUP_PAGE_SIZE: u32
 pub const workhorse::MIN_SCHEMA_VERSION: i32
 pub trait workhorse::EnqueueTransport: core::marker::Send
 pub fn workhorse::EnqueueTransport::query(&mut self, query: workhorse::EnqueueQuery<'_>) -> impl core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<workhorse::EnqueueRow>, workhorse::Error>> + core::marker::Send
