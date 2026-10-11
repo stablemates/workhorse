@@ -122,6 +122,7 @@ type HandlerContext struct {
 	cancel        context.CancelCauseFunc
 	executor      Executor
 	contracts     *contractCache
+	compatibility *CachedCompatibilityCheck
 	workerID      string
 	checkpoint    sync.Mutex
 	checkpoints   map[string]*checkpointCall
@@ -140,6 +141,11 @@ type HandlerContext struct {
 	childSet      sync.Mutex
 	childSetCall  *childrenCall
 	suspended     atomic.Bool
+	// taskGroup guards the group read and the member-add queue of this activation.
+	taskGroup      sync.Mutex
+	taskGroupRead  bool
+	taskGroupLink  *TaskGroupLink
+	taskGroupQueue *Queue
 }
 
 // GetProgress returns the latest progress observed by this handler activation.
